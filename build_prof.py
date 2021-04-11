@@ -1,3 +1,5 @@
+# Copyright 2021 Alpha Lam <arufa.hc@gmail.com>
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -75,6 +77,8 @@ b_coef = estimate_coef('refB')
 r_coef /= r_coef[0]
 g_coef /= g_coef[1]
 b_coef /= b_coef[2]
+# TODO: The coefficients cannot be positive other than the primary signal,
+# i.e. the diagonal.
 print('R Coefficients: ', r_coef)
 print('G Coefficients: ', g_coef)
 print('B Coefficients: ', b_coef)

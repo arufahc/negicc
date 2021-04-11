@@ -116,30 +116,44 @@ void make_std_negative_profile() {
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage("build_prof.icc"));
 #endif
 
-  // Commented out try using a matrix to convert from RGB to XYZ using linear regression.
-
 // From dcraw images and computed by argyllcms.
-  /*
-double mat[] = 
-{0.499288, 0.588059, 0.069591,
-         0.293241, 0.936905, -0.033396,
-         0.037895, 0.367030, 0.719375};
-  */
-// From c1 images and computed by argyllcms.
-  double mat[] = {0.582536, 0.521643, 0.066786,
-		  0.362451, 0.882864, -0.038254,
-		  0.063813, 0.325665, 0.749723,
-		  0, 0, 0};
-
-// From c1 images and computed by weka.
-  /*
+#if 0
   double mat[] = {
- 0.60889666, 0.63277913, -0.03418621,
- 0.43124504, 0.94003491, -0.12569812,
- 0.15286638, 0.59404957, 0.45594718,
- -0.0210972022, -0.0181275504, -0.0450803296
+    0.499288, 0.588059, 0.069591,
+    0.293241, 0.936905, -0.033396,
+    0.037895, 0.367030, 0.719375,
+    0, 0, 0};
+#endif
+
+#if 0
+// C1 developed It8 target Ektar 100
+// build_prof max luminance set to 0.75
+// Matrix copied from Argyllcms.
+  double mat[] = {
+    0.545943, 0.489780, 0.062323,
+    0.340007, 0.828661, -0.036992,
+    0.059898, 0.305443, 0.703262,
+    0, 0, 0};
+#endif
+
+// C1 developed It8 target Ektar 100
+// build_prof max luminance set to 0.75
+// Matrix copied from Argyllcms.
+  double mat[] = {
+    0.582536, 0.521643, 0.066786,
+    0.362451, 0.882864, -0.038254,
+    0.063813, 0.325665, 0.749723,
+    0, 0, 0};
+
+#if 0
+// From c1 images and computed by weka.
+  double mat[] = {
+    0.60889666, 0.63277913, -0.03418621,
+    0.43124504, 0.94003491, -0.12569812,
+    0.15286638, 0.59404957, 0.45594718,
+    -0.0210972022, -0.0181275504, -0.0450803296
 };
-  */
+#endif
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
 

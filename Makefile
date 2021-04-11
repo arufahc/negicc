@@ -8,6 +8,6 @@ build_prof.icc: build_prof.ti3
 	colprof -v -ax -qh -kz -u -bn -ni -np -no build_prof
 
 .PHONY: all
-all: make_icc build_prof.icc
+all: make_icc
 	mkdir -p icc_out
 	./make_icc
