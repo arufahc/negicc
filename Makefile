@@ -1,5 +1,5 @@
 build_prof.h: build_prof.py
-	python3 build_prof.py --src=../tricolor/c1_test/ektar100_it8_30c_cp80c_positive_cs100a_train.csv
+	python3 build_prof.py --src=ektar100_it8_30c_cp80c_positive_cs100a_train.csv
 
 make_icc: make_icc.c build_prof.h
 	gcc -o make_icc make_icc.c -llcms2
