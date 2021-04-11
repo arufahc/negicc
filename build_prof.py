@@ -1,7 +1,21 @@
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import argparse
 import colour
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import pandas as pd
 import sys
 from scipy import interpolate
@@ -93,7 +107,7 @@ print("GS RGB values after correction.")
 print(corrected_gs_rgb.transpose())
 
 luminance = gs['refY']
-luminance /= luminance.max() / 0.75
+luminance /= luminance.max() / 0.8
 
 # Note: These curve fitting is for mathematically evaluation only.
 # We use this mathematically model convert from electronic signal to linear RGB values
@@ -207,16 +221,36 @@ sys.stdout = stdout_backup
 
 print('Step 5: Writing build_prof.h to be used by make_icc to create final profile.')
 
-# Last step is to create C arrays that contains the tone curve.
+f = open('neg_correct.sh', 'w+')
+sys.stdout = f
+print("""
+dcraw -v -4 -o 0 -h -T -W "$1"
+convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_corrected.tiff}"
+convert "${1/.NEF/_corrected.tiff}" -set profile icc_out/std_negative_clut.icc "${1/.NEF/_corrected_clut_icc.tiff}" 
+convert "${1/.NEF/_corrected.tiff}" -set profile icc_out/std_negative.icc "${1/.NEF/_corrected_mat_icc.tiff}" 
+""" % tuple(r_coef.tolist() + g_coef.tolist() + b_coef.tolist()))
+f.close()
+
 f = open('build_prof.h', 'w+')
 sys.stdout = f
+
+# Print matrix.
+print("double crosstalk_correction_mat[] = {")
+mat = np.array([r_coef.tolist(), g_coef.tolist(), b_coef.tolist()]).transpose().flatten()
+for i in range(0, len(mat)):
+    print(" %.15f," % mat[i], end='')
+    if (i+1) % 3 == 0:
+        print()
+print("};");
+
+# Print tone curves.
 def print_curve(name, curve):
     print("float %s[%d] = {" % (name, len(curve)))
     for i in range(0, len(curve)):
         if i == len(curve) - 1:
-            print(" %f" % curve[i], end='')
+            print(" %.7f" % curve[i], end='')
         else:
-            print(" %f," % curve[i], end='')
+            print(" %.7f," % curve[i], end='')
         if (i+1) % 16 == 0:
             print()
     print("};\n")
