@@ -24,9 +24,8 @@
 #include <lcms2_plugin.h>
 #include "build_prof.h"
 
-#define COPYRIGHT "Copyright 2021, Alpha Lam (arufahc@gmail.com)."
+#define COPYRIGHT "Copyright 2021 Alpha Lam (arufahc@gmail.com)."
 #define MANUFACTURER "Alpha Lam (arufahc@gmail.com)"
-#define DESCRIPTION "NegICC Matrix Ektar 100 Profile"
 
 void error_handler(cmsContext context, cmsUInt32Number error, const char* text) {
   fprintf(stderr, "Error! Code: %d, msg: %s.\n", error, text);
@@ -39,9 +38,9 @@ cmsStage* read_clut_stage(const char* input_profile) {
   cmsPipeline *pipeline = cmsReadTag(in_profile, cmsSigAToB0Tag);
   cmsStage *inputstage, *clutstage, *outputstage;
   if (!cmsPipelineCheckAndRetreiveStages(
-                                         pipeline, 3,
-                                         cmsSigCurveSetElemType, cmsSigCLutElemType, cmsSigCurveSetElemType,
-                                         &inputstage, &clutstage, &outputstage)) {
+        pipeline, 3,
+        cmsSigCurveSetElemType, cmsSigCLutElemType, cmsSigCurveSetElemType,
+        &inputstage, &clutstage, &outputstage)) {
     fprintf(stderr, "Error! Failed to load 3 stages from A2B0 tag in build_prof.icc.\n");
     return NULL;
   }
@@ -57,8 +56,7 @@ cmsStage* read_clut_stage(const char* input_profile) {
   return cmsStageAllocCLutFloatGranular(NULL, clut_data->Params->nSamples, 3, 3, tablef);
 }
 
-void make_std_negative_profile() {
-
+cmsHPROFILE create_empty_profile() {
   cmsHPROFILE out_profile = cmsCreateRGBProfile(NULL, NULL, NULL);
   cmsSetProfileVersion(out_profile, 4.3);
   cmsSetPCS(out_profile, cmsSigXYZData);
@@ -70,14 +68,23 @@ void make_std_negative_profile() {
   cmsMLU* manufacturer = cmsMLUalloc(NULL, 1);
   cmsMLUsetASCII(manufacturer, "en", "US", MANUFACTURER);
   cmsWriteTag(out_profile, cmsSigDeviceMfgDescTag, manufacturer);
+
+#if 0
   cmsMLU* description = cmsMLUalloc(NULL, 1);
   cmsMLUsetASCII(description, "en", "US", DESCRIPTION);
   cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
+#endif
 
-  // White and black point.
-  // cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaWhitePointTag));
-  // cmsWriteTag(out_profile, cmsSigMediaBlackPointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaBlackPointTag));
+#if 0
+  // TODO: Figure out how to compute white point.
+  // Black point is not necessary for input profiles.
+  cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaWhitePointTag));
+  cmsWriteTag(out_profile, cmsSigMediaBlackPointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaBlackPointTag));
+#endif
+  return out_profile;
+}
 
+int write_black_fallback_pipeline(cmsHPROFILE out_profile) {
   // Adds a fallback A2B0 tag which gives a black image in case D2B0 is not supported.
   cmsPipeline* black_pipeline = cmsPipelineAlloc(NULL, 3, 3);
   cmsUInt16Number black[256];
@@ -90,6 +97,12 @@ void make_std_negative_profile() {
   if (!ret) {
     fprintf(stdout, "Failed to save A2B0 pipeline!\n");
   }
+  return ret;
+}
+
+void make_std_negative_profile() {
+  cmsHPROFILE out_profile = create_empty_profile();
+  int ret = write_black_fallback_pipeline(out_profile);
 
   cmsToneCurve* curvef[3];
   curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
@@ -99,7 +112,9 @@ void make_std_negative_profile() {
 
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, crosstalk_correction_mat, NULL));
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
+#if 0
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage("build_prof.icc"));
+#endif
 
   // Commented out try using a matrix to convert from RGB to XYZ using linear regression.
 
