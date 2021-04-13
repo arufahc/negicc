@@ -7,6 +7,9 @@ make_icc: make_icc.c build_prof.h
 build_prof.icc: build_prof.ti3
 	colprof -v -ax -qh -kz -u -bn -ni -np -no build_prof
 
+.PHONY: data
+data: data/ektar100_it8_30c_cp80c_positive_cs100a_train.csv
+
 .PHONY: all
 all: make_icc
 	mkdir -p icc_out
