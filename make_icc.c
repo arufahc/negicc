@@ -100,7 +100,70 @@ int write_black_fallback_pipeline(cmsHPROFILE out_profile) {
   return ret;
 }
 
+// Create a MPE for identity cmsFloat32Number CLUT
+void AddIdentityCLUT16(cmsPipeline* lut)
+{
+    const cmsUInt16Number Table[] = {
+        0,    0,    0,
+        0,    0,    0xffff,
+
+        0,    0xffff,    0,
+        0,    0xffff,    0xffff,
+
+        0xffff,    0,    0,
+        0xffff,    0,    0xffff,
+
+        0xffff,    0xffff,    0,
+        0xffff,    0xffff,    0xffff
+    };
+    cmsPipelineInsertStage(lut, cmsAT_END, cmsStageAllocCLut16bit(NULL, 2, 3, 3, Table));
+}
+
+// Uses A2B0 tag with lutAToBType transform that turns a crosstalk corrected linear RGB
+// into inverted image.
 void make_std_negative_profile() {
+  cmsHPROFILE out_profile = create_empty_profile();
+  int ret = 0;
+
+  // lutAToBType requires int16 vaules for the curves.
+  cmsUInt16Number r_curve16[4096], g_curve16[4096], b_curve16[4096];
+  for (int i = 0; i < 4096; ++i) {
+    r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
+    g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
+    b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
+  }
+  cmsToneCurve* curve[3];
+  curve[0] = cmsBuildTabulatedToneCurve16(NULL, 4096, r_curve16);
+  curve[1] = cmsBuildTabulatedToneCurve16(NULL, 4096, g_curve16);
+  curve[2] = cmsBuildTabulatedToneCurve16(NULL, 4096, b_curve16);
+
+  cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curve)); // negative tone curves.
+  AddIdentityCLUT16(neg_pipeline);
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity matrix input curves.
+
+  // From dctaw image b = 3 and computed by argullcms -am
+   double mat[] ={ 0.471485, 0.548375, 0.065106,
+ 		  0.278378, 0.876763, -0.033151,
+		   0.036492, 0.343287, 0.673884};
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity output curves.
+
+  printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
+
+  ret = cmsWriteTag(out_profile, cmsSigAToB0Tag, neg_pipeline);
+  if (!ret) {
+    fprintf(stdout, "Failed to save A2B0 pipeline.\n");
+  }
+  cmsMD5computeID(out_profile);
+  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative.icc");
+  if (!ret) {
+    printf("Failed to save profile!\n");
+  }
+}
+
+// Uses D2B0 tag with multiProcessElement Transform.
+void make_cc_negative_profile() {
   cmsHPROFILE out_profile = create_empty_profile();
   int ret = write_black_fallback_pipeline(out_profile);
 
@@ -113,8 +176,14 @@ void make_std_negative_profile() {
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, crosstalk_correction_mat, NULL));
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
 #if 0
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage("build_prof.icc"));
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage("icc_out/argull_ref_clut.icc"));
 #endif
+
+  // From dctaw image b = 3 and computed by argullcms -am
+  double mat[] ={ 0.471485, 0.548375, 0.065106,
+		  0.278378, 0.876763, -0.033151,
+		  0.036492, 0.343287, 0.673884,
+		  0, 0, 0};
 
 // From dcraw images and computed by argyllcms.
 #if 0
@@ -136,6 +205,7 @@ void make_std_negative_profile() {
     0, 0, 0};
 #endif
 
+#if 0
 // C1 developed It8 target Ektar 100
 // build_prof max luminance set to 0.75
 // Matrix copied from Argyllcms.
@@ -144,6 +214,7 @@ void make_std_negative_profile() {
     0.362451, 0.882864, -0.038254,
     0.063813, 0.325665, 0.749723,
     0, 0, 0};
+#endif
 
 #if 0
 // From c1 images and computed by weka.
@@ -162,7 +233,7 @@ void make_std_negative_profile() {
     fprintf(stdout, "Failed to save D2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative.icc");
+  ret = cmsSaveProfileToFile(out_profile, "icc_out/cc_negative.icc");
   if (!ret) {
     printf("Failed to save profile!\n");
   }
@@ -171,5 +242,6 @@ void make_std_negative_profile() {
 int main () {
   cmsSetLogErrorHandler(&error_handler);
   make_std_negative_profile();
+  make_cc_negative_profile();
   return 0;
 }

@@ -105,7 +105,7 @@ gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
 print("GS RGB values before correction.")
 print(gs_rgb.transpose())
 
-corrected_gs_rgb = np.matmul(gs_rgb.transpose(), [r_coef, g_coef, b_coef]).transpose()
+corrected_gs_rgb = np.matmul(gs_rgb.transpose(), np.array([r_coef, g_coef, b_coef]).transpose()).transpose()
 crosstalk_correction_mat = [r_coef, g_coef, b_coef]
 print("GS RGB values after correction.")
 print(corrected_gs_rgb.transpose())
@@ -228,10 +228,8 @@ print('Step 5: Writing build_prof.h to be used by make_icc to create final profi
 f = open('neg_correct.sh', 'w+')
 sys.stdout = f
 print("""
-dcraw -v -4 -o 0 -h -T -W "$1"
+dcraw -v -4 -o 0 -h -W -T -H 1 -b 3 "$1"
 convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_corrected.tiff}"
-convert "${1/.NEF/_corrected.tiff}" -set profile icc_out/std_negative_clut.icc "${1/.NEF/_corrected_clut_icc.tiff}" 
-convert "${1/.NEF/_corrected.tiff}" -set profile icc_out/std_negative.icc "${1/.NEF/_corrected_mat_icc.tiff}" 
 """ % tuple(r_coef.tolist() + g_coef.tolist() + b_coef.tolist()))
 f.close()
 
