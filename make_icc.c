@@ -133,16 +133,16 @@ void make_std_negative_profile_lutAB_mat() {
   int ret = 0;
 
   // lutAToBType requires int16 vaules for the curves.
-  cmsUInt16Number r_curve16[4096], g_curve16[4096], b_curve16[4096];
-  for (int i = 0; i < 4096; ++i) {
+  cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
+  for (int i = 0; i < CURVE_POINTS; ++i) {
     r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
     g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
     b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
   }
   cmsToneCurve* curve[3];
-  curve[0] = cmsBuildTabulatedToneCurve16(NULL, 4096, r_curve16);
-  curve[1] = cmsBuildTabulatedToneCurve16(NULL, 4096, g_curve16);
-  curve[2] = cmsBuildTabulatedToneCurve16(NULL, 4096, b_curve16);
+  curve[0] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, r_curve16);
+  curve[1] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, g_curve16);
+  curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
 
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curve)); // negative tone curves.
@@ -177,16 +177,16 @@ void make_std_negative_profile_mft_clut() {
   int ret = 0;
 
   // lutAToBType requires int16 vaules for the curves.
-  cmsUInt16Number r_curve16[4096], g_curve16[4096], b_curve16[4096];
-  for (int i = 0; i < 4096; ++i) {
+  cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
+  for (int i = 0; i < CURVE_POINTS; ++i) {
     r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
     g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
     b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
   }
   cmsToneCurve* curve[3];
-  curve[0] = cmsBuildTabulatedToneCurve16(NULL, 4096, r_curve16);
-  curve[1] = cmsBuildTabulatedToneCurve16(NULL, 4096, g_curve16);
-  curve[2] = cmsBuildTabulatedToneCurve16(NULL, 4096, b_curve16);
+  curve[0] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, r_curve16);
+  curve[1] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, g_curve16);
+  curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
 
   cmsToneCurve* curvef[3];
   curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
@@ -242,6 +242,7 @@ void make_std_negative_profile_mpet_mat() {
 		  0.037010, 0.266008, 0.722028};
 #endif
 
+#if 0
   // Computed by Weka using linear regression.
   double mat[] = {
     0.43828032, 0.57176434, 0.1188123,
@@ -253,6 +254,14 @@ void make_std_negative_profile_mpet_mat() {
   };
 
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, offsets));
+#endif
+  double mat[] = {
+    0.550, 0.361, 0.053,
+    0.259, 0.854, -0.113,
+    0.011, 0.013, 0.801,
+  };
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
+
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
 
   ret = cmsWriteTag(out_profile, cmsSigDToB0Tag, neg_pipeline);
