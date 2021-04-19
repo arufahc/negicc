@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import colour
 
 def read_txt_readings(file):
     f = open(file, "r")
@@ -73,9 +74,7 @@ if __name__ == "__main__":
 
         for patch, vals in src.items():
             if args.Yxy:
-                Y = Yxy[patch]['Y']
-                X = Yxy[patch]['x'] * Y / Yxy[patch]['y']
-                Z = (1 - Yxy[patch]['x'] - Yxy[patch]['y']) * Y / Yxy[patch]['y']
+                X, Y, Z = colour.xyY_to_XYZ([Yxy[patch]['x'], Yxy[patch]['y'], Yxy[patch]['Y']])
             elif args.XYZ:
                 X, Y, Z = XYZ[patch]['X'], XYZ[patch]['Y'], XYZ[patch]['Z']
             print(patch, vals['r'], vals['g'], vals['b'], r[patch]['r'],  g[patch]['g'],  b[patch]['b'], X, Y, Z)

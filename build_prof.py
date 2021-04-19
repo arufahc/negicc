@@ -35,6 +35,10 @@ from sklearn.linear_model import LinearRegression
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--src", help="Source readings file.")
 parser.add_argument("--fit_intercept", help="Whether to allow intercept in linear interpolation for crosstalk correction.", default=False)
+parser.add_argument("--white_Y", help="Source media white Y.")
+parser.add_argument("--white_x", help="Source media white x. This is used for chromatic adaptation if the reference XYZ are not D50 adapted.")
+parser.add_argument("--white_y", help="Source media white y. This is used for chromatic adaptation if the reference XYZ are not D50 adapted.")
+parser.add_argument("--debug", help="Print debug messages.", default=False, type=bool)
 args = parser.parse_args()
 
 df = pd.read_csv(args.src, index_col="patch")
@@ -105,8 +109,8 @@ gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
 print("GS RGB values before correction.")
 print(gs_rgb.transpose())
 
-corrected_gs_rgb = np.matmul(gs_rgb.transpose(), np.array([r_coef, g_coef, b_coef]).transpose()).transpose()
-crosstalk_correction_mat = [r_coef, g_coef, b_coef]
+crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
+corrected_gs_rgb = np.matmul(gs_rgb.transpose(), crosstalk_correction_mat).transpose()
 print("GS RGB values after correction.")
 print(corrected_gs_rgb.transpose())
 
@@ -173,6 +177,8 @@ rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
 
 # Crosstalk correct then clip to [0, 65535].
 corrected_rgb = np.clip(np.matmul(rgb.transpose(), crosstalk_correction_mat), 0, 65535)
+print("Crosstalk corrected RGB values.")
+print(corrected_rgb)
 
 # Apply curves to convert them positive signals.
 lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
@@ -185,10 +191,30 @@ positive_df = (positive_rgb * 100).transpose()
 df['pos_r'] = pd.Series(positive_df[0], index=df.index)
 df['pos_g'] = pd.Series(positive_df[1], index=df.index)
 df['pos_b'] = pd.Series(positive_df[2], index=df.index)
-max_XYZ = df[['refX', 'refY', 'refZ']].max().max()
-df['norm_refX'] = df['refX'] / max_XYZ * 100
-df['norm_refY'] = df['refY'] / max_XYZ * 100
-df['norm_refZ'] = df['refZ'] / max_XYZ * 100
+
+# Next step is to perform chromatic adaptation of the measured tristimulus values
+# into D50. Film balanced at 5500K so we should be exposing the test chart with
+# 5500K light and also measure the test chart with same color temperature.
+
+# This is the standard value from ICC specification.
+D50_XYZ = np.array([0.9642, 1, 0.8249])
+
+unadapted_XYZ = np.array(df[['refX', 'refY', 'refZ']])
+if args.white_Y and args.white_x and args.white_y:
+    test_white_XYZ = colour.xyY_to_XYZ([args.white_x, args.white_y, args.white_Y])
+
+    adapted_XYZ = colour.adaptation.chromatic_adaptation(unadapted_XYZ, test_white_XYZ, D50_XYZ, method='Von Kries', transform='Bradford')
+else:
+    adapted_XYZ = unadapted_XYZ / unadapted_XYZ.max().max()
+
+if args.debug:
+    print('Refernce unadapted XYZ values:')
+    print(unadapted_XYZ)
+    print('D50 adapted XYZ values using Bradford CAT:')
+    print(adapted_XYZ)
+
+norm_XYZ = adapted_XYZ.transpose() * 100
+df['norm_refX'], df['norm_refY'], df['norm_refZ'] = norm_XYZ
 df.to_csv('build_prof_diag.csv')
 
 print('Step 4: Writing build_prof.ti3 to be used by ArgyllCMS for building cLUT.')
@@ -238,7 +264,7 @@ sys.stdout = f
 
 # Print matrix.
 print("double crosstalk_correction_mat[] = {")
-mat = np.array([r_coef.tolist(), g_coef.tolist(), b_coef.tolist()]).transpose().flatten()
+mat = crosstalk_correction_mat.transpose().flatten()
 for i in range(0, len(mat)):
     print(" %.15f," % mat[i], end='')
     if (i+1) % 3 == 0:
