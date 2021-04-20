@@ -370,7 +370,7 @@ def main():
         print("GS RGB values after correction.")
         print(corrected_gs_rgb.transpose())
 
-    luminance = gs['refY'] / (gs['refY'].max() / args.whitest_patch_scaling)
+    luminance = gs['refY'] / (df[['refY']].max().max() / args.whitest_patch_scaling)
     if args.debug:
         debug_inversion_curves(gs['refR'], gs['refG'], gs['refB'], luminance)
     r_curve, g_curve, b_curve = estimate_trc_curves(corrected_gs_rgb, luminance)
