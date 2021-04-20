@@ -66,6 +66,10 @@ parser.add_argument(
     help="Print debug messages.",
     default=False,
     type=bool)
+parser.add_argument(
+    "--film_name",
+    help="Name of the film.",
+    default="Generic")
 args = parser.parse_args()
 
 # DataFrame that will keep all the source data and mutations.
@@ -375,13 +379,15 @@ def run_colprof_clut(ti3_name):
     subprocess.run(['colprof', '-v',
                     '-ax',  # Generate XYZ cLUT.
                     '-qu',  # Gives 45 grid points instead of 33 of -qh.
+                            # -qu crashes Capture 1 with ICC V4 mpet transform.
                     '-kz',  # TODO: Need to experiment with this option.
                     '-u',  # TODO: Need to experiment with this option.
                     '-bn',  # No need of B2A profiles.
                     # Forces linear input and output curves.
                     '-ni', '-np', '-no',
                     ti3_name], check=True)
-    os.rename(ti3_name + '.icc', ti3_name + '_clut.icc')
+    os.rename(ti3_name + '.icc', 'icc_out/%s_clut.icc' % ti3_name)
+    return 'icc_out/%s_clut.icc' % ti3_name
 
 
 def run_colprof_matrix(ti3_name):
@@ -402,7 +408,8 @@ def run_colprof_matrix(ti3_name):
                     # Forces linear input and output curves.
                     '-ni', '-np', '-no',
                     ti3_name], check=True)
-    os.rename(ti3_name + '.icc', ti3_name + '_matrix.icc')
+    os.rename(ti3_name + '.icc', 'icc_out/%s_matrix.icc' % ti3_name)
+    return 'icc_out/%s_matrix.icc' % ti3_name
 
 
 def run_make_icc(
@@ -411,6 +418,7 @@ def run_make_icc(
         r_curve,
         g_curve,
         b_curve,
+        film_name,
         clut_icc,
         mat_icc):
     write_build_prof_header(
@@ -420,7 +428,7 @@ def run_make_icc(
         g_curve,
         b_curve)
     subprocess.run(['make', 'make_icc'], check=True)
-    subprocess.run(['./make_icc', clut_icc, mat_icc], check=True)
+    subprocess.run(['bin_out/make_icc', film_name, clut_icc, mat_icc], check=True)
 
 
 def main():
@@ -470,8 +478,8 @@ def main():
     print("Step 3: Run colprof to produce a profile.")
     df.to_csv('build_prof_diag.csv')
     write_ti3('build_prof.ti3')
-    run_colprof_clut('build_prof')
-    run_colprof_matrix('build_prof')
+    clut_prof = run_colprof_clut('build_prof')
+    matrix_prof = run_colprof_matrix('build_prof')
 
     print('Step 4: Building ICC profiles using make_icc.')
     run_make_icc(
@@ -480,8 +488,9 @@ def main():
         r_curve,
         g_curve,
         b_curve,
-        'build_prof_clut.icc',
-        'build_prof_matrix.icc')
+        args.film_name,
+        clut_prof,
+        matrix_prof)
 
 
 if __name__ == "__main__":

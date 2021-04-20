@@ -120,9 +120,14 @@ cmsStage* create_identity_clut_stage() {
 
 // Uses A2B0 tag with mft2 transform that turns a crosstalk corrected linear RGB
 // into positive image.
-void make_std_negative_profile_mft2_clut(char* src_profile_name) {
+void make_std_negative_profile_mft2_clut(const char* film_name, const char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   cmsSetProfileVersion(out_profile, 2.2);
+  cmsMLU* description = cmsMLUalloc(NULL, 1);
+  char profile_name[256];
+  sprintf(profile_name, "%s cLUT", film_name);
+  cmsMLUsetASCII(description, "en", "US", profile_name);
+  cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
   int ret = 0;
 
   cmsToneCurve* curvef[3];
@@ -147,10 +152,15 @@ void make_std_negative_profile_mft2_clut(char* src_profile_name) {
   }
 }
 
-void make_std_negative_profile_lutab_mat(const char* src_profile_name) {
+void make_std_negative_profile_lutab_mat(const char* film_name, const char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   cmsSetProfileVersion(out_profile, 4.3);
-  int ret;
+  cmsMLU* description = cmsMLUalloc(NULL, 1);
+  char profile_name[256];
+  sprintf(profile_name, "%s Matrix", film_name);
+  cmsMLUsetASCII(description, "en", "US", profile_name);
+  cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
+  int ret = 0;
 
   // lutAToBType requires int16 vaules for the curves.
   cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
@@ -203,8 +213,14 @@ void make_std_negative_profile_lutab_mat(const char* src_profile_name) {
 // because C1 adjusts the 'raw' values which is before the color profile is applied. When using C1
 // first produce a linear image with crosstalk correction applied and then use the mpet profile
 // without crosstalk correction applied.
-void make_cc_negative_profile(const char* src_profile_name) {
+void make_cc_negative_profile(const char* film_name, const char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
+  cmsMLU* description = cmsMLUalloc(NULL, 1);
+  char profile_name[256];
+  sprintf(profile_name, "%s Crosstalk correction cLUT", film_name);
+  cmsMLUsetASCII(description, "en", "US", profile_name);
+  cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
+
   int ret = write_black_fallback_pipeline(out_profile);
 
   cmsToneCurve* curvef[3];
@@ -232,19 +248,23 @@ void make_cc_negative_profile(const char* src_profile_name) {
 int main (int argc, char** argv) {
   cmsSetLogErrorHandler(&error_handler);
 
+  const char* film_name = argv[1];
+  const char* src_clut_profile = argv[2];
+  const char* src_mat_profile = argv[3];
+
   // Builds a V2 profile with mft2 transform.
   // TRC(float) -> cLUT(int16) -> Output curves(float)
-  make_std_negative_profile_mft2_clut(argv[1]); // version 2.2 cLUT profile.
+  make_std_negative_profile_mft2_clut(film_name, src_clut_profile); // version 2.2 cLUT profile.
   printf("mft2 TRC + cLUT Done\n");
 
   // Builds a V4 profile with lubtAToB transform.
   // TRC(int16) -> Matrix(double) -> TRC(int16)
-  make_std_negative_profile_lutab_mat(argv[2]); // version 4.3 matrix profile.
+  make_std_negative_profile_lutab_mat(film_name, src_mat_profile); // version 4.3 matrix profile.
   printf("lutAToB TRC + Matrix Done\n");
 
   // Builds a V4 profile with mpet transform.
   // Matrix(double) -> TRC(float) -> cLUT(fllat)
-  make_cc_negative_profile(argv[1]); // version 4.3 mpet profile.
+  make_cc_negative_profile(film_name, src_clut_profile); // version 4.3 mpet profile.
   printf("mpet Matrix + TRC + cLUT Done\n");
   printf("All done\n");
   return 0;
