@@ -18,4 +18,4 @@ make_icc: make_icc.c
 
 .PHONY: all
 all: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt  --debug=1 --white_x=0.3353 --white_y=0.3496 --fit_intercept=1
+	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --fit_intercept=1
