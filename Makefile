@@ -13,20 +13,9 @@ data/ektar100_it8_30m_cp80c_triband_lp610.txt:
 data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt: data/ektar100_it8_30m_cp80c_triband.txt data/ektar100_it8_30m_cp80c_triband_bp470.txt data/ektar100_it8_30m_cp80c_triband_bp525.txt data/ektar100_it8_30m_cp80c_triband_lp610.txt
 	python3 add_ref_readings.py  --r=data/ektar100_it8_30m_cp80c_triband_lp610.txt --g=data/ektar100_it8_30m_cp80c_triband_bp525.txt --b=data/ektar100_it8_30m_cp80c_triband_bp470.txt --Yxy=data/cs100a_measurements.txt data/ektar100_it8_30m_cp80c_triband.txt | tr ' ' ',' > $@
 
-build_prof.h: build_prof.py data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt
-	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt
-
-make_icc: make_icc.c build_prof.h
+make_icc: make_icc.c
 	gcc -o make_icc make_icc.c -llcms2
 
-icc_out/argyll_ref_clut.icc: build_prof.ti3 build_prof.h
-	colprof -v -ax -qh -kz -u -bn -ni -np -no build_prof
-	mv build_prof.icc $@
-
-icc_out/argyll_ref_mat.icc: build_prof.ti3 build_prof.h
-	colprof -v -am -qh -kz -u -bn -ni -np -no build_prof
-	mv build_prof.icc $@
-
 .PHONY: all
-all: make_icc icc_out/argyll_ref_mat.icc icc_out/argyll_ref_clut.icc
-	./make_icc
+all: build_prof.py make_icc.c
+	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt  --debug=1 --white_x=0.3353 --white_y=0.3496 --fit_intercept=1

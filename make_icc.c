@@ -118,34 +118,21 @@ cmsStage* create_identity_clut_stage() {
     return cmsStageAllocCLut16bit(NULL, 2, 3, 3, table);
 }
 
-// Uses A2B0 tag with mft transform that turns a crosstalk corrected linear RGB
-// into inverted image.
-void make_std_negative_profile_mft_clut(char* src_profile_name) {
+// Uses A2B0 tag with mft2 transform that turns a crosstalk corrected linear RGB
+// into positive image.
+void make_std_negative_profile_mft2_clut(char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   cmsSetProfileVersion(out_profile, 2.2);
   int ret = 0;
 
-  // lutAToBType requires int16 vaules for the curves.
-  cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
-  for (int i = 0; i < CURVE_POINTS; ++i) {
-    r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
-    g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
-    b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
-  }
-  cmsToneCurve* curve[3];
-  curve[0] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, r_curve16);
-  curve[1] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, g_curve16);
-  curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
-
   cmsToneCurve* curvef[3];
-  printf("Input curves have points: %d\n", CURVE_POINTS);
   curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
   curvef[1] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(g_curve) / sizeof(float), g_curve);
   curvef[2] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(b_curve) / sizeof(float), b_curve);
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_16(src_profile_name));
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity matrix output curves.
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // identity matrix output curves.
 
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
 
@@ -160,55 +147,51 @@ void make_std_negative_profile_mft_clut(char* src_profile_name) {
   }
 }
 
-// Uses D2B0 tag with multiProcessElement Transform without crosstalk correction.
-void make_std_negative_profile_mpet_mat() {
+void make_std_negative_profile_lutab_mat(const char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   cmsSetProfileVersion(out_profile, 4.3);
-  int ret = write_black_fallback_pipeline(out_profile);
+  int ret;
 
-  cmsToneCurve* curvef[3];
-  curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
-  curvef[1] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(g_curve) / sizeof(float), g_curve);
-  curvef[2] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(b_curve) / sizeof(float), b_curve);
+  // lutAToBType requires int16 vaules for the curves.
+  cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
+  for (int i = 0; i < CURVE_POINTS; ++i) {
+    r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
+    g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
+    b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
+  }
+  cmsToneCurve* curve[3];
+  curve[0] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, r_curve16);
+  curve[1] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, g_curve16);
+  curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
+
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curve)); // negative tone curves.
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, create_identity_clut_stage());
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // identity matrix curves.
 
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
-
-#if 0
-  // From dctaw image b = 3 and computed by argullcms -am
-  double mat[] = {0.440064, 0.520204, 0.078978,
-		  0.253482, 0.826624, -0.015199,
-		  0.037010, 0.266008, 0.722028};
-#endif
-
-#if 0
-  // Computed by Weka using linear regression.
+  cmsHPROFILE in_profile = cmsOpenProfileFromFile(src_profile_name, "r");
+  cmsCIEXYZ* r_col = (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigRedMatrixColumnTag);
+  cmsCIEXYZ* g_col = (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigGreenMatrixColumnTag);
+  cmsCIEXYZ* b_col = (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigBlueMatrixColumnTag);
   double mat[] = {
-    0.43828032, 0.57176434, 0.1188123,
-    0.29326052, 0.82380897, 0.04753673,
-    0.07779477, 0.34604537, 0.68812647
+    r_col->X, g_col->X, b_col->X,
+    r_col->Y, g_col->Y, b_col->Y,
+    r_col->Z, g_col->Z, b_col->Z,
   };
-  double offsets[] = {
-    -3.74188932 / 100, -3.79688203 / 100, -4.18103362 / 100
-  };
-
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, offsets));
-#endif
-  double mat[] = {
-    0.550, 0.361, 0.053,
-    0.259, 0.854, -0.113,
-    0.011, 0.013, 0.801,
-  };
+  for (int i = 0; i < 9; ++i) {
+    mat[i] /= 2;
+  }
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // identity output curves.
 
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
 
-  ret = cmsWriteTag(out_profile, cmsSigDToB0Tag, neg_pipeline);
+  ret = cmsWriteTag(out_profile, cmsSigAToB0Tag, neg_pipeline);
   if (!ret) {
-    fprintf(stdout, "Failed to save D2B0 pipeline.\n");
+    fprintf(stdout, "Failed to save A2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_mpet_mat.icc");
+  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_v4_mat.icc");
   if (!ret) {
     printf("Failed to save profile!\n");
   }
@@ -231,7 +214,6 @@ void make_cc_negative_profile(const char* src_profile_name) {
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
 
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, crosstalk_correction_mat, NULL));
-  // cmsPipelineInsertStage(neg_pipeline, cmsAT_END, create_identity_clut_stage_float());
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_float(src_profile_name));
 
@@ -249,8 +231,21 @@ void make_cc_negative_profile(const char* src_profile_name) {
 
 int main (int argc, char** argv) {
   cmsSetLogErrorHandler(&error_handler);
-  make_std_negative_profile_mft_clut(argv[1]); // version 2.2 
-  make_std_negative_profile_mpet_mat(); // version 4.3 mat
-  make_cc_negative_profile(argv[1]);
+
+  // Builds a V2 profile with mft2 transform.
+  // TRC(float) -> cLUT(int16) -> Output curves(float)
+  make_std_negative_profile_mft2_clut(argv[1]); // version 2.2 cLUT profile.
+  printf("mft2 TRC + cLUT Done\n");
+
+  // Builds a V4 profile with lubtAToB transform.
+  // TRC(int16) -> Matrix(double) -> TRC(int16)
+  make_std_negative_profile_lutab_mat(argv[2]); // version 4.3 matrix profile.
+  printf("lutAToB TRC + Matrix Done\n");
+
+  // Builds a V4 profile with mpet transform.
+  // Matrix(double) -> TRC(float) -> cLUT(fllat)
+  make_cc_negative_profile(argv[1]); // version 4.3 mpet profile.
+  printf("mpet Matrix + TRC + cLUT Done\n");
+  printf("All done\n");
   return 0;
 }
