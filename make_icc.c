@@ -83,12 +83,8 @@ cmsHPROFILE create_empty_profile() {
   cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
 #endif
 
-#if 0
-  // TODO: Figure out how to compute white point.
-  // Black point is not necessary for input profiles.
-  cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaWhitePointTag));
-  cmsWriteTag(out_profile, cmsSigMediaBlackPointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaBlackPointTag));
-#endif
+  cmsCIEXYZ media_white = {white_point[0], white_point[1], white_point[2]};
+  cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, &media_white);
   return out_profile;
 }
 
@@ -122,56 +118,9 @@ cmsStage* create_identity_clut_stage() {
     return cmsStageAllocCLut16bit(NULL, 2, 3, 3, table);
 }
 
-// Uses A2B0 tag with lutAToBType transform that turns a crosstalk corrected linear RGB
-// into inverted image.
-// TODO: This is a big TODO.
-void make_std_negative_profile_lutAB_mat() {
-  // This cannot be a mft2 type because we want curve -> matrix -> curve
-  // Instead we should write 3 curves and primaries similar to a color space profile.
-  cmsHPROFILE out_profile = create_empty_profile();
-  cmsSetProfileVersion(out_profile, 4.3);
-  int ret = 0;
-
-  // lutAToBType requires int16 vaules for the curves.
-  cmsUInt16Number r_curve16[CURVE_POINTS], g_curve16[CURVE_POINTS], b_curve16[CURVE_POINTS];
-  for (int i = 0; i < CURVE_POINTS; ++i) {
-    r_curve16[i] = (cmsUInt16Number)(r_curve[i] * 65535);
-    g_curve16[i] = (cmsUInt16Number)(g_curve[i] * 65535);
-    b_curve16[i] = (cmsUInt16Number)(b_curve[i] * 65535);
-  }
-  cmsToneCurve* curve[3];
-  curve[0] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, r_curve16);
-  curve[1] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, g_curve16);
-  curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
-
-  cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curve)); // negative tone curves.
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, create_identity_clut_stage());
-   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity matrix input curves.
-
-  // From dctaw image b = 3 and computed by argullcms -am
-  double mat[] = {0.440064, 0.520204, 0.078978,
-		  0.253482, 0.826624, -0.015199,
-		  0.037010, 0.266008, 0.722028};
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity output curves.
-
-  printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
-
-  ret = cmsWriteTag(out_profile, cmsSigAToB0Tag, neg_pipeline);
-  if (!ret) {
-    fprintf(stdout, "Failed to save A2B0 pipeline.\n");
-  }
-  cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_mab_mat.icc");
-  if (!ret) {
-    printf("Failed to save profile!\n");
-  }
-}
-
 // Uses A2B0 tag with mft transform that turns a crosstalk corrected linear RGB
 // into inverted image.
-void make_std_negative_profile_mft_clut() {
+void make_std_negative_profile_mft_clut(char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   cmsSetProfileVersion(out_profile, 2.2);
   int ret = 0;
@@ -189,24 +138,14 @@ void make_std_negative_profile_mft_clut() {
   curve[2] = cmsBuildTabulatedToneCurve16(NULL, CURVE_POINTS, b_curve16);
 
   cmsToneCurve* curvef[3];
+  printf("Input curves have points: %d\n", CURVE_POINTS);
   curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
   curvef[1] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(g_curve) / sizeof(float), g_curve);
   curvef[2] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(b_curve) / sizeof(float), b_curve);
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
-
-
-/*   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3); */
-/*   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curve)); // negative tone curves. */
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_16("icc_out/argyll_ref_clut.icc"));
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity matrix input curves.
-
-/*   // From dctaw image b = 3 and computed by argullcms -am */
-/*   double mat[] = {0.440064, 0.520204, 0.078978, */
-/* 		  0.253482, 0.826624, -0.015199, */
-/* 		  0.037010, 0.266008, 0.722028}; */
-/*   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL)); */
-/*   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity output curves. */
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_16(src_profile_name));
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, NULL)); // Identity matrix output curves.
 
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
 
@@ -215,7 +154,7 @@ void make_std_negative_profile_mft_clut() {
     fprintf(stdout, "Failed to save A2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_mab_clut.icc");
+  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_v2_clut.icc");
   if (!ret) {
     printf("Failed to save profile!\n");
   }
@@ -275,42 +214,13 @@ void make_std_negative_profile_mpet_mat() {
   }
 }
 
-
-// Uses D2B0 tag with multiProcessElement Transform without crosstalk correction.
-void make_std_negative_profile_mpet_clut() {
-  cmsHPROFILE out_profile = create_empty_profile();
-  cmsSetProfileVersion(out_profile, 4.3);
-  int ret = write_black_fallback_pipeline(out_profile);
-
-  cmsToneCurve* curvef[3];
-  curvef[0] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(r_curve) / sizeof(float), r_curve);
-  curvef[1] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(g_curve) / sizeof(float), g_curve);
-  curvef[2] = cmsBuildTabulatedToneCurveFloat(NULL, sizeof(b_curve) / sizeof(float), b_curve);
-  cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
-
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_float("icc_out/argyll_ref_clut.icc"));
-
-  printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
-
-  ret = cmsWriteTag(out_profile, cmsSigDToB0Tag, neg_pipeline);
-  if (!ret) {
-    fprintf(stdout, "Failed to save D2B0 pipeline.\n");
-  }
-  cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_mpet_clut.icc");
-  if (!ret) {
-    printf("Failed to save profile!\n");
-  }
-}
-
 // Uses D2B0 tag with multiProcessElement Transform.
 // This problem can be used with ImageMagick to convert a DCRAW linear (-o 0) file into a RGB space.
 // However using such profile with Capture One will cause color shift when adjusting levels. This is
 // because C1 adjusts the 'raw' values which is before the color profile is applied. When using C1
 // first produce a linear image with crosstalk correction applied and then use the mpet profile
 // without crosstalk correction applied.
-void make_cc_negative_profile() {
+void make_cc_negative_profile(const char* src_profile_name) {
   cmsHPROFILE out_profile = create_empty_profile();
   int ret = write_black_fallback_pipeline(out_profile);
 
@@ -321,20 +231,11 @@ void make_cc_negative_profile() {
   cmsPipeline* neg_pipeline = cmsPipelineAlloc(NULL, 3, 3);
 
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, crosstalk_correction_mat, NULL));
+  // cmsPipelineInsertStage(neg_pipeline, cmsAT_END, create_identity_clut_stage_float());
   cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocToneCurves(NULL, 3, curvef)); // negative tone curves.
-#if 1 // Hack! To see what happens with clut output.
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_float("icc_out/argyll_ref_clut.icc"));
-#else
+  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, read_clut_stage_float(src_profile_name));
 
-  // From dctaw image b = 3 and computed by argullcms -am
-  double mat[] = {0.440064, 0.520204, 0.078978,
-		  0.253482, 0.826624, -0.015199,
-		  0.037010, 0.266008, 0.722028};
-
-  cmsPipelineInsertStage(neg_pipeline, cmsAT_END, cmsStageAllocMatrix(NULL, 3, 3, mat, NULL));
-#endif
   printf("New pipeline has stages: %d\n", cmsPipelineStageCount(neg_pipeline));
-
   ret = cmsWriteTag(out_profile, cmsSigDToB0Tag, neg_pipeline);
   if (!ret) {
     fprintf(stdout, "Failed to save D2B0 pipeline.\n");
@@ -346,12 +247,10 @@ void make_cc_negative_profile() {
   }
 }
 
-int main () {
+int main (int argc, char** argv) {
   cmsSetLogErrorHandler(&error_handler);
-  make_std_negative_profile_lutAB_mat(); // TODO: version 2.2 curve and mat
-  make_std_negative_profile_mft_clut(); // version 2.2
+  make_std_negative_profile_mft_clut(argv[1]); // version 2.2 
   make_std_negative_profile_mpet_mat(); // version 4.3 mat
-  make_std_negative_profile_mpet_clut(); // version 4.3 clut
-  make_cc_negative_profile();
+  make_cc_negative_profile(argv[1]);
   return 0;
 }

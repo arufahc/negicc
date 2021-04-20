@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+import subprocess
 import sys
 from scipy import interpolate
 from scipy.optimize import curve_fit
@@ -38,8 +39,8 @@ parser.add_argument("--white_x", help="Source media white x. This is used for ch
 parser.add_argument("--white_y", help="Source media white y. This is used for chromatic adaptation if the reference XYZ are not D50 adapted.")
 parser.add_argument("--whitest_patch_scaling",
                     help="The RGB value that should be assigned to the whitest (densest) patch. "
-                    "Setting this value allows extrapolation of brighter objects that whitest patch on the target.", default=0.8)
-parser.add_argument("--fit_intercept", help="Whether to allow intercept in linear interpolation for crosstalk correction.", default=False)
+                    "Setting this value allows extrapolation of brighter objects that whitest patch on the target.", default=0.8, type=float)
+parser.add_argument("--fit_intercept", help="Whether to allow intercept in linear interpolation for crosstalk correction.", default=True)
 parser.add_argument("--crosstalk_r_coefs", help="R coefficients for the crosstalk correction matrix.")
 parser.add_argument("--crosstalk_g_coefs", help="G coefficients for the crosstalk correction matrix.")
 parser.add_argument("--crosstalk_b_coefs", help="B coefficients for the crosstalk correction matrix.")
@@ -55,17 +56,26 @@ if args.debug:
     print(df.tail())
 
 def estimate_crosstalk_correction_coefficients():
-    # ALGORITHM
-    #
-    # We assume there is a linear relationship between the R, G, B values with the reference
-    # values. This assumption is generally true because the camera R value comes from the
-    # signals captured in the G and B spectrum, and so on for G and B vaules.
-    # This is particularly true if the images are captured via a narrow band filter from a
-    # negative IT8 or from a positive IT8 target.
-    # If the images are from a negative IT8 target with narrowband light the estimation
-    # might be far off because the optical density (hence strong signal) is much lower in the
-    # crosstalk spectrum between dyes. It is recommended to use a narrow triband filter to
-    # capture an image with 3 channels.
+    """
+    Computes the crosstalk correction coefficients from global df variable. Uses the 'r', 'g'
+    and 'b' series and correct then to match 'refR', 'refG', 'refB' series using linear
+    interpolation.
+
+    Returns:
+      Crosstalk correction coefficients for RGB channels in a tuple.
+
+     ALGORITHM
+    
+     We assume there is a linear relationship between the R, G, B values with the reference
+     values. This assumption is generally true because the camera R value comes from the
+     signals captured in the G and B spectrum, and so on for G and B vaules.
+     This is particularly true if the images are captured via a narrow band filter from a
+     negative IT8 or from a positive IT8 target.
+     If the images are from a negative IT8 target with narrowband light the estimation
+     might be far off because the optical density (hence strong signal) is much lower in the
+     crosstalk spectrum between dyes. It is recommended to use a narrow triband filter to
+     capture an image with 3 channels.
+    """
     if args.crosstalk_g_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs:
         return ([float(x) for x in args.crosstalk_r_coefs.split()],
                 [float(x) for x in args.crosstalk_g_coefs.split()],
@@ -92,157 +102,91 @@ def estimate_crosstalk_correction_coefficients():
     # to have the gray scale patches align.
     return (r_coef / r_coef[0], g_coef / g_coef[1], b_coef / b_coef[2])
 
-print("Step 1: Estimate the cross-talk correction matrix.")
-# TODO: The coefficients cannot be positive other than the primary signal, i.e. the diagonal.
-r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
-print('R Coefficients: ', r_coef)
-print('G Coefficients: ', g_coef)
-print('B Coefficients: ', b_coef)
+def debug_inversion_curves(refR, refG, refB, luminance):
+    # Note: These curve fitting is for mathematically evaluation only.
+    # We use this mathematically model convert from electronic signal to linear RGB values
+    # that is proportional to luminance:
+    #
+    # linear_val = a * (b / signal) ^ c
+    #
+    # Where
+    # a is a constant scale factor
+    # b is a reference signal that is strong enough
+    # c is the gamma
+    def func(x, a, b, c):
+        return a * ((b / x) ** c)
+    r_opt, _ = curve_fit(func, refR, luminance, p0=[0.1, refR['gs23'], 0.5])
+    g_opt, _ = curve_fit(func, refG, luminance, p0=[0.1, refG['gs23'], 0.5])
+    b_opt, _ = curve_fit(func, refB, luminance, p0=[0.1, refB['gs23'], 0.5])
+    with np.printoptions(precision=5):
+        print("Best fitted parameters for modeling electronic signal to RGB values:")
+        print("linearR = %f * (%f / r) ^ %f" % tuple(r_opt.tolist()))
+        print("linearG = %f * (%f / g) ^ %f" % tuple(g_opt.tolist()))
+        print("linearB = %f * (%f / b) ^ %f" % tuple(b_opt.tolist()))
 
-# Crosstalk correct matrix is always applied on the right hand side and is thus
-# transposed.
-crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
+def estimate_trc_curves(corrected_gs_rgb, luminance):
+    """
+    Estimate the TRC curves from the RGB values to the linear luminance values.
 
-print("Step 2: Estimate the TRC from cross-talk corrected RGB values to linear RGB values proportional to luminance.")
+    Args:
+      rgb: Three vectors of RGB values.
+      luminance: Linear luminance values measured from an instrument.
 
-# ALGORITHM
-#
-# We assume that gs patches in the training data are supposed to be well balanced.
-# Then we build tone curves using interpolation to align the patches such that the
-# crosstalk corrected RGB values from these patches are perfectly aligned. We have
-# to pay extra attention such that the extrapolated values outside of the known values
-# are monotonic, hence the Pchip interpolator is selected.
-#
-# The limitation of this method is the balanced gradation is only guranteed for the
-# luminanced range of the training data, which is about 7 stops (i.e. 2^7:1 = 128:1
-# contrast) limited by the reflective IT8 target. It might be possible to combine
-# data from exposures taken at 1 stop apart, but this assumes the camera had very
-# accurate shutter speed between stops. More research is needed to cover 10 stops
-# of gradation.
+    Returns:
+      A tuple of TRC curves for the RGB channels such that the incoming RGB values are
+      linearalized according to the luminance vector.
 
-gs = df.loc[['gs' + str(x) for x in range(0,24)]]
-gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
-print("GS RGB values before correction.")
-print(gs_rgb.transpose())
+    ALGORITHM
+     We assume that gs patches in the training data are supposed to be well balanced.
+     Then we build tone curves using interpolation to align the patches such that the
+     crosstalk corrected RGB values from these patches are perfectly aligned. We have
+     to pay extra attention such that the extrapolated values outside of the known values
+     are monotonic, hence the Pchip interpolator is selected.
+    
+     The limitation of this method is the balanced gradation is only guranteed for the
+     luminanced range of the training data, which is about 7 stops (i.e. 2^7:1 = 128:1
+     contrast) limited by the reflective IT8 target. It might be possible to combine
+     data from exposures taken at 1 stop apart, but this assumes the camera had very
+     accurate shutter speed between stops. More research is needed to cover 10 stops
+     of gradation.
+    """
 
-corrected_gs_rgb = np.matmul(gs_rgb.transpose(), crosstalk_correction_mat).transpose()
-print("GS RGB values after correction.")
-print(corrected_gs_rgb.transpose())
+    # Build interpolators from the training data.
+    train_gs_luminance = np.append(np.insert(luminance.tolist(), 0, 1), 0)
+    corrected_gs_r, corrected_gs_g, corrected_gs_b = corrected_gs_rgb
+    corrected_gs_r = np.append(np.insert(corrected_gs_r, 0, 0), 65535)
+    corrected_gs_g = np.append(np.insert(corrected_gs_g, 0, 0), 65535)
+    corrected_gs_b = np.append(np.insert(corrected_gs_b, 0, 0), 65535)
 
-luminance = gs['refY']
-luminance /= luminance.max() / args.whitest_patch_scaling
+    interp_r = interpolate.PchipInterpolator(corrected_gs_r, train_gs_luminance)
+    interp_g = interpolate.PchipInterpolator(corrected_gs_g, train_gs_luminance)
+    interp_b = interpolate.PchipInterpolator(corrected_gs_b, train_gs_luminance)
 
-# Note: These curve fitting is for mathematically evaluation only.
-# We use this mathematically model convert from electronic signal to linear RGB values
-# that is proportional to luminance:
-#
-# linear_val = a * (b / signal) ^ c
-#
-# Where
-# a is a constant scale factor
-# b is a reference signal that is strong enough
-# c is the gamma
-def func(x, a, b, c):
-    return a * ((b / x) ** c)
-r_opt, _ = curve_fit(func, gs['refR'], luminance, p0=[0.1, gs['refR']['gs23'], 0.5])
-g_opt, _ = curve_fit(func, gs['refG'], luminance, p0=[0.1, gs['refG']['gs23'], 0.5])
-b_opt, _ = curve_fit(func, gs['refB'], luminance, p0=[0.1, gs['refB']['gs23'], 0.5])
-with np.printoptions(precision=5):
-    print("Best fitted parameters for modeling electronic signal to RGB values:")
-    print("linearR = %f * (%f / r) ^ %f" % tuple(r_opt.tolist()))
-    print("linearG = %f * (%f / g) ^ %f" % tuple(g_opt.tolist()))
-    print("linearB = %f * (%f / b) ^ %f" % tuple(b_opt.tolist()))
+    if args.debug:
+        with np.printoptions(precision=8):
+            print("GS RGB values after 3x1D LUT.")
+            print(np.round(np.array([interp_r(corrected_gs_r), interp_g(corrected_gs_g), interp_b(corrected_gs_b)]).transpose(), 8))
 
-print('Step 3: Build 3D LUT from positive RGB to measured XYZ.')
+    xs = np.linspace(0, 65536, 4096) # V2 Profile allow up to 4096 points.
+    r_curve = interp_r(xs)
+    g_curve = interp_g(xs)
+    b_curve = interp_b(xs)
 
-# Build interpolators from the training data.
-train_gs_luminance = np.append(np.insert(luminance.tolist(), 0, 1), 0)
-train_gs_r, train_gs_g, train_gs_b = corrected_gs_rgb
-train_gs_r = np.append(np.insert(train_gs_r, 0, 0), 65535)
-train_gs_g = np.append(np.insert(train_gs_g, 0, 0), 65535)
-train_gs_b = np.append(np.insert(train_gs_b, 0, 0), 65535)
-interp_r = interpolate.PchipInterpolator(train_gs_r, train_gs_luminance)
-interp_g = interpolate.PchipInterpolator(train_gs_g, train_gs_luminance)
-interp_b = interpolate.PchipInterpolator(train_gs_b, train_gs_luminance)
+    if args.debug:
+        # Plot a graph to show the interpolated tone curves.
+        plt.plot(corrected_gs_r, train_gs_luminance, 'o', xs, r_curve, '-')
+        plt.plot(corrected_gs_g, train_gs_luminance, 'o', xs, g_curve, '-')
+        plt.plot(corrected_gs_b, train_gs_luminance, 'o', xs, b_curve, '-')
+        plt.show()
+    return r_curve, g_curve, b_curve
 
-with np.printoptions(precision=8):
-    print("GS RGB values after 3x1D LUT.")
-    print(np.round(np.array([interp_r(train_gs_r), interp_g(train_gs_g), interp_b(train_gs_b)]).transpose(), 8))
+def write_ti3(filename):
+    f = open(filename, 'w+')
+    stdout_backup = sys.stdout
+    sys.stdout = f
 
-# Plot a graph to show the interpolated tone curves.
-xs = np.linspace(0, 65536, 16384)
-r_curve = interp_r(xs)
-g_curve = interp_g(xs)
-b_curve = interp_b(xs)
-
-if args.debug:
-    plt.plot(train_gs_r, train_gs_luminance, 'o', xs, r_curve, '-')
-    plt.plot(train_gs_g, train_gs_luminance, 'o', xs, g_curve, '-')
-    plt.plot(train_gs_b, train_gs_luminance, 'o', xs, b_curve, '-')
-    plt.show()
-
-# ALGORITHM
-#
-# Apply in order crosstalk correction and then curve correction to all patches
-# of the training data. This converts then to positive images. Then each positive
-# RGB values can be mapped to known XYZ values using a cLUT.
-#
-# The building of cLUT is done by ArgyllCMS.
-
-# Contains all rgb values of the patches of shape 3 x NUM_OF_PATCHES.
-rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
-
-# Crosstalk correct then clip to [0, 65535].
-corrected_rgb = np.clip(np.matmul(rgb.transpose(), crosstalk_correction_mat), 0, 65535)
-
-# Apply curves to convert them positive signals.
-lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
-positive_rgb = lut.apply(corrected_rgb / 65535) # LUT takes range [0, 1].
-
-# Add back the positive RGB values and the corresponding normalized XYZ values
-# into |df|. These values need to be normalized to max of 100 which is what
-# ArgyllCMS likes.
-positive_df = (positive_rgb * 100).transpose()
-df['pos_r'] = pd.Series(positive_df[0], index=df.index)
-df['pos_g'] = pd.Series(positive_df[1], index=df.index)
-df['pos_b'] = pd.Series(positive_df[2], index=df.index)
-
-# Next step is to perform chromatic adaptation of the measured tristimulus values
-# into D50. Film balanced at 5500K so we should be exposing the test chart with
-# 5500K light and also measure the test chart with same color temperature.
-
-# This is the standard value from ICC specification.
-D50_XYZ = np.array([0.9642, 1, 0.8249])
-
-unadapted_XYZ = np.array(df[['refX', 'refY', 'refZ']])
-if args.white_x and args.white_y:
-    test_white_XYZ = colour.xyY_to_XYZ([args.white_x, args.white_y, 1]) # Don't need to be particular about Y value.
-
-    adapted_XYZ = colour.adaptation.chromatic_adaptation(unadapted_XYZ, test_white_XYZ, D50_XYZ, method='Von Kries', transform='Bradford')
-else:
-    adapted_XYZ = unadapted_XYZ
-
-if args.debug:
-    print('Refernce unadapted XYZ values:')
-    print(unadapted_XYZ)
-    print('D50 adapted XYZ values using Bradford CAT:')
-    print(adapted_XYZ)
-
-# colprof expects max value to be 100.0.
-norm_XYZ = adapted_XYZ.transpose() / adapted_XYZ.max().max() * 100
-df['norm_refX'], df['norm_refY'], df['norm_refZ'] = norm_XYZ
-df.to_csv('build_prof_diag.csv')
-
-print('Step 4: Writing build_prof.ti3 to be used by ArgyllCMS for building cLUT.')
-print('Example command for using colprof to generate cLUT profile:')
-print('    colprof -v -ax -qh -kz -u -bn -ni -np -no build_prof')
-
-f = open('build_prof.ti3', 'w+')
-stdout_backup = sys.stdout
-sys.stdout = f
-
-# Print TI3 file for cLUT profiling using ArgyllCMS.
-print("""
+    # Print TI3 file for cLUT profiling using ArgyllCMS.
+    print("""
 CTI3   
 
 DESCRIPTOR "Argyll Calibration Target chart information 3"
@@ -259,48 +203,168 @@ END_DATA_FORMAT
 NUMBER_OF_SETS 288
 BEGIN_DATA
 """)
-for index, row in df.iterrows():
-    print(index, row['norm_refX'], row['norm_refY'], row['norm_refZ'], row['pos_r'], row['pos_g'], row['pos_b'])
-print("END_DATA")
-f.close()
-sys.stdout = stdout_backup
+    for index, row in df.iterrows():
+        print(index, row['norm_refX'], row['norm_refY'], row['norm_refZ'], row['pos_r'], row['pos_g'], row['pos_b'])
+    print("END_DATA")
+    f.close()
+    sys.stdout = stdout_backup
 
-print('Step 5: Writing build_prof.h to be used by make_icc to create final profile.')
+def write_build_prof_header(crosstalk_correction_mat, test_white_XYZ, r_curve, g_curve, b_curve):
+    f = open('build_prof.h', 'w+')
+    stdout_backup = sys.stdout
+    sys.stdout = f
 
-f = open('neg_correct.sh', 'w+')
-sys.stdout = f
-print("""
-dcraw -v -4 -o 0 -h -W -T -H 1 -b 3 "$1"
-convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_corrected.tiff}"
-""" % tuple(crosstalk_correction_mat.transpose().flatten()))
-f.close()
-
-f = open('build_prof.h', 'w+')
-sys.stdout = f
-
-# Print matrix.
-print("double crosstalk_correction_mat[] = {")
-mat = crosstalk_correction_mat.transpose().flatten()
-for i in range(0, len(mat)):
-    print(" %.15f," % mat[i], end='')
-    if (i+1) % 3 == 0:
-        print()
-print("};");
-
-# Print tone curves.
-def print_curve(name, curve):
-    print("float %s[CURVE_POINTS] = {" % name)
-    for i in range(0, len(curve)):
-        if i == len(curve) - 1:
-            print(" %.7f" % curve[i], end='')
-        else:
-            print(" %.7f," % curve[i], end='')
-        if (i+1) % 16 == 0:
+    # Print matrix.
+    print("double crosstalk_correction_mat[] = {")
+    mat = crosstalk_correction_mat.transpose().flatten()
+    for i in range(0, len(mat)):
+        print(" %.15f," % mat[i], end='')
+        if (i+1) % 3 == 0:
             print()
-    print("};\n")
+    print("};");
 
-print("const int CURVE_POINTS = %d;" % len(xs))
-print_curve('b_curve', interp_b(xs))
-print_curve('g_curve', interp_g(xs))
-print_curve('r_curve', interp_r(xs))
-f.close()
+    # Print tone curves.
+    def print_curve(name, curve):
+        print("float %s[CURVE_POINTS] = {" % name)
+        for i in range(0, len(curve)):
+            if i == len(curve) - 1:
+                print(" %.7f" % curve[i], end='')
+            else:
+                print(" %.7f," % curve[i], end='')
+            if (i+1) % 16 == 0:
+                print()
+        print("};\n")
+
+    print("const double white_point[] = {%f, %f, %f};" % tuple(test_white_XYZ / args.whitest_patch_scaling))
+    print("const int CURVE_POINTS = %d;" % len(r_curve))
+    print_curve('b_curve', b_curve)
+    print_curve('g_curve', g_curve)
+    print_curve('r_curve', r_curve)
+    f.close()
+    sys.stdout = stdout_backup
+
+def run_chromatic_adaptation_on_ref_XYZ():
+    """
+    Perform chromatic adaptation of the measured tristimulus values
+    into D50. Film balanced at 5500K so we should be exposing the test chart with
+    5500K light and also measure the test chart with same color temperature.
+
+    Results are written to global df and scaled to max value of 100.
+
+    Returns:
+      XYZ values of testing media white.
+    """
+    # This is the standard value from ICC specification.
+    D50_XYZ = np.array([0.9642, 1, 0.8249])
+
+    unadapted_XYZ = np.array(df[['refX', 'refY', 'refZ']])
+    if args.white_x and args.white_y:
+        test_white_XYZ = np.array(colour.xyY_to_XYZ([args.white_x, args.white_y, 1]))
+        adapted_XYZ = colour.adaptation.chromatic_adaptation(unadapted_XYZ, test_white_XYZ, D50_XYZ, method='Von Kries', transform='Bradford')
+    else:
+        test_white_XYZ = D50_XYZ
+        adapted_XYZ = unadapted_XYZ
+
+    if args.debug:
+        print('Refernce unadapted XYZ values:')
+        print(unadapted_XYZ)
+        print('D50 adapted XYZ values using Bradford CAT:')
+        print(adapted_XYZ)
+
+    # colprof expects max value to be 100.0.
+    norm_XYZ = adapted_XYZ.transpose() / adapted_XYZ.max().max() * 100
+    df['norm_refX'], df['norm_refY'], df['norm_refZ'] = norm_XYZ
+    return test_white_XYZ
+
+print('Step 3: Build 3D LUT from positive RGB to measured XYZ.')
+
+def compute_positive_rgb_values(crosstalk_correction_mat, r_curve, g_curve, b_curve):
+    """
+    Apply crosstalk correction and TRC curves to produce RGB values for the patches.
+
+    Positive patches are written to pos_r, pos_g and pos_b serieses with max value of 100.
+    """
+    # Contains all rgb values of the patches of shape 3 x NUM_OF_PATCHES.
+    rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
+
+    # Crosstalk correct then clip to [0, 65535].
+    corrected_rgb = np.clip(np.matmul(rgb.transpose(), crosstalk_correction_mat), 0, 65535)
+
+    # Apply curves to convert them positive signals.
+    lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
+    positive_rgb = lut.apply(corrected_rgb / 65535) # LUT takes range [0, 1].
+
+    # Add back the positive RGB values and the corresponding normalized XYZ values
+    # into |df|. These values need to be normalized to max of 100 which is what
+    # ArgyllCMS likes.
+    positive_df = (positive_rgb * 100).transpose()
+    df['pos_r'] = pd.Series(positive_df[0], index=df.index)
+    df['pos_g'] = pd.Series(positive_df[1], index=df.index)
+    df['pos_b'] = pd.Series(positive_df[2], index=df.index)
+
+def run_colprof():
+    """
+    Run colprof to produce a profile.
+    """
+    df.to_csv('build_prof_diag.csv')
+    write_ti3('build_prof.ti3')
+
+    # This set of arguments forces colprof to generate profile with linear input and output curves.
+    # Since we have already applied a curve to the input to get GS patches to be linear the input
+    # curves would have been generated by ArgyllCMS only make small adjustments and otherwise does
+    # not improve accuracy much so save the complexity.
+    subprocess.run(['colprof', '-v',
+                    '-ax', # Generate XYZ cLUT.
+                    '-qu', # Gives 45 grid points instead of 33 of -qh.
+                    '-kz', # TODO: Need to experiment with this option.
+                    '-u', # TODO: Need to experiment with this option.
+                    '-bn', # No need of B2A profiles.
+                    '-ni', '-np', '-no', # Forces linear input and output curves.
+                    'build_prof'], check=True)
+
+def run_make_icc(crosstalk_correction_mat, test_white_XYZ, r_curve, g_curve, b_curve):
+    write_build_prof_header(crosstalk_correction_mat, test_white_XYZ, r_curve, g_curve, b_curve)
+    subprocess.run(['make', 'make_icc'], check=True)
+    subprocess.run(['./make_icc', 'build_prof.icc'], check=True)
+
+def main():
+    # Prepare the refernce XYZ values to be used for running colprof.
+    test_white_XYZ = run_chromatic_adaptation_on_ref_XYZ()
+
+    print("Step 1: Estimate the cross-talk correction matrix.")
+    # TODO: The coefficients cannot be positive other than the primary signal, i.e. the diagonal.
+    r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
+    print('R Coefficients: ', r_coef)
+    print('G Coefficients: ', g_coef)
+    print('B Coefficients: ', b_coef)
+
+    # Crosstalk correct matrix is always applied on the right hand side and is thus transposed.
+    crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
+
+    print("Step 2: Estimate the TRC from cross-talk corrected RGB values to linear RGB values proportional to luminance.")
+    gs = df.loc[['gs' + str(x) for x in range(0,24)]]
+    gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
+    corrected_gs_rgb = np.matmul(gs_rgb.transpose(), crosstalk_correction_mat).transpose()
+
+    if args.debug:
+        print("GS RGB values before correction.")
+        print(gs_rgb.transpose())
+        print("GS RGB values after correction.")
+        print(corrected_gs_rgb.transpose())
+
+    luminance = gs['refY'] / (gs['refY'].max() / args.whitest_patch_scaling)
+    if args.debug:
+        debug_inversion_curves(gs['refR'], gs['refG'], gs['refB'], luminance)
+    r_curve, g_curve, b_curve = estimate_trc_curves(corrected_gs_rgb, luminance)
+
+    # Compute the pos_r, pos_g and pos_b series using the estimated corrections.
+    compute_positive_rgb_values(crosstalk_correction_mat, r_curve, g_curve, b_curve)
+
+    print("Step 3: Run colprof to produce a profile.")
+    run_colprof()
+
+    print('Step 4: Building ICC profiles using make_icc.')
+    run_make_icc(crosstalk_correction_mat, test_white_XYZ, r_curve, g_curve, b_curve)
+
+if __name__ == "__main__":
+    main()
