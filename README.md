@@ -80,6 +80,17 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * scikit-learn
 * lcms2
 
+# Tools Used
+
+## Critical components
+* IT8 target (R190808 from coloraid.de)
+* Edmund Optics #87-254
+* Bandpass filters: MidOpt BP470, BP525 and LP610
+
+## Secondary components
+* Fiet 74204/CA led light panel
+* Camera (Nikon Z7)
+
 # Usage
 
 All the steps are programmed in the Makefile. Running make will build the 
