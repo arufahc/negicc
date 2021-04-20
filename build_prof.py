@@ -295,6 +295,23 @@ def write_build_prof_header(
     sys.stdout = stdout_backup
 
 
+def write_neg_invert_sh(file_name, crosstalk_correction_mat):
+    f = open(file_name, 'w+')
+    stdout_backup = sys.stdout
+    sys.stdout = f
+    print("""
+dcraw -v -4 -o 0 -h -W -T -H 1 -b 3 "$1"
+
+convert "${1/.NEF/.tiff}" -set colorspace RGB -set profile ../icc_out/cc_negative.icc -profile ~/Library/ColorSync/Profiles/ClayRGB-elle-V4-g22.icm "${1/.NEF/_pos_g22.tiff}" 
+
+convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_cc.tiff}"
+convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v4_mat.icc "${1/.NEF/_std_prof_v4_mat.tiff}"
+convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
+""" % tuple(crosstalk_correction_mat.transpose().flatten()))
+    f.close()
+    sys.stdout = stdout_backup
+
+
 def run_chromatic_adaptation_on_ref_XYZ():
     """
     Perform chromatic adaptation of the measured tristimulus values
@@ -491,6 +508,8 @@ def main():
         args.film_name,
         clut_prof,
         matrix_prof)
+
+    write_neg_invert_sh("bin_out/neg_invert.sh", crosstalk_correction_mat)
 
 
 if __name__ == "__main__":
