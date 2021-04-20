@@ -83,7 +83,12 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 # Usage
 
 All the steps are programmed in the Makefile. Running make will build the 
-ICC profiles.
+ICC profiles. This will generate a ./neg_invert.sh script that can be used
+to produce a TIFF image that embeds the cLUT profile.
+
+Note that the profile is only good for the particular setup I used. You will
+need to develop your own IT8 target exposures, scan them with filters and run
+this again. The steps for generating the data files are in the Makefile.
 
 ```
 make all
