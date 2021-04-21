@@ -97,10 +97,11 @@ def estimate_crosstalk_correction_coefficients():
      signals captured in the G and B spectrum, and so on for G and B vaules.
      This is particularly true if the images are captured via a narrow band filter from a
      negative IT8 or from a positive IT8 target.
-     If the images are from a negative IT8 target with narrowband light the estimation
+     If the images are from a negative IT8 target with wide spectrum light the estimation
      might be far off because the optical density (hence strong signal) is much lower in the
      crosstalk spectrum between dyes. It is recommended to use a narrow triband filter to
-     capture an image with 3 channels.
+     capture an image with 3 channels. Alternatively one can also use narrow band LEDs to
+     illuminate the film for these shots.
     """
     if args.crosstalk_g_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs:
         return ([float(x) for x in args.crosstalk_r_coefs.split()],
