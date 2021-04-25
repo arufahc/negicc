@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+import shutil
 import subprocess
 import sys
 from scipy import interpolate
@@ -46,7 +47,7 @@ parser.add_argument(
     "--whitest_patch_scaling",
     help="The RGB value that should be assigned to the whitest (densest) patch. "
     "Setting this value allows extrapolation of brighter objects that whitest patch on the target.",
-    default=0.8,
+    default=0.75,
     type=float)
 parser.add_argument(
     "--fit_intercept",
@@ -215,7 +216,7 @@ def estimate_trc_curves(corrected_gs_rgb, luminance):
     return r_curve, g_curve, b_curve
 
 
-def write_ti3(filename):
+def write_ti3(filename, positive_rgb=True):
     f = open(filename, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
@@ -244,9 +245,9 @@ BEGIN_DATA
             row['norm_refX'],
             row['norm_refY'],
             row['norm_refZ'],
-            row['pos_r'],
-            row['pos_g'],
-            row['pos_b'])
+            row['pos_r'] if positive_rgb else row['corrected_r'],
+            row['pos_g'] if positive_rgb else row['corrected_g'],
+            row['pos_b'] if positive_rgb else row['corrected_b'])
     print("END_DATA")
     f.close()
     sys.stdout = stdout_backup
@@ -301,13 +302,14 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat):
     stdout_backup = sys.stdout
     sys.stdout = f
     print("""
-dcraw -v -4 -o 0 -h -W -T -H 1 -b 3 "$1"
+dcraw -v -4 -o 0 -W -T -H 1 -b 3 -q 0 "$1"
 
-convert "${1/.NEF/.tiff}" -set colorspace RGB -set profile ../icc_out/cc_negative.icc -profile ~/Library/ColorSync/Profiles/ClayRGB-elle-V4-g22.icm "${1/.NEF/_pos_g22.tiff}" 
+# convert "${1/.NEF/.tiff}" -set colorspace RGB -set profile ../icc_out/cc_negative.icc -profile ~/Library/ColorSync/Profiles/ClayRGB-elle-V4-g22.icm "${1/.NEF/_pos_g22.tiff}" 
 
 convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_cc.tiff}"
-convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v4_mat.icc "${1/.NEF/_std_prof_v4_mat.tiff}"
-convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
+# convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v4_mat.icc "${1/.NEF/_std_prof_v4_mat.tiff}"
+# convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
+rm "${1/.NEF/.tiff}"
 """ % tuple(crosstalk_correction_mat.transpose().flatten()))
     f.close()
     sys.stdout = stdout_backup
@@ -372,6 +374,10 @@ def compute_positive_rgb_values(
             crosstalk_correction_mat),
         0,
         65535)
+    corrected_df = (corrected_rgb / 65535 * 100).transpose()
+    df['corrected_r'] = pd.Series(corrected_df[0], index=df.index)
+    df['corrected_g'] = pd.Series(corrected_df[1], index=df.index)
+    df['corrected_b'] = pd.Series(corrected_df[2], index=df.index)
 
     # Apply curves to convert them positive signals.
     lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
@@ -449,6 +455,10 @@ def run_make_icc(
     subprocess.run(['bin_out/make_icc', film_name, clut_icc, mat_icc], check=True)
 
 
+def run_prof_check(clut_icc):
+    subprocess.run(['profcheck', '-v3', 'check_prof.ti3', clut_icc], check=True)
+
+
 def main():
     # Prepare the refernce XYZ values to be used for running colprof.
     test_white_XYZ = run_chromatic_adaptation_on_ref_XYZ()
@@ -479,7 +489,7 @@ def main():
         print(corrected_gs_rgb.transpose())
 
     luminance = gs['refY'] / \
-        (df[['refY']].max().max() / args.whitest_patch_scaling)
+        (gs['refY'].max() / args.whitest_patch_scaling)
     if args.debug:
         debug_inversion_curves(gs['refR'], gs['refG'], gs['refB'], luminance)
     r_curve, g_curve, b_curve = estimate_trc_curves(
@@ -509,8 +519,16 @@ def main():
         args.film_name,
         clut_prof,
         matrix_prof)
+    out_clut_prof = 'icc_out/%s cLUT.icc' % args.film_name
+    out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
+
+    write_ti3('check_prof.ti3', positive_rgb=False)
+    run_prof_check(out_clut_prof)
 
     write_neg_invert_sh("bin_out/neg_invert.sh", crosstalk_correction_mat)
+    os.makedirs('~/Library/ColorSync/Profiles/NegICC Profiles/', exist_ok=True)
+    print("Copying %s -> %s.", out_clut_prof, '~/Library/ColorSync/Profiles/NegICC Profiles/')
+    shutil.copy(out_clut_prof, '~/Library/ColorSync/Profiles/NegICC Profiles/')
 
 
 if __name__ == "__main__":

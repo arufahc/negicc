@@ -146,7 +146,9 @@ void make_std_negative_profile_mft2_clut(const char* film_name, const char* src_
     fprintf(stdout, "Failed to save A2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_v2_clut.icc");
+  char file_name[256];
+  sprintf(file_name, "icc_out/%s cLUT.icc", film_name);
+  ret = cmsSaveProfileToFile(out_profile, file_name);
   if (!ret) {
     printf("Failed to save profile!\n");
   }
@@ -201,7 +203,9 @@ void make_std_negative_profile_lutab_mat(const char* film_name, const char* src_
     fprintf(stdout, "Failed to save A2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/std_negative_v4_mat.icc");
+  char file_name[256];
+  sprintf(file_name, "icc_out/%s Matrix.icc", film_name);
+  ret = cmsSaveProfileToFile(out_profile, file_name);
   if (!ret) {
     printf("Failed to save profile!\n");
   }
@@ -239,7 +243,9 @@ void make_cc_negative_profile(const char* film_name, const char* src_profile_nam
     fprintf(stdout, "Failed to save D2B0 pipeline.\n");
   }
   cmsMD5computeID(out_profile);
-  ret = cmsSaveProfileToFile(out_profile, "icc_out/cc_negative.icc");
+  char file_name[256];
+  sprintf(file_name, "icc_out/%s CC cLUT.icc", film_name);
+  ret = cmsSaveProfileToFile(out_profile, file_name);
   if (!ret) {
     printf("Failed to save profile!\n");
   }
