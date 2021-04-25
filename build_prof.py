@@ -22,6 +22,7 @@ import pandas as pd
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from scipy import interpolate
 from scipy.optimize import curve_fit
 from sklearn.linear_model import LinearRegression
@@ -302,14 +303,14 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat):
     stdout_backup = sys.stdout
     sys.stdout = f
     print("""
-dcraw -v -4 -o 0 -W -T -H 1 -b 3 -q 0 "$1"
+dcraw -v -4 -o 0 -W -T -H 1 -b 3 "$1"
 
 # convert "${1/.NEF/.tiff}" -set colorspace RGB -set profile ../icc_out/cc_negative.icc -profile ~/Library/ColorSync/Profiles/ClayRGB-elle-V4-g22.icm "${1/.NEF/_pos_g22.tiff}" 
 
 convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_cc.tiff}"
 # convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v4_mat.icc "${1/.NEF/_std_prof_v4_mat.tiff}"
-# convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
-rm "${1/.NEF/.tiff}"
+convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
+rm "${1/.NEF/.tiff}" "${1/.NEF/_cc.tiff}"
 """ % tuple(crosstalk_correction_mat.transpose().flatten()))
     f.close()
     sys.stdout = stdout_backup
@@ -526,9 +527,9 @@ def main():
     run_prof_check(out_clut_prof)
 
     write_neg_invert_sh("bin_out/neg_invert.sh", crosstalk_correction_mat)
-    os.makedirs('~/Library/ColorSync/Profiles/NegICC Profiles/', exist_ok=True)
-    print("Copying %s -> %s.", out_clut_prof, '~/Library/ColorSync/Profiles/NegICC Profiles/')
-    shutil.copy(out_clut_prof, '~/Library/ColorSync/Profiles/NegICC Profiles/')
+    # install_dir = str(Path.home()) + '/Library/ColorSync/Profiles/NegICC Profiles/'
+    # os.makedirs(install_dir, exist_ok=True)
+    # shutil.copy(out_clut_prof, install_dir)
 
 
 if __name__ == "__main__":
