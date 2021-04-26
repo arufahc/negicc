@@ -72,6 +72,9 @@ parser.add_argument(
     "--film_name",
     help="Name of the film.",
     default="Generic")
+parser.add_argument(
+    "--install_dir",
+    help="Location to place the ICC profile and script.")
 args = parser.parse_args()
 
 # DataFrame that will keep all the source data and mutations.
@@ -536,12 +539,12 @@ def main():
     write_ti3('check_prof.ti3', positive_rgb=False)
     run_prof_check(out_clut_prof)
 
-    install_dir = str(Path.home()) + '/Library/ColorSync/Profiles/NegICC Profiles/'
-    os.makedirs(install_dir, exist_ok=True)
-    shutil.copy(out_clut_prof, install_dir)
-    write_neg_invert_sh(install_dir + "%s_neg_invert.sh" % args.film_name.lower().replace(' ', '_'),
-                        crosstalk_correction_mat,
-                        install_dir + out_clut_prof.split('/')[-1])
+    if args.install_dir:
+        os.makedirs(args.install_dir, exist_ok=True)
+        shutil.copy(out_clut_prof, args.install_dir)
+        write_neg_invert_sh(args.install_dir + "%s_neg_invert.sh" % args.film_name.lower().replace(' ', '_'),
+                            crosstalk_correction_mat,
+                            args.install_dir + out_clut_prof.split('/')[-1])
 
 
 if __name__ == "__main__":
