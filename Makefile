@@ -70,7 +70,10 @@ test_white_xy = --white_x=0.3353 --white_y=0.3496
 # time for scanning with additional 3 bandpass filters.
 nikon_z7_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.082115947096161 -0.018122368837481' --crosstalk_g_coefs='-0.078439679225726 1 -0.218905850589040' --crosstalk_b_coefs='-0.004963694751139 -0.100838827684968 1' 
 
-nikon_z7_triband_common_args = $(nikon_z7_triband_crosstalk_coefs) $(test_white_xy) --debug=1
+DEBUG = 
+INSTALL_DIR = 
+
+nikon_z7_triband_common_args = $(nikon_z7_triband_crosstalk_coefs) $(test_white_xy) $(DEBUG) $(INSTALL_DIR)/
 
 .PHONY: nikon_z7_ektar100_u2
 nikon_z7_ektar100_u2: build_prof.py make_icc.c
@@ -79,68 +82,68 @@ nikon_z7_ektar100_u2: build_prof.py make_icc.c
 
 .PHONY: nikon_z7_ektar100_u1
 nikon_z7_ektar100_u1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/ektar100_it8_u1_30m_cp80c_triband_cs100a_train.txt --film_name="Nikon Z7 Ektar100 u1" --debug=1
+	python3 build_prof.py --src=data/ektar100_it8_u1_30m_cp80c_triband_cs100a_train.txt --film_name="Nikon Z7 Ektar100 u1" 
 
 .PHONY: nikon_z7_ektar100_o0
 nikon_z7_ektar100_o0: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/ektar100_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o0" --debug=1
+	python3 build_prof.py --src=data/ektar100_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o0" 
 
 .PHONY: nikon_z7_ektar100_o1
 nikon_z7_ektar100_o1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/ektar100_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o1" --debug=1
+	python3 build_prof.py --src=data/ektar100_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o1" 
 
 
 .PHONY: nikon_z7_ektar100_o2
 nikon_z7_ektar100_o2: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/ektar100_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o2" --debug=1
+	python3 build_prof.py --src=data/ektar100_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Ektar100 o2" 
 
 
 .PHONY: nikon_z7_portra160_u2
 nikon_z7_portra160_u2: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra160_it8_u2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 u2" --debug=1
+	python3 build_prof.py --src=data/portra160_it8_u2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 u2" 
 
 
 .PHONY: nikon_z7_portra160_u1
 nikon_z7_portra160_u1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra160_it8_u1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 u1" --debug=1
+	python3 build_prof.py --src=data/portra160_it8_u1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 u1" 
 
 
 .PHONY: nikon_z7_portra160_o0
 nikon_z7_portra160_o0: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra160_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o0" --debug=1
+	python3 build_prof.py --src=data/portra160_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o0" 
 
 .PHONY: nikon_z7_portra160_o1
 nikon_z7_portra160_o1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra160_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o1" --debug=1
+	python3 build_prof.py --src=data/portra160_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o1" 
 
 
 .PHONY: nikon_z7_portra160_o2
 nikon_z7_portra160_o2: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra160_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o2" --debug=1
+	python3 build_prof.py --src=data/portra160_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra160 o2" 
 
 
 .PHONY: nikon_z7_portra400_u2
 nikon_z7_portra400_u2: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra400_it8_u2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 u2" --debug=1
+	python3 build_prof.py --src=data/portra400_it8_u2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 u2" 
 
 
 .PHONY: nikon_z7_portra400_u1
 nikon_z7_portra400_u1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra400_it8_u1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 u1" --debug=1
+	python3 build_prof.py --src=data/portra400_it8_u1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 u1" 
 
 
 .PHONY: nikon_z7_portra400_o0
 nikon_z7_portra400_o0: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra400_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o0" --debug=1
+	python3 build_prof.py --src=data/portra400_it8_o0_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o0" 
 
 .PHONY: nikon_z7_portra400_o1
 nikon_z7_portra400_o1: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra400_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o1" --debug=1
+	python3 build_prof.py --src=data/portra400_it8_o1_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o1" 
 
 
 .PHONY: nikon_z7_portra400_o2
 nikon_z7_portra400_o2: build_prof.py make_icc.c
-	python3 build_prof.py --src=data/portra400_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o2" --debug=1
+	python3 build_prof.py --src=data/portra400_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o2" 
 
 make_icc: make_icc.c
 	mkdir -p bin_out
@@ -149,5 +152,4 @@ make_icc: make_icc.c
 .PHONY: all
 all: build_prof.py make_icc.c
 	mkdir -p icc_out
-	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --fit_intercept=1 --film_name="Nikon Z7 Ektar100" --debug=1
-	chmod 755 ~/Library/ColorSync/Profiles/NegICC\ Profiles/*.sh
+	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --fit_intercept=1 --film_name="Nikon Z7 Ektar100" $(DEBUG) $(INSTALL_DIR)/

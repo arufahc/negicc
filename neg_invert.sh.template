@@ -1,0 +1,4 @@
+dcraw -v -4 -o 0 -W -T -H 1 -b 2.5 "$1"
+
+convert "${1/.NEF/.tiff}" -set colorspace RGB $ROTATE $FLIP -color-matrix '%.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f' -set profile '%s' -compress lzw "${1/.NEF/_positive.tiff}"
+rm "${1/.NEF/.tiff}"

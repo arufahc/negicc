@@ -65,7 +65,7 @@ cmsStage* read_clut_stage_float(const char* input_profile) {
   return cmsStageAllocCLutFloatGranular(NULL, clut_data->Params->nSamples, 3, 3, tablef);
 }
 
-cmsHPROFILE create_empty_profile() {
+cmsHPROFILE create_empty_profile(const char* input_profile) {
   cmsHPROFILE out_profile = cmsCreateRGBProfile(NULL, NULL, NULL);
   cmsSetPCS(out_profile, cmsSigXYZData);
   cmsSetDeviceClass(out_profile, cmsSigInputClass);
@@ -77,14 +77,9 @@ cmsHPROFILE create_empty_profile() {
   cmsMLUsetASCII(manufacturer, "en", "US", MANUFACTURER);
   cmsWriteTag(out_profile, cmsSigDeviceMfgDescTag, manufacturer);
 
-#if 0
-  cmsMLU* description = cmsMLUalloc(NULL, 1);
-  cmsMLUsetASCII(description, "en", "US", DESCRIPTION);
-  cmsWriteTag(out_profile, cmsSigProfileDescriptionTag, description);
-#endif
-
-  cmsCIEXYZ media_white = {white_point[0], white_point[1], white_point[2]};
-  cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, &media_white);
+  cmsHPROFILE in_profile = cmsOpenProfileFromFile(input_profile, "r");  
+  cmsWriteTag(out_profile, cmsSigMediaWhitePointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaWhitePointTag));
+  cmsWriteTag(out_profile, cmsSigMediaBlackPointTag, (cmsCIEXYZ*)cmsReadTag(in_profile, cmsSigMediaBlackPointTag));
   return out_profile;
 }
 
@@ -121,7 +116,7 @@ cmsStage* create_identity_clut_stage() {
 // Uses A2B0 tag with mft2 transform that turns a crosstalk corrected linear RGB
 // into positive image.
 void make_std_negative_profile_mft2_clut(const char* film_name, const char* src_profile_name) {
-  cmsHPROFILE out_profile = create_empty_profile();
+  cmsHPROFILE out_profile = create_empty_profile(src_profile_name);
   cmsSetProfileVersion(out_profile, 2.2);
   cmsMLU* description = cmsMLUalloc(NULL, 1);
   char profile_name[256];
@@ -155,7 +150,7 @@ void make_std_negative_profile_mft2_clut(const char* film_name, const char* src_
 }
 
 void make_std_negative_profile_lutab_mat(const char* film_name, const char* src_profile_name) {
-  cmsHPROFILE out_profile = create_empty_profile();
+  cmsHPROFILE out_profile = create_empty_profile(src_profile_name);
   cmsSetProfileVersion(out_profile, 4.3);
   cmsMLU* description = cmsMLUalloc(NULL, 1);
   char profile_name[256];
@@ -218,7 +213,7 @@ void make_std_negative_profile_lutab_mat(const char* film_name, const char* src_
 // first produce a linear image with crosstalk correction applied and then use the mpet profile
 // without crosstalk correction applied.
 void make_cc_negative_profile(const char* film_name, const char* src_profile_name) {
-  cmsHPROFILE out_profile = create_empty_profile();
+  cmsHPROFILE out_profile = create_empty_profile(src_profile_name);
   cmsMLU* description = cmsMLUalloc(NULL, 1);
   char profile_name[256];
   sprintf(profile_name, "%s Crosstalk correction cLUT", film_name);

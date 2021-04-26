@@ -302,11 +302,6 @@ def write_build_prof_header(
                 print()
         print("};\n")
 
-    print(
-        "const double white_point[] = {%f, %f, %f};" %
-        tuple(
-            test_white_XYZ /
-            args.whitest_patch_scaling))
     print("const int CURVE_POINTS = %d;" % len(r_curve))
     print_curve('b_curve', b_curve)
     print_curve('g_curve', g_curve)
@@ -319,14 +314,11 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
-    print("""
-dcraw -v -4 -o 0 -W -T -H 1 -b 2.5 "$1"
-
-convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f' -set profile '%s' -compress lzw "${1/.NEF/_positive.tiff}"
-rm "${1/.NEF/.tiff}"
-""" % (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,)))
+    with open('neg_invert.sh.template', 'r') as tf:
+        print(tf.read() % (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,)))
     f.close()
     sys.stdout = stdout_backup
+    os.chmod(file_name, 0o755)
 
 
 def run_chromatic_adaptation_on_ref_XYZ():
