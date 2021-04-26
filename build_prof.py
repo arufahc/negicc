@@ -105,7 +105,11 @@ def estimate_crosstalk_correction_coefficients():
      capture an image with 3 channels. Alternatively one can also use narrow band LEDs to
      illuminate the film for these shots.
     """
-    if args.crosstalk_g_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs:
+    print(args.crosstalk_r_coefs)
+    print(args.crosstalk_g_coefs)
+    print(args.crosstalk_b_coefs)
+    if args.crosstalk_r_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs:
+        print("Using supplied crosstalk coefficients.")
         return ([float(x) for x in args.crosstalk_r_coefs.split()],
                 [float(x) for x in args.crosstalk_g_coefs.split()],
                 [float(x) for x in args.crosstalk_b_coefs.split()])
@@ -189,6 +193,16 @@ def estimate_trc_curves(corrected_gs_rgb, luminance):
     corrected_gs_r = np.append(np.insert(corrected_gs_r, 0, 0), 65535)
     corrected_gs_g = np.append(np.insert(corrected_gs_g, 0, 0), 65535)
     corrected_gs_b = np.append(np.insert(corrected_gs_b, 0, 0), 65535)
+
+    # Some film will reach Dmin and hence the gs values are not strictly increasing.
+    # Fake it so we can still interpolate.
+    def fix_strictly_increasing(d):
+        for i in range(0, len(d) - 1):
+            if d[i+1] <= d[i]:
+                d[i+1] = d[i] + 1
+    fix_strictly_increasing(corrected_gs_r)
+    fix_strictly_increasing(corrected_gs_g)
+    fix_strictly_increasing(corrected_gs_b)
 
     interp_r = interpolate.PchipInterpolator(
         corrected_gs_r, train_gs_luminance)
@@ -305,7 +319,7 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     print("""
 dcraw -v -4 -o 0 -W -T -H 1 -b 2.5 "$1"
 
-convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f' -set profile '%s' -compress lzw "${1/.NEF/_positive.tiff}"
+convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f %.15f' -set profile '%s' -compress lzw "${1/.NEF/_positive.tiff}"
 rm "${1/.NEF/.tiff}"
 """ % (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,)))
     f.close()
