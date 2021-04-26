@@ -298,20 +298,16 @@ def write_build_prof_header(
     sys.stdout = stdout_backup
 
 
-def write_neg_invert_sh(file_name, crosstalk_correction_mat):
+def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
     print("""
-dcraw -v -4 -o 0 -W -T -H 1 -b 3 "$1"
+dcraw -v -4 -o 0 -W -T -H 1 -b 2.5 "$1"
 
-# convert "${1/.NEF/.tiff}" -set colorspace RGB -set profile ../icc_out/cc_negative.icc -profile ~/Library/ColorSync/Profiles/ClayRGB-elle-V4-g22.icm "${1/.NEF/_pos_g22.tiff}" 
-
-convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%f %f %f %f %f %f %f %f %f' "${1/.NEF/_cc.tiff}"
-# convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v4_mat.icc "${1/.NEF/_std_prof_v4_mat.tiff}"
-convert "${1/.NEF/_cc.tiff}" -set colorspace RGB -set profile ../icc_out/std_negative_v2_clut.icc "${1/.NEF/_std_prof_v2_clut.tiff}"
-rm "${1/.NEF/.tiff}" "${1/.NEF/_cc.tiff}"
-""" % tuple(crosstalk_correction_mat.transpose().flatten()))
+convert "${1/.NEF/.tiff}" -set colorspace RGB -color-matrix '%.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f %.7f' -set profile '%s' -compress lzw "${1/.NEF/_positive.tiff}"
+rm "${1/.NEF/.tiff}"
+""" % (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,)))
     f.close()
     sys.stdout = stdout_backup
 
@@ -526,10 +522,12 @@ def main():
     write_ti3('check_prof.ti3', positive_rgb=False)
     run_prof_check(out_clut_prof)
 
-    write_neg_invert_sh("bin_out/neg_invert.sh", crosstalk_correction_mat)
-    # install_dir = str(Path.home()) + '/Library/ColorSync/Profiles/NegICC Profiles/'
-    # os.makedirs(install_dir, exist_ok=True)
-    # shutil.copy(out_clut_prof, install_dir)
+    install_dir = str(Path.home()) + '/Library/ColorSync/Profiles/NegICC Profiles/'
+    os.makedirs(install_dir, exist_ok=True)
+    shutil.copy(out_clut_prof, install_dir)
+    write_neg_invert_sh(install_dir + "%s_neg_invert.sh" % args.film_name.lower().replace(' ', '_'),
+                        crosstalk_correction_mat,
+                        install_dir + out_clut_prof.split('/')[-1])
 
 
 if __name__ == "__main__":
