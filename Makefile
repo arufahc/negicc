@@ -93,7 +93,9 @@ test_white_xy = --white_x=0.3353 --white_y=0.3496
 # Camera + triband filter and light combination. They do not change with film scanned
 # so we do not need to compute them again for each IT8 image, which also saves the
 # time for scanning with additional 3 bandpass filters.
-nikon_z7_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.082115947096161 -0.018122368837481' --crosstalk_g_coefs='-0.078439679225726 1 -0.218905850589040' --crosstalk_b_coefs='-0.004963694751139 -0.100838827684968 1' 
+nikon_z7_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.082115947096161 -0.018122368837481' --crosstalk_g_coefs='-0.078439679225726 1 -0.218905850589040' --crosstalk_b_coefs='-0.004963694751139 -0.100838827684968 1'
+
+sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
 
 DEBUG = 
 INSTALL_DIR = 
