@@ -67,7 +67,7 @@ if args.multi:
     if not ret:
         sys.exit("Cannot read image file.")
         
-    img = cv2.merge((imgs[2], imgs[1], imgs[0]))
+    img = cv2.merge((imgs[0], imgs[1], imgs[2]))
 else:
     img = cv2.imread(args.img, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
