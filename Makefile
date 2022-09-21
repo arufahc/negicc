@@ -181,6 +181,9 @@ make_icc: make_icc.c
 	mkdir -p bin_out
 	gcc -o bin_out/make_icc make_icc.c -llcms2
 
+neg_process: neg_process.cc
+	g++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw
+
 .PHONY: all
 all: build_prof.py make_icc.c
 	mkdir -p icc_out
