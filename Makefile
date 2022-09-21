@@ -1,3 +1,4 @@
+# Nikon Z7 shots of target with 30M CP80C light filtration.
 data/ektar100_it8_30m_cp80c_triband.txt:
 	python3 read_it8.py --img=it8_imgs/ektar100_it8_30m_cp80c_triband.tiff --outfile=$@ --a1_x=73 --gs0_x=20 --hbase=1310	
 
@@ -57,6 +58,30 @@ data/portra400_it8_o1_30m_cp80c_triband_cs100a_train.txt: data/cs100a_measuremen
 
 data/portra400_it8_o2_30m_cp80c_triband_cs100a_train.txt: data/cs100a_measurements.txt data/portra400_it8_o2_30m_cp80c_triband.txt
 	python3 add_ref_readings.py --Yxy=data/cs100a_measurements.txt data/portra400_it8_o2_30m_cp80c_triband.txt | tr ' ' ',' > $@
+
+# Sony A7R IV shots with triband filter.
+data/portra400-0.txt:
+	python3 read_it8.py --img=it8_imgs/portra400-0.tif --multi --outfile=$@
+
+# Triband filter with BP470 bandpass filter
+data/portra400-0-bp475.txt:
+	python3 read_it8.py --img=it8_imgs/portra400-0-bp475.tif --multi --outfile=$@
+
+# Triband filter with BP525 bandpass filter
+data/portra400-0-bp525.txt:
+	python3 read_it8.py --img=it8_imgs/portra400-0-bp525.tif --multi --outfile=$@
+
+# Triband filter with LP610 bandpass filter
+data/portra400-0-lp610.txt:
+	python3 read_it8.py --img=it8_imgs/portra400-0-lp610.tif --multi --outfile=$@
+
+# Combine RGB shots with single shot into a single training file.
+# This training set will allow us to compute the correction matrix.
+data/portra400-0-cs100a_train.txt: data/portra400-0.txt \
+	data/portra400-0-bp475.txt \
+	data/portra400-0-bp525.txt \
+	data/portra400-0-lp610.txt
+	python3 add_ref_readings.py --r=data/portra400-0-lp610.txt --g=data/portra400-0-bp525.txt --b=data/portra400-0-bp475.txt --Yxy=data/cs100a_measurements.txt data/portra400-0.txt | tr ' ' ',' > $@
 
 # Test white chromaticies are common for all film as this is fixed during test time.
 # Change these values to the one used during the test environment. The following
@@ -144,6 +169,11 @@ nikon_z7_portra400_o1: build_prof.py make_icc.c
 .PHONY: nikon_z7_portra400_o2
 nikon_z7_portra400_o2: build_prof.py make_icc.c
 	python3 build_prof.py --src=data/portra400_it8_o2_30m_cp80c_triband_cs100a_train.txt $(nikon_z7_triband_common_args) --film_name="Nikon Z7 Portra400 o2" 
+
+# Sony A7R IV profiles.
+.PHONY: sony_a7rm4_portra400_0
+sony_a7rm4_portra400_0: build_prof.py make_icc.c
+	python3 build_prof.py --src=data/portra400-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400" --fit_intercept=1 --debug
 
 make_icc: make_icc.c
 	mkdir -p bin_out

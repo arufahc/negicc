@@ -66,8 +66,7 @@ parser.add_argument(
 parser.add_argument(
     "--debug",
     help="Print debug messages.",
-    default=False,
-    type=bool)
+    action="store_true")
 parser.add_argument(
     "--film_name",
     help="Name of the film.",
@@ -108,11 +107,11 @@ def estimate_crosstalk_correction_coefficients():
      capture an image with 3 channels. Alternatively one can also use narrow band LEDs to
      illuminate the film for these shots.
     """
-    print(args.crosstalk_r_coefs)
-    print(args.crosstalk_g_coefs)
-    print(args.crosstalk_b_coefs)
     if args.crosstalk_r_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs:
         print("Using supplied crosstalk coefficients.")
+        print(args.crosstalk_r_coefs)
+        print(args.crosstalk_g_coefs)
+        print(args.crosstalk_b_coefs)
         return ([float(x) for x in args.crosstalk_r_coefs.split()],
                 [float(x) for x in args.crosstalk_g_coefs.split()],
                 [float(x) for x in args.crosstalk_b_coefs.split()])
@@ -136,7 +135,7 @@ def estimate_crosstalk_correction_coefficients():
 
     # Normalize the crosstalk correction matrix by the primary signal. The relative weight
     # between channels is not important as we will apply curve individually to each channel
-    # to have the gray scale patches align.
+    # to have the gray scale patches align. The constants don't matter also.
     return (r_coef / r_coef[0], g_coef / g_coef[1], b_coef / b_coef[2])
 
 
