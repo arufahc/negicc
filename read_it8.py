@@ -30,6 +30,7 @@ parser.add_argument("--a1_y", help="Y coordinate of A1 patch", type=int, default
 parser.add_argument("--gs0_x", help="X coordinate of GS0 patch", type=int, default=23)
 parser.add_argument("--gs0_y", help="Y coordinate of GS1 patch", type=int, default=800)
 parser.add_argument("--img", help="Source image", type=str)
+parser.add_argument("--multi", help="Read multi-page TIFF", action='store_true')
 parser.add_argument("--outfile", help="Output file", type=str)
 args = parser.parse_args()
 
@@ -61,9 +62,17 @@ for i in range(1, 12):
 boxes["gs0"] = (args.gs0_x/HBASE, args.gs0_y/VBASE), BOX_DIMENSION
 add_horizontal_boxes('gs', 1, 24)
 
-img = cv2.imread(args.img, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
-img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+if args.multi:
+    ret, imgs = cv2.imreadmulti(args.img, [], cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
+    if not ret:
+        sys.exit("Cannot read image file.")
+        
+    img = cv2.merge((imgs[2], imgs[1], imgs[0]))
+else:
+    img = cv2.imread(args.img, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 height, width, _ = img.shape
+print("Read image %d x %d" % (width, height))
 
 def to_int(coord):
     return int(coord[0] * width), int(coord[1] * height)
