@@ -214,6 +214,7 @@ int main(int ac, char *av[]) {
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coef[0], b_coef[1], b_coef[2]);
   post_process(proc[0], r_coef, g_coef, b_coef);
 
+  // This is a hack to force LibRaw write the ICC profile in the TIFF.
   if (prof_fn[0]) {
     printf("Attaching profile: %s\n", prof_fn);
     FILE *fp = fopen(prof_fn, "rb");
@@ -225,94 +226,5 @@ int main(int ac, char *av[]) {
     fclose(fp);
   }
   proc[0]->dcraw_ppm_tiff_writer(out_fn);
-  //write_tiff(proc[0], out_fn);
   return 0;
-}
-
-void tiff_set(ushort *ntag, ushort tag, ushort type, int count, int val)
-{
-  struct libraw_tiff_tag *tt;
-  int c;
-
-  tt = (struct libraw_tiff_tag *)(ntag + 1) + (*ntag)++;
-  tt->tag = tag;
-  tt->type = type;
-  tt->count = count;
-  if ((type < LIBRAW_EXIFTAG_TYPE_SHORT) && (count <= 4))
-    for (c = 0; c < 4; c++)
-      tt->val.c[c] = val >> (c << 3);
-  else if (tagtypeIs(LIBRAW_EXIFTAG_TYPE_SHORT) && (count <= 2))
-    for (c = 0; c < 2; c++)
-      tt->val.s[c] = val >> (c << 4);
-  else
-    tt->val.i = val;
-}
-#define TOFF(ptr) ((char *)(&(ptr)) - (char *)th)
-
-void tiff_head(int width, int height, struct tiff_hdr *th)
-{
-  int c;
-  time_t timestamp = time(NULL);
-  struct tm *t;
-
-  memset(th, 0, sizeof *th);
-  th->t_order = htonl(0x4d4d4949) >> 16;
-  th->magic = 42;
-  th->ifd = 10;
-  tiff_set(&th->ntag, 254, 4, 1, 0);
-  tiff_set(&th->ntag, 256, 4, 1, width);
-  tiff_set(&th->ntag, 257, 4, 1, height);
-  tiff_set(&th->ntag, 258, 3, 1, 16);
-  for (c = 0; c < 4; c++)
-    th->bps[c] = 16;
-  tiff_set(&th->ntag, 259, 3, 1, 1);
-  tiff_set(&th->ntag, 262, 3, 1, 1);
-  tiff_set(&th->ntag, 273, 4, 1, sizeof *th);
-  tiff_set(&th->ntag, 277, 3, 1, 3);
-  tiff_set(&th->ntag, 278, 4, 1, height);
-  tiff_set(&th->ntag, 279, 4, 1, height * width * 6);
-  tiff_set(&th->ntag, 282, 5, 1, TOFF(th->rat[0]));
-  tiff_set(&th->ntag, 283, 5, 1, TOFF(th->rat[2]));
-  tiff_set(&th->ntag, 284, 3, 1, 1);
-  tiff_set(&th->ntag, 296, 3, 1, 2);
-  tiff_set(&th->ntag, 306, 2, 20, TOFF(th->date));
-  th->rat[0] = th->rat[2] = 300;
-  th->rat[1] = th->rat[3] = 1;
-  t = localtime(&timestamp);
-  if (t) {
-    sprintf(th->date, "%04d:%02d:%02d %02d:%02d:%02d", t->tm_year + 1900,
-        t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
-  }
-}
-
-void write_tiff(int width, int height, unsigned short *bitmap, const char *fn)
-{
-  struct tiff_hdr th;
-  FILE *ofp = fopen(fn, "wb");
-  if (!ofp)
-    return;
-  tiff_head(width, height, &th);
-  fwrite(&th, sizeof th, 1, ofp);
-  fwrite(bitmap, 2, width * height, ofp);
-  fclose(ofp);
-}
-
-void write_tiff(LibRaw* proc, const char *fn)
-{
-  struct tiff_hdr th;
-  FILE *ofp = fopen(fn, "wb");
-  if (!ofp)
-    return;
-  tiff_head(proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, &th);
-  fwrite(&th, sizeof th, 1, ofp);
-  unsigned short row[proc->imgdata.sizes.iwidth * 3];
-  for (int i = 0; i < proc->imgdata.sizes.iheight; ++i) {
-    for (int j = 0; j < proc->imgdata.sizes.iwidth; ++j) {
-      row[3 * j] = proc->imgdata.image[i * proc->imgdata.sizes.iwidth + j][0];
-      row[3 * j + 1] = proc->imgdata.image[i * proc->imgdata.sizes.iwidth + j][1];
-      row[3 * j + 2] = proc->imgdata.image[i * proc->imgdata.sizes.iwidth + j][2];
-    }
-    fwrite(row, 1, sizeof(row), ofp);
-  }
-  fclose(ofp);
 }
