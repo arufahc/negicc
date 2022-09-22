@@ -114,7 +114,7 @@ test_white_xy = --white_x=0.3353 --white_y=0.3496
 nikon_z7_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.082115947096161 -0.018122368837481' --crosstalk_g_coefs='-0.078439679225726 1 -0.218905850589040' --crosstalk_b_coefs='-0.004963694751139 -0.100838827684968 1'
 
 DEBUG = 
-INSTALL_DIR = --install_dir="~/Library/ColorSync/Profiles/NegICC Profiles"
+INSTALL_DIR =
 
 nikon_z7_triband_common_args = $(nikon_z7_triband_crosstalk_coefs) $(test_white_xy) $(DEBUG) $(INSTALL_DIR)/
 

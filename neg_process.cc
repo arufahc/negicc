@@ -223,6 +223,7 @@ int main(int ac, char *av[]) {
     fread(proc[0]->get_internal_data_pointer()->output_data.oprof, 1, size, fp);
     fclose(fp);
   }
+  printf("Writing TIFF %s\n", out_fn);
   proc[0]->dcraw_ppm_tiff_writer(out_fn);
   return 0;
 }
