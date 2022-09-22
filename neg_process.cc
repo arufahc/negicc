@@ -12,17 +12,12 @@
 #error This code is for LibRaw 0.14+ only
 #endif
 
-void write_tiff(int width, int height, unsigned short *bitmap,
-                const char *basename);
-void write_tiff(LibRaw* proc,
-                const char *basename);
-
 void print_pixel(LibRaw* proc, int row, int col) {
   printf("Pixel data at (%d %d) color = %d: %d\n", row, col, proc->COLOR(row, col),
 	 proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
 }
 
-LibRaw* load_raw(char* fn, bool debayer, bool half_size) {
+LibRaw* load_raw(char* fn, bool debayer, bool half_size, bool write_tiff) {
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -49,7 +44,8 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size) {
   proc->imgdata.params.no_auto_bright = 1;
   proc->imgdata.params.highlight = 0;
   proc->imgdata.params.output_color = 0;
-  proc->imgdata.params.output_tiff = 1;
+  if (write_tiff)
+    proc->imgdata.params.output_tiff = 1;
   if (!debayer) {
     proc->imgdata.params.no_interpolation = 1;
     proc->raw2image();
@@ -114,6 +110,7 @@ int main(int ac, char *av[]) {
   char* files[16];
   int fp = 0;
   bool half_size = false;
+  bool write_tiff = false;
   for (i = 1; i < ac; i++) {
     if (av[i][0] == '-') {
       switch (av[i][1]) {
@@ -138,6 +135,7 @@ int main(int ac, char *av[]) {
 	break;
       case 'p':
 	strncpy(prof_fn, av[i+1], strlen(av[i+1]));
+	write_tiff = true;
 	++i;
 	break;
       default:
@@ -152,7 +150,7 @@ int main(int ac, char *av[]) {
   LibRaw *proc[4];
   if (fp == 4) {
     for (int i = 0; i < 4; ++i) {
-      proc[i] = load_raw(files[i], false, false);
+      proc[i] = load_raw(files[i], false, false, write_tiff);
     }
     printf("Merging 4 images...\n");
 
@@ -207,7 +205,7 @@ int main(int ac, char *av[]) {
       b_coef[i] *= scale_factor;
     }
   } else {
-    proc[0] = load_raw(files[0], true, half_size);
+    proc[0] = load_raw(files[0], true, half_size, write_tiff);
   }
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coef[0], r_coef[1], r_coef[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coef[0], g_coef[1], g_coef[2]);

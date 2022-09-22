@@ -320,6 +320,12 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     os.chmod(file_name, 0o755)
 
 
+def print_neg_process_cmd(file_name, crosstalk_correction_mat, clut_profile):
+    print('Use the following command to convert a negative image: ')
+    print('%s -r \'%.15f %.15f %.15f\' -g \'%.15f %.15f %.15f\' -b \'%.15f %.15f %.15f\' -p \'%s\'' % 
+          ((file_name,) + (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,))))
+
+
 def run_chromatic_adaptation_on_ref_XYZ():
     """
     Perform chromatic adaptation of the measured tristimulus values
@@ -533,9 +539,9 @@ def main():
     if args.install_dir:
         os.makedirs(args.install_dir, exist_ok=True)
         shutil.copy(out_clut_prof, args.install_dir)
-        write_neg_invert_sh(args.install_dir + "%s_neg_invert.sh" % args.film_name.lower().replace(' ', '_'),
-                            crosstalk_correction_mat,
-                            args.install_dir + out_clut_prof.split('/')[-1])
+        print_neg_process_cmd(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'bin_out/neg_process'),
+                              crosstalk_correction_mat,
+                              args.install_dir + out_clut_prof.split('/')[-1])
 
 
 if __name__ == "__main__":
