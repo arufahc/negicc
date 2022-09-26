@@ -13,8 +13,7 @@ The ICC profiles created should have the following properties:
 
 An ICC profile alone is insufficient to gurantee consistency from frame to
 frame. You need good color separation from the captured images in the
-physical department. I created a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhL\
-Cj3OE/edit?usp=sharing) with detailed steps. An older [document](https://docs.google.com/document/d/1OrmYLJbnluGod663s_0ZrWyX9wF_R-uxLu4libq2c2U/edit#heading=h.g6xkp75rwj2t) has more details of the
+physical department. I created a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing) with detailed steps. An older [document](https://docs.google.com/document/d/1OrmYLJbnluGod663s_0ZrWyX9wF_R-uxLu4libq2c2U/edit#heading=h.g6xkp75rwj2t) has more details of the
 research I have done.
 
 After good color separation is archived we can apply an ICC profile to the
