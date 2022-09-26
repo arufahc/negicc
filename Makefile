@@ -214,8 +214,3 @@ make_icc: make_icc.c
 
 neg_process: neg_process.cc
 	g++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw
-
-.PHONY: all
-all: build_prof.py make_icc.c
-	mkdir -p icc_out
-	python3 build_prof.py --src=data/ektar100_it8_30m_cp80c_triband_cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --fit_intercept=1 --film_name="Nikon Z7 Ektar100" $(DEBUG) $(INSTALL_DIR)/

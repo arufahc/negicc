@@ -12,8 +12,10 @@ The ICC profiles created should have the following properties:
 # Introduction
 
 An ICC profile alone is insufficient to gurantee consistency from frame to
-frame. You need good color separation from the captured images. In order to
-accomplish this you can refer to this Google [document](https://docs.google.com/document/d/1OrmYLJbnluGod663s_0ZrWyX9wF_R-uxLu4libq2c2U/edit#heading=h.g6xkp75rwj2t) that I created.
+frame. You need good color separation from the captured images in the
+physical department. I created a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhL\
+Cj3OE/edit?usp=sharing) with detailed steps. An older [document](https://docs.google.com/document/d/1OrmYLJbnluGod663s_0ZrWyX9wF_R-uxLu4libq2c2U/edit#heading=h.g6xkp75rwj2t) has more details of the
+research I have done.
 
 After good color separation is archived we can apply an ICC profile to the
 captured linear images to map to a well known color space. In the case of
@@ -44,17 +46,18 @@ values. cLUT usually is more accurate but could cause clipping and hence
 not ideal for photo editting. Matrix is much less accurate but is more
 robust for editting.
 
-The matrix in the third profile is a crosstalk correction matrix to account
-for crosstalk between RGB channels of the digital sensor when capturing the
-image. This is a property that is intrinsic to the camera and is not
-dependent on the film or light used. This matrix is not suitable to be
-encoded in the ICC profile. This is because color negatives need to be
-color balance adjusted and RAW developers modifies the signal before the
-ICC profile, which would interfere with the crosstalk correction process.
+The matrix in the third profile includes a crosstalk correction matrix to
+account for crosstalk between RGB channels of the digital sensor, the
+curves and the cLUT. The matrix is an invariant of CFA sensor and triband
+filter (optional with tricolor light source). However this V4 profile uses
+a MPET pipeline that is not compatible with many image editors and is there
+for completeness only.
 
-Hence the process of using the profiles should be:
-1. Use a RAW developer (e.g. dcraw) to output a linear image.
-2. Apply crosstalk correction matrix computed. Using ImageMagick for example.
+The process of using the profiles should be:
+1. Use a RAW developer (e.g. neg_process included or dcraw) to output a
+   linear image.
+2. Apply crosstalk correction matrix computed. Use neg_process can do this
+   in step (1) or use ImageMagick separately.
 3. Add (but not convert using) the cLUT or matric ICC profile to image from step 2.
 
 Included in this repo is data files from Ektar100 film exposed with a
@@ -79,17 +82,26 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * Scipy
 * scikit-learn
 * lcms2
+* libRAW
 
-# Tools Used
+# Hardware Used
 
-## Critical components
+## Creating Profiles
 * IT8 target (R190808 from coloraid.de)
 * Edmund Optics #87-254
 * Bandpass filters: MidOpt BP470, BP525 and LP610
 
-## Secondary components
+## Capturing (previous setup)
 * Fiet 74204/CA led light panel
-* Camera (Nikon Z7)
+* Edmund Optics #87-254
+* Nikon Z7
+* Rayfact QVM05041MF
+
+## Capturing (new setup with 4-shot pixel shift)
+* Olafus 25W RGB Flood Light
+* Edmund Optics #87-254
+* Sony A7RM4
+* Rayfact QVM05041MF
 
 # Usage
 
@@ -109,9 +121,17 @@ need to develop your own IT8 target exposures, scan them with filters and run
 this again. The steps for generating the data files are in the Makefile.
 
 ```
-make all
+# Make neg_process tool for RAW developing.
+make neg_process
+
+# Make profile for Sony A7RM4 with Portra 400
+make sony_a7rm4_portra400_0
+
+# Make profile for Sony A7RM4 with Portra 400 +2 stops exposure
+make sony_a7rm4_portra400+2
 ```
 
 # More details
 
-Please see the code in build_prof.py and make_icc.c for more details.
+Please see the code in build_prof.py and make_icc.c for more algorithms and
+details.
