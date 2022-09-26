@@ -61,7 +61,7 @@ The process of using the profiles should be:
 3. Add (but not convert using) the cLUT or matric ICC profile to image from step 2.
 
 Included in this repo is data files from Ektar100 film exposed with a
-IT8 target under 5400K sunlight and scanned using a Nikon Z7 digital camera
+IT8 target under 5400K sunlight and scanned using a Sony A7RM4 digital camera
 with a Edmund Optics #87-254 triband filter. The crosstalk correction matrix
 is estimated by additionally scanning with red, blue and green bandpass filters.
 
