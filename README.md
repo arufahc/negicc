@@ -83,16 +83,16 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 # Requirements
 
 * Python 3
+* PIP
 * ArgyllCMS
-* OpenCV
-* Numpy
-* Scipy
-* scikit-learn
-* lcms2
 * libRAW
+* lcms2
+```
+sudo apt-get install python3 pip argyll liblcms2-dev libraw-dev
+```
 * Python packages
 ```
- pip install opencv-python matplotlib colour-science pandas scikit-learn
+pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
 ```
 
 # Hardware Used
