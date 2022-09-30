@@ -92,7 +92,7 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * libRAW
 * Python packages
 ```
- pip install opencv-python matplotlib colour-science
+ pip install opencv-python matplotlib colour-science pandas
 ```
 
 # Hardware Used
