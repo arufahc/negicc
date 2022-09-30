@@ -90,6 +90,7 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * scikit-learn
 * lcms2
 * libRAW
+* colour-science 0.4.1
 
 # Hardware Used
 
