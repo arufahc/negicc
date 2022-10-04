@@ -116,20 +116,7 @@ pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
 
 # Usage
 
-All the steps are programmed in the Makefile. Running make will build the 
-ICC profiles. This will generate a ./neg_invert.sh script that can be used
-to produce a TIFF image that embeds the cLUT profile.
-
-The cLUT applied TIFF image can be editted with Capture One. The suggested
-workflow is to adjust *only* the levels using the Levels tool. This mimic
-adjusting the color filtration in making darkroom prints assuming we already
-have good color separation. You can also do exposure adjustments as well.
-After the image is color balanced, it should be exported to AdobeRGB and
-imported again for further editting.
-
-Note that the profile is only good for the particular setup I used. You will
-need to develop your own IT8 target exposures, scan them with filters and run
-this again. The steps for generating the data files are in the Makefile.
+Run the following commands to RAW develop tools and ICC profiles.
 
 ```
 # Make neg_process tool for RAW developing.
@@ -141,6 +128,36 @@ make sony_a7rm4_portra400_0
 # Make profile for Sony A7RM4 with Portra 400 +2 stops exposure
 make sony_a7rm4_portra400+2
 ```
+
+neg_process tool uses LibRAW to unpack raw files. It can run in two modes,
+4-shot pixel shift mode and single shot mode. The 4-shot pixel shift mode
+assumes taken with Sony camera with such capability and will not for other
+brands. In 4-shot pixel shift mode, the raw values are simply scaled by 4
+to convert from 14-bit raw to 16-bit image after subtracting the dark value.
+In single shot mode, libRAW processing is used and scales automatically but
+without auto brightness. Either mode will give consistent results as long
+as you don't switch between the two modes.
+
+Usage like this:
+```
+# Single shot mode. The output format is PPM.
+bin_out/neg_process -o output_file.ppm input.raw
+
+# 4-shot pixel shfit mode. The output format is TIFF without a ICC profile.
+# If 4 input files are provided, it assumes 4-shot PS mode.
+bin_out/neg_process -o out.tif -p some_profile.icc input1.raw input2.raw input3.raw input4.raw
+```
+
+Note that the profile is only good for the particular setup I used. You will
+need to develop your own IT8 target exposures, scan them with filters and run
+this again. The steps for generating the data files are in the Makefile.
+
+The cLUT applied TIFF image can be editted with Capture One. The suggested
+workflow is to adjust *only* the levels using the Levels tool. This mimic
+adjusting the color filtration in making darkroom prints assuming we already
+have good color separation. You can also do exposure adjustments as well.
+After the image is color balanced, it should be exported to AdobeRGB and
+imported again for further editting.
 
 # More details
 
