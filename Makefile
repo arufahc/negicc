@@ -213,4 +213,5 @@ make_icc: make_icc.c
 	gcc -o bin_out/make_icc make_icc.c -llcms2
 
 neg_process: neg_process.cc
+	mkdir -p bin_out
 	g++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw

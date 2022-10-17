@@ -6,7 +6,10 @@
 #include <algorithm>
 #include <string>
 
+#include <netinet/in.h>
+
 #include "libraw/libraw.h"
+
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only

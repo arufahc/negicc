@@ -478,6 +478,9 @@ def main():
     # TODO: The coefficients cannot be positive other than the primary signal,
     # i.e. the diagonal.
     r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
+
+    g_coef *= float(df['r']['gs10'] / df['g']['gs10'])
+    b_coef *= float(df['r']['gs10'] / df['b']['gs10'])
     print('R Coefficients: ', r_coef)
     print('G Coefficients: ', g_coef)
     print('B Coefficients: ', b_coef)
@@ -485,6 +488,13 @@ def main():
     # Crosstalk correct matrix is always applied on the right hand side and is
     # thus transposed.
     crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
+
+    gs_cell = 'gs10'
+    prod = crosstalk_correction_mat.transpose().dot(
+        np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
+
+    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
+
 
     print("Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
