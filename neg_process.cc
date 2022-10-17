@@ -113,7 +113,7 @@ int main(int ac, char *av[]) {
   char* files[16];
   int fp = 0;
   bool half_size = false;
-  bool write_tiff = false;
+  bool write_tiff = true;
   for (i = 1; i < ac; i++) {
     if (av[i][0] == '-') {
       switch (av[i][1]) {
@@ -138,7 +138,6 @@ int main(int ac, char *av[]) {
 	break;
       case 'p':
 	strncpy(prof_fn, av[i+1], strlen(av[i+1]));
-	write_tiff = true;
 	++i;
 	break;
       default:
