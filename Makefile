@@ -113,10 +113,7 @@ test_white_xy = --white_x=0.3353 --white_y=0.3496
 # time for scanning with additional 3 bandpass filters.
 nikon_z7_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.082115947096161 -0.018122368837481' --crosstalk_g_coefs='-0.078439679225726 1 -0.218905850589040' --crosstalk_b_coefs='-0.004963694751139 -0.100838827684968 1'
 
-DEBUG = 
-INSTALL_DIR =
-
-nikon_z7_triband_common_args = $(nikon_z7_triband_crosstalk_coefs) $(test_white_xy) $(DEBUG) $(INSTALL_DIR)
+nikon_z7_triband_common_args = $(nikon_z7_triband_crosstalk_coefs) $(test_white_xy) $(DEBUG) --install_dir="$(INSTALL_DIR)"
 
 .PHONY: nikon_z7_ektar100_u2
 nikon_z7_ektar100_u2: build_prof.py make_icc.c
@@ -191,22 +188,22 @@ nikon_z7_portra400_o2: build_prof.py make_icc.c
 # Sony A7R IV profiles.
 .PHONY: sony_a7rm4_portra400_0
 sony_a7rm4_portra400_0: build_prof.py make_icc.c data/portra400-0-cs100a_train.txt
-	python3 build_prof.py --src=data/portra400-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400" --fit_intercept=1 --debug $(INSTALL_DIR)
+	python3 build_prof.py --src=data/portra400-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400" --fit_intercept=1 --debug --install_dir="$(INSTALL_DIR)"
 
 # Coefficients copied from the above step.
 sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
 
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: build_prof.py make_icc.c data/portra160-0-cs100a_train.txt
-	python3 build_prof.py --src=data/portra160-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra160" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug $(INSTALL_DIR)
+	python3 build_prof.py --src=data/portra160-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra160" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
 
 .PHONY: sony_a7rm4_ektar100_0
 sony_a7rm4_ektar100_0: build_prof.py make_icc.c data/ektar100-0-cs100a_train.txt
-	python3 build_prof.py --src=data/ektar100-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Ektar100" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug $(INSTALL_DIR)
+	python3 build_prof.py --src=data/ektar100-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Ektar100" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
 
 .PHONY: sony_a7rm4_portra400+2
 sony_a7rm4_portra400+2: build_prof.py make_icc.c data/portra400+2-cs100a_train.txt
-	python3 build_prof.py --src=data/portra400+2-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --prescale_coef=gs22 $(INSTALL_DIR)
+	python3 build_prof.py --src=data/portra400+2-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
 
 make_icc: make_icc.c
 	mkdir -p bin_out

@@ -73,6 +73,8 @@ parser.add_argument(
     default="Generic")
 parser.add_argument(
     "--install_dir",
+    nargs='?',
+    const='',
     help="Location to place the ICC profile and script.")
 parser.add_argument(
     "--prescale_coef",
@@ -546,11 +548,13 @@ def main():
     run_prof_check(out_clut_prof)
 
     if args.install_dir:
-        os.makedirs(args.install_dir, exist_ok=True)
-        shutil.copy(out_clut_prof, args.install_dir)
-        print_neg_process_cmd(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'bin_out/neg_process'),
+        install_dir = os.path.realpath(args.install_dir)
+        os.makedirs(install_dir, exist_ok=True)
+        shutil.copy(out_clut_prof, install_dir)
+        shutil.copy('bin_out/neg_process', install_dir)
+        print_neg_process_cmd(os.path.join(install_dir, 'neg_process'),
                               crosstalk_correction_mat,
-                              args.install_dir + out_clut_prof.split('/')[-1])
+                              os.path.join(install_dir, out_clut_prof.split('/')[-1]))
 
 
 if __name__ == "__main__":
