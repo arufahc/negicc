@@ -206,7 +206,7 @@ sony_a7rm4_ektar100_0: build_prof.py make_icc.c data/ektar100-0-cs100a_train.txt
 
 .PHONY: sony_a7rm4_portra400+2
 sony_a7rm4_portra400+2: build_prof.py make_icc.c data/portra400+2-cs100a_train.txt
-	python3 build_prof.py --src=data/portra400+2-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug $(INSTALL_DIR)
+	python3 build_prof.py --src=data/portra400+2-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --prescale_coef=gs22 $(INSTALL_DIR)
 
 make_icc: make_icc.c
 	mkdir -p bin_out

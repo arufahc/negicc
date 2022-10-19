@@ -74,6 +74,9 @@ parser.add_argument(
 parser.add_argument(
     "--install_dir",
     help="Location to place the ICC profile and script.")
+parser.add_argument(
+    "--prescale_coef",
+    help="Set a greyscale patch to pre-scale the coefficients.")
 args = parser.parse_args()
 
 # DataFrame that will keep all the source data and mutations.
@@ -112,9 +115,9 @@ def estimate_crosstalk_correction_coefficients():
         print(args.crosstalk_r_coefs)
         print(args.crosstalk_g_coefs)
         print(args.crosstalk_b_coefs)
-        return ([float(x) for x in args.crosstalk_r_coefs.split()],
-                [float(x) for x in args.crosstalk_g_coefs.split()],
-                [float(x) for x in args.crosstalk_b_coefs.split()])
+        return (np.array([float(x) for x in args.crosstalk_r_coefs.split()]),
+                np.array([float(x) for x in args.crosstalk_g_coefs.split()]),
+                np.array([float(x) for x in args.crosstalk_b_coefs.split()]))
 
     def estimate_coef(channel):
         # Intercept must be true because the black frame is already subtracted and we don't
@@ -127,11 +130,11 @@ def estimate_crosstalk_correction_coefficients():
         if args.debug:
             print("R2 score for estimating %s: " % channel, reg.score(x, y))
             print("Intercept for debugging:", reg.intercept_)
-        return reg.coef_
+        return (reg.coef_, reg.intercept_)
 
-    r_coef = estimate_coef('refR')
-    g_coef = estimate_coef('refG')
-    b_coef = estimate_coef('refB')
+    r_coef, r_intercept = estimate_coef('refR')
+    g_coef, g_intercept = estimate_coef('refG')
+    b_coef, b_intercept = estimate_coef('refB')
 
     # Normalize the crosstalk correction matrix by the primary signal. The relative weight
     # between channels is not important as we will apply curve individually to each channel
@@ -478,9 +481,6 @@ def main():
     # TODO: The coefficients cannot be positive other than the primary signal,
     # i.e. the diagonal.
     r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
-
-    g_coef *= float(df['r']['gs10'] / df['g']['gs10'])
-    b_coef *= float(df['r']['gs10'] / df['b']['gs10'])
     print('R Coefficients: ', r_coef)
     print('G Coefficients: ', g_coef)
     print('B Coefficients: ', b_coef)
@@ -489,12 +489,11 @@ def main():
     # thus transposed.
     crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
 
-    gs_cell = 'gs10'
-    prod = crosstalk_correction_mat.transpose().dot(
-        np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
-
-    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
-
+    if args.prescale_coef:
+        gs_cell = args.prescale_coef
+        prod = crosstalk_correction_mat.transpose().dot(
+            np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
+        crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
 
     print("Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
