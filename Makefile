@@ -101,6 +101,18 @@ data/portra160-0-cs100a_train.txt: data/portra160-0.txt
 data/ektar100-0-cs100a_train.txt: data/ektar100-0.txt
 	python3 add_ref_readings.py --Yxy=data/cs100a_measurements.txt data/ektar100-0.txt | tr ' ' ',' > $@
 
+data/portra400-0-r190808d55_train.txt: data/portra400-0.txt
+	python3 add_ref_readings.py --XYZ=data/R190808D55.txt data/portra400-0.txt | tr ' ' ',' > $@
+
+data/portra400+2-r190808d55_train.txt: data/portra400+2.txt
+	python3 add_ref_readings.py --XYZ=data/R190808D55.txt data/portra400+2.txt | tr ' ' ',' > $@
+
+data/portra160-0-r190808d55_train.txt: data/portra160-0.txt
+	python3 add_ref_readings.py --XYZ=data/R190808D55.txt data/portra160-0.txt | tr ' ' ',' > $@
+
+data/ektar100-0-r190808d55_train.txt: data/ektar100-0.txt
+	python3 add_ref_readings.py --XYZ=data/R190808D55.txt data/ektar100-0.txt | tr ' ' ',' > $@
+
 # Test white chromaticies are common for all film as this is fixed during test time.
 # Change these values to the one used during the test environment. The following
 # values are measured under sunlight at around 5400K.
@@ -200,6 +212,22 @@ sony_a7rm4_portra160_0: build_prof.py make_icc.c data/portra160-0-cs100a_train.t
 .PHONY: sony_a7rm4_ektar100_0
 sony_a7rm4_ektar100_0: build_prof.py make_icc.c data/ektar100-0-cs100a_train.txt
 	python3 build_prof.py --src=data/ektar100-0-cs100a_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Ektar100" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
+
+.PHONY: sony_a7rm4_ektar100_0_r190808d55
+sony_a7rm4_ektar100_0_r190808d55: build_prof.py make_icc.c data/ektar100-0-r190808d55_train.txt
+	python3 build_prof.py --src=data/ektar100-0-r190808d55_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Ektar100 R190808D55" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
+
+.PHONY: sony_a7rm4_portra160_0_r190808d55
+sony_a7rm4_portra160_0_r190808d55: build_prof.py make_icc.c data/portra160-0-r190808d55_train.txt
+	python3 build_prof.py --src=data/portra160-0-r190808d55_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra160 R190808D55" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
+
+.PHONY: sony_a7rm4_portra400_0_r190808d55
+sony_a7rm4_portra400_0_r190808d55: build_prof.py make_icc.c data/portra400-0-r190808d55_train.txt
+	python3 build_prof.py --src=data/portra400-0-r190808d55_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 R190808D55" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
+
+.PHONY: sony_a7rm4_portra400+2_r190808d55
+sony_a7rm4_portra400+2_r190808d55: build_prof.py make_icc.c data/portra400+2-r190808d55_train.txt
+	python3 build_prof.py --src=data/portra400+2-r190808d55_train.txt --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400+2 R190808D55" --fit_intercept=1 $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
 
 .PHONY: sony_a7rm4_portra400+2
 sony_a7rm4_portra400+2: build_prof.py make_icc.c data/portra400+2-cs100a_train.txt

@@ -15,6 +15,10 @@
 
 import argparse
 import colour
+import re
+
+_RE_STRIP_WHITESPACE = re.compile(r"(?a:^\s+|\s+$)")
+_RE_COMBINE_WHITESPACE = re.compile(r"(?a:\s+)")
 
 def read_txt_readings(file):
     f = open(file, "r")
@@ -28,6 +32,43 @@ def read_txt_readings(file):
         rows[vals[0]] = {}
         for i in range(1, len(fields)):
             rows[vals[0]][fields[i]] = float(vals[i])
+    f.close()
+    return rows
+
+def is_it8(file):
+    with open(file, "r") as f:
+        return f.readline().startswith("IT8")
+
+def read_it8_readings(file):
+    f = open(file, "r")
+    rows = {}
+    fields = []
+    name_map = {}
+    name_map['SAMPLE_ID'] = 'patch'
+    name_map['XYZ_X'] = 'X'
+    name_map['XYZ_Y'] = 'Y'
+    name_map['XYZ_Z'] = 'Z'
+    while True:
+        l = f.readline()
+        if not l:
+            break
+        l = l.strip('\n\r ')
+        if l == "BEGIN_DATA":
+            break
+        if l.startswith('SAMPLE_ID'):
+            vals = _RE_COMBINE_WHITESPACE.sub(" ", l.strip('\n\r')).split(" ")
+            for i in range(0, 4):
+                fields.append(name_map[vals[i]])
+    while True:
+        l = f.readline()
+        if not l:
+            break
+        if l.strip('\n\r ').startswith("END_DATA"):
+            break
+        vals = _RE_COMBINE_WHITESPACE.sub(" ", l.strip('\n\r')).split(" ")
+        rows[vals[0].lower()] = {}
+        for i in range(1, len(fields)):
+            rows[vals[0].lower()][fields[i]] = float(vals[i])
     f.close()
     return rows
 
@@ -63,7 +104,10 @@ if __name__ == "__main__":
     if args.Yxy:
         Yxy = read_txt_readings(args.Yxy)
     elif args.XYZ:
-        XYZ = read_txt_readings(args.XYZ)
+        if is_it8(args.XYZ):
+            XYZ = read_it8_readings(args.XYZ)
+        else:
+            XYZ = read_txt_readings(args.XYZ)
 
     if not args.Yxy and not args.XYZ:
         print('patch', 'r', 'g', 'b', 'refR', 'refG', 'refB')
