@@ -48,7 +48,13 @@ parser.add_argument(
     "--whitest_patch_scaling",
     help="The RGB value that should be assigned to the whitest (densest) patch. "
     "Setting this value allows extrapolation of brighter objects that whitest patch on the target.",
-    default=0.75,
+    default=0.7,
+    type=float)
+parser.add_argument(
+    "--darkest_patch_scaling",
+    help="The RGB value that should be assigned to the darkest (lightest) GS patch. "
+    "Setting this value will scale the correct matrix according to the darkest GS patch.",
+    default=40000,
     type=float)
 parser.add_argument(
     "--fit_intercept",
@@ -78,7 +84,9 @@ parser.add_argument(
     help="Location to place the ICC profile and script.")
 parser.add_argument(
     "--prescale_coef",
-    help="Set a greyscale patch to pre-scale the coefficients.")
+    help="Set a greyscale patch to pre-scale the coefficients.",
+    default='gs14')
+
 args = parser.parse_args()
 
 # DataFrame that will keep all the source data and mutations.
@@ -140,7 +148,9 @@ def estimate_crosstalk_correction_coefficients():
 
     # Normalize the crosstalk correction matrix by the primary signal. The relative weight
     # between channels is not important as we will apply curve individually to each channel
-    # to have the gray scale patches align. The constants don't matter also.
+    # to have the gray scale patches align. The constants don't matter also, assuming it is
+    # small.
+    # TODO: Print a warning if the constant is larger than a threshold.
     return (r_coef / r_coef[0], g_coef / g_coef[1], b_coef / b_coef[2])
 
 
@@ -324,6 +334,16 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     sys.stdout = stdout_backup
     os.chmod(file_name, 0o755)
 
+def write_color_correction_matrix(file_name, crosstalk_correction_mat):
+    f = open(file_name, 'w+')
+    stdout_backup = sys.stdout
+    sys.stdout = f
+    flat_cc_mat = crosstalk_correction_mat.transpose().flatten()
+    print(' '.join([x.astype(str) for x in flat_cc_mat[0:3]]))
+    print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
+    print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
+    f.close()
+    sys.stdout = stdout_backup
 
 def print_neg_process_cmd(file_name, crosstalk_correction_mat, clut_profile):
     print('Use the following command to convert a negative image: ')
@@ -496,10 +516,17 @@ def main():
         prod = crosstalk_correction_mat.transpose().dot(
             np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
         crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
+        print("Scaled crosstalk correction matrix to white balance patch: %s." % args.prescale_coef)
+        print(crosstalk_correction_mat.transpose())
 
     print("Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
     gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
+    corrected_gs_rgb = np.matmul(
+        gs_rgb.transpose(),
+        crosstalk_correction_mat).transpose()
+    print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
+    crosstalk_correction_mat *= args.darkest_patch_scaling / corrected_gs_rgb.max()
     corrected_gs_rgb = np.matmul(
         gs_rgb.transpose(),
         crosstalk_correction_mat).transpose()
@@ -545,6 +572,9 @@ def main():
     out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
 
     write_ti3('check_prof.ti3', positive_rgb=False)
+    write_color_correction_matrix(
+        'icc_out/%s CC Matrix.txt' % args.film_name,
+        crosstalk_correction_mat)
     run_prof_check(out_clut_prof)
 
     if args.install_dir:

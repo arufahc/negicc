@@ -49,6 +49,13 @@ parser.add_argument(
 parser.add_argument('--target-mode', '-T', action='store_true')
 args = parser.parse_args()
 
+matrix = []
+with open('%s/icc_out/Sony A7RM4 %s %s CC Matrix.txt' % (os.path.dirname(__file__),
+                                                         args.emulsion.capitalize(),
+                                                         args.measurement)) as f:
+    for i in range(0, 3):
+        matrix.append(f.readline().strip('\r\n'))
+
 if args.target_mode:
     subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
                     '-h',
@@ -56,9 +63,9 @@ if args.target_mode:
                     args.raw_file], check=True)
     exit(0)
 subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-                '-r', '1 -0.08262711 -0.01249409',
-                '-g', '-0.13898878 1 -0.32017315',
-                '-b', '-0.00664173 -0.09860774 1',
+                '-r', matrix[0],
+                '-g', matrix[1],
+                '-b', matrix[2],
                 '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
                                                                 args.emulsion.capitalize(),
                                                                 args.measurement),
