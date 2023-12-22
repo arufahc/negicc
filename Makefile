@@ -115,6 +115,12 @@ test_white_xy = --white_x=0.3353 --white_y=0.3496
 sony_a7rm4_portra400_0: data/portra400-0-cs100a_train.txt make_icc
 	python3 build_prof.py --src=$< --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400" --fit_intercept=1 --debug --install_dir="$(INSTALL_DIR)"
 
+# Coefficients copied from the above step.
+# TODO: The portra400-0 it8 has ben updated and so the bandpass filter captures
+# should be updated too. But the coefficients shouldn't change because they are
+# intrinsic to the sensor color filters and the triband filter combination.
+sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
+
 .PHONY: sony_a7rm4_portra400_0_r190808
 sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc
 	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
@@ -130,12 +136,6 @@ sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt make_icc
 .PHONY: sony_a7rm4_portra400+2_r190808
 sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.txt make_icc
 	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)"
-
-# Coefficients copied from the above step.
-# TODO: The portra400-0 it8 has ben updated and so the bandpass filter captures
-# should be updated too. But the coefficients shouldn't change because they are
-# intrinsic to the sensor color filters and the triband filter combination.
-sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
 
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: data/portra160-0-cs100a_train.txt make_icc
