@@ -23,18 +23,38 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument(
     "--emulsion", '-e',
-    choices=['ektar100', 'portra400', 'portra400+2', 'portra160'],
+    choices=[
+        'ektar100',
+        'ektar100-1',
+        'ektar100+1',
+        'ektar100+2',
+        'portra400',
+        'portra400-1',
+        'portra400+1',
+        'portra400+2',
+        'portra160',
+        'portra160-1',
+        'portra160+1',
+        'portra160+2',
+    ],
     help="Emulsion of the scanned film or the name of the generated profile.")
 parser.add_argument(
     '--raw_file', '-f',
     help="Name of the input raw file.")
 parser.add_argument(
     '--measurement', '-m',
-    choices=['', 'R190808D55', 'R190808'],
-    default='R190808D55',
+    choices=['', 'R190808'],
+    default='R190808',
     help="Measurement used")
+parser.add_argument('--target-mode', '-T', action='store_true')
 args = parser.parse_args()
 
+if args.target_mode:
+    subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
+                    '-h',
+                    '-o', Path(args.raw_file).stem + ('.target.tif'),
+                    args.raw_file], check=True)
+    exit(0)
 subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
                 '-r', '1 -0.08262711 -0.01249409',
                 '-g', '-0.13898878 1 -0.32017315',
