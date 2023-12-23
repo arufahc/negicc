@@ -20,7 +20,7 @@ void print_pixel(LibRaw* proc, int row, int col) {
 	 proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
 }
 
-LibRaw* load_raw(char* fn, bool debayer, bool half_size, bool write_tiff) {
+LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_tiff) {
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -56,7 +56,7 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, bool write_tiff) {
   } else {
     proc->imgdata.params.half_size = half_size;
     proc->imgdata.params.highlight = 1;
-    proc->imgdata.params.user_qual = 12;
+    proc->imgdata.params.user_qual = qual;
     proc->imgdata.params.user_mul[0] = 1;
     proc->imgdata.params.user_mul[1] = 1;
     proc->imgdata.params.user_mul[2] = 1;
@@ -67,11 +67,11 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, bool write_tiff) {
 }
 
 void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
-  for (int i = 0; i < proc->imgdata.sizes.iwidth; ++i) {
-    for (int j = 0; j < proc->imgdata.sizes.iheight; ++j) {
-      int r = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][0];
-      int g = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][1];
-      int b = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][2];
+  for (int j = 0; j < proc->imgdata.sizes.iheight; ++j) {
+    for (int i = 0; i < proc->imgdata.sizes.iwidth; ++i) {
+      ushort r = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][0];
+      ushort g = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][1];
+      ushort b = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][2];
       float fr = r * r_coef[0] + g * r_coef[1] + b * r_coef[2] + 0.5f;
       float fg = r * g_coef[0] + g * g_coef[1] + b * g_coef[2] + 0.5f;
       float fb = r * b_coef[0] + g * b_coef[1] + b * b_coef[2] + 0.5f;
@@ -91,9 +91,9 @@ int main(int ac, char *av[]) {
   char prof_fn[1024];
   memset(prof_fn, 0, sizeof(prof_fn));
 
-  float r_coef[3] = {1.0f,0,0};
-  float g_coef[3] = {0,1.0f,0};
-  float b_coef[3] = {0,0,1.0f};
+  float r_coef[4] = {1.0f,0,0,0.0};
+  float g_coef[4] = {0,1.0f,0,0.0};
+  float b_coef[4] = {0,0,1.0f,0.0};
 
   if (ac < 2) {
     usage:
@@ -114,6 +114,7 @@ int main(int ac, char *av[]) {
   int fp = 0;
   bool half_size = false;
   bool write_tiff = true;
+  int qual = 0;
   for (i = 1; i < ac; i++) {
     if (av[i][0] == '-') {
       switch (av[i][1]) {
@@ -136,6 +137,10 @@ int main(int ac, char *av[]) {
 	sscanf(av[i+1],"%f %f %f", b_coef, b_coef+1, b_coef+2);
 	++i;
 	break;
+      case 'q':
+	sscanf(av[i+1], "%d", &qual);
+	++i;
+	break;
       case 'p':
 	strncpy(prof_fn, av[i+1], strlen(av[i+1]));
 	++i;
@@ -152,7 +157,10 @@ int main(int ac, char *av[]) {
   LibRaw *proc[4];
   if (fp == 4) {
     for (int i = 0; i < 4; ++i) {
-      proc[i] = load_raw(files[i], false, false, write_tiff);
+      proc[i] = load_raw(files[i], false, false,
+			 /*quality doesn't matter because no interpolation*/
+			 0,
+			 write_tiff);
     }
     printf("Merging 4 images...\n");
 
@@ -201,13 +209,15 @@ int main(int ac, char *av[]) {
     }
     proc[0]->imgdata.idata.colors = 3;
     for (int i = 0; i < 3; ++i) {
+      // Operating on data without interpolation and for Sony A7RM4 sensor
+      // needs to multiply by 4.
       int scale_factor = 4;
       r_coef[i] *= scale_factor;
       g_coef[i] *= scale_factor;
       b_coef[i] *= scale_factor;
     }
   } else {
-    proc[0] = load_raw(files[0], true, half_size, write_tiff);
+    proc[0] = load_raw(files[0], true, half_size, qual, write_tiff);
   }
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coef[0], r_coef[1], r_coef[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coef[0], g_coef[1], g_coef[2]);
