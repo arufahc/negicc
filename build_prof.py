@@ -578,7 +578,7 @@ def main():
 
     write_ti3('check_prof.ti3', positive_rgb=False)
     write_profile_info_txt(
-        'icc_out/%s CC Matrix.txt' % args.film_name,
+        'icc_out/%s Info.txt' % args.film_name,
         crosstalk_correction_mat, args.shutter_speed)
     run_prof_check(out_clut_prof)
 
