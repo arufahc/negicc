@@ -86,6 +86,10 @@ parser.add_argument(
     "--prescale_coef",
     help="Set a greyscale patch to pre-scale the coefficients.",
     default='gs14')
+parser.add_argument(
+    "--shutter_speed",
+    help="Just for record of the shutter speed used to capture the target.",
+    default='')
 
 args = parser.parse_args()
 
@@ -334,7 +338,7 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     sys.stdout = stdout_backup
     os.chmod(file_name, 0o755)
 
-def write_color_correction_matrix(file_name, crosstalk_correction_mat):
+def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
@@ -342,6 +346,7 @@ def write_color_correction_matrix(file_name, crosstalk_correction_mat):
     print(' '.join([x.astype(str) for x in flat_cc_mat[0:3]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
+    print('%s # Shutter speed' % shutter_speed)
     f.close()
     sys.stdout = stdout_backup
 
@@ -572,9 +577,9 @@ def main():
     out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
 
     write_ti3('check_prof.ti3', positive_rgb=False)
-    write_color_correction_matrix(
+    write_profile_info_txt(
         'icc_out/%s CC Matrix.txt' % args.film_name,
-        crosstalk_correction_mat)
+        crosstalk_correction_mat, args.shutter_speed)
     run_prof_check(out_clut_prof)
 
     if args.install_dir:

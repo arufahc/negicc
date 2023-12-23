@@ -57,6 +57,7 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_ti
     proc->imgdata.params.half_size = half_size;
     proc->imgdata.params.highlight = 1;
     proc->imgdata.params.user_qual = qual;
+    proc->imgdata.params.use_auto_wb = 0;
     proc->imgdata.params.user_mul[0] = 1;
     proc->imgdata.params.user_mul[1] = 1;
     proc->imgdata.params.user_mul[2] = 1;
@@ -98,9 +99,10 @@ int main(int ac, char *av[]) {
   if (ac < 2) {
     usage:
       printf("neg_process - Process Negative with LibRAW %s\n"
-	     "Usage: %s [-h] raw-files....\n"
+	     "Usage: %s [options] raw-files....\n"
              "  More than 4 raw-files supplied will be combined assuming a Sony 4-shot pixel sequence.\n"
 	     "  -h: Half size.\n"
+             "  -q: Quality.\n"
 	     "  -r: R correction coefficients.\n"
 	     "  -g: R correction coefficients.\n"
 	     "  -b: R correction coefficients.\n"
@@ -219,6 +221,8 @@ int main(int ac, char *av[]) {
   } else {
     proc[0] = load_raw(files[0], true, half_size, qual, write_tiff);
   }
+  printf("ISO Speed: %f\n", proc[0]->imgdata.other.iso_speed);
+  printf("Shutter %f\n", proc[0]->imgdata.other.shutter);
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coef[0], r_coef[1], r_coef[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coef[0], g_coef[1], g_coef[2]);
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coef[0], b_coef[1], b_coef[2]);

@@ -49,16 +49,10 @@ parser.add_argument(
 parser.add_argument(
     '--quality', '-q',
     default=0,
+    type=int,
     help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD")
-parser.add_argument('--target-mode', '-T', action='store_true')
+parser.add_argument('--target_mode', '-T', action='store_true')
 args = parser.parse_args()
-
-matrix = []
-with open('%s/icc_out/Sony A7RM4 %s %s CC Matrix.txt' % (os.path.dirname(__file__),
-                                                         args.emulsion.capitalize(),
-                                                         args.measurement)) as f:
-    for i in range(0, 3):
-        matrix.append(f.readline().strip('\r\n'))
 
 if args.target_mode:
     subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
@@ -66,11 +60,18 @@ if args.target_mode:
                     '-o', Path(args.raw_file).stem + ('.target.tif'),
                     args.raw_file], check=True)
     exit(0)
+matrix = []
+with open('%s/icc_out/Sony A7RM4 %s %s CC Matrix.txt' % (os.path.dirname(__file__),
+                                                         args.emulsion.capitalize(),
+                                                         args.measurement)) as f:
+    for i in range(0, 3):
+        matrix.append(f.readline().strip('\r\n'))
+
 subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
                 '-r', matrix[0],
                 '-g', matrix[1],
                 '-b', matrix[2],
-                '-q', args.quality,
+                '-q', str(args.quality),
                 '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
                                                                 args.emulsion.capitalize(),
                                                                 args.measurement),
