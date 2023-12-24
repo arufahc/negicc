@@ -29,11 +29,26 @@ data/ektar100-0.txt:
 data/ektar100-1.txt:
 	python3 read_it8.py --img=it8_imgs/ektar100-1.tif --outfile=$@
 
+data/ektar100-2.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100-2.tif --outfile=$@
+
+data/ektar100-3.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100-3.tif --outfile=$@
+
+data/ektar100-4.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100-4.tif --outfile=$@
+
+data/ektar100-5.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100-5.tif --outfile=$@
+
 data/ektar100+1.txt:
 	python3 read_it8.py --img=it8_imgs/ektar100+1.tif --outfile=$@
 
 data/ektar100+2.txt:
 	python3 read_it8.py --img=it8_imgs/ektar100+2.tif --outfile=$@
+
+data/ektar100+3.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100+3.tif --outfile=$@
 
 # Triband filter with BP470 bandpass filter
 # TODO: Redo this with same light source as portra400-0.tif capture.
@@ -99,10 +114,25 @@ data/ektar100-0-r190808_train.txt: data/ektar100-0.txt
 data/ektar100-1-r190808_train.txt: data/ektar100-1.txt
 	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
+data/ektar100-2-r190808_train.txt: data/ektar100-2.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/ektar100-3-r190808_train.txt: data/ektar100-3.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/ektar100-4-r190808_train.txt: data/ektar100-4.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/ektar100-5-r190808_train.txt: data/ektar100-5.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
 data/ektar100+1-r190808_train.txt: data/ektar100+1.txt
 	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/ektar100+2-r190808_train.txt: data/ektar100+2.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/ektar100+3-r190808_train.txt: data/ektar100+3.txt
 	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 # Test white chromaticies are common for all film as this is fixed during test time.
@@ -169,6 +199,22 @@ sony_a7rm4_ektar100_0_r190808: data/ektar100-0-r190808_train.txt make_icc
 sony_a7rm4_ektar100-1_r190808: data/ektar100-1-r190808_train.txt make_icc
 	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.076923
 
+.PHONY: sony_a7rm4_ektar100-2_r190808
+sony_a7rm4_ektar100-2_r190808: data/ektar100-2-r190808_train.txt make_icc
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.066667
+
+.PHONY: sony_a7rm4_ektar100-3_r190808
+sony_a7rm4_ektar100-3_r190808: data/ektar100-3-r190808_train.txt make_icc
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.050000
+
+.PHONY: sony_a7rm4_ektar100-4_r190808
+sony_a7rm4_ektar100-4_r190808: data/ektar100-4-r190808_train.txt make_icc
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-4 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.040000
+
+.PHONY: sony_a7rm4_ektar100-5_r190808
+sony_a7rm4_ektar100-5_r190808: data/ektar100-5-r190808_train.txt make_icc
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-5 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.033333
+
 .PHONY: sony_a7rm4_ektar100+1_r190808
 sony_a7rm4_ektar100+1_r190808: data/ektar100+1-r190808_train.txt make_icc
 	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100+1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.200000
@@ -176,6 +222,10 @@ sony_a7rm4_ektar100+1_r190808: data/ektar100+1-r190808_train.txt make_icc
 .PHONY: sony_a7rm4_ektar100+2_r190808
 sony_a7rm4_ektar100+2_r190808: data/ektar100+2-r190808_train.txt make_icc
 	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.250000
+
+.PHONY: sony_a7rm4_ektar100+3_r190808
+sony_a7rm4_ektar100+3_r190808: data/ektar100+3-r190808_train.txt make_icc
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100+3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.333333
 
 .PHONY: sony_a7rm4_portra400+2
 sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt make_icc

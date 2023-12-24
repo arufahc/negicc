@@ -37,8 +37,13 @@ parser.add_argument(
     choices=[
         'ektar100',
         'ektar100-1',
+        'ektar100-2',
+        'ektar100-3',
+        'ektar100-4',
+        'ektar100-5',
         'ektar100+1',
         'ektar100+2',
+        'ektar100+3',
         'portra160',
         'portra160-1',
         'portra160+1',
@@ -86,11 +91,14 @@ if not args.profile:
         exit(1)
 
 def read_profile_info(name):
+    profile_info_txt = '%s/icc_out/Sony A7RM4 %s %s Info.txt' % (os.path.dirname(__file__),
+                                                                 name.capitalize(),
+                                                                 args.measurement)
+    if not os.path.exists(profile_info_txt):
+        return None
     matrix = []
     shutter_speed = ''
-    with open('%s/icc_out/Sony A7RM4 %s %s Info.txt' % (os.path.dirname(__file__),
-                                                        name.capitalize(),
-                                                        args.measurement)) as f:
+    with open(profile_info_txt) as f:
         for i in range(0, 3):
             matrix.append(f.readline().strip('\r\n'))
         shutter_speed = f.readline().split(' ')[0]
@@ -104,14 +112,15 @@ def get_profile(raw_file):
     profile = {}
     profiles = []
     profiles.append(read_profile_info(args.emulsion))
-    profiles.append(read_profile_info(args.emulsion + '-1'))
-    profiles.append(read_profile_info(args.emulsion + '+1'))
-    profiles.append(read_profile_info(args.emulsion + '+2'))
+    # Append profiles that are exposed over and under.
+    for exp_diff in ['-1', '-2', '-3', '-4', '-5', '+1', '+2', '+3']:
+        exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
+        if exp_diff_profile:
+            profiles.append(exp_diff_profile)
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding).strip()
     raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
     print("Raw shutter speed: %f" % raw_shutter_speed)
-
     max_exp_diff = 100
     for p in profiles:
         exp_diff = abs(math.log2(p['shutter_speed'] / raw_shutter_speed))
