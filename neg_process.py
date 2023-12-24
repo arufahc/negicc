@@ -75,6 +75,11 @@ if args.target_mode:
                     args.raw_file], check=True)
     exit(0)
 
+if not args.profile:
+    if not args.emulsion:
+        print('At least --emulsion needs to be specified!')
+        exit(1)
+
 def read_profile_info(name):
     matrix = []
     shutter_speed = ''
@@ -86,20 +91,19 @@ def read_profile_info(name):
         shutter_speed = f.readline().split(' ')[0]
     return {'name': name, 'matrix': matrix, 'shutter_speed': float(shutter_speed)}
 
-profile = {}
+def get_profile(raw_file):
+    if args.profile:
+        return read_profile_info(args.profile)
 
-# If profile is not specified use emulsion and shutter speed to select profile automatically.
-if not args.profile:
-    if not args.emulsion:
-        print('At least --emulsion needs to be specified!')
-        exit(1)
+    # If profile is not specified use emulsion and shutter speed to select profile automatically.
+    profile = {}
     profiles = []
     profiles.append(read_profile_info(args.emulsion))
     profiles.append(read_profile_info(args.emulsion + '-1'))
     profiles.append(read_profile_info(args.emulsion + '+1'))
     profiles.append(read_profile_info(args.emulsion + '+2'))
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                                 '-s', args.raw_file]).decode(sys.stdout.encoding).strip()
+                                                 '-s', raw_file]).decode(sys.stdout.encoding).strip()
     raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
     print("Raw shutter speed: %f" % raw_shutter_speed)
 
@@ -109,25 +113,27 @@ if not args.profile:
         if exp_diff < max_exp_diff:
             max_exp_diff = exp_diff
             profile = p
-    print("Choose profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-else:
-    profile = read_profile_info(args.profile)
+    print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
+    return profile
 
-neg_process_args = [
-    os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-    '-r', profile['matrix'][0],
-    '-g', profile['matrix'][1],
-    '-b', profile['matrix'][2],
-    '-q', str(args.quality),
-    '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
-                                                    profile['name'].capitalize(),
-                                                    args.measurement),
-    '-o', Path(args.raw_file).stem + ('.%s.tif' % profile['name']),
-    args.raw_file]
+def run_neg_process(raw_file):
+    profile = get_profile(raw_file)
+    neg_process_args = [
+        os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
+        '-r', profile['matrix'][0],
+        '-g', profile['matrix'][1],
+        '-b', profile['matrix'][2],
+        '-q', str(args.quality),
+        '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
+                                                        profile['name'].capitalize(),
+                                                        args.measurement),
+        '-o', Path(raw_file).stem + ('.%s.tif' % profile['name']),
+        raw_file]
 
-if args.multi_shot:
-    file_num = int(Path(args.raw_file).stem[-4:])
-    for i in range(1,4):
-        neg_process_args.append(Path(args.raw_file).stem[0:-4] + str(file_num + i) + Path(args.raw_file).suffix)
+    if args.multi_shot:
+        file_num = int(Path(raw_file).stem[-4:])
+        for i in range(1,4):
+            neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
+    subprocess.run(neg_process_args, check=True)
 
-subprocess.run(neg_process_args, check=True)
+run_neg_process(args.raw_file)
