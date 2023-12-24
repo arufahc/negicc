@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 parser = argparse.ArgumentParser(
@@ -55,6 +56,10 @@ parser.add_argument(
     '--multi_shot', '-M',
     action='store_true',
     help="Sony 4-shots multishot mode. Assume 4 consecutive shots from [raw_file]")
+parser.add_argument(
+    '--scan_mode', '-s',
+    action='store_true',
+    help="Scanning mode will wait for a new file and process automatically.")
 parser.add_argument(
     '--measurement', '-m',
     choices=['', 'R190808'],
@@ -136,4 +141,25 @@ def run_neg_process(raw_file):
             neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
     subprocess.run(neg_process_args, check=True)
 
-run_neg_process(args.raw_file)
+# Single process mode.
+if not args.scan_mode:
+    run_neg_process(args.raw_file)
+    exit(0)
+
+seen_files = set(os.listdir(os.getcwd()))
+
+while True:
+    for f in os.listdir(os.getcwd()):
+        if not os.path.isfile(f):
+            continue
+        if f in seen_files:
+            continue
+        # Only supports .ARW right now.
+        if not f.endswith('.ARW'):
+            continue
+        if int(time.time()) - os.path.getmtime(f) < 3:
+            continue
+        print('Found new file %s.' % f)
+        run_neg_process(f)
+        seen_files.add(f)
+    time.sleep(1)
