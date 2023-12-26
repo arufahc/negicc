@@ -1,12 +1,13 @@
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include <time.h>
 
 #include <algorithm>
 #include <string>
 
 #include <netinet/in.h>
+#include <lcms2.h>
 
 #include "libraw/libraw.h"
 
@@ -68,6 +69,7 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_ti
 }
 
 void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
+  #pragma omp parallel
   for (int j = 0; j < proc->imgdata.sizes.iheight; ++j) {
     for (int i = 0; i < proc->imgdata.sizes.iwidth; ++i) {
       ushort r = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][0];
@@ -86,11 +88,67 @@ void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
   }
 }
 
+int read_profile(const char* prof_name, unsigned **prof_out, unsigned *size) {
+  FILE *fp;
+  if ((fp = fopen(prof_name, "rb"))) {
+    fread(size, 4, 1, fp);
+    fseek(fp, 0, SEEK_SET);
+    *prof_out = (unsigned *)malloc(*size = ntohl(*size));
+    fread(*prof_out, 1, *size, fp);
+    fclose(fp);
+    return 0;
+  }
+  return -1;
+}
+
+int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *input, const char *output)
+{
+  cmsHPROFILE hInProfile = 0, hOutProfile = 0;
+  cmsHTRANSFORM hTransform;
+  unsigned *prof, *oprof;
+  unsigned size;
+
+  if (!read_profile(input, &prof, &size)) {
+    printf("Reading input ICC profile: %s\n", input);
+    if (!(hInProfile = cmsOpenProfileFromMem(prof, size))) {
+      free(prof);
+      prof = 0;
+      return -1;
+    }
+  } else {
+    return -1;
+  }
+
+  if (!strcmp(output, "srgb")) {
+    printf("Creating standard sRGB profile\n");
+    hOutProfile = cmsCreate_sRGBProfile();
+  } else if (!read_profile(output, &oprof, &size)) {
+    printf("Reading output ICC profile: %s\n", output);
+    if (!(hOutProfile = cmsOpenProfileFromMem(oprof, size))) {
+      free(oprof);
+      oprof = 0;
+      return -1;
+    }
+  } else {
+    return -1;
+  }
+  hTransform = cmsCreateTransform(hInProfile, TYPE_RGBA_16, hOutProfile,
+                                  TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
+  cmsDoTransform(hTransform, image, image, width * height);
+  cmsDeleteTransform(hTransform);
+  cmsCloseProfile(hOutProfile);
+ quit:
+  cmsCloseProfile(hInProfile);
+  return 0;
+}
+
 int main(int ac, char *av[]) {
   int i, ret;
   char out_fn[1024];
-  char prof_fn[1024];
-  memset(prof_fn, 0, sizeof(prof_fn));
+  char in_prof_fn[1024];
+  char out_prof_fn[1024];
+  memset(in_prof_fn, 0, sizeof(in_prof_fn));
+  memset(out_prof_fn, 0, sizeof(out_prof_fn));
 
   float r_coef[4] = {1.0f,0,0,0.0};
   float g_coef[4] = {0,1.0f,0,0.0};
@@ -106,7 +164,8 @@ int main(int ac, char *av[]) {
 	     "  -r: R correction coefficients.\n"
 	     "  -g: R correction coefficients.\n"
 	     "  -b: R correction coefficients.\n"
-             "  -p: ICC Profile to attach to TIFF file.\n"
+             "  -p: ICC Profile that applies to the corrected RGB from RAW file. Consider this as the input ICC profile.\n"
+             "  -P: srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.\n"
 	     "  -o: Output file location.\n",
 	     LibRaw::version(), av[0]);
       return 0;
@@ -144,7 +203,11 @@ int main(int ac, char *av[]) {
 	++i;
 	break;
       case 'p':
-	strncpy(prof_fn, av[i+1], strlen(av[i+1]));
+	strncpy(in_prof_fn, av[i+1], strlen(av[i+1]));
+	++i;
+	break;
+      case 'P':
+	strncpy(out_prof_fn, av[i+1], strlen(av[i+1]));
 	++i;
 	break;
       default:
@@ -212,7 +275,7 @@ int main(int ac, char *av[]) {
     proc[0]->imgdata.idata.colors = 3;
     for (int i = 0; i < 3; ++i) {
       // Operating on data without interpolation and for Sony A7RM4 sensor
-      // needs to multiply by 4.
+      // the input is 14-bit and multiply by 4 to expand into 16-bit.
       int scale_factor = 4;
       r_coef[i] *= scale_factor;
       g_coef[i] *= scale_factor;
@@ -228,18 +291,25 @@ int main(int ac, char *av[]) {
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coef[0], b_coef[1], b_coef[2]);
   post_process(proc[0], r_coef, g_coef, b_coef);
 
-  // This is a hack to force LibRaw write the ICC profile in the TIFF.
-  if (prof_fn[0]) {
-    printf("Attaching profile: %s\n", prof_fn);
-    FILE *fp = fopen(prof_fn, "rb");
-    unsigned size;
-    fread(&size, 4, 1, fp);
-    fseek(fp, 0, SEEK_SET);
-    proc[0]->get_internal_data_pointer()->output_data.oprof = (unsigned *)malloc(size = ntohl(size));
-    fread(proc[0]->get_internal_data_pointer()->output_data.oprof, 1, size, fp);
-    fclose(fp);
+  // By default attach the input profile to the output file only, no conversion.
+  char* attach_prof_fn = in_prof_fn;
+  if (in_prof_fn[0] && out_prof_fn[0]) {
+    apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight, in_prof_fn, out_prof_fn);
+    // Attach the output profile since conversion has applied.
+    attach_prof_fn = out_prof_fn;
   }
-  printf("Writing TIFF %s\n", out_fn);
+
+  if (attach_prof_fn && strcmp(attach_prof_fn, "srgb")) {
+    // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
+    // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
+    printf("Attaching profile: %s\n", attach_prof_fn);
+    unsigned size;
+    if (read_profile(attach_prof_fn, &proc[0]->get_internal_data_pointer()->output_data.oprof, &size)) {
+      printf("Cannot read profile.\n");
+      return -1;
+    }
+  }
+  printf("Writing TIFF '%s'\n", out_fn);
   proc[0]->dcraw_ppm_tiff_writer(out_fn);
   return 0;
 }

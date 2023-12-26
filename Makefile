@@ -233,12 +233,12 @@ sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt make_icc
 
 make_icc: make_icc.c
 	mkdir -p bin_out
-	gcc -o bin_out/make_icc make_icc.c -llcms2
+	clang -o bin_out/make_icc make_icc.c -llcms2
 
 raw_info: raw_info.cc
 	mkdir -p bin_out
-	g++ -o bin_out/raw_info raw_info.cc -lraw
+	clang++ -o bin_out/raw_info raw_info.cc -lraw
 
 neg_process: neg_process.cc
 	mkdir -p bin_out
-	g++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw -O3 -ftree-vectorize
+	clang++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw -lz -O3 -llcms2

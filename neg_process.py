@@ -55,6 +55,13 @@ parser.add_argument(
     ],
     help="Profile of the scanned film or the name of the generated profile.")
 parser.add_argument(
+    "--output_profile", '-P',
+    choices=[
+        'srgb',
+        '<ICC profile path>',
+    ],
+    help="Output color profile. If not spciefied input profile is attached. If specified then convert using this profile.")
+parser.add_argument(
     '--raw_file', '-f',
     help="Name of the input raw file.")
 parser.add_argument(
@@ -66,6 +73,10 @@ parser.add_argument(
     action='store_true',
     help="Scanning mode will wait for a new file and process automatically.")
 parser.add_argument(
+    '--debug', '-d',
+    action='store_true',
+    help="Debug mode and print neg_process arguments.")
+parser.add_argument(
     '--measurement', '-m',
     choices=['', 'R190808'],
     default='R190808',
@@ -75,6 +86,11 @@ parser.add_argument(
     default=0,
     type=int,
     help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD")
+parser.add_argument(
+    '--neg_brightness', '-b',
+    default=1.0,
+    type=float,
+    help="Adjust brightness of the negative. Compensate for over-/under-exposure of the negative.")
 parser.add_argument('--target_mode', '-T', action='store_true')
 args = parser.parse_args()
 
@@ -100,7 +116,8 @@ def read_profile_info(name):
     shutter_speed = ''
     with open(profile_info_txt) as f:
         for i in range(0, 3):
-            matrix.append(f.readline().strip('\r\n'))
+            coeffs = [float(x) for x in f.readline().strip('\r\n').split(' ')]
+            matrix.append(coeffs)
         shutter_speed = f.readline().split(' ')[0]
     return {'name': name, 'matrix': matrix, 'shutter_speed': float(shutter_speed)}
 
@@ -134,20 +151,24 @@ def run_neg_process(raw_file):
     profile = get_profile(raw_file)
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-        '-r', profile['matrix'][0],
-        '-g', profile['matrix'][1],
-        '-b', profile['matrix'][2],
+        '-r', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][0]]),
+        '-g', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][1]]),
+        '-b', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][2]]),
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
                                                         profile['name'].capitalize(),
                                                         args.measurement),
-        '-o', Path(raw_file).stem + ('.%s.tif' % profile['name']),
-        raw_file]
+        '-o', Path(raw_file).stem + ('.%s.tif' % profile['name'])]
+    if args.output_profile:
+        neg_process_args += ['-P', args.output_profile]
 
+    neg_process_args.append(raw_file)
     if args.multi_shot:
         file_num = int(Path(raw_file).stem[-4:])
         for i in range(1,4):
             neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
+    if args.debug:
+        print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
     subprocess.run(neg_process_args, check=True)
 
 # Single process mode.
