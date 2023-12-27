@@ -87,10 +87,9 @@ parser.add_argument(
     type=int,
     help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD")
 parser.add_argument(
-    '--neg_brightness', '-b',
-    default=1.0,
+    '--exposure_comp', '-c',
     type=float,
-    help="Adjust brightness of the negative. Compensate for over-/under-exposure of the negative.")
+    help="Multiplier to compensate for over-/under-exposure of the negative.")
 parser.add_argument('--target_mode', '-T', action='store_true')
 args = parser.parse_args()
 
@@ -121,21 +120,30 @@ def read_profile_info(name):
         shutter_speed = f.readline().split(' ')[0]
     return {'name': name, 'matrix': matrix, 'shutter_speed': float(shutter_speed)}
 
-def get_profile(raw_file):
+def compute_exposure_comp(profile, raw_shutter_speed):
+    '''Assuming shutter speed is the only variable between the profile and RAW capture,
+    compute the exposure compensation that should be applied to the converted RGB matrix
+    to match the exposure of the profile.'''
+    return profile['shutter_speed'] / raw_shutter_speed
+
+def get_profile_and_exposure_comp(raw_file):
+    ''' Assuming shutter speed is the only variable between the profile and RAW capture,
+    pick the profile with shutter speed that is cloest that of the RAW file.
+    Scale the color correction matrix to accomodate the exposure compensation.'''
+    raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                                 '-s', raw_file]).decode(sys.stdout.encoding).strip()
     if args.profile:
-        return read_profile_info(args.profile)
+        return (read_profile_info(args.profile),
+                compute_exposure_comp(args.profile, raw_shutter_speed))
 
     # If profile is not specified use emulsion and shutter speed to select profile automatically.
     profile = {}
     profiles = []
-    profiles.append(read_profile_info(args.emulsion))
     # Append profiles that are exposed over and under.
-    for exp_diff in ['-1', '-2', '-3', '-4', '-5', '+1', '+2', '+3']:
+    for exp_diff in ['', '-1', '-2', '-3', '-4', '-5', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             profiles.append(exp_diff_profile)
-    raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                                 '-s', raw_file]).decode(sys.stdout.encoding).strip()
     raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
     print("Raw shutter speed: %f" % raw_shutter_speed)
     max_exp_diff = 100
@@ -145,15 +153,18 @@ def get_profile(raw_file):
             max_exp_diff = exp_diff
             profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    return profile
+    return (profile, compute_exposure_comp(profile, raw_shutter_speed))
 
 def run_neg_process(raw_file):
-    profile = get_profile(raw_file)
+    profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
+    if args.exposure_comp:
+        exposure_comp = args.exposure_comp
+    print("Exposure compensation applied: %f" % exposure_comp)
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-        '-r', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][0]]),
-        '-g', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][1]]),
-        '-b', ' '.join([str(x * args.neg_brightness) for x in profile['matrix'][2]]),
+        '-r', ' '.join([str(x * exposure_comp) for x in profile['matrix'][0]]),
+        '-g', ' '.join([str(x * exposure_comp) for x in profile['matrix'][1]]),
+        '-b', ' '.join([str(x * exposure_comp) for x in profile['matrix'][2]]),
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
                                                         profile['name'].capitalize(),
