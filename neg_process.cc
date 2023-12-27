@@ -101,16 +101,15 @@ int read_profile(const char* prof_name, unsigned **prof_out, unsigned *size) {
   return -1;
 }
 
-int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *input, const char *output)
-{
-  cmsHPROFILE hInProfile = 0, hOutProfile = 0;
-  cmsHTRANSFORM hTransform;
+int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *input, const char *output) {
+  cmsHPROFILE in_profile = 0, out_profile = 0;
+  cmsHTRANSFORM transform;
   unsigned *prof, *oprof;
   unsigned size;
 
   if (!read_profile(input, &prof, &size)) {
     printf("Reading input ICC profile: %s\n", input);
-    if (!(hInProfile = cmsOpenProfileFromMem(prof, size))) {
+    if (!(in_profile = cmsOpenProfileFromMem(prof, size))) {
       free(prof);
       prof = 0;
       return -1;
@@ -121,10 +120,10 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *i
 
   if (!strcmp(output, "srgb")) {
     printf("Creating standard sRGB profile\n");
-    hOutProfile = cmsCreate_sRGBProfile();
+    out_profile = cmsCreate_sRGBProfile();
   } else if (!read_profile(output, &oprof, &size)) {
     printf("Reading output ICC profile: %s\n", output);
-    if (!(hOutProfile = cmsOpenProfileFromMem(oprof, size))) {
+    if (!(out_profile = cmsOpenProfileFromMem(oprof, size))) {
       free(oprof);
       oprof = 0;
       return -1;
@@ -132,13 +131,13 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *i
   } else {
     return -1;
   }
-  hTransform = cmsCreateTransform(hInProfile, TYPE_RGBA_16, hOutProfile,
+  transform = cmsCreateTransform(in_profile, TYPE_RGBA_16, out_profile,
                                   TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
-  cmsDoTransform(hTransform, image, image, width * height);
-  cmsDeleteTransform(hTransform);
-  cmsCloseProfile(hOutProfile);
+  cmsDoTransform(transform, image, image, width * height);
+  cmsDeleteTransform(transform);
+  cmsCloseProfile(out_profile);
  quit:
-  cmsCloseProfile(hInProfile);
+  cmsCloseProfile(in_profile);
   return 0;
 }
 
