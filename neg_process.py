@@ -132,9 +132,10 @@ def get_profile_and_exposure_comp(raw_file):
     Scale the color correction matrix to accomodate the exposure compensation.'''
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding).strip()
+    raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
     if args.profile:
-        return (read_profile_info(args.profile),
-                compute_exposure_comp(args.profile, raw_shutter_speed))
+        profile = read_profile_info(args.profile)
+        return (profile, compute_exposure_comp(profile, raw_shutter_speed))
 
     # If profile is not specified use emulsion and shutter speed to select profile automatically.
     profile = {}
@@ -144,7 +145,6 @@ def get_profile_and_exposure_comp(raw_file):
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             profiles.append(exp_diff_profile)
-    raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
     print("Raw shutter speed: %f" % raw_shutter_speed)
     max_exp_diff = 100
     for p in profiles:
