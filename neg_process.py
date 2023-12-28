@@ -88,8 +88,7 @@ parser.add_argument(
     help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD")
 parser.add_argument(
     '--exposure_comp', '-c',
-    type=float,
-    help="Multiplier to compensate for over-/under-exposure of the negative.")
+    help="Multipliers for RGB to compensate for over-/under-exposure of the negative.")
 parser.add_argument(
     '--half', '-H',
     action='store_true',
@@ -129,7 +128,8 @@ def compute_exposure_comp(profile, raw_shutter_speed):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
     compute the exposure compensation that should be applied to the converted RGB matrix
     to match the exposure of the profile.'''
-    return profile['shutter_speed'] / raw_shutter_speed
+    mul = profile['shutter_speed'] / raw_shutter_speed
+    return (mul, mul, mul)
 
 def get_profile_and_exposure_comp(raw_file):
     ''' Assuming shutter speed is the only variable between the profile and RAW capture,
@@ -163,13 +163,13 @@ def get_profile_and_exposure_comp(raw_file):
 def run_neg_process(raw_file):
     profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
     if args.exposure_comp:
-        exposure_comp = args.exposure_comp
-    print("Exposure compensation applied: %f" % exposure_comp)
+        exposure_comp = [float(x) for x in args.exposure_comp.split(' ')]
+    print("Exposure compensation applied: %s" % str(exposure_comp))
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-        '-r', ' '.join([str(x * exposure_comp) for x in profile['matrix'][0]]),
-        '-g', ' '.join([str(x * exposure_comp) for x in profile['matrix'][1]]),
-        '-b', ' '.join([str(x * exposure_comp) for x in profile['matrix'][2]]),
+        '-r', ' '.join([str(x * exposure_comp[0]) for x in profile['matrix'][0]]),
+        '-g', ' '.join([str(x * exposure_comp[1]) for x in profile['matrix'][1]]),
+        '-b', ' '.join([str(x * exposure_comp[2]) for x in profile['matrix'][2]]),
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
                                                         profile['name'].capitalize(),
