@@ -90,6 +90,11 @@ parser.add_argument(
     '--exposure_comp', '-c',
     type=float,
     help="Multiplier to compensate for over-/under-exposure of the negative.")
+parser.add_argument(
+    '--half', '-H',
+    action='store_true',
+    help="Half size.")
+
 parser.add_argument('--target_mode', '-T', action='store_true')
 args = parser.parse_args()
 
@@ -172,6 +177,8 @@ def run_neg_process(raw_file):
         '-o', Path(raw_file).stem + ('.%s.tif' % profile['name'])]
     if args.output_profile:
         neg_process_args += ['-P', args.output_profile]
+    if args.half:
+        neg_process_args.append('-h')
 
     neg_process_args.append(raw_file)
     if args.multi_shot:

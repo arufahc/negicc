@@ -298,7 +298,7 @@ int main(int ac, char *av[]) {
     attach_prof_fn = out_prof_fn;
   }
 
-  if (attach_prof_fn && strcmp(attach_prof_fn, "srgb")) {
+  if (attach_prof_fn[0] && strcmp(attach_prof_fn, "srgb")) {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
     printf("Attaching profile: %s\n", attach_prof_fn);
