@@ -37,19 +37,19 @@ parser.add_argument(
     choices=[
         'ektar100',
         'ektar100-1',
-        'ektar100-2',
-        'ektar100-3',
-        'ektar100-4',
-        'ektar100-5',
+        'ektar100-2', # Looks worse than ektar100-1 profile.
+        'ektar100-3', # Poor quality.
+        'ektar100-4', # Poor quality.
+        'ektar100-5', # Poor quality.
         'ektar100+1',
         'ektar100+2',
         'ektar100+3',
         'portra160',
-        'portra160-1',
+        'portra160-1', # Poor quality. Might be better to use portra160 and then brighten image.
         'portra160+1',
         'portra160+2',
         'portra400',
-        'portra400-1',
+        'portra400-1', # Poor quality. Might be better to use portra400 and then brighten image.
         'portra400+1',
         'portra400+2',
     ],
@@ -151,7 +151,8 @@ def get_profile_and_exposure_comp(raw_file):
     profile = {}
     profiles = []
     # Append profiles that are exposed over and under.
-    for exp_diff in ['', '-1', '-2', '-3', '-4', '-5', '+1', '+2', '+3']:
+    # Profiles made too under-exposed have poor quality and are excluded.
+    for exp_diff in ['', '-1', '-2', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             profiles.append(exp_diff_profile)
