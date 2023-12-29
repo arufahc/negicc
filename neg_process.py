@@ -90,6 +90,10 @@ parser.add_argument(
     '--color_comp', '-c',
     help="Multipliers for corrected RGB to compensate for color difference of the film base.")
 parser.add_argument(
+    '--exposure_comp', '-C',
+    type=float,
+    help="Multiplier for RGB values (doesn't matter corrected RGB or not).")
+parser.add_argument(
     '--half', '-H',
     action='store_true',
     help="Half size.")
@@ -128,6 +132,8 @@ def compute_exposure_comp(profile, raw_shutter_speed):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
     compute the exposure compensation that should be applied to the converted RGB matrix
     to match the exposure of the profile.'''
+    if args.exposure_comp:
+        return args.exposure_comp
     return profile['shutter_speed'] / raw_shutter_speed
 
 def get_profile_and_exposure_comp(raw_file):
