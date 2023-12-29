@@ -69,7 +69,6 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_ti
 }
 
 void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
-  #pragma omp parallel
   for (int j = 0; j < proc->imgdata.sizes.iheight; ++j) {
     for (int i = 0; i < proc->imgdata.sizes.iwidth; ++i) {
       ushort r = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][0];
