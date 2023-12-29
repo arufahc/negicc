@@ -57,6 +57,13 @@ parser.add_argument(
     default=40000,
     type=float)
 parser.add_argument(
+    "--mid_grey_scaling",
+    help="The RGB value that should be assigned to the mid-grey GS patch. "
+    "Setting this value will scale the correct matrix according to the mid-grey GS patch"
+    " specified by --prescale_coef.",
+    # default=10000,
+    type=float)
+parser.add_argument(
     "--fit_intercept",
     help="Whether to allow intercept in linear interpolation for crosstalk correction.",
     default=True)
@@ -516,11 +523,17 @@ def main():
     # thus transposed.
     crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
 
+    # This is only used to scale the matrix using mid-grey patch.
+    # See the check for args.mid_grey_scaling below.
+    corrected_mid_grey_r = 0
     if args.prescale_coef:
         gs_cell = args.prescale_coef
+        # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
         prod = crosstalk_correction_mat.transpose().dot(
             np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
+        # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
         crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
+        corrected_mid_grey_r = prod[0]
         print("Scaled crosstalk correction matrix to white balance patch: %s." % args.prescale_coef)
         print(crosstalk_correction_mat.transpose())
 
@@ -530,8 +543,13 @@ def main():
     corrected_gs_rgb = np.matmul(
         gs_rgb.transpose(),
         crosstalk_correction_mat).transpose()
+
     print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
-    crosstalk_correction_mat *= args.darkest_patch_scaling / corrected_gs_rgb.max()
+    if args.darkest_patch_scaling:
+        crosstalk_correction_mat *= args.darkest_patch_scaling / corrected_gs_rgb.max()
+    elif args.mid_grey_scaling:
+        crosstalk_correction_mat *= args.mid_grey_scaling / corrected_mid_grey_r
+    
     corrected_gs_rgb = np.matmul(
         gs_rgb.transpose(),
         crosstalk_correction_mat).transpose()
