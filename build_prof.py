@@ -97,6 +97,10 @@ parser.add_argument(
     "--shutter_speed",
     help="Just for record of the shutter speed used to capture the target.",
     default='')
+parser.add_argument(
+    "--film_base_rgb",
+    help="Just for record of the average RGB values of the film base.",
+    default='')
 
 args = parser.parse_args()
 
@@ -345,7 +349,7 @@ def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
     sys.stdout = stdout_backup
     os.chmod(file_name, 0o755)
 
-def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed):
+def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
@@ -354,6 +358,7 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed):
     print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
     print('%s # Shutter speed' % shutter_speed)
+    print('%s # Film base RGB (uncorrected) values' % film_base_rgb)
     f.close()
     sys.stdout = stdout_backup
 
@@ -597,7 +602,7 @@ def main():
     write_ti3('check_prof.ti3', positive_rgb=False)
     write_profile_info_txt(
         'icc_out/%s Info.txt' % args.film_name,
-        crosstalk_correction_mat, args.shutter_speed)
+        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb)
     run_prof_check(out_clut_prof)
 
     if args.install_dir:
