@@ -516,7 +516,7 @@ def main():
     # Prepare the refernce XYZ values to be used for running colprof.
     test_white_XYZ = run_chromatic_adaptation_on_ref_XYZ()
 
-    print("Step 1: Estimate the cross-talk correction matrix.")
+    print("### Step 1: Estimate the cross-talk correction matrix.")
     # TODO: The coefficients cannot be positive other than the primary signal,
     # i.e. the diagonal.
     r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
@@ -542,7 +542,7 @@ def main():
         print("Scaled crosstalk correction matrix to white balance patch: %s." % args.prescale_coef)
         print(crosstalk_correction_mat.transpose())
 
-    print("Step 2: Estimate the TRC from cross-talk corrected RGB values.")
+    print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
     gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
     corrected_gs_rgb = np.matmul(
@@ -580,13 +580,15 @@ def main():
         g_curve,
         b_curve)
 
-    print("Step 3: Run colprof to produce a profile.")
+    print("### Step 3: Run colprof to produce cLUT profile.")
     df.to_csv('build_prof_diag.csv')
     write_ti3('build_prof.ti3')
     clut_prof = run_colprof_clut('build_prof')
+
+    print("### Step 4: Run colprof to produce matrix profile.")
     matrix_prof = run_colprof_matrix('build_prof')
 
-    print('Step 4: Building ICC profiles using make_icc.')
+    print('### Step 5: Building ICC profiles using make_icc.')
     run_make_icc(
         crosstalk_correction_mat,
         test_white_XYZ,
@@ -603,6 +605,7 @@ def main():
     write_profile_info_txt(
         'icc_out/%s Info.txt' % args.film_name,
         crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb)
+    print('### Step 6: Checking cLUT profile.')
     run_prof_check(out_clut_prof)
 
     if args.install_dir:

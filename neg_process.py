@@ -56,6 +56,11 @@ parser.add_argument(
     ],
     help="Profile of the scanned film or the name of the generated profile.")
 parser.add_argument(
+    "--profile_type", '-t',
+    choices=['cLUT', 'Matrix'],
+    default='cLUT',
+    help="Profile type used to attach (no -P specified) or to convert (with -P specified).")
+parser.add_argument(
     "--output_profile", '-P',
     choices=[
         'srgb',
@@ -238,10 +243,11 @@ def run_neg_process(raw_file):
         '-g', ' '.join([str(x * color_comp[1]) for x in profile['matrix'][1]]),
         '-b', ' '.join([str(x * color_comp[2]) for x in profile['matrix'][2]]),
         '-q', str(args.quality),
-        '-p', '%s/icc_out/Sony A7RM4 %s %s cLUT.icc' % (os.path.dirname(__file__),
-                                                        profile['name'].capitalize(),
-                                                        args.measurement),
-        '-o', Path(raw_file).stem + ('.%s.tif' % profile['name'])]
+        '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
+                                                      profile['name'].capitalize(),
+                                                      args.measurement,
+                                                      args.profile_type),
+        '-o', Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))]
     if args.output_profile:
         neg_process_args += ['-P', args.output_profile]
     if args.half:
