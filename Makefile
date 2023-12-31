@@ -159,19 +159,19 @@ sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='TODO'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
 sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400 R190808" $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.076923
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.076923
 
 .PHONY: sony_a7rm4_portra400-1_r190808
 sony_a7rm4_portra400-1_r190808: data/portra400-1-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.066667
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.066667
 
 .PHONY: sony_a7rm4_portra400+1_r190808
 sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400+1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.100000
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400+1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.100000
 
 .PHONY: sony_a7rm4_portra400+2_r190808
 sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.166667
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --install_dir="$(INSTALL_DIR)" --shutter_speed=0.166667
 
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: data/portra160-0-cs100a_train.txt make_icc
