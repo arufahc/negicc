@@ -199,8 +199,16 @@ def compute_color_comp(profile, film_base_rgb, film_base_raw_file):
     if film_base_rgb:
         center_rgb = film_base_rgb.split(' ')
     else:
-        center_rgb = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                              '-w', film_base_raw_file]).decode(sys.stdout.encoding).strip()
+        raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
+        if os.path.exists(raw_info_txt):
+            with open(raw_info_txt) as f:
+                center_rgb = f.read()
+        else:
+            center_rgb = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                                  '-w', film_base_raw_file]).decode(sys.stdout.encoding)
+            f = open(raw_info_txt, 'w+')
+            f.write(center_rgb)
+            f.close()
         center_rgb = center_rgb.split('\n')[0].strip('\r').split(' ')
     center_rgb = np.array([float(x) for x in center_rgb[0:3]])
     cc_average_r = np.dot(profile['matrix'][0], center_rgb)
