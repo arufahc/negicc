@@ -21,7 +21,7 @@ void print_pixel(LibRaw* proc, int row, int col) {
 	 proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
 }
 
-LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_tiff) {
+LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool crop) {
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -48,8 +48,7 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_ti
   proc->imgdata.params.no_auto_bright = 1;
   proc->imgdata.params.highlight = 0;
   proc->imgdata.params.output_color = 0;
-  if (write_tiff)
-    proc->imgdata.params.output_tiff = 1;
+  proc->imgdata.params.output_tiff = 1;
   if (!debayer) {
     proc->imgdata.params.no_interpolation = 1;
     proc->raw2image();
@@ -63,6 +62,13 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool write_ti
     proc->imgdata.params.user_mul[1] = 1;
     proc->imgdata.params.user_mul[2] = 1;
     proc->imgdata.params.user_mul[3] = 1;
+    if (crop &&
+        (proc->imgdata.sizes.raw_inset_crops[0].cleft || proc->imgdata.sizes.raw_inset_crops[0].ctop)) {
+      proc->imgdata.params.cropbox[0] = proc->imgdata.sizes.raw_inset_crops[0].cleft;
+      proc->imgdata.params.cropbox[1] = proc->imgdata.sizes.raw_inset_crops[0].ctop;
+      proc->imgdata.params.cropbox[2] = proc->imgdata.sizes.raw_inset_crops[0].cwidth;
+      proc->imgdata.params.cropbox[3] = proc->imgdata.sizes.raw_inset_crops[0].cheight;
+    }
     proc->dcraw_process();
   }
   return proc;
@@ -154,63 +160,67 @@ int main(int ac, char *av[]) {
 
   if (ac < 2) {
     usage:
-      printf("neg_process - Process Negative with LibRAW %s\n"
-	     "Usage: %s [options] raw-files....\n"
-             "  More than 4 raw-files supplied will be combined assuming a Sony 4-shot pixel sequence.\n"
-	     "  -h: Half size.\n"
-             "  -q: Quality.\n"
-	     "  -r: R correction coefficients.\n"
-	     "  -g: R correction coefficients.\n"
-	     "  -b: R correction coefficients.\n"
-             "  -p: ICC Profile that applies to the corrected RGB from RAW file. Consider this as the input ICC profile.\n"
-             "  -P: srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.\n"
-	     "  -o: Output file location.\n",
-	     LibRaw::version(), av[0]);
-      return 0;
+    printf("neg_process - Process Negative with LibRAW %s\n"
+           "Usage: %s [options] raw-files....\n"
+           "  More than 4 raw-files supplied will be combined assuming a Sony 4-shot pixel sequence.\n"
+           "  -h: Half size.\n"
+           "  -C: No cropping based on raw aspect ratio.\n"
+           "  -q: Quality.\n"
+           "  -r: R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW.\n"
+           "  -g: G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW.\n"
+           "  -b: B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW.\n"
+           "  -p: ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.\n"
+           "  -P: srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.\n"
+           "  -o: Output file location.\n",
+           LibRaw::version(), av[0]);
+    return 0;
   }
 
   char* files[16];
   int fp = 0;
   bool half_size = false;
-  bool write_tiff = true;
+  bool crop = true;
   int qual = 0;
   for (i = 1; i < ac; i++) {
     if (av[i][0] == '-') {
       switch (av[i][1]) {
       case 'h':
-	half_size = true;
-	break;
+        half_size = true;
+        break;
+      case 'C':
+        crop = false;
+        break;
       case 'o':
-	strncpy(out_fn, av[i+1], strlen(av[i+1]));
-	++i;
-	break;
+        strncpy(out_fn, av[i+1], strlen(av[i+1]));
+        ++i;
+        break;
       case 'r':
-	sscanf(av[i+1],"%f %f %f", r_coef, r_coef+1, r_coef+2);
-	++i;
-	break;
+        sscanf(av[i+1],"%f %f %f", r_coef, r_coef+1, r_coef+2);
+        ++i;
+        break;
       case 'g':
-	sscanf(av[i+1],"%f %f %f", g_coef, g_coef+1, g_coef+2);
-	++i;
-	break;
+        sscanf(av[i+1],"%f %f %f", g_coef, g_coef+1, g_coef+2);
+        ++i;
+        break;
       case 'b':
-	sscanf(av[i+1],"%f %f %f", b_coef, b_coef+1, b_coef+2);
-	++i;
-	break;
+        sscanf(av[i+1],"%f %f %f", b_coef, b_coef+1, b_coef+2);
+        ++i;
+        break;
       case 'q':
-	sscanf(av[i+1], "%d", &qual);
-	++i;
-	break;
+        sscanf(av[i+1], "%d", &qual);
+        ++i;
+        break;
       case 'p':
-	strncpy(in_prof_fn, av[i+1], strlen(av[i+1]));
-	++i;
-	break;
+        strncpy(in_prof_fn, av[i+1], strlen(av[i+1]));
+        ++i;
+        break;
       case 'P':
-	strncpy(out_prof_fn, av[i+1], strlen(av[i+1]));
-	++i;
-	break;
+        strncpy(out_prof_fn, av[i+1], strlen(av[i+1]));
+        ++i;
+        break;
       default:
-	goto usage;
-	continue;
+        goto usage;
+        continue;
       }
     } else {
       files[fp++] = av[i];
@@ -220,10 +230,12 @@ int main(int ac, char *av[]) {
   LibRaw *proc[4];
   if (fp == 4) {
     for (int i = 0; i < 4; ++i) {
-      proc[i] = load_raw(files[i], false, false,
-			 /*quality doesn't matter because no interpolation*/
-			 0,
-			 write_tiff);
+      proc[i] = load_raw(
+          files[i], false, false,
+          /* Quality doesn't matter because no interpolation. */
+          0,
+          /* Don't crop since it might mess up pixel-shift merging. */
+          false);
     }
     printf("Merging 4 images...\n");
 
@@ -280,7 +292,7 @@ int main(int ac, char *av[]) {
       b_coef[i] *= scale_factor;
     }
   } else {
-    proc[0] = load_raw(files[0], true, half_size, qual, write_tiff);
+    proc[0] = load_raw(files[0], true, half_size, qual, crop);
   }
   printf("ISO Speed: %f\n", proc[0]->imgdata.other.iso_speed);
   printf("Shutter %f\n", proc[0]->imgdata.other.shutter);

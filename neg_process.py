@@ -72,17 +72,21 @@ parser.add_argument(
     help="Raw file for the capture of the film base."
     " The channel balance is computed from the film base to compute compensations"
     " that should be applied to match that of the target. This method is to"
-    " account for variations of the film base density")
+    " account for variations of the film base density.")
 parser.add_argument(
     '--film_base_rgb', '-B',
     help="Uncorrected RGB values of the film base."
     " The channel balance is computed from the film base to compute compensations"
     " that should be applied to match that of the target. This method is to"
-    " account for variations of the film base density")
+    " account for variations of the film base density.")
 parser.add_argument(
     '--multi_shot', '-M',
     action='store_true',
-    help="Sony 4-shots multishot mode. Assume 4 consecutive shots from [raw_file]")
+    help="Sony 4-shots multishot mode. Assume 4 consecutive shots from [raw_file].")
+parser.add_argument(
+    '--no_crop', '-C',
+    action='store_true',
+    help="No cropping based on aspect ratio from metadata in [raw_file].")
 parser.add_argument(
     '--scan_mode', '-s',
     action='store_true',
@@ -95,12 +99,12 @@ parser.add_argument(
     '--measurement', '-m',
     choices=['', 'R190808'],
     default='R190808',
-    help="Measurement used")
+    help="Measurement used.")
 parser.add_argument(
     '--quality', '-q',
     default=0,
     type=int,
-    help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD")
+    help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD.")
 parser.add_argument(
     '--color_comp', '-c',
     help="Multipliers for corrected RGB."
@@ -108,13 +112,13 @@ parser.add_argument(
     " The purpose of this flag is to manually adjust channel"
     " balance before ICC profile is applied.")
 parser.add_argument(
-    '--exposure_comp', '-C',
+    '--exposure_comp', '-E',
     type=float,
     help="Single multiplier for all RGB values (doesn't matter corrected RGB or not).")
 parser.add_argument(
     '--half', '-H',
     action='store_true',
-    help="Half size.")
+    help="Generate half size image.")
 
 parser.add_argument('--target', '-T', action='store_true')
 args = parser.parse_args()
@@ -234,6 +238,8 @@ def run_neg_process(raw_file):
         neg_process_args += ['-P', args.output_profile]
     if args.half:
         neg_process_args.append('-h')
+    if args.no_crop:
+        neg_process_args.append('-C')
 
     neg_process_args.append(raw_file)
     if args.multi_shot:
