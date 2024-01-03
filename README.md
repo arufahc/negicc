@@ -70,7 +70,9 @@ The process of using the profiles should be:
    linear image.
 2. Apply crosstalk correction matrix computed. Use neg_process can do this
    in step (1) or use ImageMagick separately.
-3. Add (but not convert using) the cLUT or matric ICC profile to image from step 2.
+3. Apply the cLUT or matric ICC profile to convert image to sRGB colorspace.
+   Optionally the tool can produce a TIFF iamge with the ICC profile attached
+   as input profile.
 
 Included in this repo is data files from films exposed with a
 IT8 target under 5400K sunlight and scanned using a Sony A7RM4 digital camera
