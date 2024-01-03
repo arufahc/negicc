@@ -161,5 +161,4 @@ imported again for further editting.
 
 # More details
 
-Please see the code in build_prof.py and make_icc.c for more algorithms and
-details.
+Please see the code in build_prof.py and ne_process.{cc, py} for details of the algorithm.
