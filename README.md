@@ -6,7 +6,7 @@ film taken with a digital camera.
 
 The ICC profiles created should have the following properties:
 * Allow color balance adjustments
-* Produces netural color which allows further adjustments
+* Produces netural color which allows further asdjustments
 * Can be used with commonly available photo editting tools
 
 ![sample conversion](samples/sample.png)
@@ -16,7 +16,7 @@ The ICC profiles created should have the following properties:
 Typical color negative conversion software operates in sRGB colorspace.
 However color negative is a medium for recording color information in terms
 of dye density. The density of the dyes is designed to be extracted with
-Status M densitometry and is not under D50 or 5000K light. The first step
+[Status M](https://law.resource.org/pub/us/cfr/ibr/001/aimm.it2.18.1996.pdf) densitometry and is not under D50 or 5000K light. The first step
 of scanning film with a digital camera is to produce response that resembles
 Status M densitometry with good sepearation between the channels. I created
 a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing) with detailed steps.
@@ -168,4 +168,4 @@ imported again for further editting.
 
 # More details
 
-Please see the code in build_prof.py and ne_process.{cc, py} for details of the algorithm.
+Please see the code in build_prof.py and neg_process.{cc, py} for details of the algorithm.
