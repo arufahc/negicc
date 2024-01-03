@@ -13,16 +13,21 @@ The ICC profiles created should have the following properties:
 
 # Introduction
 
-An ICC profile alone is insufficient to gurantee consistency from frame to
-frame. You need good color separation from the captured images in the
-physical department. I created a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing) with detailed steps. An older [document](https://docs.google.com/document/d/1OrmYLJbnluGod663s_0ZrWyX9wF_R-uxLu4libq2c2U/edit#heading=h.g6xkp75rwj2t) has more details of the
-research I have done.
+Typical color negative conversion software operates in sRGB colorspace.
+However color negative is a medium for recording color information in terms
+of dye density. The density of the dyes is designed to be extracted with
+Status M densitometry and is not under D50 or 5000K light. The first step
+of scanning film with a digital camera is to produce response that resembles
+Status M densitometry with good sepearation between the channels. I created
+a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing) with detailed steps.
 
-After good color separation is archived we can apply an ICC profile to the
-captured linear images to map to a well known color space. In the case of
-ICC it is CIE XYZ chromatically adapted to D50 illuminant. This allows the
-image with this profile to be mapped to other color space for further
-editting.
+The first step of conversion is then to map the linear RGB sensor response
+to produce linear density response with good separation. Assuming a good
+physical setup this is done by applying a conversion matrix.
+
+The next step of the algorithm is to map the density response to predict
+the RGB response as recorded by the film. Last step is to convert to the
+CIE XYZ colorspace. These two steps can be encoded as a ICC profie.
 
 ![IT8 used for profiling](samples/it8.png)
 
@@ -67,7 +72,7 @@ The process of using the profiles should be:
    in step (1) or use ImageMagick separately.
 3. Add (but not convert using) the cLUT or matric ICC profile to image from step 2.
 
-Included in this repo is data files from Ektar100 film exposed with a
+Included in this repo is data files from films exposed with a
 IT8 target under 5400K sunlight and scanned using a Sony A7RM4 digital camera
 with a Edmund Optics #87-254 triband filter. The crosstalk correction matrix
 is estimated by additionally scanning with red, blue and green bandpass filters.
