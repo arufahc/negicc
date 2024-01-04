@@ -17,11 +17,29 @@
 #error This code is for LibRaw 0.14+ only
 #endif
 
-void print_pixel(LibRaw* proc, int row, int col) {
+void debug_pixel(LibRaw* proc, int row, int col) {
   printf("Pixel data at (%d %d) color = %d: %d\n", row, col, proc->COLOR(row, col),
-	 proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
+         proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
 }
 
+// Load a RAW file and decode it into linear values.
+//
+// If |debayer| is true, interpolation is performed to generate missing pixels
+// from the color filter array (usually a bayer pattern). Otherwise, the linear
+// RGB values will have missing pixels and will not be scaled to 16-bit. If the
+// sensor produces 14-bit files, then a scale factor of 4 needs to be applied,
+// this is needed only when merging pixel-shift images.
+//
+// |qual| chooses the debayer algorithm used. 0 is the faster and is bilinear.
+// Since the RAW capture is supposed to be linear to dye densities, which are
+// supposed to be independent and have different grain structures, interpolation
+// of the RAW file often produces artifacts that accentuates visible grain. This
+// is caused by the debayer algorithm reading pixels from red channel (more
+// grain) to generate pixels for blue and green channels (less grain). qual = 0
+// is preferred or use pixel shift to eliminate need for interpolation.
+//
+// When |crop| is false, the entire RAW file is used, disregarding aspect ratio
+// and cropbox specified in the RAW metadata.
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop) {
   int ret;
   LibRaw* proc = new LibRaw();
@@ -77,6 +95,57 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   return proc;
 }
 
+// Merge 4 RAW files from pixel-shift captures using Sony camera.
+LibRaw* merge_pixel_shift_raw(LibRaw *proc[4]) {
+  printf("Merging 4 images...\n");
+
+  int movements[4][2] = {
+    // x, y movements
+    {0, 0},
+    {0, 1},
+    {-1, 1},
+    {-1, 0},
+  };
+
+#define P(n, r, c) proc[n]->imgdata.image[(r) * proc[n]->imgdata.sizes.iwidth + (c)]
+#define FOR_PIXEL for (int r = 0; r < proc[mi]->imgdata.sizes.iheight - 1; ++r) \
+    for (int c = 1; c < proc[mi]->imgdata.sizes.iwidth; ++c)
+
+  for (int mi = 0; mi < 2; ++mi) {
+    int dc = movements[mi][0];
+    int dr = movements[mi][1];
+
+    FOR_PIXEL {
+      int col = proc[mi]->COLOR(r, c);
+      if (col & 1)
+        P(0, r+dr, c+dc)[1] = P(mi, r, c)[col];
+      else
+        P(0, r+dr, c+dc)[col] = P(mi, r, c)[col];
+    }
+    if (mi > 0) {
+      proc[mi]->recycle();
+      delete proc[mi];
+    }
+  }
+
+  for (int mi = 2; mi < 4; ++mi) {
+    int dc = movements[mi][0];
+    int dr = movements[mi][1];
+
+    FOR_PIXEL {
+      int col = proc[mi]->COLOR(r, c);
+      if (col & 1)
+        P(0, r+dr, c+dc)[1] = (P(mi, r, c)[col] + P(0, r+dr, c+dc)[1]) / 2;
+      else
+        P(0, r+dr, c+dc)[col] = P(mi, r, c)[col];
+    }
+    proc[mi]->recycle();
+    delete proc[mi];
+  }
+  proc[0]->imgdata.idata.colors = 3;
+  return proc[0];
+}
+
 void post_process(LibRaw* proc,
                   const std::vector<float>& r_coef,
                   const std::vector<float>& g_coef,
@@ -109,11 +178,12 @@ int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *si
     fclose(fp);
     return 0;
   }
-  printf("ERROR! Cannot read ICC profile: %s\n", prof_name.c_str());
+  fprintf(stderr, "ERROR! Cannot read ICC profile: %s\n", prof_name.c_str());
   return -1;
 }
 
-int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::string& input, const std::string& output) {
+int apply_profile(ushort (*image)[4], ushort width, ushort height,
+                  const std::string& input, const std::string& output) {
   cmsHPROFILE in_profile = 0, out_profile = 0;
   cmsHTRANSFORM transform;
   unsigned *prof, *oprof;
@@ -127,7 +197,7 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::st
       return -1;
     }
   } else {
-    printf("ERROR! cannot read input ICC profile\n");
+    fprintf(stderr, "ERROR! cannot read input ICC profile\n");
     return -1;
   }
 
@@ -142,11 +212,11 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::st
       return -1;
     }
   } else {
-    printf("ERROR! cannot read output ICC profile\n");
+    fprintf(stderr, "ERROR! cannot read output ICC profile\n");
     return -1;
   }
   transform = cmsCreateTransform(in_profile, TYPE_RGBA_16, out_profile,
-                                  TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
+                                 TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
   cmsDoTransform(transform, image, image, width * height);
   cmsDeleteTransform(transform);
   cmsCloseProfile(out_profile);
@@ -198,67 +268,23 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
-  LibRaw *proc[4];
   const auto files = parser.get<std::vector<std::string>>("raw_files");
   auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
 
+  LibRaw *proc;
   if (files.size() == 4) {
+    LibRaw *four_proc[4];
     for (int i = 0; i < 4; ++i) {
-      proc[i] = load_raw(
-          files[i], false, false,
-          /* Quality doesn't matter because no interpolation. */
-          0,
-          /* Don't crop since it might mess up pixel-shift merging. */
-          false);
+      four_proc[i] = load_raw(
+                         files[i], false, false,
+                         /* Quality doesn't matter because no interpolation. */
+                         0,
+                         /* Don't crop since it might mess up pixel-shift merging. */
+                         false);
     }
-    printf("Merging 4 images...\n");
-
-    int movements[4][2] = {
-      // x, y movements
-      {0, 0},
-      {0, 1},
-      {-1, 1},
-      {-1, 0},
-    };
-
-#define P(n, r, c) proc[n]->imgdata.image[(r) * proc[n]->imgdata.sizes.iwidth + (c)]
-#define FOR_PIXEL for (int r = 0; r < proc[mi]->imgdata.sizes.iheight - 1; ++r) \
-      for (int c = 1; c < proc[mi]->imgdata.sizes.iwidth; ++c)
-
-    for (int mi = 0; mi < 2; ++mi) {
-      int dc = movements[mi][0];
-      int dr = movements[mi][1];
-
-      FOR_PIXEL {
-	int col = proc[mi]->COLOR(r, c);
-	if (col & 1)
-	  P(0, r+dr, c+dc)[1] = P(mi, r, c)[col];
-	else
-	  P(0, r+dr, c+dc)[col] = P(mi, r, c)[col];
-      }
-      if (mi > 0) {
-	proc[mi]->recycle();
-	delete proc[mi];
-      }
-    }
-
-    for (int mi = 2; mi < 4; ++mi) {
-      int dc = movements[mi][0];
-      int dr = movements[mi][1];
-
-      FOR_PIXEL {
-	int col = proc[mi]->COLOR(r, c);
-	if (col & 1)
-	  P(0, r+dr, c+dc)[1] = (P(mi, r, c)[col] + P(0, r+dr, c+dc)[1]) / 2;
-	else
-	  P(0, r+dr, c+dc)[col] = P(mi, r, c)[col];
-      }
-      proc[mi]->recycle();
-      delete proc[mi];
-    }
-    proc[0]->imgdata.idata.colors = 3;
+    proc = merge_pixel_shift_raw(four_proc);
     for (int i = 0; i < 3; ++i) {
       // Operating on data without interpolation and for Sony A7RM4 sensor
       // the input is 14-bit and multiply by 4 to expand into 16-bit.
@@ -268,26 +294,39 @@ int main(int ac, char *av[]) {
       b_coeff[i] *= scale_factor;
     }
   } else {
-    proc[0] = load_raw(files[0], true,
+    proc = load_raw(files[0], true,
                        parser.get<bool>("--half_size"),
                        parser.get<int>("--quality"),
                        !parser.get<bool>("--no_crop"));
   }
-  printf("ISO Speed: %f\n", proc[0]->imgdata.other.iso_speed);
-  printf("Shutter %f\n", proc[0]->imgdata.other.shutter);
+  printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
+  printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
-  post_process(proc[0], r_coeff, g_coeff, b_coeff);
+
+  // A conversion matrix is applied the linear image from RAW file to:
+  // 1. Remove crosstalk between color channels.
+  // 2. Scale the color channels independently such that mid-grey values are aligned.
+  // 3. Scale the color channels independently to compensate for density difference
+  //    between target and the captured film.
+  // 4. Global scale factor for brightness.
+  // 5. Scale the color channels independently according to user input (optional).
+  // 6. Scale from 14-bit to 16-bit in pixel-shift mode (optional).
+  //
+  // A single matrix is combined with the above steps combined. Note that scaling is
+  // always done after crosstalk correction, hence the scale factor can be applied
+  // separately to the R, G and B coefficients.
+  post_process(proc, r_coeff, g_coeff, b_coeff);
 
   // By default attach the input profile to the output file only, no conversion.
   auto attach_profile = parser.get<std::string>("--film_profile");
   if (parser.is_used("--film_profile") && parser.is_used("--colorspace")) {
     printf("Applying colorspace profile: %s\n", parser.get<std::string>("--colorspace").c_str());
-    if (apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight,
+    if (apply_profile(proc->imgdata.image, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
                       parser.get<std::string>("--film_profile"),
                       parser.get<std::string>("--colorspace")) < 0) {
-      printf("ERROR! Cannot convert using colorspace profile.\n");
+      fprintf(stderr, "ERROR! Cannot convert using colorspace profile.\n");
     }
     // Attach the output profile since conversion has applied.
     attach_profile = parser.get<std::string>("--colorspace");
@@ -298,13 +337,13 @@ int main(int ac, char *av[]) {
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
     printf("Attaching profile: %s\n", attach_profile.c_str());
     unsigned size;
-    if (read_profile(attach_profile, &proc[0]->get_internal_data_pointer()->output_data.oprof, &size)) {
+    if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
       printf("Cannot read profile.\n");
       return -1;
     }
   }
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
-  proc[0]->dcraw_ppm_tiff_writer(output.c_str());
+  proc->dcraw_ppm_tiff_writer(output.c_str());
   return 0;
 }
