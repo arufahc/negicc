@@ -85,11 +85,6 @@ parser.add_argument(
     help="Name of the film.",
     default="Generic")
 parser.add_argument(
-    "--install_dir",
-    nargs='?',
-    const='',
-    help="Location to place the ICC profile and script.")
-parser.add_argument(
     "--prescale_coef",
     help="Set a greyscale patch to pre-scale the coefficients.",
     default='gs14')
@@ -362,12 +357,6 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     f.close()
     sys.stdout = stdout_backup
 
-def print_neg_process_cmd(file_name, crosstalk_correction_mat, clut_profile):
-    print('Use the following command to convert a negative image: ')
-    print('%s -r \'%.15f %.15f %.15f\' -g \'%.15f %.15f %.15f\' -b \'%.15f %.15f %.15f\' -p \'%s\'' % 
-          ((file_name,) + (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,))))
-
-
 def run_chromatic_adaptation_on_ref_XYZ():
     """
     Perform chromatic adaptation of the measured tristimulus values
@@ -607,16 +596,6 @@ def main():
         crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb)
     print('### Step 6: Checking cLUT profile.')
     run_prof_check(out_clut_prof)
-
-    if args.install_dir:
-        install_dir = os.path.realpath(args.install_dir)
-        os.makedirs(install_dir, exist_ok=True)
-        shutil.copy(out_clut_prof, install_dir)
-        shutil.copy('bin_out/neg_process', install_dir)
-        print_neg_process_cmd(os.path.join(install_dir, 'neg_process'),
-                              crosstalk_correction_mat,
-                              os.path.join(install_dir, out_clut_prof.split('/')[-1]))
-
 
 if __name__ == "__main__":
     main()
