@@ -79,7 +79,7 @@ parser.add_argument(
     " that should be applied to match that of the target. This method is to"
     " account for variations of the film base density.")
 parser.add_argument(
-    '--film_base_rgb', '-B',
+    '--film_base_rgb', '-B', nargs=3,
     help="Uncorrected RGB values of the film base."
     " The channel balance is computed from the film base to compute compensations"
     " that should be applied to match that of the target. This method is to"
@@ -151,15 +151,15 @@ def read_profile_info(name):
     film_base_rgb = []
     with open(profile_info_txt) as f:
         for i in range(0, 3):
-            coeffs = [float(x) for x in f.readline().strip('\r\n').split(' ')]
-            matrix.append(np.array(coeffs))
-        shutter_speed = f.readline().split(' ')[0]
-        film_base_rgb = [int(x) for x in f.readline().split(' ')[0:3]]
+            coeffs = f.readline().strip('\r\n').split(' ')[0:3]
+            matrix.append(coeffs)
+        shutter_speed = f.readline().strip('\r\n').split(' ')[0]
+        film_base_rgb = f.readline().strip('\r\n').split(' ')[0:3]
     return {
         'name': name,
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
-        'film_base_rgb': np.array(film_base_rgb)
+        'film_base_rgb': film_base_rgb
         }
 
 def compute_exposure_comp(profile, raw_shutter_speed):
@@ -200,6 +200,19 @@ def get_profile_and_exposure_comp(raw_file):
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
     return (profile, compute_exposure_comp(profile, raw_shutter_speed))
 
+def compute_film_base_rgb(film_base_raw_file):
+    raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
+    if os.path.exists(raw_info_txt):
+        with open(raw_info_txt) as f:
+            center_rgb = f.read()
+    else:
+        center_rgb = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                              '-w', film_base_raw_file]).decode(sys.stdout.encoding)
+        f = open(raw_info_txt, 'w+')
+        f.write(center_rgb)
+        f.close()
+    return center_rgb.split('\n')[0].split(' ')[0:3]
+
 def compute_color_comp(profile, film_base_rgb, film_base_raw_file):
     if film_base_rgb:
         center_rgb = film_base_rgb.split(' ')
@@ -216,34 +229,31 @@ def compute_color_comp(profile, film_base_rgb, film_base_raw_file):
             f.close()
         center_rgb = center_rgb.split('\n')[0].strip('\r').split(' ')
     center_rgb = np.array([float(x) for x in center_rgb[0:3]])
-    cc_average_r = np.dot(profile['matrix'][0], center_rgb)
-    cc_average_g = np.dot(profile['matrix'][1], center_rgb)
-    cc_average_b = np.dot(profile['matrix'][2], center_rgb)
-    cc_profile_r = np.dot(profile['matrix'][0], profile['film_base_rgb'])
-    cc_profile_g = np.dot(profile['matrix'][1], profile['film_base_rgb'])
-    cc_profile_b = np.dot(profile['matrix'][2], profile['film_base_rgb'])
-    print("Current roll film base RGB (corrected) = %f %f %f" % (cc_average_r, cc_average_g, cc_average_b))
-    print("Profile film base RGB (corrected) = %f %f %f" % (cc_profile_r, cc_profile_g, cc_profile_b))
-    return (1,
-            (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r),
-            (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r))
     
 def run_neg_process(raw_file):
     profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
     print("Exposure compensation applied: %f" % exposure_comp)
-    color_comp = [exposure_comp, exposure_comp, exposure_comp]
-    if args.color_comp:
-        color_comp = exposure_comp * np.array([float(x) for x in args.color_comp.split(' ')])
-    elif args.film_base_raw_file or args.film_base_rgb:
-        color_comp = exposure_comp * np.array(compute_color_comp(profile, args.film_base_rgb, args.film_base_raw_file))
-    print("Color + exposure compensation applied: %s" % str(color_comp))
+    # TODO: Turn exposure_comp into a scale factor for neg_process.
+    # color_comp = [exposure_comp, exposure_comp, exposure_comp]
+    # if args.color_comp:
+    #    color_comp = exposure_comp * np.array([float(x) for x in args.color_comp.split(' ')])
+    # color_comp = exposure_comp * np.array(compute_color_comp(profile, args.film_base_rgb, args.film_base_raw_file))
+    # print("Color + exposure compensation applied: %s" % str(color_comp))
     neg_process_args = [os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process')]
     neg_process_args.append('-r')
-    neg_process_args += [str(x * color_comp[0]) for x in profile['matrix'][0]]
+    neg_process_args += profile['matrix'][0]
     neg_process_args.append('-g')
-    neg_process_args += [str(x * color_comp[1]) for x in profile['matrix'][1]]
+    neg_process_args += profile['matrix'][1]
     neg_process_args.append('-b')
-    neg_process_args += [str(x * color_comp[2]) for x in profile['matrix'][2]]
+    neg_process_args += profile['matrix'][2]
+    neg_process_args.append('--profile_film_base_rgb')
+    neg_process_args += profile['film_base_rgb']
+    if args.film_base_raw_file:
+        neg_process_args.append('--film_base_rgb')
+        neg_process_args += compute_film_base_rgb(args.film_base_raw_file)
+    elif args.film_base_rgb:
+        neg_process_args.append('--film_base_rgb')
+        neg_process_args += args.film_base_rgb
     neg_process_args += [
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),

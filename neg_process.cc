@@ -146,6 +146,43 @@ LibRaw* merge_pixel_shift_raw(LibRaw *proc[4]) {
   return proc[0];
 }
 
+template <class T>
+float dot_product(const std::vector<float>& v1, const std::vector<T>& v2) {
+  float prod = 0;
+  for (int i = 0; i < v1.size() && i < v2.size(); ++i) {
+    prod += v1[i] * v2[i];
+  }
+  return prod;
+}
+
+void scale(std::vector<float>& v, float factor) {
+  for (int i = 0; i < v.size(); ++i) {
+    v[i] *= factor;
+  }
+}
+
+void adjust_coefficients(
+   std::vector<float>& r_coef, 
+   std::vector<float>& g_coef,
+   std::vector<float>& b_coef,
+   float global_scale_factor,
+   const std::vector<int>& profile_film_base_rgb,
+   const std::vector<int>& film_base_rgb) {
+
+  float cc_average_r = dot_product(r_coef, film_base_rgb);
+  float cc_average_g = dot_product(g_coef, film_base_rgb);
+  float cc_average_b = dot_product(b_coef, film_base_rgb);
+  float cc_profile_r = dot_product(r_coef, profile_film_base_rgb);
+  float cc_profile_g = dot_product(g_coef, profile_film_base_rgb);
+  float cc_profile_b = dot_product(b_coef, profile_film_base_rgb);
+  printf("Film base RGB (corrected): %f %f %f\n", cc_average_r, cc_average_g, cc_average_b);
+  printf("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
+
+  scale(r_coef, global_scale_factor);
+  scale(g_coef, (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r) * global_scale_factor);
+  scale(b_coef, (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r) * global_scale_factor);
+}
+
 void post_process(LibRaw* proc,
                   const std::vector<float>& r_coef,
                   const std::vector<float>& g_coef,
@@ -242,15 +279,28 @@ int main(int ac, char *av[]) {
   parser.add_argument("-r", "--r_coeff")
     .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW.")
     .nargs(3)
+    .default_value(std::vector<float>{1, 0, 0})
     .scan<'g', float>();
   parser.add_argument("-g", "--g_coeff")
     .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW.")
     .nargs(3)
+    .default_value(std::vector<float>{0, 1, 0})
     .scan<'g', float>();
   parser.add_argument("-b", "--b_coeff")
     .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW.")
     .nargs(3)
+    .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
+  parser.add_argument("--profile_film_base_rgb")
+    .help("Linear (uncorrected) R G B values of the film base from profile.")
+    .nargs(3)
+    .default_value(std::vector<int>{1, 1, 1})
+    .scan<'i', int>();
+  parser.add_argument("--film_base_rgb")
+    .help("Linear (uncorrected) R G B values of the film base from captured image.")
+    .nargs(3)
+    .default_value(std::vector<int>{1, 1, 1})
+    .scan<'i', int>();
   parser.add_argument("-p", "--film_profile")
     .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
   parser.add_argument("-P", "--colorspace")
@@ -272,6 +322,7 @@ int main(int ac, char *av[]) {
   auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
+  float global_scale_factor = 1;
 
   LibRaw *proc;
   if (files.size() == 4) {
@@ -285,14 +336,9 @@ int main(int ac, char *av[]) {
                          false);
     }
     proc = merge_pixel_shift_raw(four_proc);
-    for (int i = 0; i < 3; ++i) {
-      // Operating on data without interpolation and for Sony A7RM4 sensor
-      // the input is 14-bit and multiply by 4 to expand into 16-bit.
-      int scale_factor = 4;
-      r_coeff[i] *= scale_factor;
-      g_coeff[i] *= scale_factor;
-      b_coeff[i] *= scale_factor;
-    }
+    // Operating on data without interpolation and for Sony A7RM4 sensor
+    // the input is 14-bit and multiply by 4 to expand into 16-bit.
+    global_scale_factor = 4;
   } else {
     proc = load_raw(files[0], true,
                        parser.get<bool>("--half_size"),
@@ -301,10 +347,6 @@ int main(int ac, char *av[]) {
   }
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
-  printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
-  printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
-  printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
-
   // A conversion matrix is applied the linear image from RAW file to:
   // 1. Remove crosstalk between color channels.
   // 2. Scale the color channels independently such that mid-grey values are aligned.
@@ -317,10 +359,17 @@ int main(int ac, char *av[]) {
   // A single matrix is combined with the above steps combined. Note that scaling is
   // always done after crosstalk correction, hence the scale factor can be applied
   // separately to the R, G and B coefficients.
+  adjust_coefficients(r_coeff, g_coeff, b_coeff,
+                      global_scale_factor,
+                      parser.get<std::vector<int>>("--profile_film_base_rgb"),
+                      parser.get<std::vector<int>>("--film_base_rgb"));
+  printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
+  printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
+  printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
   post_process(proc, r_coeff, g_coeff, b_coeff);
 
   // By default attach the input profile to the output file only, no conversion.
-  auto attach_profile = parser.get<std::string>("--film_profile");
+  std::string attach_profile;
   if (parser.is_used("--film_profile") && parser.is_used("--colorspace")) {
     printf("Applying colorspace profile: %s\n", parser.get<std::string>("--colorspace").c_str());
     if (apply_profile(proc->imgdata.image, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
@@ -330,9 +379,11 @@ int main(int ac, char *av[]) {
     }
     // Attach the output profile since conversion has applied.
     attach_profile = parser.get<std::string>("--colorspace");
+  } else if (parser.is_used("--film_profile")) {
+    attach_profile = parser.get<std::string>("--film_profile");
   }
 
-  if (attach_profile != "srgb") {
+  if (!attach_profile.empty() && attach_profile != "srgb") {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
     printf("Attaching profile: %s\n", attach_profile.c_str());
