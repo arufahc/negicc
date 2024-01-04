@@ -338,7 +338,6 @@ int main(int ac, char *av[]) {
     printf("Attaching profile: %s\n", attach_profile.c_str());
     unsigned size;
     if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
-      printf("Cannot read profile.\n");
       return -1;
     }
   }
