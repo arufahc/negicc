@@ -161,14 +161,14 @@ void scale(std::vector<float>& v, float factor) {
   }
 }
 
-void adjust_coefficients(
-   std::vector<float>& r_coef, 
-   std::vector<float>& g_coef,
-   std::vector<float>& b_coef,
-   float global_scale_factor,
-   const std::vector<int>& profile_film_base_rgb,
-   const std::vector<int>& film_base_rgb) {
-
+void adjust_correction_matrix(std::vector<float>& r_coef, 
+                              std::vector<float>& g_coef,
+                              std::vector<float>& b_coef,
+                              float global_scale_factor,
+                              const std::vector<int>& profile_film_base_rgb,
+                              const std::vector<int>& film_base_rgb) {
+  // First convert the linear RGB into corrected RGB values that are proportional
+  // to transmittance.
   float cc_average_r = dot_product(r_coef, film_base_rgb);
   float cc_average_g = dot_product(g_coef, film_base_rgb);
   float cc_average_b = dot_product(b_coef, film_base_rgb);
@@ -178,6 +178,36 @@ void adjust_coefficients(
   printf("Film base RGB (corrected): %f %f %f\n", cc_average_r, cc_average_g, cc_average_b);
   printf("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
 
+  // The ICC profiles map the transmittance values after the correction matrix is
+  // applied to XYZ. Transmittance is relative the profile film base. For example
+  // if the R value for profile film base is 10000, a R value of 5000 has
+  // transmittance of 5000 / 10000 = 0.5. But we don't convert the corrected RGB
+  // into a floating point value first, the actual denominator is not important.
+  // Suppose we record the transmittance as a 16-bit fixed point number, we will
+  // lose precision for denser film. So the ICC profiles are generated with
+  // transmittance values scaled given a fixed value for mid-grey patch (e.g.
+  // GS14). 
+  //
+  // The film base RGB values are only useful in relative terms. Here we are
+  // compensating the difference in transmittance between the profile and the
+  // scanned film.
+  //
+  // Suppose the mid-grey patch has R = 5000 and G = 10000. With film base
+  // R = 10000 and film base G = 20000, the transmittance is 0.5 in both channels.
+  //
+  // A different captured film has R = 5000 (film base R = 10000) will have
+  // transmittance of 0.5 in the R channel. Let's say the G layer is denser
+  // because of flutation in the film development. G = 8000 (film base G = 16000)
+  // will also have a transmittance of 0.5. However using the ICC profile which
+  // assumes film base G is 20000 in the G channel, will treat the transmittance
+  // as 8000 / 20000 = 0.4 and the color balance will be off.
+  //
+  // To compensate for this we will scale the G channel (with R as reference)
+  // by (20000 / 10000) / (16000 / (10000) = 1.25.
+  //
+  // Of course the density even for R is not the same in the target and the
+  // captured film. After adjusting the color balance, all channels can be
+  // adjusted with a single scaling factor.
   float g_scale = (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r);
   float b_scale = (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r);
   printf("Scale channels to match film base: %f %f %f\n", 1.0, g_scale, b_scale);
@@ -362,10 +392,10 @@ int main(int ac, char *av[]) {
   // A single matrix is combined with the above steps combined. Note that scaling is
   // always done after crosstalk correction, hence the scale factor can be applied
   // separately to the R, G and B coefficients.
-  adjust_coefficients(r_coeff, g_coeff, b_coeff,
-                      global_scale_factor,
-                      parser.get<std::vector<int>>("--profile_film_base_rgb"),
-                      parser.get<std::vector<int>>("--film_base_rgb"));
+  adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
+                           global_scale_factor,
+                           parser.get<std::vector<int>>("--profile_film_base_rgb"),
+                           parser.get<std::vector<int>>("--film_base_rgb"));
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
