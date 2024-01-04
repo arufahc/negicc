@@ -178,9 +178,12 @@ void adjust_coefficients(
   printf("Film base RGB (corrected): %f %f %f\n", cc_average_r, cc_average_g, cc_average_b);
   printf("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
 
+  float g_scale = (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r);
+  float b_scale = (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r);
+  printf("Scale channels to match film base: %f %f %f\n", 1.0, g_scale, b_scale);
   scale(r_coef, global_scale_factor);
-  scale(g_coef, (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r) * global_scale_factor);
-  scale(b_coef, (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r) * global_scale_factor);
+  scale(g_coef, g_scale * global_scale_factor);
+  scale(b_coef, b_scale * global_scale_factor);
 }
 
 void post_process(LibRaw* proc,
