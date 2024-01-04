@@ -61,10 +61,10 @@ parser.add_argument(
     default='cLUT',
     help="Profile type used to attach (no -P specified) or to convert (with -P specified).")
 parser.add_argument(
-    "--output_profile", '-P',
+    "--colorspace", '-P',
     choices=[
         'srgb',
-        '<ICC profile path>',
+        '<ICC profile path for the output colorspace>',
     ],
     help="Output color profile."
     " If not spciefied input profile is attached."
@@ -251,8 +251,8 @@ def run_neg_process(raw_file):
                                                       args.measurement,
                                                       args.profile_type),
         '-o', Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))]
-    if args.output_profile:
-        neg_process_args += ['-P', args.output_profile]
+    if args.colorspace:
+        neg_process_args += ['-P', args.colorspace]
     if args.half_size:
         neg_process_args.append('--half_size')
     if args.no_crop:

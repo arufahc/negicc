@@ -109,6 +109,7 @@ int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *si
     fclose(fp);
     return 0;
   }
+  printf("ERROR! Cannot read ICC profile: %s\n", prof_name.c_str());
   return -1;
 }
 
@@ -126,11 +127,12 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::st
       return -1;
     }
   } else {
+    printf("ERROR! cannot read input ICC profile\n");
     return -1;
   }
 
-  if (output != "srgb") {
-    printf("Creating standard sRGB profile\n");
+  if (output == "srgb") {
+    printf("Using standard sRGB profile\n");
     out_profile = cmsCreate_sRGBProfile();
   } else if (!read_profile(output, &oprof, &size)) {
     printf("Reading output ICC profile: %s\n", output.c_str());
@@ -140,6 +142,7 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::st
       return -1;
     }
   } else {
+    printf("ERROR! cannot read output ICC profile\n");
     return -1;
   }
   transform = cmsCreateTransform(in_profile, TYPE_RGBA_16, out_profile,
@@ -280,9 +283,12 @@ int main(int ac, char *av[]) {
   // By default attach the input profile to the output file only, no conversion.
   auto attach_profile = parser.get<std::string>("--film_profile");
   if (parser.is_used("--film_profile") && parser.is_used("--colorspace")) {
-    apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight,
-                  parser.get<std::string>("--film_profile"),
-                  parser.get<std::string>("--colorspace"));
+    printf("Applying colorspace profile: %s\n", parser.get<std::string>("--colorspace").c_str());
+    if (apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight,
+                      parser.get<std::string>("--film_profile"),
+                      parser.get<std::string>("--colorspace")) < 0) {
+      printf("ERROR! Cannot convert using colorspace profile.\n");
+    }
     // Attach the output profile since conversion has applied.
     attach_profile = parser.get<std::string>("--colorspace");
   }
