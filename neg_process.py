@@ -121,7 +121,7 @@ parser.add_argument(
     type=float,
     help="Single multiplier for all RGB values (doesn't matter corrected RGB or not).")
 parser.add_argument(
-    '--half', '-H',
+    '--half_size', '-H',
     action='store_true',
     help="Generate half size image.")
 
@@ -130,7 +130,7 @@ args = parser.parse_args()
 
 if args.target:
     subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-                    '-h',
+                    '--half_size',
                     '-o', Path(args.raw_file).stem + ('.target.tif'),
                     args.raw_file], check=True)
     exit(0)
@@ -237,11 +237,14 @@ def run_neg_process(raw_file):
     elif args.film_base_raw_file or args.film_base_rgb:
         color_comp = exposure_comp * np.array(compute_color_comp(profile, args.film_base_rgb, args.film_base_raw_file))
     print("Color + exposure compensation applied: %s" % str(color_comp))
-    neg_process_args = [
-        os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-        '-r', ' '.join([str(x * color_comp[0]) for x in profile['matrix'][0]]),
-        '-g', ' '.join([str(x * color_comp[1]) for x in profile['matrix'][1]]),
-        '-b', ' '.join([str(x * color_comp[2]) for x in profile['matrix'][2]]),
+    neg_process_args = [os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process')]
+    neg_process_args.append('-r')
+    neg_process_args += [str(x * color_comp[0]) for x in profile['matrix'][0]]
+    neg_process_args.append('-g')
+    neg_process_args += [str(x * color_comp[1]) for x in profile['matrix'][1]]
+    neg_process_args.append('-b')
+    neg_process_args += [str(x * color_comp[2]) for x in profile['matrix'][2]]
+    neg_process_args += [
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
                                                       profile['name'].capitalize(),
@@ -250,8 +253,8 @@ def run_neg_process(raw_file):
         '-o', Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))]
     if args.output_profile:
         neg_process_args += ['-P', args.output_profile]
-    if args.half:
-        neg_process_args.append('-h')
+    if args.half_size:
+        neg_process_args.append('--half_size')
     if args.no_crop:
         neg_process_args.append('-C')
 

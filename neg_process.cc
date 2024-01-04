@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 #include <netinet/in.h>
 
@@ -21,19 +22,21 @@ void print_pixel(LibRaw* proc, int row, int col) {
 	 proc->imgdata.image[row * proc->imgdata.sizes.iwidth + col][proc->COLOR(row, col)]);
 }
 
-LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool crop) {
+LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop) {
   int ret;
   LibRaw* proc = new LibRaw();
 
-  printf("Processing file %s\n", fn);
-  if ((ret = proc->open_file(fn)) != LIBRAW_SUCCESS) {
-    fprintf(stderr, "Cannot open %s: %s\n", fn, libraw_strerror(ret));
+  printf("Processing file %s\n", fn.c_str());
+  if ((ret = proc->open_file(fn.c_str())) != LIBRAW_SUCCESS) {
+    fprintf(stderr, "Cannot open %s: %s\n", fn.c_str(), libraw_strerror(ret));
     return NULL;
   }
   printf("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+  if (debayer)
+    printf("Debayer quality: %d\n", qual);
 
   if ((ret = proc->unpack()) != LIBRAW_SUCCESS) {
-    fprintf(stderr, "Cannot unpack %s: %s\n", fn, libraw_strerror(ret));
+    fprintf(stderr, "Cannot unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
     return NULL;
   }
   if (!(proc->imgdata.idata.filters || proc->imgdata.idata.colors == 1)) {
@@ -74,7 +77,10 @@ LibRaw* load_raw(char* fn, bool debayer, bool half_size, int qual, bool crop) {
   return proc;
 }
 
-void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
+void post_process(LibRaw* proc,
+                  const std::vector<float>& r_coef,
+                  const std::vector<float>& g_coef,
+                  const std::vector<float>& b_coef) {
   for (int j = 0; j < proc->imgdata.sizes.iheight; ++j) {
     for (int i = 0; i < proc->imgdata.sizes.iwidth; ++i) {
       ushort r = proc->imgdata.image[j * proc->imgdata.sizes.iwidth + i][0];
@@ -93,9 +99,9 @@ void post_process(LibRaw* proc, float* r_coef, float* g_coef, float* b_coef) {
   }
 }
 
-int read_profile(const char* prof_name, unsigned **prof_out, unsigned *size) {
+int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *size) {
   FILE *fp;
-  if ((fp = fopen(prof_name, "rb"))) {
+  if ((fp = fopen(prof_name.c_str(), "rb"))) {
     fread(size, 4, 1, fp);
     fseek(fp, 0, SEEK_SET);
     *prof_out = (unsigned *)malloc(*size = ntohl(*size));
@@ -106,14 +112,14 @@ int read_profile(const char* prof_name, unsigned **prof_out, unsigned *size) {
   return -1;
 }
 
-int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *input, const char *output) {
+int apply_profile(ushort (*image)[4], ushort width, ushort height, const std::string& input, const std::string& output) {
   cmsHPROFILE in_profile = 0, out_profile = 0;
   cmsHTRANSFORM transform;
   unsigned *prof, *oprof;
   unsigned size;
 
   if (!read_profile(input, &prof, &size)) {
-    printf("Reading input ICC profile: %s\n", input);
+    printf("Reading input ICC profile: %s\n", input.c_str());
     if (!(in_profile = cmsOpenProfileFromMem(prof, size))) {
       free(prof);
       prof = 0;
@@ -123,11 +129,11 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *i
     return -1;
   }
 
-  if (!strcmp(output, "srgb")) {
+  if (output != "srgb") {
     printf("Creating standard sRGB profile\n");
     out_profile = cmsCreate_sRGBProfile();
   } else if (!read_profile(output, &oprof, &size)) {
-    printf("Reading output ICC profile: %s\n", output);
+    printf("Reading output ICC profile: %s\n", output.c_str());
     if (!(out_profile = cmsOpenProfileFromMem(oprof, size))) {
       free(oprof);
       oprof = 0;
@@ -147,88 +153,55 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height, const char *i
 }
 
 int main(int ac, char *av[]) {
-  int i, ret;
-  char out_fn[1024];
-  char in_prof_fn[1024];
-  char out_prof_fn[1024];
-  memset(in_prof_fn, 0, sizeof(in_prof_fn));
-  memset(out_prof_fn, 0, sizeof(out_prof_fn));
+  argparse::ArgumentParser parser("neg_process");
+  parser.add_argument("-H", "--half_size")
+    .help("Half size.")
+    .default_value(false)
+    .implicit_value(true);
+  parser.add_argument("-C", "--no_crop")
+    .help("No cropping according to aspect ratio in RAW file.")
+    .default_value(false)
+    .implicit_value(true);
+  parser.add_argument("-q", "--quality")
+    .help("De-bayer quality. Not used in pixel-shift mode.")
+    .scan<'i', int>()
+    .default_value(0);
+  parser.add_argument("-r", "--r_coeff")
+    .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .scan<'g', float>();
+  parser.add_argument("-g", "--g_coeff")
+    .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .scan<'g', float>();
+  parser.add_argument("-b", "--b_coeff")
+    .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .scan<'g', float>();
+  parser.add_argument("-p", "--film_profile")
+    .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
+  parser.add_argument("-P", "--colorspace")
+    .help("srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
+  parser.add_argument("-o", "--output")
+    .required()
+    .help("Output file location.");
+  parser.add_argument("raw_files").nargs(1, 4);
 
-  float r_coef[4] = {1.0f,0,0,0.0};
-  float g_coef[4] = {0,1.0f,0,0.0};
-  float b_coef[4] = {0,0,1.0f,0.0};
-
-  if (ac < 2) {
-    usage:
-    printf("neg_process - Process Negative with LibRAW %s\n"
-           "Usage: %s [options] raw-files....\n"
-           "  More than 4 raw-files supplied will be combined assuming a Sony 4-shot pixel sequence.\n"
-           "  -h: Half size.\n"
-           "  -C: No cropping based on raw aspect ratio.\n"
-           "  -q: Quality.\n"
-           "  -r: R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW.\n"
-           "  -g: G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW.\n"
-           "  -b: B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW.\n"
-           "  -p: ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.\n"
-           "  -P: srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.\n"
-           "  -o: Output file location.\n",
-           LibRaw::version(), av[0]);
-    return 0;
-  }
-
-  char* files[16];
-  int fp = 0;
-  bool half_size = false;
-  bool crop = true;
-  int qual = 0;
-  for (i = 1; i < ac; i++) {
-    if (av[i][0] == '-') {
-      switch (av[i][1]) {
-      case 'h':
-        half_size = true;
-        break;
-      case 'C':
-        crop = false;
-        break;
-      case 'o':
-        strncpy(out_fn, av[i+1], strlen(av[i+1]));
-        ++i;
-        break;
-      case 'r':
-        sscanf(av[i+1],"%f %f %f", r_coef, r_coef+1, r_coef+2);
-        ++i;
-        break;
-      case 'g':
-        sscanf(av[i+1],"%f %f %f", g_coef, g_coef+1, g_coef+2);
-        ++i;
-        break;
-      case 'b':
-        sscanf(av[i+1],"%f %f %f", b_coef, b_coef+1, b_coef+2);
-        ++i;
-        break;
-      case 'q':
-        sscanf(av[i+1], "%d", &qual);
-        ++i;
-        break;
-      case 'p':
-        strncpy(in_prof_fn, av[i+1], strlen(av[i+1]));
-        ++i;
-        break;
-      case 'P':
-        strncpy(out_prof_fn, av[i+1], strlen(av[i+1]));
-        ++i;
-        break;
-      default:
-        goto usage;
-        continue;
-      }
-    } else {
-      files[fp++] = av[i];
-    }
+  try {
+    parser.parse_args(ac, av);
+  } catch (const std::exception& err) {
+    std::cerr << err.what() << std::endl;
+    std::cerr << parser;
+    return 1;
   }
 
   LibRaw *proc[4];
-  if (fp == 4) {
+  const auto files = parser.get<std::vector<std::string>>("raw_files");
+  auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
+  auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
+  auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
+
+  if (files.size() == 4) {
     for (int i = 0; i < 4; ++i) {
       proc[i] = load_raw(
           files[i], false, false,
@@ -287,39 +260,45 @@ int main(int ac, char *av[]) {
       // Operating on data without interpolation and for Sony A7RM4 sensor
       // the input is 14-bit and multiply by 4 to expand into 16-bit.
       int scale_factor = 4;
-      r_coef[i] *= scale_factor;
-      g_coef[i] *= scale_factor;
-      b_coef[i] *= scale_factor;
+      r_coeff[i] *= scale_factor;
+      g_coeff[i] *= scale_factor;
+      b_coeff[i] *= scale_factor;
     }
   } else {
-    proc[0] = load_raw(files[0], true, half_size, qual, crop);
+    proc[0] = load_raw(files[0], true,
+                       parser.get<bool>("--half_size"),
+                       parser.get<int>("--quality"),
+                       !parser.get<bool>("--no_crop"));
   }
   printf("ISO Speed: %f\n", proc[0]->imgdata.other.iso_speed);
   printf("Shutter %f\n", proc[0]->imgdata.other.shutter);
-  printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coef[0], r_coef[1], r_coef[2]);
-  printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coef[0], g_coef[1], g_coef[2]);
-  printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coef[0], b_coef[1], b_coef[2]);
-  post_process(proc[0], r_coef, g_coef, b_coef);
+  printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
+  printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
+  printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
+  post_process(proc[0], r_coeff, g_coeff, b_coeff);
 
   // By default attach the input profile to the output file only, no conversion.
-  char* attach_prof_fn = in_prof_fn;
-  if (in_prof_fn[0] && out_prof_fn[0]) {
-    apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight, in_prof_fn, out_prof_fn);
+  auto attach_profile = parser.get<std::string>("--film_profile");
+  if (parser.is_used("--film_profile") && parser.is_used("--colorspace")) {
+    apply_profile(proc[0]->imgdata.image, proc[0]->imgdata.sizes.iwidth, proc[0]->imgdata.sizes.iheight,
+                  parser.get<std::string>("--film_profile"),
+                  parser.get<std::string>("--colorspace"));
     // Attach the output profile since conversion has applied.
-    attach_prof_fn = out_prof_fn;
+    attach_profile = parser.get<std::string>("--colorspace");
   }
 
-  if (attach_prof_fn[0] && strcmp(attach_prof_fn, "srgb")) {
+  if (attach_profile != "srgb") {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
-    printf("Attaching profile: %s\n", attach_prof_fn);
+    printf("Attaching profile: %s\n", attach_profile.c_str());
     unsigned size;
-    if (read_profile(attach_prof_fn, &proc[0]->get_internal_data_pointer()->output_data.oprof, &size)) {
+    if (read_profile(attach_profile, &proc[0]->get_internal_data_pointer()->output_data.oprof, &size)) {
       printf("Cannot read profile.\n");
       return -1;
     }
   }
-  printf("Writing TIFF '%s'\n", out_fn);
-  proc[0]->dcraw_ppm_tiff_writer(out_fn);
+  const auto output = parser.get<std::string>("--output");
+  printf("Writing TIFF '%s'\n", output.c_str());
+  proc[0]->dcraw_ppm_tiff_writer(output.c_str());
   return 0;
 }
