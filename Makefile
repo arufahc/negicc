@@ -247,4 +247,4 @@ raw_info: raw_info.cc
 
 neg_process: neg_process.cc
 	mkdir -p bin_out
-	clang++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -L/usr/local/opt/curl/lib -lraw -lz -O3 -llcms2
+	clang++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -I3rd_party -L/usr/local/opt/curl/lib -lraw -lz -O3 -llcms2 -std=c++17 -DCMS_NO_REGISTER_KEYWORD
