@@ -54,14 +54,14 @@ parser.add_argument(
     "--darkest_patch_scaling",
     help="The RGB value that should be assigned to the darkest (lightest) GS patch. "
     "Setting this value will scale the correct matrix according to the darkest GS patch.",
-    default=40000,
+    # default=40000,
     type=float)
 parser.add_argument(
     "--mid_grey_scaling",
     help="The RGB value that should be assigned to the mid-grey GS patch. "
     "Setting this value will scale the correct matrix according to the mid-grey GS patch"
     " specified by --prescale_coef.",
-    # default=10000,
+    default=10000,
     type=float)
 parser.add_argument(
     "--fit_intercept",
