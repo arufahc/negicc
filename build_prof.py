@@ -334,17 +334,7 @@ def write_build_prof_header(
     sys.stdout = stdout_backup
 
 
-def write_neg_invert_sh(file_name, crosstalk_correction_mat, clut_profile):
-    f = open(file_name, 'w+')
-    stdout_backup = sys.stdout
-    sys.stdout = f
-    with open('neg_invert.sh.template', 'r') as tf:
-        print(tf.read() % (tuple(crosstalk_correction_mat.transpose().flatten()) + (clut_profile,)))
-    f.close()
-    sys.stdout = stdout_backup
-    os.chmod(file_name, 0o755)
-
-def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb):
+def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb, average_rgb_values):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
@@ -354,8 +344,10 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
     print('%s # Shutter speed' % shutter_speed)
     print('%s # Film base RGB (uncorrected) values' % film_base_rgb)
+    print('%f %f %f # Average patch RGB values' % tuple(average_rgb_values))
     f.close()
     sys.stdout = stdout_backup
+
 
 def run_chromatic_adaptation_on_ref_XYZ():
     """
@@ -393,8 +385,14 @@ def run_chromatic_adaptation_on_ref_XYZ():
     return test_white_XYZ
 
 
-print('Step 3: Build 3D LUT from positive RGB to measured XYZ.')
-
+def compute_crosstalk_corrected_rgb_values(crosstalk_correction_mat):
+    """
+    Returns vectors of the corrected (R, G and B) values. The order is the same
+    as |df|.
+    """
+    rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
+    return np.matmul(rgb.transpose(), crosstalk_correction_mat)
+    
 
 def compute_positive_rgb_values(
         crosstalk_correction_mat,
@@ -411,9 +409,7 @@ def compute_positive_rgb_values(
 
     # Crosstalk correct then clip to [0, 65535].
     corrected_rgb = np.clip(
-        np.matmul(
-            rgb.transpose(),
-            crosstalk_correction_mat),
+        compute_crosstalk_corrected_rgb_values(crosstalk_correction_mat),
         0,
         65535)
     corrected_df = (corrected_rgb / 65535 * 100).transpose()
@@ -528,12 +524,14 @@ def main():
         # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
         crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
         corrected_mid_grey_r = prod[0]
-        print("Scaled crosstalk correction matrix to white balance patch: %s." % args.prescale_coef)
+        print("Scaled crosstalk correction matrix to white balance patch: %s." % gs_cell)
         print(crosstalk_correction_mat.transpose())
 
     print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
     gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
+
+    # Compute the corrected GS values once to see how much scaling is needed.
     corrected_gs_rgb = np.matmul(
         gs_rgb.transpose(),
         crosstalk_correction_mat).transpose()
@@ -543,7 +541,8 @@ def main():
         crosstalk_correction_mat *= args.darkest_patch_scaling / corrected_gs_rgb.max()
     elif args.mid_grey_scaling:
         crosstalk_correction_mat *= args.mid_grey_scaling / corrected_mid_grey_r
-    
+
+    # Compute the corrected GS values again after scaling the matrix.
     corrected_gs_rgb = np.matmul(
         gs_rgb.transpose(),
         crosstalk_correction_mat).transpose()
@@ -554,8 +553,7 @@ def main():
         print("GS RGB values after correction.")
         print(corrected_gs_rgb.transpose())
 
-    luminance = gs['refY'] / \
-        (gs['refY'].max() / args.whitest_patch_scaling)
+    luminance = gs['refY'] / (gs['refY'].max() / args.whitest_patch_scaling)
     if args.debug:
         debug_inversion_curves(gs['refR'], gs['refG'], gs['refB'], luminance)
     r_curve, g_curve, b_curve = estimate_trc_curves(
@@ -593,7 +591,8 @@ def main():
     write_ti3('check_prof.ti3', positive_rgb=False)
     write_profile_info_txt(
         'icc_out/%s Info.txt' % args.film_name,
-        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb)
+        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
+        np.average(df[['r', 'g', 'b']], axis=0))
     print('### Step 6: Checking cLUT profile.')
     run_prof_check(out_clut_prof)
 
