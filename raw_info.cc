@@ -6,9 +6,10 @@
 #include "libraw/libraw.h"
 
 enum MODE {
-  SHUTTER_SPEED = 0,
-  ISO,
-  CENTER_WEIGHT_AVERAGE,
+  NONE = 0,
+  SHUTTER_SPEED = 1,
+  ISO = 2,
+  CENTER_WEIGHT_AVERAGE = 4,
 };
 
 void print_center_weight_averages(ushort (*image)[4], ushort width, ushort height) {
@@ -26,7 +27,7 @@ void print_center_weight_averages(ushort (*image)[4], ushort width, ushort heigh
   ushort avg_r = total_r / pixels;
   ushort avg_g = total_g / pixels;
   ushort avg_b = total_b / pixels;
-  printf("%d %d %d\n", avg_r, avg_g, avg_b);
+  printf("%d %d %d # Center-weight average RGB\n", avg_r, avg_g, avg_b);
   total_r = total_g = total_b = 0;
   for (int j = 0; j < height; ++j) {
     for (int i = 0; i < width; ++i) {
@@ -35,7 +36,7 @@ void print_center_weight_averages(ushort (*image)[4], ushort width, ushort heigh
       total_b += (image[j * width + i][2] - avg_b) * (image[j * width + i][2] - avg_b);
     }
   }
-  printf("%f %f %f\n", sqrt(total_r / pixels), sqrt(total_g / pixels), sqrt(total_b / pixels));
+  printf("%f %f %f # Center-weight RGB stddev\n", sqrt(total_r / pixels), sqrt(total_g / pixels), sqrt(total_b / pixels));
 }
 
 int main(int ac, char *av[]) {
@@ -52,13 +53,13 @@ int main(int ac, char *av[]) {
 
   char* files[16];
   int fp = 0;
-  MODE mode;
+  int mode = 0;
   for (int i = 1; i < ac; i++) {
     if (av[i][0] == '-') {
       switch (av[i][1]) {
-      case 's': mode = SHUTTER_SPEED; break;
-      case 'i': mode = ISO; break;
-      case 'w': mode = CENTER_WEIGHT_AVERAGE; break;
+      case 's': mode |= SHUTTER_SPEED; break;
+      case 'i': mode |= ISO; break;
+      case 'w': mode |= CENTER_WEIGHT_AVERAGE; break;
       default:
 	goto usage;
 	continue;
@@ -76,17 +77,16 @@ int main(int ac, char *av[]) {
       fprintf(stderr, "Cannot open %s: %s\n", fn, libraw_strerror(ret));
       return 1;
     }
-    switch (mode) {
-    case SHUTTER_SPEED:
-      printf("%f\n", proc->imgdata.other.shutter);
-      break;
-    case ISO:
-      printf("%f\n", proc->imgdata.other.iso_speed);
-      break;
-    case CENTER_WEIGHT_AVERAGE:
+    if (mode & SHUTTER_SPEED) {
+      printf("%f # Shutter speed\n", proc->imgdata.other.shutter);
+    }
+    if (mode & ISO) {
+      printf("%f # ISO speed\n", proc->imgdata.other.iso_speed);
+    }
+    if (mode & CENTER_WEIGHT_AVERAGE) {
       if ((ret = proc->unpack()) != LIBRAW_SUCCESS) {
-	fprintf(stderr, "Cannot unpack %s: %s\n", fn, libraw_strerror(ret));
-	return -1;
+        fprintf(stderr, "Cannot unpack %s: %s\n", fn, libraw_strerror(ret));
+        return -1;
       }
       // Params needed to perform half size linear conversion.
       proc->imgdata.params.output_bps = 16;

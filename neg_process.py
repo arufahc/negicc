@@ -175,8 +175,8 @@ def get_profile_and_exposure_comp(raw_file):
     pick the profile with shutter speed that is cloest that of the RAW file.
     Scale the color correction matrix to accomodate the exposure compensation.''' 
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                                 '-s', raw_file]).decode(sys.stdout.encoding).strip()
-    raw_shutter_speed = float(raw_shutter_speed.strip('\r\n'))
+                                                 '-s', raw_file]).decode(sys.stdout.encoding)
+    raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
     if args.profile:
         profile = read_profile_info(args.profile)
         return (profile, compute_exposure_comp(profile, raw_shutter_speed))
@@ -213,23 +213,6 @@ def compute_film_base_rgb(film_base_raw_file):
         f.close()
     return center_rgb.split('\n')[0].split(' ')[0:3]
 
-def compute_color_comp(profile, film_base_rgb, film_base_raw_file):
-    if film_base_rgb:
-        center_rgb = film_base_rgb.split(' ')
-    else:
-        raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
-        if os.path.exists(raw_info_txt):
-            with open(raw_info_txt) as f:
-                center_rgb = f.read()
-        else:
-            center_rgb = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                                  '-w', film_base_raw_file]).decode(sys.stdout.encoding)
-            f = open(raw_info_txt, 'w+')
-            f.write(center_rgb)
-            f.close()
-        center_rgb = center_rgb.split('\n')[0].strip('\r').split(' ')
-    center_rgb = np.array([float(x) for x in center_rgb[0:3]])
-    
 def run_neg_process(raw_file):
     profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
     print("Exposure compensation applied: %f" % exposure_comp)
