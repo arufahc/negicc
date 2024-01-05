@@ -117,9 +117,12 @@ parser.add_argument(
     " The purpose of this flag is to manually adjust channel"
     " balance before ICC profile is applied.")
 parser.add_argument(
-    '--exposure_comp', '-E',
+    '--post_correction_scale', '-E',
     type=float,
-    help="Single multiplier for all RGB values (doesn't matter corrected RGB or not).")
+    # 0.85 is typical number found between center-weight averages of the profile and
+    # other scans.
+    default=0.85,
+    help="Single multiplier for post-correct RGB values.")
 parser.add_argument(
     '--half_size', '-H',
     action='store_true',
@@ -166,9 +169,8 @@ def compute_exposure_comp(profile, raw_shutter_speed):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
     compute the exposure compensation that should be applied to the converted RGB matrix
     to match the exposure of the profile.'''
-    if args.exposure_comp:
-        return args.exposure_comp
-    return profile['shutter_speed'] / raw_shutter_speed
+    # TODO: Implement
+    return 1.0
 
 def get_profile_and_exposure_comp(raw_file):
     ''' Assuming shutter speed is the only variable between the profile and RAW capture,
@@ -223,20 +225,15 @@ def run_neg_process(raw_file):
     # color_comp = exposure_comp * np.array(compute_color_comp(profile, args.film_base_rgb, args.film_base_raw_file))
     # print("Color + exposure compensation applied: %s" % str(color_comp))
     neg_process_args = [os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process')]
-    neg_process_args.append('-r')
-    neg_process_args += profile['matrix'][0]
-    neg_process_args.append('-g')
-    neg_process_args += profile['matrix'][1]
-    neg_process_args.append('-b')
-    neg_process_args += profile['matrix'][2]
-    neg_process_args.append('--profile_film_base_rgb')
-    neg_process_args += profile['film_base_rgb']
+    neg_process_args += ['-r'] + profile['matrix'][0]
+    neg_process_args += ['-g'] + profile['matrix'][1]
+    neg_process_args += ['-b'] + profile['matrix'][2]
+    neg_process_args += ['--post_correction_scale', str(args.post_correction_scale)]
+    neg_process_args += ['--profile_film_base_rgb'] + profile['film_base_rgb']
     if args.film_base_raw_file:
-        neg_process_args.append('--film_base_rgb')
-        neg_process_args += compute_film_base_rgb(args.film_base_raw_file)
+        neg_process_args += ['--film_base_rgb'] + compute_film_base_rgb(args.film_base_raw_file)
     elif args.film_base_rgb:
-        neg_process_args.append('--film_base_rgb')
-        neg_process_args += args.film_base_rgb
+        neg_process_args += ['--film_base_rgb'] + args.film_base_rgb
     neg_process_args += [
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),

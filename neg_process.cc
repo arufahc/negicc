@@ -1,3 +1,18 @@
+// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -324,6 +339,10 @@ int main(int ac, char *av[]) {
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
+  parser.add_argument("-E", "--post_correction_scale")
+    .help("Scale post-correction RGB values with this number.")
+    .scan<'g', float>()
+    .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
     .help("Linear (uncorrected) R G B values of the film base from profile.")
     .nargs(3)
@@ -355,7 +374,7 @@ int main(int ac, char *av[]) {
   auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
-  float global_scale_factor = 1;
+  float global_scale_factor = parser.get<float>("--post_correction_scale");
 
   LibRaw *proc;
   if (files.size() == 4) {
