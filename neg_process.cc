@@ -59,7 +59,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   int ret;
   LibRaw* proc = new LibRaw();
 
-  printf("Processing file %s\n", fn.c_str());
+  printf("Loading RAW file %s\n", fn.c_str());
   if ((ret = proc->open_file(fn.c_str())) != LIBRAW_SUCCESS) {
     fprintf(stderr, "Cannot open %s: %s\n", fn.c_str(), libraw_strerror(ret));
     return NULL;
@@ -107,6 +107,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     }
     proc->dcraw_process();
   }
+  printf("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   return proc;
 }
 
@@ -376,6 +377,9 @@ int main(int ac, char *av[]) {
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
   float global_scale_factor = parser.get<float>("--post_correction_scale");
 
+  // TODO: Prepare a half size conversion only when --auto_crop is specified. 
+  LibRaw *half_proc = load_raw(files[0], /*debayer*/true, /*half_size*/true, /*quality*/0, /*crop*/true);
+
   LibRaw *proc;
   if (files.size() == 4) {
     LibRaw *four_proc[4];
@@ -429,7 +433,7 @@ int main(int ac, char *av[]) {
                       parser.get<std::string>("--colorspace")) < 0) {
       fprintf(stderr, "ERROR! Cannot convert using colorspace profile.\n");
     }
-    // Attach the output profile since conversion has applied.
+    // Attach the output colorspace profile since conversion has happened.
     attach_profile = parser.get<std::string>("--colorspace");
   } else if (parser.is_used("--film_profile")) {
     attach_profile = parser.get<std::string>("--film_profile");

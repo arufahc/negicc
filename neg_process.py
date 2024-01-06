@@ -119,9 +119,6 @@ parser.add_argument(
 parser.add_argument(
     '--post_correction_scale', '-E',
     type=float,
-    # 0.85 is typical number found between center-weight averages of the profile and
-    # other scans.
-    default=0.85,
     help="Single multiplier for post-correct RGB values.")
 parser.add_argument(
     '--half_size', '-H',
@@ -158,11 +155,13 @@ def read_profile_info(name):
             matrix.append(coeffs)
         shutter_speed = f.readline().strip('\r\n').split(' ')[0]
         film_base_rgb = f.readline().strip('\r\n').split(' ')[0:3]
+        profile_average_rgb = f.readline().strip('\r\n').split(' ')[0:3]
     return {
         'name': name,
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
-        'film_base_rgb': film_base_rgb
+        'film_base_rgb': film_base_rgb,
+        'profile_average_rgb': profile_average_rgb,
         }
 
 def compute_exposure_comp(profile, raw_shutter_speed):
@@ -218,22 +217,18 @@ def compute_film_base_rgb(film_base_raw_file):
 def run_neg_process(raw_file):
     profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
     print("Exposure compensation applied: %f" % exposure_comp)
-    # TODO: Turn exposure_comp into a scale factor for neg_process.
-    # color_comp = [exposure_comp, exposure_comp, exposure_comp]
-    # if args.color_comp:
-    #    color_comp = exposure_comp * np.array([float(x) for x in args.color_comp.split(' ')])
-    # color_comp = exposure_comp * np.array(compute_color_comp(profile, args.film_base_rgb, args.film_base_raw_file))
-    # print("Color + exposure compensation applied: %s" % str(color_comp))
     neg_process_args = [os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process')]
     neg_process_args += ['-r'] + profile['matrix'][0]
     neg_process_args += ['-g'] + profile['matrix'][1]
     neg_process_args += ['-b'] + profile['matrix'][2]
-    neg_process_args += ['--post_correction_scale', str(args.post_correction_scale)]
     neg_process_args += ['--profile_film_base_rgb'] + profile['film_base_rgb']
+    # TODO: Move this into neg_process.cc.
     if args.film_base_raw_file:
         neg_process_args += ['--film_base_rgb'] + compute_film_base_rgb(args.film_base_raw_file)
     elif args.film_base_rgb:
         neg_process_args += ['--film_base_rgb'] + args.film_base_rgb
+    if args.post_correction_scale:
+        neg_process_args += ['--post_correction_scale', str(args.post_correction_scale)]
     neg_process_args += [
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),

@@ -344,7 +344,7 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
     print('%s # Shutter speed' % shutter_speed)
     print('%s # Film base RGB (uncorrected) values' % film_base_rgb)
-    print('%f %f %f # Average patch RGB values' % tuple(average_rgb_values))
+    print('%f %f %f # Average patch RGB (uncorrected) values' % tuple(average_rgb_values))
     f.close()
     sys.stdout = stdout_backup
 
