@@ -60,7 +60,7 @@ parser.add_argument(
     "--mid_grey_scaling",
     help="The RGB value that should be assigned to the mid-grey GS patch. "
     "Setting this value will scale the correct matrix according to the mid-grey GS patch"
-    " specified by --prescale_coef.",
+    " specified by --mid_grey_patch.",
     default=10000,
     type=float)
 parser.add_argument(
@@ -85,8 +85,11 @@ parser.add_argument(
     help="Name of the film.",
     default="Generic")
 parser.add_argument(
-    "--prescale_coef",
-    help="Set a greyscale patch to pre-scale the coefficients.",
+    "--mid_grey_patch",
+    help="Set a greyscale patch to pre-scale the coefficients."
+    "Setting a denser patch (e.g. gs12 over gs14) will result in more contrast in bright"
+    "area and warmer tone. This will also mean less headroom to recover highlight."
+    "gs14 is the mid-grey patch that gives best range from shadow and highlight.",
     default='gs14')
 parser.add_argument(
     "--shutter_speed",
@@ -515,16 +518,16 @@ def main():
 
     # This is only used to scale the matrix using mid-grey patch.
     # See the check for args.mid_grey_scaling below.
-    corrected_mid_grey_r = 0
-    if args.prescale_coef:
-        gs_cell = args.prescale_coef
+    corrected_mid_greyr = 0
+    if args.mid_grey_patch:
+        gs_cell = args.mid_grey_patch
         # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
         prod = crosstalk_correction_mat.transpose().dot(
             np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
         # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
         crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
         corrected_mid_grey_r = prod[0]
-        print("Scaled crosstalk correction matrix to white balance patch: %s." % gs_cell)
+        print("Scaled crosstalk correction matrix to white balance with patch: %s." % gs_cell)
         print(crosstalk_correction_mat.transpose())
 
     print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
@@ -537,10 +540,13 @@ def main():
         crosstalk_correction_mat).transpose()
 
     print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
+    global_scale_factor = 1
     if args.darkest_patch_scaling:
-        crosstalk_correction_mat *= args.darkest_patch_scaling / corrected_gs_rgb.max()
+        global_scale_factor = args.darkest_patch_scaling / corrected_gs_rgb.max()
     elif args.mid_grey_scaling:
-        crosstalk_correction_mat *= args.mid_grey_scaling / corrected_mid_grey_r
+        global_scale_factor = args.mid_grey_scaling / corrected_mid_grey_r
+    print("Scale correction matrix by: %f" % global_scale_factor)
+    crosstalk_correction_mat *= global_scale_factor
 
     # Compute the corrected GS values again after scaling the matrix.
     corrected_gs_rgb = np.matmul(

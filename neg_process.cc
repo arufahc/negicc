@@ -378,7 +378,7 @@ int main(int ac, char *av[]) {
   float global_scale_factor = parser.get<float>("--post_correction_scale");
 
   // TODO: Prepare a half size conversion only when --auto_crop is specified. 
-  LibRaw *half_proc = load_raw(files[0], /*debayer*/true, /*half_size*/true, /*quality*/0, /*crop*/true);
+  // LibRaw *half_proc = load_raw(files[0], /*debayer*/true, /*half_size*/true, /*quality*/0, /*crop*/true);
 
   LibRaw *proc;
   if (files.size() == 4) {

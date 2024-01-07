@@ -227,15 +227,18 @@ def run_neg_process(raw_file):
         neg_process_args += ['--film_base_rgb'] + compute_film_base_rgb(args.film_base_raw_file)
     elif args.film_base_rgb:
         neg_process_args += ['--film_base_rgb'] + args.film_base_rgb
+    out_file = Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))
     if args.post_correction_scale:
         neg_process_args += ['--post_correction_scale', str(args.post_correction_scale)]
+        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
+            profile['name'], args.profile_type.lower(), args.post_correction_scale))
     neg_process_args += [
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
                                                       profile['name'].capitalize(),
                                                       args.measurement,
                                                       args.profile_type),
-        '-o', Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))]
+        '-o', out_file]
     if args.colorspace:
         neg_process_args += ['-P', args.colorspace]
     if args.half_size:
