@@ -199,12 +199,16 @@ def get_profile_and_exposure_comp(raw_file):
     # anyway. We'll do some adjustment based on empirical results.
     predefined_exp_comp = {
         '': 1.1,
-        '+1': 1.1,
+        '+1': 1.05,
         '+2': 1.0,
-        '-1': 1.3,
+        '-1': 1.1,
         '-2': 1.3,
     }
-    return (profile, predefined_exp_comp[profile['exp_diff']])
+    exp_comp = predefined_exp_comp[profile['exp_diff']]
+    # If film is under-exposed by more than 1 stop, then scale even more.
+    if profile['exp_diff'] in ['-1', '-2'] and max_exp_diff >= 0.257:
+        exp_comp = 1.3
+    return (profile, exp_comp)
 
 def compute_film_base_rgb(film_base_raw_file):
     raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
