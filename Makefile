@@ -155,7 +155,7 @@ sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249
 # TODO: Use raw_info to compute these into a data file.
 sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='38443 59423 56787'
 sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='20903 32374 26549'
-sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='20586 30539 25985'
+sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='19556 30277 25814'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
 sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc
