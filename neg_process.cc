@@ -415,10 +415,17 @@ int main(int ac, char *av[]) {
   // A single matrix is combined with the above steps combined. Note that scaling is
   // always done after crosstalk correction, hence the scale factor can be applied
   // separately to the R, G and B coefficients.
+  auto profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
+  auto film_base_rgb = parser.get<std::vector<int>>("--film_base_rgb");
+  // Both --profile_film_base_rgb and --film_base_rgb need to be specified or will
+  // give incorrect scaling.
+  if (!parser.is_used("--profile_film_base_rgb") || !parser.is_used("--film_base_rgb")) {
+    profile_film_base_rgb = film_base_rgb = std::vector{1, 1, 1};
+  }
   adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
                            global_scale_factor,
-                           parser.get<std::vector<int>>("--profile_film_base_rgb"),
-                           parser.get<std::vector<int>>("--film_base_rgb"));
+                           profile_film_base_rgb,
+                           film_base_rgb);
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
   printf("G coefficients: %1.5f %1.5f %1.5f\n", g_coeff[0], g_coeff[1], g_coeff[2]);
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
