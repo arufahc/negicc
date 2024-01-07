@@ -164,13 +164,6 @@ def read_profile_info(name):
         'profile_average_rgb': profile_average_rgb,
         }
 
-def compute_exposure_comp(profile, raw_shutter_speed):
-    '''Assuming shutter speed is the only variable between the profile and RAW capture,
-    compute the exposure compensation that should be applied to the converted RGB matrix
-    to match the exposure of the profile.'''
-    # TODO: Implement
-    return 1.0
-
 def get_profile_and_exposure_comp(raw_file):
     ''' Assuming shutter speed is the only variable between the profile and RAW capture,
     pick the profile with shutter speed that is cloest that of the RAW file.
@@ -180,7 +173,7 @@ def get_profile_and_exposure_comp(raw_file):
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
     if args.profile:
         profile = read_profile_info(args.profile)
-        return (profile, compute_exposure_comp(profile, raw_shutter_speed))
+        return (profile, 1.0)
 
     # If profile is not specified use emulsion and shutter speed to select profile automatically.
     profile = {}
@@ -190,16 +183,28 @@ def get_profile_and_exposure_comp(raw_file):
     for exp_diff in ['', '-1', '-2', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
+            exp_diff_profile['exp_diff'] = exp_diff
             profiles.append(exp_diff_profile)
     print("Raw shutter speed: %f" % raw_shutter_speed)
     max_exp_diff = 100
     for p in profiles:
-        exp_diff = abs(math.log2(p['shutter_speed'] / raw_shutter_speed))
-        if exp_diff < max_exp_diff:
-            max_exp_diff = exp_diff
-            profile = p
+       exp_diff = abs(math.log2(p['shutter_speed'] / raw_shutter_speed))
+       if exp_diff < max_exp_diff:
+           max_exp_diff = exp_diff
+           profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    return (profile, compute_exposure_comp(profile, raw_shutter_speed))
+    # For unknown reasons Sony A7RM4 always under-expose film captures a little bit compared
+    # to the target capture. This is true particularly for film with thin density. And for
+    # compensation of 1.1 is less than 1/3 of a stop which cannot be adjusted in the camera
+    # anyway. We'll do some adjustment based on empirical results.
+    predefined_exp_comp = {
+        '': 1.1,
+        '+1': 1.1,
+        '+2': 1.0,
+        '-1': 1.3,
+        '-2': 1.3,
+    }
+    return (profile, predefined_exp_comp[profile['exp_diff']])
 
 def compute_film_base_rgb(film_base_raw_file):
     raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
@@ -229,10 +234,11 @@ def run_neg_process(raw_file):
         neg_process_args += ['--film_base_rgb'] + args.film_base_rgb
     out_file = Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))
     if args.post_correction_scale:
-        neg_process_args += ['--post_correction_scale', str(args.post_correction_scale)]
+        exposure_comp = args.post_correction_scale
         out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
             profile['name'], args.profile_type.lower(), args.post_correction_scale))
     neg_process_args += [
+        '--post_correction_scale', str(exposure_comp),
         '-q', str(args.quality),
         '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
                                                       profile['name'].capitalize(),
