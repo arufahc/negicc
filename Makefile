@@ -153,7 +153,7 @@ sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249
 
 # These are linear and uncorrected RGB values of the film base.
 # TODO: Use raw_info to compute these into a data file.
-sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='38443 59423 56787'
+sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='15283 23717 22369'
 sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='20903 32374 26549'
 sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='19556 30277 25814'
 
@@ -163,7 +163,7 @@ sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc
 
 .PHONY: sony_a7rm4_portra400-1_r190808
 sony_a7rm4_portra400-1_r190808: data/portra400-1-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --shutter_speed=0.066667 --mid_grey_patch=gs13
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --shutter_speed=0.066667 --mid_grey_patch=gs13 --whitest_patch_scaling=0.8
 
 .PHONY: sony_a7rm4_portra400+1_r190808
 sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt make_icc
@@ -183,7 +183,7 @@ sony_a7rm4_portra160_0_r190808: data/portra160-0-r190808_train.txt make_icc
 
 .PHONY: sony_a7rm4_portra160-1_r190808
 sony_a7rm4_portra160-1_r190808: data/portra160-1-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra160-1 R190808" $(sony_a7rm4_triband_portra160_film_base_rgb) $(sony_a7rm4_triband_crosstalk_coefs) --debug --shutter_speed=0.066667
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Portra160-1 R190808" $(sony_a7rm4_triband_portra160_film_base_rgb) $(sony_a7rm4_triband_crosstalk_coefs) --debug --shutter_speed=0.066667 --whitest_patch_scaling=0.8
 
 .PHONY: sony_a7rm4_portra160+1_r190808
 sony_a7rm4_portra160+1_r190808: data/portra160+1-r190808_train.txt make_icc
@@ -203,23 +203,23 @@ sony_a7rm4_ektar100_0_r190808: data/ektar100-0-r190808_train.txt make_icc
 
 .PHONY: sony_a7rm4_ektar100-1_r190808
 sony_a7rm4_ektar100-1_r190808: data/ektar100-1-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.076923
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.076923 --mid_grey_patch=gs12 --whitest_patch_scaling=0.7
 
 .PHONY: sony_a7rm4_ektar100-2_r190808
 sony_a7rm4_ektar100-2_r190808: data/ektar100-2-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.066667
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.066667 --mid_grey_patch=gs10 --whitest_patch_scaling=0.8
 
 .PHONY: sony_a7rm4_ektar100-3_r190808
 sony_a7rm4_ektar100-3_r190808: data/ektar100-3-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.050000
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.050000 --mid_grey_patch=gs10
 
 .PHONY: sony_a7rm4_ektar100-4_r190808
 sony_a7rm4_ektar100-4_r190808: data/ektar100-4-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-4 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.040000
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-4 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.040000 --mid_grey_patch=gs10
 
 .PHONY: sony_a7rm4_ektar100-5_r190808
 sony_a7rm4_ektar100-5_r190808: data/ektar100-5-r190808_train.txt make_icc
-	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-5 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.033333
+	python3 build_prof.py --src=$< --film_name="Sony A7RM4 Ektar100-5 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.033333 --mid_grey_patch=gs8
 
 .PHONY: sony_a7rm4_ektar100+1_r190808
 sony_a7rm4_ektar100+1_r190808: data/ektar100+1-r190808_train.txt make_icc

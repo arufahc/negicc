@@ -131,6 +131,7 @@ args = parser.parse_args()
 if args.target:
     subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
                     '--half_size',
+                    '--no_crop',
                     '-o', Path(args.raw_file).stem + ('.target.tif'),
                     args.raw_file], check=True)
     exit(0)
@@ -254,7 +255,7 @@ def run_neg_process(raw_file):
     if args.half_size:
         neg_process_args.append('--half_size')
     if args.no_crop:
-        neg_process_args.append('-C')
+        neg_process_args.append('--no_crop')
 
     neg_process_args.append(raw_file)
     if args.multi_shot:
