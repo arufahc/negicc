@@ -89,8 +89,7 @@ parser.add_argument(
     help="Set a greyscale patch to pre-scale the coefficients."
     "Setting a denser patch (e.g. gs12 over gs14) will result in more contrast in bright"
     "area and warmer tone. This will also mean less headroom to recover highlight."
-    "gs14 is the mid-grey patch that gives best range from shadow and highlight.",
-    default='gs14')
+    "gs14 is the mid-grey patch that gives best range from shadow and highlight.")
 parser.add_argument(
     "--shutter_speed",
     help="Just for record of the shutter speed used to capture the target.",
@@ -376,7 +375,7 @@ def run_chromatic_adaptation_on_ref_XYZ():
         test_white_XYZ = D50_XYZ
         adapted_XYZ = unadapted_XYZ
 
-    if args.debug:
+    if args.white_x and args.white_y and args.debug:
         print('Refernce unadapted XYZ values:')
         print(unadapted_XYZ)
         print('D50 adapted XYZ values using Bradford CAT:')
@@ -497,7 +496,46 @@ def run_make_icc(
 
 
 def run_prof_check(clut_icc):
-    subprocess.run(['profcheck', '-v3', 'check_prof.ti3', clut_icc], check=True)
+    return subprocess.check_output(['profcheck', '-v3', 'check_prof.ti3', clut_icc]).decode(sys.stdout.encoding).strip()
+
+
+def compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, gs_cell):
+    '''Scale GB values using |gs_cell| to color balance (i.e. R=G=B), compute
+    the total mean sqaure in G and B channels.'''
+    gs_cell_rgb = np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]])
+    corrected_gs_cell_rgb = np.array([r_coef, g_coef, b_coef]).dot(gs_cell_rgb)
+    # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
+    scaled_crosstalk_correction_mat = np.array(
+        [r_coef,
+         g_coef * corrected_gs_cell_rgb[0] / corrected_gs_cell_rgb[1],
+         b_coef * corrected_gs_cell_rgb[0] / corrected_gs_cell_rgb[2]])
+
+    gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
+
+    # Compute the corrected GS values once to see how much scaling is needed.
+    corrected_gs_rgb = np.matmul(
+        gs[['r', 'g', 'b']],
+        scaled_crosstalk_correction_mat.transpose()).transpose().to_numpy()
+    gr_ratio = corrected_gs_rgb[1] / corrected_gs_rgb[0]
+    br_ratio = corrected_gs_rgb[2] / corrected_gs_rgb[0]
+    gr_mse = np.mean(np.square(gr_ratio - np.ones(len(gr_ratio))))
+    br_mse = np.mean(np.square(br_ratio - np.ones(len(br_ratio))))
+    return gr_mse + br_mse
+
+
+def find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef):
+    '''Find a grey scale patch such that color balance using this patch will result
+    in minimum total mean-square-error from G and B channels.'''
+    max_err = 999
+    min_err_gs_cell = ''
+    for gs_cell in ['gs' + str(i) for i in range(0, 24)]:
+        tmse = compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, gs_cell)
+        if args.debug:
+            print('Tested GS cell %s with Total MSE: %f' % (gs_cell, tmse))
+        if tmse < max_err:
+            max_err = tmse
+            min_err_gs_cell = gs_cell
+    return min_err_gs_cell
 
 
 def main():
@@ -521,14 +559,17 @@ def main():
     corrected_mid_greyr = 0
     if args.mid_grey_patch:
         gs_cell = args.mid_grey_patch
-        # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
-        prod = crosstalk_correction_mat.transpose().dot(
-            np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
-        # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
-        crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
-        corrected_mid_grey_r = prod[0]
-        print("Scaled crosstalk correction matrix to white balance with patch: %s." % gs_cell)
-        print(crosstalk_correction_mat.transpose())
+    else:
+        gs_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
+        print('GS cell with minimum total MSE: %s' % gs_cell)
+    # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
+    prod = crosstalk_correction_mat.transpose().dot(
+        np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
+
+    # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
+    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
+    corrected_mid_grey_r = prod[0]
+    print("Scaled crosstalk correction matrix to white balance with patch: %s." % gs_cell)
 
     print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
@@ -600,7 +641,12 @@ def main():
         crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
         np.average(df[['r', 'g', 'b']], axis=0))
     print('### Step 6: Checking cLUT profile.')
-    run_prof_check(out_clut_prof)
+    prof_check = run_prof_check(out_clut_prof)
+    print('...Done')
+    print('### Details ###')
+    print('Mid-grey GS cell: %s' % gs_cell)
+    print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, gs_cell))
+    print('profcheck output: %s' % prof_check.split('\n')[-1].split(':')[1].strip(' '))
 
 if __name__ == "__main__":
     main()
