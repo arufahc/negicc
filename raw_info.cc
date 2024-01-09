@@ -92,7 +92,7 @@ int main(int ac, char *av[]) {
       proc->imgdata.params.output_bps = 16;
       proc->imgdata.params.user_flip = 0;
       proc->imgdata.params.gamm[0] = 1;
-      proc->imgdata.params.gamm[0] = 1;
+      proc->imgdata.params.gamm[1] = 1;
       proc->imgdata.params.no_auto_bright = 1;
       proc->imgdata.params.highlight = 0;
       proc->imgdata.params.output_color = 0;
