@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import cv2
 import math
 import numpy as np
 import os
@@ -276,10 +277,28 @@ def run_neg_process(raw_file):
     if args.debug:
         print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
     subprocess.run(neg_process_args, check=True)
+    return out_file
 
 # Single process mode.
 if not args.scan_mode:
-    run_neg_process(args.raw_file)
+    out_file = run_neg_process(args.raw_file)
+    if False:
+        # img = cv2.imread(out_file, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
+        img = cv2.imread(out_file, cv2.IMREAD_ANYCOLOR)
+
+        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_blur = cv2.GaussianBlur(img, (3, 3), sigmaX=0, sigmaY=0) 
+        img_canny = cv2.Canny(image=img_blur, threshold1=100, threshold2=200) 
+        cv2.imshow("canny", img_canny)
+        cv2.waitKey()
+        lines = cv2.HoughLines(img_canny, 1, np.pi / 180, 150, None, 0, 0)
+        linesP = cv2.HoughLinesP(img_canny, 1, np.pi / 180, 50, None, 80, 10)
+        if linesP is not None:
+            for i in range(0, len(linesP)):
+                l = linesP[i][0]
+                cv2.line(img, (l[0], l[1]), (l[2], l[3]), (0,0,255), 3, cv2.LINE_AA)
+        cv2.imshow("lines", img)
+        cv2.waitKey()
     exit(0)
 
 seen_files = set(os.listdir(os.getcwd()))
