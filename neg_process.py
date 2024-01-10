@@ -119,7 +119,14 @@ parser.add_argument(
 parser.add_argument(
     '--post_correction_scale', '-E',
     type=float,
-    help="Single multiplier for post-correct RGB values.")
+    help="Single multiplier for post-correction RGB values.")
+parser.add_argument(
+    '--output_gamma', '-G',
+    type=float,
+    help="Gamma to apply to output RGB values in the TIFF file."
+    " This is applied to all RGB values and should not affect color balance, the effect is"
+    " to reduce contrast and to recover blown highlight. Use this only if --colorspace is"
+    " not specified, otherwise the gamma is applied *after* colorspace conversion.")
 parser.add_argument(
     '--half_size', '-H',
     action='store_true',
@@ -242,6 +249,10 @@ def run_neg_process(raw_file):
         exposure_comp = args.post_correction_scale
         out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
             profile['name'], args.profile_type.lower(), args.post_correction_scale))
+    if args.output_gamma:
+        neg_process_args += ['--output_gamma', str(args.output_gamma)]
+        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.G=%.2f.tif' % (
+            profile['name'], args.profile_type.lower(), exposure_comp, args.output_gamma))
     neg_process_args += [
         '--post_correction_scale', str(exposure_comp),
         '-q', str(args.quality),

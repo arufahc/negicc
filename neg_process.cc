@@ -344,6 +344,10 @@ int main(int ac, char *av[]) {
     .help("Scale post-correction RGB values with this number.")
     .scan<'g', float>()
     .default_value(1.0f);
+  parser.add_argument("-G", "--output_gamma")
+    .help("Apply a gamma to RGB values at the final output stage.")
+    .scan<'g', float>()
+    .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
     .help("Linear (uncorrected) R G B values of the film base from profile.")
     .nargs(3)
@@ -454,6 +458,11 @@ int main(int ac, char *av[]) {
     if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
       return -1;
     }
+  }
+
+  if (parser.is_used("--output_gamma")) {
+    proc->imgdata.params.gamm[0] = aparser.get<float>("--output_gamma");
+    proc->imgdata.params.gamm[1] = 0;
   }
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
