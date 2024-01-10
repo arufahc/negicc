@@ -345,7 +345,7 @@ int main(int ac, char *av[]) {
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("-G", "--output_gamma")
-    .help("Apply a gamma to RGB values at the final output stage.")
+    .help("Apply a gamma to RGB values at the final output stage. This has no effect if colorspace conversion has happened.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
@@ -437,7 +437,9 @@ int main(int ac, char *av[]) {
 
   // By default attach the input profile to the output file only, no conversion.
   std::string attach_profile;
+  bool colorspace_conversion_happened = false;
   if (parser.is_used("--film_profile") && parser.is_used("--colorspace")) {
+    colorspace_conversion_happened = true;
     printf("Applying colorspace profile: %s\n", parser.get<std::string>("--colorspace").c_str());
     if (apply_profile(proc->imgdata.image, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
                       parser.get<std::string>("--film_profile"),
@@ -459,8 +461,7 @@ int main(int ac, char *av[]) {
       return -1;
     }
   }
-
-  if (parser.is_used("--output_gamma")) {
+  if (!colorspace_conversion_happened && parser.is_used("--output_gamma")) {
     proc->imgdata.params.gamm[0] = aparser.get<float>("--output_gamma");
     proc->imgdata.params.gamm[1] = 0;
   }
