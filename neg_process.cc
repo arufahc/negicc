@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 
 #include "argparse/argparse.hpp"
+#include "dcraw/gamma_curve.h"
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "libraw/libraw.h"
@@ -270,6 +271,16 @@ int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *si
   return -1;
 }
 
+void apply_gamma(ushort (*image)[4], ushort width, ushort height, double gamma) {
+  ushort curve[0x10000];
+  gamma_curve(curve, gamma, /* toe slope */ 0.0);
+  for (int j = 0; j < width * height; j++) {
+    for (int i = 0; i < 3; ++i) {
+      image[j][i] = curve[image[j][i]];
+    }
+  }
+}
+
 int apply_profile(ushort (*image)[4], ushort width, ushort height,
                   const std::string& input, const std::string& output) {
   cmsHPROFILE in_profile = 0, out_profile = 0;
@@ -349,8 +360,8 @@ int main(int ac, char *av[]) {
     .help("Scale post-correction RGB values with this number.")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("-G", "--output_gamma")
-    .help("Apply a gamma to RGB values at the final output stage. If the output profile has a non-linear TRC curve apply gamma to gamma-already-applied pixel values, leading to unexpected results. Use with no output profile or 'srgb-g10'.")
+  parser.add_argument("-G", "--post_correction_gamma")
+    .help("Apply a gamma to linear RGB after correction but before ICC profile is applied.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
@@ -440,6 +451,13 @@ int main(int ac, char *av[]) {
   printf("B coefficients: %1.5f %1.5f %1.5f\n", b_coeff[0], b_coeff[1], b_coeff[2]);
   post_process(proc, r_coeff, g_coeff, b_coeff);
 
+  if (parser.is_used("--post_correction_gamma")) {
+    apply_gamma(proc->imgdata.image,
+                proc->imgdata.sizes.iwidth,
+                proc->imgdata.sizes.iheight,
+                parser.get<float>("--post_correction_gamma"));
+  }
+
   // By default attach the input profile to the output file only, no conversion.
   std::string attach_profile;
   bool colorspace_conversion_happened = false;
@@ -471,10 +489,6 @@ int main(int ac, char *av[]) {
         return -1;
       }
     }
-  }
-  if (!colorspace_conversion_happened && parser.is_used("--output_gamma")) {
-    proc->imgdata.params.gamm[0] = parser.get<float>("--output_gamma");
-    proc->imgdata.params.gamm[1] = 0;
   }
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
