@@ -26,6 +26,8 @@
 #include <netinet/in.h>
 
 #include "argparse/argparse.hpp"
+#include "elle_icc_profiles/sRGB_elle_V2_g10.h"
+#include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "libraw/libraw.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
@@ -288,8 +290,11 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height,
   }
 
   if (output == "srgb") {
-    printf("Using standard sRGB profile\n");
-    out_profile = cmsCreate_sRGBProfile();
+    printf("Using elle sRGB TRC profile\n");
+    out_profile = cmsOpenProfileFromMem(sRGB_elle_V2_srgbtrc_icc, sRGB_elle_V2_srgbtrc_icc_len);
+  } else if (output == "srgb-g10") {
+    printf("Using elle sRGB Linear (Gamma = 1.0) profile\n");
+    out_profile = cmsOpenProfileFromMem(sRGB_elle_V2_g10_icc, sRGB_elle_V2_g10_icc_len);
   } else if (!read_profile(output, &oprof, &size)) {
     printf("Reading output ICC profile: %s\n", output.c_str());
     if (!(out_profile = cmsOpenProfileFromMem(oprof, size))) {
@@ -345,7 +350,7 @@ int main(int ac, char *av[]) {
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("-G", "--output_gamma")
-    .help("Apply a gamma to RGB values at the final output stage. This has no effect if colorspace conversion has happened.")
+    .help("Apply a gamma to RGB values at the final output stage. If the output profile has a non-linear TRC curve apply gamma to gamma-already-applied pixel values, leading to unexpected results. Use with no output profile or 'srgb-g10'.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
@@ -361,7 +366,7 @@ int main(int ac, char *av[]) {
   parser.add_argument("-p", "--film_profile")
     .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
   parser.add_argument("-P", "--colorspace")
-    .help("srgb or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
+    .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("-o", "--output")
     .required()
     .help("Output file location.");
@@ -452,17 +457,23 @@ int main(int ac, char *av[]) {
     attach_profile = parser.get<std::string>("--film_profile");
   }
 
-  if (!attach_profile.empty() && attach_profile != "srgb") {
+  if (!attach_profile.empty()) {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
     printf("Attaching profile: %s\n", attach_profile.c_str());
-    unsigned size;
-    if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
-      return -1;
+    if (attach_profile == "srgb") {
+      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
+    } else if (attach_profile == "srgb-g10") {
+      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_g10_icc);
+    } else {
+      unsigned size;
+      if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
+        return -1;
+      }
     }
   }
   if (!colorspace_conversion_happened && parser.is_used("--output_gamma")) {
-    proc->imgdata.params.gamm[0] = aparser.get<float>("--output_gamma");
+    proc->imgdata.params.gamm[0] = parser.get<float>("--output_gamma");
     proc->imgdata.params.gamm[1] = 0;
   }
   const auto output = parser.get<std::string>("--output");
