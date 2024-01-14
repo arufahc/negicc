@@ -301,10 +301,10 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height,
   }
 
   if (output == "srgb") {
-    printf("Using elle sRGB TRC profile\n");
+    printf("Using elle sRGB TRC as output profile\n");
     out_profile = cmsOpenProfileFromMem(sRGB_elle_V2_srgbtrc_icc, sRGB_elle_V2_srgbtrc_icc_len);
   } else if (output == "srgb-g10") {
-    printf("Using elle sRGB Linear (Gamma = 1.0) profile\n");
+    printf("Using elle sRGB Linear (Gamma = 1.0) as output profile\n");
     out_profile = cmsOpenProfileFromMem(sRGB_elle_V2_g10_icc, sRGB_elle_V2_g10_icc_len);
   } else if (!read_profile(output, &oprof, &size)) {
     printf("Reading output ICC profile: %s\n", output.c_str());
