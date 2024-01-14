@@ -310,7 +310,8 @@ class FilmBaseSelector:
             return [int(x) for x in np.mean([selected_img], axis=(0, 1, 2))]
         return None
 
-plt.rcParams["figure.figsize"] = (12,10)
+plt.rcParams.update({'font.size': 7})
+plt.rcParams["figure.figsize"] = (15,10)
 plt.rcParams["image.interpolation"] = 'none'
 if args.film_base_raw_file:
     film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, True, False, 'film_base.tif')
@@ -327,8 +328,10 @@ else:
 fig, ax_img = plt.subplots()
 fig.tight_layout()
 
-ax_exp_comp = fig.add_axes([0.10, 0.01, 0.28, 0.018])
-ax_gamma = fig.add_axes([0.10, 0.03, 0.28, 0.018])
+ax_exp_comp = fig.add_axes([0.83, 0.30, 0.15, 0.018])
+ax_gamma = fig.add_axes([0.83, 0.35, 0.15, 0.018])
+ax_profile = fig.add_axes([0.83, 0.40, 0.15, 0.018])
+ax_lab_hist = fig.add_axes([0.83, 0.45, 0.15, 0.10])
 
 # Current params.
 exp_comp = 1
@@ -339,12 +342,29 @@ last_out_path = None
 slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exposure Comp', 0, 3, valinit=exp_comp)
 slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
 
-ax_profile = fig.add_axes([0.10, 0.05, 0.28, 0.018])
 slider_profile = page_slider.PageSlider(ax_profile, 'Profile Exp', min_page=-3, max_page=3, activecolor="orange", valinit=profile_exp)
 
-ax_lab_hist = fig.add_axes([0.48, 0.01, 0.50, 0.10])
+fig.subplots_adjust(right=0.80)
 
-fig.subplots_adjust(bottom=0.10)
+def compute_histogram_mean_and_stddev(hist):
+    sum = 0
+    pixels = 0
+    for i in range(0, 256):
+        sum += i * hist[i][0]
+        pixels += hist[i][0]
+    mean = sum / pixels
+    sum = 0
+    for i in range(0, 256):
+        sum += (i - mean) * (i - mean) * hist[i][0]
+    return (mean, math.sqrt(sum/pixels))
+
+def compute_histogram_mse_from_grey(hist):
+    sum = 0
+    pixels = 0
+    for i in range(0, 256):
+        sum += (i - 128) * (i - 128) * hist[i][0]
+        pixels += hist[i][0]
+    return sum / (pixels - 1)
 
 def reprocess_and_show_image():
     global profile
@@ -369,10 +389,17 @@ def reprocess_and_show_image():
     l_hist = cv2.calcHist([lab_img], [0], None, [256], [0,256])
     a_hist = cv2.calcHist([lab_img], [1], None, [256], [0,256])
     b_hist = cv2.calcHist([lab_img], [2], None, [256], [0,256])
+    ax_lab_hist.set_facecolor("grey")
     ax_lab_hist.cla()
-    ax_lab_hist.plot(l_hist, color='grey')
-    ax_lab_hist.plot(a_hist, color='red')
-    ax_lab_hist.plot(b_hist, color='blue')
+    ax_lab_hist.plot(l_hist, color='white')
+    a_mean, _ = compute_histogram_mean_and_stddev(a_hist)
+    #ax_lab_hist.axvline(x=a_mean)
+    ax_lab_hist.plot(a_hist, color=('red' if a_mean >= 128 else 'green'))
+    b_mean, _ = compute_histogram_mean_and_stddev(b_hist)
+    #ax_lab_hist.axvline(x=b_mean)
+    ax_lab_hist.plot(b_hist, color=('blue' if b_mean >= 128 else 'yellow'))
+    ax_lab_hist.tick_params(axis="y", labelsize=5)
+    #ax_lab_hist.yaxis.label.set_fontsize(5)
     end = time.time()
     print('Process time %f Show time %f' % (end_neg_process - start, end - start))
 
