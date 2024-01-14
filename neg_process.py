@@ -22,6 +22,10 @@ import shutil
 import subprocess
 import sys
 import time
+import matplotlib.pyplot as plt
+import matplotlib.widgets as widgets
+import matplotlib.patches as patches
+import page_slider
 from pathlib import Path
 
 parser = argparse.ArgumentParser(
@@ -65,6 +69,7 @@ parser.add_argument(
     "--colorspace", '-P',
     choices=[
         'srgb',
+        'srgb-g10',
         '<ICC profile path for the output colorspace>',
     ],
     help="Output color profile."
@@ -92,11 +97,12 @@ parser.add_argument(
 parser.add_argument(
     '--no_crop', '-C',
     action='store_true',
+    default=False,
     help="No cropping based on aspect ratio from metadata in [raw_file].")
 parser.add_argument(
-    '--scan_mode', '-s',
+    '--interactive_mode', '-i',
     action='store_true',
-    help="Scanning mode will wait for a new file and process automatically.")
+    help="Interactive mode to select profile and parameters.")
 parser.add_argument(
     '--debug', '-d',
     action='store_true',
@@ -120,14 +126,15 @@ parser.add_argument(
 parser.add_argument(
     '--post_correction_scale', '-E',
     type=float,
+    default=1.0,
     help="Single multiplier for post-correction RGB values.")
 parser.add_argument(
-    '--output_gamma', '-G',
+    '--post_correction_gamma', '-G',
     type=float,
-    help="Gamma to apply to output RGB values in the TIFF file."
+    default=1.0,
+    help="Gamma to apply to linear RGB after correction and before ICC is applied."
     " This is applied to all RGB values and should not affect color balance, the effect is"
-    " to reduce contrast and to recover blown highlight. Use this only if --colorspace is"
-    " not specified, otherwise the gamma is applied *after* colorspace conversion.")
+    " to reduce contrast and to recover blown highlight.")
 parser.add_argument(
     '--half_size', '-H',
     action='store_true',
@@ -166,6 +173,8 @@ def read_profile_info(name):
         film_base_rgb = f.readline().strip('\r\n').split(' ')[0:3]
         profile_average_rgb = f.readline().strip('\r\n').split(' ')[0:3]
     return {
+        'exp': int(name[-2:]) if name[-2] in ['+', '-'] else 0,
+        'emulsion': name[:-2] if name[-2] in ['+', '-'] else name,
         'name': name,
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
@@ -173,16 +182,15 @@ def read_profile_info(name):
         'profile_average_rgb': profile_average_rgb,
         }
 
-def get_profile_and_exposure_comp(raw_file):
-    ''' Assuming shutter speed is the only variable between the profile and RAW capture,
-    pick the profile with shutter speed that is cloest that of the RAW file.
-    Scale the color correction matrix to accomodate the exposure compensation.''' 
+def get_profile_from_shutter_speed(raw_file):
+    '''Assuming shutter speed is the only variable between the profile and RAW capture,
+    pick the profile with shutter speed that is cloest that of the RAW file.'''
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding)
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
     if args.profile:
         profile = read_profile_info(args.profile)
-        return (profile, 1.0)
+        return profile
 
     # If profile is not specified use emulsion and shutter speed to select profile automatically.
     profile = {}
@@ -202,22 +210,7 @@ def get_profile_and_exposure_comp(raw_file):
            max_exp_diff = exp_diff
            profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    # For unknown reasons Sony A7RM4 always under-expose film captures a little bit compared
-    # to the target capture. This is true particularly for film with thin density. And for
-    # compensation of 1.1 is less than 1/3 of a stop which cannot be adjusted in the camera
-    # anyway. We'll do some adjustment based on empirical results.
-    predefined_exp_comp = {
-        '': 1.1,
-        '+1': 1.05,
-        '+2': 1.0,
-        '-1': 1.1,
-        '-2': 1.3,
-    }
-    exp_comp = predefined_exp_comp[profile['exp_diff']]
-    # If film is under-exposed by more than 1 stop, then scale even more.
-    if profile['exp_diff'] in ['-1', '-2'] and max_exp_diff >= 0.257:
-        exp_comp = 1.3
-    return (profile, exp_comp)
+    return profile
 
 def compute_film_base_rgb(film_base_raw_file):
     raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
@@ -232,43 +225,38 @@ def compute_film_base_rgb(film_base_raw_file):
         f.close()
     return center_rgb.split('\n')[0].split(' ')[0:3]
 
-def run_neg_process(raw_file):
-    profile, exposure_comp = get_profile_and_exposure_comp(raw_file)
+def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, half_size, no_crop, out_file_override=None):
     print("Exposure compensation applied: %f" % exposure_comp)
-    neg_process_args = [os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process')]
-    neg_process_args += ['-r'] + profile['matrix'][0]
-    neg_process_args += ['-g'] + profile['matrix'][1]
-    neg_process_args += ['-b'] + profile['matrix'][2]
-    neg_process_args += ['--profile_film_base_rgb'] + profile['film_base_rgb']
-    # TODO: Move this into neg_process.cc.
-    if args.film_base_raw_file:
-        neg_process_args += ['--film_base_rgb'] + compute_film_base_rgb(args.film_base_raw_file)
-    elif args.film_base_rgb:
-        neg_process_args += ['--film_base_rgb'] + args.film_base_rgb
-    out_file = Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))
-    if args.post_correction_scale:
-        exposure_comp = args.post_correction_scale
-        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
-            profile['name'], args.profile_type.lower(), args.post_correction_scale))
-    if args.output_gamma:
-        neg_process_args += ['--output_gamma', str(args.output_gamma)]
-        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.G=%.2f.tif' % (
-            profile['name'], args.profile_type.lower(), exposure_comp, args.output_gamma))
-    neg_process_args += [
+    neg_process_args = [
+        os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
         '--post_correction_scale', str(exposure_comp),
-        '-q', str(args.quality),
-        '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
-                                                      profile['name'].capitalize(),
-                                                      args.measurement,
-                                                      args.profile_type),
-        '-o', out_file]
-    if args.colorspace:
-        neg_process_args += ['-P', args.colorspace]
-    if args.half_size:
+        '-q', str(args.quality)]
+    if profile:
+        neg_process_args += ['-r'] + profile['matrix'][0]
+        neg_process_args += ['-g'] + profile['matrix'][1]
+        neg_process_args += ['-b'] + profile['matrix'][2]
+        neg_process_args += ['--profile_film_base_rgb'] + profile['film_base_rgb']
+        neg_process_args += ['--film_base_rgb'] + film_base_rgb
+        neg_process_args += [
+            '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
+                                                          profile['name'].capitalize(),
+                                                          args.measurement,
+                                                          args.profile_type)]
+        out_file = Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))
+    if exposure_comp != 1.0:
+        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
+            profile['name'], args.profile_type.lower(), exposure_comp))
+    if post_correction_gamma != 1.0:
+        neg_process_args += ['--post_correction_gamma', str(post_correction_gamma)]
+        out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.G=%.2f.tif' % (
+            profile['name'], args.profile_type.lower(), exposure_comp, post_correction_gamma))
+    if colorspace:
+        neg_process_args += ['-P', colorspace]
+    if half_size:
         neg_process_args.append('--half_size')
-    if args.no_crop:
+    if no_crop:
         neg_process_args.append('--no_crop')
-
+    neg_process_args += ['-o', out_file_override or out_file]
     neg_process_args.append(raw_file)
     if args.multi_shot:
         file_num = int(Path(raw_file).stem[-4:])
@@ -277,44 +265,142 @@ def run_neg_process(raw_file):
     if args.debug:
         print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
     subprocess.run(neg_process_args, check=True)
-    return out_file
+    return out_file_override or out_file
 
-# Single process mode.
-if not args.scan_mode:
-    out_file = run_neg_process(args.raw_file)
-    if False:
-        # img = cv2.imread(out_file, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
-        img = cv2.imread(out_file, cv2.IMREAD_ANYCOLOR)
+# TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
+profile = get_profile_from_shutter_speed(args.raw_file)
 
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img_blur = cv2.GaussianBlur(img, (3, 3), sigmaX=0, sigmaY=0) 
-        img_canny = cv2.Canny(image=img_blur, threshold1=100, threshold2=200) 
-        cv2.imshow("canny", img_canny)
-        cv2.waitKey()
-        lines = cv2.HoughLines(img_canny, 1, np.pi / 180, 150, None, 0, 0)
-        linesP = cv2.HoughLinesP(img_canny, 1, np.pi / 180, 50, None, 80, 10)
-        if linesP is not None:
-            for i in range(0, len(linesP)):
-                l = linesP[i][0]
-                cv2.line(img, (l[0], l[1]), (l[2], l[3]), (0,0,255), 3, cv2.LINE_AA)
-        cv2.imshow("lines", img)
-        cv2.waitKey()
+if args.film_base_raw_file:
+   film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
+elif args.film_base_rgb:
+   film_base_rgb = args.film_base_rgb
+
+if not args.interactive_mode:
+    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, film_base_rgb, args.colorspace, args.half_size, args.no_crop)
     exit(0)
 
-seen_files = set(os.listdir(os.getcwd()))
+class FilmBaseSelector:
+    def _line_select_callback(self, eclick, erelease):
+        x1, y1 = eclick.xdata, eclick.ydata
+        x2, y2 = erelease.xdata, erelease.ydata
 
-while True:
-    for f in os.listdir(os.getcwd()):
-        if not os.path.isfile(f):
-            continue
-        if f in seen_files:
-            continue
-        # Only supports .ARW right now.
-        if not f.endswith('.ARW'):
-            continue
-        if int(time.time()) - os.path.getmtime(f) < 3:
-            continue
-        print('Found new file %s.' % f)
-        run_neg_process(f)
-        seen_files.add(f)
-    time.sleep(1)
+    def show_selector(self, path):
+        film_base_img = cv2.imread(path, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
+        film_base_img = cv2.cvtColor(film_base_img, cv2.COLOR_BGR2RGB)
+        thumb_img = cv2.normalize(film_base_img, None, 0, 255, norm_type=cv2.NORM_MINMAX)
+        
+        fig, ax = plt.subplots(1)
+        plot = ax.imshow(thumb_img)
+        selector = widgets.RectangleSelector(ax, self._line_select_callback,
+                                         drawtype='box', useblit=True,
+                                         button=[1, 3],  # don't use middle button
+                                         minspanx=5, minspany=5,
+                                         spancoords='pixels',
+                                         interactive=True)
+        img_h, img_w, _ = thumb_img.shape
+        patch_w = min(img_h, img_w) / 4
+        ax.add_patch(patches.Rectangle(
+                ((img_w - patch_w) / 2, (img_h - patch_w) / 2),
+                patch_w, patch_w, linewidth=1, edgecolor='r', facecolor='none'))
+        plt.show()
+        xmin, xmax, ymin, ymax = selector.extents
+        if xmax > xmin and ymax > ymin + 1:
+            selected_img = film_base_img[int(ymin):int(ymax), int(xmin):int(xmax)]
+            return [int(x) for x in np.mean([selected_img], axis=(0, 1, 2))]
+        return None
+
+if args.film_base_raw_file:
+    film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, True, False, 'film_base.tif')
+    selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
+else:
+    film_base_tif = None
+    selected_film_base_rgb = None
+
+if selected_film_base_rgb is None:
+    selected_film_base_rgb = film_base_rgb
+else:
+    selected_film_base_rgb = [str(x) for x in selected_film_base_rgb]
+
+fig, ax = plt.subplots()
+fig.tight_layout()
+
+ax_exp_comp = fig.add_axes([0.23, 0.02, 0.56, 0.03])
+ax_gamma = fig.add_axes([0.23, 0.06, 0.56, 0.03])
+
+# Current params.
+exp_comp = 1
+gamma = 1
+profile_exp = profile['exp']
+last_out_path = None
+
+slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exposure Comp', 0, 3, valinit=exp_comp)
+slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
+
+ax_profile = fig.add_axes([0.23, 0.1, 0.56, 0.035])
+slider_profile = page_slider.PageSlider(ax_profile, 'Profile Exp', min_page=-3, max_page=3, activecolor="orange", valinit=profile_exp)
+
+fig.subplots_adjust(bottom=0.15)
+
+def reprocess_and_show_image():
+    global profile
+    global last_out_path
+    start = time.time()
+    # cv2 reads the image without caring the embedded ICC profile.
+    # Meanwhile imshow() will display the image assuming they have sRGB curves, at least in OSX.
+    # For this reason apply a srgb output profile for correct brightness of the image displayed.
+    new_profile_name = profile['emulsion'] + ('' if profile_exp == 0 else '%+1d' % profile_exp)
+    new_profile = read_profile_info(new_profile_name)
+    if new_profile:
+        profile = new_profile
+    last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
+                                    selected_film_base_rgb, 'srgb', True, False, 'temp.tif')
+    end_neg_process = time.time()
+    out_img = cv2.imread(last_out_path, cv2.IMREAD_REDUCED_COLOR_2)
+    out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
+    ax.imshow(out_img)
+    ax.axis('off')
+    end = time.time()
+    print('Process time %f Show time %f' % (end_neg_process - start, end - start))
+
+def update_exp_comp(val):
+    global exp_comp
+    exp_comp = val
+    reprocess_and_show_image()
+    pass
+
+def update_gamma(val):
+    global gamma
+    gamma = val
+    reprocess_and_show_image()
+    pass
+
+def update_profile(val):
+    global profile_exp
+    exp = int(val)
+    if exp != profile['exp']:
+        profile_exp = exp
+        reprocess_and_show_image()
+
+slider_exp_comp.on_changed(update_exp_comp)
+slider_gamma.on_changed(update_gamma)
+slider_profile.on_changed(update_profile)
+
+reprocess_and_show_image()
+plt.show()
+
+print('Gamma %f' % gamma)
+print('Exposure comp %f' % exp_comp)
+print('Profile used %s' % profile['name'])
+
+if args.half_size and not args.no_crop:
+    # Reuse the temp image as final if the arguments for conversions are unchanged.
+    os.rename(last_out_path, Path(args.raw_file).stem + '.pos.tif')
+else:
+    os.remove(last_out_path)
+    run_neg_process(args.raw_file, profile, exp_comp, gamma,
+                    selected_film_base_rgb, 'srgb', args.half_size, args.no_crop,
+                    Path(args.raw_file).stem + '.pos.tif')
+
+# TODO: Write parameters for debugging.
+    
+
