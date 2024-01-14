@@ -311,6 +311,7 @@ class FilmBaseSelector:
         return None
 
 plt.rcParams["figure.figsize"] = (12,10)
+plt.rcParams["image.interpolation"] = 'none'
 if args.film_base_raw_file:
     film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, True, False, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
@@ -361,7 +362,7 @@ def reprocess_and_show_image():
     end_neg_process = time.time()
     out_img = cv2.imread(last_out_path, cv2.IMREAD_REDUCED_COLOR_2)
     out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
-    ax_img.imshow(out_img)
+    ax_img.imshow(out_img, resample=False, filternorm=False)
     ax_img.axis('off')
 
     lab_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2Lab)
