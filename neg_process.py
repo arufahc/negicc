@@ -291,6 +291,7 @@ class FilmBaseSelector:
         
         fig, ax = plt.subplots(1)
         plot = ax.imshow(thumb_img)
+        fig.tight_layout()
         selector = widgets.RectangleSelector(ax, self._line_select_callback,
                                          drawtype='box', useblit=True,
                                          button=[1, 3],  # don't use middle button
@@ -309,6 +310,7 @@ class FilmBaseSelector:
             return [int(x) for x in np.mean([selected_img], axis=(0, 1, 2))]
         return None
 
+plt.rcParams["figure.figsize"] = (12,10)
 if args.film_base_raw_file:
     film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, True, False, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
@@ -321,11 +323,11 @@ if selected_film_base_rgb is None:
 else:
     selected_film_base_rgb = [str(x) for x in selected_film_base_rgb]
 
-fig, ax = plt.subplots()
+fig, ax_img = plt.subplots()
 fig.tight_layout()
 
-ax_exp_comp = fig.add_axes([0.23, 0.02, 0.56, 0.03])
-ax_gamma = fig.add_axes([0.23, 0.06, 0.56, 0.03])
+ax_exp_comp = fig.add_axes([0.10, 0.01, 0.28, 0.018])
+ax_gamma = fig.add_axes([0.10, 0.03, 0.28, 0.018])
 
 # Current params.
 exp_comp = 1
@@ -336,10 +338,12 @@ last_out_path = None
 slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exposure Comp', 0, 3, valinit=exp_comp)
 slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
 
-ax_profile = fig.add_axes([0.23, 0.1, 0.56, 0.035])
+ax_profile = fig.add_axes([0.10, 0.05, 0.28, 0.018])
 slider_profile = page_slider.PageSlider(ax_profile, 'Profile Exp', min_page=-3, max_page=3, activecolor="orange", valinit=profile_exp)
 
-fig.subplots_adjust(bottom=0.15)
+ax_lab_hist = fig.add_axes([0.48, 0.01, 0.50, 0.10])
+
+fig.subplots_adjust(bottom=0.10)
 
 def reprocess_and_show_image():
     global profile
@@ -357,8 +361,17 @@ def reprocess_and_show_image():
     end_neg_process = time.time()
     out_img = cv2.imread(last_out_path, cv2.IMREAD_REDUCED_COLOR_2)
     out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
-    ax.imshow(out_img)
-    ax.axis('off')
+    ax_img.imshow(out_img)
+    ax_img.axis('off')
+
+    lab_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2Lab)
+    l_hist = cv2.calcHist([lab_img], [0], None, [256], [0,256])
+    a_hist = cv2.calcHist([lab_img], [1], None, [256], [0,256])
+    b_hist = cv2.calcHist([lab_img], [2], None, [256], [0,256])
+    ax_lab_hist.cla()
+    ax_lab_hist.plot(l_hist, color='grey')
+    ax_lab_hist.plot(a_hist, color='red')
+    ax_lab_hist.plot(b_hist, color='blue')
     end = time.time()
     print('Process time %f Show time %f' % (end_neg_process - start, end - start))
 
