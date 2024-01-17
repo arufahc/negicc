@@ -16,6 +16,7 @@
 import argparse
 import colour
 import matplotlib.pyplot as plt
+import math
 import numpy as np
 import os
 import pandas as pd
@@ -252,10 +253,26 @@ def estimate_trc_curves(corrected_gs_rgb, luminance):
     b_curve = interp_b(xs)
 
     if args.debug:
+        # Pick a o_min such that optical desntiy of the lightest patch has
+        # OD=0.
+        o_min = corrected_gs_rgb.max()
+        r_density, g_density, b_density = np.vectorize(lambda x: math.log10(o_min / x))(corrected_gs_rgb)
+        log_lx = np.vectorize(lambda x: math.log10(x / luminance.max()))(luminance)
+        plt.plot(log_lx, r_density, 'rx-', label='R density over Log(lx)')
+        plt.plot(log_lx, g_density, 'gx-', label='G density over Log(lx)')
+        plt.plot(log_lx, b_density, 'bx-', label='B density over Log(lx)')
+        plt.title('Measured Characteristic Curves')
+        plt.xlabel('Log-Exposure (lx)')
+        plt.ylabel('Density')
+        plt.show()
+
         # Plot a graph to show the interpolated tone curves.
-        plt.plot(corrected_gs_r, train_gs_luminance, 'o', xs, r_curve, '-')
-        plt.plot(corrected_gs_g, train_gs_luminance, 'o', xs, g_curve, '-')
-        plt.plot(corrected_gs_b, train_gs_luminance, 'o', xs, b_curve, '-')
+        plt.title('Computed TRC Curves')
+        plt.plot(corrected_gs_r, train_gs_luminance, 'r*', xs, r_curve, 'r-')
+        plt.plot(corrected_gs_g, train_gs_luminance, 'g*', xs, g_curve, 'g-')
+        plt.plot(corrected_gs_b, train_gs_luminance, 'b*', xs, b_curve, 'b-')
+        plt.xlabel('Input value')
+        plt.ylabel('Output value')
         plt.show()
     return r_curve, g_curve, b_curve
 
