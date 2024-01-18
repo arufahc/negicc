@@ -151,11 +151,11 @@ sony_a7rm4_portra400_0: data/portra400-0-cs100a_train.txt make_icc
 # intrinsic to the sensor color filters and the triband filter combination.
 sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
 
-# These are linear and uncorrected RGB values of the film base.
+# These are linear and uncorrected RGB values of the film base, multiplied by 1 / shutter speed.
 # TODO: Use raw_info to compute these into a data file.
-sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='15283 23717 22369'
-sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='20903 32374 26549'
-sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='19556 30277 25814'
+sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='305900 473780 446880'
+sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='264403 400437 330058'
+sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='256724 396539 338117'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
 sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc

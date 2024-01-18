@@ -353,7 +353,7 @@ def write_build_prof_header(
     sys.stdout = stdout_backup
 
 
-def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb, average_rgb_values):
+def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb, min_rgb_values, max_rgb_values, average_rgb_values, mid_grey_rgb_values):
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
@@ -363,7 +363,10 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
     print('%s # Shutter speed' % shutter_speed)
     print('%s # Film base RGB (uncorrected) values' % film_base_rgb)
+    print('%f %f %f # Min patch RGB (uncorrected) values' % tuple(min_rgb_values))
+    print('%f %f %f # Max patch RGB (uncorrected) values' % tuple(max_rgb_values))
     print('%f %f %f # Average patch RGB (uncorrected) values' % tuple(average_rgb_values))
+    print('%f %f %f # Mid-grey RGB (uncorrected) values' % tuple(mid_grey_rgb_values))
     f.close()
     sys.stdout = stdout_backup
 
@@ -653,10 +656,14 @@ def main():
     out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
 
     write_ti3('check_prof.ti3', positive_rgb=False)
+    print(df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
     write_profile_info_txt(
         'icc_out/%s Info.txt' % args.film_name,
         crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
-        np.average(df[['r', 'g', 'b']], axis=0))
+        np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
     print('### Step 6: Checking cLUT profile.')
     prof_check = run_prof_check(out_clut_prof)
     print('...Done')

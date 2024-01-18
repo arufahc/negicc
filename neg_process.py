@@ -171,7 +171,6 @@ def read_profile_info(name):
             matrix.append(coeffs)
         shutter_speed = f.readline().strip('\r\n').split(' ')[0]
         film_base_rgb = f.readline().strip('\r\n').split(' ')[0:3]
-        profile_average_rgb = f.readline().strip('\r\n').split(' ')[0:3]
     return {
         'exp': int(name[-2:]) if name[-2] in ['+', '-'] else 0,
         'emulsion': name[:-2] if name[-2] in ['+', '-'] else name,
@@ -179,7 +178,6 @@ def read_profile_info(name):
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
         'film_base_rgb': film_base_rgb,
-        'profile_average_rgb': profile_average_rgb,
         }
 
 def get_profile_from_shutter_speed(raw_file):
@@ -213,17 +211,22 @@ def get_profile_from_shutter_speed(raw_file):
     return profile
 
 def compute_film_base_rgb(film_base_raw_file):
+    '''Returns the film base RGB by computing average from the center of |film_base_raw_file|,
+    multiplied by the 1/shutter_speed.'''
     raw_info_txt = Path(film_base_raw_file).stem + '.raw_info.txt'
     if os.path.exists(raw_info_txt):
         with open(raw_info_txt) as f:
-            center_rgb = f.read()
+            output = f.read()
     else:
-        center_rgb = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                              '-w', film_base_raw_file]).decode(sys.stdout.encoding)
+        output = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                          '-w', '-s', film_base_raw_file]).decode(sys.stdout.encoding)
         f = open(raw_info_txt, 'w+')
-        f.write(center_rgb)
+        f.write(output)
         f.close()
-    return center_rgb.split('\n')[0].split(' ')[0:3]
+    output = output.split('\n')
+    center_rgb = next((x for x in output if 'average RGB' in x), '1 1 1').split(' ')[0:3]
+    shutter_speed = next((x for x in output if 'Shutter' in x), '1').split(' ')[0]
+    return [int(float(x) / float(shutter_speed)) for x in center_rgb]
 
 def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, half_size, no_crop, out_file_override=None):
     print("Exposure compensation applied: %f" % exposure_comp)
@@ -272,6 +275,8 @@ profile = get_profile_from_shutter_speed(args.raw_file)
 
 if args.film_base_raw_file:
    film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
+   print('Compute film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(film_base_rgb))
+   film_base_rgb = [str(x) for x in film_base_rgb]
 elif args.film_base_rgb:
    film_base_rgb = args.film_base_rgb
 
@@ -320,9 +325,16 @@ else:
     film_base_tif = None
     selected_film_base_rgb = None
 
+# If user has not selected a region, use the computed film base RGB.
 if selected_film_base_rgb is None:
     selected_film_base_rgb = film_base_rgb
 else:
+    raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                                 '-s', args.film_base_raw_file]).decode(sys.stdout.encoding)
+    # TODO: Optimize this read from .raw_info.txt file.
+    raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
+    selected_film_base_rgb = [int(x / raw_shutter_speed) for x in selected_film_base_rgb]
+    print("Selected Film Base RGB: %d %d %d" % tuple(selected_film_base_rgb))
     selected_film_base_rgb = [str(x) for x in selected_film_base_rgb]
 
 fig, ax_img = plt.subplots()
