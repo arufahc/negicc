@@ -2,5 +2,8 @@
 -0.269893432097 1.9418361115 -0.621723784602
 -0.0114705016245 -0.170299039837 1.72703521891
 0.333333 # Shutter speed
-15283 23717 22369 # Film base RGB (uncorrected) values
-8434.868056 6709.295139 5709.010417 # Average patch RGB (uncorrected) values
+305900 473780 446880 # Film base RGB (uncorrected) values
+13110.013110 6717.006717 4581.004581 # Min patch RGB (uncorrected) values
+67299.067299 75486.075486 65496.065496 # Max patch RGB (uncorrected) values
+25304.629471 20127.905545 17127.048377 # Average patch RGB (uncorrected) values
+31356.031356 26265.026265 20169.020169 # Mid-grey RGB (uncorrected) values
