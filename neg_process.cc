@@ -30,6 +30,7 @@
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "libraw/libraw.h"
+#include "libraw/tiff_head.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
@@ -205,7 +206,7 @@ void adjust_correction_matrix(std::vector<float>& r_coef,
   // Suppose we record the transmittance as a 16-bit fixed point number, we will
   // lose precision for denser film. So the ICC profiles are generated with
   // transmittance values scaled given a fixed value for mid-grey patch (e.g.
-  // GS14). 
+  // GS14).
   //
   // The film base RGB values are only useful in relative terms. Here we are
   // compensating the difference in transmittance between the profile and the
@@ -324,6 +325,26 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height,
   cmsCloseProfile(out_profile);
  quit:
   cmsCloseProfile(in_profile);
+  return 0;
+}
+
+int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output) {
+  if (!attach_profile.empty()) {
+    // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
+    // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
+    printf("Attaching profile: %s\n", attach_profile.c_str());
+    if (attach_profile == "srgb") {
+      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
+    } else if (attach_profile == "srgb-g10") {
+      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_g10_icc);
+    } else {
+      unsigned size;
+      if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
+        return -1;
+      }
+    }
+  }
+  proc->dcraw_ppm_tiff_writer(output.c_str());
   return 0;
 }
 
@@ -475,23 +496,7 @@ int main(int ac, char *av[]) {
     attach_profile = parser.get<std::string>("--film_profile");
   }
 
-  if (!attach_profile.empty()) {
-    // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
-    // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
-    printf("Attaching profile: %s\n", attach_profile.c_str());
-    if (attach_profile == "srgb") {
-      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
-    } else if (attach_profile == "srgb-g10") {
-      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_g10_icc);
-    } else {
-      unsigned size;
-      if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
-        return -1;
-      }
-    }
-  }
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
-  proc->dcraw_ppm_tiff_writer(output.c_str());
-  return 0;
+  return write_tiff(proc, attach_profile, output);
 }
