@@ -329,22 +329,44 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height,
 }
 
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output) {
+  unsigned* output_profile = NULL;
+  unsigned profile_size = 0;
   if (!attach_profile.empty()) {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
     printf("Attaching profile: %s\n", attach_profile.c_str());
     if (attach_profile == "srgb") {
-      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
+      output_profile = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
+      profile_size = sRGB_elle_V2_srgbtrc_icc_len;
     } else if (attach_profile == "srgb-g10") {
-      proc->get_internal_data_pointer()->output_data.oprof = reinterpret_cast<unsigned int*>(sRGB_elle_V2_g10_icc);
+      output_profile = reinterpret_cast<unsigned int*>(sRGB_elle_V2_g10_icc);
+      profile_size = sRGB_elle_V2_g10_icc_len;
     } else {
-      unsigned size;
-      if (read_profile(attach_profile, &proc->get_internal_data_pointer()->output_data.oprof, &size)) {
+      if (read_profile(attach_profile, &output_profile, &profile_size)) {
         return -1;
       }
     }
   }
-  proc->dcraw_ppm_tiff_writer(output.c_str());
+
+  struct tiff_hdr header;
+  tiff_head(proc, &header, profile_size);
+  auto* fp = fopen(output.c_str(), "w+");
+  fwrite(&header, sizeof(header), 1, fp);
+  if (profile_size) {
+    fwrite(output_profile, profile_size, 1, fp);
+  }
+  const unsigned height = proc->imgdata.sizes.iheight;
+  const unsigned width = proc->imgdata.sizes.iwidth;
+  ushort row_buf[width * 3];
+  for (unsigned row = 0; row < height; ++row) {
+    for (unsigned col = 0; col < width; ++col) {
+      row_buf[col * 3] = proc->imgdata.image[row * width + col][0];
+      row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
+      row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
+    }
+    fwrite(row_buf, 3 * 2, width, fp);
+  }
+  fclose(fp);
   return 0;
 }
 
