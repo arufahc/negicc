@@ -328,7 +328,7 @@ int apply_profile(ushort (*image)[4], ushort width, ushort height,
   return 0;
 }
 
-int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output) {
+int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output, bool half_size) {
   unsigned* output_profile = NULL;
   unsigned profile_size = 0;
   if (!attach_profile.empty()) {
@@ -348,23 +348,51 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
     }
   }
 
+  const unsigned height = proc->imgdata.sizes.iheight;
+  const unsigned width = proc->imgdata.sizes.iwidth;
   struct tiff_hdr header;
-  tiff_head(proc, &header, profile_size);
+  if (half_size) {
+    tiff_head(proc, &header, profile_size, width / 2, height / 2);
+  } else {
+    tiff_head(proc, &header, profile_size);
+  }
   auto* fp = fopen(output.c_str(), "w+");
   fwrite(&header, sizeof(header), 1, fp);
   if (profile_size) {
     fwrite(output_profile, profile_size, 1, fp);
   }
-  const unsigned height = proc->imgdata.sizes.iheight;
-  const unsigned width = proc->imgdata.sizes.iwidth;
-  ushort row_buf[width * 3];
+  const unsigned output_width = half_size ? width / 2 : width;
+  ushort row_buf[output_width * 3];
   for (unsigned row = 0; row < height; ++row) {
-    for (unsigned col = 0; col < width; ++col) {
-      row_buf[col * 3] = proc->imgdata.image[row * width + col][0];
-      row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
-      row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
+    if (half_size && row % 2 == 0) {
+      // Even number rows, reset row buffer.
+      for (unsigned col = 0; col < output_width; ++col) {
+        row_buf[col * 3] = (proc->imgdata.image[row * width + 2 * col][0] + 
+                            proc->imgdata.image[row * width + 2 * col + 1][0]) / 4;
+        row_buf[col * 3 + 1] = (proc->imgdata.image[row * width + 2 * col][1] +
+                                proc->imgdata.image[row * width + 2 * col + 1][1]) / 4;
+        row_buf[col * 3 + 2] = (proc->imgdata.image[row * width + 2 * col][2] +
+                                proc->imgdata.image[row * width + 2 * col + 1][2]) / 4;
+      }
+    } else if (half_size && row % 2) {
+      // Odd number rows, add to row buffer.
+      for (unsigned col = 0; col < output_width; ++col) {
+        row_buf[col * 3] += (proc->imgdata.image[row * width + 2 * col][0] + 
+                            proc->imgdata.image[row * width + 2 * col + 1][0]) / 4;
+        row_buf[col * 3 + 1] += (proc->imgdata.image[row * width + 2 * col][1] +
+                                 proc->imgdata.image[row * width + 2 * col + 1][1]) / 4;
+        row_buf[col * 3 + 2] += (proc->imgdata.image[row * width + 2 * col][2] +
+                                 proc->imgdata.image[row * width + 2 * col + 1][2]) / 4;
+      }
+      fwrite(row_buf, 3 * 2, output_width, fp);
+    } else {
+      for (unsigned col = 0; col < width; ++col) {
+        row_buf[col * 3] = proc->imgdata.image[row * width + col][0];
+        row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
+        row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
+      }
+      fwrite(row_buf, 3 * 2, width, fp);
     }
-    fwrite(row_buf, 3 * 2, width, fp);
   }
   fclose(fp);
   return 0;
@@ -374,6 +402,10 @@ int main(int ac, char *av[]) {
   argparse::ArgumentParser parser("neg_process");
   parser.add_argument("-H", "--half_size")
     .help("Half size.")
+    .default_value(false)
+    .implicit_value(true);
+  parser.add_argument("-Q", "--quarter_size")
+    .help("Quarter size.")
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("-C", "--no_crop")
@@ -440,9 +472,6 @@ int main(int ac, char *av[]) {
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
   float global_scale_factor = parser.get<float>("--post_correction_scale");
 
-  // TODO: Prepare a half size conversion only when --auto_crop is specified. 
-  // LibRaw *half_proc = load_raw(files[0], /*debayer*/true, /*half_size*/true, /*quality*/0, /*crop*/true);
-
   LibRaw *proc;
   if (files.size() == 4) {
     LibRaw *four_proc[4];
@@ -460,9 +489,9 @@ int main(int ac, char *av[]) {
     global_scale_factor = 4;
   } else {
     proc = load_raw(files[0], true,
-                       parser.get<bool>("--half_size"),
-                       parser.get<int>("--quality"),
-                       !parser.get<bool>("--no_crop"));
+                    parser.get<bool>("--half_size") || parser.get<bool>("--quarter_size"),
+                    parser.get<int>("--quality"),
+                    !parser.get<bool>("--no_crop"));
   }
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
@@ -520,5 +549,7 @@ int main(int ac, char *av[]) {
 
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
-  return write_tiff(proc, attach_profile, output);
+  return write_tiff(proc, attach_profile, output,
+                    // Multi-shot mode always gets the full size.
+                    parser.get<bool>("--quarter_size") && files.size() == 1);
 }

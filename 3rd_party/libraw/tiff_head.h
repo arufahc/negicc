@@ -50,15 +50,19 @@ void tiff_set(struct tiff_hdr *th, ushort *ntag, ushort tag,
 
 #define TOFF(ptr) ((char *)(&(ptr)) - (char *)th)
 
-void tiff_head(const LibRaw* proc, struct tiff_hdr *th, size_t profile_size)
-{
+// If |width_override| or |height_override| are greater than 0.
+// Use their values instead of width and height from |proc|.
+// This is useful when outputting an image that is different size
+// than that of the processed raw.
+void tiff_head(const LibRaw* proc, struct tiff_hdr *th,
+               size_t profile_size, size_t width_override = 0, size_t height_override = 0) {
   int c;
   struct tm *t;
 
   // Commonly used POD.
   auto colors = proc->imgdata.idata.colors;
-  auto width = proc->imgdata.sizes.iwidth;
-  auto height = proc->imgdata.sizes.iheight;
+  auto width = width_override ? width_override : proc->imgdata.sizes.iwidth;
+  auto height = height_override ? height_override : proc->imgdata.sizes.iheight;
   auto output_bps = proc->imgdata.params.output_bps;
 
   memset(th, 0, sizeof *th);

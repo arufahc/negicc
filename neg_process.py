@@ -228,7 +228,7 @@ def compute_film_base_rgb(film_base_raw_file):
     shutter_speed = next((x for x in output if 'Shutter' in x), '1').split(' ')[0]
     return [int(float(x) / float(shutter_speed)) for x in center_rgb]
 
-def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, half_size, no_crop, out_file_override=None):
+def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, scale_down_factor, no_crop, out_file_override=None):
     print("Exposure compensation applied: %f" % exposure_comp)
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
@@ -255,8 +255,10 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
             profile['name'], args.profile_type.lower(), exposure_comp, post_correction_gamma))
     if colorspace:
         neg_process_args += ['-P', colorspace]
-    if half_size:
+    if scale_down_factor == 2:
         neg_process_args.append('--half_size')
+    elif scale_down_factor == 4:
+        neg_process_args.append('--quarter_size')
     if no_crop:
         neg_process_args.append('--no_crop')
     neg_process_args += ['-o', out_file_override or out_file]
@@ -281,7 +283,7 @@ elif args.film_base_rgb:
    film_base_rgb = args.film_base_rgb
 
 if not args.interactive_mode:
-    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, film_base_rgb, args.colorspace, args.half_size, args.no_crop)
+    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
     exit(0)
 
 class FilmBaseSelector:
@@ -319,7 +321,7 @@ plt.rcParams.update({'font.size': 7})
 plt.rcParams["figure.figsize"] = (15,10)
 plt.rcParams["image.interpolation"] = 'none'
 if args.film_base_raw_file:
-    film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, True, False, 'film_base.tif')
+    film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, 4, False, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
 else:
     film_base_tif = None
@@ -390,7 +392,7 @@ def reprocess_and_show_image():
     if new_profile:
         profile = new_profile
     last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
-                                    selected_film_base_rgb, 'srgb', True, False, 'temp.tif')
+                                    selected_film_base_rgb, 'srgb', 4, False, 'temp.tif')
     end_neg_process = time.time()
     out_img = cv2.imread(last_out_path, cv2.IMREAD_REDUCED_COLOR_2)
     out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
@@ -445,14 +447,10 @@ print('Gamma %f' % gamma)
 print('Exposure comp %f' % exp_comp)
 print('Profile used %s' % profile['name'])
 
-if args.half_size and not args.no_crop:
-    # Reuse the temp image as final if the arguments for conversions are unchanged.
-    os.rename(last_out_path, Path(args.raw_file).stem + '.pos.tif')
-else:
-    os.remove(last_out_path)
-    run_neg_process(args.raw_file, profile, exp_comp, gamma,
-                    selected_film_base_rgb, 'srgb', args.half_size, args.no_crop,
-                    Path(args.raw_file).stem + '.pos.tif')
+os.remove(last_out_path)
+run_neg_process(args.raw_file, profile, exp_comp, gamma,
+                selected_film_base_rgb, 'srgb', 2 if args.half_size else 1, args.no_crop,
+                Path(args.raw_file).stem + '.pos.tif')
 
 # TODO: Write parameters for debugging.
     
