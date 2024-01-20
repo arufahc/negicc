@@ -330,7 +330,7 @@ def write_build_prof_header(
 
     # Print matrix.
     print("double crosstalk_correction_mat[] = {")
-    mat = crosstalk_correction_mat.transpose().flatten()
+    mat = crosstalk_correction_mat.flatten()
     for i in range(0, len(mat)):
         print(" %.15f," % mat[i], end='')
         if (i + 1) % 3 == 0:
@@ -361,7 +361,7 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
-    flat_cc_mat = crosstalk_correction_mat.transpose().flatten()
+    flat_cc_mat = crosstalk_correction_mat.flatten()
     print(' '.join([x.astype(str) for x in flat_cc_mat[0:3]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
@@ -417,7 +417,7 @@ def compute_crosstalk_corrected_rgb_values(crosstalk_correction_mat):
     as |df|.
     """
     rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
-    return np.matmul(rgb.transpose(), crosstalk_correction_mat)
+    return np.matmul(crosstalk_correction_mat, rgb)
     
 
 def compute_positive_rgb_values(
@@ -430,22 +430,19 @@ def compute_positive_rgb_values(
 
     Positive patches are written to pos_r, pos_g and pos_b serieses with max value of 100.
     """
-    # Contains all rgb values of the patches of shape 3 x NUM_OF_PATCHES.
-    rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
-
     # Crosstalk correct then clip to [0, 65535].
     corrected_rgb = np.clip(
         compute_crosstalk_corrected_rgb_values(crosstalk_correction_mat),
         0,
         65535)
-    corrected_df = (corrected_rgb / 65535 * 100).transpose()
+    corrected_df = (corrected_rgb / 65535 * 100)
     df['corrected_r'] = pd.Series(corrected_df[0], index=df.index)
     df['corrected_g'] = pd.Series(corrected_df[1], index=df.index)
     df['corrected_b'] = pd.Series(corrected_df[2], index=df.index)
 
     # Apply curves to convert them positive signals.
     lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
-    positive_rgb = lut.apply(corrected_rgb / 65535)  # LUT takes range [0, 1].
+    positive_rgb = lut.apply(corrected_rgb.transpose() / 65535)  # LUT takes range [0, 1].
 
     # Add back the positive RGB values and the corresponding normalized XYZ values
     # into |df|. These values need to be normalized to max of 100 which is what
@@ -575,7 +572,7 @@ def main():
 
     print('B Coefficients: ', b_coef)
 
-    crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
+    crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef])
 
     # This is only used to scale the matrix using mid-grey patch.
     # See the check for args.mid_grey_scaling below.
@@ -586,11 +583,11 @@ def main():
         gs_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
         print('GS cell with minimum total MSE: %s' % gs_cell)
     # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
-    prod = crosstalk_correction_mat.transpose().dot(
+    prod = crosstalk_correction_mat.dot(
         np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
 
     # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
-    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]]).transpose()
+    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]])
     corrected_mid_grey_r = prod[0]
     print("Scaled crosstalk correction matrix to white balance with patch: %s." % gs_cell)
 
@@ -599,9 +596,8 @@ def main():
     gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
 
     # Compute the corrected GS values once to see how much scaling is needed.
-    corrected_gs_rgb = np.matmul(
-        gs_rgb.transpose(),
-        crosstalk_correction_mat).transpose()
+    corrected_gs_rgb = np.matmul(crosstalk_correction_mat,
+                                 gs_rgb)
 
     print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
     global_scale_factor = 1
@@ -613,9 +609,8 @@ def main():
     crosstalk_correction_mat *= global_scale_factor
 
     # Compute the corrected GS values again after scaling the matrix.
-    corrected_gs_rgb = np.matmul(
-        gs_rgb.transpose(),
-        crosstalk_correction_mat).transpose()
+    corrected_gs_rgb = np.matmul(crosstalk_correction_mat,
+                                 gs_rgb)
 
     if args.debug:
         print("GS RGB values before correction.")
