@@ -99,6 +99,10 @@ parser.add_argument(
     "--film_base_rgb",
     help="Just for record of the average RGB values of the film base.",
     default='')
+parser.add_argument(
+    "--build_info_only",
+    help="Generate only the Info files, but don't generate profiles.",
+    action="store_true")
 
 args = parser.parse_args()
 
@@ -568,10 +572,9 @@ def main():
     r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
     print('R Coefficients: ', r_coef)
     print('G Coefficients: ', g_coef)
+
     print('B Coefficients: ', b_coef)
 
-    # Crosstalk correct matrix is always applied on the right hand side and is
-    # thus transposed.
     crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef]).transpose()
 
     # This is only used to scale the matrix using mid-grey patch.
@@ -634,6 +637,17 @@ def main():
         g_curve,
         b_curve)
 
+    write_profile_info_txt(
+        'icc_out/%s Info.txt' % args.film_name,
+        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
+        np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
+        df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
+
+    if args.build_info_only:
+        exit(0)
+
     print("### Step 3: Run colprof to produce cLUT profile.")
     df.to_csv('build_prof_diag.csv')
     write_ti3('build_prof.ti3')
@@ -656,14 +670,6 @@ def main():
     out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
 
     write_ti3('check_prof.ti3', positive_rgb=False)
-    print(df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
-    write_profile_info_txt(
-        'icc_out/%s Info.txt' % args.film_name,
-        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
-        np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
     print('### Step 6: Checking cLUT profile.')
     prof_check = run_prof_check(out_clut_prof)
     print('...Done')
