@@ -366,7 +366,7 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
     print('%f # Shutter speed' % shutter_speed)
-    print('%f %f %f # Film base RGB (uncorrected) values' % tuple(film_base_rgb))
+    print('%d %d %d # Film base RGB (uncorrected) values' % tuple(film_base_rgb))
     print('%f %f %f # Min patch RGB (uncorrected) values' % tuple(min_rgb_values))
     print('%f %f %f # Max patch RGB (uncorrected) values' % tuple(max_rgb_values))
     print('%f %f %f # Average patch RGB (uncorrected) values' % tuple(average_rgb_values))

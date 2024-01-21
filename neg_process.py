@@ -156,6 +156,11 @@ if not args.profile:
         print('At least --emulsion needs to be specified!')
         exit(1)
 
+plt.rcParams.update({'font.size': 7})
+plt.rcParams["figure.figsize"] = (15,10)
+plt.rcParams["image.interpolation"] = 'none'
+
+
 def read_profile_info(name):
     profile_info_txt = '%s/icc_out/Sony A7RM4 %s %s Info.txt' % (os.path.dirname(__file__),
                                                                  name.capitalize(),
@@ -177,7 +182,7 @@ def read_profile_info(name):
         'name': name,
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
-        'film_base_rgb': film_base_rgb,
+        'film_base_rgb': list(map(int, film_base_rgb)),
         }
 
 def get_profile_from_shutter_speed(raw_file):
@@ -238,8 +243,8 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
         neg_process_args += ['-r'] + profile['matrix'][0]
         neg_process_args += ['-g'] + profile['matrix'][1]
         neg_process_args += ['-b'] + profile['matrix'][2]
-        neg_process_args += ['--profile_film_base_rgb'] + profile['film_base_rgb']
-        neg_process_args += ['--film_base_rgb'] + film_base_rgb
+        neg_process_args += ['--profile_film_base_rgb'] + list(map(str, profile['film_base_rgb']))
+        neg_process_args += ['--film_base_rgb'] + list(map(str, film_base_rgb))
         neg_process_args += [
             '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
                                                           profile['name'].capitalize(),
@@ -269,22 +274,10 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
             neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
     if args.debug:
         print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
+    print(neg_process_args)
     subprocess.run(neg_process_args, check=True)
     return out_file_override or out_file
 
-# TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
-profile = get_profile_from_shutter_speed(args.raw_file)
-
-if args.film_base_raw_file:
-   film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
-   print('Compute film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(film_base_rgb))
-   film_base_rgb = [str(x) for x in film_base_rgb]
-elif args.film_base_rgb:
-   film_base_rgb = args.film_base_rgb
-
-if not args.interactive_mode:
-    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
-    exit(0)
 
 class FilmBaseSelector:
     def _line_select_callback(self, eclick, erelease):
@@ -317,27 +310,30 @@ class FilmBaseSelector:
             return [int(x) for x in np.mean([selected_img], axis=(0, 1, 2))]
         return None
 
-plt.rcParams.update({'font.size': 7})
-plt.rcParams["figure.figsize"] = (15,10)
-plt.rcParams["image.interpolation"] = 'none'
-if args.film_base_raw_file:
+
+if args.film_base_raw_file and args.interactive_mode:
     film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, 4, False, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
-else:
-    film_base_tif = None
-    selected_film_base_rgb = None
 
-# If user has not selected a region, use the computed film base RGB.
-if selected_film_base_rgb is None:
-    selected_film_base_rgb = film_base_rgb
-else:
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', args.film_base_raw_file]).decode(sys.stdout.encoding)
     # TODO: Optimize this read from .raw_info.txt file.
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
     selected_film_base_rgb = [int(x / raw_shutter_speed) for x in selected_film_base_rgb]
-    print("Selected Film Base RGB: %d %d %d" % tuple(selected_film_base_rgb))
-    selected_film_base_rgb = [str(x) for x in selected_film_base_rgb]
+    print("Selected Film Base RGB: %d %d %d (normalized to 1s shutter speed)" % tuple(selected_film_base_rgb))
+elif args.film_base_raw_file:
+    selected_film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
+    print('Computed film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
+else:
+    selected_film_base_rgb = list(map(int, args.film_base_rgb))
+    print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
+
+# TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
+profile = get_profile_from_shutter_speed(args.raw_file)
+
+if not args.interactive_mode:
+    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
+    exit(0)
 
 fig, ax_img = plt.subplots()
 fig.tight_layout()
