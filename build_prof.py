@@ -365,8 +365,8 @@ def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, f
     print(' '.join([x.astype(str) for x in flat_cc_mat[0:3]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
     print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
-    print('%s # Shutter speed' % shutter_speed)
-    print('%s # Film base RGB (uncorrected) values' % film_base_rgb)
+    print('%f # Shutter speed' % shutter_speed)
+    print('%f %f %f # Film base RGB (uncorrected) values' % tuple(film_base_rgb))
     print('%f %f %f # Min patch RGB (uncorrected) values' % tuple(min_rgb_values))
     print('%f %f %f # Max patch RGB (uncorrected) values' % tuple(max_rgb_values))
     print('%f %f %f # Average patch RGB (uncorrected) values' % tuple(average_rgb_values))
@@ -569,7 +569,6 @@ def main():
     r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
     print('R Coefficients: ', r_coef)
     print('G Coefficients: ', g_coef)
-
     print('B Coefficients: ', b_coef)
 
     crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef])
@@ -596,8 +595,7 @@ def main():
     gs_rgb = np.array([gs['r'].tolist(), gs['g'].tolist(), gs['b'].tolist()])
 
     # Compute the corrected GS values once to see how much scaling is needed.
-    corrected_gs_rgb = np.matmul(crosstalk_correction_mat,
-                                 gs_rgb)
+    corrected_gs_rgb = np.matmul(crosstalk_correction_mat, gs_rgb)
 
     print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
     global_scale_factor = 1
@@ -609,8 +607,7 @@ def main():
     crosstalk_correction_mat *= global_scale_factor
 
     # Compute the corrected GS values again after scaling the matrix.
-    corrected_gs_rgb = np.matmul(crosstalk_correction_mat,
-                                 gs_rgb)
+    corrected_gs_rgb = np.matmul(crosstalk_correction_mat, gs_rgb)
 
     if args.debug:
         print("GS RGB values before correction.")
@@ -632,9 +629,11 @@ def main():
         g_curve,
         b_curve)
 
+    film_base_rgb = list(map(float, args.film_base_rgb.split(' ')[:3]))
+    shutter_speed = float(args.shutter_speed)
     write_profile_info_txt(
         'icc_out/%s Info.txt' % args.film_name,
-        crosstalk_correction_mat, args.shutter_speed, args.film_base_rgb,
+        crosstalk_correction_mat, shutter_speed, film_base_rgb,
         np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
         np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
         np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
@@ -670,6 +669,8 @@ def main():
     print('...Done')
     print('### Details ###')
     print('Mid-grey GS cell: %s' % gs_cell)
+    print('Mid-grey relative transmittance: %f %f %f' % tuple(
+            (np.ones(3) * args.mid_grey_scaling / shutter_speed / np.matmul(crosstalk_correction_mat, film_base_rgb)).flatten()))
     print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, gs_cell))
     print('profcheck output: %s' % prof_check.split('\n')[-1].split(':')[1].strip(' '))
 
