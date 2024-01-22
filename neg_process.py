@@ -278,7 +278,6 @@ def compute_film_base_rgb(film_base_raw_file):
 
 
 def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, scale_down_factor, no_crop, out_file_override=None):
-    print("Exposure compensation applied: %f" % exposure_comp)
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
         '--post_correction_scale', str(exposure_comp),
@@ -318,7 +317,9 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
             neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
     if args.debug:
         print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
-    subprocess.run(neg_process_args, check=True)
+        subprocess.run(neg_process_args, check=True)
+    else:
+        subprocess.check_output(neg_process_args)
     return out_file_override or out_file
 
 
@@ -378,7 +379,8 @@ if selected_film_base_rgb is None:
 profile = get_profile_from_shutter_speed(args.raw_file, selected_film_base_rgb)
 
 if not args.interactive_mode:
-    run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
+    out_file = run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
+    print('Done %s' % out_file)
     exit(0)
 
 fig, ax_img = plt.subplots()
@@ -490,9 +492,10 @@ print('Exposure comp %f' % exp_comp)
 print('Profile used %s' % profile['name'])
 
 os.remove(last_out_path)
-run_neg_process(args.raw_file, profile, exp_comp, gamma,
+out_file = run_neg_process(args.raw_file, profile, exp_comp, gamma,
                 selected_film_base_rgb, 'srgb', 2 if args.half_size else 1, args.no_crop,
                 Path(args.raw_file).stem + '.pos.tif')
+print('Done %s' % out_file)
 
 # TODO: Write parameters for debugging.
     
