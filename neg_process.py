@@ -246,10 +246,11 @@ def get_profile_from_shutter_speed(raw_file, film_base_rgb):
        profile_mean_transmittance = compute_relative_transmittance(
            correction_mat, p['mean_rgb'], p['film_base_rgb'])
        profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
-       print('[%s] Evaluating profile' % p['name'])
-       print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
-       print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
-       print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
+       if args.debug:
+           print('[%s] Evaluating profile' % p['name'])
+           print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
+           print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
+           print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
        if profile_distance < max_profile_distance:
            max_profile_distance = profile_distance
            profile = p
