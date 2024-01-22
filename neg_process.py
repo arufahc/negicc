@@ -90,6 +90,7 @@ parser.add_argument(
     " The channel balance is computed from the film base to compute compensations"
     " that should be applied to match that of the target. This method is to"
     " account for variations of the film base density.")
+# TODO: Fix multi_shot mode for the intermediate runs of neg_process.
 parser.add_argument(
     '--multi_shot', '-M',
     action='store_true',
@@ -173,9 +174,13 @@ def read_profile_info(name):
     with open(profile_info_txt) as f:
         for i in range(0, 3):
             coeffs = f.readline().strip('\r\n').split(' ')[0:3]
-            matrix.append(coeffs)
+            matrix.append(list(map(float, coeffs)))
         shutter_speed = f.readline().strip('\r\n').split(' ')[0]
         film_base_rgb = f.readline().strip('\r\n').split(' ')[0:3]
+        f.readline() # Min
+        f.readline() # Max
+        mean_rgb = f.readline().strip('\r\n').split(' ')[0:3] # Mean
+        mid_grey_rgb = f.readline().strip('\r\n').split(' ')[0:3] # Mid-grey
     return {
         'exp': int(name[-2:]) if name[-2] in ['+', '-'] else 0,
         'emulsion': name[:-2] if name[-2] in ['+', '-'] else name,
@@ -183,14 +188,23 @@ def read_profile_info(name):
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
         'film_base_rgb': list(map(int, film_base_rgb)),
+        'mean_rgb': list(map(float, mean_rgb)),
+        'mid_grey_rgb': list(map(float, mid_grey_rgb)),
         }
 
-def get_profile_from_shutter_speed(raw_file):
+
+def compute_relative_transmittance(correction_mat, rgb, film_base_rgb):
+    return np.matmul(correction_mat, rgb) / np.matmul(correction_mat, film_base_rgb)
+
+
+def get_profile_from_shutter_speed(raw_file, film_base_rgb):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
     pick the profile with shutter speed that is cloest that of the RAW file.'''
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding)
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
+    if args.debug:
+        print("Raw shutter speed: %f" % raw_shutter_speed)
     if args.profile:
         profile = read_profile_info(args.profile)
         return profile
@@ -200,20 +214,48 @@ def get_profile_from_shutter_speed(raw_file):
     profiles = []
     # Append profiles that are exposed over and under.
     # Profiles made too under-exposed have poor quality and are excluded.
-    for exp_diff in ['', '-1', '-2', '+1', '+2', '+3']:
+    for exp_diff in ['-2', '-1', '', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             exp_diff_profile['exp_diff'] = exp_diff
             profiles.append(exp_diff_profile)
-    print("Raw shutter speed: %f" % raw_shutter_speed)
-    max_exp_diff = 100
+
+    # Use the first profile to compute the relative transmittance. Doesn't matter
+    # which profile is choosen because transmittance is relative to the film base
+    # so scaling applied to the corrected RGB values will cancelled out when
+    # divided by the corrected film base RGB values.
+    run_neg_process(args.raw_file, profiles[0], 1, 1, film_base_rgb,
+                    # No ICC profile is applied
+                    None, 4, False, 'temp.tif')
+    neg_img = cv2.imread('temp.tif', cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
+    h, w, _ = neg_img.shape
+    CROP_FACTOR = 5
+    b, g, r = cv2.split(neg_img[int(h/CROP_FACTOR):int(h-h/CROP_FACTOR),
+                                int(w/CROP_FACTOR):int(w-w/CROP_FACTOR)])
+    correction_mat = np.array([profiles[0]['matrix'][0],
+                               profiles[0]['matrix'][1],
+                               profiles[0]['matrix'][2]])
+    corrected_film_base_rgb = np.matmul(correction_mat, film_base_rgb)
+    mean_transmittance = np.array([np.mean(r), np.mean(g), np.mean(b)]) / raw_shutter_speed / corrected_film_base_rgb
+    if args.debug:
+        print('Mean film relative transmittance: %f %f %f' % tuple(mean_transmittance))
+    max_profile_distance = 10000
     for p in profiles:
-       exp_diff = abs(math.log2(p['shutter_speed'] / raw_shutter_speed))
-       if exp_diff < max_exp_diff:
-           max_exp_diff = exp_diff
+       profile_mid_grey_transmittance = compute_relative_transmittance(
+           correction_mat, p['mid_grey_rgb'], p['film_base_rgb'])
+       profile_mean_transmittance = compute_relative_transmittance(
+           correction_mat, p['mean_rgb'], p['film_base_rgb'])
+       profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
+       print('[%s] Evaluating profile' % p['name'])
+       print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
+       print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
+       print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
+       if profile_distance < max_profile_distance:
+           max_profile_distance = profile_distance
            profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
     return profile
+
 
 def compute_film_base_rgb(film_base_raw_file):
     '''Returns the film base RGB by computing average from the center of |film_base_raw_file|,
@@ -233,6 +275,7 @@ def compute_film_base_rgb(film_base_raw_file):
     shutter_speed = next((x for x in output if 'Shutter' in x), '1').split(' ')[0]
     return [int(float(x) / float(shutter_speed)) for x in center_rgb]
 
+
 def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, scale_down_factor, no_crop, out_file_override=None):
     print("Exposure compensation applied: %f" % exposure_comp)
     neg_process_args = [
@@ -240,9 +283,9 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
         '--post_correction_scale', str(exposure_comp),
         '-q', str(args.quality)]
     if profile:
-        neg_process_args += ['-r'] + profile['matrix'][0]
-        neg_process_args += ['-g'] + profile['matrix'][1]
-        neg_process_args += ['-b'] + profile['matrix'][2]
+        neg_process_args += ['-r'] + list(map(str, profile['matrix'][0]))
+        neg_process_args += ['-g'] + list(map(str, profile['matrix'][1]))
+        neg_process_args += ['-b'] + list(map(str, profile['matrix'][2]))
         neg_process_args += ['--profile_film_base_rgb'] + list(map(str, profile['film_base_rgb']))
         neg_process_args += ['--film_base_rgb'] + list(map(str, film_base_rgb))
         neg_process_args += [
@@ -274,7 +317,6 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
             neg_process_args.append(Path(raw_file).stem[0:-4] + str(file_num + i) + Path(raw_file).suffix)
     if args.debug:
         print(' '.join([("'" + x + "'" if ' ' in x else x) for x in neg_process_args]))
-    print(neg_process_args)
     subprocess.run(neg_process_args, check=True)
     return out_file_override or out_file
 
@@ -311,25 +353,28 @@ class FilmBaseSelector:
         return None
 
 
+selected_film_base_rgb = None
 if args.film_base_raw_file and args.interactive_mode:
     film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, 4, False, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
+    if selected_film_base_rgb:
+        raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
+                                                     '-s', args.film_base_raw_file]).decode(sys.stdout.encoding)
+        # TODO: Optimize this read from .raw_info.txt file.
+        raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
+        selected_film_base_rgb = [int(x / raw_shutter_speed) for x in selected_film_base_rgb]
+        print("Selected Film Base RGB: %d %d %d (normalized to 1s shutter speed)" % tuple(selected_film_base_rgb))
 
-    raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
-                                                 '-s', args.film_base_raw_file]).decode(sys.stdout.encoding)
-    # TODO: Optimize this read from .raw_info.txt file.
-    raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
-    selected_film_base_rgb = [int(x / raw_shutter_speed) for x in selected_film_base_rgb]
-    print("Selected Film Base RGB: %d %d %d (normalized to 1s shutter speed)" % tuple(selected_film_base_rgb))
-elif args.film_base_raw_file:
-    selected_film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
-    print('Computed film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
-else:
-    selected_film_base_rgb = list(map(int, args.film_base_rgb))
-    print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
+if selected_film_base_rgb is None:
+    if args.film_base_raw_file:
+        selected_film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
+        print('Computed film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
+    else:
+        selected_film_base_rgb = list(map(int, args.film_base_rgb))
+        print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
 
 # TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
-profile = get_profile_from_shutter_speed(args.raw_file)
+profile = get_profile_from_shutter_speed(args.raw_file, selected_film_base_rgb)
 
 if not args.interactive_mode:
     run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
@@ -390,7 +435,7 @@ def reprocess_and_show_image():
     last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
                                     selected_film_base_rgb, 'srgb', 4, False, 'temp.tif')
     end_neg_process = time.time()
-    out_img = cv2.imread(last_out_path, cv2.IMREAD_REDUCED_COLOR_2)
+    out_img = cv2.imread(last_out_path, cv2.IMREAD_COLOR)
     out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
     ax_img.imshow(out_img, resample=False, filternorm=False)
     ax_img.axis('off')
