@@ -360,7 +360,7 @@ class FilmBaseSelector:
 
 selected_film_base_rgb = None
 if args.film_base_raw_file and args.interactive_mode:
-    film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, 4, False, 'film_base.tif')
+    film_base_tif = run_neg_process(args.film_base_raw_file, None, 1.0, 1.0, None, None, 4, True, 'film_base.tif')
     selected_film_base_rgb = FilmBaseSelector().show_selector(film_base_tif)
     if selected_film_base_rgb:
         raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
