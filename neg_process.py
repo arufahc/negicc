@@ -217,7 +217,7 @@ def get_profile_and_shutter_speed(raw_file, film_base_rgb):
     profiles = []
     # Append profiles that are exposed over and under.
     # Profiles made too under-exposed have poor quality and are excluded.
-    for exp_diff in ['-2', '-1', '', '+1', '+2', '+3']:
+    for exp_diff in ['-1', '', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             exp_diff_profile['exp_diff'] = exp_diff
