@@ -125,10 +125,9 @@ parser.add_argument(
     " The purpose of this flag is to manually adjust channel"
     " balance before ICC profile is applied.")
 parser.add_argument(
-    '--post_correction_scale', '-E',
+    '--exposure_comp', '-E',
     type=float,
-    default=1.0,
-    help="Single multiplier for post-correction RGB values.")
+    help="Single multiplier for RGB values.")
 parser.add_argument(
     '--post_correction_gamma', '-G',
     type=float,
@@ -140,6 +139,10 @@ parser.add_argument(
     '--half_size', '-H',
     action='store_true',
     help="Generate half size image.")
+parser.add_argument(
+    '--quarter_size', '-Q',
+    action='store_true',
+    help="Generate quarter size image.")
 
 parser.add_argument('--target', '-T', action='store_true')
 args = parser.parse_args()
@@ -197,7 +200,7 @@ def compute_relative_transmittance(correction_mat, rgb, film_base_rgb):
     return np.matmul(correction_mat, rgb) / np.matmul(correction_mat, film_base_rgb)
 
 
-def get_profile_from_shutter_speed(raw_file, film_base_rgb):
+def get_profile_and_shutter_speed(raw_file, film_base_rgb):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
     pick the profile with shutter speed that is cloest that of the RAW file.'''
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
@@ -255,7 +258,7 @@ def get_profile_from_shutter_speed(raw_file, film_base_rgb):
            max_profile_distance = profile_distance
            profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    return profile
+    return profile, raw_shutter_speed
 
 
 def compute_film_base_rgb(film_base_raw_file):
@@ -280,7 +283,7 @@ def compute_film_base_rgb(film_base_raw_file):
 def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, film_base_rgb, colorspace, scale_down_factor, no_crop, out_file_override=None):
     neg_process_args = [
         os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
-        '--post_correction_scale', str(exposure_comp),
+        '--exposure_comp', str(exposure_comp),
         '-q', str(args.quality)]
     if profile:
         neg_process_args += ['-r'] + list(map(str, profile['matrix'][0]))
@@ -294,7 +297,7 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
                                                           args.measurement,
                                                           args.profile_type)]
         out_file = Path(raw_file).stem + ('.%s.%s.tif' % (profile['name'], args.profile_type.lower()))
-    if exposure_comp != 1.0:
+    if exposure_comp is not None and exposure_comp != 1.0:
         out_file = Path(raw_file).stem + ('.%s.%s.E=%.2f.tif' % (
             profile['name'], args.profile_type.lower(), exposure_comp))
     if post_correction_gamma != 1.0:
@@ -376,28 +379,28 @@ if selected_film_base_rgb is None:
         print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
 
 # TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
-profile = get_profile_from_shutter_speed(args.raw_file, selected_film_base_rgb)
+profile, raw_shutter_speed = get_profile_and_shutter_speed(args.raw_file, selected_film_base_rgb)
+
+# Current params.
+exp_comp = args.exposure_comp if args.exposure_comp else (profile['shutter_speed'] / raw_shutter_speed)
+gamma = 1
+profile_exp = profile['exp']
+last_out_path = None
 
 if not args.interactive_mode:
-    out_file = run_neg_process(args.raw_file, profile, args.post_correction_scale, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else 1, args.no_crop)
+    out_file = run_neg_process(args.raw_file, profile, exp_comp, args.post_correction_gamma, selected_film_base_rgb, args.colorspace, 2 if args.half_size else (4 if args.quarter_size else 1), args.no_crop)
     print('Done %s' % out_file)
     exit(0)
 
 fig, ax_img = plt.subplots()
 fig.tight_layout()
 
-ax_exp_comp = fig.add_axes([0.83, 0.30, 0.15, 0.018])
-ax_gamma = fig.add_axes([0.83, 0.35, 0.15, 0.018])
-ax_profile = fig.add_axes([0.83, 0.40, 0.15, 0.018])
-ax_lab_hist = fig.add_axes([0.83, 0.45, 0.15, 0.10])
+ax_exp_comp = fig.add_axes([0.825, 0.30, 0.15, 0.018])
+ax_gamma = fig.add_axes([0.825, 0.35, 0.15, 0.018])
+ax_profile = fig.add_axes([0.825, 0.40, 0.15, 0.018])
+ax_lab_hist = fig.add_axes([0.825, 0.45, 0.15, 0.10])
 
-# Current params.
-exp_comp = 1
-gamma = 1
-profile_exp = profile['exp']
-last_out_path = None
-
-slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exposure Comp', 0, 3, valinit=exp_comp)
+slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exp. Comp.', 0, 3, valinit=exp_comp)
 slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
 
 slider_profile = page_slider.PageSlider(ax_profile, 'Profile Exp', min_page=-3, max_page=3, activecolor="orange", valinit=profile_exp)
@@ -427,14 +430,18 @@ def compute_histogram_mse_from_grey(hist):
 def reprocess_and_show_image():
     global profile
     global last_out_path
+    global exp_comp
     start = time.time()
     # cv2 reads the image without caring the embedded ICC profile.
     # Meanwhile imshow() will display the image assuming they have sRGB curves, at least in OSX.
     # For this reason apply a srgb output profile for correct brightness of the image displayed.
     new_profile_name = profile['emulsion'] + ('' if profile_exp == 0 else '%+1d' % profile_exp)
     new_profile = read_profile_info(new_profile_name)
-    if new_profile:
+    if new_profile and new_profile['name'] != profile['name']:
         profile = new_profile
+        exp_comp = profile['shutter_speed'] / raw_shutter_speed
+        slider_exp_comp.set_val(exp_comp)
+        return
     last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
                                     selected_film_base_rgb, 'srgb', 4, False, 'temp.tif')
     end_neg_process = time.time()
@@ -493,10 +500,8 @@ print('Profile used %s' % profile['name'])
 
 os.remove(last_out_path)
 out_file = run_neg_process(args.raw_file, profile, exp_comp, gamma,
-                selected_film_base_rgb, 'srgb', 2 if args.half_size else 1, args.no_crop,
+                selected_film_base_rgb, 'srgb', 2 if args.half_size else (4 if args.quarter_size else 1), args.no_crop,
                 Path(args.raw_file).stem + '.pos.tif')
 print('Done %s' % out_file)
 
 # TODO: Write parameters for debugging.
-    
-

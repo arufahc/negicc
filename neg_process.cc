@@ -184,7 +184,7 @@ void scale(std::vector<float>& v, float factor) {
 void adjust_correction_matrix(std::vector<float>& r_coef, 
                               std::vector<float>& g_coef,
                               std::vector<float>& b_coef,
-                              float global_scale_factor,
+                              float global_exposure_comp,
                               const std::vector<int>& profile_film_base_rgb,
                               const std::vector<int>& film_base_rgb) {
   // First convert the linear RGB into corrected RGB values that are proportional
@@ -231,9 +231,9 @@ void adjust_correction_matrix(std::vector<float>& r_coef,
   float g_scale = (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r);
   float b_scale = (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r);
   printf("Scale channels to match film base: %f %f %f\n", 1.0, g_scale, b_scale);
-  scale(r_coef, global_scale_factor);
-  scale(g_coef, g_scale * global_scale_factor);
-  scale(b_coef, b_scale * global_scale_factor);
+  scale(r_coef, global_exposure_comp);
+  scale(g_coef, g_scale * global_exposure_comp);
+  scale(b_coef, b_scale * global_exposure_comp);
 }
 
 void post_process(LibRaw* proc,
@@ -431,8 +431,8 @@ int main(int ac, char *av[]) {
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
-  parser.add_argument("-E", "--post_correction_scale")
-    .help("Scale post-correction RGB values with this number.")
+  parser.add_argument("-E", "--exposure_comp")
+    .help("Multiplier for RGB values.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("-G", "--post_correction_gamma")
@@ -470,7 +470,7 @@ int main(int ac, char *av[]) {
   auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
-  float global_scale_factor = parser.get<float>("--post_correction_scale");
+  float global_exposure_comp = parser.get<float>("--exposure_comp");
 
   LibRaw *proc;
   if (files.size() == 4) {
@@ -486,7 +486,7 @@ int main(int ac, char *av[]) {
     proc = merge_pixel_shift_raw(four_proc);
     // Operating on data without interpolation and for Sony A7RM4 sensor
     // the input is 14-bit and multiply by 4 to expand into 16-bit.
-    global_scale_factor = 4;
+    global_exposure_comp = 4;
   } else {
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size") || parser.get<bool>("--quarter_size"),
@@ -515,7 +515,7 @@ int main(int ac, char *av[]) {
     profile_film_base_rgb = film_base_rgb = std::vector{1, 1, 1};
   }
   adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
-                           global_scale_factor,
+                           global_exposure_comp,
                            profile_film_base_rgb,
                            film_base_rgb);
   printf("R coefficients: %1.5f %1.5f %1.5f\n", r_coeff[0], r_coeff[1], r_coeff[2]);
