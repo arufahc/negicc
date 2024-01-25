@@ -49,7 +49,7 @@ parser.add_argument(
     "--whitest_patch_scaling",
     help="The RGB value that should be assigned to the whitest (densest) patch. "
     "Setting this value allows extrapolation of brighter objects that whitest patch on the target.",
-    default=0.6,
+    default=0.75,
     type=float)
 parser.add_argument(
     "--darkest_patch_scaling",
