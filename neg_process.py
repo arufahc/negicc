@@ -367,6 +367,8 @@ if args.film_base_raw_file and args.interactive_mode:
                                                      '-s', args.film_base_raw_file]).decode(sys.stdout.encoding)
         # TODO: Optimize this read from .raw_info.txt file.
         raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
+        if args.debug:
+            print('Selected film base shutter speed: %f' % raw_shutter_speed)
         selected_film_base_rgb = [int(x / raw_shutter_speed) for x in selected_film_base_rgb]
         print("Selected Film Base RGB: %d %d %d (normalized to 1s shutter speed)" % tuple(selected_film_base_rgb))
 
