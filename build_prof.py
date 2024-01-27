@@ -90,7 +90,8 @@ parser.add_argument(
     help="Set a greyscale patch to pre-scale the coefficients."
     "Setting a denser patch (e.g. gs12 over gs14) will result in more contrast in bright"
     "area and warmer tone. This will also mean less headroom to recover highlight."
-    "gs14 is the mid-grey patch that gives best range from shadow and highlight.")
+    "gs14 is the mid-grey patch that gives best range from shadow and highlight.",
+    default='gs14')
 parser.add_argument(
     "--shutter_speed",
     help="Just for record of the shutter speed used to capture the target.",
@@ -576,19 +577,18 @@ def main():
     # This is only used to scale the matrix using mid-grey patch.
     # See the check for args.mid_grey_scaling below.
     corrected_mid_greyr = 0
-    if args.mid_grey_patch:
-        gs_cell = args.mid_grey_patch
-    else:
-        gs_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
-        print('GS cell with minimum total MSE: %s' % gs_cell)
-    # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
-    prod = crosstalk_correction_mat.dot(
-        np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))
+    color_balance_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
+    print('GS cell with minimum total MSE: %s' % color_balance_cell)
+
+    # Dot product of the crosstalk correction matrix of the GS RGB.
+    corrected_color_balance_rgb = crosstalk_correction_mat.dot(
+        np.array([df['r'][color_balance_cell], df['g'][color_balance_cell], df['b'][color_balance_cell]]))
 
     # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
-    crosstalk_correction_mat = np.array([r_coef, g_coef * prod[0] / prod[1], b_coef * prod[0] / prod[2]])
-    corrected_mid_grey_r = prod[0]
-    print("Scaled crosstalk correction matrix to white balance with patch: %s." % gs_cell)
+    crosstalk_correction_mat = np.array([r_coef,
+                                         g_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[1],
+                                         b_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[2]])
+    print("Scaled crosstalk correction matrix to white balance with patch: %s." % color_balance_cell)
 
     print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
@@ -602,7 +602,9 @@ def main():
     if args.darkest_patch_scaling:
         global_scale_factor = args.darkest_patch_scaling / corrected_gs_rgb.max()
     elif args.mid_grey_scaling:
-        global_scale_factor = args.mid_grey_scaling / corrected_mid_grey_r
+        global_scale_factor = args.mid_grey_scaling / np.average(
+            np.matmul(crosstalk_correction_mat,
+                      df.loc[[args.mid_grey_patch]][['r', 'g', 'b']].to_numpy().flatten()))
     print("Scale correction matrix by: %f" % global_scale_factor)
     crosstalk_correction_mat *= global_scale_factor
 
@@ -637,7 +639,7 @@ def main():
         np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
         np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
         np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        df.loc[[gs_cell]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
+        df.loc[[args.mid_grey_patch]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
 
     if args.build_info_only:
         exit(0)
@@ -668,10 +670,10 @@ def main():
     prof_check = run_prof_check(out_clut_prof)
     print('...Done')
     print('### Details ###')
-    print('Mid-grey GS cell: %s' % gs_cell)
+    print('Mid-grey GS cell: %s' % args.mid_grey_patch)
     print('Mid-grey relative transmittance: %f %f %f' % tuple(
             (np.ones(3) * args.mid_grey_scaling / shutter_speed / np.matmul(crosstalk_correction_mat, film_base_rgb)).flatten()))
-    print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, gs_cell))
+    print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, color_balance_cell))
     print('profcheck output: %s' % prof_check.split('\n')[-1].split(':')[1].strip(' '))
 
 if __name__ == "__main__":
