@@ -220,7 +220,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
     profiles = []
     # Append profiles that are exposed over and under.
     # Profiles made too under-exposed have poor quality and are excluded.
-    for exp_diff in ['-3', '-2', '-1', '', '+1', '+2', '+3']:
+    for exp_diff in ['', '-3', '-2', '-1', '+1', '+2', '+3']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             exp_diff_profile['exp_diff'] = exp_diff
@@ -258,6 +258,9 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
         profile_mid_grey_rgb = np.matmul(correction_mat, p['mid_grey_rgb']) * p['shutter_speed']
         # Apply a scale factor such that mean_rgb is closer to mid_grey_rgb on average.
         # Also assume the matrices are scaled by a simple factor so do the compensation here.
+        # Ideally the scale factor should be calculated using the matrix for the profile
+        # but doing so is costly so assume the mean_rgb from 'normal exposure' profile
+        # is good enough.
         p_to_scale[p['name']] = np.mean(profile_mid_grey_rgb / mean_rgb) * (profiles[0]['matrix'][0][0] / p['matrix'][0][0])
         profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
         if args.debug:
