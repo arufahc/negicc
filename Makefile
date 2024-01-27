@@ -142,7 +142,7 @@ sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249
 # These are linear and uncorrected RGB values of the film base, multiplied by 1 / shutter speed.
 # TODO: Use raw_info to compute these into a data file.
 sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='67375 104355 106090'
-sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='62791 95899 79006'
+sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='64482 98429 81102'
 sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='61990 94994 81022'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
