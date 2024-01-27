@@ -142,8 +142,8 @@ sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249
 # These are linear and uncorrected RGB values of the film base, multiplied by 1 / shutter speed.
 # TODO: Use raw_info to compute these into a data file.
 sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='67375 104355 106090'
-sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='264403 400437 330058'
-sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='256724 396539 338117'
+sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='62791 95899 79006'
+sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='61990 94994 81022'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
 sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt make_icc
@@ -159,7 +159,7 @@ sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt make_icc
 
 .PHONY: sony_a7rm4_portra400+2_r190808
 sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.txt make_icc
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --shutter_speed=0.150219
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --debug --shutter_speed=0.14926
 
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: data/portra160-0-cs100a_train.txt make_icc
@@ -175,7 +175,7 @@ sony_a7rm4_portra160_0_r190808: data/portra160-0-r190808_train.txt make_icc
 
 .PHONY: sony_a7rm4_portra160+1_r190808
 sony_a7rm4_portra160+1_r190808: data/portra160+1-r190808_train.txt make_icc
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra160+1 R190808" $(sony_a7rm4_triband_portra160_film_base_rgb) $(sony_a7rm4_triband_crosstalk_coefs) --debug --shutter_speed=0.1563101467
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra160+1 R190808" $(sony_a7rm4_triband_portra160_film_base_rgb) $(sony_a7rm4_triband_crosstalk_coefs) --debug --shutter_speed=0.11860
 
 .PHONY: sony_a7rm4_portra160+2_r190808
 sony_a7rm4_portra160+2_r190808: data/portra160+2-r190808_train.txt make_icc
