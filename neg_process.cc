@@ -86,7 +86,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   proc->imgdata.params.gamm[0] = 1;
   proc->imgdata.params.gamm[1] = 1;
   proc->imgdata.params.no_auto_bright = 1;
-  proc->imgdata.params.highlight = 0;
+  proc->imgdata.params.no_auto_scale = 1;
+  proc->imgdata.params.highlight = 1;
   proc->imgdata.params.output_color = 0;
   proc->imgdata.params.output_tiff = 1;
   if (!debayer) {
@@ -95,7 +96,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     proc->subtract_black();
   } else {
     proc->imgdata.params.half_size = half_size;
-    proc->imgdata.params.highlight = 1;
     proc->imgdata.params.user_qual = qual;
     proc->imgdata.params.use_auto_wb = 0;
     proc->imgdata.params.user_mul[0] = 1;
@@ -484,9 +484,6 @@ int main(int ac, char *av[]) {
                          false);
     }
     proc = merge_pixel_shift_raw(four_proc);
-    // Operating on data without interpolation and for Sony A7RM4 sensor
-    // the input is 14-bit and multiply by 4 to expand into 16-bit.
-    global_exposure_comp = 4;
   } else {
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size") || parser.get<bool>("--quarter_size"),
