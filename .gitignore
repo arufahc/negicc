@@ -8,3 +8,5 @@ check_prof.ti3
 
 bin_out
 __pycache__
+.DS_Store
+\#*
