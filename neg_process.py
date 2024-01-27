@@ -200,9 +200,12 @@ def compute_relative_transmittance(correction_mat, rgb, film_base_rgb):
     return np.matmul(correction_mat, rgb) / np.matmul(correction_mat, film_base_rgb)
 
 
-def get_profile_and_shutter_speed(raw_file, film_base_rgb):
+def get_profile_and_scale_factors(raw_file, film_base_rgb):
     '''Assuming shutter speed is the only variable between the profile and RAW capture,
-    pick the profile with shutter speed that is cloest that of the RAW file.'''
+    pick the profile that is most suitable for the RAW capture. Also return the scale
+    factors that should applied to the profiles such that the exposure is uniform.
+    The scale factor dictionary is useful for users to select between profiles with
+    consistent exposure.'''
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding)
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
@@ -239,26 +242,35 @@ def get_profile_and_shutter_speed(raw_file, film_base_rgb):
                                profiles[0]['matrix'][1],
                                profiles[0]['matrix'][2]])
     corrected_film_base_rgb = np.matmul(correction_mat, film_base_rgb)
-    mean_transmittance = np.array([np.mean(r), np.mean(g), np.mean(b)]) / raw_shutter_speed / corrected_film_base_rgb
+    mean_rgb = np.array([np.mean(r), np.mean(g), np.mean(b)])
+    mean_transmittance = mean_rgb  / raw_shutter_speed / corrected_film_base_rgb
     if args.debug:
+        print('Mean film RGB (corrected): %f %f %f' % tuple(mean_rgb))
         print('Mean film relative transmittance: %f %f %f' % tuple(mean_transmittance))
     max_profile_distance = 10000
+    p_to_scale = {}
     for p in profiles:
-       profile_mid_grey_transmittance = compute_relative_transmittance(
-           correction_mat, p['mid_grey_rgb'], p['film_base_rgb'])
-       profile_mean_transmittance = compute_relative_transmittance(
-           correction_mat, p['mean_rgb'], p['film_base_rgb'])
-       profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
-       if args.debug:
-           print('[%s] Evaluating profile' % p['name'])
-           print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
-           print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
-           print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
-       if profile_distance < max_profile_distance:
-           max_profile_distance = profile_distance
-           profile = p
+        correction_mat = np.array([p['matrix'][0], p['matrix'][1], p['matrix'][2]])
+        profile_mid_grey_transmittance = compute_relative_transmittance(
+            correction_mat, p['mid_grey_rgb'], p['film_base_rgb'])
+        profile_mean_transmittance = compute_relative_transmittance(
+            correction_mat, p['mean_rgb'], p['film_base_rgb'])
+        profile_mid_grey_rgb = np.matmul(correction_mat, p['mid_grey_rgb']) * p['shutter_speed']
+        # Apply a scale factor such that mean_rgb is closer to mid_grey_rgb on average.
+        # Also assume the matrices are scaled by a simple factor so do the compensation here.
+        p_to_scale[p['name']] = np.mean(profile_mid_grey_rgb / mean_rgb) * (profiles[0]['matrix'][0][0] / p['matrix'][0][0])
+        profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
+        if args.debug:
+            print('[%s] Evaluating profile' % p['name'])
+            print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
+            print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
+            print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
+            print('  Scale to mid-grey: %f' % p_to_scale[p['name']])
+        if profile_distance < max_profile_distance:
+            max_profile_distance = profile_distance
+            profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    return profile, raw_shutter_speed
+    return profile, p_to_scale
 
 
 def compute_film_base_rgb(film_base_raw_file):
@@ -380,11 +392,10 @@ if selected_film_base_rgb is None:
         selected_film_base_rgb = list(map(int, args.film_base_rgb))
         print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
 
-# TODO: For Portra400, prefer to use a slight darkening with predefined exp_comp values.
-profile, raw_shutter_speed = get_profile_and_shutter_speed(args.raw_file, selected_film_base_rgb)
+profile, p_to_scale = get_profile_and_scale_factors(args.raw_file, selected_film_base_rgb)
 
 # Current params.
-exp_comp = args.exposure_comp if args.exposure_comp else (profile['shutter_speed'] / raw_shutter_speed)
+exp_comp = args.exposure_comp if args.exposure_comp else p_to_scale[profile['name']]
 gamma = 1
 profile_exp = profile['exp']
 last_out_path = None
@@ -397,8 +408,8 @@ if not args.interactive_mode:
 fig, ax_img = plt.subplots()
 fig.tight_layout()
 
-ax_exp_comp = fig.add_axes([0.825, 0.30, 0.15, 0.018])
-ax_gamma = fig.add_axes([0.825, 0.35, 0.15, 0.018])
+ax_gamma = fig.add_axes([0.825, 0.30, 0.15, 0.018])
+ax_exp_comp = fig.add_axes([0.825, 0.35, 0.15, 0.018])
 ax_profile = fig.add_axes([0.825, 0.40, 0.15, 0.018])
 ax_lab_hist = fig.add_axes([0.825, 0.45, 0.15, 0.10])
 
@@ -441,7 +452,7 @@ def reprocess_and_show_image():
     new_profile = read_profile_info(new_profile_name)
     if new_profile and new_profile['name'] != profile['name']:
         profile = new_profile
-        exp_comp = profile['shutter_speed'] / raw_shutter_speed
+        exp_comp = p_to_scale[profile['name']]
         slider_exp_comp.set_val(exp_comp)
         return
     last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
