@@ -94,7 +94,7 @@ int main(int ac, char *av[]) {
       proc->imgdata.params.gamm[0] = 1;
       proc->imgdata.params.gamm[1] = 1;
       proc->imgdata.params.no_auto_bright = 1;
-      proc->imgdata.params.highlight = 0;
+      proc->imgdata.params.no_auto_scale = 1;
       proc->imgdata.params.output_color = 0;
       proc->imgdata.params.half_size = 1;
       proc->imgdata.params.highlight = 1;
