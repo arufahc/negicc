@@ -1,1 +1,10 @@
 *.icc
+*~
+
+build_prof.h
+build_prof.ti3
+build_prof_diag.csv
+check_prof.ti3
+
+bin_out
+__pycache__
