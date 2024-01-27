@@ -266,7 +266,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
             print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
             print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
             print('  Scale to mid-grey: %f' % p_to_scale[p['name']])
-        if profile_distance < max_profile_distance:
+        if profile_distance < max_profile_distance and p['exp_diff'] not in ['-2', '-3']:
             max_profile_distance = profile_distance
             profile = p
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
