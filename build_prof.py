@@ -90,7 +90,8 @@ parser.add_argument(
     help="Set a greyscale patch to pre-scale the coefficients."
     "Setting a denser patch (e.g. gs12 over gs14) will result in more contrast in bright"
     "area and warmer tone. This will also mean less headroom to recover highlight."
-    "gs14 is the mid-grey patch that gives best range from shadow and highlight.")
+    "gs14 is the mid-grey patch that gives best range from shadow and highlight.",
+    default='gs14')
 parser.add_argument(
     "--shutter_speed",
     help="Just for record of the shutter speed used to capture the target.",
@@ -578,9 +579,10 @@ def main():
     corrected_mid_greyr = 0
     if args.mid_grey_patch:
         gs_cell = args.mid_grey_patch
-    else:
-        gs_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
-        print('GS cell with minimum total MSE: %s' % gs_cell)
+    # Disable mid_grey patch search avoid interfering automatic profile selection.
+    # else:
+    #    gs_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
+    #    print('GS cell with minimum total MSE: %s' % gs_cell)
     # Dot product of the crosstalk correction matrix of the mid-grey GS RGB.
     prod = crosstalk_correction_mat.dot(
         np.array([df['r'][gs_cell], df['g'][gs_cell], df['b'][gs_cell]]))

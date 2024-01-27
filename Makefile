@@ -41,6 +41,9 @@ data/ektar100+1.txt:
 data/ektar100+2.txt:
 	python3 read_it8.py --img=it8_imgs/ektar100+2.tif --outfile=$@
 
+data/ektar100+3.txt:
+	python3 read_it8.py --img=it8_imgs/ektar100+3.tif --outfile=$@
+
 # Triband filter with BP470 bandpass filter
 # TODO: Redo this with same light source as portra400-0.tif capture.
 data/portra400-0-bp475.txt:
@@ -117,6 +120,9 @@ data/ektar100+1-r190808_train.txt: data/ektar100+1.txt
 data/ektar100+2-r190808_train.txt: data/ektar100+2.txt
 	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
+data/ektar100+3-r190808_train.txt: data/ektar100+3.txt
+	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
 # Test white chromaticies are common for all film as this is fixed during test time.
 # Change these values to the one used during the test environment. The following
 # values are measured under sunlight at around 5400K.
@@ -135,7 +141,7 @@ sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249
 
 # These are linear and uncorrected RGB values of the film base, multiplied by 1 / shutter speed.
 # TODO: Use raw_info to compute these into a data file.
-sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='384120 608800 594690'
+sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='67375 104355 106090'
 sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='264403 400437 330058'
 sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='256724 396539 338117'
 
@@ -202,6 +208,10 @@ sony_a7rm4_ektar100+1_r190808: data/ektar100+1-r190808_train.txt make_icc
 .PHONY: sony_a7rm4_ektar100+2_r190808
 sony_a7rm4_ektar100+2_r190808: data/ektar100+2-r190808_train.txt make_icc
 	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Ektar100+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.33333
+
+.PHONY: sony_a7rm4_ektar100+3_r190808
+sony_a7rm4_ektar100+3_r190808: data/ektar100+3-r190808_train.txt make_icc
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Ektar100+3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) --debug $(sony_a7rm4_triband_ektar100_film_base_rgb) --shutter_speed=0.4
 
 .PHONY: sony_a7rm4_portra400+2
 sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt make_icc
