@@ -1,5 +1,6 @@
 *.icc
 *~
+data/R190808.txt
 
 build_prof.h
 build_prof.ti3
