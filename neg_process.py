@@ -17,11 +17,13 @@ import argparse
 import cv2
 import math
 import numpy as np
+import colour
 import os
 import shutil
 import subprocess
 import sys
 import time
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.widgets as widgets
 import matplotlib.patches as patches
@@ -65,16 +67,9 @@ parser.add_argument(
     choices=['cLUT', 'Matrix'],
     default='cLUT',
     help="Profile type used to attach (no -P specified) or to convert (with -P specified).")
-parser.add_argument(
-    "--colorspace", '-P',
-    choices=[
-        'srgb',
-        'srgb-g10',
-        '<ICC profile path for the output colorspace>',
-    ],
-    help="Output color profile."
+parser.add_argument("--colorspace", '-P', help="Output color profile."
     " If not spciefied input profile is attached."
-    " If specified then convert using this profile.")
+    " If specified then convert using specified profile, default is 'srgb'")
 parser.add_argument(
     '--raw_file', '-f',
     help="Name of the input raw file.")
@@ -209,8 +204,6 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
     raw_shutter_speed = subprocess.check_output([os.path.join(os.path.dirname(__file__), 'bin_out', 'raw_info'),
                                                  '-s', raw_file]).decode(sys.stdout.encoding)
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
-    if args.debug:
-        print("Raw shutter speed: %f" % raw_shutter_speed)
     if args.profile:
         profile = read_profile_info(args.profile)
         return profile
@@ -235,45 +228,71 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
                     None, 4, False, 'temp.tif')
     neg_img = cv2.imread('temp.tif', cv2.IMREAD_ANYDEPTH | cv2.IMREAD_ANYCOLOR)
     h, w, _ = neg_img.shape
-    CROP_FACTOR = 5
-    b, g, r = cv2.split(neg_img[int(h/CROP_FACTOR):int(h-h/CROP_FACTOR),
-                                int(w/CROP_FACTOR):int(w-w/CROP_FACTOR)])
+    CROP_FACTOR = 7
+    crop_img = cv2.cvtColor(neg_img[int(h/CROP_FACTOR):int(h-h/CROP_FACTOR),
+                                    int(w/CROP_FACTOR):int(w-w/CROP_FACTOR)], cv2.COLOR_BGR2RGB)
     correction_mat = np.array([profiles[0]['matrix'][0],
                                profiles[0]['matrix'][1],
                                profiles[0]['matrix'][2]])
     corrected_film_base_rgb = np.matmul(correction_mat, film_base_rgb)
-    mean_rgb = np.array([np.mean(r), np.mean(g), np.mean(b)])
-    mean_transmittance = mean_rgb  / raw_shutter_speed / corrected_film_base_rgb
+    transmittance_img = crop_img / raw_shutter_speed / corrected_film_base_rgb
+    mean_transmittance = np.mean(transmittance_img, axis = (0,1))
+
+    # mean_rgb in the profile is normalized to 1s so multiply the shutter speed
+    # to get original RGB values.
+    profile_mean_rgb = np.array(profiles[0]['mean_rgb']) * profiles[0]['shutter_speed']
+
     if args.debug:
-        print('Mean film RGB (corrected): %f %f %f' % tuple(mean_rgb))
+        print("Raw shutter speed: %f" % raw_shutter_speed)
+        print('Mean film RGB: %f %f %f' % tuple(np.mean(crop_img, axis = (0,1))))
         print('Mean film relative transmittance: %f %f %f' % tuple(mean_transmittance))
     max_profile_distance = 10000
     p_to_scale = {}
+    transmittance_vector = []
+    exp_diff_vector = []
     for p in profiles:
         correction_mat = np.array([p['matrix'][0], p['matrix'][1], p['matrix'][2]])
         profile_mid_grey_transmittance = compute_relative_transmittance(
             correction_mat, p['mid_grey_rgb'], p['film_base_rgb'])
         profile_mean_transmittance = compute_relative_transmittance(
             correction_mat, p['mean_rgb'], p['film_base_rgb'])
-        profile_mid_grey_rgb = np.matmul(correction_mat, p['mid_grey_rgb']) * p['shutter_speed']
-        # Apply a scale factor such that mean_rgb is closer to mid_grey_rgb on average.
-        # Also assume the matrices are scaled by a simple factor so do the compensation here.
-        # Ideally the scale factor should be calculated using the matrix for the profile
-        # but doing so is costly so assume the mean_rgb from 'normal exposure' profile
-        # is good enough.
-        p_to_scale[p['name']] = np.mean(profile_mid_grey_rgb / mean_rgb) * (profiles[0]['matrix'][0][0] / p['matrix'][0][0])
-        profile_distance = np.linalg.norm(mean_transmittance - profile_mid_grey_transmittance)
+        profile_distance = np.max(np.absolute(np.log10(mean_transmittance) - np.log10(profile_mid_grey_transmittance)))
+        transmittance_vector.append(profile_mid_grey_transmittance)
+        exp_diff_vector.append(int(p['exp_diff'] if p['exp_diff'] else 0))
         if args.debug:
             print('[%s] Evaluating profile' % p['name'])
+            print('  Shutter speed: %f' % p['shutter_speed'])
             print('  Mean transmittance: %f %f %f' % tuple(profile_mean_transmittance))
             print('  Mid-grey transmittance: %f %f %f' % tuple(profile_mid_grey_transmittance))
             print("  Mid-grey distance to mean transmittance: %f" % profile_distance)
-            print('  Scale to mid-grey: %f' % p_to_scale[p['name']])
         if profile_distance < max_profile_distance and p['exp_diff'] not in ['-2', '-3']:
             max_profile_distance = profile_distance
             profile = p
+
+    transmittance_map = cv2.resize(transmittance_img, (10, 10), interpolation = cv2.INTER_LINEAR)
+    exp_map = []
+    for row in range(0, transmittance_map.shape[0]):
+        exp_row = []
+        for col in range(0, transmittance_map.shape[1]):
+            # Compute the distance for each profile mid-grey transmittance to that of the pixel.
+            distance_vector = np.linalg.norm(np.repeat([transmittance_map[row, col]], [len(transmittance_vector)], axis=0) - transmittance_vector, axis=1)
+            exp_row.append(exp_diff_vector[np.argmin(distance_vector)])
+        exp_map.append(exp_row)
+
     print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
-    return profile, p_to_scale
+    # Rely on the camera AE to properly expose the captured image. This is not very 
+    # reliable because the shutter speed reported are not very accurate in AE mode.
+    common_scale_factor = np.ones(3) * profile['shutter_speed'] / raw_shutter_speed
+    print('Common scale factor: %f %f %f' % tuple(common_scale_factor))
+    for p in profiles:
+        # Assume the matrices are scaled by a simple factor between profiles.
+        # Ideally the scale factor should be calculated using the matrix for the profile
+        # but doing so is costly so assume the scale factor computed from base profile
+        # is good enough.
+        p_to_scale[p['name']] = np.mean(common_scale_factor) * (profile['matrix'][0][0] / p['matrix'][0][0])
+        if args.debug:
+            print('[%s] Scaling profile with factor %f' % (p['name'], p_to_scale[p['name']]))
+    return profile, p_to_scale, exp_map
 
 
 def compute_film_base_rgb(film_base_raw_file):
@@ -355,11 +374,11 @@ class FilmBaseSelector:
         plot = ax.imshow(thumb_img)
         fig.tight_layout()
         selector = widgets.RectangleSelector(ax, self._line_select_callback,
-                                         drawtype='box', useblit=True,
-                                         button=[1, 3],  # don't use middle button
-                                         minspanx=5, minspany=5,
-                                         spancoords='pixels',
-                                         interactive=True)
+                                             useblit=True,
+                                             button=[1, 3],  # don't use middle button
+                                             minspanx=5, minspany=5,
+                                             spancoords='pixels',
+                                             interactive=True)
         img_h, img_w, _ = thumb_img.shape
         patch_w = min(img_h, img_w) / 4
         ax.add_patch(patches.Rectangle(
@@ -395,7 +414,7 @@ if selected_film_base_rgb is None:
         selected_film_base_rgb = list(map(int, args.film_base_rgb))
         print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
 
-profile, p_to_scale = get_profile_and_scale_factors(args.raw_file, selected_film_base_rgb)
+profile, p_to_scale, exp_map = get_profile_and_scale_factors(args.raw_file, selected_film_base_rgb)
 
 # Current params.
 exp_comp = args.exposure_comp if args.exposure_comp else p_to_scale[profile['name']]
@@ -414,7 +433,19 @@ fig.tight_layout()
 ax_gamma = fig.add_axes([0.825, 0.30, 0.15, 0.018])
 ax_exp_comp = fig.add_axes([0.825, 0.35, 0.15, 0.018])
 ax_profile = fig.add_axes([0.825, 0.40, 0.15, 0.018])
-ax_lab_hist = fig.add_axes([0.825, 0.45, 0.15, 0.10])
+ax_trans_map = fig.add_axes([0.82, 0.45, 0.15, 0.20])
+ax_color_bar = fig.add_axes([0.965, 0.45, 0.01, 0.20])
+ax_lab_hist = fig.add_axes([0.825, 0.68, 0.15, 0.10])
+ax_l_hist = fig.add_axes([0.825, 0.82, 0.15, 0.10])
+
+norm = matplotlib.colors.BoundaryNorm(np.linspace(-3, 4, 8), plt.cm.bone.N)
+im_trans_map = ax_trans_map.imshow(exp_map, cmap='bone', norm=norm)
+fig.colorbar(im_trans_map, cax=ax_color_bar, orientation='vertical', cmap='bone', norm=norm, ticks=np.arange(-3, 4))
+def im_trans_map_onclick(event):
+    if event.xdata != None and event.ydata != None and event.inaxes == ax_trans_map:
+        val = event.inaxes.get_images()[0].get_cursor_data(event)
+        slider_profile.set_val(val)
+im_trans_map.figure.canvas.mpl_connect('button_press_event', im_trans_map_onclick)
 
 slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exp. Comp.', 0, 3, valinit=exp_comp)
 slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
@@ -422,26 +453,6 @@ slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
 slider_profile = page_slider.PageSlider(ax_profile, 'Profile Exp', min_page=-3, max_page=3, activecolor="orange", valinit=profile_exp)
 
 fig.subplots_adjust(right=0.80)
-
-def compute_histogram_mean_and_stddev(hist):
-    sum = 0
-    pixels = 0
-    for i in range(0, 256):
-        sum += i * hist[i][0]
-        pixels += hist[i][0]
-    mean = sum / pixels
-    sum = 0
-    for i in range(0, 256):
-        sum += (i - mean) * (i - mean) * hist[i][0]
-    return (mean, math.sqrt(sum/pixels))
-
-def compute_histogram_mse_from_grey(hist):
-    sum = 0
-    pixels = 0
-    for i in range(0, 256):
-        sum += (i - 128) * (i - 128) * hist[i][0]
-        pixels += hist[i][0]
-    return sum / (pixels - 1)
 
 def reprocess_and_show_image():
     global profile
@@ -461,26 +472,51 @@ def reprocess_and_show_image():
     last_out_path = run_neg_process(args.raw_file, profile, exp_comp, gamma,
                                     selected_film_base_rgb, 'srgb', 4, False, 'temp.tif')
     end_neg_process = time.time()
-    out_img = cv2.imread(last_out_path, cv2.IMREAD_COLOR)
+    out_img = cv2.imread(last_out_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH).astype(np.float32) / 65535
     out_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2RGB)
+    # The image can be shown as-is because it's in sRGB colorspace.
     ax_img.imshow(out_img, resample=False, filternorm=False)
-    ax_img.axis('off')
+    end_neg_process = time.time()
 
-    lab_img = cv2.cvtColor(out_img, cv2.COLOR_BGR2Lab)
-    l_hist = cv2.calcHist([lab_img], [0], None, [256], [0,256])
-    a_hist = cv2.calcHist([lab_img], [1], None, [256], [0,256])
-    b_hist = cv2.calcHist([lab_img], [2], None, [256], [0,256])
-    ax_lab_hist.set_facecolor("grey")
+    # TODO: Exclude border.
+    out_img = cv2.resize(out_img, (0, 0), fx = 0.1, fy = 0.1, interpolation = cv2.INTER_LINEAR)
+
+    D50 = colour.CCS_ILLUMINANTS['cie_2_1931']['D50']
+    xyz_img = colour.sRGB_to_XYZ(out_img, illuminant=D50)
+    lab_img = colour.XYZ_to_Lab(xyz_img, illuminant=D50)
+    L, a, b = cv2.split(lab_img)
+    L = L.flatten()
+    a = a.flatten()
+    b = b.flatten()
+    # 2D La*b* histogram.
+    #hist = cv2.calcHist([lab_img], [1, 2], None, [256, 256], [0, 256, 0, 256])
+    #hist = np.power(hist / hist.max(), 0.3)
+
+    # Hack to modify in Lab colorspace.
+    #D65 = colour.CCS_ILLUMINANTS['cie_2_1931']['D65']
+    #xyz = colour.Lab_to_XYZ(cv2.merge([L, a, b + 30]), illuminant=D65)
+    #ax_img.imshow(colour.XYZ_to_sRGB(xyz, illuminant=D65))
     ax_lab_hist.cla()
-    ax_lab_hist.plot(l_hist, color='white')
-    a_mean, _ = compute_histogram_mean_and_stddev(a_hist)
-    #ax_lab_hist.axvline(x=a_mean)
-    ax_lab_hist.plot(a_hist, color=('red' if a_mean >= 128 else 'green'))
-    b_mean, _ = compute_histogram_mean_and_stddev(b_hist)
-    #ax_lab_hist.axvline(x=b_mean)
-    ax_lab_hist.plot(b_hist, color=('blue' if b_mean >= 128 else 'yellow'))
+    ax_lab_hist.cla()
+    ax_lab_hist.set_facecolor("grey")
+    ax_lab_hist.set_xlim([-128, 128])
+    a = 50*a/L
+    b = 50*b/L
+    a_mean = np.mean(a)
+    b_mean = np.mean(b)
+    ax_lab_hist.hist(a, 50, color=('magenta' if a_mean >= 0 else 'green'))
+    ax_lab_hist.hist(b, 50, color=('yellow' if b_mean >= 0 else 'blue'))
+    ax_lab_hist.axvline(a_mean, color=('magenta' if a_mean >= 0 else 'green'), linestyle='dashed', linewidth=1)
+    ax_lab_hist.axvline(b_mean, color=('yellow' if b_mean >= 0 else 'blue'), linestyle='dashed', linewidth=1)
+    ax_lab_hist.text(a_mean + 3, 0.9, str(round(a_mean, 2)), transform=ax_lab_hist.get_xaxis_transform(), color='magenta')
+    ax_lab_hist.text(b_mean + 3, 0.8, str(round(b_mean, 2)), transform=ax_lab_hist.get_xaxis_transform(), color='yellow')
     ax_lab_hist.tick_params(axis="y", labelsize=5)
-    #ax_lab_hist.yaxis.label.set_fontsize(5)
+
+    l_mean = L.mean()
+    ax_l_hist.cla()
+    ax_l_hist.axvline(l_mean, color='black', linestyle='dashed', linewidth=1)
+    ax_l_hist.text(l_mean + 3, 0.9, str(round(l_mean, 2)), transform=ax_l_hist.get_xaxis_transform(), color='red')
+    ax_l_hist.hist(L, 50, (0, 100), color='grey')
     end = time.time()
     print('Process time %f Show time %f' % (end_neg_process - start, end - start))
 
@@ -495,7 +531,6 @@ def update_gamma(val):
     gamma = val
     reprocess_and_show_image()
     pass
-
 def update_profile(val):
     global profile_exp
     exp = int(val)
@@ -516,7 +551,7 @@ print('Profile used %s' % profile['name'])
 
 os.remove(last_out_path)
 out_file = run_neg_process(args.raw_file, profile, exp_comp, gamma,
-                selected_film_base_rgb, 'srgb', 2 if args.half_size else (4 if args.quarter_size else 1), args.no_crop,
+                selected_film_base_rgb, args.colorspace, 2 if args.half_size else (4 if args.quarter_size else 1), args.no_crop,
                 Path(args.raw_file).stem + '.pos.tif')
 print('Done %s' % out_file)
 
