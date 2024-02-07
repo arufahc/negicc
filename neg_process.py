@@ -248,7 +248,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
         print('Mean film relative transmittance: %f %f %f' % tuple(mean_transmittance))
     max_profile_distance = 10000
     p_to_scale = {}
-    transmittance_vector = []
+    profile_transmittance_vector = []
     exp_diff_vector = []
     for p in profiles:
         correction_mat = np.array([p['matrix'][0], p['matrix'][1], p['matrix'][2]])
@@ -256,8 +256,11 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
             correction_mat, p['mid_grey_rgb'], p['film_base_rgb'])
         profile_mean_transmittance = compute_relative_transmittance(
             correction_mat, p['mean_rgb'], p['film_base_rgb'])
+        # TODO: RGB curves have different gamma values and the log base should be different for channels.
+        # A log10 is applied because this is the convention used for density.
+        # Compute th maximum of tranmittance difference among channels and take the profile with the minimum.
         profile_distance = np.max(np.absolute(np.log10(mean_transmittance) - np.log10(profile_mid_grey_transmittance)))
-        transmittance_vector.append(profile_mid_grey_transmittance)
+        profile_transmittance_vector.append(profile_mid_grey_transmittance)
         exp_diff_vector.append(int(p['exp_diff'] if p['exp_diff'] else 0))
         if args.debug:
             print('[%s] Evaluating profile' % p['name'])
@@ -268,22 +271,28 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
         if profile_distance < max_profile_distance and p['exp_diff'] not in ['-2', '-3']:
             max_profile_distance = profile_distance
             profile = p
+    H = 50
+    W = 50
+    transmittance_map = cv2.resize(transmittance_img, (H, W), interpolation = cv2.INTER_LINEAR)
 
-    transmittance_map = cv2.resize(transmittance_img, (10, 10), interpolation = cv2.INTER_LINEAR)
-    exp_map = []
-    for row in range(0, transmittance_map.shape[0]):
-        exp_row = []
-        for col in range(0, transmittance_map.shape[1]):
-            # Compute the distance for each profile mid-grey transmittance to that of the pixel.
-            distance_vector = np.linalg.norm(np.repeat([transmittance_map[row, col]], [len(transmittance_vector)], axis=0) - transmittance_vector, axis=1)
-            exp_row.append(exp_diff_vector[np.argmin(distance_vector)])
-        exp_map.append(exp_row)
+    NEW_SHAPE = (H, W, len(profile_transmittance_vector), 3)
+    # TODO: RGB curves have different gamma values and the log base should be different for channels.
+    # Here a log10 is applied because this is the convention used for density.
+    transmittance_diff = np.abs(
+        np.log10(np.reshape(
+            # Repeat by the number of the profiles to compare with.
+            np.repeat(transmittance_map, len(profile_transmittance_vector), axis=1),
+            # Reshape to h * w * profiles * |(r,g,b)|.
+            NEW_SHAPE)) -
+        # Repeat the profile transmittance by number of pixels of the transmittance map.
+        np.log10(np.reshape(profile_transmittance_vector * H * W, NEW_SHAPE)))
+    # For each profile-transmittance-diff within each pixel, take the maximum of diff among r,g,b pixels.
+    # And the compute the minimum among the profiles.
+    exp_map = np.array(exp_diff_vector)[np.argmin(np.max(transmittance_diff, axis=3), axis=2)]
 
-    print("Chosen profile %s with shutter speed: %f" % (profile['name'], profile['shutter_speed']))
     # Rely on the camera AE to properly expose the captured image. This is not very 
     # reliable because the shutter speed reported are not very accurate in AE mode.
     common_scale_factor = np.ones(3) * profile['shutter_speed'] / raw_shutter_speed
-    print('Common scale factor: %f %f %f' % tuple(common_scale_factor))
     for p in profiles:
         # Assume the matrices are scaled by a simple factor between profiles.
         # Ideally the scale factor should be calculated using the matrix for the profile
@@ -414,7 +423,9 @@ if selected_film_base_rgb is None:
         selected_film_base_rgb = list(map(int, args.film_base_rgb))
         print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
 
+start = time.time()
 profile, p_to_scale, exp_map = get_profile_and_scale_factors(args.raw_file, selected_film_base_rgb)
+print("Chosen profile %s in %f seconds with shutter speed %f." % (profile['name'], time.time() - start, profile['shutter_speed']))
 
 # Current params.
 exp_comp = args.exposure_comp if args.exposure_comp else p_to_scale[profile['name']]
@@ -433,19 +444,20 @@ fig.tight_layout()
 ax_gamma = fig.add_axes([0.825, 0.30, 0.15, 0.018])
 ax_exp_comp = fig.add_axes([0.825, 0.35, 0.15, 0.018])
 ax_profile = fig.add_axes([0.825, 0.40, 0.15, 0.018])
-ax_trans_map = fig.add_axes([0.82, 0.45, 0.15, 0.20])
-ax_color_bar = fig.add_axes([0.965, 0.45, 0.01, 0.20])
+ax_density_map = fig.add_axes([0.82, 0.439, 0.15, 0.20])
+ax_color_bar = fig.add_axes([0.965, 0.439, 0.01, 0.20])
 ax_lab_hist = fig.add_axes([0.825, 0.68, 0.15, 0.10])
 ax_l_hist = fig.add_axes([0.825, 0.82, 0.15, 0.10])
 
 norm = matplotlib.colors.BoundaryNorm(np.linspace(-3, 4, 8), plt.cm.bone.N)
-im_trans_map = ax_trans_map.imshow(exp_map, cmap='bone', norm=norm)
-fig.colorbar(im_trans_map, cax=ax_color_bar, orientation='vertical', cmap='bone', norm=norm, ticks=np.arange(-3, 4))
-def im_trans_map_onclick(event):
-    if event.xdata != None and event.ydata != None and event.inaxes == ax_trans_map:
+ax_density_map.set_title('Density Map')
+im_density_map = ax_density_map.imshow(exp_map, cmap='bone', norm=norm)
+fig.colorbar(im_density_map, cax=ax_color_bar, orientation='vertical', cmap='bone', norm=norm, ticks=np.arange(-3, 4))
+def im_density_map_onclick(event):
+    if event.xdata != None and event.ydata != None and event.inaxes == ax_density_map:
         val = event.inaxes.get_images()[0].get_cursor_data(event)
         slider_profile.set_val(val)
-im_trans_map.figure.canvas.mpl_connect('button_press_event', im_trans_map_onclick)
+im_density_map.figure.canvas.mpl_connect('button_press_event', im_density_map_onclick)
 
 slider_exp_comp = widgets.Slider(ax_exp_comp, 'Exp. Comp.', 0, 3, valinit=exp_comp)
 slider_gamma = widgets.Slider(ax_gamma, 'Gamma', 0, 3, valinit=gamma)
@@ -497,7 +509,7 @@ def reprocess_and_show_image():
     #xyz = colour.Lab_to_XYZ(cv2.merge([L, a, b + 30]), illuminant=D65)
     #ax_img.imshow(colour.XYZ_to_sRGB(xyz, illuminant=D65))
     ax_lab_hist.cla()
-    ax_lab_hist.cla()
+    ax_lab_hist.set_title('a* b* Histogram')
     ax_lab_hist.set_facecolor("grey")
     ax_lab_hist.set_xlim([-128, 128])
     a = 50*a/L
@@ -514,6 +526,7 @@ def reprocess_and_show_image():
 
     l_mean = L.mean()
     ax_l_hist.cla()
+    ax_l_hist.set_title('L* Histogram')
     ax_l_hist.axvline(l_mean, color='black', linestyle='dashed', linewidth=1)
     ax_l_hist.text(l_mean + 3, 0.9, str(round(l_mean, 2)), transform=ax_l_hist.get_xaxis_transform(), color='red')
     ax_l_hist.hist(L, 50, (0, 100), color='grey')
