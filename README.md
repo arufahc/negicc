@@ -92,7 +92,7 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * Clang
 * Matplotlib
 ```
-sudo apt-get install python3 pip argyll liblcms2-dev libraw-dev
+sudo apt-get install python3 pip argyll liblcms2-dev libraw-dev libtiff-dev
 ```
 * Python packages
 ```
