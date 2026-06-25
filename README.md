@@ -1,5 +1,9 @@
 # Objective
 
+> [!WARNING]
+> **This repository is no longer maintained.**
+> This project was created for research purposes. The active, fully integrated capture and conversion station software—including automated USB tethering, GTK3 desktop UIs, CUDA hardware acceleration, and optimized multi-exposure profiling—is now maintained in the **[negicc-station](https://github.com/arufahc/negicc-station)** repository. Please check the new [negicc-station README](https://github.com/arufahc/negicc-station/blob/main/README.md) for setup and instructions.
+
 NegICC is a project for creating ICC profiles for color negatives. The main
 objective of the tool is to have consistent colors for images of negative
 film taken with a digital camera.
