@@ -410,6 +410,9 @@ bool is_sony_cfa_geometry(LibRaw* proc) {
 // Results vs 4-shot ground truth (Portra 400, Sony A7RM4):
 // - Recovers 91.6%-92.3% edge acutance (+35-40% boost over plain bilinear).
 // - Cuts false-color zippering by 22.3% and sky chroma mottle by 19.7% (~47 dB PSNR).
+//
+// Caveat: This works best with narrowband light (e.g. RGB LED); on whitelight
+// the blue noise is too high to work well.
 // -----------------------------------------------------------------------------
 
 inline float get_px_refl(const uint16_t* raw_img, int r, int c, int h, int w, int pitch, int black) {
@@ -448,6 +451,7 @@ inline float reconstruct_green_soft(const uint16_t* m, int r, int c, int h, int 
   return std::max(0.0f, std::min(white, g_est));
 }
 
+// Caveat: this works best with narrowband light, and on whitelight the blue noise is too high to work well.
 bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   if (!proc || !proc->imgdata.rawdata.raw_image) return false;
 
