@@ -665,10 +665,12 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     proc->imgdata.sizes.iwidth = proc->imgdata.sizes.width;
     proc->imgdata.sizes.iheight = proc->imgdata.sizes.height;
   } else {
-    const bool is_native_cfa = is_sony_cfa_geometry(proc) && crosstalk_specified;
-    bool use_grain_aware = (!half_size && qual < 0 && is_native_cfa);
+    // When -r -g -b is specified, assume camera linear RGB (output_color = 0) regardless of debayer.
+    // Otherwise fallback to Rec.2020 (output_color = 8).
+    proc->imgdata.params.output_color = crosstalk_specified ? 0 : 8;
+
+    bool use_grain_aware = (!half_size && qual < 0 && crosstalk_specified && is_sony_cfa_geometry(proc));
     if (use_grain_aware) {
-      proc->imgdata.params.output_color = 0;
       printf("Debayer quality: grain-aware\n");
       if (!debayer_grain_aware(proc, crop, roi)) {
         fprintf(stderr, "Grain-aware debayer failed, falling back to bilinear\n");
@@ -678,7 +680,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     if (!use_grain_aware) {
       int effective_qual = (qual < 0) ? 0 : qual;
       printf("Debayer quality: %d\n", effective_qual);
-      proc->imgdata.params.output_color = is_native_cfa ? 0 : 8;
       proc->imgdata.params.half_size = half_size;
       proc->imgdata.params.user_qual = effective_qual;
       proc->imgdata.params.use_auto_wb = 0;
@@ -753,7 +754,7 @@ void merge_pixel_shift_frame(LibRaw* base, LibRaw* frame, int mi) {
   }
 }
 
-// Merge 4 RAW files from pixel-shift captures using Sony camera, loading one frame at a time to save memory.
+// Merge 4 RAW files from Sony pixel-shift into camera linear RGB, loading one frame at a time to save memory.
 LibRaw* merge_pixel_shift_streaming(const std::vector<std::string>& files) {
   if (files.size() < 4) return nullptr;
   printf("Merging 4 images...\n");
