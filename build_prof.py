@@ -474,8 +474,8 @@ def run_colprof_clut(ti3_name):
                     # Forces linear input and output curves.
                     '-ni', '-np', '-no',
                     ti3_name])
-    os.rename(ti3_name + '.icc', 'icc_out/%s_clut.icc' % ti3_name)
-    return 'icc_out/%s_clut.icc' % ti3_name
+    os.rename(ti3_name + '.icc', 'profiles/%s_clut.icc' % ti3_name)
+    return 'profiles/%s_clut.icc' % ti3_name
 
 
 def run_colprof_matrix(ti3_name):
@@ -497,8 +497,8 @@ def run_colprof_matrix(ti3_name):
                     # Forces linear input and output curves.
                     '-ni', '-np', '-no',
                     ti3_name])
-    os.rename(ti3_name + '.icc', 'icc_out/%s_matrix.icc' % ti3_name)
-    return 'icc_out/%s_matrix.icc' % ti3_name
+    os.rename(ti3_name + '.icc', 'profiles/%s_matrix.icc' % ti3_name)
+    return 'profiles/%s_matrix.icc' % ti3_name
 
 
 def run_make_icc(
@@ -638,7 +638,7 @@ def main():
     film_base_rgb = list(map(float, args.film_base_rgb.split(' ')[:3]))
     shutter_speed = float(args.shutter_speed)
     write_profile_info_txt(
-        'icc_out/%s Info.txt' % args.film_name,
+        'profiles/%s Info.txt' % args.film_name,
         crosstalk_correction_mat, shutter_speed, film_base_rgb,
         np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
         np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
@@ -666,8 +666,8 @@ def main():
         args.film_name,
         clut_prof,
         matrix_prof)
-    out_clut_prof = 'icc_out/%s cLUT.icc' % args.film_name
-    out_matrix_prof = 'icc_out/%s Matrix.icc' % args.film_name
+    out_clut_prof = 'profiles/%s cLUT.icc' % args.film_name
+    out_matrix_prof = 'profiles/%s Matrix.icc' % args.film_name
 
     write_ti3('check_prof.ti3', positive_rgb=False)
     print('### Step 6: Checking cLUT profile.')

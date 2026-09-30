@@ -1,4 +1,5 @@
 *.icc
+!profiles/*.icc
 *~
 data/R190808.txt
 

@@ -161,6 +161,18 @@ sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt clean
 sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.txt clean
 	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.14926
 
+.PHONY: sony_a7rm4_portra400+3_r190808
+sony_a7rm4_portra400+3_r190808: data/portra400+3-r190808_train.txt clean
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.250000
+
+.PHONY: sony_a7rm4_portra400+3.5_r190808
+sony_a7rm4_portra400+3.5_r190808: data/portra400+3.5-r190808_train.txt clean
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3.5 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.400000
+
+.PHONY: sony_a7rm4_portra400-0.5_r190808
+sony_a7rm4_portra400-0.5_r190808: data/portra400-0.5-r190808_train.txt clean
+	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400-0.5 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.076923
+
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: data/portra160-0-cs100a_train.txt clean
 	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra160" $(sony_a7rm4_triband_portra160_film_base_rgb) $(sony_a7rm4_triband_crosstalk_coefs) --debug
@@ -221,11 +233,14 @@ sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt clean
 clean:
 	rm -f *_prof.ti3 build_prof_diag.csv build_prof.h
 
-.PHONY: sony_a7rm4_portra400_all
+.PHONY: sony_a7rm4_portra400_r190808_all
 sony_a7rm4_portra400_r190808_all: \
+	sony_a7rm4_portra400+3.5_r190808 \
+	sony_a7rm4_portra400+3_r190808 \
 	sony_a7rm4_portra400+2_r190808 \
 	sony_a7rm4_portra400+1_r190808 \
 	sony_a7rm4_portra400_0_r190808 \
+	sony_a7rm4_portra400-0.5_r190808 \
 	sony_a7rm4_portra400-1_r190808
 
 .PHONY: sony_a7rm4_portra160_all
@@ -246,13 +261,13 @@ sony_a7rm4_ektar100_r190808_all: \
 	sony_a7rm4_ektar100-3_r190808
 
 make_icc: make_icc.c
-	mkdir -p bin_out
-	clang -o bin_out/make_icc make_icc.c -llcms2
+	mkdir -p bin_out profiles
+	$(CC) -o bin_out/make_icc make_icc.c -llcms2
 
 raw_info: raw_info.cc
 	mkdir -p bin_out
-	clang++ -o bin_out/raw_info raw_info.cc -lraw
+	$(CXX) -o bin_out/raw_info raw_info.cc -lraw
 
 neg_process: neg_process.cc
-	mkdir -p bin_out
-	clang++ -o bin_out/neg_process neg_process.cc -I/usr/local/opt/curl/include -I3rd_party -L/usr/local/opt/curl/lib -lraw -lz -O3 -llcms2 -std=c++17 -DCMS_NO_REGISTER_KEYWORD
+	mkdir -p bin_out profiles
+	$(CXX) -o bin_out/neg_process neg_process.cc -I3rd_party -lraw -lz -O3 -llcms2 -std=c++17

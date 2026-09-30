@@ -161,7 +161,7 @@ plt.rcParams["image.interpolation"] = 'none'
 
 
 def read_profile_info(name):
-    profile_info_txt = '%s/icc_out/Sony A7RM4 %s %s Info.txt' % (os.path.dirname(__file__),
+    profile_info_txt = '%s/profiles/Sony A7RM4 %s %s Info.txt' % (os.path.dirname(__file__),
                                                                  name.capitalize(),
                                                                  args.measurement)
     if not os.path.exists(profile_info_txt):
@@ -335,7 +335,7 @@ def run_neg_process(raw_file, profile, exposure_comp, post_correction_gamma, fil
         neg_process_args += ['--profile_film_base_rgb'] + list(map(str, profile['film_base_rgb']))
         neg_process_args += ['--film_base_rgb'] + list(map(str, film_base_rgb))
         neg_process_args += [
-            '-p', '%s/icc_out/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
+            '-p', '%s/profiles/Sony A7RM4 %s %s %s.icc' % (os.path.dirname(__file__),
                                                           profile['name'].capitalize(),
                                                           args.measurement,
                                                           args.profile_type)]
