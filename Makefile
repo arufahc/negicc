@@ -317,4 +317,4 @@ raw_info: raw_info.cc
 
 neg_process: neg_process.cc
 	mkdir -p bin_out profiles
-	$(CXX) -o bin_out/neg_process neg_process.cc -I3rd_party -lraw -lz -O3 -llcms2 -std=c++17
+	$(CXX) -o bin_out/neg_process neg_process.cc -I3rd_party -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp

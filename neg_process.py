@@ -17,7 +17,6 @@ import argparse
 import cv2
 import math
 import numpy as np
-import colour
 import os
 import re
 import shutil
@@ -30,6 +29,11 @@ import matplotlib.widgets as widgets
 import matplotlib.patches as patches
 import page_slider
 from pathlib import Path
+
+try:
+    import colour
+except ImportError:
+    colour = None
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -58,9 +62,12 @@ parser.add_argument(
         'portra160+1',
         'portra160+2',
         'portra400',
+        'portra400-0.5',
         'portra400-1', # Poor quality. Might be better to use portra400 and then brighten image.
         'portra400+1',
         'portra400+2',
+        'portra400+3',
+        'portra400+3.5',
     ],
     help="Profile of the scanned film or the name of the generated profile.")
 parser.add_argument(
@@ -210,7 +217,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
     raw_shutter_speed = float(raw_shutter_speed.split(' ')[0])
     if args.profile:
         profile = read_profile_info(args.profile)
-        return profile
+        return profile, {profile['name']: 1.0}, {profile['name']: 0.0}
 
     # If profile is not specified use emulsion and shutter speed to select profile automatically.
     profile = {}
@@ -423,9 +430,19 @@ if selected_film_base_rgb is None:
     if args.film_base_raw_file:
         selected_film_base_rgb = compute_film_base_rgb(args.film_base_raw_file)
         print('Computed film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
-    else:
+    elif args.film_base_rgb:
         selected_film_base_rgb = list(map(int, args.film_base_rgb))
         print('Entered film base RGB %d %d %d (normalized to 1s shutter speed)' % tuple(selected_film_base_rgb))
+    elif args.profile:
+        prof_info = read_profile_info(args.profile)
+        selected_film_base_rgb = prof_info['film_base_rgb']
+        print('Defaulting to profile film base RGB %d %d %d' % tuple(selected_film_base_rgb))
+    elif args.emulsion:
+        prof_info = read_profile_info(args.emulsion)
+        selected_film_base_rgb = prof_info['film_base_rgb']
+        print('Defaulting to emulsion film base RGB %d %d %d' % tuple(selected_film_base_rgb))
+    else:
+        selected_film_base_rgb = [1, 1, 1]
 
 start = time.time()
 profile, p_to_scale, exp_map = get_profile_and_scale_factors(args.raw_file, selected_film_base_rgb)
@@ -497,9 +514,13 @@ def reprocess_and_show_image():
     # TODO: Exclude border.
     out_img = cv2.resize(out_img, (0, 0), fx = 0.1, fy = 0.1, interpolation = cv2.INTER_LINEAR)
 
-    D50 = colour.CCS_ILLUMINANTS['cie_2_1931']['D50']
-    xyz_img = colour.sRGB_to_XYZ(out_img, illuminant=D50)
-    lab_img = colour.XYZ_to_Lab(xyz_img, illuminant=D50)
+    if colour is not None:
+        D50 = colour.CCS_ILLUMINANTS['cie_2_1931']['D50']
+        xyz_img = colour.sRGB_to_XYZ(out_img, illuminant=D50)
+        lab_img = colour.XYZ_to_Lab(xyz_img, illuminant=D50)
+    else:
+        img_f32 = (out_img / 65535.0).astype(np.float32) if out_img.dtype == np.uint16 else (out_img / 255.0).astype(np.float32)
+        lab_img = cv2.cvtColor(img_f32, cv2.COLOR_RGB2Lab)
     L, a, b = cv2.split(lab_img)
     L = L.flatten()
     a = a.flatten()
