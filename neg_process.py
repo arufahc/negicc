@@ -19,6 +19,7 @@ import math
 import numpy as np
 import colour
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -179,9 +180,12 @@ def read_profile_info(name):
         f.readline() # Max
         mean_rgb = f.readline().strip('\r\n').split(' ')[0:3] # Mean
         mid_grey_rgb = f.readline().strip('\r\n').split(' ')[0:3] # Mid-grey
+    m = re.search(r'([+-]\d+(\.\d+)?)', name)
+    exp = float(m.group(1)) if m else 0.0
+    emulsion = name[:m.start()] if m else name
     return {
-        'exp': int(name[-2:]) if name[-2] in ['+', '-'] else 0,
-        'emulsion': name[:-2] if name[-2] in ['+', '-'] else name,
+        'exp': int(exp) if exp.is_integer() else exp,
+        'emulsion': emulsion,
         'name': name,
         'matrix': matrix,
         'shutter_speed': float(shutter_speed),
@@ -213,7 +217,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
     profiles = []
     # Append profiles that are exposed over and under.
     # Profiles made too under-exposed have poor quality and are excluded.
-    for exp_diff in ['', '-3', '-2', '-1', '+1', '+2', '+3']:
+    for exp_diff in ['', '-3', '-2', '-1', '-0.5', '+1', '+2', '+3', '+3.5']:
         exp_diff_profile = read_profile_info(args.emulsion + exp_diff)
         if exp_diff_profile:
             exp_diff_profile['exp_diff'] = exp_diff
@@ -261,7 +265,7 @@ def get_profile_and_scale_factors(raw_file, film_base_rgb):
         # Compute th maximum of tranmittance difference among channels and take the profile with the minimum.
         profile_distance = np.max(np.absolute(np.log10(mean_transmittance) - np.log10(profile_mid_grey_transmittance)))
         profile_transmittance_vector.append(profile_mid_grey_transmittance)
-        exp_diff_vector.append(int(p['exp_diff'] if p['exp_diff'] else 0))
+        exp_diff_vector.append(float(p['exp_diff'] if p['exp_diff'] else 0))
         if args.debug:
             print('[%s] Evaluating profile' % p['name'])
             print('  Shutter speed: %f' % p['shutter_speed'])
@@ -474,7 +478,7 @@ def reprocess_and_show_image():
     # cv2 reads the image without caring the embedded ICC profile.
     # Meanwhile imshow() will display the image assuming they have sRGB curves, at least in OSX.
     # For this reason apply a srgb output profile for correct brightness of the image displayed.
-    new_profile_name = profile['emulsion'] + ('' if profile_exp == 0 else '%+1d' % profile_exp)
+    new_profile_name = profile['emulsion'] + ('' if profile_exp == 0 else '%+g' % profile_exp)
     new_profile = read_profile_info(new_profile_name)
     if new_profile and new_profile['name'] != profile['name']:
         profile = new_profile

@@ -14,19 +14,30 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
-import numpy as np
-import colour
-import matplotlib.pyplot as plt
+import json
 import math
 import os
-import pandas as pd
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    import colour
+    HAS_COLOUR = True
+except ImportError:
+    colour = None
+    HAS_COLOUR = False
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from scipy import interpolate
 from scipy.optimize import curve_fit
 from sklearn.linear_model import LinearRegression
+
+from add_ref_readings import read_xyz_readings
 
 # The purpose of this script is to compute the crosstalk correction matrix and
 # tone curves for the RGB channels. The matrix and curves can then be used to
@@ -38,7 +49,15 @@ from sklearn.linear_model import LinearRegression
 # ICC profile by make_icc tool.
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument("--src", help="Source readings file.")
+parser.add_argument("--src", help="Source readings file (.txt, .csv, or .json).")
+parser.add_argument(
+    "--target",
+    help="Target name (e.g. 'Target 5') or bracket index/label when src is a multi-target JSON profile.",
+    default=None)
+parser.add_argument(
+    "--ref_xyz",
+    help="Reference XYZ file (.txt IT8 or .json) if reference XYZ is not embedded in src.",
+    default=None)
 parser.add_argument(
     "--white_x",
     help="Source media white x. This is used for chromatic adaptation if the reference XYZ are not D50 adapted.")
@@ -55,19 +74,22 @@ parser.add_argument(
     "--darkest_patch_scaling",
     help="The RGB value that should be assigned to the darkest (lightest) GS patch. "
     "Setting this value will scale the correct matrix according to the darkest GS patch.",
-    # default=40000,
     type=float)
 parser.add_argument(
     "--mid_grey_scaling",
     help="The RGB value that should be assigned to the mid-grey GS patch. "
     "Setting this value will scale the correct matrix according to the mid-grey GS patch"
     " specified by --mid_grey_patch.",
-    default=10000,
+    default=None,
     type=float)
 parser.add_argument(
     "--fit_intercept",
     help="Whether to allow intercept in linear interpolation for crosstalk correction.",
     default=True)
+parser.add_argument(
+    "--crosstalk_matrix",
+    help="9 numbers for 3x3 crosstalk correction matrix.",
+    default=None)
 parser.add_argument(
     "--crosstalk_r_coefs",
     help="R coefficients for the crosstalk correction matrix.")
@@ -77,6 +99,11 @@ parser.add_argument(
 parser.add_argument(
     "--crosstalk_b_coefs",
     help="B coefficients for the crosstalk correction matrix.")
+parser.add_argument(
+    "--scale_matrix_for_color_balance",
+    help="Whether to rescale G and B coefficients using the optimal color balance GS cell.",
+    action="store_true",
+    default=False)
 parser.add_argument(
     "--debug",
     help="Print debug messages.",
@@ -107,13 +134,173 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-# DataFrame that will keep all the source data and mutations.
-df = pd.read_csv(args.src, index_col="patch")
+
+def parse_shutter_seconds(s):
+    if s is None or s == '':
+        return 0.125
+    if isinstance(s, (int, float)):
+        return float(s)
+    s = str(s).strip().rstrip('s')
+    if '/' in s:
+        parts = s.split('/')
+        return float(parts[0]) / float(parts[1])
+    return float(s)
+
+
+def load_reference_xyz(ref_path):
+    if not ref_path:
+        ref_path = next((c for c in ['data/R190808_ref.json', 'data/R190808.txt'] if os.path.exists(c)), None)
+    if not ref_path:
+        return {}
+    return read_xyz_readings(ref_path)
+
+
+def bracket_from_film_name(film_name):
+    """Extracts the exposure bracket, e.g. '+3.5' from 'Sony A7RM4 Portra400+3.5 R190808'."""
+    m = re.search(r'(?<=\d)([+-]\d+(?:\.\d+)?)(?=\s|$)', film_name)
+    if not m or float(m.group(1)) == 0:
+        return '0'
+    return m.group(1)
+
+
+supplied_crosstalk_mat = None
+if args.crosstalk_matrix:
+    vals = [float(x) for x in args.crosstalk_matrix.split()]
+    if len(vals) != 9:
+        parser.error("--crosstalk_matrix requires 9 numbers, got %d" % len(vals))
+    supplied_crosstalk_mat = np.array(vals, dtype=np.float64).reshape(3, 3)
+
+# Load data into DataFrame
+if args.src.endswith('.json'):
+    with open(args.src, 'r', encoding='utf-8') as f:
+        src_data = json.load(f)
+
+    if 'targets' in src_data:
+        targets = src_data['targets']
+        selected_target = None
+        if args.target:
+            for t in targets:
+                if t.get('name') == args.target or str(t.get('name', '')).lower() == str(args.target).lower():
+                    selected_target = t
+                    break
+            if selected_target is None and str(args.target).isdigit():
+                idx = int(args.target)
+                if 0 <= idx < len(targets):
+                    selected_target = targets[idx]
+
+        if selected_target is None and args.film_name:
+            bracket_map = {
+                '0': 'Target 5',
+                '-0.5': 'Target 6',
+                '-1': 'Target 7',
+                '+1': 'Target 4',
+                '+2': 'Target 3',
+                '+3': 'Target 1',
+                '+3.5': 'Target 2',
+            }
+            t_name = bracket_map.get(bracket_from_film_name(args.film_name))
+            selected_target = next((t for t in targets if t.get('name') == t_name), None)
+
+        if selected_target is None:
+            selected_target = next((t for t in targets if t.get('name') == 'Target 5'), targets[0])
+
+        target_patches = selected_target.get('patches', {})
+
+        if not args.shutter_speed:
+            args.shutter_speed = str(parse_shutter_seconds(selected_target.get('shutter', '1/8s')))
+
+        if not args.film_base_rgb and 'film_base' in src_data:
+            fb = src_data['film_base']
+            fb_t = parse_shutter_seconds(fb.get('shutter', '1/8s'))
+            fb_r = round(fb.get('r', {}).get('avg', 0) / fb_t)
+            fb_g = round(fb.get('g', {}).get('avg', 0) / fb_t)
+            fb_b = round(fb.get('b', {}).get('avg', 0) / fb_t)
+            args.film_base_rgb = f"{fb_r} {fb_g} {fb_b}"
+
+        if supplied_crosstalk_mat is None:
+            if 'crosstalk_profile' in src_data:
+                cc = src_data['crosstalk_profile'].get('crosstalk_correction_matrix')
+                if cc:
+                    supplied_crosstalk_mat = np.array(cc, dtype=np.float64)
+            elif 'crosstalk_correction_matrix' in src_data:
+                supplied_crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
+
+        ref_lookup = load_reference_xyz(args.ref_xyz)
+        rows = []
+        for p_name, p_data in target_patches.items():
+            ref = ref_lookup.get(p_name.lower(), {})
+            rows.append({
+                'patch': p_name.lower(),
+                'r': float(p_data.get('r', 0.0)),
+                'g': float(p_data.get('g', 0.0)),
+                'b': float(p_data.get('b', 0.0)),
+                'refR': float(p_data.get('refR', 0.0)),
+                'refG': float(p_data.get('refG', 0.0)),
+                'refB': float(p_data.get('refB', 0.0)),
+                'refX': float(p_data.get('refX', ref.get('X', 0.0))),
+                'refY': float(p_data.get('refY', ref.get('Y', 0.0))),
+                'refZ': float(p_data.get('refZ', ref.get('Z', 0.0))),
+            })
+        df = pd.DataFrame(rows).set_index('patch')
+
+    elif 'patches' in src_data:
+        if not args.shutter_speed and 'shutter_speed' in src_data:
+            args.shutter_speed = str(src_data['shutter_speed'])
+        elif not args.shutter_speed and 'shutter' in src_data:
+            args.shutter_speed = str(parse_shutter_seconds(src_data['shutter']))
+
+        if not args.film_base_rgb and 'film_base_rgb' in src_data:
+            fb = src_data['film_base_rgb']
+            if isinstance(fb, list):
+                args.film_base_rgb = " ".join(map(str, fb))
+            else:
+                args.film_base_rgb = str(fb)
+
+        if supplied_crosstalk_mat is None and 'crosstalk_correction_matrix' in src_data:
+            supplied_crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
+
+        ref_lookup = None
+        rows = []
+        for p_name, p_data in src_data['patches'].items():
+            refX = p_data.get('refX')
+            refY = p_data.get('refY')
+            refZ = p_data.get('refZ')
+            if refX is None:
+                if ref_lookup is None:
+                    ref_lookup = load_reference_xyz(args.ref_xyz)
+                ref = ref_lookup.get(p_name.lower(), {})
+                refX = ref.get('X', 0.0)
+                refY = ref.get('Y', 0.0)
+                refZ = ref.get('Z', 0.0)
+            rows.append({
+                'patch': p_name.lower(),
+                'r': float(p_data.get('r', 0.0)),
+                'g': float(p_data.get('g', 0.0)),
+                'b': float(p_data.get('b', 0.0)),
+                'refR': float(p_data.get('refR', 0.0)),
+                'refG': float(p_data.get('refG', 0.0)),
+                'refB': float(p_data.get('refB', 0.0)),
+                'refX': float(refX),
+                'refY': float(refY),
+                'refZ': float(refZ),
+            })
+        df = pd.DataFrame(rows).set_index('patch')
+    elif isinstance(src_data, list):
+        df = pd.DataFrame(src_data).set_index('patch')
+    else:
+        raise ValueError(f"Unrecognized JSON structure in {args.src}")
+else:
+    df = pd.read_csv(args.src, index_col="patch")
 
 if args.debug:
     print("Peak of a few data rows in source file:", args.src)
     print(df.head())
     print(df.tail())
+    if supplied_crosstalk_mat is not None:
+        print("Supplied crosstalk matrix:")
+        print(supplied_crosstalk_mat)
+    print("Shutter speed:", args.shutter_speed)
+    print("Film base RGB:", args.film_base_rgb)
 
 
 def estimate_crosstalk_correction_coefficients():
@@ -360,15 +547,16 @@ def write_build_prof_header(
 
 
 def write_profile_info_txt(file_name, crosstalk_correction_mat, shutter_speed, film_base_rgb, min_rgb_values, max_rgb_values, average_rgb_values, mid_grey_rgb_values):
+    os.makedirs(os.path.dirname(file_name) or '.', exist_ok=True)
     f = open(file_name, 'w+')
     stdout_backup = sys.stdout
     sys.stdout = f
     flat_cc_mat = crosstalk_correction_mat.flatten()
-    print(' '.join([x.astype(str) for x in flat_cc_mat[0:3]]))
-    print(' '.join([x.astype(str) for x in flat_cc_mat[3:6]]))
-    print(' '.join([x.astype(str) for x in flat_cc_mat[6:9]]))
+    print(' '.join([str(x) for x in flat_cc_mat[0:3]]))
+    print(' '.join([str(x) for x in flat_cc_mat[3:6]]))
+    print(' '.join([str(x) for x in flat_cc_mat[6:9]]))
     print('%f # Shutter speed' % shutter_speed)
-    print('%d %d %d # Film base RGB (uncorrected) values' % tuple(film_base_rgb))
+    print('%d %d %d # Film base RGB (uncorrected) values' % tuple(map(int, film_base_rgb)))
     print('%f %f %f # Min patch RGB (uncorrected) values' % tuple(min_rgb_values))
     print('%f %f %f # Max patch RGB (uncorrected) values' % tuple(max_rgb_values))
     print('%f %f %f # Average patch RGB (uncorrected) values' % tuple(average_rgb_values))
@@ -389,14 +577,28 @@ def run_chromatic_adaptation_on_ref_XYZ():
       XYZ values of testing media white.
     """
     # This is the standard value from ICC specification.
-    D50_XYZ = np.array([0.9642, 1, 0.8249])
+    D50_XYZ = np.array([0.9642, 1.0, 0.8249])
 
     unadapted_XYZ = np.array(df[['refX', 'refY', 'refZ']])
     if args.white_x and args.white_y:
-        test_white_XYZ = np.array(colour.xyY_to_XYZ(
-            [args.white_x, args.white_y, 1]))
-        adapted_XYZ = colour.adaptation.chromatic_adaptation(
-            unadapted_XYZ, test_white_XYZ, D50_XYZ, method='Von Kries', transform='Bradford')
+        if HAS_COLOUR:
+            test_white_XYZ = np.array(colour.xyY_to_XYZ(
+                [args.white_x, args.white_y, 1]))
+            adapted_XYZ = colour.adaptation.chromatic_adaptation(
+                unadapted_XYZ, test_white_XYZ, D50_XYZ, method='Von Kries', transform='Bradford')
+        else:
+            x, y = float(args.white_x), float(args.white_y)
+            test_white_XYZ = np.array([x / y, 1.0, (1.0 - x - y) / y])
+            M_BF = np.array([
+                [ 0.8951,  0.2664, -0.1614],
+                [-0.7502,  1.7135,  0.0367],
+                [ 0.0389, -0.0685,  1.0296]
+            ])
+            M_BF_inv = np.linalg.inv(M_BF)
+            lms_s = M_BF.dot(test_white_XYZ)
+            lms_d = M_BF.dot(D50_XYZ)
+            M = M_BF_inv.dot(np.diag(lms_d / lms_s)).dot(M_BF)
+            adapted_XYZ = unadapted_XYZ.dot(M.T)
     else:
         test_white_XYZ = D50_XYZ
         adapted_XYZ = unadapted_XYZ
@@ -420,7 +622,7 @@ def compute_crosstalk_corrected_rgb_values(crosstalk_correction_mat):
     """
     rgb = np.array([df['r'].tolist(), df['g'].tolist(), df['b'].tolist()])
     return np.matmul(crosstalk_correction_mat, rgb)
-    
+
 
 def compute_positive_rgb_values(
         crosstalk_correction_mat,
@@ -443,8 +645,16 @@ def compute_positive_rgb_values(
     df['corrected_b'] = pd.Series(corrected_df[2], index=df.index)
 
     # Apply curves to convert them positive signals.
-    lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
-    positive_rgb = lut.apply(corrected_rgb.transpose() / 65535)  # LUT takes range [0, 1].
+    if HAS_COLOUR:
+        lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
+        positive_rgb = lut.apply(corrected_rgb.transpose() / 65535)  # LUT takes range [0, 1].
+    else:
+        # Same sample positions as the curves built in estimate_trc_curves().
+        xs = np.linspace(0, 65536, len(r_curve))
+        pos_r = np.interp(np.clip(corrected_rgb[0], 0, 65535), xs, r_curve)
+        pos_g = np.interp(np.clip(corrected_rgb[1], 0, 65535), xs, g_curve)
+        pos_b = np.interp(np.clip(corrected_rgb[2], 0, 65535), xs, b_curve)
+        positive_rgb = np.array([pos_r, pos_g, pos_b]).T
 
     # Add back the positive RGB values and the corresponding normalized XYZ values
     # into |df|. These values need to be normalized to max of 100 which is what
@@ -567,31 +777,43 @@ def main():
     # Prepare the refernce XYZ values to be used for running colprof.
     test_white_XYZ = run_chromatic_adaptation_on_ref_XYZ()
 
-    print("### Step 1: Estimate the cross-talk correction matrix.")
-    # TODO: The coefficients cannot be positive other than the primary signal,
-    # i.e. the diagonal.
-    r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
-    if args.debug:
-        print('R Coefficients: ', r_coef)
-        print('G Coefficients: ', g_coef)
-        print('B Coefficients: ', b_coef)
+    if supplied_crosstalk_mat is not None and not (args.crosstalk_r_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs):
+        print("### Step 1: Using supplied cross-talk correction matrix.")
+        crosstalk_correction_mat = supplied_crosstalk_mat.copy()
+        r_coef, g_coef, b_coef = crosstalk_correction_mat[0], crosstalk_correction_mat[1], crosstalk_correction_mat[2]
+        if args.debug:
+            print('Crosstalk correction matrix:\n', crosstalk_correction_mat)
+        if args.scale_matrix_for_color_balance:
+            color_balance_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
+            print('Selected color balance cell: %s' % color_balance_cell)
+            corrected_color_balance_rgb = crosstalk_correction_mat.dot(
+                np.array([df['r'][color_balance_cell], df['g'][color_balance_cell], df['b'][color_balance_cell]]))
+            crosstalk_correction_mat = np.array([
+                r_coef,
+                g_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[1],
+                b_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[2]])
+    else:
+        print("### Step 1: Estimate the cross-talk correction matrix.")
+        # TODO: The coefficients cannot be positive other than the primary signal,
+        # i.e. the diagonal.
+        r_coef, g_coef, b_coef = estimate_crosstalk_correction_coefficients()
+        if args.debug:
+            print('R Coefficients: ', r_coef)
+            print('G Coefficients: ', g_coef)
+            print('B Coefficients: ', b_coef)
 
-    crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef])
+        crosstalk_correction_mat = np.array([r_coef, g_coef, b_coef])
+        color_balance_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
+        print('Selected color balance cell: %s' % color_balance_cell)
 
-    # This is only used to scale the matrix using mid-grey patch.
-    # See the check for args.mid_grey_scaling below.
-    corrected_mid_greyr = 0
-    color_balance_cell = find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef)
-    print('Selected color balance cell: %s' % color_balance_cell)
+        corrected_color_balance_rgb = crosstalk_correction_mat.dot(
+            np.array([df['r'][color_balance_cell], df['g'][color_balance_cell], df['b'][color_balance_cell]]))
 
-    # Dot product of the crosstalk correction matrix of the GS RGB.
-    corrected_color_balance_rgb = crosstalk_correction_mat.dot(
-        np.array([df['r'][color_balance_cell], df['g'][color_balance_cell], df['b'][color_balance_cell]]))
-
-    # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
-    crosstalk_correction_mat = np.array([r_coef,
-                                         g_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[1],
-                                         b_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[2]])
+        # Scale the G and B coefficient such that after applying the matrix their values will equal R coefficient.
+        crosstalk_correction_mat = np.array([
+            r_coef,
+            g_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[1],
+            b_coef * corrected_color_balance_rgb[0] / corrected_color_balance_rgb[2]])
 
     print("### Step 2: Estimate the TRC from cross-talk corrected RGB values.")
     gs = df.loc[['gs' + str(x) for x in range(0, 24)]]
@@ -602,15 +824,23 @@ def main():
 
     if args.debug:
         print("Max GS element after color correction: %f" % corrected_gs_rgb.max())
-    global_scale_factor = 1
+    global_scale_factor = 1.0
+    # Without an explicit --mid_grey_scaling a supplied crosstalk matrix is used
+    # as-is so its absolute scale is preserved; estimated matrices default to 10000.
+    mid_grey_scaling = args.mid_grey_scaling
+    if mid_grey_scaling is None and supplied_crosstalk_mat is None:
+        mid_grey_scaling = 10000.0
+
     if args.darkest_patch_scaling:
         global_scale_factor = args.darkest_patch_scaling / corrected_gs_rgb.max()
-    elif args.mid_grey_scaling:
-        global_scale_factor = args.mid_grey_scaling / np.average(
+        crosstalk_correction_mat *= global_scale_factor
+        print("Scale correction matrix by: %f" % global_scale_factor)
+    elif mid_grey_scaling is not None:
+        global_scale_factor = mid_grey_scaling / np.average(
             np.matmul(crosstalk_correction_mat,
                       df.loc[[args.mid_grey_patch]][['r', 'g', 'b']].to_numpy().flatten()))
-    print("Scale correction matrix by: %f" % global_scale_factor)
-    crosstalk_correction_mat *= global_scale_factor
+        crosstalk_correction_mat *= global_scale_factor
+        print("Scale correction matrix by: %f" % global_scale_factor)
 
     # Compute the corrected GS values again after scaling the matrix.
     corrected_gs_rgb = np.matmul(crosstalk_correction_mat, gs_rgb)
@@ -635,15 +865,17 @@ def main():
         g_curve,
         b_curve)
 
-    film_base_rgb = list(map(float, args.film_base_rgb.split(' ')[:3]))
-    shutter_speed = float(args.shutter_speed)
+    fb_str = args.film_base_rgb if args.film_base_rgb else "0 0 0"
+    film_base_rgb = list(map(float, fb_str.split()[:3]))
+    shutter_speed = parse_shutter_seconds(args.shutter_speed)
+
     write_profile_info_txt(
         'profiles/%s Info.txt' % args.film_name,
         crosstalk_correction_mat, shutter_speed, film_base_rgb,
-        np.min(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        np.max(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        np.average(df[['r', 'g', 'b']], axis=0) / float(args.shutter_speed),
-        df.loc[[args.mid_grey_patch]][['r', 'g', 'b']].to_numpy().flatten() / float(args.shutter_speed))
+        np.min(df[['r', 'g', 'b']], axis=0) / shutter_speed,
+        np.max(df[['r', 'g', 'b']], axis=0) / shutter_speed,
+        np.average(df[['r', 'g', 'b']], axis=0) / shutter_speed,
+        df.loc[[args.mid_grey_patch]][['r', 'g', 'b']].to_numpy().flatten() / shutter_speed)
 
     if args.build_info_only:
         exit(0)

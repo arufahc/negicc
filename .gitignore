@@ -2,6 +2,7 @@
 !profiles/*.icc
 *~
 data/R190808.txt
+data/R190808_ref.json
 
 build_prof.h
 build_prof.ti3

@@ -1,15 +1,26 @@
+PYTHON ?= python3
+
 # Sony A7R IV shots with triband filter.
 data/portra400-0.txt:
-	python3 read_it8.py --img=it8_imgs/portra400-0.tif --outfile=$@
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400-0.tif --outfile=$@
+
+data/portra400-0.5.txt:
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400-0.5.tif --outfile=$@
 
 data/portra400-1.txt:
-	python3 read_it8.py --img=it8_imgs/portra400-1.tif --outfile=$@
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400-1.tif --outfile=$@
 
 data/portra400+1.txt:
-	python3 read_it8.py --img=it8_imgs/portra400+1.tif --outfile=$@
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400+1.tif --outfile=$@
 
 data/portra400+2.txt:
-	python3 read_it8.py --img=it8_imgs/portra400+2.tif --outfile=$@
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400+2.tif --outfile=$@
+
+data/portra400+3.txt:
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400+3.tif --outfile=$@
+
+data/portra400+3.5.txt:
+	$(PYTHON) read_it8.py --img=it8_imgs/portra400+3.5.tif --outfile=$@
 
 data/portra160-0.txt:
 	python3 read_it8.py --img=it8_imgs/portra160-0.tif --outfile=$@
@@ -78,17 +89,47 @@ data/portra160-0-cs100a_train.txt: data/portra160-0.txt
 data/ektar100-0-cs100a_train.txt: data/ektar100-0.txt
 	python3 add_ref_readings.py --Yxy=data/cs100a_measurements.txt data/ektar100-0.txt | tr ' ' ',' > $@
 
-data/portra400-0-r190808_train.txt: data/portra400-0.txt
-	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+data/portra400-0-r190808_train.json: data/portra400-0.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400-1-r190808_train.txt: data/portra400-1.txt
-	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+data/portra400-0-r190808_train.txt: data/portra400-0.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
-data/portra400+1-r190808_train.txt: data/portra400+1.txt
-	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+data/portra400-0.5-r190808_train.json: data/portra400-0.5.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400+2-r190808_train.txt: data/portra400+2.txt
-	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+data/portra400-0.5-r190808_train.txt: data/portra400-0.5.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/portra400-1-r190808_train.json: data/portra400-1.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
+
+data/portra400-1-r190808_train.txt: data/portra400-1.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/portra400+1-r190808_train.json: data/portra400+1.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
+
+data/portra400+1-r190808_train.txt: data/portra400+1.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/portra400+2-r190808_train.json: data/portra400+2.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
+
+data/portra400+2-r190808_train.txt: data/portra400+2.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/portra400+3-r190808_train.json: data/portra400+3.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
+
+data/portra400+3-r190808_train.txt: data/portra400+3.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
+
+data/portra400+3.5-r190808_train.json: data/portra400+3.5.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
+
+data/portra400+3.5-r190808_train.txt: data/portra400+3.5.txt data/R190808.txt
+	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/portra160-0-r190808_train.txt: data/portra160-0.txt
 	python3 add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
@@ -139,39 +180,46 @@ sony_a7rm4_portra400_0: data/portra400-0-cs100a_train.txt
 # intrinsic to the sensor color filters and the triband filter combination.
 sony_a7rm4_triband_crosstalk_coefs = --crosstalk_r_coefs='1 -0.08262711 -0.01249409' --crosstalk_g_coefs='-0.13898878 1 -0.32017315' --crosstalk_b_coefs='-0.00664173 -0.09860774 1'
 
-# These are linear and uncorrected RGB values of the film base, multiplied by 1 / shutter speed.
-# TODO: Use raw_info to compute these into a data file.
+# Crosstalk correction matrix from negicc-station (ILCE-7RM4), used for the modern
+# 288-patch Portra400 readings. Its absolute scale is preserved (no mid-grey scaling).
+sony_a7rm4_triband_portra400_crosstalk_matrix = --crosstalk_matrix='1.014258374879 -0.082323763405 -0.026613946496 -0.186093988436 1.161766417054 -0.519321459089 0.034925853217 -0.323647598077 1.145745378760'
+
+# Uncorrected RGB values of the film base, scaled by 1 / shutter speed (from negicc-station)
 sony_a7rm4_triband_ektar100_film_base_rgb = --film_base_rgb='67375 104355 106090'
-sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='64482 98429 81102'
+sony_a7rm4_triband_portra400_film_base_rgb = --film_base_rgb='84871 46183 73060'
 sony_a7rm4_triband_portra160_film_base_rgb = --film_base_rgb='61990 94994 81022'
 
 .PHONY: sony_a7rm4_portra400_0_r190808
-sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.076923
-
-.PHONY: sony_a7rm4_portra400-1_r190808
-sony_a7rm4_portra400-1_r190808: data/portra400-1-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.066667
-
-.PHONY: sony_a7rm4_portra400+1_r190808
-sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+1 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.100000
-
-.PHONY: sony_a7rm4_portra400+2_r190808
-sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+2 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.14926
-
-.PHONY: sony_a7rm4_portra400+3_r190808
-sony_a7rm4_portra400+3_r190808: data/portra400+3-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.250000
-
-.PHONY: sony_a7rm4_portra400+3.5_r190808
-sony_a7rm4_portra400+3.5_r190808: data/portra400+3.5-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3.5 R190808"  $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.400000
+sony_a7rm4_portra400_0_r190808: data/portra400-0-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.125000
 
 .PHONY: sony_a7rm4_portra400-0.5_r190808
-sony_a7rm4_portra400-0.5_r190808: data/portra400-0.5-r190808_train.txt clean
-	python3 build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400-0.5 R190808" $(sony_a7rm4_triband_crosstalk_coefs) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.076923
+sony_a7rm4_portra400-0.5_r190808: data/portra400-0.5-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400-0.5 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.125000
+
+.PHONY: sony_a7rm4_portra400-1_r190808
+sony_a7rm4_portra400-1_r190808: data/portra400-1-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400-1 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.125000
+
+.PHONY: sony_a7rm4_portra400+1_r190808
+sony_a7rm4_portra400+1_r190808: data/portra400+1-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+1 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.166667
+
+.PHONY: sony_a7rm4_portra400+2_r190808
+sony_a7rm4_portra400+2_r190808: data/portra400+2-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+2 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.200000
+
+.PHONY: sony_a7rm4_portra400+3_r190808
+sony_a7rm4_portra400+3_r190808: data/portra400+3-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.250000
+
+.PHONY: sony_a7rm4_portra400+3.5_r190808
+sony_a7rm4_portra400+3.5_r190808: data/portra400+3.5-r190808_train.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --film_name="Sony A7RM4 Portra400+3.5 R190808" $(sony_a7rm4_triband_portra400_crosstalk_matrix) $(sony_a7rm4_triband_portra400_film_base_rgb) --shutter_speed=0.400000
+
+.PHONY: sony_a7rm4_portra400_bundle
+sony_a7rm4_portra400_bundle: profiles/profile_Portra400_20260927_035659.json clean
+	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --target="Target 5" --film_name="Sony A7RM4 Portra400 R190808"
 
 .PHONY: sony_a7rm4_portra160_0
 sony_a7rm4_portra160_0: data/portra160-0-cs100a_train.txt clean

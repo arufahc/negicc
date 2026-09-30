@@ -14,8 +14,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
-import colour
+import json
 import re
+
+try:
+    import colour
+except ImportError:
+    colour = None
 
 _RE_STRIP_WHITESPACE = re.compile(r"(?a:^\s+|\s+$)")
 _RE_COMBINE_WHITESPACE = re.compile(r"(?a:\s+)")
@@ -29,11 +34,40 @@ def read_txt_readings(file):
         if not l:
             break
         vals = l.strip('\n\r').split(' ')
-        rows[vals[0]] = {}
+        rows[vals[0].lower()] = {}
         for i in range(1, len(fields)):
-            rows[vals[0]][fields[i]] = float(vals[i])
+            rows[vals[0].lower()][fields[i]] = float(vals[i])
     f.close()
     return rows
+
+def _rgb_from_json_patches(patches):
+    return {k.lower(): {c: float(v.get(c, 0)) for c in ('r', 'g', 'b')}
+            for k, v in patches.items() if isinstance(v, dict)}
+
+def read_readings(file):
+    if not file.endswith('.json'):
+        return read_txt_readings(file)
+    with open(file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    if 'patches' in data:
+        return _rgb_from_json_patches(data['patches'])
+    if data.get('targets'):
+        return _rgb_from_json_patches(data['targets'][0].get('patches', {}))
+    return _rgb_from_json_patches(data)
+
+def read_xyz_json(file):
+    with open(file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    patches = data.get('patches', data)
+    return {k.lower(): {c: float(v.get(c, 0)) for c in ('X', 'Y', 'Z')}
+            for k, v in patches.items() if isinstance(v, dict)}
+
+def read_xyz_readings(file):
+    if file.endswith('.json'):
+        return read_xyz_json(file)
+    if is_it8(file):
+        return read_it8_readings(file)
+    return read_txt_readings(file)
 
 def is_it8(file):
     with open(file, "r") as f:
@@ -80,45 +114,59 @@ def build_empty(src, col):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("src", help="Source readings file.")
+    parser.add_argument("src", help="Source readings file (.txt or .json).")
     parser.add_argument("--r", help="R channel reference file.")
     parser.add_argument("--g", help="G channel reference file.")
     parser.add_argument("--b", help="B channel reference file.")
     parser.add_argument("--Yxy", help="Yxy reference file.")
-    parser.add_argument("--XYZ", help="XYZ reference file.")
+    parser.add_argument("--XYZ", help="XYZ reference file (.txt IT8 or .json).")
+    parser.add_argument("--json", action="store_true", help="Output in JSON format.")
     args = parser.parse_args()
 
-    src = read_txt_readings(args.src)
+    src = read_readings(args.src)
     if args.r:
-        r =  read_txt_readings(args.r)
+        r = read_readings(args.r)
     else:
         r = build_empty(src, 'r')
     if args.g:
-        g =  read_txt_readings(args.g)
+        g = read_readings(args.g)
     else:
         g = build_empty(src, 'g')
     if args.b:
-        b =  read_txt_readings(args.b)
+        b = read_readings(args.b)
     else:
         b = build_empty(src, 'b')
+
     if args.Yxy:
         Yxy = read_txt_readings(args.Yxy)
     elif args.XYZ:
-        if is_it8(args.XYZ):
-            XYZ = read_it8_readings(args.XYZ)
-        else:
-            XYZ = read_txt_readings(args.XYZ)
+        XYZ = read_xyz_readings(args.XYZ)
 
-    if not args.Yxy and not args.XYZ:
-        print('patch', 'r', 'g', 'b', 'refR', 'refG', 'refB')
-        for patch, vals in src.items():
-            print(patch, vals['r'], vals['g'], vals['b'], r[patch]['r'],  g[patch]['g'],  b[patch]['b'])
+    if args.Yxy and colour is None:
+        raise RuntimeError("colour module required for Yxy conversion")
+
+    def ref_xyz(patch):
+        if args.Yxy:
+            return tuple(float(v) for v in colour.xyY_to_XYZ(
+                [Yxy[patch]['x'], Yxy[patch]['y'], Yxy[patch]['Y']]))
+        if args.XYZ:
+            return XYZ[patch]['X'], XYZ[patch]['Y'], XYZ[patch]['Z']
+        return None
+
+    fields = ['r', 'g', 'b', 'refR', 'refG', 'refB']
+    if args.Yxy or args.XYZ:
+        fields += ['refX', 'refY', 'refZ']
+    rows = {}
+    for patch, vals in src.items():
+        row = [vals['r'], vals['g'], vals['b'], r[patch]['r'], g[patch]['g'], b[patch]['b']]
+        xyz = ref_xyz(patch)
+        if xyz is not None:
+            row += list(xyz)
+        rows[patch] = row
+
+    if args.json:
+        print(json.dumps({'patches': {patch: dict(zip(fields, row)) for patch, row in rows.items()}}, indent=2))
     else:
-        print('patch', 'r', 'g', 'b', 'refR', 'refG', 'refB', 'refX', 'refY', 'refZ')
-
-        for patch, vals in src.items():
-            if args.Yxy:
-                X, Y, Z = colour.xyY_to_XYZ([Yxy[patch]['x'], Yxy[patch]['y'], Yxy[patch]['Y']])
-            elif args.XYZ:
-                X, Y, Z = XYZ[patch]['X'], XYZ[patch]['Y'], XYZ[patch]['Z']
-            print(patch, vals['r'], vals['g'], vals['b'], r[patch]['r'],  g[patch]['g'],  b[patch]['b'], X, Y, Z)
+        print('patch', *fields)
+        for patch, row in rows.items():
+            print(patch, *row)
