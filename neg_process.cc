@@ -448,7 +448,7 @@ inline float reconstruct_green_soft(const uint16_t* m, int r, int c, int h, int 
   return std::max(0.0f, std::min(white, g_est));
 }
 
-bool debayer_grain_aware(LibRaw* proc, bool crop) {
+bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   if (!proc || !proc->imgdata.rawdata.raw_image) return false;
 
   const int src_w = proc->imgdata.sizes.width;
@@ -469,7 +469,12 @@ bool debayer_grain_aware(LibRaw* proc, bool crop) {
 #endif
 
   int rx = 0, ry = 0, rw = src_w, rh = src_h;
-  if (crop && (crop_ref.cleft || crop_ref.ctop)) {
+  if (roi && roi[2] > 0 && roi[3] > 0) {
+    rx = std::max(0, std::min(roi[0], src_w - 1));
+    ry = std::max(0, std::min(roi[1], src_h - 1));
+    rw = std::max(1, std::min(roi[2], src_w - rx));
+    rh = std::max(1, std::min(roi[3], src_h - ry));
+  } else if (crop && (crop_ref.cleft || crop_ref.ctop)) {
     rx = crop_ref.cleft;
     ry = crop_ref.ctop;
     rw = crop_ref.cwidth;
@@ -477,8 +482,7 @@ bool debayer_grain_aware(LibRaw* proc, bool crop) {
   }
 
   if (proc->imgdata.image) {
-    free(proc->imgdata.image);
-    proc->imgdata.image = nullptr;
+    proc->free_image();
   }
   proc->imgdata.image = (ushort (*)[4]) malloc((size_t)rw * rh * sizeof(*proc->imgdata.image));
   if (!proc->imgdata.image) {
@@ -610,7 +614,8 @@ bool debayer_grain_aware(LibRaw* proc, bool crop) {
 //
 // When |crop| is false, the entire RAW file is used, disregarding aspect ratio
 // and cropbox specified in the RAW metadata.
-LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop, bool crosstalk_specified = false) {
+LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
+                 bool crosstalk_specified = false, const int* roi = nullptr) {
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -633,6 +638,17 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     return NULL;
   }
 
+  if (roi) {
+    if (roi[0] < 0 || roi[1] < 0 ||
+        roi[0] >= (int)proc->imgdata.sizes.width || roi[1] >= (int)proc->imgdata.sizes.height ||
+        roi[2] <= 0 || roi[3] <= 0) {
+      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+              roi[0], roi[1], roi[2], roi[3], proc->imgdata.sizes.width, proc->imgdata.sizes.height);
+      delete proc;
+      return NULL;
+    }
+  }
+
   proc->imgdata.params.output_bps = 16;
   proc->imgdata.params.user_flip = 0;
   proc->imgdata.params.gamm[0] = 1;
@@ -650,7 +666,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     if (use_grain_aware) {
       proc->imgdata.params.output_color = 0;
       printf("Debayer quality: grain-aware\n");
-      if (!debayer_grain_aware(proc, crop)) {
+      if (!debayer_grain_aware(proc, crop, roi)) {
         fprintf(stderr, "Grain-aware debayer failed, falling back to bilinear\n");
         use_grain_aware = false;
       }
@@ -666,16 +682,28 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       proc->imgdata.params.user_mul[1] = 1;
       proc->imgdata.params.user_mul[2] = 1;
       proc->imgdata.params.user_mul[3] = 1;
+
+      if (roi && roi[2] > 0 && roi[3] > 0) {
+        int rx = std::max(0, std::min(roi[0], (int)proc->imgdata.sizes.width - 1));
+        int ry = std::max(0, std::min(roi[1], (int)proc->imgdata.sizes.height - 1));
+        int rw = std::max(1, std::min(roi[2], (int)proc->imgdata.sizes.width - rx));
+        int rh = std::max(1, std::min(roi[3], (int)proc->imgdata.sizes.height - ry));
+        proc->imgdata.params.cropbox[0] = rx;
+        proc->imgdata.params.cropbox[1] = ry;
+        proc->imgdata.params.cropbox[2] = rw;
+        proc->imgdata.params.cropbox[3] = rh;
+      } else {
 #if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
-      auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
+        auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
 #else
-      auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
+        auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
 #endif
-      if (crop && (crop_ref.cleft || crop_ref.ctop)) {
-        proc->imgdata.params.cropbox[0] = crop_ref.cleft;
-        proc->imgdata.params.cropbox[1] = crop_ref.ctop;
-        proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
-        proc->imgdata.params.cropbox[3] = crop_ref.cheight;
+        if (crop && (crop_ref.cleft || crop_ref.ctop)) {
+          proc->imgdata.params.cropbox[0] = crop_ref.cleft;
+          proc->imgdata.params.cropbox[1] = crop_ref.ctop;
+          proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
+          proc->imgdata.params.cropbox[3] = crop_ref.cheight;
+        }
       }
       proc->dcraw_process();
     }
@@ -799,6 +827,76 @@ float dot_product(const std::vector<float>& v1, const std::vector<T>& v2) {
   return prod;
 }
 
+// Extract a sub-rectangle from decoded LibRaw image buffer with rotation and flip.
+bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
+                               int rot_cw, bool hflip, bool vflip) {
+  if (!proc || !proc->imgdata.image) return false;
+
+  const int cur_w = proc->imgdata.sizes.iwidth;
+  const int cur_h = proc->imgdata.sizes.iheight;
+  rx = std::max(0, std::min(rx, cur_w - 1));
+  ry = std::max(0, std::min(ry, cur_h - 1));
+  rw = std::max(1, std::min(rw, cur_w - rx));
+  rh = std::max(1, std::min(rh, cur_h - ry));
+
+  rot_cw = ((rot_cw % 360) + 360) % 360;
+
+  // 180-degree rotation is equivalent to flipping both axes.
+  if (rot_cw == 180) {
+    hflip = !hflip;
+    vflip = !vflip;
+    rot_cw = 0;
+  }
+
+  const bool swap_dims = (rot_cw == 90 || rot_cw == 270);
+  const int dst_w = swap_dims ? rh : rw;
+  const int dst_h = swap_dims ? rw : rh;
+
+  if (rx == 0 && ry == 0 && rw == cur_w && rh == cur_h && rot_cw == 0 && !hflip && !vflip) {
+    return true;
+  }
+
+  ushort (*new_image)[4] = (ushort (*)[4]) malloc((size_t)dst_w * dst_h * sizeof(*new_image));
+  if (!new_image) {
+    fprintf(stderr, "ERROR! Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
+    return false;
+  }
+
+  const ushort (*src_image)[4] = proc->imgdata.image;
+
+  if (rot_cw == 0 && !hflip && !vflip) {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < rh; ++y) {
+      memcpy(&new_image[(size_t)y * dst_w],
+             &src_image[(size_t)(ry + y) * cur_w + rx],
+             (size_t)rw * sizeof(*new_image));
+    }
+  } else {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < rh; ++y) {
+      for (int x = 0; x < rw; ++x) {
+        int x1 = (rot_cw == 0)  ? x : ((rot_cw == 90) ? (rh - 1 - y) : y);
+        int y1 = (rot_cw == 0)  ? y : ((rot_cw == 90) ? x : (rw - 1 - x));
+        int dx = hflip ? (dst_w - 1 - x1) : x1;
+        int dy = vflip ? (dst_h - 1 - y1) : y1;
+
+        const ushort* s = src_image[(size_t)(ry + y) * cur_w + (rx + x)];
+        ushort* d = new_image[(size_t)dy * dst_w + dx];
+        d[0] = s[0];
+        d[1] = s[1];
+        d[2] = s[2];
+        d[3] = s[3];
+      }
+    }
+  }
+
+  proc->free_image();
+  proc->imgdata.image = new_image;
+  proc->imgdata.sizes.iwidth = dst_w;
+  proc->imgdata.sizes.iheight = dst_h;
+  return true;
+}
+
 void adjust_correction_matrix(const std::vector<float>& r_coef, 
                               const std::vector<float>& g_coef,
                               const std::vector<float>& b_coef,
@@ -871,7 +969,7 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
   printf("B coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
 }
 
-int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output, bool half_size) {
+int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output) {
   unsigned* output_profile = NULL;
   unsigned profile_size = 0;
   bool dynamically_allocated = false;
@@ -897,11 +995,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
   const unsigned height = proc->imgdata.sizes.iheight;
   const unsigned width = proc->imgdata.sizes.iwidth;
   struct tiff_hdr header;
-  if (half_size) {
-    tiff_head(proc, &header, profile_size, width / 2, height / 2);
-  } else {
-    tiff_head(proc, &header, profile_size);
-  }
+  tiff_head(proc, &header, profile_size);
   auto* fp = fopen(output.c_str(), "wb+");
   if (!fp) {
     fprintf(stderr, "ERROR! Cannot open %s for writing\n", output.c_str());
@@ -916,38 +1010,14 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
     free(output_profile);
   }
 
-  const unsigned output_width = half_size ? width / 2 : width;
-  std::vector<ushort> row_buf(output_width * 3);
+  std::vector<ushort> row_buf(width * 3);
   for (unsigned row = 0; row < height; ++row) {
-    if (half_size && row % 2 == 0) {
-      // Even number rows, reset row buffer.
-      for (unsigned col = 0; col < output_width; ++col) {
-        row_buf[col * 3] = (proc->imgdata.image[row * width + 2 * col][0] + 
-                            proc->imgdata.image[row * width + 2 * col + 1][0]) / 4;
-        row_buf[col * 3 + 1] = (proc->imgdata.image[row * width + 2 * col][1] +
-                                proc->imgdata.image[row * width + 2 * col + 1][1]) / 4;
-        row_buf[col * 3 + 2] = (proc->imgdata.image[row * width + 2 * col][2] +
-                                proc->imgdata.image[row * width + 2 * col + 1][2]) / 4;
-      }
-    } else if (half_size && row % 2) {
-      // Odd number rows, add to row buffer.
-      for (unsigned col = 0; col < output_width; ++col) {
-        row_buf[col * 3] += (proc->imgdata.image[row * width + 2 * col][0] + 
-                             proc->imgdata.image[row * width + 2 * col + 1][0]) / 4;
-        row_buf[col * 3 + 1] += (proc->imgdata.image[row * width + 2 * col][1] +
-                                 proc->imgdata.image[row * width + 2 * col + 1][1]) / 4;
-        row_buf[col * 3 + 2] += (proc->imgdata.image[row * width + 2 * col][2] +
-                                 proc->imgdata.image[row * width + 2 * col + 1][2]) / 4;
-      }
-      fwrite(row_buf.data(), 3 * sizeof(ushort), output_width, fp);
-    } else {
-      for (unsigned col = 0; col < width; ++col) {
-        row_buf[col * 3]     = proc->imgdata.image[row * width + col][0];
-        row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
-        row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
-      }
-      fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp);
+    for (unsigned col = 0; col < width; ++col) {
+      row_buf[col * 3]     = proc->imgdata.image[row * width + col][0];
+      row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
+      row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
     }
+    fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp);
   }
   fclose(fp);
   return 0;
@@ -957,10 +1027,6 @@ int main(int ac, char *av[]) {
   argparse::ArgumentParser parser("neg_process");
   parser.add_argument("-H", "--half_size")
     .help("Half size.")
-    .default_value(false)
-    .implicit_value(true);
-  parser.add_argument("-Q", "--quarter_size")
-    .help("Quarter size.")
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("-C", "--no_crop")
@@ -1020,6 +1086,22 @@ int main(int ac, char *av[]) {
     .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
+  parser.add_argument("--roi")
+    .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]].")
+    .nargs(4, 7)
+    .scan<'i', int>();
+  parser.add_argument("--rot", "--rot_cw")
+    .help("Clockwise rotation in degrees (0, 90, 180, 270).")
+    .scan<'i', int>()
+    .default_value(0);
+  parser.add_argument("--hflip")
+    .help("Horizontal flip.")
+    .default_value(false)
+    .implicit_value(true);
+  parser.add_argument("--vflip")
+    .help("Vertical flip.")
+    .default_value(false)
+    .implicit_value(true);
   parser.add_argument("-o", "--output")
     .required()
     .help("Output file location.");
@@ -1045,6 +1127,36 @@ int main(int ac, char *av[]) {
   const bool has_gamma = parser.is_used("--post_correction_gamma") && (gamma > 0.0f) && (fabsf(gamma - 1.0f) > 1e-4f);
   const float inv_gamma = has_gamma ? (1.0f / gamma) : 1.0f;
 
+  int rot_cw = 0;
+  bool hflip = false;
+  bool vflip = false;
+  int roi_coords[4] = {0, 0, 0, 0};
+  const bool has_roi = parser.is_used("--roi");
+
+  if (has_roi) {
+    const auto roi_vals = parser.get<std::vector<int>>("--roi");
+    roi_coords[0] = roi_vals[0];
+    roi_coords[1] = roi_vals[1];
+    roi_coords[2] = roi_vals[2];
+    roi_coords[3] = roi_vals[3];
+    if (roi_vals.size() >= 5) rot_cw = roi_vals[4];
+    if (roi_vals.size() >= 6) hflip = (roi_vals[5] != 0);
+    if (roi_vals.size() >= 7) vflip = (roi_vals[6] != 0);
+  }
+
+  if (parser.is_used("--rot")) {
+    rot_cw = parser.get<int>("--rot");
+  } else if (parser.is_used("--rot_cw")) {
+    rot_cw = parser.get<int>("--rot_cw");
+  }
+  if (parser.get<bool>("--hflip")) hflip = true;
+  if (parser.get<bool>("--vflip")) vflip = true;
+
+  if (rot_cw % 90 != 0) {
+    fprintf(stderr, "ERROR! Rotation must be a multiple of 90 degrees (got %d)\n", rot_cw);
+    return 1;
+  }
+
   LibRaw *proc = nullptr;
   if (files.size() == 4) {
     proc = merge_pixel_shift_streaming(files);
@@ -1052,20 +1164,45 @@ int main(int ac, char *av[]) {
       fprintf(stderr, "ERROR! Failed to merge pixel-shift files\n");
       return 1;
     }
+    if (has_roi || rot_cw != 0 || hflip || vflip) {
+      int rx = has_roi ? roi_coords[0] : 0;
+      int ry = has_roi ? roi_coords[1] : 0;
+      int rw = has_roi ? roi_coords[2] : proc->imgdata.sizes.iwidth;
+      int rh = has_roi ? roi_coords[3] : proc->imgdata.sizes.iheight;
+      if (!extract_roi_and_transform(proc, rx, ry, rw, rh, rot_cw, hflip, vflip)) {
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+      printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip, vflip);
+    }
   } else {
     const bool has_crosstalk = parser.is_used("-r") || parser.is_used("--r_coeff") ||
                                parser.is_used("-g") || parser.is_used("--g_coeff") ||
                                parser.is_used("-b") || parser.is_used("--b_coeff");
     proc = load_raw(files[0], true,
-                    parser.get<bool>("--half_size") || parser.get<bool>("--quarter_size"),
+                    parser.get<bool>("--half_size"),
                     parser.get<int>("--quality"),
-                    !parser.get<bool>("--no_crop"),
-                    has_crosstalk);
+                    !parser.get<bool>("--no_crop") && !has_roi,
+                    has_crosstalk,
+                    has_roi ? roi_coords : nullptr);
     if (!proc) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
       return 1;
     }
+    if (rot_cw != 0 || hflip || vflip) {
+      if (!extract_roi_and_transform(proc, 0, 0, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                                     rot_cw, hflip, vflip)) {
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+      printf("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip, vflip);
+    }
   }
+
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
 
@@ -1203,9 +1340,8 @@ int main(int ac, char *av[]) {
 
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
-  int ret = write_tiff(proc, attach_profile, output,
-                       // Multi-shot mode always gets the full size.
-                       parser.get<bool>("--quarter_size") && files.size() == 1);
+  int ret = write_tiff(proc, attach_profile, output);
+  proc->free_image();
   delete proc;
   return ret;
 }
