@@ -25,10 +25,8 @@ from pathlib import Path
 
 try:
     import colour
-    HAS_COLOUR = True
 except ImportError:
     colour = None
-    HAS_COLOUR = False
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -105,6 +103,11 @@ parser.add_argument(
     action="store_true",
     default=False)
 parser.add_argument(
+    "--bypass_crosstalk",
+    help="Bypass crosstalk correction and use an identity matrix.",
+    action="store_true",
+    default=False)
+parser.add_argument(
     "--debug",
     help="Print debug messages.",
     action="store_true")
@@ -170,25 +173,28 @@ if args.crosstalk_matrix:
         parser.error("--crosstalk_matrix requires 9 numbers, got %d" % len(vals))
     supplied_crosstalk_mat = np.array(vals, dtype=np.float64).reshape(3, 3)
 
-# Load data into DataFrame
-if args.src.endswith('.json'):
-    with open(args.src, 'r', encoding='utf-8') as f:
+def load_json_src(src_path):
+    with open(src_path, 'r', encoding='utf-8') as f:
         src_data = json.load(f)
+
+    shutter = None
+    film_base_str = None
+    crosstalk_mat = None
 
     if 'targets' in src_data:
         targets = src_data['targets']
-        selected_target = None
+        selected = None
         if args.target:
             for t in targets:
                 if t.get('name') == args.target or str(t.get('name', '')).lower() == str(args.target).lower():
-                    selected_target = t
+                    selected = t
                     break
-            if selected_target is None and str(args.target).isdigit():
+            if selected is None and str(args.target).isdigit():
                 idx = int(args.target)
                 if 0 <= idx < len(targets):
-                    selected_target = targets[idx]
+                    selected = targets[idx]
 
-        if selected_target is None and args.film_name:
+        if selected is None and args.film_name:
             bracket_map = {
                 '0': 'Target 5',
                 '-0.5': 'Target 6',
@@ -199,35 +205,31 @@ if args.src.endswith('.json'):
                 '+3.5': 'Target 2',
             }
             t_name = bracket_map.get(bracket_from_film_name(args.film_name))
-            selected_target = next((t for t in targets if t.get('name') == t_name), None)
+            selected = next((t for t in targets if t.get('name') == t_name), None)
 
-        if selected_target is None:
-            selected_target = next((t for t in targets if t.get('name') == 'Target 5'), targets[0])
+        if selected is None:
+            selected = next((t for t in targets if t.get('name') == 'Target 5'), targets[0])
 
-        target_patches = selected_target.get('patches', {})
+        shutter = str(parse_shutter_seconds(selected.get('shutter', '1/8s')))
 
-        if not args.shutter_speed:
-            args.shutter_speed = str(parse_shutter_seconds(selected_target.get('shutter', '1/8s')))
-
-        if not args.film_base_rgb and 'film_base' in src_data:
+        if 'film_base' in src_data:
             fb = src_data['film_base']
             fb_t = parse_shutter_seconds(fb.get('shutter', '1/8s'))
             fb_r = round(fb.get('r', {}).get('avg', 0) / fb_t)
             fb_g = round(fb.get('g', {}).get('avg', 0) / fb_t)
             fb_b = round(fb.get('b', {}).get('avg', 0) / fb_t)
-            args.film_base_rgb = f"{fb_r} {fb_g} {fb_b}"
+            film_base_str = f"{fb_r} {fb_g} {fb_b}"
 
-        if supplied_crosstalk_mat is None:
-            if 'crosstalk_profile' in src_data:
-                cc = src_data['crosstalk_profile'].get('crosstalk_correction_matrix')
-                if cc:
-                    supplied_crosstalk_mat = np.array(cc, dtype=np.float64)
-            elif 'crosstalk_correction_matrix' in src_data:
-                supplied_crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
+        if 'crosstalk_profile' in src_data:
+            cc = src_data['crosstalk_profile'].get('crosstalk_correction_matrix')
+            if cc:
+                crosstalk_mat = np.array(cc, dtype=np.float64)
+        elif 'crosstalk_correction_matrix' in src_data:
+            crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
 
         ref_lookup = load_reference_xyz(args.ref_xyz)
         rows = []
-        for p_name, p_data in target_patches.items():
+        for p_name, p_data in selected.get('patches', {}).items():
             ref = ref_lookup.get(p_name.lower(), {})
             rows.append({
                 'patch': p_name.lower(),
@@ -244,20 +246,17 @@ if args.src.endswith('.json'):
         df = pd.DataFrame(rows).set_index('patch')
 
     elif 'patches' in src_data:
-        if not args.shutter_speed and 'shutter_speed' in src_data:
-            args.shutter_speed = str(src_data['shutter_speed'])
-        elif not args.shutter_speed and 'shutter' in src_data:
-            args.shutter_speed = str(parse_shutter_seconds(src_data['shutter']))
+        if 'shutter_speed' in src_data:
+            shutter = str(src_data['shutter_speed'])
+        elif 'shutter' in src_data:
+            shutter = str(parse_shutter_seconds(src_data['shutter']))
 
-        if not args.film_base_rgb and 'film_base_rgb' in src_data:
+        if 'film_base_rgb' in src_data:
             fb = src_data['film_base_rgb']
-            if isinstance(fb, list):
-                args.film_base_rgb = " ".join(map(str, fb))
-            else:
-                args.film_base_rgb = str(fb)
+            film_base_str = " ".join(map(str, fb)) if isinstance(fb, list) else str(fb)
 
-        if supplied_crosstalk_mat is None and 'crosstalk_correction_matrix' in src_data:
-            supplied_crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
+        if 'crosstalk_correction_matrix' in src_data:
+            crosstalk_mat = np.array(src_data['crosstalk_correction_matrix'], dtype=np.float64)
 
         ref_lookup = None
         rows = []
@@ -288,7 +287,19 @@ if args.src.endswith('.json'):
     elif isinstance(src_data, list):
         df = pd.DataFrame(src_data).set_index('patch')
     else:
-        raise ValueError(f"Unrecognized JSON structure in {args.src}")
+        raise ValueError("Unrecognized JSON structure in %s" % src_path)
+
+    return df, shutter, film_base_str, crosstalk_mat
+
+
+if args.src.endswith('.json'):
+    df, auto_shutter, auto_fb, auto_mat = load_json_src(args.src)
+    if not args.shutter_speed and auto_shutter:
+        args.shutter_speed = auto_shutter
+    if not args.film_base_rgb and auto_fb:
+        args.film_base_rgb = auto_fb
+    if supplied_crosstalk_mat is None and auto_mat is not None:
+        supplied_crosstalk_mat = auto_mat
 else:
     df = pd.read_csv(args.src, index_col="patch")
 
@@ -538,7 +549,7 @@ def write_build_prof_header(
                 print()
         print("};\n")
 
-    print("const int CURVE_POINTS = %d;" % len(r_curve))
+    print("#define CURVE_POINTS %d" % len(r_curve))
     print_curve('b_curve', b_curve)
     print_curve('g_curve', g_curve)
     print_curve('r_curve', r_curve)
@@ -581,7 +592,7 @@ def run_chromatic_adaptation_on_ref_XYZ():
 
     unadapted_XYZ = np.array(df[['refX', 'refY', 'refZ']])
     if args.white_x and args.white_y:
-        if HAS_COLOUR:
+        if colour is not None:
             test_white_XYZ = np.array(colour.xyY_to_XYZ(
                 [args.white_x, args.white_y, 1]))
             adapted_XYZ = colour.adaptation.chromatic_adaptation(
@@ -645,7 +656,7 @@ def compute_positive_rgb_values(
     df['corrected_b'] = pd.Series(corrected_df[2], index=df.index)
 
     # Apply curves to convert them positive signals.
-    if HAS_COLOUR:
+    if colour is not None:
         lut = colour.LUT3x1D(np.array([r_curve, g_curve, b_curve]).transpose())
         positive_rgb = lut.apply(corrected_rgb.transpose() / 65535)  # LUT takes range [0, 1].
     else:
@@ -774,10 +785,18 @@ def find_gs_cell_with_minimize_gb_mse(r_coef, g_coef, b_coef):
 
 
 def main():
+    color_balance_cell = None
+
     # Prepare the refernce XYZ values to be used for running colprof.
     test_white_XYZ = run_chromatic_adaptation_on_ref_XYZ()
 
-    if supplied_crosstalk_mat is not None and not (args.crosstalk_r_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs):
+    if args.bypass_crosstalk:
+        print("### Step 1: Bypassing cross-talk correction (using identity matrix).")
+        crosstalk_correction_mat = np.eye(3)
+        r_coef, g_coef, b_coef = crosstalk_correction_mat[0], crosstalk_correction_mat[1], crosstalk_correction_mat[2]
+        if args.debug:
+            print('Crosstalk correction matrix:\n', crosstalk_correction_mat)
+    elif supplied_crosstalk_mat is not None and not (args.crosstalk_r_coefs and args.crosstalk_g_coefs and args.crosstalk_b_coefs):
         print("### Step 1: Using supplied cross-talk correction matrix.")
         crosstalk_correction_mat = supplied_crosstalk_mat.copy()
         r_coef, g_coef, b_coef = crosstalk_correction_mat[0], crosstalk_correction_mat[1], crosstalk_correction_mat[2]
@@ -828,7 +847,7 @@ def main():
     # Without an explicit --mid_grey_scaling a supplied crosstalk matrix is used
     # as-is so its absolute scale is preserved; estimated matrices default to 10000.
     mid_grey_scaling = args.mid_grey_scaling
-    if mid_grey_scaling is None and supplied_crosstalk_mat is None:
+    if mid_grey_scaling is None and supplied_crosstalk_mat is None and not args.bypass_crosstalk:
         mid_grey_scaling = 10000.0
 
     if args.darkest_patch_scaling:
@@ -907,9 +926,13 @@ def main():
     print('...Done')
     print('### Details ###')
     print('Mid-grey GS cell: %s' % args.mid_grey_patch)
-    print('Mid-grey relative transmittance: %f %f %f' % tuple(
-            (np.ones(3) * args.mid_grey_scaling / shutter_speed / np.matmul(crosstalk_correction_mat, film_base_rgb)).flatten()))
-    print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, color_balance_cell))
+    if mid_grey_scaling is not None and shutter_speed is not None and film_base_rgb is not None:
+        denom = np.matmul(crosstalk_correction_mat, film_base_rgb)
+        if (denom > 0).all():
+            transmittance = (np.ones(3) * mid_grey_scaling / shutter_speed / denom).flatten()
+            print('Mid-grey relative transmittance: %f %f %f' % tuple(transmittance))
+    if color_balance_cell is not None:
+        print('Total MSE scaled using mid-grey GS cell: %f' % compute_total_mean_square_error_in_gb(r_coef, g_coef, b_coef, color_balance_cell))
     print('profcheck output: %s' % prof_check.split('\n')[-1].split(':')[1].strip(' '))
 
 if __name__ == "__main__":
