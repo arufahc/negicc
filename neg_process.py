@@ -118,9 +118,9 @@ parser.add_argument(
     help="Measurement used.")
 parser.add_argument(
     '--quality', '-q',
-    default=0,
+    default=-1,
     type=int,
-    help="Quality. 0 = linear, 3 = AHD, 11 = DHT, 12 = mod AHD.")
+    help="Quality. -1 = auto (grain-aware if Sony CFA, else bilinear), 0 = bilinear, 3 = AHD.")
 parser.add_argument(
     '--color_comp', '-c',
     help="Multipliers for corrected RGB."
@@ -152,6 +152,10 @@ args = parser.parse_args()
 
 if args.target:
     subprocess.run([os.path.join(os.path.dirname(__file__), 'bin_out', 'neg_process'),
+                    '-r', '1', '0', '0',
+                    '-g', '0', '1', '0',
+                    '-b', '0', '0', '1',
+                    '--knee', '1.0',
                     '--half_size',
                     '--no_crop',
                     '-o', Path(args.raw_file).stem + ('.target.tif'),
