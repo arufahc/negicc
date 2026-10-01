@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <sys/stat.h>
 #include <vector>
 
@@ -81,8 +82,15 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
         if (backend != "cpu") {
             const bool has_gpu = cuda_device_available();
             if (has_gpu && !engine_path.empty()) {
-                m_runner = make_trt_runner(engine_path);
-                return true;
+                try {
+                    m_runner = make_trt_runner(engine_path);
+                    return true;
+                } catch (const std::exception& e) {
+                    if (backend == "gpu") throw;
+                    std::cerr << "DinoV3Engine: TensorRT runner failed to load (" << e.what()
+                              << "), falling back to CPU ONNX Runtime" << std::endl;
+                    m_runner.reset();
+                }
             }
             if (backend == "gpu") {
                 std::cerr << "DinoV3Engine: backend 'gpu' requested but "
@@ -110,6 +118,9 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
 DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, int height, int stride) {
     if (!is_loaded()) {
         throw std::runtime_error("DinoV3Engine::infer called before model loaded.");
+    }
+    if (width <= 0 || height <= 0 || !srgb_data) {
+        throw std::invalid_argument("DinoV3Engine::infer: invalid image dimensions or null data pointer");
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();

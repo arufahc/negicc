@@ -276,10 +276,15 @@ sony_a7rm4_ektar100+3_r190808: data/ektar100+3-r190808_train.txt clean
 sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt clean
 	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2"  $(sony_a7rm4_triband_crosstalk_coefs) --debug
 
-.PHONY: clean lib neg_process
+.PHONY: clean clean_lib clean_all lib neg_process
 clean:
 	rm -f *_prof.ti3 build_prof_diag.csv build_prof.h
+
+clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/.use_cuda_*
+
+clean_all: clean clean_lib
+	rm -f bin_out/make_icc bin_out/raw_info bin_out/neg_process
 
 .PHONY: sony_a7rm4_portra400_r190808_all
 sony_a7rm4_portra400_r190808_all: \
@@ -335,7 +340,12 @@ ifeq ($(ARCH),aarch64)
 else
     ORT_LIB_DIR ?= $(ORT_DIR)/lib/x86_64
 endif
-ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
+ifneq ($(filter /%,$(ORT_LIB_DIR)),)
+    ORT_RPATH = -Wl,-rpath,'$(ORT_LIB_DIR)'
+else
+    ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
+endif
+ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime $(ORT_RPATH)
 
 NVCC := $(shell which nvcc 2>/dev/null)
 ifeq ($(NVCC),)
