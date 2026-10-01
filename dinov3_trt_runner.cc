@@ -94,6 +94,7 @@ public:
     // py-ref: negicc_station/src/tensorrt_intent_model.py:200-274 @ 2f7ee4a (predict / execution loop)
     void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
              const DinoV3RunnerOutputs& outputs) override {
+        std::lock_guard<std::mutex> lock(m_infer_mutex);
         const size_t pv_bytes = (size_t)3 * height * width * sizeof(float);
         const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
 
@@ -130,6 +131,7 @@ public:
     }
 
 private:
+    std::mutex m_infer_mutex;
     std::unique_ptr<nvinfer1::IRuntime> m_runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> m_engine;
     std::unique_ptr<nvinfer1::IExecutionContext> m_context;
@@ -156,7 +158,8 @@ bool cuda_device_available() {
             if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess && prop.canMapHostMemory) {
                 available = true;
             } else {
-                available = true;
+                cudaGetLastError(); // Clear error state if prop check failed
+                available = false;
             }
         } else {
             cudaGetLastError(); // Clear error state if no device

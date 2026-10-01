@@ -1,9 +1,9 @@
 // Inference runners behind DinoV3Engine: one fused-model forward pass on preprocessed tensors.
 //
-// The ONNX Runtime CPU runner (dinov3_ort_runner.cpp) is built everywhere. The TensorRT runner
-// (dinov3_trt_runner.cpp) is built only with USE_CUDA=1 and runs the device-specific model.engine that
-// `make engine` builds (src/export_intent_engine.py). When USE_CUDA=0, dinov3_nocuda.cpp provides
-// the fallback stubs.
+// The ONNX Runtime CPU runner (dinov3_ort_runner.cc) is built everywhere. The TensorRT runner
+// (dinov3_trt_runner.cc) is built only with USE_CUDA=1 and runs the device-specific model.engine that
+// `make engine` builds in negicc-station. When USE_CUDA=0, dinov3_nocuda.cc provides the fallback stubs.
+// These sources live in negicc and are consumed by negicc-station via git submodule at 3rd_party/negicc.
 //
 // py-ref: negicc_station/src/export_intent_engine.py:49-70, 104-112 @ 2f7ee4a (output contract)
 // py-ref: negicc_station/src/tensorrt_intent_model.py:249-273 @ 2f7ee4a (multi-head output parsing)
