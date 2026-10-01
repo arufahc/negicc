@@ -14,8 +14,6 @@
 #include <NvInfer.h>
 #include <cuda_runtime.h>
 
-namespace negicc {
-
 namespace {
 
 class TrtLogger : public nvinfer1::ILogger {
@@ -168,5 +166,3 @@ bool cuda_device_available() {
     });
     return available;
 }
-
-}  // namespace negicc

@@ -8,16 +8,14 @@
 // py-ref: negicc_station/src/export_intent_engine.py:49-70, 104-112 @ 2f7ee4a (output contract)
 // py-ref: negicc_station/src/tensorrt_intent_model.py:249-273 @ 2f7ee4a (multi-head output parsing)
 // py-ref: negicc_station/src/dino_geometry.py:23-27 @ 2f7ee4a (IntentPrediction namedtuple)
-#ifndef NEGICC_DINOV3_RUNNER_H
-#define NEGICC_DINOV3_RUNNER_H
+#ifndef DINOV3_RUNNER_H
+#define DINOV3_RUNNER_H
 
 #include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
-
-namespace negicc {
 
 // Multi-head inference result matching Python IntentPrediction.
 // py-ref: negicc_station/src/dino_geometry.py:23-27 @ 2f7ee4a (IntentPrediction namedtuple)
@@ -82,6 +80,4 @@ std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int
 // Checks if a CUDA device is available.
 bool cuda_device_available();
 
-}  // namespace negicc
-
-#endif  // NEGICC_DINOV3_RUNNER_H
+#endif  // DINOV3_RUNNER_H

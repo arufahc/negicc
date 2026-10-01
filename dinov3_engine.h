@@ -1,5 +1,5 @@
-#ifndef NEGICC_DINOV3_ENGINE_H
-#define NEGICC_DINOV3_ENGINE_H
+#ifndef DINOV3_ENGINE_H
+#define DINOV3_ENGINE_H
 
 #include <cstdint>
 #include <cstddef>
@@ -8,8 +8,6 @@
 #include <vector>
 
 #include "dinov3_runner.h"
-
-namespace negicc {
 
 // The fused DINOv3 intent model (src/export_intent_engine.py): inputs pixel_values, pool_weights; outputs mu,
 // sigma, pooled, pooled_tone. Preprocessing reproduces intent_model.predict / dino_geometry.
@@ -51,6 +49,4 @@ private:
     int m_patch_size = 16;
 };
 
-}  // namespace negicc
-
-#endif  // NEGICC_DINOV3_ENGINE_H
+#endif  // DINOV3_ENGINE_H

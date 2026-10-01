@@ -1356,7 +1356,7 @@ int main(int ac, char *av[]) {
       printf("Note: --colorspace srgb was not specified; DINOv3 intent inference expects sRGB pixel data.\n");
     }
     printf("Loading DINOv3 engine from '%s' (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
-    negicc::DinoV3Engine engine;
+    DinoV3Engine engine;
     if (!engine.load(dino_path, dino_backend)) {
       fprintf(stderr, "ERROR! Failed to load DINOv3 engine from '%s'\n", dino_path.c_str());
       delete proc;

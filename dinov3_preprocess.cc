@@ -11,8 +11,6 @@
 #include <cmath>
 #include <vector>
 
-namespace negicc {
-
 namespace {
 
 // ---- Antialiased Bilinear Resampling with Support Widening ----------------------------------------------------
@@ -230,5 +228,3 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
         }
     }
 }
-
-}  // namespace negicc
