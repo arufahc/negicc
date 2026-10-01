@@ -92,44 +92,24 @@ data/ektar100-0-cs100a_train.txt: data/ektar100-0.txt
 data/portra400-0-r190808_train.json: data/portra400-0.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400-0-r190808_train.txt: data/portra400-0.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
-
 data/portra400-0.5-r190808_train.json: data/portra400-0.5.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
-
-data/portra400-0.5-r190808_train.txt: data/portra400-0.5.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/portra400-1-r190808_train.json: data/portra400-1.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400-1-r190808_train.txt: data/portra400-1.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
-
 data/portra400+1-r190808_train.json: data/portra400+1.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
-
-data/portra400+1-r190808_train.txt: data/portra400+1.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/portra400+2-r190808_train.json: data/portra400+2.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400+2-r190808_train.txt: data/portra400+2.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
-
 data/portra400+3-r190808_train.json: data/portra400+3.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
-
-data/portra400+3-r190808_train.txt: data/portra400+3.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/portra400+3.5-r190808_train.json: data/portra400+3.5.txt data/R190808.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt --json $< > $@
 
-data/portra400+3.5-r190808_train.txt: data/portra400+3.5.txt data/R190808.txt
-	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
 
 data/portra160-0-r190808_train.txt: data/portra160-0.txt
 	$(PYTHON) add_ref_readings.py --XYZ=data/R190808.txt $< | tr ' ' ',' > $@
