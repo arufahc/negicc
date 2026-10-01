@@ -17,14 +17,16 @@
 
 #include <omp.h>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 #include "dinov3_preprocess.h"
 
-static constexpr float TOL_PARAM = 0.02f;
-static constexpr float TOL_REL_ERR = 0.015f;
+static constexpr double TOL_PARAM = 0.02;
+static constexpr double TOL_REL_ERR = 0.015;
 
 void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
                          uint16_t* dst, int dst_w, int dst_h) {
@@ -101,102 +103,104 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
   }
 }
 
-static inline float compute_penalties(double e, float hi_clip, double e_center, float& pen_clip, float& pen_e) {
-  const float clip_excess = std::max(0.0f, hi_clip - 2.5f) / 2.0f;
-  pen_clip = 15.0f * (clip_excess * clip_excess);
+// Search state in double, as the reference's Python scalars; candidates are rounded to float only at intent_loss.
+struct GainsD {
+  double e, g, b;
+};
+
+static inline double compute_penalties(double e, float hi_clip, double e_center, double& pen_clip, double& pen_e) {
+  const double clip_excess = std::max(0.0, (double)hi_clip - 2.5) / 2.0;
+  pen_clip = 15.0 * (clip_excess * clip_excess);
   if (e_center > 0.0) {
     const double log2_ratio = std::log2(e / e_center);
-    pen_e = (float)(5.0 * log2_ratio * log2_ratio);
+    pen_e = 5.0 * log2_ratio * log2_ratio;
   } else {
-    pen_e = 0.0f;
+    pen_e = 0.0;
   }
   return pen_clip + pen_e;
 }
 
-float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
-                                 int gw, int gh, const float* mu, const float* sigma,
-                                 const IntentGains* initial, const float* e_bounds,
-                                 unsigned pin_mask, IntentGains& out) {
-  const int n_cells = gw * gh;
-  double curr_g = (initial != nullptr) ? (double)initial->g : 1.22;
-  double curr_b = (initial != nullptr) ? (double)initial->b : 1.15;
+static inline IntentLoss eval_one(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
+                                  double e, double g, double b, const float* mu, const float* sigma) {
+  const IntentGains cand{(float)e, (float)g, (float)b};
+  IntentLoss r;
+  intent_loss(cfg, merged, grid_rgb16, n_px, &cand, 1, mu, sigma, &r);
+  return r;
+}
 
-  double e_min = 0.40, e_max = 1.80, e_center = 1.0;
+static double optimize_impl(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
+                            int gw, int gh, const float* mu, const float* sigma,
+                            const GainsD* initial, const double* e_bounds,
+                            unsigned pin_mask, GainsD& out) {
+  const int n_cells = gw * gh;
+  // A pinned gain stays at its start value (relative 1 without initial), never at the reference's free defaults.
+  double curr_g = initial ? initial->g : ((pin_mask & PIN_G) ? 1.0 : 1.22);
+  double curr_b = initial ? initial->b : ((pin_mask & PIN_B) ? 1.0 : 1.15);
+
+  double e_min, e_max, e_center;
   std::vector<double> e_cands_d;
 
   if (pin_mask & PIN_E) {
-    const double fixed_e = (initial != nullptr) ? (double)initial->e : 1.0;
+    const double fixed_e = initial ? initial->e : 1.0;
     e_cands_d.push_back(fixed_e);
-    e_min = fixed_e;
-    e_max = fixed_e;
-    e_center = fixed_e;
+    e_min = e_max = e_center = fixed_e;
   } else if (e_bounds != nullptr) {
     e_min = e_bounds[0];
     e_max = e_bounds[1];
     e_center = e_bounds[2];
-    for (int i = 0; i < 13; ++i) {
-      e_cands_d.push_back(e_min + (e_max - e_min) * ((double)i / 12.0));
-    }
-    if (initial != nullptr) {
-      const double de_list[5] = {-0.06, -0.03, 0.0, 0.03, 0.06};
-      for (double de : de_list) {
-        const double c = (double)initial->e + de;
-        if (c >= e_min && c <= e_max) {
-          e_cands_d.push_back(c);
-        }
+    // np.linspace: start + i * step, endpoint pinned to stop
+    const double lin_step = (e_max - e_min) / 12.0;
+    for (int i = 0; i < 12; ++i) e_cands_d.push_back(e_min + i * lin_step);
+    e_cands_d.push_back(e_max);
+    if (initial) {
+      for (double de : {-0.06, -0.03, 0.0, 0.03, 0.06}) {
+        const double c = initial->e + de;
+        if (c >= e_min && c <= e_max) e_cands_d.push_back(c);
       }
     }
     std::sort(e_cands_d.begin(), e_cands_d.end());
     e_cands_d.erase(std::unique(e_cands_d.begin(), e_cands_d.end()), e_cands_d.end());
-  } else if (initial != nullptr) {
-    const double init_e = (double)initial->e;
+  } else if (initial) {
     e_min = 0.20;
     e_max = 3.0;
-    e_center = init_e;
-    const double de_list[9] = {-0.15, -0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10, 0.15};
-    for (double d : de_list) {
-      if (init_e + d >= 0.20) e_cands_d.push_back(init_e + d);
+    e_center = initial->e;
+    for (double d : {-0.15, -0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10, 0.15}) {
+      if (initial->e + d >= 0.20) e_cands_d.push_back(initial->e + d);
     }
   } else {
     e_min = 0.40;
     e_max = 1.80;
     e_center = 1.0;
-    const double fixed_cands[11] = {0.40, 0.50, 0.60, 0.70, 0.80, 0.95, 1.10, 1.25, 1.40, 1.55, 1.70};
-    for (double val : fixed_cands) e_cands_d.push_back(val);
+    e_cands_d = {0.40, 0.50, 0.60, 0.70, 0.80, 0.95, 1.10, 1.25, 1.40, 1.55, 1.70};
   }
 
-  std::vector<IntentGains> cands_e(e_cands_d.size());
-  for (size_t i = 0; i < e_cands_d.size(); ++i) {
-    cands_e[i] = {(float)e_cands_d[i], (float)curr_g, (float)curr_b};
-  }
+  // 1. Exposure sweep (first minimum)
+  std::vector<IntentGains> cands(e_cands_d.size());
+  for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)curr_g, (float)curr_b};
+  std::vector<IntentLoss> losses(cands.size());
+  intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
 
-  std::vector<IntentLoss> losses_e(cands_e.size());
-  intent_loss(cfg, merged, grid_rgb16, n_cells, cands_e.data(), (int)cands_e.size(), mu, sigma, losses_e.data());
-
+  double p_clip, p_e;
   size_t best_k = 0;
-  float best_score_e = 1e30f;
+  double best_score_e = 0.0;
   for (size_t i = 0; i < e_cands_d.size(); ++i) {
-    float p_clip = 0.0f, p_e = 0.0f;
-    const float score = losses_e[i].L + compute_penalties(e_cands_d[i], losses_e[i].clip, e_center, p_clip, p_e);
-    if (score < best_score_e) {
+    const double score = (double)losses[i].L + compute_penalties(e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+    if (i == 0 || score < best_score_e) {
       best_score_e = score;
       best_k = i;
     }
   }
   double best_e = e_cands_d[best_k];
 
-  // E refinement (sequential)
+  // Exposure refinement (sequential, fixed base)
   if (!(pin_mask & PIN_E)) {
     const double step = (e_max > e_min) ? std::max(0.01, (e_max - e_min) / 40.0) : 0.02;
-    const double de_steps[4] = {-2.0 * step, -step, step, 2.0 * step};
-    for (double de : de_steps) {
-      const double e_test = best_e + de;
+    const double base_e = best_e;
+    for (double de : {-2.0 * step, -step, step, 2.0 * step}) {
+      const double e_test = base_e + de;
       if (e_test < e_min || e_test > e_max) continue;
-      const IntentGains cand{(float)e_test, (float)curr_g, (float)curr_b};
-      IntentLoss r;
-      intent_loss(cfg, merged, grid_rgb16, n_cells, &cand, 1, mu, sigma, &r);
-      float p_clip = 0.0f, p_e = 0.0f;
-      const float s = r.L + compute_penalties(e_test, r.clip, e_center, p_clip, p_e);
+      const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, curr_g, curr_b, mu, sigma);
+      const double s = (double)r.L + compute_penalties(e_test, r.clip, e_center, p_clip, p_e);
       if (s < best_score_e) {
         best_score_e = s;
         best_e = e_test;
@@ -204,92 +208,80 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
     }
   }
 
-  // Chromatic gains: g sweep then b sweep
-  std::vector<double> g_cands_d;
-  std::vector<double> b_cands_d;
+  // 2. Chromatic gains: g sweep, then b sweep
+  std::vector<double> g_cands_d, b_cands_d;
   if (pin_mask & PIN_G) {
-    g_cands_d.push_back(curr_g);
-  } else if (initial != nullptr) {
-    const double dg_list[5] = {-0.04, -0.02, 0.0, 0.02, 0.04};
-    for (double d : dg_list) g_cands_d.push_back((double)initial->g + d);
+    g_cands_d = {curr_g};
+  } else if (initial) {
+    for (double d : {-0.04, -0.02, 0.0, 0.02, 0.04}) g_cands_d.push_back(initial->g + d);
   } else {
-    const double def_g[6] = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
-    for (double v : def_g) g_cands_d.push_back(v);
+    g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   }
-
   if (pin_mask & PIN_B) {
-    b_cands_d.push_back(curr_b);
-  } else if (initial != nullptr) {
-    const double db_list[5] = {-0.06, -0.03, 0.0, 0.03, 0.06};
-    for (double d : db_list) b_cands_d.push_back((double)initial->b + d);
+    b_cands_d = {curr_b};
+  } else if (initial) {
+    for (double d : {-0.06, -0.03, 0.0, 0.03, 0.06}) b_cands_d.push_back(initial->b + d);
   } else {
-    const double def_b[6] = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
-    for (double v : def_b) b_cands_d.push_back(v);
+    b_cands_d = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   }
 
-  std::vector<IntentGains> cands_g(g_cands_d.size());
-  for (size_t i = 0; i < g_cands_d.size(); ++i) {
-    cands_g[i] = {(float)best_e, (float)g_cands_d[i], (float)curr_b};
+  cands.resize(g_cands_d.size());
+  losses.resize(g_cands_d.size());
+  for (size_t i = 0; i < g_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)g_cands_d[i], (float)curr_b};
+  intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+  size_t k = 0;
+  for (size_t i = 1; i < g_cands_d.size(); ++i) {
+    if (losses[i].a < losses[k].a) k = i;
   }
-  std::vector<IntentLoss> losses_g(cands_g.size());
-  intent_loss(cfg, merged, grid_rgb16, n_cells, cands_g.data(), (int)cands_g.size(), mu, sigma, losses_g.data());
+  double best_g = g_cands_d[k];
+  const float best_loss_a = losses[k].a;
 
-  size_t best_g_idx = 0;
-  float best_loss_a = 1e30f;
-  for (size_t i = 0; i < g_cands_d.size(); ++i) {
-    if (losses_g[i].a < best_loss_a) {
-      best_loss_a = losses_g[i].a;
-      best_g_idx = i;
-    }
+  cands.resize(b_cands_d.size());
+  losses.resize(b_cands_d.size());
+  for (size_t i = 0; i < b_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)best_g, (float)b_cands_d[i]};
+  intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+  k = 0;
+  for (size_t i = 1; i < b_cands_d.size(); ++i) {
+    if (losses[i].b < losses[k].b) k = i;
   }
-  double best_g = g_cands_d[best_g_idx];
+  double best_b = b_cands_d[k];
+  const float best_loss_b = losses[k].b;
 
-  std::vector<IntentGains> cands_b(b_cands_d.size());
-  for (size_t i = 0; i < b_cands_d.size(); ++i) {
-    cands_b[i] = {(float)best_e, (float)best_g, (float)b_cands_d[i]};
-  }
-  std::vector<IntentLoss> losses_b(cands_b.size());
-  intent_loss(cfg, merged, grid_rgb16, n_cells, cands_b.data(), (int)cands_b.size(), mu, sigma, losses_b.data());
-
-  size_t best_b_idx = 0;
-  float best_loss_b = 1e30f;
-  for (size_t i = 0; i < b_cands_d.size(); ++i) {
-    if (losses_b[i].b < best_loss_b) {
-      best_loss_b = losses_b[i].b;
-      best_b_idx = i;
-    }
-  }
-  double best_b = b_cands_d[best_b_idx];
-
-  // g/b fine-tune (sequential, chained)
+  // 3. g/b fine-tune (sequential, chained)
   double best_gb = (double)best_loss_a + (double)best_loss_b;
-  const double dg_chain[4] = {-0.02, 0.02, 0.0, 0.0};
-  const double db_chain[4] = {0.0, 0.0, -0.02, 0.02};
-  for (int step = 0; step < 4; ++step) {
-    if ((pin_mask & PIN_G) && dg_chain[step] != 0.0) continue;
-    if ((pin_mask & PIN_B) && db_chain[step] != 0.0) continue;
-    const double test_g = best_g + dg_chain[step];
-    const double test_b = best_b + db_chain[step];
-    const IntentGains cand{(float)best_e, (float)test_g, (float)test_b};
-    IntentLoss r;
-    intent_loss(cfg, merged, grid_rgb16, n_cells, &cand, 1, mu, sigma, &r);
+  const double chain[4][2] = {{-0.02, 0.0}, {0.02, 0.0}, {0.0, -0.02}, {0.0, 0.02}};
+  for (const auto& d : chain) {
+    if ((pin_mask & PIN_G) && d[0] != 0.0) continue;
+    if ((pin_mask & PIN_B) && d[1] != 0.0) continue;
+    const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g + d[0], best_b + d[1], mu, sigma);
     if ((double)r.a + (double)r.b < best_gb) {
       best_gb = (double)r.a + (double)r.b;
-      best_g = test_g;
-      best_b = test_b;
+      best_g += d[0];
+      best_b += d[1];
     }
   }
 
-  // Final balanced intent loss and score
-  const IntentGains final_cand{(float)best_e, (float)best_g, (float)best_b};
-  IntentLoss r_final;
-  intent_loss(cfg, merged, grid_rgb16, n_cells, &final_cand, 1, mu, sigma, &r_final);
-  float p_clip = 0.0f, p_e = 0.0f;
-  const float penalties = compute_penalties(best_e, r_final.clip, e_center, p_clip, p_e);
-  const float loss_intent = (r_final.L + r_final.a + r_final.b) / 3.0f;
+  // 4. Final balanced intent loss
+  const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g, best_b, mu, sigma);
+  const double loss_intent = ((double)r.L + (double)r.a + (double)r.b) / 3.0;
+  out = {best_e, best_g, best_b};
+  return loss_intent + compute_penalties(best_e, r.clip, e_center, p_clip, p_e);
+}
 
-  out = final_cand;
-  return loss_intent + penalties;
+float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
+                                 int gw, int gh, const float* mu, const float* sigma,
+                                 const IntentGains* initial, const float* e_bounds,
+                                 unsigned pin_mask, IntentGains& out) {
+  GainsD init_d, out_d;
+  if (initial) init_d = {initial->e, initial->g, initial->b};
+  double bounds_d[3];
+  if (e_bounds) {
+    for (int i = 0; i < 3; ++i) bounds_d[i] = e_bounds[i];
+  }
+  const double score = optimize_impl(cfg, merged, grid_rgb16, gw, gh, mu, sigma, initial ? &init_d : nullptr,
+                                     e_bounds ? bounds_d : nullptr, pin_mask, out_d);
+  out = {(float)out_d.e, (float)out_d.g, (float)out_d.b};
+  return (float)score;
 }
 
 static float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
@@ -331,161 +323,183 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
   }
 }
 
+// Inference with the shape and sigma checks the loss relies on (no sigma floor: the reference divides by raw sigma).
+static bool infer_checked(DinoV3Engine& eng, const uint8_t* preview_u8, int w, int h, int gw, int gh,
+                          DinoV3InferenceResult& res, DinoSolveResult& out) {
+  const double t0 = omp_get_wtime();
+  try {
+    res = eng.infer(preview_u8, w, h, w * 3);
+  } catch (const std::exception& e) {
+    fprintf(stderr, "ERROR! DINOv3 inference failed: %s\n", e.what());
+    return false;
+  }
+  out.timing_infer_ms += (omp_get_wtime() - t0) * 1000.0;
+  out.total_inferences++;
+  const size_t n = (size_t)gw * gh * 3;
+  if (res.grid_w != gw || res.grid_h != gh || res.mu.size() != n || res.sigma.size() != n) {
+    fprintf(stderr, "ERROR! DINOv3 intent field shape %dx%d (%zu values) does not match grid %dx%d.\n",
+            res.grid_w, res.grid_h, res.mu.size(), gw, gh);
+    return false;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (!(res.sigma[i] > 0.0f) || !std::isfinite(res.sigma[i]) || !std::isfinite(res.mu[i])) {
+      fprintf(stderr, "ERROR! DINOv3 intent field has non-positive or non-finite sigma/mu at %zu.\n", i);
+      return false;
+    }
+  }
+  return true;
+}
+
+static DinoIterationLog make_log(char tag, int step, const GainsD& p, float residual, const IntentLoss& l,
+                                 double e_center) {
+  DinoIterationLog log;
+  log.tag = tag;
+  log.step = step;
+  log.e = (float)p.e;
+  log.g = (float)p.g;
+  log.b = (float)p.b;
+  log.residual = residual;
+  log.loss_L = l.L;
+  log.loss_a = l.a;
+  log.loss_b = l.b;
+  log.clip_pct = l.clip;
+  double p_clip, p_e;
+  const double pen = compute_penalties(p.e, l.clip, e_center, p_clip, p_e);
+  log.penalty_clip = (float)p_clip;
+  log.penalty_anchor = (float)p_e;
+  log.objective = (float)(((double)l.L + (double)l.a + (double)l.b) / 3.0 + pen);
+  return log;
+}
+
 bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
                          const uint16_t (*image)[4], int w, int h,
                          IntentGains user_gains, unsigned pin_mask,
                          int max_iters, DinoSolveResult& out) {
-  if (!image || w <= 0 || h <= 0 || !cfg.prof) return false;
+  if (!image || w <= 0 || h <= 0 || !cfg.prof || !user_merged) return false;
 
   const double t0_total = omp_get_wtime();
 
   int target_w = 0, target_h = 0, grid_w = 0, grid_h = 0;
   compute_aspect_preserved_shape(w, h, eng.max_size(), eng.patch_size(), target_w, target_h, grid_w, grid_h);
-
   out.grid_w = grid_w;
   out.grid_h = grid_h;
   out.target_w = target_w;
   out.target_h = target_h;
 
   const int n_cells = grid_w * grid_h;
-  std::vector<uint16_t> grid_rgb16(n_cells * 3);
+  if (n_cells <= 0) return false;
+  std::vector<uint16_t> grid_rgb16((size_t)n_cells * 3);
 
   const double t0_views = omp_get_wtime();
   resample_grid_rgb16(image, w, h, grid_rgb16.data(), grid_w, grid_h);
   out.timing_views_ms += (omp_get_wtime() - t0_views) * 1000.0;
 
-  // 1. Exposure anchor E_c bisection (if E is not pinned)
+  // Bootstrap gains (reference (e_c, 1.10, 1.15)); a pinned gain stays at relative 1.
+  const double boot_g = (pin_mask & PIN_G) ? 1.0 : 1.10;
+  const double boot_b = (pin_mask & PIN_B) ? 1.0 : 1.15;
+
+  // 1. Exposure anchor E_c: median L* of the grid render = 50, bisection on log2 E over [-4, 4].
   double e_center = 1.0;
   if (!(pin_mask & PIN_E)) {
-    double log2_lo = -4.0, log2_hi = 4.0;
+    const double lo0 = -4.0, hi0 = 4.0;
+    double log2_lo = lo0, log2_hi = hi0;
+    std::vector<float> l_vals(n_cells);
     for (int iter = 0; iter < 16; ++iter) {
       const double mid = 0.5 * (log2_lo + log2_hi);
-      const double e_cand = std::pow(2.0, mid);
       float m[9];
-      candidate_matrix(user_merged, (float)e_cand, 1.10f, 1.15f, m);
-
-      std::vector<float> l_vals(n_cells);
+      candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
       for (int i = 0; i < n_cells; ++i) {
-        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + i * 3, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof);
-        const Lab lab = srgb_to_lab(v);
-        l_vals[i] = lab.L;
+        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, cfg.knee, cfg.has_gamma,
+                                         cfg.inv_gamma, *cfg.prof);
+        l_vals[i] = srgb_to_lab(v).L;
       }
       std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
-      const float med_L = l_vals[n_cells / 2];
-      if (med_L < 50.0f) {
-        log2_lo = mid;
-      } else {
+      // Negative: more transmittance (larger E) renders a darker positive, so median L* falls with E.
+      if (l_vals[n_cells / 2] < 50.0f) {
         log2_hi = mid;
+      } else {
+        log2_lo = mid;
       }
     }
+    out.anchor_clamped = (log2_lo == lo0 || log2_hi == hi0);
     e_center = std::pow(2.0, 0.5 * (log2_lo + log2_hi));
   }
   out.e_center = (float)e_center;
 
-  // Build merged_norm matrix: all rows scaled by E_c
+  // Search in E_c-normalized units: all rows scaled once by E_c.
   float merged_norm[9];
-  for (int i = 0; i < 9; ++i) {
-    merged_norm[i] = user_merged[i] * (float)e_center;
-  }
+  for (int i = 0; i < 9; ++i) merged_norm[i] = user_merged[i] * (float)e_center;
 
-  const float e_bounds[3] = {
-    (float)std::pow(2.0, -1.5),
-    (float)std::pow(2.0, 1.5),
-    1.0f
-  };
-  out.bounds_lo = e_bounds[0];
-  out.bounds_hi = e_bounds[1];
+  const double e_bounds[3] = {std::pow(2.0, -1.5), std::pow(2.0, 1.5), 1.0};
+  out.bounds_lo = (float)e_bounds[0];
+  out.bounds_hi = (float)e_bounds[1];
 
   std::vector<uint8_t> preview_u8((size_t)w * h * 3);
+  DinoV3InferenceResult inf;
 
-  // If all parameters are pinned, render once to acquire intent features and exit
+  // All pinned: no search; one render + inference for the intent field at the user's parameters.
   if (pin_mask == (PIN_E | PIN_G | PIN_B)) {
     const double t0_r = omp_get_wtime();
-    render_crop_preview(cfg, merged_norm, image, w, h, 1.0f / (float)e_center, 1.0f, 1.0f, preview_u8.data());
+    render_crop_preview(cfg, merged_norm, image, w, h, 1.0f, 1.0f, 1.0f, preview_u8.data());
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
-
-    const double t0_inf = omp_get_wtime();
-    const auto inf = eng.infer(preview_u8.data(), w, h, w * 3);
-    out.timing_infer_ms += (omp_get_wtime() - t0_inf) * 1000.0;
-    out.total_inferences = 1;
+    if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
     out.status = "PINNED";
     out.best_iteration = 0;
-    out.best_residual = 0.0f;
+    out.best_residual = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h,
+                                                  inf.mu.data(), inf.sigma.data());
     out.solved_relative = {1.0f, 1.0f, 1.0f};
     out.solved_absolute = user_gains;
-    out.best_mu = inf.mu;
-    out.best_sigma = inf.sigma;
-    out.tone_mass = inf.tone_mass;
+    out.best_mu = std::move(inf.mu);
+    out.best_sigma = std::move(inf.sigma);
+    out.tone_mass = std::move(inf.tone_mass);
+    out.timing_total_ms = (omp_get_wtime() - t0_total) * 1000.0;
     return true;
   }
 
-  // Bootstrap inference at normalized theta_boot = (1.0, 1.10, 1.15)
+  // 2. Bootstrap: render at (1, boot_g, boot_b), infer, search with initial = null.
+  const GainsD boot{1.0, boot_g, boot_b};
   const double t0_r_boot = omp_get_wtime();
-  render_crop_preview(cfg, merged_norm, image, w, h, 1.0f, 1.10f, 1.15f, preview_u8.data());
+  render_crop_preview(cfg, merged_norm, image, w, h, (float)boot.e, (float)boot.g, (float)boot.b, preview_u8.data());
   out.timing_render_ms += (omp_get_wtime() - t0_r_boot) * 1000.0;
+  if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
-  const double t0_inf_boot = omp_get_wtime();
-  const auto inf_boot = eng.infer(preview_u8.data(), w, h, w * 3);
-  out.timing_infer_ms += (omp_get_wtime() - t0_inf_boot) * 1000.0;
-  out.total_inferences++;
+  const double anchor_center = (pin_mask & PIN_E) ? 0.0 : 1.0;  // pinned E drops P_anchor
+  out.iterations.push_back(make_log('b', -1, boot, -1.0f,
+                                    eval_one(cfg, merged_norm, grid_rgb16.data(), n_cells, boot.e, boot.g, boot.b,
+                                             inf.mu.data(), inf.sigma.data()),
+                                    anchor_center));
 
-  // Log bootstrap row
-  IntentGains boot_gains{1.0f, 1.10f, 1.15f};
-  IntentLoss boot_loss;
-  intent_loss(cfg, merged_norm, grid_rgb16.data(), n_cells, &boot_gains, 1,
-              inf_boot.mu.data(), inf_boot.sigma.data(), &boot_loss);
-  float boot_p_clip = 0.0f, boot_p_e = 0.0f;
-  const float boot_penalties = compute_penalties(1.0, boot_loss.clip, 1.0, boot_p_clip, boot_p_e);
-  const float boot_obj = (boot_loss.L + boot_loss.a + boot_loss.b) / 3.0f + boot_penalties;
-
-  DinoIterationLog boot_log;
-  boot_log.tag = 'b';
-  boot_log.step = -1;
-  boot_log.e = 1.0f;
-  boot_log.g = 1.10f;
-  boot_log.b = 1.15f;
-  boot_log.residual = -1.0f;
-  boot_log.loss_L = boot_loss.L;
-  boot_log.loss_a = boot_loss.a;
-  boot_log.loss_b = boot_loss.b;
-  boot_log.clip_pct = boot_loss.clip;
-  boot_log.penalty_clip = boot_p_clip;
-  boot_log.penalty_anchor = boot_p_e;
-  boot_log.objective = boot_obj;
-  out.iterations.push_back(boot_log);
-
-  // Bootstrap initial search
   const double t0_search_boot = omp_get_wtime();
-  IntentGains curr;
-  optimize_target_for_intent(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h,
-                             inf_boot.mu.data(), inf_boot.sigma.data(),
-                             nullptr, e_bounds, pin_mask, curr);
+  GainsD curr;
+  optimize_impl(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
+                nullptr, e_bounds, pin_mask, curr);
   out.timing_search_ms += (omp_get_wtime() - t0_search_boot) * 1000.0;
 
-  float prev_err = 1e30f;
-  float best_err = 1e30f;
-  IntentGains best_params = curr;
-  DinoV3InferenceResult best_inf = inf_boot;
+  // 3. Fixed-point loop (reference fixed_point).
+  double prev_err = HUGE_VAL;
+  double best_err = HUGE_VAL;
+  GainsD best_params = curr;
+  DinoV3InferenceResult best_inf;
   int best_it = -1;
-
   std::string status = "MAX_ITERS";
   const int loop_limit = std::max(1, max_iters);
 
   for (int it = 0; it < loop_limit; ++it) {
     const double t0_r = omp_get_wtime();
-    render_crop_preview(cfg, merged_norm, image, w, h, curr.e, curr.g, curr.b, preview_u8.data());
+    render_crop_preview(cfg, merged_norm, image, w, h, (float)curr.e, (float)curr.g, (float)curr.b,
+                        preview_u8.data());
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
-
-    const double t0_inf = omp_get_wtime();
-    const auto inf = eng.infer(preview_u8.data(), w, h, w * 3);
-    out.timing_infer_ms += (omp_get_wtime() - t0_inf) * 1000.0;
-    out.total_inferences++;
+    if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
     const double t0_resid = omp_get_wtime();
-    const float err = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h,
-                                               inf.mu.data(), inf.sigma.data());
+    const double err = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h,
+                                                 inf.mu.data(), inf.sigma.data());
     out.timing_residual_ms += (omp_get_wtime() - t0_resid) * 1000.0;
+
+    const IntentLoss it_loss = eval_one(cfg, merged_norm, grid_rgb16.data(), n_cells, curr.e, curr.g, curr.b,
+                                        inf.mu.data(), inf.sigma.data());
+    DinoIterationLog it_log = make_log((char)('0' + it % 10), it, curr, (float)err, it_loss, anchor_center);
 
     if (err < best_err) {
       best_err = err;
@@ -494,87 +508,48 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
       best_it = it;
     }
 
-    // Divergence check
-    if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
+    // Diverged: checked before the search, as the reference.
+    if (it > 0 && err > prev_err * 1.25 && (err - prev_err) > 1.5) {
       status = "DIVERGED";
-      DinoIterationLog div_log;
-      div_log.tag = '0' + (char)it;
-      div_log.step = it;
-      div_log.e = curr.e;
-      div_log.g = curr.g;
-      div_log.b = curr.b;
-      div_log.residual = err;
-      out.iterations.push_back(div_log);
+      out.iterations.push_back(it_log);
       break;
     }
 
-    // Search against latest mu, sigma
     const double t0_s = omp_get_wtime();
-    IntentGains next_params;
-    optimize_target_for_intent(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h,
-                               inf.mu.data(), inf.sigma.data(),
-                               &curr, e_bounds, pin_mask, next_params);
+    GainsD next;
+    optimize_impl(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
+                  &curr, e_bounds, pin_mask, next);
     out.timing_search_ms += (omp_get_wtime() - t0_s) * 1000.0;
 
-    const float dp = std::abs(next_params.e - curr.e) +
-                     std::abs(next_params.g - curr.g) +
-                     std::abs(next_params.b - curr.b);
-    const float rel = (it > 0) ? (std::abs(err - prev_err) / std::max(1e-4f, prev_err)) : 1.0f;
-
-    // Evaluate iteration diagnostic losses
-    IntentLoss it_loss;
-    intent_loss(cfg, merged_norm, grid_rgb16.data(), n_cells, &curr, 1,
-                inf.mu.data(), inf.sigma.data(), &it_loss);
-    float it_p_clip = 0.0f, it_p_e = 0.0f;
-    const float it_pen = compute_penalties(curr.e, it_loss.clip, 1.0, it_p_clip, it_p_e);
-    const float it_obj = (it_loss.L + it_loss.a + it_loss.b) / 3.0f + it_pen;
-
-    DinoIterationLog it_log;
-    it_log.tag = '0' + (char)it;
-    it_log.step = it;
-    it_log.e = curr.e;
-    it_log.g = curr.g;
-    it_log.b = curr.b;
-    it_log.residual = err;
-    it_log.loss_L = it_loss.L;
-    it_log.loss_a = it_loss.a;
-    it_log.loss_b = it_loss.b;
-    it_log.clip_pct = it_loss.clip;
-    it_log.penalty_clip = it_p_clip;
-    it_log.penalty_anchor = it_p_e;
-    it_log.objective = it_obj;
-    it_log.dp = dp;
-    it_log.rel = rel;
+    const double dp = std::abs(next.e - curr.e) + std::abs(next.g - curr.g) + std::abs(next.b - curr.b);
+    const double rel = (it > 0) ? std::abs(err - prev_err) / std::max(1e-4, prev_err) : 1.0;
+    it_log.dp = (float)dp;
+    it_log.rel = (float)rel;
     out.iterations.push_back(it_log);
 
+    curr = next;
+    prev_err = err;
     if (it > 0 && (dp <= TOL_PARAM || rel <= TOL_REL_ERR)) {
       status = "CONVERGED";
-      curr = next_params;
-      prev_err = err;
       break;
     }
+  }
 
-    curr = next_params;
-    prev_err = err;
+  if (best_it < 0) {
+    fprintf(stderr, "ERROR! DINOv3 solver produced no finite residual.\n");
+    return false;
   }
 
   out.status = status;
   out.best_iteration = best_it;
-  out.best_residual = best_err;
-  out.solved_relative = {
-    (float)(e_center * best_params.e),
-    best_params.g,
-    best_params.b
-  };
-  out.solved_absolute = {
-    (float)(user_gains.e * e_center * best_params.e),
-    user_gains.g * best_params.g,
-    user_gains.b * best_params.b
-  };
-  out.best_mu = best_inf.mu;
-  out.best_sigma = best_inf.sigma;
-  out.tone_mass = best_inf.tone_mass;
+  out.best_residual = (float)best_err;
+  out.solved_relative = {(float)(e_center * best_params.e), (float)best_params.g, (float)best_params.b};
+  out.solved_absolute = {(float)((double)user_gains.e * e_center * best_params.e),
+                         (float)((double)user_gains.g * best_params.g),
+                         (float)((double)user_gains.b * best_params.b)};
+  out.best_mu = std::move(best_inf.mu);
+  out.best_sigma = std::move(best_inf.sigma);
+  out.tone_mass = std::move(best_inf.tone_mass);
   out.timing_total_ms = (omp_get_wtime() - t0_total) * 1000.0;
-
   return true;
 }
