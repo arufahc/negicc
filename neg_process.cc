@@ -1157,6 +1157,9 @@ int main(int ac, char *av[]) {
            dino_res.grid_w, dino_res.grid_h, dino_res.target_w, dino_res.target_h,
            engine.backend_name(), dino_res.e_center, dino_res.bounds_lo, dino_res.bounds_hi,
            max_iters, pins_str.c_str());
+    if (dino_res.anchor_clamped) {
+      printf("Warning: ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
+    }
     printf(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
     for (const auto& it : dino_res.iterations) {
       if (it.residual < 0.0f) {
@@ -1175,11 +1178,15 @@ int main(int ac, char *av[]) {
            dino_res.solved_relative.e, dino_res.solved_relative.g, dino_res.solved_relative.b);
     printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g\n",
            dino_res.solved_absolute.e, dino_res.solved_absolute.g, dino_res.solved_absolute.b);
+    if (dino_res.solved_relative.g < 0.5f || dino_res.solved_relative.g > 2.0f ||
+        dino_res.solved_relative.b < 0.5f || dino_res.solved_relative.b > 2.0f) {
+      printf("Warning: GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
+    }
     if (dino_res.best_iteration >= 0 && (size_t)dino_res.best_iteration + 1 < dino_res.iterations.size()) {
       const auto& bit = dino_res.iterations[dino_res.best_iteration + 1];
       float log2_ratio = (bit.e > 0.0f) ? std::log2(bit.e) : 0.0f;
-      printf("Penalties: clip %.3f (%.2f%% <= 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
-             bit.penalty_clip, bit.clip_pct, bit.penalty_anchor, log2_ratio);
+      printf("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
+             bit.penalty_clip, bit.clip_pct, bit.clip_pct <= 2.5f ? "<=" : ">", bit.penalty_anchor, log2_ratio);
     }
     printf("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
            dino_res.timing_views_ms, dino_res.timing_render_ms, dino_res.timing_infer_ms,
