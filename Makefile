@@ -368,7 +368,7 @@ $(BUILD_STAMP):
 
 DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(ORT_INC) $(DINOV3_EXTRA_INC)
 
-DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o $(DINOV3_RUNNER_OBJ)
+DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -381,6 +381,10 @@ bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h $(BUILD_ST
 bin_out/dinov3_ort_runner.o: dinov3_ort_runner.cc dinov3_ort_runner.h dinov3_runner.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_ort_runner.cc -o $@
+
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h neg_pipeline.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
 bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_trt_runner.h dinov3_runner.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -399,7 +403,7 @@ lib: bin_out/libnegicc_dinov3.a
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc bin_out/libnegicc_dinov3.a $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
 	mkdir -p bin_out profiles
-	$(CXX) -o $@ neg_process.cc bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -o $@ neg_process.cc bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
