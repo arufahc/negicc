@@ -13,3 +13,5 @@ bin_out
 __pycache__
 .DS_Store
 \#*
+3rd_party/onnxruntime/*
+!3rd_party/onnxruntime/README.md

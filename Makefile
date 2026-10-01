@@ -276,9 +276,10 @@ sony_a7rm4_ektar100+3_r190808: data/ektar100+3-r190808_train.txt clean
 sony_a7rm4_portra400+2: data/portra400+2-cs100a_train.txt clean
 	$(PYTHON) build_prof.py ${BUILD_PROF_FLAGS} --src=$< --white_x=0.3353 --white_y=0.3496 --film_name="Sony A7RM4 Portra400 +2"  $(sony_a7rm4_triband_crosstalk_coefs) --debug
 
-.PHONY: clean
+.PHONY: clean lib neg_process
 clean:
 	rm -f *_prof.ti3 build_prof_diag.csv build_prof.h
+	rm -f bin_out/*.o bin_out/*.a bin_out/.use_cuda_*
 
 .PHONY: sony_a7rm4_portra400_r190808_all
 sony_a7rm4_portra400_r190808_all: \
@@ -315,6 +316,100 @@ raw_info: raw_info.cc
 	mkdir -p bin_out
 	$(CXX) -o bin_out/raw_info raw_info.cc -lraw
 
-neg_process: neg_process.cc
+# ----------------------------------------------------------------------
+# DINOv3 C++ Inference Engine & Library
+# ----------------------------------------------------------------------
+ARCH := $(shell uname -m)
+
+ORT_CANDIDATES := $(wildcard 3rd_party/onnxruntime/include/onnxruntime_cxx_api.h \
+                             ../onnxruntime/include/onnxruntime_cxx_api.h \
+                             ../negicc-station/3rd_party/onnxruntime/include/onnxruntime_cxx_api.h)
+ifneq ($(strip $(ORT_CANDIDATES)),)
+    ORT_DIR ?= $(patsubst %/include/onnxruntime_cxx_api.h,%,$(firstword $(ORT_CANDIDATES)))
+else
+    ORT_DIR ?= 3rd_party/onnxruntime
+endif
+ORT_INC = -I$(ORT_DIR)/include
+ifeq ($(ARCH),aarch64)
+    ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
+else
+    ORT_LIB_DIR ?= $(ORT_DIR)/lib/x86_64
+endif
+ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
+
+NVCC := $(shell which nvcc 2>/dev/null)
+ifeq ($(NVCC),)
+    ifneq ($(wildcard /usr/local/cuda/bin/nvcc),)
+        NVCC := /usr/local/cuda/bin/nvcc
+    else ifneq ($(wildcard /usr/local/cuda-12.6/bin/nvcc),)
+        NVCC := /usr/local/cuda-12.6/bin/nvcc
+    endif
+endif
+
+USE_CUDA ?= $(if $(NVCC),1,0)
+TRT_INC ?= -I/usr/include/$(ARCH)-linux-gnu
+TRT_LIBS ?= -L/usr/lib/$(ARCH)-linux-gnu -lnvinfer
+
+ifeq ($(USE_CUDA),1)
+    ifeq ($(NVCC),)
+        $(error USE_CUDA=1 but nvcc was not found; install CUDA or build with USE_CUDA=0)
+    endif
+    CUDA_INC = -I/usr/local/cuda/include -I/usr/local/cuda-12.6/include
+    CUDA_LIBS = -L/usr/local/cuda/lib64 -L/usr/local/cuda/targets/aarch64-linux/lib -L/usr/local/cuda-12.6/targets/aarch64-linux/lib -lcudart
+    DINOV3_RUNNER_SRC = dinov3_trt_runner.cc
+    DINOV3_RUNNER_OBJ = bin_out/dinov3_trt_runner.o
+    DINOV3_EXTRA_INC = $(CUDA_INC) $(TRT_INC)
+    DINOV3_EXTRA_LIBS = $(CUDA_LIBS) $(TRT_LIBS)
+else ifeq ($(USE_CUDA),0)
+    DINOV3_RUNNER_SRC = dinov3_nocuda.cc
+    DINOV3_RUNNER_OBJ = bin_out/dinov3_nocuda.o
+    DINOV3_EXTRA_INC =
+    DINOV3_EXTRA_LIBS =
+else
+    $(error USE_CUDA must be 0 or 1, got '$(USE_CUDA)')
+endif
+
+BUILD_STAMP = bin_out/.use_cuda_$(USE_CUDA)
+
+$(BUILD_STAMP):
+	mkdir -p bin_out
+	rm -f bin_out/.use_cuda_*
+	touch $@
+
+DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(ORT_INC) $(DINOV3_EXTRA_INC)
+
+DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o $(DINOV3_RUNNER_OBJ)
+
+bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_engine.cc -o $@
+
+bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_preprocess.cc -o $@
+
+bin_out/dinov3_ort_runner.o: dinov3_ort_runner.cc dinov3_ort_runner.h dinov3_runner.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_ort_runner.cc -o $@
+
+bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_trt_runner.h dinov3_runner.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_trt_runner.cc -o $@
+
+bin_out/dinov3_nocuda.o: dinov3_nocuda.cc dinov3_runner.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_nocuda.cc -o $@
+
+bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	rm -f $@
+	ar rcs $@ $(DINOV3_OBJS)
+
+lib: bin_out/libnegicc_dinov3.a
+
+neg_process: bin_out/neg_process
+
+bin_out/neg_process: neg_process.cc bin_out/libnegicc_dinov3.a $(BUILD_STAMP)
 	mkdir -p bin_out profiles
-	$(CXX) -o bin_out/neg_process neg_process.cc -I3rd_party -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp
+	$(CXX) -o $@ neg_process.cc bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+

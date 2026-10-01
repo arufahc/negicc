@@ -36,6 +36,7 @@
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "libraw/libraw.h"
 #include "libraw/tiff_head.h"
+#include "dinov3_engine.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
@@ -1110,6 +1111,11 @@ int main(int ac, char *av[]) {
   parser.add_argument("-o", "--output")
     .required()
     .help("Output file location.");
+  parser.add_argument("--dino")
+    .help("Path to DINOv3 model directory or file (containing model.onnx or model.engine) for photographic intent inference.");
+  parser.add_argument("--dino_backend")
+    .help("DINOv3 inference backend: auto, cpu, or gpu (defaults to auto).")
+    .default_value(std::string("auto"));
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -1342,6 +1348,52 @@ int main(int ac, char *av[]) {
 
   const double t_end = omp_get_wtime();
   printf("Processing time: %f\n", t_end - t_start);
+
+  if (parser.is_used("--dino")) {
+    const std::string dino_path = parser.get<std::string>("--dino");
+    const std::string dino_backend = parser.get<std::string>("--dino_backend");
+    if (encoding != ENCODE_SRGB) {
+      printf("Note: --colorspace srgb was not specified; DINOv3 intent inference expects sRGB pixel data.\n");
+    }
+    printf("Loading DINOv3 engine from '%s' (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
+    negicc::DinoV3Engine engine;
+    if (!engine.load(dino_path, dino_backend)) {
+      fprintf(stderr, "ERROR! Failed to load DINOv3 engine from '%s'\n", dino_path.c_str());
+      delete proc;
+      return 1;
+    }
+    printf("DINOv3 engine loaded [%s] (memory: %.1f MB)\n",
+           engine.backend_name(), (double)engine.memory_bytes() / (1024.0 * 1024.0));
+
+    // Prepare 8-bit RGB buffer for DINOv3 inference
+    std::vector<uint8_t> srgb8(width * height * 3);
+    #pragma omp parallel for schedule(static)
+    for (int j = 0; j < height; ++j) {
+      for (int i = 0; i < width; ++i) {
+        const ushort* px = proc->imgdata.image[j * width + i];
+        srgb8[(j * width + i) * 3 + 0] = static_cast<uint8_t>(px[0] >> 8);
+        srgb8[(j * width + i) * 3 + 1] = static_cast<uint8_t>(px[1] >> 8);
+        srgb8[(j * width + i) * 3 + 2] = static_cast<uint8_t>(px[2] >> 8);
+      }
+    }
+    const double t_dino_start = omp_get_wtime();
+    const auto dino_res = engine.infer(srgb8.data(), width, height, width * 3);
+    const double t_dino_end = omp_get_wtime();
+    printf("DINOv3 inference completed in %.3f s:\n", t_dino_end - t_dino_start);
+    printf("  Grid: %d x %d (patches: %d), Target: %d x %d\n",
+           dino_res.grid_w, dino_res.grid_h, dino_res.num_patches, dino_res.target_w, dino_res.target_h);
+    printf("  Target Lab (mu) dim: %zu, Tolerance (sigma) dim: %zu\n",
+           dino_res.mu.size(), dino_res.sigma.size());
+    if (!dino_res.pooled.empty()) {
+      printf("  Pooled vector dim: %zu\n", dino_res.pooled.size());
+    }
+    if (!dino_res.pooled_tone.empty()) {
+      printf("  Tone-pooled vector dim: %zu\n", dino_res.pooled_tone.size());
+    }
+    if (!dino_res.features_3459.empty()) {
+      printf("  Concatenated features dim: %zu\n", dino_res.features_3459.size());
+    }
+  }
 
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
