@@ -44,8 +44,19 @@ struct IntentLoss {
 struct SolverConfig {
   const ProfileData* prof = nullptr;
   float knee = 0.95f;
+  bool knee_auto = false;
   bool has_gamma = false;
   float inv_gamma = 1.0f;
+};
+
+struct DynamicKneeResult {
+  bool active = false;
+  float knee = 0.95f;
+  float q995 = 0.0f;
+  float knee_fit = 0.95f;
+  float s = 0.0f;
+  float delta_J = 0.0f;
+  bool guard_triggered = false;
 };
 
 struct DinoIterationLog {
@@ -80,6 +91,8 @@ struct DinoSolveResult {
   std::vector<float> best_mu;
   std::vector<float> best_sigma;
   std::vector<float> tone_mass;
+  DynamicKneeResult dynamic_knee;
+  std::vector<uint64_t> best_hist;
   int grid_w = 0;
   int grid_h = 0;
   int target_w = 0;

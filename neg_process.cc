@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <lcms2.h>
 #include <lcms2_plugin.h>
 #include <omp.h>
@@ -872,6 +873,278 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
   return 0;
 }
 
+#ifndef NEGICC_GIT_VERSION
+#define NEGICC_GIT_VERSION "master"
+#endif
+
+static std::string json_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (unsigned char c : s) {
+    switch (c) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b";  break;
+      case '\f': out += "\\f";  break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        if (c < 0x20) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned int)c);
+          out += buf;
+        } else {
+          out += (char)c;
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+static std::string json_num(double val, const char* fmt = "%.6g") {
+  if (!std::isfinite(val)) return "null";
+  char buf[64];
+  snprintf(buf, sizeof(buf), fmt, val);
+  return buf;
+}
+
+static bool write_json_sidecar(
+    const std::string& output_path,
+    int ac, char* av[],
+    const LibRaw* proc,
+    const std::vector<std::string>& files,
+    int orig_w, int orig_h,
+    bool half_size,
+    bool has_roi, const int* roi_coords,
+    int rot_cw, bool hflip, bool vflip,
+    int out_w, int out_h,
+    bool film_base_applied,
+    const std::vector<int>& film_base_rgb,
+    const std::vector<int>& profile_film_base_rgb,
+    bool film_base_cli_used,
+    const std::string& film_profile_path,
+    const float* merged_matrix,
+    float exposure_comp, float gain_g, float gain_b,
+    unsigned pin_mask,
+    float knee, const std::string& knee_source,
+    bool has_dino, const DinoSolveResult& dino_res,
+    const std::string& dino_model_path,
+    const std::string& dino_backend,
+    const std::string& colorspace_name,
+    double t_raw_decode_ms,
+    double t_full_conversion_ms,
+    double t_tiff_write_ms) {
+  const std::string json_path = output_path + ".json";
+  const std::string tmp_path = json_path + ".tmp";
+  FILE* fp = fopen(tmp_path.c_str(), "w");
+  if (!fp) {
+    fprintf(stderr, "Warning: Cannot open sidecar file %s for writing\n", tmp_path.c_str());
+    return false;
+  }
+
+  fprintf(fp, "{\n");
+  fprintf(fp, "  \"schema\": \"negicc.neg_process.sidecar/1\",\n");
+  fprintf(fp, "  \"tool\": {\"name\": \"neg_process\", \"version\": \"%s\"},\n", json_escape(NEGICC_GIT_VERSION).c_str());
+
+  // argv
+  fprintf(fp, "  \"argv\": [");
+  for (int i = 0; i < ac; ++i) {
+    fprintf(fp, "%s\"%s\"", (i > 0 ? ", " : ""), json_escape(av[i]).c_str());
+  }
+  fprintf(fp, "],\n");
+
+  // inputs
+  std::string camera = "Unknown";
+  if (proc) {
+    std::string make = proc->imgdata.idata.make;
+    std::string model = proc->imgdata.idata.model;
+    if (!make.empty() && !model.empty()) {
+      if (model.find(make) == 0) camera = model;
+      else camera = make + " " + model;
+    } else if (!model.empty()) camera = model;
+    else if (!make.empty()) camera = make;
+  }
+  fprintf(fp, "  \"inputs\": {\"raw_files\": [");
+  for (size_t i = 0; i < files.size(); ++i) {
+    fprintf(fp, "%s\"%s\"", (i > 0 ? ", " : ""), json_escape(files[i]).c_str());
+  }
+  fprintf(fp, "], \"camera\": \"%s\", \"iso\": %s, \"shutter\": %s},\n",
+          json_escape(camera).c_str(),
+          proc ? json_num(proc->imgdata.other.iso_speed).c_str() : "0",
+          proc ? json_num(proc->imgdata.other.shutter).c_str() : "0");
+
+  // geometry
+  fprintf(fp, "  \"geometry\": {\n");
+  fprintf(fp, "    \"sensor_size\": [%d, %d], \"half_size\": %s,\n",
+          orig_w, orig_h, half_size ? "true" : "false");
+  fprintf(fp, "    \"roi_source\": \"%s\", ", has_roi ? "cli" : "none");
+  if (has_roi) {
+    fprintf(fp, "\"roi\": [%d, %d, %d, %d],\n", roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3]);
+  } else {
+    fprintf(fp, "\"roi\": null,\n");
+  }
+  fprintf(fp, "    \"rot_cw\": %d, \"hflip\": %s, \"vflip\": %s,\n",
+          rot_cw, hflip ? "true" : "false", vflip ? "true" : "false");
+  fprintf(fp, "    \"output_size\": [%d, %d]\n", out_w, out_h);
+  fprintf(fp, "  },\n");
+
+  // frame_detection
+  fprintf(fp, "  \"frame_detection\": null,\n");
+
+  // film_base
+  fprintf(fp, "  \"film_base\": {\n");
+  fprintf(fp, "    \"source\": \"%s\", \"applied\": %s,\n",
+          film_base_cli_used ? "cli" : "none",
+          film_base_applied ? "true" : "false");
+  fprintf(fp, "    \"film_base_rgb\": [%d, %d, %d], \"std_density\": null,\n",
+          film_base_rgb[0], film_base_rgb[1], film_base_rgb[2]);
+  fprintf(fp, "    \"profile_film_base_rgb\": [%d, %d, %d]\n",
+          profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
+  fprintf(fp, "  },\n");
+
+  // profile
+  if (!film_profile_path.empty()) {
+    fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"icc\", \"bundle_target\": null},\n",
+            json_escape(film_profile_path).c_str());
+  } else {
+    fprintf(fp, "  \"profile\": null,\n");
+  }
+
+  // matrix
+  fprintf(fp, "  \"matrix\": {\"merged\": [");
+  for (int i = 0; i < 9; ++i) {
+    fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(merged_matrix[i], "%.9g").c_str());
+  }
+  fprintf(fp, "],\n");
+  fprintf(fp, "             \"exposure_comp\": %s, \"gain_g\": %s, \"gain_b\": %s,\n",
+          json_num(exposure_comp, "%.9g").c_str(),
+          json_num(gain_g, "%.9g").c_str(),
+          json_num(gain_b, "%.9g").c_str());
+  fprintf(fp, "             \"pins\": {\"e\": %s, \"g\": %s, \"b\": %s}},\n",
+          (pin_mask & PIN_E) ? "true" : "false",
+          (pin_mask & PIN_G) ? "true" : "false",
+          (pin_mask & PIN_B) ? "true" : "false");
+
+  // cli_equivalent
+  fprintf(fp, "  \"cli_equivalent\": [\"-E\", \"%s\", \"--gain_g\", \"%s\", \"--gain_b\", \"%s\", \"--knee\", \"%s\"",
+          json_num(exposure_comp, "%.9g").c_str(),
+          json_num(gain_g, "%.9g").c_str(),
+          json_num(gain_b, "%.9g").c_str(),
+          json_num(knee, "%.9g").c_str());
+  if (has_roi) {
+    fprintf(fp, ", \"--roi\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\"",
+            roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
+            rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+  }
+  fprintf(fp, "],\n");
+
+  // dino
+  if (has_dino) {
+    fprintf(fp, "  \"dino\": {\n");
+    fprintf(fp, "    \"model\": \"%s\", \"backend\": \"%s\", \"grid\": [%d, %d], \"target\": [%d, %d],\n",
+            json_escape(dino_model_path).c_str(), json_escape(dino_backend).c_str(),
+            dino_res.grid_w, dino_res.grid_h, dino_res.target_w, dino_res.target_h);
+    fprintf(fp, "    \"e_center\": %s, \"e_bounds\": [%s, %s], \"status\": \"%s\", \"best_iteration\": %d, \"inferences\": %d,\n",
+            json_num(dino_res.e_center).c_str(),
+            json_num(dino_res.bounds_lo).c_str(),
+            json_num(dino_res.bounds_hi).c_str(),
+            json_escape(dino_res.status).c_str(), dino_res.best_iteration, dino_res.total_inferences);
+    fprintf(fp, "    \"solved_relative\": {\"e\": %s, \"g\": %s, \"b\": %s},\n",
+            json_num(dino_res.solved_relative.e).c_str(),
+            json_num(dino_res.solved_relative.g).c_str(),
+            json_num(dino_res.solved_relative.b).c_str());
+
+    if (!dino_res.iterations.empty() && dino_res.iterations[0].tag == 'b') {
+      const auto& b = dino_res.iterations[0];
+      fprintf(fp, "    \"bootstrap\": {\"e\": %s, \"g\": %s, \"b\": %s, \"loss_L\": %s, \"loss_a\": %s, \"loss_b\": %s, "
+                  "\"clip_pct\": %s, \"penalty_clip\": %s, \"penalty_anchor\": %s, \"objective\": %s},\n",
+              json_num(b.e).c_str(), json_num(b.g).c_str(), json_num(b.b).c_str(),
+              json_num(b.loss_L).c_str(), json_num(b.loss_a).c_str(), json_num(b.loss_b).c_str(),
+              json_num(b.clip_pct).c_str(), json_num(b.penalty_clip).c_str(),
+              json_num(b.penalty_anchor).c_str(), json_num(b.objective).c_str());
+    } else {
+      fprintf(fp, "    \"bootstrap\": null,\n");
+    }
+
+    fprintf(fp, "    \"iterations\": [");
+    bool first_it = true;
+    for (size_t i = 0; i < dino_res.iterations.size(); ++i) {
+      if (dino_res.iterations[i].tag == 'b') continue;
+      const auto& it = dino_res.iterations[i];
+      if (!first_it) fprintf(fp, ",\n      ");
+      else fprintf(fp, "\n      ");
+      first_it = false;
+      fprintf(fp, "{\"e\": %s, \"g\": %s, \"b\": %s, \"residual\": %s, \"loss_L\": %s, \"loss_a\": %s, \"loss_b\": %s, "
+                  "\"clip_pct\": %s, \"penalty_clip\": %s, \"penalty_anchor\": %s, \"objective\": %s}",
+              json_num(it.e).c_str(), json_num(it.g).c_str(), json_num(it.b).c_str(),
+              json_num(it.residual).c_str(), json_num(it.loss_L).c_str(), json_num(it.loss_a).c_str(),
+              json_num(it.loss_b).c_str(), json_num(it.clip_pct).c_str(),
+              json_num(it.penalty_clip).c_str(), json_num(it.penalty_anchor).c_str(),
+              json_num(it.objective).c_str());
+    }
+    if (!first_it) fprintf(fp, "\n    ");
+    fprintf(fp, "],\n");
+
+    fprintf(fp, "    \"tone_mass\": [");
+    for (size_t i = 0; i < dino_res.tone_mass.size(); ++i) {
+      fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(dino_res.tone_mass[i]).c_str());
+    }
+    fprintf(fp, "]\n");
+    fprintf(fp, "  },\n");
+  } else {
+    fprintf(fp, "  \"dino\": null,\n");
+  }
+
+  // tone
+  fprintf(fp, "  \"tone\": {\"knee\": %s, \"knee_source\": \"%s\", ",
+          json_num(knee, "%.9g").c_str(), json_escape(knee_source).c_str());
+  if (has_dino && dino_res.dynamic_knee.active) {
+    fprintf(fp, "\"q995\": %s, \"knee_fit\": %s},\n",
+            json_num(dino_res.dynamic_knee.q995).c_str(),
+            json_num(dino_res.dynamic_knee.knee_fit).c_str());
+  } else {
+    fprintf(fp, "\"q995\": null, \"knee_fit\": null},\n");
+  }
+
+  // output
+  fprintf(fp, "  \"output\": {\"path\": \"%s\", \"colorspace\": \"%s\", \"bits\": 16},\n",
+          json_escape(output_path).c_str(), json_escape(colorspace_name).c_str());
+
+  // timings_ms
+  fprintf(fp, "  \"timings_ms\": {\"raw_decode\": %s, \"frame_detection\": null, ",
+          json_num(t_raw_decode_ms, "%.1f").c_str());
+  if (has_dino) {
+    fprintf(fp, "\"dino_views\": %s, \"dino_render\": %s, \"dino_inference\": %s, \"dino_search\": %s, ",
+            json_num(dino_res.timing_views_ms, "%.1f").c_str(),
+            json_num(dino_res.timing_render_ms, "%.1f").c_str(),
+            json_num(dino_res.timing_infer_ms, "%.1f").c_str(),
+            json_num(dino_res.timing_search_ms, "%.1f").c_str());
+  } else {
+    fprintf(fp, "\"dino_views\": null, \"dino_render\": null, \"dino_inference\": null, \"dino_search\": null, ");
+  }
+  fprintf(fp, "\"full_conversion\": %s, \"tiff_write\": %s}\n",
+          json_num(t_full_conversion_ms, "%.1f").c_str(),
+          json_num(t_tiff_write_ms, "%.1f").c_str());
+
+  fprintf(fp, "}\n");
+  const bool write_ok = (ferror(fp) == 0);
+  const bool close_ok = (fclose(fp) == 0);
+  if (!write_ok || !close_ok) {
+    fprintf(stderr, "Warning: Failed to flush/close sidecar %s\n", tmp_path.c_str());
+    unlink(tmp_path.c_str());
+    return false;
+  }
+
+  if (rename(tmp_path.c_str(), json_path.c_str()) != 0) {
+    fprintf(stderr, "Warning: Failed to rename sidecar from %s to %s\n", tmp_path.c_str(), json_path.c_str());
+    unlink(tmp_path.c_str());
+    return false;
+  }
+  return true;
+}
+
 int main(int ac, char *av[]) {
   argparse::ArgumentParser parser("neg_process");
   parser.add_argument("-H", "--half_size")
@@ -910,9 +1183,12 @@ int main(int ac, char *av[]) {
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--knee")
-    .help("Soft knee highlight compression threshold in [0, 1]. Defaults to 0.95 (>=1.0 disables).")
-    .scan<'g', float>()
-    .default_value(0.95f);
+    .help("Soft knee highlight compression threshold in [0, 1], or 'auto' (requires --dino). Defaults to 0.95 (>=1.0 disables).")
+    .default_value(std::string("0.95"));
+  parser.add_argument("--no-metadata")
+    .help("Disable automatic JSON metadata sidecar generation.")
+    .default_value(false)
+    .implicit_value(true);
   parser.add_argument("--gain_g")
     .help("Additional gain multiplier for the G channel. Defaults to 1.0.")
     .scan<'g', float>()
@@ -978,7 +1254,23 @@ int main(int ac, char *av[]) {
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
   float global_exposure_comp = parser.get<float>("--exposure_comp");
-  const float knee = parser.get<float>("--knee");
+  const std::string knee_str = parser.get<std::string>("--knee");
+  const bool is_knee_auto = (knee_str == "auto");
+  float knee = 0.95f;
+  if (is_knee_auto) {
+    if (!parser.is_used("--dino")) {
+      fprintf(stderr, "ERROR! --knee auto requires --dino\n");
+      return 1;
+    }
+  } else {
+    char* end = nullptr;
+    const float val = strtof(knee_str.c_str(), &end);
+    if (!end || *end != '\0' || end == knee_str.c_str() || !std::isfinite(val) || val <= 0.0f) {
+      fprintf(stderr, "ERROR! Invalid --knee argument '%s'\n", knee_str.c_str());
+      return 1;
+    }
+    knee = val;
+  }
   float gain_g = parser.get<float>("--gain_g");
   float gain_b = parser.get<float>("--gain_b");
   const float gamma = parser.get<float>("--post_correction_gamma");
@@ -1015,6 +1307,7 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
+  const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
   if (files.size() == 4) {
     proc = merge_pixel_shift_streaming(files);
@@ -1061,6 +1354,10 @@ int main(int ac, char *av[]) {
     }
   }
 
+  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0;
+  const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.iwidth;
+  const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.iheight;
+
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
 
@@ -1076,20 +1373,29 @@ int main(int ac, char *av[]) {
   // A single matrix is combined with the above steps combined. Note that scaling is
   // always done after crosstalk correction, hence the scale factor can be applied
   // separately to the R, G and B coefficients.
-  auto profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
-  auto film_base_rgb = parser.get<std::vector<int>>("--film_base_rgb");
+  const auto orig_profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
+  const auto orig_film_base_rgb = parser.get<std::vector<int>>("--film_base_rgb");
+  auto effective_profile_film_base_rgb = orig_profile_film_base_rgb;
+  auto effective_film_base_rgb = orig_film_base_rgb;
+  const bool film_base_cli_used = parser.is_used("--film_base_rgb");
+  const bool film_base_applied = parser.is_used("--profile_film_base_rgb") && parser.is_used("--film_base_rgb");
   // Both --profile_film_base_rgb and --film_base_rgb need to be specified or will
   // give incorrect scaling.
-  if (!parser.is_used("--profile_film_base_rgb") || !parser.is_used("--film_base_rgb")) {
-    profile_film_base_rgb = film_base_rgb = std::vector{1, 1, 1};
+  if (!film_base_applied) {
+    effective_profile_film_base_rgb = effective_film_base_rgb = std::vector{1, 1, 1};
   }
+
+  unsigned pin_mask = 0;
+  if (parser.is_used("-E") || parser.is_used("--exposure_comp")) pin_mask |= PIN_E;
+  if (parser.is_used("--gain_g")) pin_mask |= PIN_G;
+  if (parser.is_used("--gain_b")) pin_mask |= PIN_B;
 
   float merged_matrix[9];
   adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
                            global_exposure_comp,
                            gain_g, gain_b,
-                           profile_film_base_rgb,
-                           film_base_rgb,
+                           effective_profile_film_base_rgb,
+                           effective_film_base_rgb,
                            merged_matrix);
 
   ParsedFilmProfile film_prof;
@@ -1100,6 +1406,8 @@ int main(int ac, char *av[]) {
     }
   }
 
+  DinoSolveResult dino_res;
+
   if (parser.is_used("--dino")) {
     if (!parser.is_used("--film_profile") || !film_prof.data.has_profile) {
       fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
@@ -1107,11 +1415,6 @@ int main(int ac, char *av[]) {
       delete proc;
       return 1;
     }
-
-    unsigned pin_mask = 0;
-    if (parser.is_used("-E") || parser.is_used("--exposure_comp")) pin_mask |= PIN_E;
-    if (parser.is_used("--gain_g")) pin_mask |= PIN_G;
-    if (parser.is_used("--gain_b")) pin_mask |= PIN_B;
 
     const std::string dino_path = parser.get<std::string>("--dino");
     const std::string dino_backend = parser.get<std::string>("--dino_backend");
@@ -1129,12 +1432,12 @@ int main(int ac, char *av[]) {
     SolverConfig cfg;
     cfg.prof = &film_prof.data;
     cfg.knee = knee;
+    cfg.knee_auto = is_knee_auto;
     cfg.has_gamma = has_gamma;
     cfg.inv_gamma = inv_gamma;
 
     const int max_iters = parser.get<int>("--dino_iters");
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
-    DinoSolveResult dino_res;
     if (!solve_dinov3_intent(engine, cfg, merged_matrix,
                              (const uint16_t (*)[4])proc->imgdata.image,
                              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
@@ -1143,6 +1446,10 @@ int main(int ac, char *av[]) {
       proc->free_image();
       delete proc;
       return 1;
+    }
+
+    if (is_knee_auto && dino_res.dynamic_knee.active) {
+      knee = dino_res.dynamic_knee.knee;
     }
 
     std::string pins_str = "none";
@@ -1199,8 +1506,8 @@ int main(int ac, char *av[]) {
     adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
                              global_exposure_comp,
                              gain_g, gain_b,
-                             profile_film_base_rgb,
-                             film_base_rgb,
+                             effective_profile_film_base_rgb,
+                             effective_film_base_rgb,
                              merged_matrix);
   }
 
@@ -1298,11 +1605,49 @@ int main(int ac, char *av[]) {
   }
 
   const double t_end = omp_get_wtime();
+  const double t_full_conversion_ms = (t_end - t_start) * 1000.0;
   printf("Processing time: %f\n", t_end - t_start);
 
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
+  const double t_tiff_0 = omp_get_wtime();
   int ret = write_tiff(proc, attach_profile, output);
+  const double t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
+
+  if (ret != 0 || parser.get<bool>("--no-metadata")) {
+    unlink((output + ".json").c_str());
+  } else {
+    const std::string knee_source = is_knee_auto ? "auto" : (parser.is_used("--knee") ? "cli" : "default");
+    std::string cs_name = "camera-linear";
+    if (encoding == ENCODE_SRGB) {
+      cs_name = "srgb";
+    } else if (encoding == ENCODE_SRGB_LINEAR) {
+      cs_name = "srgb-linear";
+    } else if (encoding == ENCODE_CUSTOM) {
+      cs_name = attach_profile;
+    } else if (encoding == ENCODE_NONE) {
+      cs_name = attach_profile.empty() ? "camera-linear" : attach_profile;
+    }
+
+    write_json_sidecar(output, ac, av, proc, files,
+                       orig_w, orig_h,
+                       parser.get<bool>("--half_size"),
+                       has_roi, roi_coords, rot_cw, hflip, vflip,
+                       width, height,
+                       film_base_applied, orig_film_base_rgb, orig_profile_film_base_rgb,
+                       film_base_cli_used,
+                       parser.is_used("--film_profile") ? parser.get<std::string>("--film_profile") : "",
+                       merged_matrix,
+                       global_exposure_comp, gain_g, gain_b,
+                       pin_mask,
+                       knee, knee_source,
+                       parser.is_used("--dino"), dino_res,
+                       parser.is_used("--dino") ? parser.get<std::string>("--dino") : "",
+                       parser.is_used("--dino_backend") ? parser.get<std::string>("--dino_backend") : "auto",
+                       cs_name,
+                       t_raw_decode_ms, t_full_conversion_ms, t_tiff_write_ms);
+  }
+
   proc->free_image();
   delete proc;
   return ret;
