@@ -12,8 +12,6 @@
 #include <thread>
 #include <vector>
 
-namespace negicc {
-
 namespace {
 
 class OrtCpuRunner : public DinoV3Runner {
@@ -99,5 +97,3 @@ private:
 std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads) {
     return std::make_unique<OrtCpuRunner>(model_path, num_threads);
 }
-
-}  // namespace negicc

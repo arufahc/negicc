@@ -15,8 +15,6 @@
 #include <sys/stat.h>
 #include <vector>
 
-namespace negicc {
-
 namespace {
 
 bool file_exists(const std::string& p) {
@@ -207,5 +205,3 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     return res;
 }
-
-}  // namespace negicc
