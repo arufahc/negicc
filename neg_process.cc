@@ -40,6 +40,7 @@
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
 #include "dinov3_auto_solver.h"
+#include "film_frame_detector.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
@@ -918,12 +919,16 @@ static bool write_json_sidecar(
     int orig_w, int orig_h,
     bool half_size,
     bool has_roi, const int* roi_coords,
+    const std::string& roi_source,
+    const FrameDetection* frame_det,
     int rot_cw, bool hflip, bool vflip,
     int out_w, int out_h,
     bool film_base_applied,
     const std::vector<int>& film_base_rgb,
     const std::vector<int>& profile_film_base_rgb,
-    bool film_base_cli_used,
+    const std::string& film_base_source,
+    float std_density,
+    bool has_std_density,
     const std::string& film_profile_path,
     const float* merged_matrix,
     float exposure_comp, float gain_g, float gain_b,
@@ -934,6 +939,7 @@ static bool write_json_sidecar(
     const std::string& dino_backend,
     const std::string& colorspace_name,
     double t_raw_decode_ms,
+    double t_frame_det_ms,
     double t_full_conversion_ms,
     double t_tiff_write_ms) {
   const std::string json_path = output_path + ".json";
@@ -979,7 +985,7 @@ static bool write_json_sidecar(
   fprintf(fp, "  \"geometry\": {\n");
   fprintf(fp, "    \"sensor_size\": [%d, %d], \"half_size\": %s,\n",
           orig_w, orig_h, half_size ? "true" : "false");
-  fprintf(fp, "    \"roi_source\": \"%s\", ", has_roi ? "cli" : "none");
+  fprintf(fp, "    \"roi_source\": \"%s\", ", json_escape(roi_source).c_str());
   if (has_roi) {
     fprintf(fp, "\"roi\": [%d, %d, %d, %d],\n", roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3]);
   } else {
@@ -991,15 +997,41 @@ static bool write_json_sidecar(
   fprintf(fp, "  },\n");
 
   // frame_detection
-  fprintf(fp, "  \"frame_detection\": null,\n");
+  if (frame_det) {
+    const int s_scale = (half_size && files.size() != 4) ? 2 : 1;
+    fprintf(fp, "  \"frame_detection\": {\n");
+    fprintf(fp, "    \"axis\": \"%c\", \"confidence\": %s, \"reason\": \"%s\",\n",
+            frame_det->axis, json_num(frame_det->conf, "%.2f").c_str(), json_escape(frame_det->reason).c_str());
+    fprintf(fp, "    \"gaps\": [");
+    int g_cnt = 0;
+    for (int g = 0; g < 2; ++g) {
+      if (frame_det->gap[g][0] >= 0) {
+        if (g_cnt > 0) fprintf(fp, ", ");
+        fprintf(fp, "[%d, %d]", frame_det->gap[g][0] * s_scale, frame_det->gap[g][1] * s_scale);
+        g_cnt++;
+      }
+    }
+    fprintf(fp, "], \"segments\": %d, \"n_gaps\": %d, \"selected\": %d,\n",
+            frame_det->n_segments, frame_det->n_gaps, frame_det->selected);
+    fprintf(fp, "    \"aspect\": %s, \"format\": \"%s\"\n",
+            json_num(frame_det->aspect, "%.4g").c_str(), json_escape(frame_det->format).c_str());
+    fprintf(fp, "  },\n");
+  } else {
+    fprintf(fp, "  \"frame_detection\": null,\n");
+  }
 
   // film_base
   fprintf(fp, "  \"film_base\": {\n");
   fprintf(fp, "    \"source\": \"%s\", \"applied\": %s,\n",
-          film_base_cli_used ? "cli" : "none",
+          json_escape(film_base_source).c_str(),
           film_base_applied ? "true" : "false");
-  fprintf(fp, "    \"film_base_rgb\": [%d, %d, %d], \"std_density\": null,\n",
-          film_base_rgb[0], film_base_rgb[1], film_base_rgb[2]);
+  if (film_base_source == "none") {
+    fprintf(fp, "    \"film_base_rgb\": null, \"std_density\": null,\n");
+  } else {
+    fprintf(fp, "    \"film_base_rgb\": [%d, %d, %d], \"std_density\": %s,\n",
+            film_base_rgb[0], film_base_rgb[1], film_base_rgb[2],
+            (film_base_source == "rebate" && has_std_density) ? json_num(std_density, "%.6g").c_str() : "null");
+  }
   fprintf(fp, "    \"profile_film_base_rgb\": [%d, %d, %d]\n",
           profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
   fprintf(fp, "  },\n");
@@ -1037,6 +1069,12 @@ static bool write_json_sidecar(
     fprintf(fp, ", \"--roi\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\"",
             roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
             rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+  }
+  if (film_base_applied) {
+    fprintf(fp, ", \"--film_base_rgb\", \"%d\", \"%d\", \"%d\"",
+            film_base_rgb[0], film_base_rgb[1], film_base_rgb[2]);
+    fprintf(fp, ", \"--profile_film_base_rgb\", \"%d\", \"%d\", \"%d\"",
+            profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
   }
   fprintf(fp, "],\n");
 
@@ -1113,8 +1151,9 @@ static bool write_json_sidecar(
           json_escape(output_path).c_str(), json_escape(colorspace_name).c_str());
 
   // timings_ms
-  fprintf(fp, "  \"timings_ms\": {\"raw_decode\": %s, \"frame_detection\": null, ",
-          json_num(t_raw_decode_ms, "%.1f").c_str());
+  fprintf(fp, "  \"timings_ms\": {\"raw_decode\": %s, \"frame_detection\": %s, ",
+          json_num(t_raw_decode_ms, "%.1f").c_str(),
+          frame_det ? json_num(t_frame_det_ms, "%.1f").c_str() : "null");
   if (has_dino) {
     fprintf(fp, "\"dino_views\": %s, \"dino_render\": %s, \"dino_inference\": %s, \"dino_search\": %s, ",
             json_num(dino_res.timing_views_ms, "%.1f").c_str(),
@@ -1203,18 +1242,15 @@ int main(int ac, char *av[]) {
     .default_value(std::vector<int>{1, 1, 1})
     .scan<'i', int>();
   parser.add_argument("--film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from captured image.")
-    .nargs(3)
-    .default_value(std::vector<int>{1, 1, 1})
-    .scan<'i', int>();
+    .help("Linear (uncorrected) R G B values of the film base from captured image, or 'auto'.")
+    .nargs(1, 3);
   parser.add_argument("-p", "--film_profile")
     .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
-    .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]].")
-    .nargs(4, 7)
-    .scan<'i', int>();
+    .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'.")
+    .nargs(1, 7);
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
     .scan<'i', int>()
@@ -1281,17 +1317,51 @@ int main(int ac, char *av[]) {
   bool hflip = false;
   bool vflip = false;
   int roi_coords[4] = {0, 0, 0, 0};
-  const bool has_roi = parser.is_used("--roi");
+  bool has_roi = false;
+  bool is_roi_auto = false;
+  char roi_axis_hint = 0;
 
-  if (has_roi) {
-    const auto roi_vals = parser.get<std::vector<int>>("--roi");
-    roi_coords[0] = roi_vals[0];
-    roi_coords[1] = roi_vals[1];
-    roi_coords[2] = roi_vals[2];
-    roi_coords[3] = roi_vals[3];
-    if (roi_vals.size() >= 5) rot_cw = roi_vals[4];
-    if (roi_vals.size() >= 6) hflip = (roi_vals[5] != 0);
-    if (roi_vals.size() >= 7) vflip = (roi_vals[6] != 0);
+  if (parser.is_used("--roi")) {
+    const auto roi_tokens = parser.get<std::vector<std::string>>("--roi");
+    if (roi_tokens.empty()) {
+      fprintf(stderr, "ERROR! --roi requires arguments\n");
+      return 1;
+    }
+    if (roi_tokens[0] == "auto") {
+      is_roi_auto = true;
+      if (roi_tokens.size() > 1) {
+        if (roi_tokens[1] == "h" || roi_tokens[1] == "H") {
+          roi_axis_hint = 'h';
+        } else if (roi_tokens[1] == "v" || roi_tokens[1] == "V") {
+          roi_axis_hint = 'v';
+        } else {
+          fprintf(stderr, "ERROR! Invalid --roi auto axis hint '%s' (must be 'h' or 'v')\n", roi_tokens[1].c_str());
+          return 1;
+        }
+      }
+      if (roi_tokens.size() > 2) {
+        fprintf(stderr, "ERROR! Too many arguments for --roi auto\n");
+        return 1;
+      }
+    } else {
+      if (roi_tokens.size() < 4) {
+        fprintf(stderr, "ERROR! --roi requires at least 4 arguments: x y w h [rot_cw [hflip [vflip]]]\n");
+        return 1;
+      }
+      try {
+        roi_coords[0] = std::stoi(roi_tokens[0]);
+        roi_coords[1] = std::stoi(roi_tokens[1]);
+        roi_coords[2] = std::stoi(roi_tokens[2]);
+        roi_coords[3] = std::stoi(roi_tokens[3]);
+        if (roi_tokens.size() >= 5) rot_cw = std::stoi(roi_tokens[4]);
+        if (roi_tokens.size() >= 6) hflip = (std::stoi(roi_tokens[5]) != 0);
+        if (roi_tokens.size() >= 7) vflip = (std::stoi(roi_tokens[6]) != 0);
+        has_roi = true;
+      } catch (const std::exception& e) {
+        fprintf(stderr, "ERROR! Invalid integer argument for --roi\n");
+        return 1;
+      }
+    }
   }
 
   if (parser.is_used("--rot")) {
@@ -1307,6 +1377,39 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
+  bool is_film_base_auto = false;
+  bool film_base_cli_used = false;
+  std::vector<int> user_film_base_rgb = {1, 1, 1};
+
+  if (parser.is_used("--film_base_rgb")) {
+    const auto fb_tokens = parser.get<std::vector<std::string>>("--film_base_rgb");
+    if (fb_tokens.size() == 1 && fb_tokens[0] == "auto") {
+      is_film_base_auto = true;
+    } else if (fb_tokens.size() == 3) {
+      try {
+        user_film_base_rgb[0] = std::stoi(fb_tokens[0]);
+        user_film_base_rgb[1] = std::stoi(fb_tokens[1]);
+        user_film_base_rgb[2] = std::stoi(fb_tokens[2]);
+        film_base_cli_used = true;
+      } catch (const std::exception& e) {
+        fprintf(stderr, "ERROR! Invalid integer argument for --film_base_rgb\n");
+        return 1;
+      }
+    } else {
+      fprintf(stderr, "ERROR! --film_base_rgb requires 3 integers or 'auto'\n");
+      return 1;
+    }
+  }
+
+  if (is_film_base_auto && !is_roi_auto) {
+    fprintf(stderr, "ERROR! --film_base_rgb auto requires --roi auto\n");
+    return 1;
+  }
+  if (is_film_base_auto && !parser.is_used("--profile_film_base_rgb")) {
+    fprintf(stderr, "ERROR! --film_base_rgb auto requires --profile_film_base_rgb\n");
+    return 1;
+  }
+
   const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
   if (files.size() == 4) {
@@ -1315,7 +1418,7 @@ int main(int ac, char *av[]) {
       fprintf(stderr, "ERROR! Failed to merge pixel-shift files\n");
       return 1;
     }
-    if (has_roi || rot_cw != 0 || hflip || vflip) {
+    if (!is_roi_auto && (has_roi || rot_cw != 0 || hflip || vflip)) {
       int rx = has_roi ? roi_coords[0] : 0;
       int ry = has_roi ? roi_coords[1] : 0;
       int rw = has_roi ? roi_coords[2] : proc->imgdata.sizes.iwidth;
@@ -1326,7 +1429,7 @@ int main(int ac, char *av[]) {
         return 1;
       }
       printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip, vflip);
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
     }
   } else {
     const bool has_crosstalk = parser.is_used("-r") || parser.is_used("--r_coeff") ||
@@ -1335,14 +1438,14 @@ int main(int ac, char *av[]) {
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size"),
                     parser.get<int>("--quality"),
-                    !parser.get<bool>("--no_crop") && !has_roi,
+                    !parser.get<bool>("--no_crop") && !has_roi && !is_roi_auto,
                     has_crosstalk,
-                    has_roi ? roi_coords : nullptr);
+                    (!is_roi_auto && has_roi) ? roi_coords : nullptr);
     if (!proc) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
       return 1;
     }
-    if (rot_cw != 0 || hflip || vflip) {
+    if (!is_roi_auto && (rot_cw != 0 || hflip || vflip)) {
       if (!extract_roi_and_transform(proc, 0, 0, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
                                      rot_cw, hflip, vflip)) {
         proc->free_image();
@@ -1350,13 +1453,90 @@ int main(int ac, char *av[]) {
         return 1;
       }
       printf("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip, vflip);
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
     }
   }
 
   const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0;
-  const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.iwidth;
-  const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.iheight;
+  const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.width;
+  const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.height;
+
+  FrameDetection frame_det;
+  double t_frame_det_ms = 0.0;
+  bool rebate_applied = false;
+
+  if (is_roi_auto) {
+    const double t_det_0 = omp_get_wtime();
+    const bool half_size = parser.get<bool>("--half_size");
+    const int cur_w = proc->imgdata.sizes.iwidth;
+    const int cur_h = proc->imgdata.sizes.iheight;
+    const unsigned filters = proc->imgdata.idata.filters;
+
+    bool det_ok = detect_film_frame(
+        (const uint16_t (*)[4])proc->imgdata.image,
+        cur_w, cur_h, filters, half_size,
+        roi_axis_hint, frame_det);
+
+    t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+
+    if (!det_ok) {
+      fprintf(stderr, "ERROR! Film frame detection failed\n");
+      proc->free_image();
+      delete proc;
+      return 1;
+    }
+
+    const int s_scale = (half_size && files.size() != 4) ? 2 : 1;
+    roi_coords[0] = frame_det.x * s_scale;
+    roi_coords[1] = frame_det.y * s_scale;
+    roi_coords[2] = frame_det.w * s_scale;
+    roi_coords[3] = frame_det.h * s_scale;
+    has_roi = true;
+
+    printf("Film frame: axis=%c gaps=%d segments=%d selected=%d conf=%.2f\n",
+           frame_det.axis, frame_det.n_gaps, frame_det.n_segments, frame_det.selected, frame_det.conf);
+    if (frame_det.gap[0][0] >= 0 || frame_det.gap[1][0] >= 0) {
+      printf("  Gaps (sensor px):");
+      if (frame_det.gap[0][0] >= 0) printf(" [%d, %d]", frame_det.gap[0][0] * s_scale, frame_det.gap[0][1] * s_scale);
+      if (frame_det.gap[1][0] >= 0) printf(" [%d, %d]", frame_det.gap[1][0] * s_scale, frame_det.gap[1][1] * s_scale);
+      printf("\n");
+    }
+    printf("  Frame (sensor px): x=%d y=%d w=%d h=%d aspect=%.3f format=%s\n",
+           roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
+           frame_det.aspect, frame_det.format.c_str());
+
+    if (frame_det.has_base) {
+      if (is_film_base_auto) {
+        rebate_applied = true;
+        printf("  Rebate base: R=%d G=%d B=%d (std %.3f D) applied\n",
+               frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+      } else {
+        printf("  Rebate base: R=%d G=%d B=%d (std %.3f D) sampled, unused\n",
+               frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+      }
+    } else if (is_film_base_auto) {
+      printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
+    }
+
+    if (frame_det.conf < 0.5f) {
+      printf("Warning: low detection confidence (conf=%.2f%s%s), using envelope fallback\n",
+             frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
+    }
+
+    if (parser.is_used("--dino") && frame_det.axis == 'v' && rot_cw == 0) {
+      printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+    }
+
+    if (!extract_roi_and_transform(proc, frame_det.x, frame_det.y, frame_det.w, frame_det.h,
+                                   rot_cw, hflip, vflip)) {
+      fprintf(stderr, "ERROR! Failed to extract detected frame ROI\n");
+      proc->free_image();
+      delete proc;
+      return 1;
+    }
+    printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+           proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+  }
 
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
@@ -1374,15 +1554,38 @@ int main(int ac, char *av[]) {
   // always done after crosstalk correction, hence the scale factor can be applied
   // separately to the R, G and B coefficients.
   const auto orig_profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
-  const auto orig_film_base_rgb = parser.get<std::vector<int>>("--film_base_rgb");
-  auto effective_profile_film_base_rgb = orig_profile_film_base_rgb;
-  auto effective_film_base_rgb = orig_film_base_rgb;
-  const bool film_base_cli_used = parser.is_used("--film_base_rgb");
-  const bool film_base_applied = parser.is_used("--profile_film_base_rgb") && parser.is_used("--film_base_rgb");
-  // Both --profile_film_base_rgb and --film_base_rgb need to be specified or will
-  // give incorrect scaling.
-  if (!film_base_applied) {
-    effective_profile_film_base_rgb = effective_film_base_rgb = std::vector{1, 1, 1};
+  std::vector<int> effective_profile_film_base_rgb = orig_profile_film_base_rgb;
+  std::vector<int> effective_film_base_rgb = {1, 1, 1};
+  std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
+  bool film_base_applied = false;
+  std::string film_base_source = "none";
+
+  if (rebate_applied) {
+    effective_film_base_rgb = {frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2]};
+    sidecar_film_base_rgb = effective_film_base_rgb;
+    film_base_applied = true;
+    film_base_source = "rebate";
+  } else if (film_base_cli_used) {
+    sidecar_film_base_rgb = user_film_base_rgb;
+    film_base_source = "cli";
+    if (parser.is_used("--profile_film_base_rgb")) {
+      effective_film_base_rgb = user_film_base_rgb;
+      film_base_applied = true;
+    } else {
+      effective_profile_film_base_rgb = {1, 1, 1};
+      effective_film_base_rgb = {1, 1, 1};
+      film_base_applied = false;
+    }
+  } else {
+    if (frame_det.has_base) {
+      sidecar_film_base_rgb = {frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2]};
+    } else {
+      sidecar_film_base_rgb = {1, 1, 1};
+    }
+    effective_profile_film_base_rgb = {1, 1, 1};
+    effective_film_base_rgb = {1, 1, 1};
+    film_base_applied = false;
+    film_base_source = "none";
   }
 
   unsigned pin_mask = 0;
@@ -1629,13 +1832,23 @@ int main(int ac, char *av[]) {
       cs_name = attach_profile.empty() ? "camera-linear" : attach_profile;
     }
 
+    std::string roi_source = "none";
+    if (is_roi_auto) {
+      roi_source = (frame_det.conf >= 0.5f) ? "auto" : "auto_fallback";
+    } else if (has_roi) {
+      roi_source = "cli";
+    }
+
     write_json_sidecar(output, ac, av, proc, files,
                        orig_w, orig_h,
                        parser.get<bool>("--half_size"),
-                       has_roi, roi_coords, rot_cw, hflip, vflip,
+                       has_roi, roi_coords, roi_source,
+                       is_roi_auto ? &frame_det : nullptr,
+                       rot_cw, hflip, vflip,
                        width, height,
-                       film_base_applied, orig_film_base_rgb, orig_profile_film_base_rgb,
-                       film_base_cli_used,
+                       film_base_applied, sidecar_film_base_rgb, orig_profile_film_base_rgb,
+                       film_base_source,
+                       frame_det.base_std_d, frame_det.has_base,
                        parser.is_used("--film_profile") ? parser.get<std::string>("--film_profile") : "",
                        merged_matrix,
                        global_exposure_comp, gain_g, gain_b,
@@ -1645,7 +1858,7 @@ int main(int ac, char *av[]) {
                        parser.is_used("--dino") ? parser.get<std::string>("--dino") : "",
                        parser.is_used("--dino_backend") ? parser.get<std::string>("--dino_backend") : "auto",
                        cs_name,
-                       t_raw_decode_ms, t_full_conversion_ms, t_tiff_write_ms);
+                       t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms);
   }
 
   proc->free_image();
