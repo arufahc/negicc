@@ -517,8 +517,11 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   // 1. Exposure anchor E_c: median L* of the grid render = 50, bisection on log2 E over [-4, 4].
   double e_center = 1.0;
   if (!(pin_mask & PIN_E)) {
-    const double lo0 = -4.0, hi0 = 4.0;
-    double log2_lo = lo0, log2_hi = hi0;
+    if (cfg.has_custom_bounds && cfg.custom_e_center > 0.0f) {
+      e_center = (double)cfg.custom_e_center;
+    } else {
+      const double lo0 = -4.0, hi0 = 4.0;
+      double log2_lo = lo0, log2_hi = hi0;
     std::vector<float> l_vals(n_cells);
     for (int iter = 0; iter < 16; ++iter) {
       const double mid = 0.5 * (log2_lo + log2_hi);
@@ -539,6 +542,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     }
     out.anchor_clamped = (log2_lo == lo0 || log2_hi == hi0);
     e_center = std::pow(2.0, 0.5 * (log2_lo + log2_hi));
+    }
   }
   out.e_center = (float)e_center;
 
@@ -546,7 +550,16 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   float merged_norm[9];
   for (int i = 0; i < 9; ++i) merged_norm[i] = user_merged[i] * (float)e_center;
 
-  const double e_bounds[3] = {std::pow(2.0, -1.5), std::pow(2.0, 1.5), 1.0};
+  double e_bounds[3];
+  if (cfg.has_custom_bounds) {
+    e_bounds[0] = (double)cfg.custom_e_bounds[0];
+    e_bounds[1] = (double)cfg.custom_e_bounds[1];
+    e_bounds[2] = (double)cfg.custom_e_bounds[2];
+  } else {
+    e_bounds[0] = std::pow(2.0, -1.5);
+    e_bounds[1] = std::pow(2.0, 1.5);
+    e_bounds[2] = 1.0;
+  }
   out.bounds_lo = (float)e_bounds[0];
   out.bounds_hi = (float)e_bounds[1];
 

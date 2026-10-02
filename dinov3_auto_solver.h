@@ -47,6 +47,9 @@ struct SolverConfig {
   bool knee_auto = false;
   bool has_gamma = false;
   float inv_gamma = 1.0f;
+  bool has_custom_bounds = false;
+  float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
+  float custom_e_center = 0.0f;
 };
 
 struct DynamicKneeResult {
