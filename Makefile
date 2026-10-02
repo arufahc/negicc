@@ -407,9 +407,14 @@ bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BU
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
 
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party -c profile_bundle.cc -o $@
+
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc bin_out/film_frame_detector.o bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h $(BUILD_STAMP)
 	mkdir -p bin_out profiles
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc bin_out/film_frame_detector.o bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+
 

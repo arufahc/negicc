@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 struct Rgb {
   float r, g, b;
@@ -47,6 +48,21 @@ struct ProfileData {
   float offset[3] = {0, 0, 0};
   const float* clut = nullptr;
   int clut_dim[3] = {0, 0, 0};
+};
+
+struct ParsedFilmProfile {
+  ProfileData data;
+  std::vector<float> in_trc[3];
+  std::vector<float> out_trc[3];
+  std::vector<float> clut;
+
+  void rebind_pointers() {
+    for (int c = 0; c < 3; ++c) {
+      data.in_trc[c] = in_trc[c].empty() ? nullptr : in_trc[c].data();
+      data.out_trc[c] = out_trc[c].empty() ? nullptr : out_trc[c].data();
+    }
+    data.clut = clut.empty() ? nullptr : clut.data();
+  }
 };
 
 static inline float clamp01(float v) {

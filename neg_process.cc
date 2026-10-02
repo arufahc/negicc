@@ -41,48 +41,11 @@
 #include "neg_pipeline.h"
 #include "dinov3_auto_solver.h"
 #include "film_frame_detector.h"
+#include "profile_bundle.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
 #endif
-
-struct ParsedFilmProfile {
-  ProfileData data;
-  std::vector<float> in_trc[3];
-  std::vector<float> out_trc[3];
-  std::vector<float> clut;
-};
-
-static void read_curve_set(_cmsStageToneCurvesData* data,
-                           std::vector<float> (&out)[3],
-                           int (&out_sizes)[3],
-                           const float* (&out_ptrs)[3]) {
-  for (int c = 0; c < 3; ++c) {
-    if (!data || c >= (int)data->nCurves || !data->TheCurves[c]) {
-      out[c].clear();
-      out_sizes[c] = 0;
-      out_ptrs[c] = nullptr;
-      continue;
-    }
-    cmsToneCurve* tc = data->TheCurves[c];
-    const int entries = cmsGetToneCurveEstimatedTableEntries(tc);
-    const cmsUInt16Number* table = cmsGetToneCurveEstimatedTable(tc);
-    if (entries > 0 && table) {
-      out[c].resize(entries);
-      for (int i = 0; i < entries; ++i) {
-        out[c][i] = table[i] / 65535.0f;
-      }
-    } else {
-      out[c].resize(4096);
-      for (int i = 0; i < 4096; ++i) {
-        float in_v = (float)i / 4095.0f;
-        out[c][i] = cmsEvalToneCurveFloat(tc, in_v);
-      }
-    }
-    out_sizes[c] = (int)out[c].size();
-    out_ptrs[c] = out[c].data();
-  }
-}
 
 std::string resolve_profile_path(const std::string& input_path) {
   FILE* fp = fopen(input_path.c_str(), "rb");
@@ -123,45 +86,10 @@ bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof) {
     fprintf(stderr, "ERROR! Cannot open film ICC profile: %s\n", raw_path.c_str());
     return false;
   }
-  cmsPipeline* pipeline = (cmsPipeline*)cmsReadTag(hprof, cmsSigAToB0Tag);
-  if (!pipeline) {
+  if (!parse_film_profile_pipeline(hprof, prof)) {
     fprintf(stderr, "ERROR! Film ICC profile %s has no AToB0 tag\n", resolved_path.c_str());
     cmsCloseProfile(hprof);
     return false;
-  }
-
-  prof.data.has_profile = 1;
-  const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  memcpy(prof.data.matrix, ident, sizeof(ident));
-  prof.data.offset[0] = prof.data.offset[1] = prof.data.offset[2] = 0.0f;
-
-  int curve_sets = 0;
-  for (cmsStage* st = cmsPipelineGetPtrToFirstStage(pipeline); st; st = cmsStageNext(st)) {
-    const cmsStageSignature type = cmsStageType(st);
-    if (type == cmsSigCurveSetElemType) {
-      auto* cd = (_cmsStageToneCurvesData*)cmsStageData(st);
-      if (curve_sets == 0) {
-        read_curve_set(cd, prof.in_trc, prof.data.in_trc_size, prof.data.in_trc);
-      } else {
-        read_curve_set(cd, prof.out_trc, prof.data.out_trc_size, prof.data.out_trc);
-      }
-      curve_sets++;
-    } else if (type == cmsSigMatrixElemType) {
-      auto* md = (_cmsStageMatrixData*)cmsStageData(st);
-      for (int i = 0; i < 9; ++i) prof.data.matrix[i] = (float)md->Double[i];
-      for (int i = 0; i < 3; ++i) prof.data.offset[i] = md->Offset ? (float)md->Offset[i] : 0.0f;
-    } else if (type == cmsSigCLutElemType) {
-      auto* cl = (_cmsStageCLutData*)cmsStageData(st);
-      for (int i = 0; i < 3; ++i) prof.data.clut_dim[i] = cl->Params->nSamples[i];
-      const size_t n = (size_t)prof.data.clut_dim[0] * prof.data.clut_dim[1] * prof.data.clut_dim[2] * 3;
-      prof.clut.resize(n);
-      if (cl->HasFloatValues) {
-        for (size_t i = 0; i < n; ++i) prof.clut[i] = cl->Tab.TFloat[i];
-      } else {
-        for (size_t i = 0; i < n; ++i) prof.clut[i] = cl->Tab.T[i] / 65535.0f;
-      }
-      prof.data.clut = prof.clut.data();
-    }
   }
   cmsCloseProfile(hprof);
   printf("Reading input ICC profile: %s\n", resolved_path.c_str());
@@ -820,7 +748,8 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
   printf("B coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
 }
 
-int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output) {
+int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
+               const std::vector<uint8_t>& embedded_icc = {}) {
   unsigned* output_profile = NULL;
   unsigned profile_size = 0;
   bool dynamically_allocated = false;
@@ -841,6 +770,10 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
       }
       dynamically_allocated = true;
     }
+  } else if (!embedded_icc.empty()) {
+    printf("Attaching profile: [bundle embedded ICC] (%u bytes)\n", (unsigned)embedded_icc.size());
+    output_profile = reinterpret_cast<unsigned int*>(const_cast<uint8_t*>(embedded_icc.data()));
+    profile_size = (unsigned)embedded_icc.size();
   }
 
   const unsigned height = proc->imgdata.sizes.iheight;
@@ -941,7 +874,10 @@ static bool write_json_sidecar(
     double t_raw_decode_ms,
     double t_frame_det_ms,
     double t_full_conversion_ms,
-    double t_tiff_write_ms) {
+    double t_tiff_write_ms,
+    bool is_bundle = false,
+    const std::string& bundle_target_name = "",
+    int bundle_target_idx = -1) {
   const std::string json_path = output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
   FILE* fp = fopen(tmp_path.c_str(), "w");
@@ -1038,8 +974,13 @@ static bool write_json_sidecar(
 
   // profile
   if (!film_profile_path.empty()) {
-    fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"icc\", \"bundle_target\": null},\n",
-            json_escape(film_profile_path).c_str());
+    if (is_bundle) {
+      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"bundle\", \"bundle_target\": \"%s\"},\n",
+              json_escape(film_profile_path).c_str(), json_escape(bundle_target_name).c_str());
+    } else {
+      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"icc\", \"bundle_target\": null},\n",
+              json_escape(film_profile_path).c_str());
+    }
   } else {
     fprintf(fp, "  \"profile\": null,\n");
   }
@@ -1075,6 +1016,9 @@ static bool write_json_sidecar(
             film_base_rgb[0], film_base_rgb[1], film_base_rgb[2]);
     fprintf(fp, ", \"--profile_film_base_rgb\", \"%d\", \"%d\", \"%d\"",
             profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
+  }
+  if (is_bundle && bundle_target_idx >= 0) {
+    fprintf(fp, ", \"--target\", \"%d\"", bundle_target_idx);
   }
   fprintf(fp, "],\n");
 
@@ -1275,6 +1219,9 @@ int main(int ac, char *av[]) {
     .help("Maximum iterations for DINOv3 parameter solving (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
+  parser.add_argument("--target", "--bundle_target")
+    .help("Target index (0-based) or target name in JSON profile bundle.")
+    .default_value(std::string(""));
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -1401,11 +1348,38 @@ int main(int ac, char *av[]) {
     }
   }
 
+  bool is_bundle = false;
+  ProfileBundle bundle;
+  std::string film_prof_arg;
+  if (parser.is_used("-p") || parser.is_used("--film_profile")) {
+    film_prof_arg = parser.get<std::string>("--film_profile");
+    std::string resolved_prof = resolve_profile_path(film_prof_arg);
+    if (is_json_bundle(resolved_prof)) {
+      if (!load_profile_bundle(resolved_prof, bundle)) {
+        fprintf(stderr, "ERROR! Cannot load profile bundle %s\n", film_prof_arg.c_str());
+        return 1;
+      }
+      is_bundle = true;
+    }
+  }
+
+  if (is_bundle && bundle.has_crosstalk) {
+    if (!parser.is_used("-r") && !parser.is_used("--r_coeff")) {
+      r_coeff = {bundle.crosstalk_matrix[0], bundle.crosstalk_matrix[1], bundle.crosstalk_matrix[2]};
+    }
+    if (!parser.is_used("-g") && !parser.is_used("--g_coeff")) {
+      g_coeff = {bundle.crosstalk_matrix[3], bundle.crosstalk_matrix[4], bundle.crosstalk_matrix[5]};
+    }
+    if (!parser.is_used("-b") && !parser.is_used("--b_coeff")) {
+      b_coeff = {bundle.crosstalk_matrix[6], bundle.crosstalk_matrix[7], bundle.crosstalk_matrix[8]};
+    }
+  }
+
   if (is_film_base_auto && !is_roi_auto) {
     fprintf(stderr, "ERROR! --film_base_rgb auto requires --roi auto\n");
     return 1;
   }
-  if (is_film_base_auto && !parser.is_used("--profile_film_base_rgb")) {
+  if (is_film_base_auto && !parser.is_used("--profile_film_base_rgb") && !(is_bundle && bundle.has_film_base)) {
     fprintf(stderr, "ERROR! --film_base_rgb auto requires --profile_film_base_rgb\n");
     return 1;
   }
@@ -1434,7 +1408,8 @@ int main(int ac, char *av[]) {
   } else {
     const bool has_crosstalk = parser.is_used("-r") || parser.is_used("--r_coeff") ||
                                parser.is_used("-g") || parser.is_used("--g_coeff") ||
-                               parser.is_used("-b") || parser.is_used("--b_coeff");
+                               parser.is_used("-b") || parser.is_used("--b_coeff") ||
+                               (is_bundle && bundle.has_crosstalk);
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size"),
                     parser.get<int>("--quality"),
@@ -1555,6 +1530,10 @@ int main(int ac, char *av[]) {
   // separately to the R, G and B coefficients.
   const auto orig_profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
   std::vector<int> effective_profile_film_base_rgb = orig_profile_film_base_rgb;
+  if (is_bundle && bundle.has_film_base && !parser.is_used("--profile_film_base_rgb")) {
+    effective_profile_film_base_rgb = {bundle.profile_film_base_rgb[0], bundle.profile_film_base_rgb[1], bundle.profile_film_base_rgb[2]};
+  }
+  const std::vector<int> sidecar_profile_film_base_rgb = effective_profile_film_base_rgb;
   std::vector<int> effective_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
   bool film_base_applied = false;
@@ -1568,7 +1547,7 @@ int main(int ac, char *av[]) {
   } else if (film_base_cli_used) {
     sidecar_film_base_rgb = user_film_base_rgb;
     film_base_source = "cli";
-    if (parser.is_used("--profile_film_base_rgb")) {
+    if (parser.is_used("--profile_film_base_rgb") || (is_bundle && bundle.has_film_base)) {
       effective_film_base_rgb = user_film_base_rgb;
       film_base_applied = true;
     } else {
@@ -1602,17 +1581,60 @@ int main(int ac, char *av[]) {
                            merged_matrix);
 
   ParsedFilmProfile film_prof;
-  if (parser.is_used("--film_profile")) {
-    const std::string prof_path = parser.get<std::string>("--film_profile");
-    if (!load_film_profile(prof_path, film_prof)) {
-      fprintf(stderr, "ERROR! Cannot load film profile %s\n", prof_path.c_str());
+  std::vector<uint8_t> embedded_icc;
+  std::string bundle_target_name;
+  int bundle_target_idx = -1;
+  int manual_target_idx = -1;
+
+  if (is_bundle) {
+    if (parser.is_used("--target")) {
+      const std::string tgt_str = parser.get<std::string>("--target");
+      char* end = nullptr;
+      long val = strtol(tgt_str.c_str(), &end, 10);
+      if (end && *end == '\0' && val >= 0 && val < (long)bundle.targets.size()) {
+        manual_target_idx = (int)val;
+      } else {
+        for (size_t i = 0; i < bundle.targets.size(); ++i) {
+          if (bundle.targets[i].name == tgt_str || bundle.targets[i].display_name == tgt_str) {
+            manual_target_idx = (int)i;
+            break;
+          }
+        }
+      }
+      if (manual_target_idx < 0) {
+        fprintf(stderr, "ERROR! Target '%s' not found in bundle\n", tgt_str.c_str());
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+    }
+
+    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+    int num_feasible = 0;
+    compute_bundle_enclosures(bundle,
+                              (const uint16_t (*)[4])proc->imgdata.image,
+                              proc->imgdata.sizes.iwidth,
+                              proc->imgdata.sizes.iheight,
+                              g_lo, g_hi, scene_ev, num_feasible);
+  } else {
+    if (parser.is_used("--target")) {
+      fprintf(stderr, "ERROR! --target requires a JSON profile bundle\n");
+      proc->free_image();
+      delete proc;
+      return 1;
+    }
+    if (parser.is_used("--film_profile")) {
+      const std::string prof_path = parser.get<std::string>("--film_profile");
+      if (!load_film_profile(prof_path, film_prof)) {
+        fprintf(stderr, "ERROR! Cannot load film profile %s\n", prof_path.c_str());
+      }
     }
   }
 
   DinoSolveResult dino_res;
 
   if (parser.is_used("--dino")) {
-    if (!parser.is_used("--film_profile") || !film_prof.data.has_profile) {
+    if (!parser.is_used("--film_profile") || (!is_bundle && !film_prof.data.has_profile)) {
       fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
       proc->free_image();
       delete proc;
@@ -1633,7 +1655,6 @@ int main(int ac, char *av[]) {
            engine.backend_name(), (double)engine.memory_bytes() / (1024.0 * 1024.0));
 
     SolverConfig cfg;
-    cfg.prof = &film_prof.data;
     cfg.knee = knee;
     cfg.knee_auto = is_knee_auto;
     cfg.has_gamma = has_gamma;
@@ -1641,14 +1662,53 @@ int main(int ac, char *av[]) {
 
     const int max_iters = parser.get<int>("--dino_iters");
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
-    if (!solve_dinov3_intent(engine, cfg, merged_matrix,
-                             (const uint16_t (*)[4])proc->imgdata.image,
-                             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                             user_gains, pin_mask, max_iters, dino_res)) {
-      fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
-      proc->free_image();
-      delete proc;
-      return 1;
+
+    if (is_bundle) {
+      if (manual_target_idx >= 0) {
+        bundle_target_idx = manual_target_idx;
+        const auto& tgt = bundle.targets[bundle_target_idx];
+        bundle_target_name = tgt.name;
+        film_prof = tgt.film_prof;
+        film_prof.rebind_pointers();
+        set_target_bounds(cfg, tgt);
+
+        if (!solve_dinov3_intent(engine, cfg, merged_matrix,
+                                 (const uint16_t (*)[4])proc->imgdata.image,
+                                 proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                                 user_gains, pin_mask, max_iters, dino_res)) {
+          fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
+          proc->free_image();
+          delete proc;
+          return 1;
+        }
+      } else {
+        bundle_target_idx = run_bundle_tournament_with_dino(
+            bundle, engine, cfg, merged_matrix,
+            (const uint16_t (*)[4])proc->imgdata.image,
+            proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+            user_gains, pin_mask, max_iters,
+            kDefaultMinTargetIdx, dino_res);
+        if (bundle_target_idx < 0) {
+          fprintf(stderr, "ERROR! Bundle tournament failed.\n");
+          proc->free_image();
+          delete proc;
+          return 1;
+        }
+        bundle_target_name = bundle.targets[bundle_target_idx].name;
+        film_prof = bundle.targets[bundle_target_idx].film_prof;
+        film_prof.rebind_pointers();
+      }
+    } else {
+      cfg.prof = &film_prof.data;
+      if (!solve_dinov3_intent(engine, cfg, merged_matrix,
+                               (const uint16_t (*)[4])proc->imgdata.image,
+                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                               user_gains, pin_mask, max_iters, dino_res)) {
+        fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
     }
 
     if (is_knee_auto && dino_res.dynamic_knee.active) {
@@ -1712,6 +1772,29 @@ int main(int ac, char *av[]) {
                              effective_profile_film_base_rgb,
                              effective_film_base_rgb,
                              merged_matrix);
+  } else if (is_bundle) {
+    if (manual_target_idx >= 0) {
+      bundle_target_idx = manual_target_idx;
+    } else {
+      bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+    }
+    printf("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
+    bundle_target_name = bundle.targets[bundle_target_idx].name;
+    film_prof = bundle.targets[bundle_target_idx].film_prof;
+    film_prof.rebind_pointers();
+    if (!(pin_mask & PIN_E) && bundle.targets[bundle_target_idx].e_center > 0.0f) {
+      global_exposure_comp = bundle.targets[bundle_target_idx].e_center;
+      adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
+                               global_exposure_comp,
+                               gain_g, gain_b,
+                               effective_profile_film_base_rgb,
+                               effective_film_base_rgb,
+                               merged_matrix);
+    }
+  }
+
+  if (is_bundle && bundle_target_idx >= 0) {
+    embedded_icc = bundle.targets[bundle_target_idx].icc_bytes;
   }
 
   OutputEncoding encoding = ENCODE_NONE;
@@ -1745,7 +1828,9 @@ int main(int ac, char *av[]) {
     }
   } else if (parser.is_used("--film_profile")) {
     encoding = ENCODE_NONE;
-    attach_profile = parser.get<std::string>("--film_profile");
+    if (!is_bundle) {
+      attach_profile = parser.get<std::string>("--film_profile");
+    }
   }
 
   const int width = proc->imgdata.sizes.iwidth;
@@ -1814,7 +1899,7 @@ int main(int ac, char *av[]) {
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
   const double t_tiff_0 = omp_get_wtime();
-  int ret = write_tiff(proc, attach_profile, output);
+  int ret = write_tiff(proc, attach_profile, output, is_bundle ? embedded_icc : std::vector<uint8_t>{});
   const double t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
 
   if (ret != 0 || parser.get<bool>("--no-metadata")) {
@@ -1846,7 +1931,7 @@ int main(int ac, char *av[]) {
                        is_roi_auto ? &frame_det : nullptr,
                        rot_cw, hflip, vflip,
                        width, height,
-                       film_base_applied, sidecar_film_base_rgb, orig_profile_film_base_rgb,
+                       film_base_applied, sidecar_film_base_rgb, sidecar_profile_film_base_rgb,
                        film_base_source,
                        frame_det.base_std_d, frame_det.has_base,
                        parser.is_used("--film_profile") ? parser.get<std::string>("--film_profile") : "",
@@ -1858,7 +1943,8 @@ int main(int ac, char *av[]) {
                        parser.is_used("--dino") ? parser.get<std::string>("--dino") : "",
                        parser.is_used("--dino_backend") ? parser.get<std::string>("--dino_backend") : "auto",
                        cs_name,
-                       t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms);
+                       t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms,
+                       is_bundle, bundle_target_name, bundle_target_idx);
   }
 
   proc->free_image();
