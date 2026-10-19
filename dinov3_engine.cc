@@ -141,6 +141,30 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     }
 }
 
+bool DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
+                               int num_threads, int max_size, int patch_size) {
+    m_runner.reset();
+    m_max_size = max_size;
+    m_patch_size = patch_size;
+    if (backend != "auto" && backend != "cpu" && backend != "gpu") {
+        std::cerr << "DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" << backend << "'" << std::endl;
+        return false;
+    }
+    if (backend == (is_trt_engine ? "cpu" : "gpu")) {
+        std::cerr << "DinoV3Engine: backend '" << backend << "' requested but the built-in backbone is "
+                  << (is_trt_engine ? "a TensorRT engine (USE_CUDA=1)" : "an ONNX model (USE_CUDA=0)") << std::endl;
+        return false;
+    }
+    try {
+        m_runner = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "DinoV3Engine load failed: " << e.what() << std::endl;
+        m_runner.reset();
+        return false;
+    }
+}
+
 // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict implementation)
 DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, int height, int stride) {
     if (!is_loaded()) {

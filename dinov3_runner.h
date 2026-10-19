@@ -92,9 +92,13 @@ public:
 std::unique_ptr<DinoV3AdapterRunner> make_ort_adapter(const void* onnx_data, size_t onnx_size, int num_threads = 1);
 
 std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path);
+// The same from a serialized engine held in memory.
+std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size);
 
 // Creates an ONNX Runtime CPU runner.
 std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads = 4);
+// The same from an .onnx held in memory.
+std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads = 4);
 
 // Checks if a CUDA device is available.
 bool cuda_device_available();

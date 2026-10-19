@@ -49,10 +49,8 @@ const EmbeddedFile* find_embedded_file(const std::string& name) {
   return nullptr;
 }
 
-const EmbeddedFile* find_embedded_bundle(const std::string& name, std::string& bundle_dir) {
-  std::string want, stock;
-  parse_profile_stem(name, want, stock);
-  want = lower(want);
+const EmbeddedFile* find_embedded_bundle(const std::string& key, std::string& bundle_dir) {
+  const std::string want = lower(key);
   if (want.empty()) return nullptr;
   for (uint64_t i = 0; i < negicc_embedded_count; ++i) {
     const EmbeddedFile& f = negicc_embedded_table[i];
@@ -65,6 +63,32 @@ const EmbeddedFile* find_embedded_bundle(const std::string& name, std::string& b
     }
   }
   return nullptr;
+}
+
+std::string embedded_bundle_key(const std::string& film_stock, const std::string& light_source, std::string& error) {
+  std::string light;
+  if (lower(light_source) == "tri") {
+    light = "triled";
+  } else if (lower(light_source) == "d65") {
+    light = "d65";
+  } else {
+    error = "unknown light source '" + light_source + "' (tri or d65)";
+    return "";
+  }
+  const std::string prefix = lower(film_stock) + "-", suffix = "-" + light;
+  std::vector<std::string> found;
+  for (const std::string& key : list_embedded_bundles()) {
+    const std::string k = lower(key);
+    if (k.size() > prefix.size() + suffix.size() && k.compare(0, prefix.size(), prefix) == 0 && ends_with(k, suffix)) {
+      found.push_back(key);
+    }
+  }
+  if (found.size() != 1) {
+    error = std::string(found.empty() ? "no" : "more than one") + " built-in profile bundle for film stock '" +
+            film_stock + "' and light source '" + light_source + "'";
+    return "";
+  }
+  return found[0];
 }
 
 std::vector<std::string> list_embedded_bundles() {
@@ -97,4 +121,11 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
   }
   adapter_dir.clear();
   return nullptr;
+}
+
+const EmbeddedFile* find_embedded_backbone(bool& is_trt_engine) {
+  is_trt_engine = true;
+  if (const EmbeddedFile* f = find_embedded_file("models/dinov3-small/backbone.engine")) return f;
+  is_trt_engine = false;
+  return find_embedded_file("models/dinov3-small/backbone.onnx");
 }

@@ -52,15 +52,21 @@ public:
     explicit TrtRunner(const std::string& engine_path) {
         std::ifstream f(engine_path, std::ios::binary | std::ios::ate);
         if (!f) throw std::runtime_error("cannot open TensorRT engine " + engine_path);
-        m_engine_bytes = (size_t)f.tellg();
-        std::vector<char> blob(m_engine_bytes);
+        std::vector<char> blob((size_t)f.tellg());
         f.seekg(0);
         f.read(blob.data(), (std::streamsize)blob.size());
+        init(blob.data(), blob.size(), engine_path);
+    }
 
+    // From a serialized engine held in memory (the backbone built into neg_process).
+    TrtRunner(const void* engine_data, size_t engine_size) { init(engine_data, engine_size, "[built-in]"); }
+
+    void init(const void* engine_data, size_t engine_size, const std::string& name) {
+        m_engine_bytes = engine_size;
         m_runtime.reset(nvinfer1::createInferRuntime(g_logger));
         if (!m_runtime) throw std::runtime_error("createInferRuntime failed");
-        m_engine.reset(m_runtime->deserializeCudaEngine(blob.data(), blob.size()));
-        if (!m_engine) throw std::runtime_error("cannot deserialise TensorRT engine " + engine_path);
+        m_engine.reset(m_runtime->deserializeCudaEngine(engine_data, engine_size));
+        if (!m_engine) throw std::runtime_error("cannot deserialise TensorRT engine " + name);
         m_context.reset(m_engine->createExecutionContext());
         if (!m_context) throw std::runtime_error("createExecutionContext failed");
 
@@ -152,6 +158,10 @@ private:
 
 std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path) {
     return std::make_unique<TrtRunner>(engine_path);
+}
+
+std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size) {
+    return std::make_unique<TrtRunner>(engine_data, engine_size);
 }
 
 bool cuda_device_available() {
