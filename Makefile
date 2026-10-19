@@ -1,13 +1,14 @@
-# neg_process converts film negative RAW scans; the profiles are built in negicc-station.
+# neg_process: converts film negative RAW scans with the profiles and intent adapters built into it.
+#
+#   make neg_process        # bin_out/neg_process
+#   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone --dino and --auto run
+#   make dinov3_engine      # its TensorRT engine (on a CUDA build host)
+#   make lib                # bin_out/libnegicc_dinov3.a, linked by negicc-station
 
-.PHONY: clean clean_lib clean_all lib neg_process raw_info
-clean: clean_lib
+PYTHON ?= python3
 
-clean_lib:
-	rm -f bin_out/*.o bin_out/*.a bin_out/.use_cuda_*
-
-clean_all: clean_lib
-	rm -f bin_out/raw_info bin_out/neg_process
+.PHONY: all lib neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+all: neg_process
 
 raw_info: raw_info.cc
 	mkdir -p bin_out
@@ -80,7 +81,10 @@ $(BUILD_STAMP):
 
 DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(ORT_INC) $(DINOV3_EXTRA_INC)
 
-DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o $(DINOV3_RUNNER_OBJ)
+# The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
+# neg_process (profile bundles, frame analysis, the automatic conversion).
+DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
+              bin_out/profile_bundle.o bin_out/frame_analysis.o bin_out/auto_convert.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -106,6 +110,18 @@ bin_out/dinov3_nocuda.o: dinov3_nocuda.cc dinov3_runner.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_nocuda.cc -o $@
 
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
+
+bin_out/frame_analysis.o: frame_analysis.cc frame_analysis.h neg_pipeline.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c frame_analysis.cc -o $@
+
+bin_out/auto_convert.o: auto_convert.cc auto_convert.h frame_analysis.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h dinov3_preprocess.h neg_pipeline.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c auto_convert.cc -o $@
+
 bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	rm -f $@
@@ -119,14 +135,43 @@ bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BU
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
 
-bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+# Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
+# (tools/export_negicc_data.py).
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx))
+
+bin_out/embedded_data.S: embed_data.sh $(EMBED_FILES) $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party -c profile_bundle.cc -o $@
+	sh embed_data.sh $(EMBED_FILES) > $@
+
+bin_out/embedded_data_files.o: bin_out/embedded_data.S
+	$(CC) -c $< -o $@
+
+bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c embedded_data.cc -o $@
+
+NEG_PROCESS_OBJS = bin_out/film_frame_detector.o bin_out/embedded_data.o bin_out/embedded_data_files.o
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h $(BUILD_STAMP)
-	mkdir -p bin_out profiles
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h auto_convert.h frame_analysis.h embedded_data.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
+# The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
+# transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
+DINOV3_SOURCE ?= Tooony133/dinov3-vits16-pretrain-lvd1689m
 
+dinov3_model:
+	$(PYTHON) export_dinov3_backbone.py --source $(DINOV3_SOURCE)
+
+dinov3_engine:
+	$(PYTHON) export_dinov3_backbone.py --engine-only
+
+clean: clean_lib
+
+clean_lib:
+	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_*
+
+clean_all: clean_lib
+	rm -f bin_out/raw_info bin_out/neg_process

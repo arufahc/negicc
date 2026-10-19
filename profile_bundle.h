@@ -17,6 +17,7 @@
 #define PROFILE_BUNDLE_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include <lcms2.h>
@@ -41,6 +42,14 @@ struct BundleTarget {
   std::vector<uint8_t> icc_bytes;
   ParsedFilmProfile film_prof;
 
+  // For the automatic conversion (auto_convert.h): the patches' green range in double, the bracket's camera
+  // exposure (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
+  double g_min = 0.0;
+  double g_max = 0.0;
+  double exposure_s = 0.125;
+  double tonal_capacity_ev = 0.0;
+  std::string profcheck_output;
+
   // Frame enclosure metrics
   bool is_feasible = false;
   float e_min = 0.0f;
@@ -53,14 +62,30 @@ struct BundleTarget {
 
 struct ProfileBundle {
   std::string path;
+  std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
+  std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
   float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double crosstalk_matrix_d[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   bool has_crosstalk = false;
   bool has_film_base = false;
   int profile_film_base_rgb[3] = {1, 1, 1};
+  double film_base_avg[3] = {0.0, 0.0, 0.0};   // unrounded film base (profile_film_base_rgb rounds it)
+  std::string film_base_shutter = "1/8s";
+  double film_base_iso = 100.0;
   double normalization_target = 55000.0;
   std::vector<BundleTarget> targets;
 };
+
+// Seconds of a shutter speed as profiles write it ("1/8s", "0.4s", "2"); throws std::invalid_argument when it
+// cannot be read.
+// py-ref: negicc_station/src/film_profiling.py @ 93be1ec (shutter_to_seconds)
+double shutter_to_seconds(const std::string& shutter);
+
+// Bundle and stock keys of a profile name: "profile_Portra160-A7R4-TriLED_20261003_190751.json" gives
+// ("Portra160-A7R4-TriLED", "portra160"). Empty strings when the name has none.
+// py-ref: negicc_station/src/intent_model.py @ 93be1ec (_parse_profile_stem)
+void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, std::string& stock_key);
 
 // Check by content if file is a JSON profile bundle (first non-space character is '{')
 bool is_json_bundle(const std::string& resolved_path);
@@ -71,8 +96,18 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof);
 // Configure solver bounds and anchor for a specific target bracket
 void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt);
 
-// Load and parse a multi-bracket JSON profile bundle
+// Reads a file a split bundle names (a target's "icc_profile") into out; false when it cannot.
+using BundleFileReader = std::function<bool(const std::string& name, std::vector<uint8_t>& out)>;
+
+// Load and parse a multi-bracket JSON profile bundle: an all-in-one bundle from negicc-station (ICC profiles in
+// base64), or a split one (profiles/<Key>/bundle.json, its directory, with the ICC profiles in files next to it;
+// negicc-station tools/export_negicc_data.py).
 bool load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle);
+
+// Parse a JSON profile bundle held in memory (one embedded in neg_process); name is reported as bundle.path and
+// read_file supplies the ICC profiles of a split bundle.
+bool load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
+                                     const BundleFileReader& read_file, ProfileBundle& bundle);
 
 // Compute scene green percentiles [0.5%, 99.5%] and gamut volume enclosures for all targets
 void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4],
@@ -81,12 +116,5 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
 
 // Target selection without DINOv3 (picks feasible target minimizing |fill_ratio - 0.85|)
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx = kDefaultMinTargetIdx);
-
-// Tournament target selection with active DINOv3 fixed-point loop on best 2 finalists
-int run_bundle_tournament_with_dino(ProfileBundle& bundle, DinoV3Engine& engine,
-                                   const SolverConfig& base_cfg, const float* base_merged,
-                                   const uint16_t (*image)[4], int width, int height,
-                                   IntentGains user_gains, unsigned pin_mask, int max_iters,
-                                   int min_target_idx, DinoSolveResult& winner_res);
 
 #endif  // PROFILE_BUNDLE_H
