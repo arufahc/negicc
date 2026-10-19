@@ -68,6 +68,7 @@ public:
         for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
             const char* name = m_engine->getIOTensorName(i);
             if (std::strcmp(name, "pool_weights") == 0) m_has_pool_weights = true;
+            if (std::strcmp(name, "tokens") == 0) m_has_tokens = true;
             if (std::strcmp(name, "pooled") == 0) m_has_pooled = true;
             if (std::strcmp(name, "pooled_tone") == 0) m_has_pooled_tone = true;
         }
@@ -80,12 +81,13 @@ public:
 
     const char* name() const override { return "gpu (TensorRT)"; }
     bool has_pool_weights() const override { return m_has_pool_weights; }
+    bool has_tokens() const override { return m_has_tokens; }
     bool has_pooled() const override { return m_has_pooled; }
     bool has_pooled_tone() const override { return m_has_pooled_tone; }
 
     // py-ref: negicc_station/src/tensorrt_intent_model.py:153-169 @ 2f7ee4a (memory_bytes)
     size_t memory_bytes() const override {
-        return m_engine_bytes + m_pv.bytes + m_pw.bytes + m_mu.bytes + m_sigma.bytes +
+        return m_engine_bytes + m_pv.bytes + m_pw.bytes + m_tok.bytes + m_mu.bytes + m_sigma.bytes +
                m_pooled.bytes + m_pooled_tone.bytes;
     }
 
@@ -106,8 +108,13 @@ public:
             m_context->setTensorAddress("pool_weights", m_pw.reserve(field_bytes));
             check_cuda(cudaMemcpyAsync(m_pw.ptr, pool_weights, field_bytes, cudaMemcpyHostToDevice, m_stream), "H2D");
         }
-        m_context->setTensorAddress("mu", m_mu.reserve(field_bytes));
-        m_context->setTensorAddress("sigma", m_sigma.reserve(field_bytes));
+        const size_t tok_bytes = (size_t)patches * 768 * sizeof(float);
+        if (m_has_tokens) {
+            m_context->setTensorAddress("tokens", m_tok.reserve(tok_bytes));
+        } else {
+            m_context->setTensorAddress("mu", m_mu.reserve(field_bytes));
+            m_context->setTensorAddress("sigma", m_sigma.reserve(field_bytes));
+        }
         if (m_has_pooled) m_context->setTensorAddress("pooled", m_pooled.reserve(1152 * sizeof(float)));
         if (m_has_pooled_tone) m_context->setTensorAddress("pooled_tone", m_pooled_tone.reserve(3 * 768 * sizeof(float)));
 
@@ -115,9 +122,11 @@ public:
         if (!m_context->enqueueV3(m_stream)) throw std::runtime_error("TensorRT enqueueV3 failed");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:252-266 @ 2f7ee4a (D2H output copy on stream)
-        if (outputs.mu)
+        if (outputs.tokens && m_has_tokens)
+            check_cuda(cudaMemcpyAsync(outputs.tokens, m_tok.ptr, tok_bytes, cudaMemcpyDeviceToHost, m_stream), "D2H tokens");
+        if (outputs.mu && !m_has_tokens)
             check_cuda(cudaMemcpyAsync(outputs.mu, m_mu.ptr, field_bytes, cudaMemcpyDeviceToHost, m_stream), "D2H mu");
-        if (outputs.sigma)
+        if (outputs.sigma && !m_has_tokens)
             check_cuda(cudaMemcpyAsync(outputs.sigma, m_sigma.ptr, field_bytes, cudaMemcpyDeviceToHost, m_stream), "D2H sigma");
         if (outputs.pooled && m_has_pooled)
             check_cuda(cudaMemcpyAsync(outputs.pooled, m_pooled.ptr, 1152 * sizeof(float), cudaMemcpyDeviceToHost, m_stream), "D2H pooled");
@@ -135,8 +144,8 @@ private:
     std::unique_ptr<nvinfer1::IExecutionContext> m_context;
     cudaStream_t m_stream = nullptr;
     size_t m_engine_bytes = 0;
-    bool m_has_pool_weights = false, m_has_pooled = false, m_has_pooled_tone = false;
-    DeviceBuffer m_pv, m_pw, m_mu, m_sigma, m_pooled, m_pooled_tone;
+    bool m_has_pool_weights = false, m_has_tokens = false, m_has_pooled = false, m_has_pooled_tone = false;
+    DeviceBuffer m_pv, m_pw, m_tok, m_mu, m_sigma, m_pooled, m_pooled_tone;
 };
 
 }  // namespace

@@ -23,6 +23,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
+#include <sys/stat.h>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -165,48 +167,161 @@ static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& ou
   return !out.empty();
 }
 
-static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
+static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double out_d[9]) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
     if (!node[r].is_array() || node[r].size() != 3) return false;
     for (int c = 0; c < 3; ++c) {
       if (!node[r][c].is_number()) return false;
       out_m[r * 3 + c] = node[r][c].get<float>();
+      out_d[r * 3 + c] = node[r][c].get<double>();
     }
   }
   return true;
 }
 
-bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
-  std::ifstream f(raw_path);
-  if (!f.is_open()) {
-    std::string alt = "profiles/" + raw_path;
-    f.open(alt);
-    if (!f.is_open()) {
-      size_t last_slash = raw_path.find_last_of("/\\");
-      if (last_slash != std::string::npos) {
-        std::string base = "profiles/" + raw_path.substr(last_slash + 1);
-        f.open(base);
-      }
+double shutter_to_seconds(const std::string& shutter) {
+  std::string s = shutter;
+  const size_t b = s.find_first_not_of(" \t\r\n");
+  const size_t e = s.find_last_not_of(" \t\r\n");
+  s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
+  while (!s.empty() && s.back() == 's') s.pop_back();
+  auto to_double = [&](const std::string& t) {
+    size_t used = 0;
+    const double v = std::stod(t, &used);
+    if (used != t.size()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    return v;
+  };
+  const size_t slash = s.find('/');
+  if (slash != std::string::npos) {
+    const double den = to_double(s.substr(slash + 1));
+    if (den == 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    return to_double(s.substr(0, slash)) / den;
+  }
+  return to_double(s);
+}
+
+void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, std::string& stock_key) {
+  bundle_key.clear();
+  stock_key.clear();
+  std::string s = raw_name;
+  const size_t b = s.find_first_not_of(" \t\r\n");
+  const size_t e = s.find_last_not_of(" \t\r\n");
+  if (b == std::string::npos) return;
+  s = s.substr(b, e - b + 1);
+  const size_t slash = s.find_last_of("/\\");
+  if (slash != std::string::npos) s = s.substr(slash + 1);
+  auto lower = [](std::string v) {
+    for (char& c : v) c = (char)std::tolower((unsigned char)c);
+    return v;
+  };
+  if (s.size() >= 5 && lower(s.substr(s.size() - 5)) == ".json") s = s.substr(0, s.size() - 5);
+  std::vector<std::string> parts;
+  size_t start = 0;
+  for (;;) {
+    const size_t us = s.find('_', start);
+    parts.push_back(s.substr(start, us == std::string::npos ? std::string::npos : us - start));
+    if (us == std::string::npos) break;
+    start = us + 1;
+  }
+  std::string bundle = s;
+  if (lower(parts[0]) == "profile" && parts.size() >= 2) {
+    std::string kept;
+    bool any = false;
+    for (size_t i = 1; i < parts.size(); ++i) {
+      const std::string& p = parts[i];
+      const bool is_digits = !p.empty() && std::all_of(p.begin(), p.end(), [](char c) { return c >= '0' && c <= '9'; });
+      if (is_digits && p.size() >= 8) break;
+      kept += (any ? "_" : "") + p;
+      any = true;
     }
+    bundle = any ? kept : s;
+  }
+  bundle.erase(std::remove(bundle.begin(), bundle.end(), ' '), bundle.end());
+  if (bundle.empty()) return;
+  bundle_key = bundle;
+  stock_key = lower(bundle.substr(0, bundle.find('-')));
+  stock_key = stock_key.substr(0, stock_key.find('_'));
+}
+
+static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path, const BundleFileReader& read_file,
+                                 ProfileBundle& bundle);
+
+bool load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
+                                     const BundleFileReader& read_file, ProfileBundle& bundle) {
+  try {
+    nlohmann::json j = nlohmann::json::parse(data, data + size);
+    return parse_profile_bundle(j, name, read_file, bundle);
+  } catch (const std::exception& e) {
+    fprintf(stderr, "ERROR! Profile bundle loading failed for %s: %s\n", name.c_str(), e.what());
+    return false;
+  }
+}
+
+static bool is_directory(const std::string& path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
+  std::vector<std::string> candidates = {raw_path, "profiles/" + raw_path};
+  const size_t last_slash = raw_path.find_last_of("/\\");
+  if (last_slash != std::string::npos) candidates.push_back("profiles/" + raw_path.substr(last_slash + 1));
+  std::ifstream f;
+  std::string opened;
+  for (std::string c : candidates) {
+    if (is_directory(c)) c += "/bundle.json";
+    f.open(c);
+    if (f.is_open()) {
+      opened = c;
+      break;
+    }
+    f.clear();
   }
   if (!f.is_open()) return false;
+
+  // ICC profiles of a split bundle (profiles/<Key>/bundle.json) sit next to it.
+  const size_t dir_end = opened.find_last_of("/\\");
+  const std::string dir = (dir_end == std::string::npos) ? std::string() : opened.substr(0, dir_end + 1);
+  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+    std::ifstream in(dir + name, std::ios::binary);
+    if (!in.is_open()) return false;
+    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return true;
+  };
 
   try {
     nlohmann::json j;
     f >> j;
+    return parse_profile_bundle(j, raw_path, read_file, bundle);
+  } catch (const std::exception& e) {
+    fprintf(stderr, "ERROR! Profile bundle loading failed for %s: %s\n", raw_path.c_str(), e.what());
+    return false;
+  }
+}
 
+static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path, const BundleFileReader& read_file,
+                                 ProfileBundle& bundle) {
+  try {
     bundle.path = raw_path;
+    if (j.contains("export") && j["export"].is_object()) {
+      bundle.key = j["export"].value("bundle_key", "");
+      bundle.source_file = j["export"].value("source_file", "");
+    }
+    if (bundle.key.empty()) {
+      std::string stock;
+      parse_profile_stem(raw_path, bundle.key, stock);
+    }
     bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
     bundle.normalization_target = j.value("normalization_target", 55000.0);
 
     if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
       const auto& ct = j["crosstalk_profile"];
       if (ct.contains("crosstalk_correction_matrix")) {
-        bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+        bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix, bundle.crosstalk_matrix_d);
       }
     } else if (j.contains("crosstalk_correction_matrix")) {
-      bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+      bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix, bundle.crosstalk_matrix_d);
     }
 
     if (j.contains("film_base") && j["film_base"].is_object()) {
@@ -221,6 +336,14 @@ bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
       if (fb.contains("b") && fb["b"].contains("avg") && fb["b"]["avg"].is_number()) {
         b_avg = fb["b"]["avg"].get<double>();
       }
+      bundle.film_base_avg[0] = r_avg;
+      bundle.film_base_avg[1] = g_avg;
+      bundle.film_base_avg[2] = b_avg;
+      if (fb.contains("shutter")) {
+        if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
+        else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
+      }
+      if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<double>();
       if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {
         bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
         bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
@@ -254,21 +377,61 @@ bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
         tgt.target_ev = tj["ev"].get<double>();
       }
 
+      // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_exposure)
+      try {
+        tgt.exposure_s = std::max(1e-6, shutter_to_seconds(tgt.shutter) * (tgt.iso / 100.0));
+      } catch (const std::exception&) {
+        fprintf(stderr, "Warning: cannot read shutter '%s' of target '%s'; using 1/8s\n", tgt.shutter.c_str(),
+                tgt.name.c_str());
+        tgt.exposure_s = std::max(1e-6, 0.125 * (tgt.iso / 100.0));
+      }
+
       if (tj.contains("patches") && tj["patches"].is_object()) {
+        std::vector<double> all_g, gs_g;
         for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
           if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
             tgt.patches_g.push_back(it.value()["g"].get<float>());
+            all_g.push_back(it.value()["g"].get<double>());
           }
+        }
+        // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
+        // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)
+        for (int k = 0; k < 24; ++k) {
+          const std::string key = "gs" + std::to_string(k);
+          if (tj["patches"].contains(key) && tj["patches"][key].is_object() && tj["patches"][key].contains("g") &&
+              tj["patches"][key]["g"].is_number()) {
+            gs_g.push_back(tj["patches"][key]["g"].get<double>());
+          }
+        }
+        const std::vector<double>& cap_g = gs_g.empty() ? all_g : gs_g;
+        if (!cap_g.empty()) {
+          const double mx = *std::max_element(cap_g.begin(), cap_g.end());
+          const double mn = *std::min_element(cap_g.begin(), cap_g.end());
+          tgt.tonal_capacity_ev = std::log2(mx / std::max(1e-6, mn));
         }
         if (!tgt.patches_g.empty()) {
           tgt.tgt_min_g = *std::min_element(tgt.patches_g.begin(), tgt.patches_g.end());
           tgt.tgt_max_g = *std::max_element(tgt.patches_g.begin(), tgt.patches_g.end());
+          tgt.g_min = *std::min_element(all_g.begin(), all_g.end());
+          tgt.g_max = *std::max_element(all_g.begin(), all_g.end());
         }
       }
+      if (tj.contains("profcheck_output") && tj["profcheck_output"].is_string()) {
+        tgt.profcheck_output = tj["profcheck_output"].get<std::string>();
+      }
 
+      bool have_icc = false;
       if (tj.contains("icc_profile_base64") && tj["icc_profile_base64"].is_string()) {
-        std::string b64 = tj["icc_profile_base64"].get<std::string>();
-        if (base64_decode(b64, tgt.icc_bytes) && !tgt.icc_bytes.empty()) {
+        have_icc = base64_decode(tj["icc_profile_base64"].get<std::string>(), tgt.icc_bytes);
+      } else if (tj.contains("icc_profile") && tj["icc_profile"].is_string()) {
+        const std::string icc_name = tj["icc_profile"].get<std::string>();
+        have_icc = read_file && read_file(icc_name, tgt.icc_bytes);
+        if (!have_icc) {
+          fprintf(stderr, "Warning: cannot read ICC profile '%s' of target '%s'\n", icc_name.c_str(), tgt.name.c_str());
+        }
+      }
+      {
+        if (have_icc && !tgt.icc_bytes.empty()) {
           cmsHPROFILE hprof = cmsOpenProfileFromMem(tgt.icc_bytes.data(), tgt.icc_bytes.size());
           if (hprof) {
             if (parse_film_profile_pipeline(hprof, tgt.film_prof)) {
@@ -469,115 +632,4 @@ int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_targe
   if (best_feasible_idx >= 0) return best_feasible_idx;
   if (best_any_idx >= 0) return best_any_idx;
   return start_idx;
-}
-
-int run_bundle_tournament_with_dino(ProfileBundle& bundle, DinoV3Engine& engine,
-                                   const SolverConfig& base_cfg, const float* base_merged,
-                                   const uint16_t (*image)[4], int width, int height,
-                                   IntentGains user_gains, unsigned pin_mask, int max_iters,
-                                   int min_target_idx, DinoSolveResult& winner_res) {
-  if (bundle.targets.empty()) return -1;
-  const int n = (int)bundle.targets.size();
-  const int start_idx = (n >= 5) ? std::min(min_target_idx, n - 1) : 0;
-
-  std::vector<int> cand_indices;
-  for (int i = start_idx; i < n; ++i) {
-    if (!bundle.targets[i].patches_g.empty()) {
-      cand_indices.push_back(i);
-    }
-  }
-  if (cand_indices.empty()) {
-    for (int i = 0; i < n; ++i) cand_indices.push_back(i);
-  }
-
-  auto rank_fn = [&](int idx) -> float {
-    const auto& r = bundle.targets[idx];
-    if (!r.is_feasible || r.slack_ev < 0.0f) {
-      return 1000.0f + std::abs(r.slack_ev) * 100.0f;
-    }
-    return std::abs(r.fill_ratio - 0.85f);
-  };
-
-  std::sort(cand_indices.begin(), cand_indices.end(),
-            [&](int a, int b) { return rank_fn(a) < rank_fn(b); });
-
-  std::vector<int> finalists;
-  for (int idx : cand_indices) {
-    if (bundle.targets[idx].is_feasible && bundle.targets[idx].slack_ev >= 0.10f) {
-      finalists.push_back(idx);
-      if (finalists.size() == 2) break;
-    }
-  }
-  if (finalists.size() < 2) {
-    for (int idx : cand_indices) {
-      if (bundle.targets[idx].is_feasible &&
-          std::find(finalists.begin(), finalists.end(), idx) == finalists.end()) {
-        finalists.push_back(idx);
-        if (finalists.size() == 2) break;
-      }
-    }
-  }
-  if (finalists.empty()) {
-    finalists.push_back(cand_indices[0]);
-    if (cand_indices.size() > 1) finalists.push_back(cand_indices[1]);
-  }
-
-  std::sort(finalists.begin(), finalists.end());
-
-  int num_feasible = 0;
-  for (const auto& t : bundle.targets) if (t.is_feasible) num_feasible++;
-
-  std::string bname = bundle.path;
-  size_t last_slash = bname.find_last_of("/\\");
-  if (last_slash != std::string::npos) bname = bname.substr(last_slash + 1);
-
-  printf("Profile bundle: %s (%zu targets, %d feasible)\n",
-         bname.c_str(), bundle.targets.size(), num_feasible);
-
-  std::vector<int> valid_finalists;
-  std::vector<DinoSolveResult> valid_results;
-
-  for (size_t f = 0; f < finalists.size(); ++f) {
-    const int idx = finalists[f];
-    const auto& tgt = bundle.targets[idx];
-    SolverConfig cfg = base_cfg;
-    set_target_bounds(cfg, tgt);
-
-    DinoSolveResult res;
-    bool ok = solve_dinov3_intent(engine, cfg, base_merged, image, width, height,
-                                  user_gains, pin_mask, max_iters, res);
-    if (!ok) {
-      fprintf(stderr, "Warning: DINOv3 intent solver failed for finalist target %s\n",
-              tgt.display_name.c_str());
-      continue;
-    }
-
-    printf("  %s: resid %.3f %s\n",
-           tgt.display_name.c_str(), res.best_residual, res.status.c_str());
-    valid_finalists.push_back(idx);
-    valid_results.push_back(std::move(res));
-  }
-
-  if (valid_finalists.empty()) {
-    fprintf(stderr, "ERROR! All DINOv3 tournament finalists failed.\n");
-    return -1;
-  }
-
-  size_t best_f = 0;
-  if (valid_finalists.size() > 1) {
-    const bool conv0 = (valid_results[0].status == "CONVERGED");
-    const bool conv1 = (valid_results[1].status == "CONVERGED");
-    if (conv0 && !conv1) {
-      best_f = 0;
-    } else if (conv1 && !conv0) {
-      best_f = 1;
-    } else {
-      best_f = (valid_results[0].best_residual <= valid_results[1].best_residual) ? 0 : 1;
-    }
-  }
-
-  const int winner_idx = valid_finalists[best_f];
-  winner_res = std::move(valid_results[best_f]);
-  printf("Selected target: %s\n", bundle.targets[winner_idx].display_name.c_str());
-  return winner_idx;
 }

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
 #include <sys/stat.h>
 #include <vector>
 
@@ -31,11 +32,6 @@ bool ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-std::string parent_dir(const std::string& p) {
-    auto pos = p.rfind('/');
-    return (pos == std::string::npos) ? "." : p.substr(0, pos);
-}
-
 }  // namespace
 
 DinoV3Engine::DinoV3Engine() = default;
@@ -45,11 +41,42 @@ DinoV3Engine& DinoV3Engine::operator=(DinoV3Engine&&) noexcept = default;
 
 bool DinoV3Engine::is_loaded() const { return m_runner != nullptr; }
 
+bool DinoV3Engine::needs_adapter() const { return m_runner && m_runner->has_tokens(); }
+
+bool DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads) {
+    try {
+        m_adapter = make_ort_adapter(onnx_data, onnx_size, num_threads);
+        m_adapter_name = name;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "DinoV3Engine: cannot load adapter " << name << ": " << e.what() << std::endl;
+        m_adapter.reset();
+        m_adapter_name.clear();
+        return false;
+    }
+}
+
+bool DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) {
+        std::cerr << "DinoV3Engine: cannot open adapter " << path << std::endl;
+        return false;
+    }
+    std::vector<uint8_t> bytes((size_t)f.tellg());
+    f.seekg(0);
+    f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
+    // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session.
+    m_adapter_file = std::move(bytes);
+    return set_adapter(m_adapter_file.data(), m_adapter_file.size(), path, num_threads);
+}
+
 const char* DinoV3Engine::backend_name() const { return m_runner ? m_runner->name() : "none"; }
 bool DinoV3Engine::has_pooled() const { return m_runner ? m_runner->has_pooled() : false; }
 bool DinoV3Engine::has_pooled_tone() const { return m_runner ? m_runner->has_pooled_tone() : false; }
 bool DinoV3Engine::has_pool_weights() const { return m_runner ? m_runner->has_pool_weights() : false; }
-size_t DinoV3Engine::memory_bytes() const { return m_runner ? m_runner->memory_bytes() : 0; }
+size_t DinoV3Engine::memory_bytes() const {
+    return (m_runner ? m_runner->memory_bytes() : 0) + (m_adapter ? m_adapter->memory_bytes() : 0);
+}
 
 // py-ref: negicc_station/src/intent_model.py:320-375 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
 bool DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
@@ -65,15 +92,17 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     // Resolve the ONNX model and the TensorRT engine of the model spec
     std::string onnx_path, engine_path;
     if (dir_exists(model_spec)) {
-        if (file_exists(model_spec + "/model.onnx")) {
-            onnx_path = model_spec + "/model.onnx";
-        }
-        if (file_exists(model_spec + "/model.engine")) engine_path = model_spec + "/model.engine";
+        // The backbone alone (adapters supplied separately) wins over a fused model in the same directory.
+        const char* stem = (file_exists(model_spec + "/backbone.onnx") || file_exists(model_spec + "/backbone.engine"))
+                               ? "backbone" : "model";
+        if (file_exists(model_spec + "/" + stem + ".onnx")) onnx_path = model_spec + "/" + stem + ".onnx";
+        if (file_exists(model_spec + "/" + stem + ".engine")) engine_path = model_spec + "/" + stem + ".engine";
     } else if (ends_with(model_spec, ".engine")) {
         engine_path = model_spec;
     } else {
         onnx_path = model_spec;
-        if (file_exists(parent_dir(model_spec) + "/model.engine")) engine_path = parent_dir(model_spec) + "/model.engine";
+        const std::string stem = model_spec.substr(0, model_spec.size() - (ends_with(model_spec, ".onnx") ? 5 : 0));
+        if (file_exists(stem + ".engine")) engine_path = stem + ".engine";
     }
 
     try {
@@ -100,7 +129,7 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
 
         if (onnx_path.empty() || !file_exists(onnx_path)) {
             std::cerr << "DinoV3Engine: no ONNX model found at " << model_spec
-                      << " (expected model.onnx; run `make onnx_model`)" << std::endl;
+                      << " (expected backbone.onnx or model.onnx; run `make dinov3_model`)" << std::endl;
             return false;
         }
         m_runner = make_ort_runner(onnx_path, num_threads);
@@ -163,8 +192,15 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     res.sigma.resize((size_t)res.num_patches * 3);
 
     DinoV3RunnerOutputs outs;
-    outs.mu = res.mu.data();
-    outs.sigma = res.sigma.data();
+    std::vector<float> tokens;
+    if (m_runner->has_tokens()) {
+        if (!m_adapter) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
+        tokens.resize((size_t)res.num_patches * 768);
+        outs.tokens = tokens.data();
+    } else {
+        outs.mu = res.mu.data();
+        outs.sigma = res.sigma.data();
+    }
 
     const bool want_ranker = m_runner->has_pooled() || m_runner->has_pooled_tone();
     if (want_ranker) {
@@ -181,6 +217,8 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     }
 
     m_runner->run(pixel_values.data(), res.target_h, res.target_w, pool_weights.data(), res.num_patches, outs);
+    // py-ref: negicc_station/src/export_intent_engine.py @ 93be1ec (FusedIntentNetwork: adapter(cat(h_photo, h_sem)))
+    if (!tokens.empty()) m_adapter->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
 
     if (res.has_pooled_tone) {
         // py-ref: negicc_station/src/tensorrt_intent_model.py:268 @ 2f7ee4a (tone_mass = tone_weights.mean(axis=0))

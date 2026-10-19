@@ -1,4 +1,5 @@
 *.icc
+!profiles/*.icc
 !profiles/*/*.icc
 *~
 # The IT8 reference readings negicc-station profiling tools read from here (not distributed).
@@ -11,3 +12,4 @@ __pycache__
 \#*
 3rd_party/onnxruntime/*
 !3rd_party/onnxruntime/README.md
+models/dinov3-small/backbone.engine

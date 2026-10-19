@@ -30,6 +30,7 @@ public:
         }
         for (size_t i = 0; i < m_session->GetOutputCount(); ++i) {
             std::string out_name = m_session->GetOutputNameAllocated(i, alloc).get();
+            if (out_name == "tokens") m_has_tokens = true;
             if (out_name == "pooled") m_has_pooled = true;
             if (out_name == "pooled_tone") m_has_pooled_tone = true;
         }
@@ -37,6 +38,7 @@ public:
 
     const char* name() const override { return "cpu (ONNX Runtime)"; }
     bool has_pool_weights() const override { return m_has_pool_weights; }
+    bool has_tokens() const override { return m_has_tokens; }
     bool has_pooled() const override { return m_has_pooled; }
     bool has_pooled_tone() const override { return m_has_pooled_tone; }
 
@@ -60,11 +62,17 @@ public:
         std::vector<const char*> out_names;
         std::vector<Ort::Value> out_tensors;
 
-        if (outputs.mu) {
+        if (outputs.tokens && m_has_tokens) {
+            const int64_t tok_shape[] = {1, patches, 768};
+            out_names.push_back("tokens");
+            out_tensors.push_back(Ort::Value::CreateTensor<float>(mem_info, outputs.tokens, (size_t)patches * 768,
+                                                                  tok_shape, 3));
+        }
+        if (outputs.mu && !m_has_tokens) {
             out_names.push_back("mu");
             out_tensors.push_back(Ort::Value::CreateTensor<float>(mem_info, outputs.mu, field_n, field_shape, 3));
         }
-        if (outputs.sigma) {
+        if (outputs.sigma && !m_has_tokens) {
             out_names.push_back("sigma");
             out_tensors.push_back(Ort::Value::CreateTensor<float>(mem_info, outputs.sigma, field_n, field_shape, 3));
         }
@@ -88,12 +96,50 @@ private:
     Ort::SessionOptions m_opts;
     std::unique_ptr<Ort::Session> m_session;
     bool m_has_pool_weights = false;
+    bool m_has_tokens = false;
     bool m_has_pooled = false;
     bool m_has_pooled_tone = false;
+};
+
+class OrtAdapterRunner : public DinoV3AdapterRunner {
+public:
+    OrtAdapterRunner(const void* onnx_data, size_t onnx_size, int num_threads) : m_bytes(onnx_size) {
+        const int hw = std::max(1, (int)std::thread::hardware_concurrency());
+        m_opts.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
+        m_opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
+        m_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        m_session = std::make_unique<Ort::Session>(m_env, onnx_data, onnx_size, m_opts);
+    }
+
+    size_t memory_bytes() const override { return m_bytes; }
+
+    void run(const float* tokens, int patches, float* mu, float* sigma) override {
+        auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        const int64_t tok_shape[] = {1, patches, 768};
+        const int64_t field_shape[] = {1, patches, 3};
+        const size_t field_n = (size_t)patches * 3;
+        const char* in_names[] = {"tokens"};
+        Ort::Value in = Ort::Value::CreateTensor<float>(mem_info, const_cast<float*>(tokens), (size_t)patches * 768,
+                                                        tok_shape, 3);
+        const char* out_names[] = {"mu", "sigma"};
+        Ort::Value outs[] = {Ort::Value::CreateTensor<float>(mem_info, mu, field_n, field_shape, 3),
+                             Ort::Value::CreateTensor<float>(mem_info, sigma, field_n, field_shape, 3)};
+        m_session->Run(Ort::RunOptions{nullptr}, in_names, &in, 1, out_names, outs, 2);
+    }
+
+private:
+    Ort::Env m_env{ORT_LOGGING_LEVEL_WARNING, "negicc_adapter"};
+    Ort::SessionOptions m_opts;
+    std::unique_ptr<Ort::Session> m_session;
+    size_t m_bytes = 0;
 };
 
 }  // namespace
 
 std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads) {
     return std::make_unique<OrtCpuRunner>(model_path, num_threads);
+}
+
+std::unique_ptr<DinoV3AdapterRunner> make_ort_adapter(const void* onnx_data, size_t onnx_size, int num_threads) {
+    return std::make_unique<OrtAdapterRunner>(onnx_data, onnx_size, num_threads);
 }

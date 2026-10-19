@@ -40,8 +40,13 @@
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
 #include "dinov3_auto_solver.h"
+#include "auto_convert.h"
+#include "embedded_data.h"
 #include "film_frame_detector.h"
+#include "frame_analysis.h"
 #include "profile_bundle.h"
+
+#include <sys/stat.h>
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
@@ -94,6 +99,62 @@ bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof) {
   cmsCloseProfile(hprof);
   printf("Reading input ICC profile: %s\n", resolved_path.c_str());
   return true;
+}
+
+static bool is_directory(const std::string& path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static bool is_regular_file(const std::string& path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+// Loads the profile bundle a -p argument names: a bundle file or directory on disk (as given or under profiles/),
+// else one built into neg_process. 1 when loaded, 0 when the argument is not a bundle, -1 on error.
+int load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
+  for (const std::string& dir : {arg, "profiles/" + arg}) {
+    if (is_directory(dir)) {
+      return load_profile_bundle(dir, bundle) ? 1 : -1;
+    }
+  }
+  const std::string resolved = resolve_profile_path(arg);
+  if (is_regular_file(resolved)) {
+    if (!is_json_bundle(resolved)) return 0;
+    return load_profile_bundle(resolved, bundle) ? 1 : -1;
+  }
+  std::string dir;
+  const EmbeddedFile* f = find_embedded_bundle(arg, dir);
+  if (!f) return 0;
+  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+    const EmbeddedFile* e = find_embedded_file(dir + "/" + name);
+    if (!e) return false;
+    out.assign(e->data, e->data + e->size);
+    return true;
+  };
+  if (!load_profile_bundle_from_memory((const char*)f->data, f->size, std::string("[built-in] ") + f->name,
+                                       read_file, bundle)) {
+    return -1;
+  }
+  return 1;
+}
+
+// The DINOv3 model --dino or --auto uses when none is given: $NEGICC_DINOV3_MODEL, models/dinov3-small next to the
+// executable's directory, or models/dinov3-small in the working directory.
+std::string default_dino_model() {
+  const char* env = getenv("NEGICC_DINOV3_MODEL");
+  if (env && *env) return env;
+  char exe[4096];
+  const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+  if (n > 0) {
+    exe[n] = '\0';
+    std::string dir(exe);
+    dir = dir.substr(0, dir.find_last_of('/'));
+    const std::string cand = dir + "/../models/dinov3-small";
+    if (is_directory(cand)) return cand;
+  }
+  return "models/dinov3-small";
 }
 
 int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *size) {
@@ -877,7 +938,9 @@ static bool write_json_sidecar(
     double t_tiff_write_ms,
     bool is_bundle = false,
     const std::string& bundle_target_name = "",
-    int bundle_target_idx = -1) {
+    int bundle_target_idx = -1,
+    const AutoConvertResult* auto_res = nullptr,
+    double t_auto_ms = 0.0) {
   const std::string json_path = output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
   FILE* fp = fopen(tmp_path.c_str(), "w");
@@ -1022,6 +1085,50 @@ static bool write_json_sidecar(
   }
   fprintf(fp, "],\n");
 
+  // auto: the bundle search of --dino / --auto (auto_convert.h)
+  if (auto_res) {
+    const AutoConvertResult& a = *auto_res;
+    fprintf(fp, "  \"auto\": {\n");
+    fprintf(fp, "    \"target\": \"%s\", \"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s,\n",
+            json_escape(a.target_name).c_str(), a.target_idx, json_num(a.e, "%.9g").c_str(),
+            json_num(a.g, "%.9g").c_str(), json_num(a.b, "%.9g").c_str());
+    fprintf(fp, "    \"residual\": %s, \"status\": \"%s\", \"e_norm\": %s, \"input_matrix\": [",
+            json_num(a.residual, "%.6g").c_str(), json_escape(a.status).c_str(), json_num(a.e_norm, "%.9g").c_str());
+    for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.matrix[i], "%.9g").c_str());
+    fprintf(fp, "],\n");
+    fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n", a.bbox[0],
+            a.bbox[1], a.bbox[2], a.bbox[3], json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(),
+            json_num(a.scene_ev, "%.4g").c_str());
+    fprintf(fp, "    \"headroom\": {\"applied\": %s, \"ev\": %s, \"reason\": \"%s\"},\n",
+            a.headroom_applied ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
+            json_escape(a.headroom_reason).c_str());
+    fprintf(fp, "    \"rescue\": {\"branch\": \"%s\", \"white_clip\": %s, \"changed\": %s},\n",
+            json_escape(a.rescue_branch).c_str(), json_num(a.rescue_clip, "%.6g").c_str(),
+            a.rescue_changed ? "true" : "false");
+    fprintf(fp, "    \"screening\": [");
+    for (size_t i = 0; i < a.screening.size(); ++i) {
+      const auto& r = a.screening[i];
+      fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"intent_loss\": %s}", (i > 0 ? ", " : ""),
+              r.target_idx, json_num(r.e, "%.6g").c_str(), json_num(r.g, "%.6g").c_str(), json_num(r.b, "%.6g").c_str(),
+              json_num(r.intent_loss, "%.6g").c_str());
+    }
+    fprintf(fp, "],\n    \"tournament\": [");
+    for (size_t i = 0; i < a.tournament.size(); ++i) {
+      const auto& r = a.tournament[i];
+      fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"residual\": %s, \"status\": \"%s\", "
+              "\"iters\": %d}", (i > 0 ? ", " : ""), r.target_idx, json_num(r.e, "%.6g").c_str(),
+              json_num(r.g, "%.6g").c_str(), json_num(r.b, "%.6g").c_str(), json_num(r.final_err, "%.6g").c_str(),
+              json_escape(r.status).c_str(), r.iters);
+    }
+    fprintf(fp, "],\n");
+    fprintf(fp, "    \"model\": \"%s\", \"backend\": \"%s\", \"inferences\": %d, \"time_ms\": %s\n",
+            json_escape(dino_model_path).c_str(), json_escape(dino_backend).c_str(), a.inferences,
+            json_num(t_auto_ms, "%.1f").c_str());
+    fprintf(fp, "  },\n");
+  } else {
+    fprintf(fp, "  \"auto\": null,\n");
+  }
+
   // dino
   if (has_dino) {
     fprintf(fp, "  \"dino\": {\n");
@@ -1129,6 +1236,12 @@ static bool write_json_sidecar(
 }
 
 int main(int ac, char *av[]) {
+  for (int i = 1; i < ac; ++i) {
+    if (strcmp(av[i], "--list_profiles") == 0) {
+      for (const std::string& key : list_embedded_bundles()) printf("%s\n", key.c_str());
+      return 0;
+    }
+  }
   argparse::ArgumentParser parser("neg_process");
   parser.add_argument("-H", "--half_size")
     .help("Half size.")
@@ -1189,7 +1302,8 @@ int main(int ac, char *av[]) {
     .help("Linear (uncorrected) R G B values of the film base from captured image, or 'auto'.")
     .nargs(1, 3);
   parser.add_argument("-p", "--film_profile")
-    .help("ICC Profile that applies to the corrected RGB values (See -r -g and -b flags). Consider this as the input ICC profile.");
+    .help("Film profile: a profile bundle (a built-in bundle's key, see --list_profiles, a bundle directory or a "
+          "negicc-station bundle JSON), or an ICC profile that applies to the corrected RGB values (see -r -g and -b).");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
@@ -1211,7 +1325,26 @@ int main(int ac, char *av[]) {
     .required()
     .help("Output file location.");
   parser.add_argument("--dino")
-    .help("Path to DINOv3 model directory or file (containing model.onnx or model.engine) for photographic intent inference.");
+    .help("Solve exposure and gains with DINOv3 photographic intent; with a profile bundle this also picks the "
+          "bracket (negicc-station's automatic conversion). Optionally the model: a directory holding backbone.onnx "
+          "or backbone.engine (or a fused model.onnx / model.engine), or one of those files. Defaults to "
+          "$NEGICC_DINOV3_MODEL, then models/dinov3-small.")
+    .nargs(argparse::nargs_pattern::optional)
+    .default_value(std::string(""));
+  parser.add_argument("--dino_adapter")
+    .help("Intent adapter (adapter.onnx) for a DINOv3 backbone; defaults to the built-in adapter of the profile's film stock.")
+    .default_value(std::string(""));
+  parser.add_argument("--auto")
+    .help("--dino with the film frame found automatically (the lit area of the scan), instead of --roi.")
+    .default_value(false)
+    .implicit_value(true);
+  parser.add_argument("--format")
+    .help("Film format the --auto frame is narrowed to: 6x6, 35mm, 645, 6x7, 6x9 or Free (the whole lit area, the default).")
+    .default_value(std::string("Free"));
+  parser.add_argument("--list_profiles")
+    .help("List the profile bundles built into neg_process and exit.")
+    .default_value(false)
+    .implicit_value(true);
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu, or gpu (defaults to auto).")
     .default_value(std::string("auto"));
@@ -1233,6 +1366,8 @@ int main(int ac, char *av[]) {
   }
 
   const auto files = parser.get<std::vector<std::string>>("raw_files");
+  const bool use_auto_crop = parser.get<bool>("--auto");
+  const bool use_dino = parser.is_used("--dino") || use_auto_crop;
   auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
   auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
   auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
@@ -1241,7 +1376,7 @@ int main(int ac, char *av[]) {
   const bool is_knee_auto = (knee_str == "auto");
   float knee = 0.95f;
   if (is_knee_auto) {
-    if (!parser.is_used("--dino")) {
+    if (!use_dino) {
       fprintf(stderr, "ERROR! --knee auto requires --dino\n");
       return 1;
     }
@@ -1323,6 +1458,14 @@ int main(int ac, char *av[]) {
     fprintf(stderr, "ERROR! Rotation must be a multiple of 90 degrees (got %d)\n", rot_cw);
     return 1;
   }
+  if (use_auto_crop && parser.is_used("--roi")) {
+    fprintf(stderr, "ERROR! --auto finds the film frame itself; use --dino with --roi to give it\n");
+    return 1;
+  }
+  if (parser.is_used("--format") && !use_auto_crop) {
+    fprintf(stderr, "ERROR! --format requires --auto\n");
+    return 1;
+  }
 
   bool is_film_base_auto = false;
   bool film_base_cli_used = false;
@@ -1353,14 +1496,162 @@ int main(int ac, char *av[]) {
   std::string film_prof_arg;
   if (parser.is_used("-p") || parser.is_used("--film_profile")) {
     film_prof_arg = parser.get<std::string>("--film_profile");
-    std::string resolved_prof = resolve_profile_path(film_prof_arg);
-    if (is_json_bundle(resolved_prof)) {
-      if (!load_profile_bundle(resolved_prof, bundle)) {
-        fprintf(stderr, "ERROR! Cannot load profile bundle %s\n", film_prof_arg.c_str());
+    const int loaded = load_bundle_arg(film_prof_arg, bundle);
+    if (loaded < 0) {
+      fprintf(stderr, "ERROR! Cannot load profile bundle %s\n", film_prof_arg.c_str());
+      return 1;
+    }
+    is_bundle = (loaded == 1);
+    if (!is_bundle && !is_regular_file(resolve_profile_path(film_prof_arg))) {
+      fprintf(stderr, "ERROR! No profile bundle or ICC profile '%s' (--list_profiles lists the built-in bundles)\n",
+              film_prof_arg.c_str());
+      return 1;
+    }
+    if (is_bundle) {
+      printf("Profile bundle: %s (%s, %zu brackets)\n", bundle.key.c_str(), bundle.path.c_str(),
+             bundle.targets.size());
+    }
+  }
+
+  int manual_target_idx = -1;
+  if (parser.is_used("--target")) {
+    if (!is_bundle) {
+      fprintf(stderr, "ERROR! --target requires a JSON profile bundle\n");
+      return 1;
+    }
+    const std::string tgt_str = parser.get<std::string>("--target");
+    char* end = nullptr;
+    long val = strtol(tgt_str.c_str(), &end, 10);
+    if (end && *end == '\0' && val >= 0 && val < (long)bundle.targets.size()) {
+      manual_target_idx = (int)val;
+    } else {
+      for (size_t i = 0; i < bundle.targets.size(); ++i) {
+        if (bundle.targets[i].name == tgt_str || bundle.targets[i].display_name == tgt_str) {
+          manual_target_idx = (int)i;
+          break;
+        }
+      }
+    }
+    if (manual_target_idx < 0) {
+      fprintf(stderr, "ERROR! Target '%s' not found in bundle\n", tgt_str.c_str());
+      return 1;
+    }
+  }
+
+  // --dino on a profile bundle without --target: negicc-station's automatic conversion picks the bracket, the
+  // exposure and the gains (auto_convert.h); its input matrix comes from the bundle.
+  const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0;
+  if (use_dino && film_prof_arg.empty()) {
+    fprintf(stderr, "ERROR! --dino and --auto require --film_profile (-p) to evaluate intent losses.\n");
+    return 1;
+  }
+  if (bundle_search) {
+    const char* conflicting[] = {"--r_coeff", "--g_coeff", "--b_coeff", "--film_base_rgb", "--profile_film_base_rgb"};
+    for (const char* opt : conflicting) {
+      if (parser.is_used(opt)) {
+        fprintf(stderr, "ERROR! %s cannot be used with --dino on a profile bundle (the bundle gives the input "
+                        "matrix); pick a bracket with --target to use it\n", opt);
         return 1;
       }
-      is_bundle = true;
     }
+    if (is_knee_auto) {
+      fprintf(stderr, "ERROR! --knee auto cannot be used with --dino on a profile bundle\n");
+      return 1;
+    }
+    if (is_roi_auto) {
+      fprintf(stderr, "ERROR! --roi auto cannot be used with --dino on a profile bundle; use --auto\n");
+      return 1;
+    }
+  }
+
+  DinoV3Engine engine;
+  std::string dino_path;
+  const std::string dino_backend = parser.get<std::string>("--dino_backend");
+  if (use_dino) {
+    dino_path = parser.get<std::string>("--dino");
+    if (dino_path.empty()) dino_path = default_dino_model();
+    if (is_regular_file(dino_path)) {
+      const std::string ext = dino_path.substr(dino_path.find_last_of('.') + 1);
+      if (ext != "onnx" && ext != "engine") {
+        fprintf(stderr, "ERROR! --dino model '%s' is not a .onnx or .engine file (give the model, or put --dino "
+                        "after the RAW files)\n", dino_path.c_str());
+        return 1;
+      }
+    }
+    printf("Loading DINOv3 engine from '%s' (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
+    if (!engine.load(dino_path, dino_backend)) {
+      fprintf(stderr, "ERROR! Failed to load DINOv3 engine from '%s' (build it with 'make dinov3_model')\n",
+              dino_path.c_str());
+      return 1;
+    }
+    if (engine.needs_adapter()) {
+      const std::string adapter_arg = parser.get<std::string>("--dino_adapter");
+      if (!adapter_arg.empty()) {
+        if (!engine.load_adapter_file(adapter_arg)) {
+          fprintf(stderr, "ERROR! Cannot load intent adapter %s\n", adapter_arg.c_str());
+          return 1;
+        }
+      } else {
+        std::string adapter_dir;
+        const std::string profile_name = is_bundle ? bundle.key : film_prof_arg;
+        const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir);
+        if (!a || !engine.set_adapter(a->data, a->size, adapter_dir)) {
+          fprintf(stderr, "ERROR! No intent adapter for profile '%s'\n", profile_name.c_str());
+          return 1;
+        }
+      }
+    }
+    printf("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", engine.backend_name(),
+           engine.adapter_name().empty() ? "fused" : engine.adapter_name().c_str(),
+           (double)engine.memory_bytes() / (1024.0 * 1024.0));
+  }
+
+  // The half-size analysis decode: --auto finds the film frame on it, and the bundle search runs on it.
+  bool auto_cropped = false;
+  bool has_auto_res = false;
+  AutoConvertResult auto_res;
+  double t_auto_ms = 0.0;
+  if (use_auto_crop || bundle_search) {
+    const double t_auto_0 = omp_get_wtime();
+    RgbImage half;
+    double scan_shutter_s = 0.0, scan_iso = 0.0;
+    if (!load_half_size_mosaic(files[0], half, scan_shutter_s, scan_iso)) {
+      fprintf(stderr, "Cannot open %s\n", files[0].c_str());
+      return 1;
+    }
+    int bbox[4] = {0, 0, half.width, half.height};
+    if (use_auto_crop) {
+      int area[4];
+      detect_film_bbox(half, area);
+      const std::string format = parser.get<std::string>("--format");
+      if (!fit_film_format(area, format, bbox)) {
+        fprintf(stderr, "ERROR! Unknown --format '%s' (6x6, 35mm, 645, 6x7, 6x9 or Free)\n", format.c_str());
+        return 1;
+      }
+      clamp_rect(bbox, half.width, half.height);
+      for (int k = 0; k < 4; ++k) roi_coords[k] = bbox[k] * 2;
+      has_roi = true;
+      auto_cropped = true;
+      printf("Film frame (sensor px): x=%d y=%d w=%d h=%d (lit area %d %d %d %d, format %s)\n", roi_coords[0],
+             roi_coords[1], roi_coords[2], roi_coords[3], area[0] * 2, area[1] * 2, area[2] * 2, area[3] * 2,
+             format.c_str());
+    } else if (has_roi) {
+      bbox[0] = roi_coords[0] / 2;
+      bbox[1] = roi_coords[1] / 2;
+      bbox[2] = std::max(1, (roi_coords[0] + roi_coords[2]) / 2 - bbox[0]);
+      bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
+      clamp_rect(bbox, half.width, half.height);
+    }
+    if (bundle_search) {
+      AutoConvertOptions opts;
+      if (!run_auto_convert(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
+                            auto_res)) {
+        fprintf(stderr, "ERROR! Automatic conversion failed.\n");
+        return 1;
+      }
+      has_auto_res = true;
+    }
+    t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
   }
 
   if (is_bundle && bundle.has_crosstalk) {
@@ -1498,7 +1789,7 @@ int main(int ac, char *av[]) {
              frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
     }
 
-    if (parser.is_used("--dino") && frame_det.axis == 'v' && rot_cw == 0) {
+    if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
       printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
     }
 
@@ -1567,6 +1858,12 @@ int main(int ac, char *av[]) {
     film_base_source = "none";
   }
 
+  if (bundle_search) {
+    sidecar_film_base_rgb = sidecar_profile_film_base_rgb;
+    film_base_applied = true;
+    film_base_source = "bundle";
+  }
+
   unsigned pin_mask = 0;
   if (parser.is_used("-E") || parser.is_used("--exposure_comp")) pin_mask |= PIN_E;
   if (parser.is_used("--gain_g")) pin_mask |= PIN_G;
@@ -1584,31 +1881,8 @@ int main(int ac, char *av[]) {
   std::vector<uint8_t> embedded_icc;
   std::string bundle_target_name;
   int bundle_target_idx = -1;
-  int manual_target_idx = -1;
 
-  if (is_bundle) {
-    if (parser.is_used("--target")) {
-      const std::string tgt_str = parser.get<std::string>("--target");
-      char* end = nullptr;
-      long val = strtol(tgt_str.c_str(), &end, 10);
-      if (end && *end == '\0' && val >= 0 && val < (long)bundle.targets.size()) {
-        manual_target_idx = (int)val;
-      } else {
-        for (size_t i = 0; i < bundle.targets.size(); ++i) {
-          if (bundle.targets[i].name == tgt_str || bundle.targets[i].display_name == tgt_str) {
-            manual_target_idx = (int)i;
-            break;
-          }
-        }
-      }
-      if (manual_target_idx < 0) {
-        fprintf(stderr, "ERROR! Target '%s' not found in bundle\n", tgt_str.c_str());
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
-    }
-
+  if (is_bundle && !bundle_search) {
     float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
     int num_feasible = 0;
     compute_bundle_enclosures(bundle,
@@ -1616,13 +1890,7 @@ int main(int ac, char *av[]) {
                               proc->imgdata.sizes.iwidth,
                               proc->imgdata.sizes.iheight,
                               g_lo, g_hi, scene_ev, num_feasible);
-  } else {
-    if (parser.is_used("--target")) {
-      fprintf(stderr, "ERROR! --target requires a JSON profile bundle\n");
-      proc->free_image();
-      delete proc;
-      return 1;
-    }
+  } else if (!is_bundle) {
     if (parser.is_used("--film_profile")) {
       const std::string prof_path = parser.get<std::string>("--film_profile");
       if (!load_film_profile(prof_path, film_prof)) {
@@ -1633,26 +1901,31 @@ int main(int ac, char *av[]) {
 
   DinoSolveResult dino_res;
 
-  if (parser.is_used("--dino")) {
-    if (!parser.is_used("--film_profile") || (!is_bundle && !film_prof.data.has_profile)) {
+  if (has_auto_res) {
+    bundle_target_idx = auto_res.target_idx;
+    bundle_target_name = auto_res.target_name;
+    film_prof = bundle.targets[bundle_target_idx].film_prof;
+    film_prof.rebind_pointers();
+    // -E, --gain_g and --gain_b scale the solved exposure and gains.
+    float conv[9];
+    candidate_matrix(auto_res.matrix, (float)(auto_res.e * auto_res.e_norm), (float)auto_res.g, (float)auto_res.b,
+                     conv);
+    candidate_matrix(conv, global_exposure_comp, gain_g, gain_b, merged_matrix);
+    printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
+           auto_res.e, auto_res.g, auto_res.b, auto_res.residual, auto_res.status.c_str(), auto_res.inferences);
+    printf("Timings (ms): render %.1f, infer %.1f, residual %.1f, search %.1f, total %.1f\n",
+           auto_res.timing_render_ms, auto_res.timing_infer_ms, auto_res.timing_residual_ms,
+           auto_res.timing_search_ms, auto_res.timing_total_ms);
+    printf("R coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[0], merged_matrix[1], merged_matrix[2]);
+    printf("G coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[3], merged_matrix[4], merged_matrix[5]);
+    printf("B coefficients: %1.5f %1.5f %1.5f\n\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
+  } else if (use_dino) {
+    if (!is_bundle && !film_prof.data.has_profile) {
       fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
       proc->free_image();
       delete proc;
       return 1;
     }
-
-    const std::string dino_path = parser.get<std::string>("--dino");
-    const std::string dino_backend = parser.get<std::string>("--dino_backend");
-    printf("Loading DINOv3 engine from '%s' (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
-    DinoV3Engine engine;
-    if (!engine.load(dino_path, dino_backend)) {
-      fprintf(stderr, "ERROR! Failed to load DINOv3 engine from '%s'\n", dino_path.c_str());
-      proc->free_image();
-      delete proc;
-      return 1;
-    }
-    printf("DINOv3 engine loaded [%s] (memory: %.1f MB)\n",
-           engine.backend_name(), (double)engine.memory_bytes() / (1024.0 * 1024.0));
 
     SolverConfig cfg;
     cfg.knee = knee;
@@ -1664,39 +1937,21 @@ int main(int ac, char *av[]) {
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
 
     if (is_bundle) {
-      if (manual_target_idx >= 0) {
-        bundle_target_idx = manual_target_idx;
-        const auto& tgt = bundle.targets[bundle_target_idx];
-        bundle_target_name = tgt.name;
-        film_prof = tgt.film_prof;
-        film_prof.rebind_pointers();
-        set_target_bounds(cfg, tgt);
+      bundle_target_idx = manual_target_idx;
+      const auto& tgt = bundle.targets[bundle_target_idx];
+      bundle_target_name = tgt.name;
+      film_prof = tgt.film_prof;
+      film_prof.rebind_pointers();
+      set_target_bounds(cfg, tgt);
 
-        if (!solve_dinov3_intent(engine, cfg, merged_matrix,
-                                 (const uint16_t (*)[4])proc->imgdata.image,
-                                 proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                                 user_gains, pin_mask, max_iters, dino_res)) {
-          fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
-          proc->free_image();
-          delete proc;
-          return 1;
-        }
-      } else {
-        bundle_target_idx = run_bundle_tournament_with_dino(
-            bundle, engine, cfg, merged_matrix,
-            (const uint16_t (*)[4])proc->imgdata.image,
-            proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-            user_gains, pin_mask, max_iters,
-            kDefaultMinTargetIdx, dino_res);
-        if (bundle_target_idx < 0) {
-          fprintf(stderr, "ERROR! Bundle tournament failed.\n");
-          proc->free_image();
-          delete proc;
-          return 1;
-        }
-        bundle_target_name = bundle.targets[bundle_target_idx].name;
-        film_prof = bundle.targets[bundle_target_idx].film_prof;
-        film_prof.rebind_pointers();
+      if (!solve_dinov3_intent(engine, cfg, merged_matrix,
+                               (const uint16_t (*)[4])proc->imgdata.image,
+                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                               user_gains, pin_mask, max_iters, dino_res)) {
+        fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
+        proc->free_image();
+        delete proc;
+        return 1;
       }
     } else {
       cfg.prof = &film_prof.data;
@@ -1918,7 +2173,9 @@ int main(int ac, char *av[]) {
     }
 
     std::string roi_source = "none";
-    if (is_roi_auto) {
+    if (auto_cropped) {
+      roi_source = "auto_lit_area";
+    } else if (is_roi_auto) {
       roi_source = (frame_det.conf >= 0.5f) ? "auto" : "auto_fallback";
     } else if (has_roi) {
       roi_source = "cli";
@@ -1939,12 +2196,12 @@ int main(int ac, char *av[]) {
                        global_exposure_comp, gain_g, gain_b,
                        pin_mask,
                        knee, knee_source,
-                       parser.is_used("--dino"), dino_res,
-                       parser.is_used("--dino") ? parser.get<std::string>("--dino") : "",
-                       parser.is_used("--dino_backend") ? parser.get<std::string>("--dino_backend") : "auto",
+                       use_dino && !has_auto_res, dino_res,
+                       dino_path, dino_backend,
                        cs_name,
                        t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms,
-                       is_bundle, bundle_target_name, bundle_target_idx);
+                       is_bundle, bundle_target_name, bundle_target_idx,
+                       has_auto_res ? &auto_res : nullptr, t_auto_ms);
   }
 
   proc->free_image();
