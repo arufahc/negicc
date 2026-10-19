@@ -71,6 +71,9 @@ struct AutoConvertResult {
                                                   // exposure ratio, in reference units); candidate_matrix(matrix,
                                                   // e * e_norm, g, b) is the final conversion matrix
   double e_norm = 1.0;  // this frame's green input scale over the reference scan's (1/8 s, ISO 100)
+  // Per-row scale of matrix over the bundle's crosstalk matrix (normalisation to the film base and exposure
+  // ratio, divided by e_norm), so the conversion can be written as crosstalk, exposure and gains.
+  double row_scale[3] = {1.0, 1.0, 1.0};
   int bbox[4] = {0, 0, 0, 0};
   double g_lo = 0, g_hi = 0, scene_ev = 0;
   bool headroom_applied = false;

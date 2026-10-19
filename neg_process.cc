@@ -1542,7 +1542,7 @@ int main(int ac, char *av[]) {
   // exposure and the gains (auto_convert.h); its input matrix comes from the bundle.
   const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0;
   if (use_dino && film_prof_arg.empty()) {
-    fprintf(stderr, "ERROR! --dino and --auto require --film_profile (-p) to evaluate intent losses.\n");
+    fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
     return 1;
   }
   if (bundle_search) {
@@ -1859,8 +1859,8 @@ int main(int ac, char *av[]) {
   }
 
   if (bundle_search) {
+    // The bundle's film base is folded into the solved exposure and gains (not applied as a film base scale).
     sidecar_film_base_rgb = sidecar_profile_film_base_rgb;
-    film_base_applied = true;
     film_base_source = "bundle";
   }
 
@@ -1906,19 +1906,22 @@ int main(int ac, char *av[]) {
     bundle_target_name = auto_res.target_name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
-    // -E, --gain_g and --gain_b scale the solved exposure and gains.
-    float conv[9];
-    candidate_matrix(auto_res.matrix, (float)(auto_res.e * auto_res.e_norm), (float)auto_res.g, (float)auto_res.b,
-                     conv);
-    candidate_matrix(conv, global_exposure_comp, gain_g, gain_b, merged_matrix);
+    // The solved conversion written as the bundle's crosstalk with an exposure and gains (the film base and
+    // exposure ratio folded in), so the sidecar's cli_equivalent reproduces it with --target. -E, --gain_g and
+    // --gain_b scale the solved values.
+    const double e_abs = auto_res.row_scale[0] * auto_res.e * auto_res.e_norm;
+    global_exposure_comp = (float)(e_abs * global_exposure_comp);
+    gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.g * gain_g);
+    gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.b * gain_b);
+    adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
+                             effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.e, auto_res.g, auto_res.b, auto_res.residual, auto_res.status.c_str(), auto_res.inferences);
     printf("Timings (ms): render %.1f, infer %.1f, residual %.1f, search %.1f, total %.1f\n",
            auto_res.timing_render_ms, auto_res.timing_infer_ms, auto_res.timing_residual_ms,
            auto_res.timing_search_ms, auto_res.timing_total_ms);
-    printf("R coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[0], merged_matrix[1], merged_matrix[2]);
-    printf("G coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[3], merged_matrix[4], merged_matrix[5]);
-    printf("B coefficients: %1.5f %1.5f %1.5f\n\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
+    printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
+           gain_b, bundle_target_idx);
   } else if (use_dino) {
     if (!is_bundle && !film_prof.data.has_profile) {
       fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
