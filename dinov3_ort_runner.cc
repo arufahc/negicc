@@ -17,12 +17,26 @@ namespace {
 class OrtCpuRunner : public DinoV3Runner {
 public:
     OrtCpuRunner(const std::string& model_path, int num_threads) {
+        set_options(num_threads);
+        m_session = std::make_unique<Ort::Session>(m_env, model_path.c_str(), m_opts);
+        read_io();
+    }
+
+    // From an .onnx held in memory (the backbone built into neg_process).
+    OrtCpuRunner(const void* onnx_data, size_t onnx_size, int num_threads) {
+        set_options(num_threads);
+        m_session = std::make_unique<Ort::Session>(m_env, onnx_data, onnx_size, m_opts);
+        read_io();
+    }
+
+    void set_options(int num_threads) {
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
         m_opts.SetIntraOpNumThreads(std::min(num_threads, hw));
         m_opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
         m_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        m_session = std::make_unique<Ort::Session>(m_env, model_path.c_str(), m_opts);
+    }
 
+    void read_io() {
         Ort::AllocatorWithDefaultOptions alloc;
         for (size_t i = 0; i < m_session->GetInputCount(); ++i) {
             if (std::string(m_session->GetInputNameAllocated(i, alloc).get()) == "pool_weights")
@@ -138,6 +152,10 @@ private:
 
 std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads) {
     return std::make_unique<OrtCpuRunner>(model_path, num_threads);
+}
+
+std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads) {
+    return std::make_unique<OrtCpuRunner>(onnx_data, onnx_size, num_threads);
 }
 
 std::unique_ptr<DinoV3AdapterRunner> make_ort_adapter(const void* onnx_data, size_t onnx_size, int num_threads) {

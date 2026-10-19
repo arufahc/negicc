@@ -33,6 +33,11 @@ public:
     bool load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
               int max_size = 512, int patch_size = 16);
 
+    // The backbone built into neg_process: a TensorRT engine (USE_CUDA=1 builds, for the "gpu" backend) or an
+    // .onnx (USE_CUDA=0, for "cpu"), held in memory.
+    bool load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend = "auto",
+                     int num_threads = 4, int max_size = 512, int patch_size = 16);
+
     // Adapter for a backbone model: an adapter.onnx held in memory (embedded in neg_process) or read from a file.
     // name is reported by adapter_name(). Ignored by fused models, which carry their own adapter.
     bool set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1);

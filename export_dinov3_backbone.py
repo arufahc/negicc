@@ -13,7 +13,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""Exports the frozen DINOv3 backbone neg_process runs for --auto to ONNX, and optionally its TensorRT engine.
+"""Exports the frozen DINOv3 backbone neg_process runs in its parameter search to ONNX, and optionally its TensorRT engine.
 
     make dinov3_model                 # or: python3 export_dinov3_backbone.py [--source ID_OR_DIR] [--engine]
 

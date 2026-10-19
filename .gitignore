@@ -1,5 +1,4 @@
 *.icc
-!profiles/*.icc
 !profiles/*/*.icc
 *~
 # The IT8 reference readings negicc-station profiling tools read from here (not distributed).

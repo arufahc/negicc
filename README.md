@@ -4,8 +4,9 @@ NegICC converts color negatives scanned with a digital camera into positive imag
 scan, removes the camera's channel crosstalk, normalises to the film base and applies a film profile: an ICC
 profile of the film stock, built from an IT8 target recorded on that film.
 
-With `--auto` it does the whole conversion by itself: it finds the film frame, picks the calibration bracket of a
-profile bundle and solves the exposure and color balance with a DINOv3 model of how the film stock should look.
+Given the film stock and the scanning light, it does the whole conversion by itself: it picks the calibration bracket
+of the built-in profile bundle and solves the exposure and color balance with a DINOv3 model of how the film stock
+should look.
 
 ![sample conversion](samples/sample.png)
 
@@ -24,43 +25,45 @@ make neg_process            # bin_out/neg_process
 ONNX Runtime (CPU) is expected under `3rd_party/onnxruntime` (see its README). On a machine with CUDA and TensorRT
 (e.g. a Jetson with JetPack 6) the build uses them automatically; `make USE_CUDA=0` forces the CPU build.
 
-The profile bundles and the intent adapters are built into `neg_process`, so the binary needs no data files except
-the DINOv3 backbone that `--dino` and `--auto` run, in `models/dinov3-small/`. To export it from the pretrained
-weights (needs Python with torch, transformers and onnx):
+The profile bundles, the intent adapters and the DINOv3 backbone of the parameter search are built into
+`neg_process`, so the binary needs no data files. Export the backbone from the pretrained weights before building
+(needs Python with torch, transformers and onnx):
 
 ```
 make dinov3_model           # models/dinov3-small/backbone.onnx, with the weights' licence files
-make dinov3_engine          # optional: its TensorRT engine, on the device that runs it
+make dinov3_engine          # USE_CUDA=1 builds: its TensorRT engine, on the machine that runs neg_process
+make neg_process
 ```
 
-`neg_process` looks for the backbone in `$NEGICC_DINOV3_MODEL`, then `models/dinov3-small` next to the
-executable's directory, then `models/dinov3-small`, or takes a path: `--dino PATH`.
+A `USE_CUDA=1` build packs the TensorRT engine, a `USE_CUDA=0` build packs `backbone.onnx`. Without the backbone
+`neg_process` still builds, but converts only with `--gain_g` or `--gain_b` given.
 
 # Usage
 
 ```
-# Automatic: find the frame, pick the bracket, solve exposure and color balance.
-bin_out/neg_process --auto -p Portra400-A7R4-TriLED -P srgb -o out.tif scan.ARW
+# Automatic: pick the bracket, solve exposure and color balance (frame: x y w h [rot_cw [hflip [vflip]]]).
+bin_out/neg_process --film_stock portra400 --light_source tri --roi 1700 0 6686 6376 -P srgb -o out.tif scan.ARW
 
-# The same with the frame given (sensor pixels: x y w h [rot_cw [hflip [vflip]]]).
-bin_out/neg_process --dino -p Portra400-A7R4-TriLED -P srgb --roi 1700 0 6686 6376 -o out.tif scan.ARW
+# Manual: a bracket of the bundle with the exposure and gains given.
+bin_out/neg_process --film_stock portra400 --light_source tri --target 3 -E 0.6 --gain_g 0.9 --gain_b 0.8 \
+    -P srgb -o out.tif scan.ARW
 
-# Manual: one bracket of a bundle, or a single ICC profile, with exposure and gains given.
-bin_out/neg_process -p Portra400-A7R4-TriLED --target 3 -E 0.6 --gain_g 0.9 --gain_b 0.8 -P srgb -o out.tif scan.ARW
-
-# The profile bundles built in.
+# The film stocks and light sources built in.
 bin_out/neg_process --list_profiles
 ```
 
-- `--auto` narrows the frame to a film format with `--format 6x6|35mm|645|6x7|6x9`, and orients it with `--rot`,
-  `--hflip` and `--vflip`.
-- With `--dino` or `--auto`, `-E`, `--gain_g` and `--gain_b` scale the solved values.
-- With `--target`, or with a single ICC profile, `--dino` solves only the exposure and gains of that profile.
+- `--film_stock` is `ektar100`, `portra160` or `portra400`; `--light_source` is `tri` (narrowband red, green and
+  blue LED) or `d65` (white).
+- The parameter search runs unless `--gain_g` or `--gain_b` is given. `-E` keeps the exposure and solves only the
+  gains, on the bracket `--target` picks or the bundle's default.
+- `-r`, `-g` and `-b` replace rows of the bundle's crosstalk correction with ones measured for the capture.
+- `-p` takes a negicc-station profile bundle JSON (e.g. to test parity with it) or a single ICC profile (for
+  research) in place of the built-in bundle; `--dino` an intent adapter (`adapter.onnx` or its directory) in place of
+  the film stock's.
+- `--roi auto` finds the film frame, but not yet with the bracket search.
 - Four RAW files are merged as a Sony 4-shot pixel shift capture.
-- Each output gets a JSON sidecar (`out.tif.json`) with the settings, the bracket chosen and the solved values.
-
-`-p` takes a bundle key (`--list_profiles`), a bundle directory (`profiles/<Key>/`), an all-in-one bundle JSON from
-negicc-station, or an ICC profile.
+- Each output gets a JSON sidecar (`out.tif.json`) with the settings, the bracket chosen and the solved values; its
+  `cli_equivalent` reproduces the conversion.
 
 # Data
 
@@ -69,7 +72,6 @@ negicc-station, or an ICC profile.
 - `models/dinov3-small_<stock>/`: the intent adapter of a film stock (`adapter.onnx`, `metadata.json`) and its
   model card.
 - `models/dinov3-small/`: the DINOv3 backbone shared by every stock (`make dinov3_model`), with its licence.
-- `profiles/Sony A7RM4 Portra400* R190808 cLUT.icc`: the earlier single profiles, usable with `-p`.
 
 They are updated from negicc-station with its `tools/export_negicc_data.py`, never edited here except for the
 READMEs.

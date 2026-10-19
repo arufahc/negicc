@@ -1,8 +1,8 @@
 # neg_process: converts film negative RAW scans with the profiles and intent adapters built into it.
 #
-#   make neg_process        # bin_out/neg_process
-#   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone --dino and --auto run
-#   make dinov3_engine      # its TensorRT engine (on a CUDA build host)
+#   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
+#   make dinov3_engine      # its TensorRT engine, for USE_CUDA=1 builds (on the machine that runs it)
+#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
 #   make lib                # bin_out/libnegicc_dinov3.a, linked by negicc-station
 
 PYTHON ?= python3
@@ -136,8 +136,12 @@ bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BU
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
 
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
-# (tools/export_negicc_data.py).
-EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx))
+# (tools/export_negicc_data.py), and the DINOv3 backbone: its TensorRT engine in USE_CUDA=1 builds (make
+# dinov3_engine, on the machine that runs it), else backbone.onnx (make dinov3_model). Without the backbone
+# neg_process still builds, but converts only with --gain_g or --gain_b given.
+BACKBONE_FILE = models/dinov3-small/backbone.$(if $(filter 1,$(USE_CUDA)),engine,onnx)
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx)) \
+              $(wildcard $(BACKBONE_FILE))
 
 bin_out/embedded_data.S: embed_data.sh $(EMBED_FILES) $(BUILD_STAMP)
 	mkdir -p bin_out

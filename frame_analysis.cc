@@ -393,7 +393,7 @@ bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutt
     return false;
   }
   if (!proc.imgdata.rawdata.raw_image || proc.imgdata.idata.filters <= 1000 || proc.imgdata.idata.colors != 3) {
-    fprintf(stderr, "Only 3-color Bayer RAW files are supported by --auto: %s\n", path.c_str());
+    fprintf(stderr, "Only 3-color Bayer RAW files are supported by the parameter search: %s\n", path.c_str());
     return false;
   }
   const int w = proc.imgdata.sizes.width, h = proc.imgdata.sizes.height;
