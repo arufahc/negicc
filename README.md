@@ -34,33 +34,48 @@ make dinov3_engine          # optional: its TensorRT engine, on the device that 
 ```
 
 `neg_process` looks for the backbone in `$NEGICC_DINOV3_MODEL`, then `models/dinov3-small` next to the
-executable's directory, then `models/dinov3-small`, or takes a path: `--dino PATH`.
+executable's directory, then `models/dinov3-small`, or takes a path: `--dino_model PATH`.
 
 # Usage
 
 ```
 # Automatic: find the frame, pick the bracket, solve exposure and color balance.
-bin_out/neg_process --auto -p Portra400-A7R4-TriLED -P srgb -o out.tif scan.ARW
+bin_out/neg_process --auto --film_stock portra400 -P srgb -o out.tif scan.ARW
 
-# The same with the frame given (sensor pixels: x y w h [rot_cw [hflip [vflip]]]).
-bin_out/neg_process --dino -p Portra400-A7R4-TriLED -P srgb --roi 1700 0 6686 6376 -o out.tif scan.ARW
+# Parameter search on a frame you give (sensor pixels: x y w h [rot_cw [hflip [vflip]]]).
+bin_out/neg_process --dino --film_stock portra400 --roi 1700 0 6686 6376 -P srgb -o out.tif scan.ARW
 
-# Manual: one bracket of a bundle, or a single ICC profile, with exposure and gains given.
-bin_out/neg_process -p Portra400-A7R4-TriLED --target 3 -E 0.6 --gain_g 0.9 --gain_b 0.8 -P srgb -o out.tif scan.ARW
+# Manual: one bracket with exposure and gains given.
+bin_out/neg_process --film_stock portra400 --target 2 -E 2.83 --gain_g 1.0 --gain_b 0.54 -P srgb -o out.tif scan.ARW
 
 # The profile bundles built in.
 bin_out/neg_process --list_profiles
 ```
 
-- `--auto` narrows the frame to a film format with `--format 6x6|35mm|645|6x7|6x9`, and orients it with `--rot`,
-  `--hflip` and `--vflip`.
-- With `--dino` or `--auto`, `-E`, `--gain_g` and `--gain_b` scale the solved values.
-- With `--target`, or with a single ICC profile, `--dino` solves only the exposure and gains of that profile.
-- Four RAW files are merged as a Sony 4-shot pixel shift capture.
-- Each output gets a JSON sidecar (`out.tif.json`) with the settings, the bracket chosen and the solved values.
+Picking the profile bundle and intent adapter:
+- `--film_stock ektar100|portra160|portra400` with `--light_source tri|d65` (default `tri`) picks the built-in
+  bundle and the stock's adapter.
+- `--profile` (`-p`) overrides the bundle: a key from `--list_profiles`, a bundle directory, a negicc-station bundle
+  JSON, or a single ICC profile.
 
-`-p` takes a bundle key (`--list_profiles`), a bundle directory (`profiles/<Key>/`), an all-in-one bundle JSON from
-negicc-station, or an ICC profile.
+Automatic steps:
+- `--auto_crop` finds the film frame (the lit area of the scan), narrowed to a film format with
+  `--format 6x6|35mm|645|6x7|6x9`.
+- `--dino` searches the bracket, exposure and gains with DINOv3. `--dino PATH` uses another intent adapter
+  (`adapter.onnx` or its directory). With `--target`, or with a single ICC profile, it solves only the exposure and
+  gains of that profile.
+- `--auto` is `--auto_crop` and `--dino`.
+
+Manual overrides:
+- `--roi`, `--rot`, `--hflip` and `--vflip` set the frame and its orientation.
+- `-E`, `--gain_g` and `--gain_b` set the exposure and gains; with `--dino` they scale the solved values.
+- `--crosstalk_correction r1 r2 r3 g1 g2 g3 b1 b2 b3` replaces the bundle's crosstalk matrix (not with `--dino` on a
+  bundle).
+
+Other behaviour:
+- Four RAW files are merged as a Sony 4-shot pixel shift capture.
+- Each output gets a JSON sidecar (`out.tif.json`) with the settings, the bracket chosen, the solved values and a
+  `cli_equivalent` that reproduces the result without `--dino`.
 
 # Data
 
