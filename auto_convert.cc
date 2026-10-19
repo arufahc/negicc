@@ -615,6 +615,9 @@ bool run_auto_convert(const ProfileBundle& bundle, DinoV3Engine& engine, const R
   for (int i = 0; i < 9; ++i) fr.conv_matrix[i] = (float)(fr.m_frame_d[i] / fr.e_norm);
   out.e_norm = fr.e_norm;
   std::copy(fr.conv_matrix, fr.conv_matrix + 9, out.matrix);
+  for (int r = 0; r < 3; ++r) {
+    out.row_scale[r] = (fb[r] > 0 ? (bundle.normalization_target / fb[r]) * ratio_frame : 1.0) / fr.e_norm;
+  }
 
   if (verbose) {
     printf("Auto: frame %dx%d at (%d, %d) (half size), crop %dx%d, grid %dx%d\n", bbox[2], bbox[3], bbox[0], bbox[1],
