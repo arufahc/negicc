@@ -140,49 +140,6 @@ int load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
   return 1;
 }
 
-// A DINOv3 model rather than an adapter: a backbone or fused model file, or a directory holding one.
-static bool is_model_path(const std::string& p) {
-  for (const char* f : {"backbone.onnx", "backbone.engine", "model.onnx", "model.engine"}) {
-    if (is_regular_file(p + "/" + f)) return true;
-    const std::string suffix = std::string("/") + f;
-    if ((p == f || (p.size() > suffix.size() && p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0)) &&
-        is_regular_file(p)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// The built-in profile bundle of a film stock and light source: the one whose key is "<Stock>-<camera>-<Light>",
-// e.g. portra400 + tri gives "Portra400-A7R4-TriLED". Empty, with an error printed, when there is none or several.
-std::string builtin_bundle_for(const std::string& stock, const std::string& light) {
-  std::string light_key;
-  if (light == "tri") light_key = "TriLED";
-  else if (light == "d65") light_key = "D65";
-  else {
-    fprintf(stderr, "ERROR! Unknown --light_source '%s' (tri or d65)\n", light.c_str());
-    return "";
-  }
-  auto lower = [](std::string v) {
-    for (auto& ch : v) ch = (char)std::tolower((unsigned char)ch);
-    return v;
-  };
-  std::vector<std::string> found;
-  for (const std::string& key : list_embedded_bundles()) {
-    const std::string k = lower(key), prefix = lower(stock) + "-", suffix = "-" + lower(light_key);
-    if (k.size() > prefix.size() + suffix.size() && k.compare(0, prefix.size(), prefix) == 0 &&
-        k.compare(k.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      found.push_back(key);
-    }
-  }
-  if (found.size() != 1) {
-    fprintf(stderr, "ERROR! %s built-in profile bundle for --film_stock %s --light_source %s (--list_profiles "
-                    "lists them)\n", found.empty() ? "No" : "More than one", stock.c_str(), light.c_str());
-    return "";
-  }
-  return found[0];
-}
-
 // The DINOv3 model --dino or --auto uses when none is given: $NEGICC_DINOV3_MODEL, models/dinov3-small next to the
 // executable's directory, or models/dinov3-small in the working directory.
 std::string default_dino_model() {
@@ -1298,11 +1255,20 @@ int main(int ac, char *av[]) {
     .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear; >=0 passes qual to LibRaw).")
     .scan<'i', int>()
     .default_value(-1);
-  parser.add_argument("--crosstalk_correction")
-    .help("Crosstalk correction matrix 'r1 r2 r3 g1 g2 g3 b1 b2 b3': each corrected channel is the dot product of "
-          "its row and the linear RAW 'R G B'. Defaults to the profile bundle's, or identity.")
-    .nargs(9)
-    .default_value(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1})
+  parser.add_argument("-r", "--r_coeff")
+    .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .default_value(std::vector<float>{1, 0, 0})
+    .scan<'g', float>();
+  parser.add_argument("-g", "--g_coeff")
+    .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .default_value(std::vector<float>{0, 1, 0})
+    .scan<'g', float>();
+  parser.add_argument("-b", "--b_coeff")
+    .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW.")
+    .nargs(3)
+    .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
   parser.add_argument("-E", "--exposure_comp")
     .help("Multiplier for RGB values.")
@@ -1335,14 +1301,9 @@ int main(int ac, char *av[]) {
   parser.add_argument("--film_base_rgb")
     .help("Linear (uncorrected) R G B values of the film base from captured image, or 'auto'.")
     .nargs(1, 3);
-  parser.add_argument("-p", "--profile", "--film_profile")
-    .help("Profile override: a profile bundle (a built-in bundle's key, see --list_profiles, a bundle directory or a "
-          "negicc-station bundle JSON), or an ICC profile that applies to the corrected RGB values.");
-  parser.add_argument("--film_stock")
-    .help("Film stock whose built-in profile bundle and intent adapter to use: ektar100, portra160 or portra400.");
-  parser.add_argument("--light_source")
-    .help("Scanning light of the built-in bundle --film_stock picks: tri (narrowband RGB LED, the default) or d65.")
-    .default_value(std::string("tri"));
+  parser.add_argument("-p", "--film_profile")
+    .help("Film profile: a profile bundle (a built-in bundle's key, see --list_profiles, a bundle directory or a "
+          "negicc-station bundle JSON), or an ICC profile that applies to the corrected RGB values (see -r -g and -b).");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
@@ -1364,26 +1325,21 @@ int main(int ac, char *av[]) {
     .required()
     .help("Output file location.");
   parser.add_argument("--dino")
-    .help("Search the exposure and gains with DINOv3 photographic intent; on a profile bundle this also picks the "
-          "bracket (negicc-station's automatic conversion). Optionally an intent adapter to use instead of the "
-          "film stock's built-in one: adapter.onnx or a directory holding it (a fused model directory also works).")
+    .help("Solve exposure and gains with DINOv3 photographic intent; with a profile bundle this also picks the "
+          "bracket (negicc-station's automatic conversion). Optionally the model: a directory holding backbone.onnx "
+          "or backbone.engine (or a fused model.onnx / model.engine), or one of those files. Defaults to "
+          "$NEGICC_DINOV3_MODEL, then models/dinov3-small.")
     .nargs(argparse::nargs_pattern::optional)
     .default_value(std::string(""));
-  parser.add_argument("--dino_model")
-    .help("DINOv3 backbone: a directory holding backbone.onnx or backbone.engine, or one of those files. Defaults to "
-          "$NEGICC_DINOV3_MODEL, then models/dinov3-small.")
+  parser.add_argument("--dino_adapter")
+    .help("Intent adapter (adapter.onnx) for a DINOv3 backbone; defaults to the built-in adapter of the profile's film stock.")
     .default_value(std::string(""));
-  parser.add_argument("--auto_crop")
-    .help("Find the film frame automatically (the lit area of the scan) instead of --roi.")
-    .default_value(false)
-    .implicit_value(true);
   parser.add_argument("--auto")
-    .help("Automatic conversion: --auto_crop and --dino.")
+    .help("--dino with the film frame found automatically (the lit area of the scan), instead of --roi.")
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--format")
-    .help("Film format the --auto_crop frame is narrowed to: 6x6, 35mm, 645, 6x7, 6x9 or Free (the whole lit area, "
-          "the default).")
+    .help("Film format the --auto frame is narrowed to: 6x6, 35mm, 645, 6x7, 6x9 or Free (the whole lit area, the default).")
     .default_value(std::string("Free"));
   parser.add_argument("--list_profiles")
     .help("List the profile bundles built into neg_process and exit.")
@@ -1410,13 +1366,11 @@ int main(int ac, char *av[]) {
   }
 
   const auto files = parser.get<std::vector<std::string>>("raw_files");
-  const bool use_auto_crop = parser.get<bool>("--auto_crop") || parser.get<bool>("--auto");
-  const bool use_dino = parser.is_used("--dino") || parser.get<bool>("--auto");
-  const auto crosstalk = parser.get<std::vector<float>>("--crosstalk_correction");
-  const bool crosstalk_cli = parser.is_used("--crosstalk_correction");
-  std::vector<float> r_coeff(crosstalk.begin(), crosstalk.begin() + 3);
-  std::vector<float> g_coeff(crosstalk.begin() + 3, crosstalk.begin() + 6);
-  std::vector<float> b_coeff(crosstalk.begin() + 6, crosstalk.begin() + 9);
+  const bool use_auto_crop = parser.get<bool>("--auto");
+  const bool use_dino = parser.is_used("--dino") || use_auto_crop;
+  auto r_coeff = parser.get<std::vector<float>>("--r_coeff");
+  auto g_coeff = parser.get<std::vector<float>>("--g_coeff");
+  auto b_coeff = parser.get<std::vector<float>>("--b_coeff");
   float global_exposure_comp = parser.get<float>("--exposure_comp");
   const std::string knee_str = parser.get<std::string>("--knee");
   const bool is_knee_auto = (knee_str == "auto");
@@ -1505,11 +1459,11 @@ int main(int ac, char *av[]) {
     return 1;
   }
   if (use_auto_crop && parser.is_used("--roi")) {
-    fprintf(stderr, "ERROR! --auto and --auto_crop find the film frame themselves; give --roi without them\n");
+    fprintf(stderr, "ERROR! --auto finds the film frame itself; use --dino with --roi to give it\n");
     return 1;
   }
   if (parser.is_used("--format") && !use_auto_crop) {
-    fprintf(stderr, "ERROR! --format requires --auto_crop or --auto\n");
+    fprintf(stderr, "ERROR! --format requires --auto\n");
     return 1;
   }
 
@@ -1540,18 +1494,8 @@ int main(int ac, char *av[]) {
   bool is_bundle = false;
   ProfileBundle bundle;
   std::string film_prof_arg;
-  if (parser.is_used("--light_source") && !parser.is_used("--film_stock")) {
-    fprintf(stderr, "ERROR! --light_source requires --film_stock\n");
-    return 1;
-  }
-  const std::string film_stock = parser.is_used("--film_stock") ? parser.get<std::string>("--film_stock") : "";
-  if (parser.is_used("--profile")) {
-    film_prof_arg = parser.get<std::string>("--profile");
-  } else if (!film_stock.empty()) {
-    film_prof_arg = builtin_bundle_for(film_stock, parser.get<std::string>("--light_source"));
-    if (film_prof_arg.empty()) return 1;
-  }
-  if (!film_prof_arg.empty()) {
+  if (parser.is_used("-p") || parser.is_used("--film_profile")) {
+    film_prof_arg = parser.get<std::string>("--film_profile");
     const int loaded = load_bundle_arg(film_prof_arg, bundle);
     if (loaded < 0) {
       fprintf(stderr, "ERROR! Cannot load profile bundle %s\n", film_prof_arg.c_str());
@@ -1598,11 +1542,11 @@ int main(int ac, char *av[]) {
   // exposure and the gains (auto_convert.h); its input matrix comes from the bundle.
   const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0;
   if (use_dino && film_prof_arg.empty()) {
-    fprintf(stderr, "ERROR! --dino requires --film_profile (-p) or --film_stock to evaluate intent losses.\n");
+    fprintf(stderr, "ERROR! --dino requires --film_profile (-p) to evaluate intent losses.\n");
     return 1;
   }
   if (bundle_search) {
-    const char* conflicting[] = {"--crosstalk_correction", "--film_base_rgb", "--profile_film_base_rgb"};
+    const char* conflicting[] = {"--r_coeff", "--g_coeff", "--b_coeff", "--film_base_rgb", "--profile_film_base_rgb"};
     for (const char* opt : conflicting) {
       if (parser.is_used(opt)) {
         fprintf(stderr, "ERROR! %s cannot be used with --dino on a profile bundle (the bundle gives the input "
@@ -1624,25 +1568,16 @@ int main(int ac, char *av[]) {
   std::string dino_path;
   const std::string dino_backend = parser.get<std::string>("--dino_backend");
   if (use_dino) {
-    // --dino's value: an adapter override, or (as before the backbone was split out) a whole model directory.
-    std::string adapter_override;
-    const std::string dino_arg = parser.get<std::string>("--dino");
-    dino_path = parser.get<std::string>("--dino_model");
-    if (!dino_arg.empty()) {
-      if (is_model_path(dino_arg)) {
-        if (dino_path.empty()) dino_path = dino_arg;
-      } else if (is_directory(dino_arg) && is_regular_file(dino_arg + "/adapter.onnx")) {
-        adapter_override = dino_arg + "/adapter.onnx";
-      } else if (is_regular_file(dino_arg) && dino_arg.size() > 5 &&
-                 dino_arg.compare(dino_arg.size() - 5, 5, ".onnx") == 0) {
-        adapter_override = dino_arg;
-      } else {
-        fprintf(stderr, "ERROR! --dino '%s' is not an intent adapter (adapter.onnx or its directory) or a model "
-                        "directory; put --dino after the RAW files when giving none\n", dino_arg.c_str());
+    dino_path = parser.get<std::string>("--dino");
+    if (dino_path.empty()) dino_path = default_dino_model();
+    if (is_regular_file(dino_path)) {
+      const std::string ext = dino_path.substr(dino_path.find_last_of('.') + 1);
+      if (ext != "onnx" && ext != "engine") {
+        fprintf(stderr, "ERROR! --dino model '%s' is not a .onnx or .engine file (give the model, or put --dino "
+                        "after the RAW files)\n", dino_path.c_str());
         return 1;
       }
     }
-    if (dino_path.empty()) dino_path = default_dino_model();
     printf("Loading DINOv3 engine from '%s' (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
     if (!engine.load(dino_path, dino_backend)) {
       fprintf(stderr, "ERROR! Failed to load DINOv3 engine from '%s' (build it with 'make dinov3_model')\n",
@@ -1650,23 +1585,21 @@ int main(int ac, char *av[]) {
       return 1;
     }
     if (engine.needs_adapter()) {
-      if (!adapter_override.empty()) {
-        if (!engine.load_adapter_file(adapter_override)) {
-          fprintf(stderr, "ERROR! Cannot load intent adapter %s\n", adapter_override.c_str());
+      const std::string adapter_arg = parser.get<std::string>("--dino_adapter");
+      if (!adapter_arg.empty()) {
+        if (!engine.load_adapter_file(adapter_arg)) {
+          fprintf(stderr, "ERROR! Cannot load intent adapter %s\n", adapter_arg.c_str());
           return 1;
         }
       } else {
         std::string adapter_dir;
-        const std::string profile_name = !film_stock.empty() ? film_stock : is_bundle ? bundle.key : film_prof_arg;
+        const std::string profile_name = is_bundle ? bundle.key : film_prof_arg;
         const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir);
         if (!a || !engine.set_adapter(a->data, a->size, adapter_dir)) {
           fprintf(stderr, "ERROR! No intent adapter for profile '%s'\n", profile_name.c_str());
           return 1;
         }
       }
-    } else if (!adapter_override.empty()) {
-      fprintf(stderr, "Warning: %s carries its own adapter; ignoring %s\n", dino_path.c_str(),
-              adapter_override.c_str());
     }
     printf("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", engine.backend_name(),
            engine.adapter_name().empty() ? "fused" : engine.adapter_name().c_str(),
@@ -1722,9 +1655,13 @@ int main(int ac, char *av[]) {
   }
 
   if (is_bundle && bundle.has_crosstalk) {
-    if (!crosstalk_cli) {
+    if (!parser.is_used("-r") && !parser.is_used("--r_coeff")) {
       r_coeff = {bundle.crosstalk_matrix[0], bundle.crosstalk_matrix[1], bundle.crosstalk_matrix[2]};
+    }
+    if (!parser.is_used("-g") && !parser.is_used("--g_coeff")) {
       g_coeff = {bundle.crosstalk_matrix[3], bundle.crosstalk_matrix[4], bundle.crosstalk_matrix[5]};
+    }
+    if (!parser.is_used("-b") && !parser.is_used("--b_coeff")) {
       b_coeff = {bundle.crosstalk_matrix[6], bundle.crosstalk_matrix[7], bundle.crosstalk_matrix[8]};
     }
   }
@@ -1760,7 +1697,10 @@ int main(int ac, char *av[]) {
              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
     }
   } else {
-    const bool has_crosstalk = crosstalk_cli || (is_bundle && bundle.has_crosstalk);
+    const bool has_crosstalk = parser.is_used("-r") || parser.is_used("--r_coeff") ||
+                               parser.is_used("-g") || parser.is_used("--g_coeff") ||
+                               parser.is_used("-b") || parser.is_used("--b_coeff") ||
+                               (is_bundle && bundle.has_crosstalk);
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size"),
                     parser.get<int>("--quality"),
@@ -1951,8 +1891,8 @@ int main(int ac, char *av[]) {
                               proc->imgdata.sizes.iheight,
                               g_lo, g_hi, scene_ev, num_feasible);
   } else if (!is_bundle) {
-    if (!film_prof_arg.empty()) {
-      const std::string prof_path = film_prof_arg;
+    if (parser.is_used("--film_profile")) {
+      const std::string prof_path = parser.get<std::string>("--film_profile");
       if (!load_film_profile(prof_path, film_prof)) {
         fprintf(stderr, "ERROR! Cannot load film profile %s\n", prof_path.c_str());
       }
@@ -2144,10 +2084,10 @@ int main(int ac, char *av[]) {
       attach_profile = resolved_custom;
       printf("Reading output ICC profile: %s\n", resolved_custom.c_str());
     }
-  } else if (!film_prof_arg.empty()) {
+  } else if (parser.is_used("--film_profile")) {
     encoding = ENCODE_NONE;
     if (!is_bundle) {
-      attach_profile = film_prof_arg;
+      attach_profile = parser.get<std::string>("--film_profile");
     }
   }
 
@@ -2254,7 +2194,7 @@ int main(int ac, char *av[]) {
                        film_base_applied, sidecar_film_base_rgb, sidecar_profile_film_base_rgb,
                        film_base_source,
                        frame_det.base_std_d, frame_det.has_base,
-                       film_prof_arg,
+                       parser.is_used("--film_profile") ? parser.get<std::string>("--film_profile") : "",
                        merged_matrix,
                        global_exposure_comp, gain_g, gain_b,
                        pin_mask,
