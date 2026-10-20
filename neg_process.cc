@@ -434,9 +434,9 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   return true;
 }
 
-// The half-size analysis decode of the parameter search: the black-subtracted Bayer mosaic with every 2x2 quad binned
-// into one pixel (R, the mean of the greens, B), edges mirrored. Read from the unpacked RAW of proc, before any
-// processing. False when proc is not a 3-colour Bayer RAW.
+// The half-size analysis decode of the parameter search: LibRaw's half-size readout of the unpacked RAW of proc
+// (black subtracted, every 2x2 quad one pixel), as (R, the mean of the two greens, B), before any processing. proc is
+// left as unpack() left it. False when proc is not a 3-colour Bayer RAW.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
 static bool half_size_mosaic(LibRaw* proc, RgbImage& out) {
@@ -444,48 +444,30 @@ static bool half_size_mosaic(LibRaw* proc, RgbImage& out) {
     fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer RAW files\n");
     return false;
   }
-  const int w = proc->imgdata.sizes.width, h = proc->imgdata.sizes.height;
-  const int top = proc->imgdata.sizes.top_margin, left = proc->imgdata.sizes.left_margin;
-  const int pitch = proc->imgdata.sizes.raw_pitch / 2;
-  if (w < 2 || h < 2 || top + h > proc->imgdata.sizes.raw_height || left + w > pitch) {
-    fprintf(stderr, "ERROR! Unexpected RAW geometry for the parameter search\n");
+  const int half_size = proc->imgdata.params.half_size;
+  proc->imgdata.params.half_size = 1;
+  const int ret = proc->raw2image_ex(1);
+  proc->imgdata.params.half_size = half_size;
+  if (ret != LIBRAW_SUCCESS) {
+    fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n", libraw_strerror(ret));
     return false;
   }
-  const unsigned filters = proc->imgdata.idata.filters;
-  auto color_at = [filters](int r, int c) { return (int)(filters >> (((r << 1 & 14) + (c & 1)) << 1)) & 3; };
-  const int black = proc->imgdata.color.black;
-  int cblk[4];
-  for (int i = 0; i < 4; ++i) cblk[i] = black + (int)proc->imgdata.color.cblack[i];
-  const ushort* raw = proc->imgdata.rawdata.raw_image;
-  auto mosaic_at = [&](int r, int c) {
-    r = std::clamp(r < 0 ? -r : (r >= h ? 2 * (h - 1) - r : r), 0, h - 1);
-    c = std::clamp(c < 0 ? -c : (c >= w ? 2 * (w - 1) - c : c), 0, w - 1);
-    const int v = (int)raw[(size_t)(r + top) * pitch + left + c] - cblk[color_at(r, c)];
-    return v > 0 ? (uint16_t)v : (uint16_t)0;
-  };
 
-  out.width = w / 2;
-  out.height = h / 2;
-  out.rgb.assign((size_t)out.width * out.height * 3, 0);
+  // Each pixel holds R, G1, B, G2.
+  out.width = proc->imgdata.sizes.iwidth;
+  out.height = proc->imgdata.sizes.iheight;
+  out.rgb.resize((size_t)out.width * out.height * 3);
+  const ushort (*img)[4] = proc->imgdata.image;
 #pragma omp parallel for schedule(static)
-  for (int y2 = 0; y2 < out.height; ++y2) {
-    for (int x2 = 0; x2 < out.width; ++x2) {
-      uint16_t R = 0, B = 0;
-      uint32_t g_sum = 0;
-      for (int k = 0; k < 4; ++k) {
-        const int r = y2 * 2 + (k >> 1), c = x2 * 2 + (k & 1);
-        const uint16_t v = mosaic_at(r, c);
-        const int col = color_at(r, c);
-        if (col & 1) g_sum += v;
-        else if (col == 0) R = v;
-        else B = v;
-      }
-      uint16_t* o = &out.rgb[((size_t)y2 * out.width + x2) * 3];
-      o[0] = R;
-      o[1] = (uint16_t)(g_sum >> 1);
-      o[2] = B;
-    }
+  for (size_t i = 0; i < (size_t)out.width * out.height; ++i) {
+    out.rgb[i * 3] = img[i][0];
+    out.rgb[i * 3 + 1] = (uint16_t)(((uint32_t)img[i][1] + img[i][3]) >> 1);
+    out.rgb[i * 3 + 2] = img[i][2];
   }
+
+  // raw2image_ex subtracted the black level from imgdata.color and resized imgdata.sizes; put back what unpack() read.
+  proc->free_image();
+  proc->raw2image_start();
   return true;
 }
 
