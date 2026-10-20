@@ -29,13 +29,14 @@ public:
     // (set_adapter) before infer().
     // backend: "cpu" (ONNX Runtime), "gpu" (TensorRT, USE_CUDA=1 builds) or "auto" ("gpu" when this build has
     // a CUDA device and the model has a TensorRT engine, as intent_model.resolve_intent_backend).
+    // Throws std::runtime_error (std::invalid_argument for a bad backend) when the model cannot be loaded.
     // py-ref: negicc_station/src/intent_model.py:320-366 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
-    bool load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
+    void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
               int max_size = 512, int patch_size = 16);
 
     // The backbone built into neg_process: a TensorRT engine (USE_CUDA=1 builds, for the "gpu" backend) or an
-    // .onnx (USE_CUDA=0, for "cpu"), held in memory.
-    bool load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend = "auto",
+    // .onnx (USE_CUDA=0, for "cpu"), held in memory. Throws as load() does.
+    void load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend = "auto",
                      int num_threads = 4, int max_size = 512, int patch_size = 16);
 
     // Adapter for a backbone model: an adapter.onnx held in memory (embedded in neg_process) or read from a file.

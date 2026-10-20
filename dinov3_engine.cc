@@ -68,14 +68,13 @@ size_t DinoV3Engine::memory_bytes() const {
 }
 
 // py-ref: negicc_station/src/intent_model.py:320-375 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
-bool DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
+void DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
                         int max_size, int patch_size) {
     runner_.reset();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
-        std::cerr << "DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" << backend << "'" << std::endl;
-        return false;
+        throw std::invalid_argument("DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" + backend + "'");
     }
 
     // Resolve the ONNX model and the TensorRT engine of the model spec
@@ -94,64 +93,46 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
         if (file_exists(stem + ".engine")) engine_path = stem + ".engine";
     }
 
-    try {
-        if (backend != "cpu") {
-            const bool has_gpu = cuda_device_available();
-            if (has_gpu && !engine_path.empty()) {
-                try {
-                    runner_ = make_trt_runner(engine_path);
-                    return true;
-                } catch (const std::exception& e) {
-                    if (backend == "gpu") throw;
-                    std::cerr << "DinoV3Engine: TensorRT runner failed to load (" << e.what()
-                              << "), falling back to CPU ONNX Runtime" << std::endl;
-                    runner_.reset();
-                }
-            }
-            if (backend == "gpu") {
-                std::cerr << "DinoV3Engine: backend 'gpu' requested but "
-                          << (has_gpu ? "the model has no TensorRT engine (run `make engine`)" : "no CUDA device")
-                          << std::endl;
-                return false;
+    if (backend != "cpu") {
+        const bool has_gpu = cuda_device_available();
+        if (has_gpu && !engine_path.empty()) {
+            try {
+                runner_ = make_trt_runner(engine_path);
+                return;
+            } catch (const std::exception& e) {
+                if (backend == "gpu") throw;
+                std::cerr << "DinoV3Engine: TensorRT runner failed to load (" << e.what()
+                          << "), falling back to CPU ONNX Runtime" << std::endl;
+                runner_.reset();
             }
         }
-
-        if (onnx_path.empty() || !file_exists(onnx_path)) {
-            std::cerr << "DinoV3Engine: no ONNX model found at " << model_spec
-                      << " (expected backbone.onnx or model.onnx; run `make dinov3_model`)" << std::endl;
-            return false;
+        if (backend == "gpu") {
+            throw std::runtime_error(std::string("DinoV3Engine: backend 'gpu' requested but ") +
+                                     (has_gpu ? "the model has no TensorRT engine (run `make dinov3_engine`)"
+                                              : "no CUDA device"));
         }
-        runner_ = make_ort_runner(onnx_path, num_threads);
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "DinoV3Engine load failed: " << e.what() << std::endl;
-        runner_.reset();
-        return false;
     }
+
+    if (onnx_path.empty() || !file_exists(onnx_path)) {
+        throw std::runtime_error("DinoV3Engine: no ONNX model found at " + model_spec +
+                                 " (expected backbone.onnx or model.onnx; run `make dinov3_model`)");
+    }
+    runner_ = make_ort_runner(onnx_path, num_threads);
 }
 
-bool DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
+void DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
                                int num_threads, int max_size, int patch_size) {
     runner_.reset();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
-        std::cerr << "DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" << backend << "'" << std::endl;
-        return false;
+        throw std::invalid_argument("DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" + backend + "'");
     }
     if (backend == (is_trt_engine ? "cpu" : "gpu")) {
-        std::cerr << "DinoV3Engine: backend '" << backend << "' requested but the built-in backbone is "
-                  << (is_trt_engine ? "a TensorRT engine (USE_CUDA=1)" : "an ONNX model (USE_CUDA=0)") << std::endl;
-        return false;
+        throw std::runtime_error("DinoV3Engine: backend '" + backend + "' requested but the built-in backbone is " +
+                                 (is_trt_engine ? "a TensorRT engine (USE_CUDA=1)" : "an ONNX model (USE_CUDA=0)"));
     }
-    try {
-        runner_ = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "DinoV3Engine load failed: " << e.what() << std::endl;
-        runner_.reset();
-        return false;
-    }
+    runner_ = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
 }
 
 // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict implementation)

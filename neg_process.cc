@@ -1629,10 +1629,7 @@ int main(int ac, char *av[]) {
     }
     dino_path = std::string("[built-in] ") + backbone->name;
     printf("Loading DINOv3 backbone %s (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
-    if (!engine.load_memory(backbone->data, backbone->size, is_trt_engine, dino_backend)) {
-      fprintf(stderr, "ERROR! Failed to load the DINOv3 backbone\n");
-      return 1;
-    }
+    engine.load_memory(backbone->data, backbone->size, is_trt_engine, dino_backend);
     if (parser.is_used("--dino")) {
       std::string adapter = parser.get<std::string>("--dino");
       if (is_directory(adapter)) adapter += "/adapter.onnx";
