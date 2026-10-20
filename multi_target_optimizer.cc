@@ -16,14 +16,12 @@
 #include "multi_target_optimizer.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -86,7 +84,9 @@ constexpr float REFERENCE_ISO = 100.0f;
 
 using Clock = std::chrono::steady_clock;
 
-int whole_ms(Clock::duration d) { return std::chrono::duration_cast<std::chrono::milliseconds>(d).count(); }
+std::chrono::milliseconds whole_ms(Clock::duration d) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(d);
+}
 
 // v with prec decimals ("%.<prec>f", or "%+.<prec>f" with sign), for the verbose log.
 std::string fixed(float v, int prec, bool sign = false) {
@@ -525,10 +525,10 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
 // it are outside what the bracket was calibrated on.
 // TODO: read the ceiling from the bundle's metadata JSON (exported by the station) instead of parsing the report.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (profile_highlight_ceiling)
-std::array<float, 3> profile_highlight_ceiling(const std::string& profcheck_output) {
+void profile_highlight_ceiling(const std::string& profcheck_output, float ceil[3]) {
   static const std::regex kRow(R"(\]\s+(\S+):\s+\S+\s+\S+\s+\S+\s+->\s+(\S+)\s+(\S+)\s+(\S+)\s+should be)");
   const float inf = std::numeric_limits<float>::infinity();
-  std::array<float, 3> ceil = {-inf, -inf, -inf};
+  for (int c = 0; c < 3; ++c) ceil[c] = -inf;
   bool any = false;
   for (auto it = std::sregex_iterator(profcheck_output.begin(), profcheck_output.end(), kRow);
        it != std::sregex_iterator(); ++it) {
@@ -542,8 +542,9 @@ std::array<float, 3> profile_highlight_ceiling(const std::string& profcheck_outp
     for (int c = 0; c < 3; ++c) ceil[c] = std::max(ceil[c], rgb[c]);
     any = true;
   }
-  if (!any) ceil = {255.0f, 255.0f, 255.0f};
-  return ceil;
+  if (!any) {
+    for (int c = 0; c < 3; ++c) ceil[c] = 255.0f;
+  }
 }
 
 // L* histogram of kLabBins bins over [0, 100].
@@ -570,13 +571,14 @@ struct ClipStats {
   float median_L;    // the median L*
 };
 
-// The highlight clipping of img's crop rendered with each conversion matrix.
+// The highlight clipping of img's crop rendered with each conversion matrix (9 floats per candidate in matrices).
 // py-ref: negicc_station/src/pipeline/converter.cpp @ 93be1ec (Converter::highlight_clip)
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
 std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCrop& crop_in,
-                                              const std::vector<std::array<float, 9>>& matrices, float knee,
-                                              const ProfileData& prof, const std::array<float, 3>& ceil_rgb) {
-  std::vector<ClipStats> res(matrices.size(), ClipStats{{0, 0, 0}, 0, 0});
+                                              const std::vector<float>& matrices, float knee,
+                                              const ProfileData& prof, const float ceil_rgb[3]) {
+  const size_t n = matrices.size() / 9;
+  std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
   const uint64_t npx = uint64_t(crop.w) * crop.h;
   if (npx == 0) return res;
@@ -587,8 +589,8 @@ std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCr
     const float thr_u8 = std::min(std::floor(c_u8) + 1.0f, 255.0f);
     ceil_lin[k] = srgb_decode(std::max(0.0f, (thr_u8 - 0.5f) / 255.0f));
   }
-  for (size_t c = 0; c < matrices.size(); ++c) {
-    const float* m = matrices[c].data();
+  for (size_t c = 0; c < n; ++c) {
+    const float* m = &matrices[c * 9];
     uint64_t exc[3] = {0, 0, 0}, wc = 0;
     std::vector<uint64_t> hist(kLabBins, 0);
 #pragma omp parallel
@@ -629,14 +631,6 @@ float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.ex
 
 // ---- The frame the search works on -------------------------------------------------------------------------
 
-// The conversion matrix of params over an input matrix: rows scaled by E, E g and E b. The pixel pipeline takes
-// float matrices.
-std::array<float, 9> conversion_matrix(const float input[9], const ConversionParams& p) {
-  std::array<float, 9> m;
-  candidate_matrix(input, p.e, p.g, p.b, m.data());
-  return m;
-}
-
 // The frame cut out of the half-size decode in the output's orientation, its inner crop, statistics and input
 // matrix, and the measurements every step of the search makes on them: previews, DINOv3, the residual, the
 // coordinate descent and the highlight clipping. Their time is added up into the result.
@@ -673,13 +667,14 @@ class SearchFrame {
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
-    const std::array<float, 9> m = conversion_matrix(input_matrix_, params);
+    float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
+    candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
     const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
     const size_t n = inner_crop_.rgb.size() / 3;
     out.resize(inner_crop_.rgb.size());
 #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < n; ++i) {
-      const Rgb v = convert_pixel_srgb(&inner_crop_.rgb[i * 3], m.data(), AUTO_KNEE, false, 1.0f, prof);
+      const Rgb v = convert_pixel_srgb(&inner_crop_.rgb[i * 3], m, AUTO_KNEE, false, 1.0f, prof);
       out[i * 3] = quantize_u8(v.r);
       out[i * 3 + 1] = quantize_u8(v.g);
       out[i * 3 + 2] = quantize_u8(v.b);
@@ -795,20 +790,23 @@ class SearchFrame {
 
   // The highlight clipping of the frame's inner crop through bracket target_idx, per candidate (E, g, b).
   std::vector<ClipStats> highlight_clip(int target_idx, const std::vector<ConversionParams>& candidates,
-                                        const std::array<float, 3>& ceil) {
+                                        const float ceil[3]) {
     const InnerCrop crop = compute_inner_crop(frame_.width, frame_.height, crop_ratio_);
-    std::vector<std::array<float, 9>> matrices;
-    for (const ConversionParams& p : candidates) matrices.push_back(conversion_matrix(input_matrix_, p));
+    std::vector<float> matrices(candidates.size() * 9);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      const ConversionParams& p = candidates[i];
+      candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
+    }
     return measure_highlight_clip(frame_, crop, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
                                   ceil);
   }
 
   // Writes the time spent per measurement into the result, in whole milliseconds.
   void write_timings() const {
-    out_.timing_render_ms = whole_ms(render_time_);
-    out_.timing_infer_ms = whole_ms(infer_time_);
-    out_.timing_search_ms = whole_ms(search_time_);
-    out_.timing_residual_ms = whole_ms(residual_time_);
+    out_.render_time = whole_ms(render_time_);
+    out_.infer_time = whole_ms(infer_time_);
+    out_.search_time = whole_ms(search_time_);
+    out_.residual_time = whole_ms(residual_time_);
   }
 
  private:
@@ -824,6 +822,7 @@ class SearchFrame {
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
+  // Added up at the clock's resolution and rounded to whole milliseconds once, in write_timings.
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};
 };
 
@@ -839,7 +838,7 @@ struct Headroom {
 // bisection over E at the fixed gains g and b.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_highlight_headroom_ev)
 Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionParams& params, bool has_e_max,
-                            float e_max, const std::array<float, 3>& ceil) {
+                            float e_max, const float ceil[3]) {
   constexpr float tail = SCENE_TAIL, tol_ev = 0.01f;
   const float e = params.e;
   auto at_ev = [&](float ev) { return ConversionParams{e * std::pow(2.0f, ev), params.g, params.b}; };
@@ -923,6 +922,8 @@ struct Screened {
 
 // ---- Public API ----------------------------------------------------------------------------------------------
 
+// TODO: Take the frame upright (already cut out and oriented) and only search on it. Clamping the bbox, cutting the
+// frame out of the half-size image and orienting it belong to the caller.
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const HalfSizeImage& half,
                               const int bbox_in[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
                               float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
@@ -1141,13 +1142,16 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
     return bracket_enclosure(bundle.targets[target_idx], target_idx, g_lo, g_hi, r);
   };
-  std::map<int, std::array<float, 3>> ceilings;
-  auto ceiling_of = [&](int target_idx) {
-    auto it = ceilings.find(target_idx);
-    if (it == ceilings.end()) {
-      it = ceilings.emplace(target_idx, profile_highlight_ceiling(bundle.targets[target_idx].profcheck_output)).first;
+  // Each bracket's ceiling, parsed the first time it is needed.
+  std::vector<float> ceilings(bundle.targets.size() * 3);
+  std::vector<bool> has_ceiling(bundle.targets.size(), false);
+  auto ceiling_of = [&](int target_idx) -> const float* {
+    float* ceil = &ceilings[target_idx * 3];
+    if (!has_ceiling[target_idx]) {
+      profile_highlight_ceiling(bundle.targets[target_idx].profcheck_output, ceil);
+      has_ceiling[target_idx] = true;
     }
-    return it->second;
+    return ceil;
   };
   auto apply_headroom = [&](int target_idx, ConversionParams& p) {
     Enclosure hb;
@@ -1198,7 +1202,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       const float dl = hc_adj.median_L - hc0.median_L;
       if (clip_adj > RESCUE_CLIP_RATIO * clip_0) out.rescue = RescueOutcome::kClipsTooMuch;
       else if (!(RESCUE_DL_MIN <= dl && dl <= RESCUE_DL_MAX)) out.rescue = RescueOutcome::kShiftsLightness;
-      else if (fp_adj.residual > (1.0f + RESCUE_RESID_TOL) * chosen.residual) out.rescue = RescueOutcome::kWorseResidual;
+      else if (fp_adj.residual > (1.0f + RESCUE_RESID_TOL) * chosen.residual)
+        out.rescue = RescueOutcome::kWorseResidual;
       else out.rescue = RescueOutcome::kTaken;
       if (verbose) {
         std::cout << "Auto: highlight rescue: " << name_of(t_adj) << " clips " << fixed(clip_adj * 100.0f, 4)
@@ -1224,6 +1229,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.headroom = headroom.outcome;
   out.headroom_ev = headroom.delta_ev;
   fr.write_timings();
-  out.timing_total_ms = whole_ms(Clock::now() - t_start);
+  out.total_time = whole_ms(Clock::now() - t_start);
   return true;
 }

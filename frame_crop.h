@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <vector>
 
-// Cropping for the parameter search (multi_target_optimizer.h): the frame and its inner crop cut out of the half-size analysis
-// decode in the orientation of the output.
+// Cropping for the parameter search (multi_target_optimizer.h): the frame and its inner crop cut out of LibRaw's
+// half-size image in the orientation of the output.
 
 // LibRaw's half-size image, read in place while LibRaw holds it (LibRaw::raw2image_ex with half_size): every pixel
 // one 2x2 quad of the Bayer mosaic, black subtracted, as R, G1, B, G2.

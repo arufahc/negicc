@@ -61,8 +61,8 @@ struct BundleTarget {
 };
 
 // TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
-// profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and the
-// profiling code writes it.
+// profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and
+// the profiling code writes it.
 struct ProfileBundle {
   std::string path;
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
