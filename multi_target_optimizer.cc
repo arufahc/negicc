@@ -84,10 +84,6 @@ constexpr float REFERENCE_ISO = 100.0f;
 
 using Clock = std::chrono::steady_clock;
 
-std::chrono::milliseconds whole_ms(Clock::duration d) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(d);
-}
-
 // v with prec decimals ("%.<prec>f", or "%+.<prec>f" with sign), for the verbose log.
 std::string fixed(float v, int prec, bool sign = false) {
   std::ostringstream os;
@@ -103,7 +99,80 @@ std::string general(float v, int prec) {
   return os.str();
 }
 
+// ---- Cutting the frame ------------------------------------------------------------------------------------
+
+// Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
+struct RgbImage {
+  int width = 0;
+  int height = 0;
+  std::vector<uint16_t> rgb;
+};
+
 const uint16_t* pixel_at(const RgbImage& img, int x, int y) { return &img.rgb[(size_t(y) * img.width + x) * 3]; }
+
+// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (map_inverse_geometry_cpu)
+inline void map_inverse_geometry(int x_dst, int y_dst, int dst_w, int dst_h, int rw, int rh, int rot_cw,
+                                 bool hflip, bool vflip, int& x_rel, int& y_rel) {
+  rot_cw = ((rot_cw % 360) + 360) % 360;
+  if (rot_cw == 180) {
+    hflip = !hflip;
+    vflip = !vflip;
+    rot_cw = 0;
+  }
+  const int x1 = hflip ? (dst_w - 1 - x_dst) : x_dst;
+  const int y1 = vflip ? (dst_h - 1 - y_dst) : y_dst;
+  if (rot_cw == 0) {
+    x_rel = x1;
+    y_rel = y1;
+  } else if (rot_cw == 90) {
+    x_rel = y1;
+    y_rel = rh - 1 - x1;
+  } else {
+    x_rel = rw - 1 - y1;
+    y_rel = x1;
+  }
+}
+
+// Crops (x, y, w, h) out of src into camera RGB (R, the mean of the two greens, B), rotates it clockwise by rot_cw
+// and flips it. out is w x h, or h x w when rot_cw is 90 or 270. The search renders its previews in the output's
+// orientation (--rot, --hflip, --vflip), as the station's views do, because DINOv3 judges an image the way it will
+// be seen; the statistics are taken on the same pixels.
+// py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (CapturedImage::view)
+// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
+void cut_and_orient(const HalfSizeImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
+                    RgbImage& out) {
+  const int rot = ((rot_cw % 360) + 360) % 360;
+  const bool swap = (rot == 90 || rot == 270);
+  out.width = swap ? h : w;
+  out.height = swap ? w : h;
+  out.rgb.resize((size_t)out.width * out.height * 3);
+#pragma omp parallel for schedule(static)
+  for (int y2 = 0; y2 < out.height; ++y2) {
+    for (int x2 = 0; x2 < out.width; ++x2) {
+      int xr = 0, yr = 0;
+      map_inverse_geometry(x2, y2, out.width, out.height, w, h, rot, hflip, vflip, xr, yr);
+      const uint16_t* s = src.px[(size_t)(y + yr) * src.width + (x + xr)];
+      uint16_t* d = &out.rgb[((size_t)y2 * out.width + x2) * 3];
+      d[0] = s[0];
+      d[1] = (uint16_t)(((uint32_t)s[1] + s[3]) >> 1);
+      d[2] = s[2];
+    }
+  }
+}
+
+// The centred inner crop of a w x h image: crop_ratio of each side, the margins rounded to whole pixels. (x0, y0) is
+// its top-left corner in the w x h image, w x h its size: w - 2 x0 by h - 2 y0, about crop_ratio w by crop_ratio h.
+struct InnerCrop {
+  int x0 = 0, y0 = 0, w = 0, h = 0;
+};
+
+InnerCrop compute_inner_crop(int w, int h, float crop_ratio) {
+  if (w <= 0 || h <= 0) return {0, 0, 0, 0};
+  if (crop_ratio >= 1.0f) return {0, 0, w, h};
+  const int x0 = std::clamp(static_cast<int>(roundf(w * (1.0f - crop_ratio) * 0.5f)), 0, (w - 1) / 2);
+  const int y0 = std::clamp(static_cast<int>(roundf(h * (1.0f - crop_ratio) * 0.5f)), 0, (h - 1) / 2);
+  return {x0, y0, w - 2 * x0, h - 2 * y0};
+}
 
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
 
@@ -365,13 +434,15 @@ bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, floa
 // ---- Frame statistics --------------------------------------------------------------------------------------
 
 // Statistics of a frame's inner crop: the green 0.5 % / 99.5 % points, the log-average RGB and the crop averaged
-// onto the DINOv3 patch grid (one pixel per patch).
+// onto the DINOv3 patch grid (one pixel per patch). The grid is the inner crop's shape at DINOv3's input size: its
+// longer side scaled to the engine's max_size, each side rounded to whole patches of patch_size pixels, so
+// grid_w x grid_h patches (32 x 21 for a 3:2 landscape crop at 512 and 16).
 // py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
 struct FrameStats {
   float g_lo = 0.0f, g_hi = 0.0f;
   float log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
   int grid_w = 0, grid_h = 0;
-  std::vector<uint16_t> grid;  // grid_w x grid_h RGB
+  std::vector<uint16_t> grid;  // grid_w x grid_h pixels, row-major, 3 values (camera RGB) each
 };
 
 float u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, float q) {
@@ -403,13 +474,13 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
   const float scale = std::max(max_size, p) / float(std::max(crop_w, crop_h));
   const int gw = std::max(1, int(std::round(crop_w * scale / p)));
   const int gh = std::max(1, int(std::round(crop_h * scale / p)));
-  const int dino_w = gw * p, dino_h = gh * p;
+  const int dino_w = gw * p, dino_h = gh * p;  // DINOv3's input size: the grid in pixels
 
   std::vector<float> log_lut(65536);
   for (int v = 0; v < 65536; ++v) log_lut[v] = std::log(std::max(v, 1));
 
   std::vector<uint64_t> g_hist(65536, 0);
-  std::vector<float> row_logs(crop.h * 3, 0.0f);
+  std::vector<float> row_logs(crop.h * 3, 0.0f);  // per inner crop row, the sum of log R, log G and log B
 #pragma omp parallel
   {
     std::vector<uint64_t> loc(65536, 0);
@@ -443,7 +514,7 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
   }
 
   // Inner crop resampled to the DINOv3 input size (area average, bilinear when enlarging), then each
-  // patch averaged into the grid.
+  // patch averaged into the grid. dino is dino_w x dino_h pixels, row-major, 3 floats (camera RGB) each.
   std::vector<float> dino(dino_w * dino_h * 3, 0.0f);
   const float sx = crop.w / float(dino_w);
   const float sy = crop.h / float(dino_h);
@@ -664,7 +735,8 @@ class SearchFrame {
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
 
-  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees.
+  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is
+  // inner_crop_.width x inner_crop_.height pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
@@ -682,7 +754,8 @@ class SearchFrame {
     render_time_ += Clock::now() - t0;
   }
 
-  // The intent field (mu, sigma) DINOv3 predicts from a preview, on the statistics' grid.
+  // The intent field DINOv3 predicts from a preview, on the statistics' grid: mu (the target Lab) and sigma (its
+  // tolerance) are grid_w x grid_h patches, row-major, 3 floats (L*, a*, b*) each.
   bool predict(const std::vector<uint8_t>& preview, std::vector<float>& mu, std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
     DinoV3InferenceResult r;
@@ -801,12 +874,12 @@ class SearchFrame {
                                   ceil);
   }
 
-  // Writes the time spent per measurement into the result, in whole milliseconds.
+  // Writes the time spent per measurement into the result.
   void write_timings() const {
-    out_.render_time = whole_ms(render_time_);
-    out_.infer_time = whole_ms(infer_time_);
-    out_.search_time = whole_ms(search_time_);
-    out_.residual_time = whole_ms(residual_time_);
+    out_.render_time = render_time_;
+    out_.infer_time = infer_time_;
+    out_.search_time = search_time_;
+    out_.residual_time = residual_time_;
   }
 
  private:
@@ -816,14 +889,16 @@ class SearchFrame {
   ParamSearchResult& out_;
 
   float crop_ratio_ = 0.90f;
-  RgbImage frame_;       // the frame within bbox, oriented as the output
-  RgbImage inner_crop_;  // its centred inner crop (crop_ratio of each side): what DINOv3 sees
-  FrameStats stats_;     // over the inner crop
+  // The frame within bbox of the half-size image, oriented as the output: bbox[2] x bbox[3] pixels, or
+  // bbox[3] x bbox[2] when rotated by 90 or 270 degrees.
+  RgbImage frame_;
+  // The centred inner crop of frame_ (compute_inner_crop with crop_ratio_): what DINOv3 sees.
+  RgbImage inner_crop_;
+  FrameStats stats_;  // over the inner crop
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
-  // Added up at the clock's resolution and rounded to whole milliseconds once, in write_timings.
-  Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};
+  Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
 };
 
 // ---- Highlight headroom ------------------------------------------------------------------------------------
@@ -921,6 +996,14 @@ struct Screened {
 }  // namespace
 
 // ---- Public API ----------------------------------------------------------------------------------------------
+
+// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
+void clamp_rect(int r[4], int bw, int bh) {
+  r[2] = std::min(r[2], bw);
+  r[3] = std::min(r[3], bh);
+  r[0] = std::min(std::max(0, r[0]), bw - r[2]);
+  r[1] = std::min(std::max(0, r[1]), bh - r[3]);
+}
 
 // TODO: Take the frame upright (already cut out and oriented) and only search on it. Clamping the bbox, cutting the
 // frame out of the half-size image and orienting it belong to the caller.
@@ -1229,6 +1312,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.headroom = headroom.outcome;
   out.headroom_ev = headroom.delta_ev;
   fr.write_timings();
-  out.total_time = whole_ms(Clock::now() - t_start);
+  out.total_time = Clock::now() - t_start;
   return true;
 }

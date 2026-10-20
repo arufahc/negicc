@@ -21,8 +21,21 @@
 #include <vector>
 
 #include "dinov3_engine.h"
-#include "frame_crop.h"
 #include "profile_bundle.h"
+
+// LibRaw's half-size image, read in place while LibRaw holds it (LibRaw::raw2image_ex with half_size): every pixel
+// one 2x2 quad of the Bayer mosaic, black subtracted, as R, G1, B, G2. width x height is half the sensor's visible
+// area (LibRaw's iwidth x iheight, its width / 2 x height / 2 rounded up), row-major, 4 values per pixel; a point
+// (x, y) of the RAW is (x / 2, y / 2) here.
+struct HalfSizeImage {
+  const uint16_t (*px)[4] = nullptr;
+  int width = 0;
+  int height = 0;
+};
+
+// Moves rect (x, y, w, h) inside bw x bh, shrinking it only when it is larger.
+// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
+void clamp_rect(int rect[4], int bw, int bh);
 
 // The conversion parameter search of negicc-station (PerTargetConverter.convert with its defaults). It does not
 // convert anything: on the half-size analysis decode of one frame it picks the calibration bracket of a profile
@@ -164,7 +177,7 @@ struct ParamSearchResult {
   std::vector<FixedPointResult> tournament;
   int inferences = 0;  // DINOv3 inferences of the whole search: the bootstrap plus every fixed-point step
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
-  std::chrono::milliseconds render_time{0}, infer_time{0}, search_time{0}, residual_time{0}, total_time{0};
+  std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
 
 // Searches the conversion parameters of one frame. half is LibRaw's half-size image of the RAW (read in place, only
