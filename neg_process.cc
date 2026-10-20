@@ -45,7 +45,6 @@
 #include "dinov3_auto_solver.h"
 #include "embedded_data.h"
 #include "film_frame_detector.h"
-#include "frame_crop.h"
 #include "multi_target_optimizer.h"
 #include "profile_bundle.h"
 
@@ -1701,6 +1700,7 @@ int main(int ac, char *av[]) {
       const double t_auto_0 = omp_get_wtime();
       const float scan_shutter_s = raw.imgdata.other.shutter > 0 ? raw.imgdata.other.shutter : 0.125f;
       const float scan_iso = raw.imgdata.other.iso_speed > 0 ? std::round(raw.imgdata.other.iso_speed) : 100.0f;
+      // The frame (x, y, w, h) in the half-size image: --roi halved, or the whole image.
       int bbox[4] = {0, 0, half.width, half.height};
       if (has_roi) {
         bbox[0] = roi_coords[0] / 2;
@@ -1955,10 +1955,12 @@ int main(int ac, char *av[]) {
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
+    auto ms = [](std::chrono::steady_clock::duration d) {
+      return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+    };
     printf("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
-           (long long)auto_res.render_time.count(), (long long)auto_res.infer_time.count(),
-           (long long)auto_res.residual_time.count(), (long long)auto_res.search_time.count(),
-           (long long)auto_res.total_time.count());
+           ms(auto_res.render_time), ms(auto_res.infer_time), ms(auto_res.residual_time), ms(auto_res.search_time),
+           ms(auto_res.total_time));
     printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
            gain_b, bundle_target_idx);
   } else if (use_dino) {
