@@ -44,7 +44,7 @@
 #include "embedded_data.h"
 #include "film_frame_detector.h"
 #include "frame_crop.h"
-#include "param_search.h"
+#include "multi_target_optimizer.h"
 #include "profile_bundle.h"
 
 
@@ -1124,7 +1124,7 @@ static bool write_json_sidecar(
   }
   fprintf(fp, "],\n");
 
-  // auto: the conversion parameter search (param_search.h)
+  // auto: the conversion parameter search (multi_target_optimizer.h)
   if (auto_res) {
     const ParamSearchResult& a = *auto_res;
     fprintf(fp, "  \"auto\": {\n");
@@ -1608,7 +1608,7 @@ int main(int ac, char *av[]) {
   }
 
   // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is negicc-station's
-  // conversion parameter search (param_search.h), which picks the bracket, the exposure and the gains; with --target
+  // conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure and the gains; with --target
   // or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on one profile.
   const bool exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
   const bool use_dino = has_profile && !parser.is_used("--gain_g") && !parser.is_used("--gain_b");

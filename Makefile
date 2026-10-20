@@ -84,7 +84,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
-              bin_out/profile_bundle.o bin_out/frame_crop.o bin_out/param_search.o $(DINOV3_RUNNER_OBJ)
+              bin_out/profile_bundle.o bin_out/frame_crop.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -118,9 +118,9 @@ bin_out/frame_crop.o: frame_crop.cc frame_crop.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c frame_crop.cc -o $@
 
-bin_out/param_search.o: param_search.cc param_search.h frame_crop.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h frame_crop.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c param_search.cc -o $@
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
 bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -199,7 +199,7 @@ NEG_PROCESS_OBJS = bin_out/film_frame_detector.o bin_out/embedded_data.o bin_out
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h frame_crop.h param_search.h embedded_data.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h frame_crop.h multi_target_optimizer.h embedded_data.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 

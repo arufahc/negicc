@@ -13,8 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#ifndef PARAM_SEARCH_H
-#define PARAM_SEARCH_H
+#ifndef MULTI_TARGET_OPTIMIZER_H
+#define MULTI_TARGET_OPTIMIZER_H
 
 #include <string>
 #include <vector>
@@ -172,4 +172,4 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               const int bbox[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
                               float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
 
-#endif  // PARAM_SEARCH_H
+#endif  // MULTI_TARGET_OPTIMIZER_H
