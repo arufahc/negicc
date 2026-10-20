@@ -58,7 +58,7 @@
 // so E is the global gain on the linear camera RGB after the crosstalk correction and the film base
 // normalisation, ahead of the film profile, and g and b are the green and blue gains relative to red.
 struct ConversionParams {
-  double e = 1.0, g = 1.0, b = 1.0;
+  float e = 1.0f, g = 1.0f, b = 1.0f;
 };
 
 // How the fixed-point loop of a bracket stopped.
@@ -97,7 +97,7 @@ const char* to_string(RescueOutcome outcome);
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
-  const double* film_base_rgb = nullptr;
+  const float* film_base_rgb = nullptr;
   bool verbose = true;
 };
 
@@ -109,9 +109,9 @@ struct ScreeningResult {
   ConversionParams params;  // the best (E, g, b), E in reference units (see ParamSearchResult::e_norm)
   // z2 of the render at params against the bootstrap field, plus the search's penalties on clipping and on E far
   // from the bracket's centre exposure.
-  double intent_loss = 0;
-  double e_lo = 0, e_hi = 0;  // the bounds E was searched within (reference units)
-  double e_metered = 0;       // E that renders the scene's log-average at L* 50 (reference units)
+  float intent_loss = 0;
+  float e_lo = 0, e_hi = 0;  // the bounds E was searched within (reference units)
+  float e_metered = 0;       // E that renders the scene's log-average at L* 50 (reference units)
 };
 
 // Step 4, one row per shortlisted bracket: its fixed-point loop. Each step renders the frame at the current
@@ -122,7 +122,7 @@ struct FixedPointResult {
   ConversionParams params;  // (E, g, b) of the best step, E in reference units
   // The self-consistency residual of that step: z2 of the render against the field DINOv3 predicts from the same
   // render. Low when the render already looks the way DINOv3 expects the image to look.
-  double residual = 0;
+  float residual = 0;
   FixedPointStatus status = FixedPointStatus::kMaxIters;
   int steps = 0;  // render -> DINOv3 -> search steps run, one inference each
 };
@@ -131,7 +131,7 @@ struct ParamSearchResult {
   int target_idx = -1;      // the chosen bracket, an index into ProfileBundle::targets
   std::string target_name;  // its name in the bundle ("Target 3")
   ConversionParams params;  // the chosen (E, g, b), E in this frame's units: diag(E, E g, E b) * M_frame
-  double residual = 0.0;    // the chosen bracket's FixedPointResult::residual
+  float residual = 0.0f;    // the chosen bracket's FixedPointResult::residual
   FixedPointStatus status = FixedPointStatus::kMaxIters;  // and its FixedPointResult::status
 
   // The bracket's input matrix and the frame's exposure. With X the bundle's crosstalk matrix, f the film base
@@ -147,17 +147,17 @@ struct ParamSearchResult {
   // params.e is E / e_norm. row_scale lets the result be written back as the bundle's crosstalk with -E,
   // --gain_g and --gain_b (neg_process's cli_equivalent).
   float input_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  double e_norm = 1.0;
-  double row_scale[3] = {1.0, 1.0, 1.0};
+  float e_norm = 1.0f;
+  float row_scale[3] = {1.0f, 1.0f, 1.0f};
 
   int bbox[4] = {0, 0, 0, 0};  // the frame in the half-size decode (x, y, w, h)
   // The scene's green range over the inner crop (its 0.5 % and 99.5 % points, 16-bit) and its span in stops.
-  double g_lo = 0, g_hi = 0, scene_ev = 0;
+  float g_lo = 0, g_hi = 0, scene_ev = 0;
 
   HeadroomOutcome headroom = HeadroomOutcome::kWithinRange;
-  double headroom_ev = 0.0;  // the stops E was raised by
+  float headroom_ev = 0.0f;  // the stops E was raised by
   RescueOutcome rescue = RescueOutcome::kNotNeeded;
-  double rescue_white_clip = 0.0;  // the fraction of the inner crop the first choice white-clips
+  float rescue_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
@@ -169,7 +169,7 @@ struct ParamSearchResult {
 // Searches the conversion parameters of one frame. half is the half-size analysis decode, bbox the frame in it;
 // rot_cw, hflip and vflip orient the frame as the output; scan_shutter_s and scan_iso are the capture's exposure.
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
-                              const int bbox[4], int rot_cw, bool hflip, bool vflip, double scan_shutter_s,
-                              double scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
+                              const int bbox[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
+                              float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
 
 #endif  // PARAM_SEARCH_H

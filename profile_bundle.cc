@@ -167,37 +167,37 @@ static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& ou
   return !out.empty();
 }
 
-static bool parse_3x3_matrix(const nlohmann::json& node, double out_m[9]) {
+static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
     if (!node[r].is_array() || node[r].size() != 3) return false;
     for (int c = 0; c < 3; ++c) {
       if (!node[r][c].is_number()) return false;
-      out_m[r * 3 + c] = node[r][c].get<double>();
+      out_m[r * 3 + c] = node[r][c].get<float>();
     }
   }
   return true;
 }
 
-double shutter_to_seconds(const std::string& shutter) {
+float shutter_to_seconds(const std::string& shutter) {
   std::string s = shutter;
   const size_t b = s.find_first_not_of(" \t\r\n");
   const size_t e = s.find_last_not_of(" \t\r\n");
   s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
   while (!s.empty() && s.back() == 's') s.pop_back();
-  auto to_double = [&](const std::string& t) {
+  auto to_float = [&](const std::string& t) {
     size_t used = 0;
-    const double v = std::stod(t, &used);
+    const float v = std::stof(t, &used);
     if (used != t.size()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
     return v;
   };
   const size_t slash = s.find('/');
   if (slash != std::string::npos) {
-    const double den = to_double(s.substr(slash + 1));
-    if (den == 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
-    return to_double(s.substr(0, slash)) / den;
+    const float den = to_float(s.substr(slash + 1));
+    if (den == 0.0f) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    return to_float(s.substr(0, slash)) / den;
   }
-  return to_double(s);
+  return to_float(s);
 }
 
 void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, std::string& stock_key) {
@@ -342,7 +342,7 @@ static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path,
         if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
         else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
       }
-      if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<double>();
+      if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<float>();
       if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {
         bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
         bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
@@ -378,19 +378,19 @@ static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path,
 
       // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_exposure)
       try {
-        tgt.exposure_s = std::max(1e-6, shutter_to_seconds(tgt.shutter) * (tgt.iso / 100.0));
+        tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
       } catch (const std::exception&) {
         fprintf(stderr, "Warning: cannot read shutter '%s' of target '%s'; using 1/8s\n", tgt.shutter.c_str(),
                 tgt.name.c_str());
-        tgt.exposure_s = std::max(1e-6, 0.125 * (tgt.iso / 100.0));
+        tgt.exposure_s = std::max(1e-6f, 0.125f * float(tgt.iso) / 100.0f);
       }
 
       if (tj.contains("patches") && tj["patches"].is_object()) {
-        std::vector<double> all_g, gs_g;
+        std::vector<float> all_g, gs_g;
         for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
           if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
             tgt.patches_g.push_back(it.value()["g"].get<float>());
-            all_g.push_back(it.value()["g"].get<double>());
+            all_g.push_back(it.value()["g"].get<float>());
           }
         }
         // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
@@ -399,14 +399,14 @@ static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path,
           const std::string key = "gs" + std::to_string(k);
           if (tj["patches"].contains(key) && tj["patches"][key].is_object() && tj["patches"][key].contains("g") &&
               tj["patches"][key]["g"].is_number()) {
-            gs_g.push_back(tj["patches"][key]["g"].get<double>());
+            gs_g.push_back(tj["patches"][key]["g"].get<float>());
           }
         }
-        const std::vector<double>& cap_g = gs_g.empty() ? all_g : gs_g;
+        const std::vector<float>& cap_g = gs_g.empty() ? all_g : gs_g;
         if (!cap_g.empty()) {
-          const double mx = *std::max_element(cap_g.begin(), cap_g.end());
-          const double mn = *std::min_element(cap_g.begin(), cap_g.end());
-          tgt.tonal_capacity_ev = std::log2(mx / std::max(1e-6, mn));
+          const float mx = *std::max_element(cap_g.begin(), cap_g.end());
+          const float mn = *std::min_element(cap_g.begin(), cap_g.end());
+          tgt.tonal_capacity_ev = std::log2(mx / std::max(1e-6f, mn));
         }
         if (!tgt.patches_g.empty()) {
           tgt.tgt_min_g = *std::min_element(tgt.patches_g.begin(), tgt.patches_g.end());

@@ -1658,7 +1658,7 @@ int main(int ac, char *av[]) {
   if (bundle_search) {
     const double t_auto_0 = omp_get_wtime();
     RgbImage half;
-    double scan_shutter_s = 0.0, scan_iso = 0.0;
+    float scan_shutter_s = 0.0f, scan_iso = 0.0f;
     if (!load_half_size_mosaic(files[0], half, scan_shutter_s, scan_iso)) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
       return 1;

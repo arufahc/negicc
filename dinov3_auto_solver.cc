@@ -288,19 +288,6 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
   return (float)score;
 }
 
-double optimize_target_for_intent_d(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
-                                    int gw, int gh, const float* mu, const float* sigma,
-                                    const double* initial, const double* e_bounds, unsigned pin_mask, double* out) {
-  GainsD init_d{0.0, 0.0, 0.0}, out_d;
-  if (initial) init_d = {initial[0], initial[1], initial[2]};
-  const double score = optimize_impl(cfg, merged, grid_rgb16, gw, gh, mu, sigma, initial ? &init_d : nullptr,
-                                     e_bounds, pin_mask, out_d);
-  out[0] = out_d.e;
-  out[1] = out_d.g;
-  out[2] = out_d.b;
-  return score;
-}
-
 float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
                                 const float* mu, const float* sigma) {
   std::vector<uint8_t> resized(gw * gh * 3);
