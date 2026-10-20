@@ -40,10 +40,10 @@
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
 #include "dinov3_auto_solver.h"
-#include "auto_convert.h"
 #include "embedded_data.h"
 #include "film_frame_detector.h"
 #include "frame_crop.h"
+#include "param_search.h"
 #include "profile_bundle.h"
 
 #include <sys/stat.h>
@@ -935,7 +935,7 @@ static bool write_json_sidecar(
     bool is_bundle = false,
     const std::string& bundle_target_name = "",
     int bundle_target_idx = -1,
-    const AutoConvertResult* auto_res = nullptr,
+    const ParamSearchResult* auto_res = nullptr,
     double t_auto_ms = 0.0) {
   const std::string json_path = output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
@@ -1081,40 +1081,41 @@ static bool write_json_sidecar(
   }
   fprintf(fp, "],\n");
 
-  // auto: the bracket search (auto_convert.h)
+  // auto: the conversion parameter search (param_search.h)
   if (auto_res) {
-    const AutoConvertResult& a = *auto_res;
+    const ParamSearchResult& a = *auto_res;
     fprintf(fp, "  \"auto\": {\n");
     fprintf(fp, "    \"target\": \"%s\", \"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s,\n",
-            json_escape(a.target_name).c_str(), a.target_idx, json_num(a.e, "%.9g").c_str(),
-            json_num(a.g, "%.9g").c_str(), json_num(a.b, "%.9g").c_str());
+            json_escape(a.target_name).c_str(), a.target_idx, json_num(a.params.e, "%.9g").c_str(),
+            json_num(a.params.g, "%.9g").c_str(), json_num(a.params.b, "%.9g").c_str());
     fprintf(fp, "    \"residual\": %s, \"status\": \"%s\", \"e_norm\": %s, \"input_matrix\": [",
-            json_num(a.residual, "%.6g").c_str(), json_escape(a.status).c_str(), json_num(a.e_norm, "%.9g").c_str());
-    for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.matrix[i], "%.9g").c_str());
+            json_num(a.residual, "%.6g").c_str(), to_string(a.status), json_num(a.e_norm, "%.9g").c_str());
+    for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.input_matrix[i], "%.9g").c_str());
     fprintf(fp, "],\n");
     fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n", a.bbox[0],
             a.bbox[1], a.bbox[2], a.bbox[3], json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(),
             json_num(a.scene_ev, "%.4g").c_str());
     fprintf(fp, "    \"headroom\": {\"applied\": %s, \"ev\": %s, \"reason\": \"%s\"},\n",
-            a.headroom_applied ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
-            json_escape(a.headroom_reason).c_str());
+            headroom_applied(a.headroom) ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
+            to_string(a.headroom));
     fprintf(fp, "    \"rescue\": {\"branch\": \"%s\", \"white_clip\": %s, \"changed\": %s},\n",
-            json_escape(a.rescue_branch).c_str(), json_num(a.rescue_clip, "%.6g").c_str(),
-            a.rescue_changed ? "true" : "false");
+            a.rescue == RescueOutcome::kNotNeeded ? "N" : "R", json_num(a.rescue_white_clip, "%.6g").c_str(),
+            a.rescue == RescueOutcome::kTaken ? "true" : "false");
     fprintf(fp, "    \"screening\": [");
     for (size_t i = 0; i < a.screening.size(); ++i) {
       const auto& r = a.screening[i];
       fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"intent_loss\": %s}", (i > 0 ? ", " : ""),
-              r.target_idx, json_num(r.e, "%.6g").c_str(), json_num(r.g, "%.6g").c_str(), json_num(r.b, "%.6g").c_str(),
+              r.target_idx, json_num(r.params.e, "%.6g").c_str(), json_num(r.params.g, "%.6g").c_str(),
+              json_num(r.params.b, "%.6g").c_str(),
               json_num(r.intent_loss, "%.6g").c_str());
     }
     fprintf(fp, "],\n    \"tournament\": [");
     for (size_t i = 0; i < a.tournament.size(); ++i) {
       const auto& r = a.tournament[i];
       fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"residual\": %s, \"status\": \"%s\", "
-              "\"iters\": %d}", (i > 0 ? ", " : ""), r.target_idx, json_num(r.e, "%.6g").c_str(),
-              json_num(r.g, "%.6g").c_str(), json_num(r.b, "%.6g").c_str(), json_num(r.final_err, "%.6g").c_str(),
-              json_escape(r.status).c_str(), r.iters);
+              "\"iters\": %d}", (i > 0 ? ", " : ""), r.target_idx, json_num(r.params.e, "%.6g").c_str(),
+              json_num(r.params.g, "%.6g").c_str(), json_num(r.params.b, "%.6g").c_str(),
+              json_num(r.residual, "%.6g").c_str(), to_string(r.status), r.steps);
     }
     fprintf(fp, "],\n");
     fprintf(fp, "    \"model\": \"%s\", \"backend\": \"%s\", \"inferences\": %d, \"time_ms\": %s\n",
@@ -1569,8 +1570,8 @@ int main(int ac, char *av[]) {
   }
 
   // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is negicc-station's
-  // automatic conversion (auto_convert.h), which picks the bracket, the exposure and the gains; with --target or -E
-  // (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on one profile.
+  // conversion parameter search (param_search.h), which picks the bracket, the exposure and the gains; with --target
+  // or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on one profile.
   const bool exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
   const bool use_dino = has_profile && !parser.is_used("--gain_g") && !parser.is_used("--gain_b");
   const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0 && !exposure_given;
@@ -1639,18 +1640,16 @@ int main(int ac, char *av[]) {
     if (parser.is_used("--dino")) {
       std::string adapter = parser.get<std::string>("--dino");
       if (is_directory(adapter)) adapter += "/adapter.onnx";
-      if (!engine.load_adapter_file(adapter)) {
-        fprintf(stderr, "ERROR! Cannot load intent adapter %s\n", adapter.c_str());
-        return 1;
-      }
+      engine.load_adapter_file(adapter);
     } else {
       std::string adapter_dir;
       const std::string profile_name = !film_stock.empty() ? film_stock : is_bundle ? bundle.key : film_prof_arg;
       const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir);
-      if (!a || !engine.set_adapter(a->data, a->size, adapter_dir)) {
+      if (!a) {
         fprintf(stderr, "ERROR! No intent adapter for profile '%s'\n", profile_name.c_str());
         return 1;
       }
+      engine.set_adapter(a->data, a->size, adapter_dir);
     }
     printf("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", engine.backend_name(),
            engine.adapter_name().c_str(), (double)engine.memory_bytes() / (1024.0 * 1024.0));
@@ -1658,7 +1657,7 @@ int main(int ac, char *av[]) {
 
   // The bracket search runs on the half-size analysis decode, within --roi.
   bool has_auto_res = false;
-  AutoConvertResult auto_res;
+  ParamSearchResult auto_res;
   double t_auto_ms = 0.0;
   if (bundle_search) {
     const double t_auto_0 = omp_get_wtime();
@@ -1676,10 +1675,10 @@ int main(int ac, char *av[]) {
       bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
       clamp_rect(bbox, half.width, half.height);
     }
-    AutoConvertOptions opts;
-    if (!run_auto_convert(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
-                          auto_res)) {
-      fprintf(stderr, "ERROR! Automatic conversion failed.\n");
+    ParamSearchOptions opts;
+    if (!search_conversion_params(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
+                                  auto_res)) {
+      fprintf(stderr, "ERROR! The conversion parameter search failed.\n");
       return 1;
     }
     has_auto_res = true;
@@ -1921,14 +1920,15 @@ int main(int ac, char *av[]) {
     film_prof.rebind_pointers();
     // The solved conversion written as the bundle's crosstalk with an exposure and gains (the film base and
     // exposure ratio folded in), so the sidecar's cli_equivalent reproduces it with --target.
-    global_exposure_comp = (float)(auto_res.row_scale[0] * auto_res.e * auto_res.e_norm);
-    gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.g);
-    gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.b);
+    global_exposure_comp = (float)(auto_res.row_scale[0] * auto_res.params.e * auto_res.e_norm);
+    gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.params.g);
+    gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.params.b);
     adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
                              effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
-           auto_res.e, auto_res.g, auto_res.b, auto_res.residual, auto_res.status.c_str(), auto_res.inferences);
-    printf("Timings (ms): render %.1f, infer %.1f, residual %.1f, search %.1f, total %.1f\n",
+           auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
+           auto_res.inferences);
+    printf("Timings (ms): render %d, infer %d, residual %d, search %d, total %d\n",
            auto_res.timing_render_ms, auto_res.timing_infer_ms, auto_res.timing_residual_ms,
            auto_res.timing_search_ms, auto_res.timing_total_ms);
     printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,

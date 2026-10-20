@@ -20,7 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
+#include <iostream>
 
 namespace {
 
@@ -67,54 +67,26 @@ void clamp_rect(int r[4], int bw, int bh) {
   r[1] = std::min(std::max(0, r[1]), bh - r[3]);
 }
 
-bool fit_film_format(const int area[4], const std::string& format, int frame[4]) {
-  static const struct { const char* name; double l, s; } kFormats[] = {
-      {"6x6", 56.0, 56.0}, {"35mm", 36.0, 24.0}, {"645", 56.0, 41.5}, {"6x7", 69.5, 56.0}, {"6x9", 84.0, 56.0}};
-  std::copy(area, area + 4, frame);
-  if (format.empty() || format == "Free") return true;
-  double aspect = 0.0;
-  for (const auto& f : kFormats)
-    if (format == f.name) aspect = f.l / f.s;
-  if (aspect <= 0.0) return false;
-  const int x = area[0], y = area[1], w = area[2], h = area[3];
-  if (h > w) aspect = 1.0 / aspect;  // in the orientation of the area
-  int fw, fh;
-  if ((double)w / std::max(1, h) > aspect) {
-    fw = (int)std::nearbyint(h * aspect);
-    fh = h;
-  } else {
-    fw = w;
-    fh = (int)std::nearbyint(w / aspect);
-  }
-  // Python's // floors.
-  auto floordiv2 = [](int v) { return (v >= 0) ? v / 2 : -((-v + 1) / 2); };
-  frame[0] = x + floordiv2(w - fw);
-  frame[1] = y + floordiv2(h - fh);
-  frame[2] = fw;
-  frame[3] = fh;
-  return true;
-}
-
 bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutter_s, double& iso) {
   LibRaw proc;
   int ret;
   if ((ret = proc.open_file(path.c_str())) != LIBRAW_SUCCESS) {
-    fprintf(stderr, "Cannot open %s: %s\n", path.c_str(), libraw_strerror(ret));
+    std::cerr << "Cannot open " << path << ": " << libraw_strerror(ret) << std::endl;
     return false;
   }
   if ((ret = proc.unpack()) != LIBRAW_SUCCESS) {
-    fprintf(stderr, "Cannot unpack %s: %s\n", path.c_str(), libraw_strerror(ret));
+    std::cerr << "Cannot unpack " << path << ": " << libraw_strerror(ret) << std::endl;
     return false;
   }
   if (!proc.imgdata.rawdata.raw_image || proc.imgdata.idata.filters <= 1000 || proc.imgdata.idata.colors != 3) {
-    fprintf(stderr, "Only 3-color Bayer RAW files are supported by the parameter search: %s\n", path.c_str());
+    std::cerr << "Only 3-color Bayer RAW files are supported by the parameter search: " << path << std::endl;
     return false;
   }
   const int w = proc.imgdata.sizes.width, h = proc.imgdata.sizes.height;
   const int top = proc.imgdata.sizes.top_margin, left = proc.imgdata.sizes.left_margin;
   const int pitch = proc.imgdata.sizes.raw_pitch / 2;
   if (w < 2 || h < 2 || top + h > proc.imgdata.sizes.raw_height || left + w > pitch) {
-    fprintf(stderr, "Unexpected RAW geometry in %s\n", path.c_str());
+    std::cerr << "Unexpected RAW geometry in " << path << std::endl;
     return false;
   }
   const unsigned filters = proc.imgdata.idata.filters;
@@ -170,57 +142,6 @@ bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutt
   return true;
 }
 
-void detect_film_bbox(const RgbImage& half, int bbox[4]) {
-  // The largest 8-connected region of green > 500. The reference takes the largest external contour by its
-  // polygon area; for the film frame, which dwarfs any other lit region, the largest region by pixel count is the
-  // same one and so is its bounding rectangle.
-  const int w = half.width, h = half.height;
-  std::vector<int> label((size_t)w * h, -1);
-  std::vector<int> stack;
-  size_t best_count = 0;
-  int best[4] = {0, 0, w, h};
-  int next_label = 0;
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      const size_t i = (size_t)y * w + x;
-      if (label[i] >= 0 || half.rgb[i * 3 + 1] <= 500) continue;
-      const int lab = next_label++;
-      size_t count = 0;
-      int x0 = x, x1 = x, y0 = y, y1 = y;
-      label[i] = lab;
-      stack.assign(1, (int)i);
-      while (!stack.empty()) {
-        const int p = stack.back();
-        stack.pop_back();
-        const int px = p % w, py = p / w;
-        count++;
-        x0 = std::min(x0, px);
-        x1 = std::max(x1, px);
-        y0 = std::min(y0, py);
-        y1 = std::max(y1, py);
-        for (int dy = -1; dy <= 1; ++dy) {
-          for (int dx = -1; dx <= 1; ++dx) {
-            const int nx = px + dx, ny = py + dy;
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-            const size_t j = (size_t)ny * w + nx;
-            if (label[j] >= 0 || half.rgb[j * 3 + 1] <= 500) continue;
-            label[j] = lab;
-            stack.push_back((int)j);
-          }
-        }
-      }
-      if (count > best_count) {
-        best_count = count;
-        best[0] = x0;
-        best[1] = y0;
-        best[2] = x1 - x0 + 1;
-        best[3] = y1 - y0 + 1;
-      }
-    }
-  }
-  std::copy(best, best + 4, bbox);
-}
-
 void cut_and_orient(const RgbImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
                     RgbImage& out) {
   const int rot = ((rot_cw % 360) + 360) % 360;
@@ -240,4 +161,12 @@ void cut_and_orient(const RgbImage& src, int x, int y, int w, int h, int rot_cw,
       d[2] = s[2];
     }
   }
+}
+
+InnerCrop compute_inner_crop(int w, int h, float crop_ratio) {
+  if (w <= 0 || h <= 0) return {0, 0, 0, 0};
+  if (crop_ratio >= 1.0f) return {0, 0, w, h};
+  const int x0 = std::clamp(static_cast<int>(roundf(w * (1.0f - crop_ratio) * 0.5f)), 0, (w - 1) / 2);
+  const int y0 = std::clamp(static_cast<int>(roundf(h * (1.0f - crop_ratio) * 0.5f)), 0, (h - 1) / 2);
+  return {x0, y0, w - 2 * x0, h - 2 * y0};
 }

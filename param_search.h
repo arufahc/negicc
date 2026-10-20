@@ -16,102 +16,160 @@
 #ifndef PARAM_SEARCH_H
 #define PARAM_SEARCH_H
 
-#include <cmath>
-#include <cstdint>
 #include <string>
 #include <vector>
 
+#include "dinov3_engine.h"
 #include "frame_crop.h"
-#include "neg_pipeline.h"
+#include "profile_bundle.h"
 
-// The measurements the parameter search makes on a frame: its statistics, previews, CIELAB and highlight
-// clipping. The decisions made from them (auto_convert.h, and negicc-station's Python control loop) are separate.
+// The conversion parameter search of negicc-station (PerTargetConverter.convert with its defaults). It does not
+// convert anything: on the half-size analysis decode of one frame it picks the calibration bracket of a profile
+// bundle and the exposure E and gains g, b that neg_process then converts the full image with.
+//
+//   1. Enclosure: bound each bracket's E so the scene's green range lands inside the green range the bracket's
+//      patches were calibrated over.
+//   2. Bootstrap: meter each admissible bracket so the scene's log-average renders at L* 50, render the bracket
+//      metered deepest inside its bounds and let DINOv3 predict an intent field from that render.
+//   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against that
+//      one intent field.
+//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
+//      the converged ones, when any converged).
+//   5. Highlight headroom and rescue: raise E until the highlights are inside the bracket's calibrated range, and
+//      move to the next bracket when the chosen one clips clearly more.
+//
+// The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
+// should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
+// the mean squared z-score over the grid,
+//
+//   z2(render, field) = 1 / (3 N) * sum_i sum_{k in L, a, b} ((lab_i,k - mu_i,k) / sigma_i,k)^2,
+//
+// with lab_i the CIELAB of the render over patch i and N the number of patches.
+//
+// The station's Python implementation stays the reference for research; this port follows it step by step (the
+// py-ref comments name the functions) so both pick the same bracket and parameters.
+// py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (PerTargetConverter.convert)
 
-// Returns linear sRGB D65 in [0, 1] before output gamma encoding (no post-correction gamma).
-// py-ref: negicc_station/src/pipeline/color_pipeline.h @ 93be1ec (convert_pixel_linear)
-static inline Rgb convert_pixel_linear(const uint16_t* in_px, const float* matrix, float knee,
-                                       const ProfileData& prof) {
-  Rgb v = load_u16(in_px);
-  v = apply_matrix(matrix, v);
-  v = apply_knee(v, knee);
-  if (prof.has_profile) {
-    v = apply_profile(prof, v);
-  }
-  return pcs_to_linear_srgb(v);
-}
-
-// Direct linear sRGB D65 -> CIELAB D65 (OpenCV's constants, evaluated exactly).
-static inline Lab linear_srgb_to_lab(Rgb lin) {
-  const float r = lin.r, g = lin.g, b = lin.b;
-  const float X = (0.412453f * r + 0.357580f * g + 0.180423f * b) / 0.950456f;
-  const float Y = 0.212671f * r + 0.715160f * g + 0.072169f * b;
-  const float Z = (0.019334f * r + 0.119193f * g + 0.950227f * b) / 1.088754f;
-  const float fx = lab_f(X), fy = lab_f(Y), fz = lab_f(Z);
-  const float L = (Y > 0.008856f) ? (116.0f * fy - 16.0f) : (903.3f * Y);
-  return { L, 500.0f * (fx - fy), 200.0f * (fy - fz) };
-}
-
-// Direct linear sRGB D65 -> CIE L*.
-static inline float linear_srgb_to_L(Rgb lin) {
-  const float Y = 0.212671f * lin.r + 0.715160f * lin.g + 0.072169f * lin.b;
-  return (Y > 0.008856f) ? (116.0f * cbrtf(Y) - 16.0f) : (903.3f * Y);
-}
-
-// Linear-light equivalents of channel_white_clipped: srgb_decode(65399.5 / 65535).
-static inline bool linear_channel_white_clipped(float l) {
-  return l >= 0.9953029f;
-}
-
-// L* histogram of kLabBins bins over [0, 100].
-constexpr int kLabBins = 1000;
-static inline int lab_bin(float L) {
-  int k = (int)(L * (kLabBins / 100.0f));
-  return k < 0 ? 0 : (k > kLabBins - 1 ? kLabBins - 1 : k);
-}
-
-// Symmetric inner crop of a W x H image (crop_ratio of each side, centred).
-struct InnerCrop {
-  int x0 = 0, y0 = 0, w = 0, h = 0;
+// The parameters the search solves. With the input matrix M of a bracket (rows R, G, B; see
+// ParamSearchResult::input_matrix) the conversion matrix is
+//
+//   diag(E, E g, E b) * M,
+//
+// so E is the global gain on the linear camera RGB after the crosstalk correction and the film base
+// normalisation, ahead of the film profile, and g and b are the green and blue gains relative to red.
+struct ConversionParams {
+  double e = 1.0, g = 1.0, b = 1.0;
 };
 
-static inline InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
-  if (W <= 0 || H <= 0) return {0, 0, 0, 0};
-  if (crop_ratio >= 1.0f) return {0, 0, W, H};
-  int x0 = (int)roundf(W * (1.0f - crop_ratio) * 0.5f);
-  int y0 = (int)roundf(H * (1.0f - crop_ratio) * 0.5f);
-  if (x0 < 0) x0 = 0;
-  if (y0 < 0) y0 = 0;
-  const int max_x0 = (W - 1) / 2;
-  const int max_y0 = (H - 1) / 2;
-  if (x0 > max_x0) x0 = max_x0;
-  if (y0 > max_y0) y0 = max_y0;
-  return {x0, y0, W - 2 * x0, H - 2 * y0};
+// How the fixed-point loop of a bracket stopped.
+enum class FixedPointStatus {
+  kConverged,  // E, g, b moved by 0.02 or less in total, or the residual by 1.5 % or less, in the last step
+  kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
+  kMaxIters,   // neither within 8 steps
+};
+const char* to_string(FixedPointStatus status);
+
+// What the highlight headroom did with the chosen E.
+enum class HeadroomOutcome {
+  kWithinRange,      // the highlights were already inside the bracket's calibrated range: E unchanged
+  kNoCapacity,       // E is already at the bracket's upper bound: E unchanged
+  kCapacityLimited,  // E raised to the bracket's upper bound, the highlights still exceed the range
+  kPulledInside,     // E raised just enough to bring the highlights inside the range
+};
+const char* to_string(HeadroomOutcome outcome);
+inline bool headroom_applied(HeadroomOutcome outcome) {
+  return outcome == HeadroomOutcome::kCapacityLimited || outcome == HeadroomOutcome::kPulledInside;
 }
 
-// Statistics of a frame's inner crop: the green 0.5 % / 99.5 % points, the log-average RGB and the crop averaged
-// onto the DINOv3 patch grid (one pixel per patch).
-// py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
-struct FrameStats {
-  float g_lo = 0.0f, g_hi = 0.0f;
-  double log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
-  int grid_w = 0, grid_h = 0;
-  std::vector<uint16_t> grid;  // grid_w x grid_h RGB
+// What the highlight rescue did. It is tried when the chosen bracket white-clips more than 0.03 % of the inner
+// crop, on the next bracket of the bundle (target_idx + 1), and taken when that one passes every check.
+enum class RescueOutcome {
+  kNotNeeded,        // the chosen bracket does not clip
+  kNotScreened,      // the next bracket was not screened
+  kNotAdmissible,    // the next bracket's calibrated range is too narrow for the scene
+  kClipsTooMuch,     // the next bracket clips more than half as much as the chosen one
+  kShiftsLightness,  // the next bracket moves the median L* outside -4.5 .. +0.5
+  kWorseResidual,    // the next bracket's residual is more than 10 % above the chosen one's
+  kTaken,            // the next bracket replaces the chosen one
 };
-void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, int patch_size, FrameStats& st);
+const char* to_string(RescueOutcome outcome);
 
-// Renders img to 8-bit sRGB with one conversion matrix.
-void render_srgb_u8(const RgbImage& img, const float* matrix, float knee, const ProfileData& prof, uint8_t* out);
+struct ParamSearchOptions {
+  float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
+  // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
+  const double* film_base_rgb = nullptr;
+  bool verbose = true;
+};
 
-// Per-channel 8-bit sRGB ceiling of a calibration bracket from its profcheck record: the brightest values its
-// patches render to; 255 without a record.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (profile_highlight_ceiling)
-void profile_highlight_ceiling(const std::string& profcheck_output, double ceil[3]);
+// Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
+// Every bracket is scored against the same field, from one DINOv3 inference, so the rows compare the brackets
+// cheaply; the best two go on to the tournament.
+struct ScreeningResult {
+  int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
+  ConversionParams params;  // the best (E, g, b), E in reference units (see ParamSearchResult::e_norm)
+  // z2 of the render at params against the bootstrap field, plus the search's penalties on clipping and on E far
+  // from the bracket's centre exposure.
+  double intent_loss = 0;
+  double e_lo = 0, e_hi = 0;  // the bounds E was searched within (reference units)
+  double e_metered = 0;       // E that renders the scene's log-average at L* 50 (reference units)
+};
 
-// Over crop of img, per candidate matrix (n * 9 floats): the % of pixels at or above ceil_rgb per channel, the %
-// with any channel white-clipped and the median L*; out holds n * 5 floats.
-// py-ref: negicc_station/src/pipeline/converter.cpp @ 93be1ec (Converter::highlight_clip)
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
-void highlight_clip(const RgbImage& img, const InnerCrop& crop, const float* matrices, int n, float knee,
-                    const ProfileData& prof, const float ceil_rgb[3], float* out);
+// Step 4, one row per shortlisted bracket: its fixed-point loop. Each step renders the frame at the current
+// (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next (E, g, b)
+// against that render's own intent field. The row keeps the step with the lowest residual.
+struct FixedPointResult {
+  int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
+  ConversionParams params;  // (E, g, b) of the best step, E in reference units
+  // The self-consistency residual of that step: z2 of the render against the field DINOv3 predicts from the same
+  // render. Low when the render already looks the way DINOv3 expects the image to look.
+  double residual = 0;
+  FixedPointStatus status = FixedPointStatus::kMaxIters;
+  int steps = 0;  // render -> DINOv3 -> search steps run, one inference each
+};
+
+struct ParamSearchResult {
+  int target_idx = -1;      // the chosen bracket, an index into ProfileBundle::targets
+  std::string target_name;  // its name in the bundle ("Target 3")
+  ConversionParams params;  // the chosen (E, g, b), E in this frame's units: diag(E, E g, E b) * M_frame
+  double residual = 0.0;    // the chosen bracket's FixedPointResult::residual
+  FixedPointStatus status = FixedPointStatus::kMaxIters;  // and its FixedPointResult::status
+
+  // The bracket's input matrix and the frame's exposure. With X the bundle's crosstalk matrix, f the film base
+  // RGB, n the bundle's normalisation target and rho the exposure of the film base capture over this frame's
+  // (shutter x ISO / 100):
+  //
+  //   M_frame[r][c] = X[r][c] * n / f[r] * rho            (the merged input matrix of this frame)
+  //   e_norm        = M_frame[1][1] / M_ref[1][1]         (M_ref: the same for a 1/8 s, ISO 100 scan)
+  //   input_matrix  = M_frame / e_norm                    (the matrix the search runs on, in reference units)
+  //   row_scale[r]  = n / f[r] * rho / e_norm,  so  input_matrix[r][c] = row_scale[r] * X[r][c]
+  //
+  // The search's E is in reference units, so the same E means the same rendering whatever the scan's exposure;
+  // params.e is E / e_norm. row_scale lets the result be written back as the bundle's crosstalk with -E,
+  // --gain_g and --gain_b (neg_process's cli_equivalent).
+  float input_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double e_norm = 1.0;
+  double row_scale[3] = {1.0, 1.0, 1.0};
+
+  int bbox[4] = {0, 0, 0, 0};  // the frame in the half-size decode (x, y, w, h)
+  // The scene's green range over the inner crop (its 0.5 % and 99.5 % points, 16-bit) and its span in stops.
+  double g_lo = 0, g_hi = 0, scene_ev = 0;
+
+  HeadroomOutcome headroom = HeadroomOutcome::kWithinRange;
+  double headroom_ev = 0.0;  // the stops E was raised by
+  RescueOutcome rescue = RescueOutcome::kNotNeeded;
+  double rescue_white_clip = 0.0;  // the fraction of the inner crop the first choice white-clips
+
+  std::vector<ScreeningResult> screening;
+  std::vector<FixedPointResult> tournament;
+  int inferences = 0;  // DINOv3 inferences of the whole search: the bootstrap plus every fixed-point step
+  int timing_render_ms = 0, timing_infer_ms = 0, timing_search_ms = 0, timing_residual_ms = 0;
+  int timing_total_ms = 0;
+};
+
+// Searches the conversion parameters of one frame. half is the half-size analysis decode, bbox the frame in it;
+// rot_cw, hflip and vflip orient the frame as the output; scan_shutter_s and scan_iso are the capture's exposure.
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
+                              const int bbox[4], int rot_cw, bool hflip, bool vflip, double scan_shutter_s,
+                              double scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
 
 #endif  // PARAM_SEARCH_H

@@ -39,9 +39,10 @@ public:
                      int num_threads = 4, int max_size = 512, int patch_size = 16);
 
     // Adapter for a backbone model: an adapter.onnx held in memory (embedded in neg_process) or read from a file.
-    // name is reported by adapter_name(). Ignored by fused models, which carry their own adapter.
-    bool set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1);
-    bool load_adapter_file(const std::string& path, int num_threads = 1);
+    // name is reported by adapter_name(). Ignored by fused models, which carry their own adapter. Throws
+    // std::runtime_error when the adapter cannot be read or loaded.
+    void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1);
+    void load_adapter_file(const std::string& path, int num_threads = 1);
     const std::string& adapter_name() const { return m_adapter_name; }
     // The loaded model is a backbone and needs an adapter.
     bool needs_adapter() const;

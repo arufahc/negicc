@@ -43,31 +43,20 @@ bool DinoV3Engine::is_loaded() const { return m_runner != nullptr; }
 
 bool DinoV3Engine::needs_adapter() const { return m_runner && m_runner->has_tokens(); }
 
-bool DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads) {
-    try {
-        m_adapter = make_ort_adapter(onnx_data, onnx_size, num_threads);
-        m_adapter_name = name;
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "DinoV3Engine: cannot load adapter " << name << ": " << e.what() << std::endl;
-        m_adapter.reset();
-        m_adapter_name.clear();
-        return false;
-    }
+void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads) {
+    m_adapter = make_ort_adapter(onnx_data, onnx_size, num_threads);
+    m_adapter_name = name;
 }
 
-bool DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
+void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) {
-        std::cerr << "DinoV3Engine: cannot open adapter " << path << std::endl;
-        return false;
-    }
+    if (!f) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
     std::vector<uint8_t> bytes((size_t)f.tellg());
     f.seekg(0);
     f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
     // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session.
     m_adapter_file = std::move(bytes);
-    return set_adapter(m_adapter_file.data(), m_adapter_file.size(), path, num_threads);
+    set_adapter(m_adapter_file.data(), m_adapter_file.size(), path, num_threads);
 }
 
 const char* DinoV3Engine::backend_name() const { return m_runner ? m_runner->name() : "none"; }

@@ -42,7 +42,7 @@ struct BundleTarget {
   std::vector<uint8_t> icc_bytes;
   ParsedFilmProfile film_prof;
 
-  // For the automatic conversion (auto_convert.h): the patches' green range in double, the bracket's camera
+  // For the conversion parameter search (param_search.h): the patches' green range in double, the bracket's camera
   // exposure (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
   double g_min = 0.0;
   double g_max = 0.0;
