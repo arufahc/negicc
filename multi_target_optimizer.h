@@ -23,19 +23,12 @@
 #include "dinov3_engine.h"
 #include "profile_bundle.h"
 
-// LibRaw's half-size image, read in place while LibRaw holds it (LibRaw::raw2image_ex with half_size): every pixel
-// one 2x2 quad of the Bayer mosaic, black subtracted, as R, G1, B, G2. width x height is half the sensor's visible
-// area (LibRaw's iwidth x iheight, its width / 2 x height / 2 rounded up), row-major, 4 values per pixel; a point
-// (x, y) of the RAW is (x / 2, y / 2) here.
-struct HalfSizeImage {
-  const uint16_t (*px)[4] = nullptr;
+// Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
+struct RgbImage {
   int width = 0;
   int height = 0;
+  std::vector<uint16_t> rgb;
 };
-
-// Moves rect (x, y, w, h) inside bw x bh, shrinking it only when it is larger.
-// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
-void clamp_rect(int rect[4], int bw, int bh);
 
 // The conversion parameter search of negicc-station (PerTargetConverter.convert with its defaults). It does not
 // convert anything: on the half-size analysis decode of one frame it picks the calibration bracket of a profile
@@ -164,7 +157,6 @@ struct ParamSearchResult {
   float e_norm = 1.0f;
   float row_scale[3] = {1.0f, 1.0f, 1.0f};
 
-  int bbox[4] = {0, 0, 0, 0};  // the frame in the half-size decode (x, y, w, h)
   // The scene's green range over the inner crop (its 0.5 % and 99.5 % points, 16-bit) and its span in stops.
   float g_lo = 0, g_hi = 0, scene_ev = 0;
 
@@ -180,11 +172,11 @@ struct ParamSearchResult {
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
 
-// Searches the conversion parameters of one frame. half is LibRaw's half-size image of the RAW (read in place, only
-// the frame is copied out of it), bbox the frame in it; rot_cw, hflip and vflip orient the frame as the output;
-// scan_shutter_s and scan_iso are the capture's exposure.
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const HalfSizeImage& half,
-                              const int bbox[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
-                              float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
+// Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
+// decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso
+// are the capture's exposure.
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
+                              float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
+                              ParamSearchResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H
