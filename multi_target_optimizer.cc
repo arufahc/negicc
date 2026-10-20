@@ -648,9 +648,9 @@ class SearchFrame {
   // Cuts the frame (bbox in the half-size decode) and its inner crop, oriented, and takes the statistics.
   void cut(const RgbImage& half, const int bbox[4], int rot_cw, bool hflip, bool vflip, float crop_ratio) {
     crop_ratio_ = crop_ratio;
-    // TODO: Optimize the cut. The frame and its inner crop are two oriented copies of the same half-size pixels;
-    // the measurements could read the half-size decode through the bbox and orientation, or the inner crop be a view
-    // into frame_, instead of copying.
+    // TODO: Optimize the cut. At least inner_crop_ can go: it copies pixels frame_ already holds, so it can be
+    // dropped or share frame_'s rgb buffer (a view with an offset and stride). frame_ itself could read the
+    // half-size decode through the bbox and orientation instead of copying it.
     cut_and_orient(half, bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip, frame_);
     compute_frame_stats(frame_, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
     const InnerCrop in = compute_inner_crop(bbox[2], bbox[3], crop_ratio);
