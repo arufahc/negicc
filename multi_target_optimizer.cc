@@ -655,8 +655,9 @@ float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.ex
 
 // ---- The frame the search works on -------------------------------------------------------------------------
 
-// The upright frame, its inner crop, statistics and input matrix, and the measurements every step of the search makes on them: previews, DINOv3, the residual, the
-// coordinate descent and the highlight clipping. Their time is added up into the result.
+// The upright frame, its inner crop, statistics and input matrix, and the measurements every step of the search
+// makes on them: previews, DINOv3, the residual, the coordinate descent and the highlight clipping. Their time is
+// added up into the result.
 class SearchFrame {
  public:
   SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, ParamSearchResult& out)
