@@ -1,13 +1,9 @@
 *.icc
 !profiles/*.icc
 *~
+# The IT8 reference readings negicc-station profiling tools read from here (not distributed).
 data/R190808.txt
 data/R190808_ref.json
-
-build_prof.h
-build_prof.ti3
-build_prof_diag.csv
-check_prof.ti3
 
 bin_out
 __pycache__
