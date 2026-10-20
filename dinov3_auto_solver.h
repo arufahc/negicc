@@ -123,13 +123,6 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
                                  const IntentGains* initial, const float* e_bounds /* lo, hi, center or null */,
                                  unsigned pin_mask, IntentGains& out);
 
-// optimize_target_for_intent in double precision (the reference's Python floats): initial = {e, g, b} and
-// e_bounds = {lo, hi, center} may be null; writes {e, g, b} to out and returns the score.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
-double optimize_target_for_intent_d(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
-                                    int gw, int gh, const float* mu, const float* sigma,
-                                    const double* initial, const double* e_bounds, unsigned pin_mask, double* out);
-
 // Mean squared z-score of the preview, resized to the grid, against the intent field predicted from it.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (self_consistency_residual)
 float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,

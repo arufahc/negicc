@@ -68,27 +68,27 @@ const char* to_string(RescueOutcome outcome) {
 namespace {
 
 // Fixed-point loop thresholds (see FixedPointStatus).
-constexpr double TOL_PARAM = 0.02;     // |dE| + |dg| + |db| <= 0.02
-constexpr double TOL_REL_ERR = 0.015;  // relative residual change <= 1.5 %
+constexpr float TOL_PARAM = 0.02f;     // |dE| + |dg| + |db| <= 0.02
+constexpr float TOL_REL_ERR = 0.015f;  // relative residual change <= 1.5 %
 constexpr int MAX_STEPS = 8;
 // The scene's range is taken between its SCENE_TAIL and 1 - SCENE_TAIL points.
-constexpr double SCENE_TAIL = 0.005;
-constexpr double SLACK_PENALTY_SCALE = 0.5;
+constexpr float SCENE_TAIL = 0.005f;
+constexpr float SLACK_PENALTY_SCALE = 0.5f;
 // The previews, the screening and the final render use a fixed soft knee.
 constexpr float AUTO_KNEE = 0.95f;
 // Highlight rescue thresholds (see RescueOutcome).
-constexpr double RESCUE_CLIP_TAU = 3e-4;
-constexpr double RESCUE_CLIP_RATIO = 0.5;
-constexpr double RESCUE_DL_MIN = -4.5, RESCUE_DL_MAX = 0.5;
-constexpr double RESCUE_RESID_TOL = 0.10;
+constexpr float RESCUE_CLIP_TAU = 3e-4f;
+constexpr float RESCUE_CLIP_RATIO = 0.5f;
+constexpr float RESCUE_DL_MIN = -4.5f, RESCUE_DL_MAX = 0.5f;
+constexpr float RESCUE_RESID_TOL = 0.10f;
 // The search runs as if the frame were scanned at 1/8 s, ISO 100 with the profile's film base.
-constexpr double REFERENCE_SHUTTER_S = 0.125;
-constexpr double REFERENCE_ISO = 100.0;
+constexpr float REFERENCE_SHUTTER_S = 0.125f;
+constexpr float REFERENCE_ISO = 100.0f;
 
 double now_ms() { return omp_get_wtime() * 1000.0; }
 
 // v with prec decimals ("%.<prec>f", or "%+.<prec>f" with sign), for the verbose log.
-std::string fixed(double v, int prec, bool sign = false) {
+std::string fixed(float v, int prec, bool sign = false) {
   std::ostringstream os;
   if (sign) os << std::showpos;
   os << std::fixed << std::setprecision(prec) << v;
@@ -96,7 +96,7 @@ std::string fixed(double v, int prec, bool sign = false) {
 }
 
 // v with prec significant digits ("%.<prec>g"), for the verbose log.
-std::string general(double v, int prec) {
+std::string general(float v, int prec) {
   std::ostringstream os;
   os << std::setprecision(prec) << v;
   return os.str();
@@ -119,36 +119,36 @@ struct Enclosure {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   bool feasible = false;    // e_min <= e_max
   bool admissible = true;   // the scene's span fits the bracket's span plus the 2.7 stops of tolerance
-  double e_min = 0, e_max = 0;
-  double search_lo = 0, search_hi = 0;  // the range E is searched in
-  double e_center = 0;                  // sqrt(e_min * e_max)
-  double slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
-  double fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the share of the bracket the scene uses
+  float e_min = 0, e_max = 0;
+  float search_lo = 0, search_hi = 0;  // the range E is searched in
+  float e_center = 0;                  // sqrt(e_min * e_max)
+  float slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
+  float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the share of the bracket the scene uses
 };
 
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
-bool bracket_enclosure(const BundleTarget& tgt, int target_idx, double g_lo, double g_hi, Enclosure& r) {
+bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
   if (tgt.patches_g.empty()) return false;
-  const double tgt_min = tgt.g_min, tgt_max = tgt.g_max;
-  const double k_t = (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0)) / tgt.exposure_s;
+  const float tgt_min = tgt.g_min, tgt_max = tgt.g_max;
+  const float k_t = (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f)) / tgt.exposure_s;
   r.target_idx = target_idx;
   r.e_min = (tgt_min / g_lo) * k_t;
   r.e_max = (tgt_max / g_hi) * k_t;
   r.e_center = std::sqrt(r.e_min * r.e_max);
   r.slack_ev = std::log2(r.e_max / r.e_min);
   r.feasible = r.e_max >= r.e_min;
-  const double usable_hi_ev = 1.5, usable_sh_ev = 1.2;
-  const double u_min = r.e_min * std::pow(2.0, -usable_hi_ev);
-  const double u_max = r.e_max * std::pow(2.0, usable_sh_ev);
-  const double usable_capacity_ev = std::log2(tgt_max / tgt_min) + usable_hi_ev + usable_sh_ev;
+  const float usable_hi_ev = 1.5f, usable_sh_ev = 1.2f;
+  const float u_min = r.e_min * std::pow(2.0f, -usable_hi_ev);
+  const float u_max = r.e_max * std::pow(2.0f, usable_sh_ev);
+  const float usable_capacity_ev = std::log2(tgt_max / tgt_min) + usable_hi_ev + usable_sh_ev;
   r.admissible = std::log2(g_hi / g_lo) <= usable_capacity_ev;
   if (r.feasible) {
     r.search_lo = r.e_min;
     r.search_hi = r.e_max;
   } else {
-    const double margin_ev = std::max(0.60, std::min(0.85, 0.60 * std::fabs(r.slack_ev)));
-    r.search_lo = std::max(u_min, r.e_center * std::pow(2.0, -margin_ev));
-    r.search_hi = std::min(u_max, r.e_center * std::pow(2.0, margin_ev));
+    const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
+    r.search_lo = std::max(u_min, r.e_center * std::pow(2.0f, -margin_ev));
+    r.search_hi = std::min(u_max, r.e_center * std::pow(2.0f, margin_ev));
   }
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
   return true;
@@ -164,10 +164,10 @@ std::vector<int> filter_admissible_targets(const ProfileBundle& bundle) {
     for (int i = 0; i < n; ++i) out.push_back(i);
     return out;
   }
-  double max_c = 0.0;
+  float max_c = 0.0f;
   for (const auto& t : bundle.targets) max_c = std::max(max_c, t.tonal_capacity_ev);
   for (int i = 0; i < n; ++i) {
-    if (bundle.targets[i].tonal_capacity_ev >= 0.75 * max_c) out.push_back(i);
+    if (bundle.targets[i].tonal_capacity_ev >= 0.75f * max_c) out.push_back(i);
   }
   if (out.size() < 3) {
     std::vector<int> ranked(n);
@@ -184,47 +184,47 @@ std::vector<int> filter_admissible_targets(const ProfileBundle& bundle) {
 // ---- Grey point (metering) ---------------------------------------------------------------------------------
 
 // Least squares solution of the 3x3 system J x = r with singular values below rcond * max dropped (numpy lstsq).
-void lstsq3(const double J[3][3], const double r[3], double rcond, double x[3]) {
-  double A[3][3] = {}, V[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+void lstsq3(const float J[3][3], const float r[3], float rcond, float x[3]) {
+  float A[3][3] = {}, V[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j)
       for (int k = 0; k < 3; ++k) A[i][j] += J[k][i] * J[k][j];
   for (int sweep = 0; sweep < 50; ++sweep) {  // Jacobi eigen decomposition of J^T J
-    double off = std::fabs(A[0][1]) + std::fabs(A[0][2]) + std::fabs(A[1][2]);
-    if (off < 1e-300) break;
+    float off = std::fabs(A[0][1]) + std::fabs(A[0][2]) + std::fabs(A[1][2]);
+    if (off < 1e-30f) break;
     for (int p = 0; p < 2; ++p) {
       for (int q = p + 1; q < 3; ++q) {
-        if (A[p][q] == 0.0) continue;
-        const double theta = (A[q][q] - A[p][p]) / (2.0 * A[p][q]);
-        const double t = (theta >= 0 ? 1.0 : -1.0) / (std::fabs(theta) + std::sqrt(theta * theta + 1.0));
-        const double c = 1.0 / std::sqrt(t * t + 1.0), s = t * c;
+        if (A[p][q] == 0.0f) continue;
+        const float theta = (A[q][q] - A[p][p]) / (2.0f * A[p][q]);
+        const float t = (theta >= 0 ? 1.0f : -1.0f) / (std::fabs(theta) + std::sqrt(theta * theta + 1.0f));
+        const float c = 1.0f / std::sqrt(t * t + 1.0f), s = t * c;
         for (int k = 0; k < 3; ++k) {
-          const double akp = A[k][p], akq = A[k][q];
+          const float akp = A[k][p], akq = A[k][q];
           A[k][p] = c * akp - s * akq;
           A[k][q] = s * akp + c * akq;
         }
         for (int k = 0; k < 3; ++k) {
-          const double apk = A[p][k], aqk = A[q][k];
+          const float apk = A[p][k], aqk = A[q][k];
           A[p][k] = c * apk - s * aqk;
           A[q][k] = s * apk + c * aqk;
         }
         for (int k = 0; k < 3; ++k) {
-          const double vkp = V[k][p], vkq = V[k][q];
+          const float vkp = V[k][p], vkq = V[k][q];
           V[k][p] = c * vkp - s * vkq;
           V[k][q] = s * vkp + c * vkq;
         }
       }
     }
   }
-  double jt_r[3] = {0, 0, 0};
+  float jt_r[3] = {0, 0, 0};
   for (int i = 0; i < 3; ++i)
     for (int k = 0; k < 3; ++k) jt_r[i] += J[k][i] * r[k];
-  const double smax = std::sqrt(std::max({A[0][0], A[1][1], A[2][2], 0.0}));
-  x[0] = x[1] = x[2] = 0.0;
+  const float smax = std::sqrt(std::max({A[0][0], A[1][1], A[2][2], 0.0f}));
+  x[0] = x[1] = x[2] = 0.0f;
   for (int e = 0; e < 3; ++e) {
-    const double lambda = A[e][e];
-    if (!(lambda > 0.0) || std::sqrt(lambda) <= rcond * smax) continue;
-    double proj = 0.0;
+    const float lambda = A[e][e];
+    if (!(lambda > 0.0f) || std::sqrt(lambda) <= rcond * smax) continue;
+    float proj = 0.0f;
     for (int k = 0; k < 3; ++k) proj += V[k][e] * jt_r[k];
     for (int k = 0; k < 3; ++k) x[k] += V[k][e] * proj / lambda;
   }
@@ -237,11 +237,11 @@ class GreyPoint {
   explicit GreyPoint(const ProfileData& prof) : prof_(prof) {}
 
   // Lab of inputs t (n x 3), the scale going through E so the 16-bit inputs sit near 0.9.
-  void lab(const double (*t)[3], int n, double (*out)[3]) const {
-    double tmax = -std::numeric_limits<double>::infinity();
+  void lab(const float (*t)[3], int n, float (*out)[3]) const {
+    float tmax = -std::numeric_limits<float>::infinity();
     for (int i = 0; i < n; ++i)
       for (int c = 0; c < 3; ++c) tmax = std::max(tmax, t[i][c]);
-    const double s = tmax / 0.9;
+    const float s = tmax / 0.9f;
     static const float kIdentity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     float m[9];
     candidate_matrix(kIdentity, s, 1.0f, 1.0f, m);
@@ -252,15 +252,16 @@ class GreyPoint {
         const float vv = std::isfinite(v) ? v : 0.0f;
         px[c] = std::lround(std::fmin(1.0f, std::fmax(0.0f, vv)) * 65535.0f);
       }
-      const Rgb o = convert_pixel_srgb(px, m, AUTO_KNEE, false, 1.0f, prof_);
-      const float rgb[3] = {o.r, o.g, o.b};
-      srgb_to_lab_d(rgb, out[i]);
+      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, false, 1.0f, prof_));
+      out[i][0] = lab.L;
+      out[i][1] = lab.a;
+      out[i][2] = lab.b;
     }
   }
 
-  double lstar(const double t[3]) const {
-    const double in[1][3] = {{t[0], t[1], t[2]}};
-    double lab_out[1][3];
+  float lstar(const float t[3]) const {
+    const float in[1][3] = {{t[0], t[1], t[2]}};
+    float lab_out[1][3];
     lab(in, 1, lab_out);
     return lab_out[0][0];
   }
@@ -268,53 +269,53 @@ class GreyPoint {
   // The input rendered as neutral L* 50: a coarse scan along an orange-mask-like line, then Newton. False when the
   // bracket has none within 0.25 dE.
   bool reference_grey() const {
-    const double dir[3] = {1.4, 1.0, 0.88};
-    double best_k = 0.0, best_d = std::numeric_limits<double>::infinity();
+    const float dir[3] = {1.4f, 1.0f, 0.88f};
+    float best_k = 0.0f, best_d = std::numeric_limits<float>::infinity();
     for (int i = 0; i < 27; ++i) {
-      const double k = std::pow(2.0, -10.0 + 0.5 * i);
-      const double t[3] = {k * dir[0], k * dir[1], k * dir[2]};
-      const double d = std::fabs(lstar(t) - 50.0);
+      const float k = std::pow(2.0f, -10.0f + 0.5f * i);
+      const float t[3] = {k * dir[0], k * dir[1], k * dir[2]};
+      const float d = std::fabs(lstar(t) - 50.0f);
       if (d < best_d) {
         best_d = d;
         best_k = k;
       }
     }
-    double log_t[3];
+    float log_t[3];
     for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
-    const double target[3] = {50.0, 0.0, 0.0};
-    return newton(target, log_t, 20) <= 0.25;
+    const float target[3] = {50.0f, 0.0f, 0.0f};
+    return newton(target, log_t, 20) <= 0.25f;
   }
 
  private:
   // Solves Lab(exp(log_t)) = target; returns the error in Lab units.
-  double newton(const double target[3], double log_t[3], int iters) const {
-    constexpr double FD_STEP = 0.05, MAX_LOG_STEP = 0.25, TOLERANCE = 0.02;
+  float newton(const float target[3], float log_t[3], int iters) const {
+    constexpr float FD_STEP = 0.05f, MAX_LOG_STEP = 0.25f, TOLERANCE = 0.02f;
     for (int it = 0; it < iters; ++it) {
-      double pts[7][3];
+      float pts[7][3];
       for (int c = 0; c < 3; ++c) pts[0][c] = std::exp(log_t[c]);
       for (int c = 0; c < 3; ++c) {
         for (int k = 0; k < 2; ++k) {
-          const double sgn = k == 0 ? 1.0 : -1.0;
-          for (int j = 0; j < 3; ++j) pts[1 + 2 * c + k][j] = std::exp(log_t[j] + (j == c ? sgn * FD_STEP : 0.0));
+          const float sgn = k == 0 ? 1.0f : -1.0f;
+          for (int j = 0; j < 3; ++j) pts[1 + 2 * c + k][j] = std::exp(log_t[j] + (j == c ? sgn * FD_STEP : 0.0f));
         }
       }
-      double l[7][3];
+      float l[7][3];
       lab(pts, 7, l);
-      const double r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
+      const float r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
       if (std::max({std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2])}) < TOLERANCE) {
         return std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
       }
-      double J[3][3];
+      float J[3][3];
       for (int c = 0; c < 3; ++c)
-        for (int row = 0; row < 3; ++row) J[row][c] = (l[1 + 2 * c][row] - l[2 + 2 * c][row]) / (2.0 * FD_STEP);
-      double step[3];
-      lstsq3(J, r, 1e-6, step);
+        for (int row = 0; row < 3; ++row) J[row][c] = (l[1 + 2 * c][row] - l[2 + 2 * c][row]) / (2.0f * FD_STEP);
+      float step[3];
+      lstsq3(J, r, 1e-6f, step);
       for (int c = 0; c < 3; ++c) log_t[c] += std::clamp(step[c], -MAX_LOG_STEP, MAX_LOG_STEP);
     }
-    double t[1][3], l[1][3];
+    float t[1][3], l[1][3];
     for (int c = 0; c < 3; ++c) t[0][c] = std::exp(log_t[c]);
     lab(t, 1, l);
-    const double r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
+    const float r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
     return std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
   }
 
@@ -325,16 +326,16 @@ class GreyPoint {
 // bracket: the metered exposure. A bisection on log2 E over [-6, 6] that stops at |L* - 50| <= 0.1. Its 25
 // halvings, the station's count, resolve E to 12 / 2^25 stop, far below that tolerance, so they only cap the loop.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (exposure_for_lightness)
-bool exposure_for_lightness(const GreyPoint& gp, const double p[3], double g, double b, double& e_out) {
-  constexpr double TARGET = 50.0, TOL = 0.1;
+bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, float b, float& e_out) {
+  constexpr float TARGET = 50.0f, TOL = 0.1f;
   constexpr int MAX_BISECTIONS = 25;
-  const double base_t[3] = {p[0], p[1] * g, p[2] * b};
-  double lo = -6.0, hi = 6.0;
+  const float base_t[3] = {p[0], p[1] * g, p[2] * b};
+  float lo = -6.0f, hi = 6.0f;
   for (int i = 0; i < MAX_BISECTIONS; ++i) {
-    const double mid = 0.5 * (lo + hi);
-    const double E = std::pow(2.0, mid);
-    const double t[3] = {E * base_t[0], E * base_t[1], E * base_t[2]};
-    const double L = gp.lstar(t);
+    const float mid = 0.5f * (lo + hi);
+    const float E = std::pow(2.0f, mid);
+    const float t[3] = {E * base_t[0], E * base_t[1], E * base_t[2]};
+    const float L = gp.lstar(t);
     if (std::fabs(L - TARGET) <= TOL) {
       e_out = E;
       return true;
@@ -342,8 +343,8 @@ bool exposure_for_lightness(const GreyPoint& gp, const double p[3], double g, do
     if (L > TARGET) lo = mid;
     else hi = mid;
   }
-  const double E = std::pow(2.0, 0.5 * (lo + hi));
-  const double t[3] = {E * base_t[0], E * base_t[1], E * base_t[2]};
+  const float E = std::pow(2.0f, 0.5f * (lo + hi));
+  const float t[3] = {E * base_t[0], E * base_t[1], E * base_t[2]};
   e_out = E;
   return std::fabs(gp.lstar(t) - TARGET) <= TOL;
 }
@@ -355,7 +356,7 @@ bool exposure_for_lightness(const GreyPoint& gp, const double p[3], double g, do
 // py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
 struct FrameStats {
   float g_lo = 0.0f, g_hi = 0.0f;
-  double log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
+  float log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
   int grid_w = 0, grid_h = 0;
   std::vector<uint16_t> grid;  // grid_w x grid_h RGB
 };
@@ -511,16 +512,16 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
 // it are outside what the bracket was calibrated on.
 // TODO: read the ceiling from the bundle's metadata JSON (exported by the station) instead of parsing the report.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (profile_highlight_ceiling)
-std::array<double, 3> profile_highlight_ceiling(const std::string& profcheck_output) {
+std::array<float, 3> profile_highlight_ceiling(const std::string& profcheck_output) {
   static const std::regex kRow(R"(\]\s+(\S+):\s+\S+\s+\S+\s+\S+\s+->\s+(\S+)\s+(\S+)\s+(\S+)\s+should be)");
-  const double inf = std::numeric_limits<double>::infinity();
-  std::array<double, 3> ceil = {-inf, -inf, -inf};
+  const float inf = std::numeric_limits<float>::infinity();
+  std::array<float, 3> ceil = {-inf, -inf, -inf};
   bool any = false;
   for (auto it = std::sregex_iterator(profcheck_output.begin(), profcheck_output.end(), kRow);
        it != std::sregex_iterator(); ++it) {
-    double lab[3], rgb[3];
+    float lab[3], rgb[3];
     try {
-      for (int c = 0; c < 3; ++c) lab[c] = std::stod((*it)[2 + c].str());
+      for (int c = 0; c < 3; ++c) lab[c] = std::stof((*it)[2 + c].str());
     } catch (const std::exception&) {
       continue;
     }
@@ -528,7 +529,7 @@ std::array<double, 3> profile_highlight_ceiling(const std::string& profcheck_out
     for (int c = 0; c < 3; ++c) ceil[c] = std::max(ceil[c], rgb[c]);
     any = true;
   }
-  if (!any) ceil = {255.0, 255.0, 255.0};
+  if (!any) ceil = {255.0f, 255.0f, 255.0f};
   return ceil;
 }
 
@@ -561,7 +562,7 @@ struct ClipStats {
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
 std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCrop& crop_in,
                                               const std::vector<std::array<float, 9>>& matrices, float knee,
-                                              const ProfileData& prof, const std::array<double, 3>& ceil_rgb) {
+                                              const ProfileData& prof, const std::array<float, 3>& ceil_rgb) {
   std::vector<ClipStats> res(matrices.size(), ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
   const double tot = double(crop.w) * crop.h;
@@ -605,13 +606,13 @@ std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCr
     }
     for (int k = 0; k < 3; ++k) res[c].exc[k] = exc[k] / tot * 100.0;
     res[c].white_clip = wc / tot * 100.0;
-    res[c].median_L = percentile_from_hist_L(hist, tot, 0.50);
+    res[c].median_L = percentile_from_hist_L(hist, tot, 0.50f);
   }
   return res;
 }
 
 // The largest per-channel share (0..1) of a render above the bracket's ceiling.
-double max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.exc[2]}) / 100.0; }
+float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.exc[2]}) / 100.0f; }
 
 // ---- The frame the search works on -------------------------------------------------------------------------
 
@@ -642,7 +643,7 @@ class SearchFrame {
 
   // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; the search runs on
   // M_frame / e_norm.
-  void set_frame_matrix(const double frame_matrix[9], double e_norm) {
+  void set_frame_matrix(const float frame_matrix[9], float e_norm) {
     std::copy(frame_matrix, frame_matrix + 9, frame_matrix_);
     e_norm_ = e_norm;
     for (int i = 0; i < 9; ++i) input_matrix_[i] = frame_matrix_[i] / e_norm_;
@@ -650,9 +651,9 @@ class SearchFrame {
 
   const RgbImage& inner_crop() const { return inner_crop_; }
   const FrameStats& stats() const { return stats_; }
-  const double* frame_matrix() const { return frame_matrix_; }
+  const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
-  double e_norm() const { return e_norm_; }
+  float e_norm() const { return e_norm_; }
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
@@ -695,9 +696,9 @@ class SearchFrame {
   }
 
   // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
-  double residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
+  float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const double t0 = now_ms();
-    const double err = self_consistency_residual(preview.data(), inner_crop_.width, inner_crop_.height,
+    const float err = self_consistency_residual(preview.data(), inner_crop_.width, inner_crop_.height,
                                                  stats_.grid_w, stats_.grid_h, mu.data(), sigma.data());
     residual_ms_ += now_ms() - t0;
     return err;
@@ -707,18 +708,18 @@ class SearchFrame {
   // search's defaults when null) with E within e_bounds = {lo, hi, centre}; returns the intent loss
   // (ScreeningResult::intent_loss).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
-  double search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
-                const ConversionParams* initial, const double e_bounds[3], ConversionParams& out) {
+  float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
+                const ConversionParams* initial, const float e_bounds[3], ConversionParams& out) {
     const double t0 = now_ms();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
-    const double init[3] = {initial ? initial->e : 0.0, initial ? initial->g : 0.0, initial ? initial->b : 0.0};
-    double res[3];
-    const double loss = optimize_target_for_intent_d(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
-                                                     stats_.grid_h, mu.data(), sigma.data(),
-                                                     initial ? init : nullptr, e_bounds, 0, res);
-    out = {res[0], res[1], res[2]};
+    IntentGains init, res;
+    if (initial) init = {initial->e, initial->g, initial->b};
+    const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
+                                                  stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
+                                                  e_bounds, 0, res);
+    out = {res.e, res.g, res.b};
     search_ms_ += now_ms() - t0;
     return loss;
   }
@@ -726,37 +727,37 @@ class SearchFrame {
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
   // kept within the trust region e_bounds = {lo, hi, centre}; the centre is where the search's penalty pulls E.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
-  bool fixed_point(int target_idx, const ConversionParams& start, double e_bounds[3], FixedPointResult& fp) {
+  bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp) {
     if (e_bounds[0] > e_bounds[1]) {
       std::swap(e_bounds[0], e_bounds[1]);
-      e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0;
+      e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
     }
     ConversionParams curr = start, best;
-    double prev_err = std::numeric_limits<double>::infinity();
+    float prev_err = std::numeric_limits<float>::infinity();
     FixedPointStatus status = FixedPointStatus::kMaxIters;
     int steps = 0;
     bool have_best = false;
-    double best_err = 0.0;
+    float best_err = 0.0f;
     std::vector<uint8_t> preview;
     std::vector<float> mu, sigma;
     for (int it = 0; it < MAX_STEPS; ++it) {
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
-      const double err = residual(preview, mu, sigma);
+      const float err = residual(preview, mu, sigma);
       if (!have_best || err < best_err) {
         have_best = true;
         best_err = err;
         best = curr;
       }
-      if (it > 0 && err > prev_err * 1.25 && (err - prev_err) > 1.5) {
+      if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
         status = FixedPointStatus::kDiverged;
         steps++;
         break;
       }
       ConversionParams next;
       search(target_idx, mu, sigma, &curr, e_bounds, next);
-      const double dp = std::fabs(next.e - curr.e) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
-      const double rel = it > 0 ? std::fabs(err - prev_err) / std::max(1e-4, prev_err) : 1.0;
+      const float dp = std::fabs(next.e - curr.e) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
+      const float rel = it > 0 ? std::fabs(err - prev_err) / std::max(1e-4f, prev_err) : 1.0f;
       steps++;
       if (verbose_) {
         std::cout << "    T" << target_idx + 1 << " step " << it << ": E " << fixed(curr.e, 4) << " g "
@@ -779,7 +780,7 @@ class SearchFrame {
 
   // The highlight clipping of the frame's inner crop through bracket target_idx, per candidate (E, g, b).
   std::vector<ClipStats> highlight_clip(int target_idx, const std::vector<ConversionParams>& candidates,
-                                        const std::array<double, 3>& ceil) {
+                                        const std::array<float, 3>& ceil) {
     const InnerCrop crop = compute_inner_crop(frame_.width, frame_.height, crop_ratio_);
     std::vector<std::array<float, 9>> matrices;
     for (const ConversionParams& p : candidates) matrices.push_back(conversion_matrix(input_matrix_, p));
@@ -805,9 +806,9 @@ class SearchFrame {
   RgbImage frame_;       // the frame within bbox, oriented as the output
   RgbImage inner_crop_;  // its centred inner crop (crop_ratio of each side): what DINOv3 sees
   FrameStats stats_;     // over the inner crop
-  double frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
+  float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
-  double e_norm_ = 1.0;
+  float e_norm_ = 1.0f;
   double render_ms_ = 0, infer_ms_ = 0, search_ms_ = 0, residual_ms_ = 0;
 };
 
@@ -815,7 +816,7 @@ class SearchFrame {
 
 struct Headroom {
   HeadroomOutcome outcome = HeadroomOutcome::kWithinRange;
-  double delta_ev = 0.0;  // the stops E is raised by
+  float delta_ev = 0.0f;  // the stops E is raised by
 };
 
 // The exposure increase (stops) that brings every output channel's (1 - SCENE_TAIL) point inside the bracket's
@@ -823,14 +824,14 @@ struct Headroom {
 // bisection over E at the fixed gains g and b.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_highlight_headroom_ev)
 Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionParams& params, bool has_e_max,
-                            double e_max, const std::array<double, 3>& ceil) {
-  constexpr double tail = SCENE_TAIL, tol_ev = 0.01;
-  const double e = params.e;
-  auto at_ev = [&](double ev) { return ConversionParams{e * std::pow(2.0, ev), params.g, params.b}; };
+                            float e_max, const std::array<float, 3>& ceil) {
+  constexpr float tail = SCENE_TAIL, tol_ev = 0.01f;
+  const float e = params.e;
+  auto at_ev = [&](float ev) { return ConversionParams{e * std::pow(2.0f, ev), params.g, params.b}; };
   Headroom h;
   const bool cap_known = has_e_max && e_max > 0 && e > 0;
-  const double capacity_ev = cap_known ? std::log2(e_max / e) : 0.0;
-  const bool has_cap = cap_known && capacity_ev > 0.0;
+  const float capacity_ev = cap_known ? std::log2(e_max / e) : 0.0f;
+  const bool has_cap = cap_known && capacity_ev > 0.0f;
   std::vector<ConversionParams> init = {params};
   if (has_cap) init.push_back(at_ev(capacity_ev));
   const auto hc_init = fr.highlight_clip(target_idx, init, ceil);
@@ -849,13 +850,13 @@ Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionPar
   }
   // Stage 1 evaluates 2^s1 - 1 evenly spaced exposures in one batch and bisects over them; stage 2 does the same
   // inside the bracketing interval until it is narrower than tol_ev.
-  const int total_steps = std::max(0, int(std::ceil(std::log2(std::max(capacity_ev / tol_ev, 1.0)))));
+  const int total_steps = std::max(0, int(std::ceil(std::log2(std::max(capacity_ev / tol_ev, 1.0f)))));
   const int stage1_steps = std::min(4, total_steps);
-  double lo = 0.0, hi = capacity_ev;
+  float lo = 0.0f, hi = capacity_ev;
   if (stage1_steps > 0) {
     const int n1 = 1 << stage1_steps;
     std::vector<ConversionParams> cands;
-    for (int i = 1; i < n1; ++i) cands.push_back(at_ev(lo + (i / double(n1)) * (hi - lo)));
+    for (int i = 1; i < n1; ++i) cands.push_back(at_ev(lo + (i / float(n1)) * (hi - lo)));
     const auto hc1 = fr.highlight_clip(target_idx, cands, ceil);
     int ilo = 0, ihi = n1;
     for (int s = 0; s < stage1_steps; ++s) {
@@ -863,24 +864,24 @@ Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionPar
       if (max_excess(hc1[mid - 1]) <= tail) ihi = mid;
       else ilo = mid;
     }
-    lo = (ilo / double(n1)) * capacity_ev;
-    hi = (ihi / double(n1)) * capacity_ev;
+    lo = (ilo / float(n1)) * capacity_ev;
+    hi = (ihi / float(n1)) * capacity_ev;
   }
   const int rem_steps = total_steps - stage1_steps;
   if (rem_steps > 0 && (hi - lo) > tol_ev) {
     const int n2 = 1 << rem_steps;
     std::vector<ConversionParams> cands;
-    for (int i = 1; i < n2; ++i) cands.push_back(at_ev(lo + (i / double(n2)) * (hi - lo)));
+    for (int i = 1; i < n2; ++i) cands.push_back(at_ev(lo + (i / float(n2)) * (hi - lo)));
     const auto hc2 = fr.highlight_clip(target_idx, cands, ceil);
-    const double span = hi - lo, base_lo = lo;
+    const float span = hi - lo, base_lo = lo;
     int ilo = 0, ihi = n2;
     for (int s = 0; s < rem_steps; ++s) {
       const int mid = (ilo + ihi) / 2;
       if (max_excess(hc2[mid - 1]) <= tail) ihi = mid;
       else ilo = mid;
     }
-    lo = base_lo + (ilo / double(n2)) * span;
-    hi = base_lo + (ihi / double(n2)) * span;
+    lo = base_lo + (ilo / float(n2)) * span;
+    hi = base_lo + (ihi / float(n2)) * span;
   }
   h.outcome = HeadroomOutcome::kPulledInside;
   h.delta_ev = hi;
@@ -890,9 +891,9 @@ Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionPar
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
 // base and by the exposure ratio between the film base capture and the scan.
 // py-ref: negicc_station/src/film_profiling.py @ 93be1ec (compute_merged_crosstalk, compute_exposure_ratio)
-void merged_matrix(const ProfileBundle& bundle, const double fb[3], double exposure_ratio, double out[9]) {
+void merged_matrix(const ProfileBundle& bundle, const float fb[3], float exposure_ratio, float out[9]) {
   for (int r = 0; r < 3; ++r) {
-    const double scale = fb[r] > 0 ? (bundle.normalization_target / fb[r]) * exposure_ratio : 1.0;
+    const float scale = fb[r] > 0 ? (bundle.normalization_target / fb[r]) * exposure_ratio : 1.0f;
     for (int c = 0; c < 3; ++c) out[r * 3 + c] = bundle.crosstalk_matrix[r * 3 + c] * scale;
   }
 }
@@ -908,8 +909,8 @@ struct Screened {
 // ---- Public API ----------------------------------------------------------------------------------------------
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
-                              const int bbox_in[4], int rot_cw, bool hflip, bool vflip, double scan_shutter_s,
-                              double scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
+                              const int bbox_in[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
+                              float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
   const double t_start = now_ms();
   const bool verbose = opts.verbose;
   if (bundle.targets.empty()) {
@@ -928,8 +929,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 1: the enclosure of each bracket.
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_gamut_volume_enclosure)
-  const double g_lo = std::max<double>(1.0, stats.g_lo);
-  const double g_hi = std::max<double>(g_lo + 1.0, stats.g_hi);
+  const float g_lo = std::max(1.0f, stats.g_lo);
+  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
   out.g_lo = g_lo;
   out.g_hi = g_hi;
   out.scene_ev = std::log2(g_hi / g_lo);
@@ -944,25 +945,25 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
 
   // The input matrix in reference units (ParamSearchResult).
-  const double* fb = opts.film_base_rgb ? opts.film_base_rgb : bundle.film_base_avg;
-  double fb_t = 0.125;
+  const float* fb = opts.film_base_rgb ? opts.film_base_rgb : bundle.film_base_avg;
+  float fb_t = 0.125f;
   try {
     fb_t = shutter_to_seconds(bundle.film_base_shutter);
   } catch (const std::exception&) {
   }
-  const double fb_exposure = fb_t * (bundle.film_base_iso / 100.0);
+  const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
   // A measured base comes from this capture: no exposure ratio.
-  const double ratio_frame = opts.film_base_rgb ? 1.0 : fb_exposure / (scan_shutter_s * (scan_iso / 100.0));
-  const double ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0));
-  double m_frame[9], m_ref[9];
-  merged_matrix(bundle, fb, ratio_frame, m_frame);
-  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, m_ref);
-  fr.set_frame_matrix(m_frame, (m_ref[4] != 0.0) ? m_frame[4] / m_ref[4] : 1.0);
-  const double e_norm = fr.e_norm();
+  const float ratio_frame = opts.film_base_rgb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
+  const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
+  float frame_matrix[9], ref_matrix[9];
+  merged_matrix(bundle, fb, ratio_frame, frame_matrix);
+  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
+  fr.set_frame_matrix(frame_matrix, (ref_matrix[4] != 0.0f) ? frame_matrix[4] / ref_matrix[4] : 1.0f);
+  const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
   std::copy(fr.input_matrix(), fr.input_matrix() + 9, out.input_matrix);
   for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (fb[r] > 0 ? (bundle.normalization_target / fb[r]) * ratio_frame : 1.0) / e_norm;
+    out.row_scale[r] = (fb[r] > 0 ? (bundle.normalization_target / fb[r]) * ratio_frame : 1.0f) / e_norm;
   }
 
   if (verbose) {
@@ -984,7 +985,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
 
   auto rank = [](const Enclosure& r) {
-    return std::fabs(r.fill_ratio - 0.85) + SLACK_PENALTY_SCALE * std::max(0.0, -r.slack_ev);
+    return std::fabs(r.fill_ratio - 0.85f) + SLACK_PENALTY_SCALE * std::max(0.0f, -r.slack_ev);
   };
   std::vector<Enclosure> ranked = enclosure;
   std::stable_sort(ranked.begin(), ranked.end(),
@@ -1000,34 +1001,34 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   for (const auto& r : enclosure)
     if (r.admissible) pool.push_back(r);
   if (pool.empty()) pool = enclosure;
-  double p_scene[3];
+  float p_scene[3];
   for (int r = 0; r < 3; ++r) {
-    p_scene[r] = 0.0;
+    p_scene[r] = 0.0f;
     for (int c = 0; c < 3; ++c) p_scene[r] += (fr.frame_matrix()[r * 3 + c] / e_norm) * stats.log_avg_rgb[c];
   }
   struct Depth {
     Enclosure cand;
-    double e_met, depth, lo, hi;
+    float e_met, depth, lo, hi;
   };
   std::vector<Depth> depths;
   for (const auto& c : pool) {
     const GreyPoint gp(bundle.targets[c.target_idx].film_prof.data);
-    double e_met = 0.0;
+    float e_met = 0.0f;
     if (!gp.reference_grey()) {
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": no neutral L* 50 in this bracket, not metered\n";
       continue;
     }
-    if (!exposure_for_lightness(gp, p_scene, 1.10, 1.15, e_met)) {
+    if (!exposure_for_lightness(gp, p_scene, 1.10f, 1.15f, e_met)) {
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": metering did not converge\n";
       continue;
     }
-    const double lo = c.search_lo, hi = c.search_hi;
-    const double depth = std::min(std::log2(e_met / std::max(1e-6, lo)), std::log2(std::max(1e-6, hi) / e_met)) -
-                         SLACK_PENALTY_SCALE * std::max(0.0, -c.slack_ev);
+    const float lo = c.search_lo, hi = c.search_hi;
+    const float depth = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
+                         SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
     depths.push_back({c, e_met, depth, lo, hi});
   }
   Enclosure cand1;
-  double e1_init;
+  float e1_init;
   if (!depths.empty()) {
     std::stable_sort(depths.begin(), depths.end(), [](const Depth& a, const Depth& b) { return a.depth > b.depth; });
     cand1 = depths[0].cand;
@@ -1048,19 +1049,19 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
-  fr.render_preview(cand1.target_idx, {e1_init, 1.10, 1.15}, preview);
+  fr.render_preview(cand1.target_idx, {e1_init, 1.10f, 1.15f}, preview);
   if (!fr.predict(preview, mu1, sig1)) return false;
 
   // Step 3: screen the brackets against the bootstrap field.
   std::vector<Screened> screening;
-  auto screen = [&](const Enclosure& c, double lo, double hi, double e_met) {
+  auto screen = [&](const Enclosure& c, float lo, float hi, float e_met) {
     Screened s;
     s.enclosure = c;
     s.result.target_idx = c.target_idx;
     s.result.e_lo = lo;
     s.result.e_hi = hi;
     s.result.e_metered = e_met;
-    const double eb[3] = {lo, hi, c.e_center};
+    const float eb[3] = {lo, hi, c.e_center};
     s.result.intent_loss = fr.search(c.target_idx, mu1, sig1, nullptr, eb, s.result.params);
     screening.push_back(s);
   };
@@ -1074,7 +1075,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   });
   std::vector<Screened> shortlist;
   for (const auto& s : screening)
-    if (s.result.intent_loss <= screening[0].result.intent_loss + 2.0 && shortlist.size() < 2) shortlist.push_back(s);
+    if (s.result.intent_loss <= screening[0].result.intent_loss + 2.0f && shortlist.size() < 2) shortlist.push_back(s);
   if (shortlist.size() < 2 && screening.size() >= 2) shortlist.assign(screening.begin(), screening.begin() + 2);
   for (const auto& s : screening) out.screening.push_back(s.result);
   if (verbose) {
@@ -1090,14 +1091,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 4: the fixed-point loop per shortlisted bracket, within a trust region of +/- 0.5 stop around its
   // screened E.
-  auto trust_bounds = [](const Screened& c, double eb[3]) {
-    eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0, -0.5));
-    eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0, 0.5));
+  auto trust_bounds = [](const Screened& c, float eb[3]) {
+    eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0f, -0.5f));
+    eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0f, 0.5f));
     eb[2] = c.enclosure.e_center;
   };
   std::vector<FixedPointResult> adaptive;
   for (const auto& c : shortlist) {
-    double eb[3];
+    float eb[3];
     trust_bounds(c, eb);
     FixedPointResult fp;
     if (verbose) std::cout << "Auto: fixed point on " << name_of(c.result.target_idx) << "\n";
@@ -1125,7 +1126,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
     return bracket_enclosure(bundle.targets[target_idx], target_idx, g_lo, g_hi, r);
   };
-  std::map<int, std::array<double, 3>> ceilings;
+  std::map<int, std::array<float, 3>> ceilings;
   auto ceiling_of = [&](int target_idx) {
     auto it = ceilings.find(target_idx);
     if (it == ceilings.end()) {
@@ -1136,8 +1137,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   auto apply_headroom = [&](int target_idx, ConversionParams& p) {
     Enclosure hb;
     const bool has_hb = bounds_of(target_idx, hb);
-    const Headroom h = highlight_headroom(fr, target_idx, p, has_hb, has_hb ? hb.e_max : 0.0, ceiling_of(target_idx));
-    if (h.delta_ev > 0.0) p.e *= std::pow(2.0, h.delta_ev);
+    const Headroom h = highlight_headroom(fr, target_idx, p, has_hb, has_hb ? hb.e_max : 0.0f, ceiling_of(target_idx));
+    if (h.delta_ev > 0.0f) p.e *= std::pow(2.0f, h.delta_ev);
     return h;
   };
   Headroom headroom = apply_headroom(chosen.target_idx, params);
@@ -1150,7 +1151,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // Step 5: the highlight rescue (RescueOutcome).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (measure_rescue_candidates, select_highlight_rescue)
   const ClipStats hc0 = fr.highlight_clip(chosen.target_idx, {params}, ceiling_of(chosen.target_idx))[0];
-  const double clip_0 = hc0.white_clip / 100.0;
+  const float clip_0 = hc0.white_clip / 100.0f;
   out.rescue_white_clip = clip_0;
   out.rescue = RescueOutcome::kNotNeeded;
   if (clip_0 > RESCUE_CLIP_TAU) {
@@ -1170,7 +1171,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (run) {
         fp_adj = *run;
       } else {
-        double eb[3];
+        float eb[3];
         trust_bounds(*s_adj, eb);
         if (verbose) std::cout << "Auto: fixed point on " << name_of(t_adj) << " (highlight rescue)\n";
         if (!fr.fixed_point(t_adj, s_adj->result.params, eb, fp_adj)) return false;
@@ -1178,15 +1179,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       ConversionParams p_adj = fp_adj.params;
       const Headroom h_adj = apply_headroom(t_adj, p_adj);
       const ClipStats hc_adj = fr.highlight_clip(t_adj, {p_adj}, ceiling_of(t_adj))[0];
-      const double clip_adj = hc_adj.white_clip / 100.0;
-      const double dl = double(hc_adj.median_L) - hc0.median_L;
+      const float clip_adj = hc_adj.white_clip / 100.0f;
+      const float dl = hc_adj.median_L - hc0.median_L;
       if (clip_adj > RESCUE_CLIP_RATIO * clip_0) out.rescue = RescueOutcome::kClipsTooMuch;
       else if (!(RESCUE_DL_MIN <= dl && dl <= RESCUE_DL_MAX)) out.rescue = RescueOutcome::kShiftsLightness;
-      else if (fp_adj.residual > (1.0 + RESCUE_RESID_TOL) * chosen.residual) out.rescue = RescueOutcome::kWorseResidual;
+      else if (fp_adj.residual > (1.0f + RESCUE_RESID_TOL) * chosen.residual) out.rescue = RescueOutcome::kWorseResidual;
       else out.rescue = RescueOutcome::kTaken;
       if (verbose) {
-        std::cout << "Auto: highlight rescue: " << name_of(t_adj) << " clips " << fixed(clip_adj * 100.0, 4)
-                  << "% vs " << fixed(clip_0 * 100.0, 4) << "%, dL* " << fixed(dl, 2, true) << ", resid "
+        std::cout << "Auto: highlight rescue: " << name_of(t_adj) << " clips " << fixed(clip_adj * 100.0f, 4)
+                  << "% vs " << fixed(clip_0 * 100.0f, 4) << "%, dL* " << fixed(dl, 2, true) << ", resid "
                   << fixed(fp_adj.residual, 4) << ": " << to_string(out.rescue) << "\n";
       }
       if (out.rescue == RescueOutcome::kTaken) {

@@ -67,7 +67,7 @@ void clamp_rect(int r[4], int bw, int bh) {
   r[1] = std::min(std::max(0, r[1]), bh - r[3]);
 }
 
-bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutter_s, double& iso) {
+bool load_half_size_mosaic(const std::string& path, RgbImage& out, float& shutter_s, float& iso) {
   LibRaw proc;
   int ret;
   if ((ret = proc.open_file(path.c_str())) != LIBRAW_SUCCESS) {
@@ -132,13 +132,8 @@ bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutt
     }
   }
 
-  // EXIF exposure time is a rational; LibRaw keeps it as a float. Snap 1/n speeds back to their exact value.
-  shutter_s = proc.imgdata.other.shutter > 0 ? (double)proc.imgdata.other.shutter : 0.125;
-  if (shutter_s < 1.0) {
-    const double n = std::round(1.0 / shutter_s);
-    if (n > 0 && std::fabs(1.0 / n - shutter_s) <= 1e-6 * shutter_s) shutter_s = 1.0 / n;
-  }
-  iso = proc.imgdata.other.iso_speed > 0 ? std::round((double)proc.imgdata.other.iso_speed) : 100.0;
+  shutter_s = proc.imgdata.other.shutter > 0 ? proc.imgdata.other.shutter : 0.125f;
+  iso = proc.imgdata.other.iso_speed > 0 ? std::round(proc.imgdata.other.iso_speed) : 100.0f;
   return true;
 }
 

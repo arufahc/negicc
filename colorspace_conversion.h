@@ -23,8 +23,7 @@
 #include "neg_pipeline.h"
 
 // Color space conversions the parameter searches score renders with, on top of the pixel pipeline of
-// neg_pipeline.h. The pixel pipeline runs in float like the station's kernels; the conversions the search's
-// metering runs on scalars are in double like the station's Python.
+// neg_pipeline.h.
 
 // A camera pixel through the pipeline (matrix, knee, film profile) to linear sRGB D65 in [0, 1], before the output
 // gamma encoding.
@@ -63,47 +62,29 @@ static inline bool linear_channel_white_clipped(float l) {
   return l >= 0.9953029f;
 }
 
-// Encoded sRGB in [0, 1] to CIELAB D65 in double (OpenCV's constants).
-// py-ref: negicc_station/src/grey_point.py @ 93be1ec (GreyPoint.to_lab)
-static inline void srgb_to_lab_d(const float rgb[3], double lab[3]) {
-  double lin[3];
-  for (int c = 0; c < 3; ++c) {
-    const double v = rgb[c];
-    lin[c] = (v <= 0.04045) ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
-  }
-  const double X = (lin[0] * 0.412453 + lin[1] * 0.357580 + lin[2] * 0.180423) / 0.950456;
-  const double Y = lin[0] * 0.212671 + lin[1] * 0.715160 + lin[2] * 0.072169;
-  const double Z = (lin[0] * 0.019334 + lin[1] * 0.119193 + lin[2] * 0.950227) / 1.088754;
-  auto f = [](double t) { return t > 0.008856 ? std::cbrt(t) : 7.787 * t + 16.0 / 116.0; };
-  const double fx = f(X), fy = f(Y), fz = f(Z);
-  lab[0] = (Y > 0.008856) ? 116.0 * fy - 16.0 : 903.3 * Y;
-  lab[1] = 500.0 * (fx - fy);
-  lab[2] = 200.0 * (fy - fz);
-}
-
 // ICC PCS L*a*b* (D50) to 8-bit sRGB code values in [0, 255], through Bradford D50 -> D65.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb)
-static inline void pcs_lab_to_srgb_u8(const double lab[3], double out[3]) {
-  static const double kD50[3] = {0.9642, 1.0, 0.8249};
-  static const double kBradford[3][3] = {{0.9555766, -0.0230393, 0.0631636},
-                                         {-0.0282895, 1.0099416, 0.0210077},
-                                         {0.0122982, -0.0204830, 1.3299098}};
-  static const double kXyzToSrgb[3][3] = {{3.2406255, -1.5372080, -0.4986286},
-                                          {-0.9689307, 1.8757561, 0.0415175},
-                                          {0.0557101, -0.2040211, 1.0569959}};
-  const double fy = (lab[0] + 16.0) / 116.0;
-  const double f[3] = {fy + lab[1] / 500.0, fy, fy - lab[2] / 200.0};
-  double xyz[3], d65[3];
+static inline void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
+  static const float kD50[3] = {0.9642f, 1.0f, 0.8249f};
+  static const float kBradford[3][3] = {{0.9555766f, -0.0230393f, 0.0631636f},
+                                        {-0.0282895f, 1.0099416f, 0.0210077f},
+                                        {0.0122982f, -0.0204830f, 1.3299098f}};
+  static const float kXyzToSrgb[3][3] = {{3.2406255f, -1.5372080f, -0.4986286f},
+                                         {-0.9689307f, 1.8757561f, 0.0415175f},
+                                         {0.0557101f, -0.2040211f, 1.0569959f}};
+  const float fy = (lab[0] + 16.0f) / 116.0f;
+  const float f[3] = {fy + lab[1] / 500.0f, fy, fy - lab[2] / 200.0f};
+  float xyz[3], d65[3];
   for (int c = 0; c < 3; ++c) {
-    const double f3 = f[c] * f[c] * f[c];
-    xyz[c] = (f3 > 0.008856 ? f3 : (f[c] - 16.0 / 116.0) / 7.787) * kD50[c];
+    const float f3 = f[c] * f[c] * f[c];
+    xyz[c] = (f3 > 0.008856f ? f3 : (f[c] - 16.0f / 116.0f) / 7.787f) * kD50[c];
   }
   for (int r = 0; r < 3; ++r) d65[r] = kBradford[r][0] * xyz[0] + kBradford[r][1] * xyz[1] + kBradford[r][2] * xyz[2];
   for (int r = 0; r < 3; ++r) {
-    const double lin = std::clamp(kXyzToSrgb[r][0] * d65[0] + kXyzToSrgb[r][1] * d65[1] + kXyzToSrgb[r][2] * d65[2],
-                                  0.0, 1.0);
-    const double enc = (lin <= 0.0031308) ? lin * 12.92 : 1.055 * std::pow(lin, 1.0 / 2.4) - 0.055;
-    out[r] = std::clamp(enc, 0.0, 1.0) * 255.0;
+    const float lin = std::clamp(kXyzToSrgb[r][0] * d65[0] + kXyzToSrgb[r][1] * d65[1] + kXyzToSrgb[r][2] * d65[2],
+                                 0.0f, 1.0f);
+    const float enc = (lin <= 0.0031308f) ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f;
+    out[r] = std::clamp(enc, 0.0f, 1.0f) * 255.0f;
   }
 }
 

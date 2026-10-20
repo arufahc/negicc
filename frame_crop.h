@@ -34,7 +34,7 @@ struct RgbImage {
 // one pixel (R, the mean of the greens, B). shutter_s and iso are the capture's.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
-bool load_half_size_mosaic(const std::string& path, RgbImage& out, double& shutter_s, double& iso);
+bool load_half_size_mosaic(const std::string& path, RgbImage& out, float& shutter_s, float& iso);
 
 // Moves rect (x, y, w, h) inside bw x bh, shrinking it only when it is larger.
 // py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)

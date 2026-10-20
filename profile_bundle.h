@@ -42,12 +42,12 @@ struct BundleTarget {
   std::vector<uint8_t> icc_bytes;
   ParsedFilmProfile film_prof;
 
-  // For the conversion parameter search (param_search.h): the patches' green range in double, the bracket's camera
+  // For the conversion parameter search (param_search.h): the patches' green range, the bracket's camera
   // exposure (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
-  double g_min = 0.0;
-  double g_max = 0.0;
-  double exposure_s = 0.125;
-  double tonal_capacity_ev = 0.0;
+  float g_min = 0.0f;
+  float g_max = 0.0f;
+  float exposure_s = 0.125f;
+  float tonal_capacity_ev = 0.0f;
   std::string profcheck_output;
 
   // Frame enclosure metrics
@@ -65,15 +65,13 @@ struct ProfileBundle {
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
   std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
-  // In double, as the station computes the merged input matrix from it (param_search.h); the float pixel pipeline
-  // rounds it where it takes it.
-  double crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   bool has_crosstalk = false;
   bool has_film_base = false;
   int profile_film_base_rgb[3] = {1, 1, 1};
-  double film_base_avg[3] = {0.0, 0.0, 0.0};   // unrounded film base (profile_film_base_rgb rounds it)
+  float film_base_avg[3] = {0.0f, 0.0f, 0.0f};  // unrounded film base (profile_film_base_rgb rounds it)
   std::string film_base_shutter = "1/8s";
-  double film_base_iso = 100.0;
+  float film_base_iso = 100.0f;
   double normalization_target = 55000.0;
   std::vector<BundleTarget> targets;
 };
@@ -81,7 +79,7 @@ struct ProfileBundle {
 // Seconds of a shutter speed as profiles write it ("1/8s", "0.4s", "2"); throws std::invalid_argument when it
 // cannot be read.
 // py-ref: negicc_station/src/film_profiling.py @ 93be1ec (shutter_to_seconds)
-double shutter_to_seconds(const std::string& shutter);
+float shutter_to_seconds(const std::string& shutter);
 
 // Bundle and stock keys of a profile name: "profile_Portra160-A7R4-TriLED_20261003_190751.json" gives
 // ("Portra160-A7R4-TriLED", "portra160"). Empty strings when the name has none.
