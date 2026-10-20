@@ -1,0 +1,93 @@
+{
+  "model_name": "dinov3-small_portra400_intent_field",
+  "profile": "portra400",
+  "backbone": "dinov3-small",
+  "aspect_mode": "approach_1_native_aspect_bicubic",
+  "is_native_aspect": true,
+  "arithmetic_precision": "float32",
+  "mantissa_bits": 24,
+  "resampling_method": "srgb_to_linear_rgb_scale_to_srgb_to_cielab",
+  "color_pipeline": "Exact IEC 61966-2-1 inverse EOTF -> cv2.INTER_AREA linear scale -> forward EOTF -> cv2.COLOR_RGB2LAB (float32)",
+  "backbone_details": {
+    "model_id": "Tooony133/dinov3-vits16-pretrain-lvd1689m",
+    "image_size": 512,
+    "patch_size": 16,
+    "grid_size": 32,
+    "num_patches": 1024,
+    "raw_dim": 384,
+    "fused_dim": 768,
+    "adapter_hidden_dim": 384,
+    "token_start_idx": 5,
+    "description": "Meta DINOv3 Small (ViT-S/16, 512x512, 1,024 patches, Layers 9+12 fused 768-D)"
+  },
+  "parameters": 595590,
+  "in_dim": 768,
+  "hidden_dim": 384,
+  "export_date": "2026-10-01T00:19:14.378498+00:00",
+  "input_dimensions": {
+    "batch_size": "variable",
+    "num_patches": "variable_native_aspect (e.g. 672 for 3:2, 768 for 4:3, 1024 for 1:1)",
+    "token_dim": 768
+  },
+  "output_dimensions": {
+    "mu": [
+      "batch_size",
+      "num_patches",
+      3
+    ],
+    "sigma": [
+      "batch_size",
+      "num_patches",
+      3
+    ],
+    "log_var": [
+      "batch_size",
+      "num_patches",
+      3
+    ]
+  },
+  "color_space": "CIE L*a*b*",
+  "channel_ranges": {
+    "L*": [
+      0.0,
+      100.0
+    ],
+    "a*": [
+      -128.0,
+      127.0
+    ],
+    "b*": [
+      -128.0,
+      127.0
+    ]
+  },
+  "metrics": {
+    "epoch": 60,
+    "val_loss": 1.764565348625183,
+    "val_mae": 4.130506992340088,
+    "val_mae_L": 3.747722864151001,
+    "val_mae_ab": 4.321903228759766,
+    "train_loss": 1.7574438878943104,
+    "train_mae": 4.102119767952644,
+    "uncertainty_dr": 42.52,
+    "profile": "portra400",
+    "backbone": "dinov3-small",
+    "in_dim": 768,
+    "hidden_dim": 384,
+    "aspect_mode": "approach_1_native_aspect_bicubic"
+  },
+  "acceptance_gates": {
+    "gates": {
+      "gate_val_loss_le_2_30": true,
+      "gate_mae_ab_le_5_00": true,
+      "gate_mae_L_le_8_00": true
+    },
+    "all_passed": true
+  },
+  "exported_files": {
+    "pytorch_weights": "model.pt",
+    "torchscript": "adapter.torchscript",
+    "adapter_onnx": "adapter.onnx",
+    "metadata": "metadata.json"
+  }
+}

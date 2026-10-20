@@ -1,24 +1,5 @@
 # Film Profiles
 
-ICC profiles for Sony A7R IV captures with triband filter.
-
-Portra 400 profiles were generated using 7 exposure brackets of IT8 target R190808 (from -1 to +3.5 EV). The multiple brackets allow patches above the nominal white patch to be measured rather than extrapolated, preventing highlight clipping and cyan casts in bright highlights.
-
-## Brackets
-
-- Portra400-1 (-1.2 EV): 1/8s, for underexposed frames
-- Portra400-0.5 (-0.5 EV): 1/8s
-- Portra400 (0 EV): 1/8s, box speed baseline
-- Portra400+1 (+1.1 EV): 1/6s
-- Portra400+2 (+1.8 EV): 1/5s
-- Portra400+3 (+2.7 EV): 1/4s
-- Portra400+3.5 (+3.5 EV): 0.4s, for high-key or overexposed frames
-
-Each bracket has a cLUT ICC profile and a corresponding `Info.txt` with crosstalk matrix and film base RGB readings.
-
-## Usage
-
-```sh
-# Convert RAW with Portra400 profile to sRGB
-bin_out/neg_process -p "profiles/Sony A7RM4 Portra400 R190808 cLUT.icc" -o output.tif input.ARW
-```
+Each directory is a profile bundle for one film stock, camera and scanning light, exported from negicc-station: one
+ICC profile per calibration bracket and a `bundle.json`. Its README says how it was built. The bundles are built
+into `neg_process`, which picks one with `--film_stock` and `--light_source` (`--list_profiles` lists them).
