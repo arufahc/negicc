@@ -99,66 +99,9 @@ std::string general(float v, int prec) {
   return os.str();
 }
 
-// ---- Cutting the frame ------------------------------------------------------------------------------------
-
-// Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
-struct RgbImage {
-  int width = 0;
-  int height = 0;
-  std::vector<uint16_t> rgb;
-};
+// ---- The inner crop ---------------------------------------------------------------------------------------
 
 const uint16_t* pixel_at(const RgbImage& img, int x, int y) { return &img.rgb[(size_t(y) * img.width + x) * 3]; }
-
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (map_inverse_geometry_cpu)
-inline void map_inverse_geometry(int x_dst, int y_dst, int dst_w, int dst_h, int rw, int rh, int rot_cw,
-                                 bool hflip, bool vflip, int& x_rel, int& y_rel) {
-  rot_cw = ((rot_cw % 360) + 360) % 360;
-  if (rot_cw == 180) {
-    hflip = !hflip;
-    vflip = !vflip;
-    rot_cw = 0;
-  }
-  const int x1 = hflip ? (dst_w - 1 - x_dst) : x_dst;
-  const int y1 = vflip ? (dst_h - 1 - y_dst) : y_dst;
-  if (rot_cw == 0) {
-    x_rel = x1;
-    y_rel = y1;
-  } else if (rot_cw == 90) {
-    x_rel = y1;
-    y_rel = rh - 1 - x1;
-  } else {
-    x_rel = rw - 1 - y1;
-    y_rel = x1;
-  }
-}
-
-// Crops (x, y, w, h) out of src into camera RGB (R, the mean of the two greens, B), rotates it clockwise by rot_cw
-// and flips it. out is w x h, or h x w when rot_cw is 90 or 270. The search renders its previews in the output's
-// orientation (--rot, --hflip, --vflip), as the station's views do, because DINOv3 judges an image the way it will
-// be seen; the statistics are taken on the same pixels.
-// py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (CapturedImage::view)
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
-void cut_and_orient(const HalfSizeImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
-                    RgbImage& out) {
-  const int rot = ((rot_cw % 360) + 360) % 360;
-  const bool swap = (rot == 90 || rot == 270);
-  out.width = swap ? h : w;
-  out.height = swap ? w : h;
-  out.rgb.resize((size_t)out.width * out.height * 3);
-#pragma omp parallel for schedule(static)
-  for (int y2 = 0; y2 < out.height; ++y2) {
-    for (int x2 = 0; x2 < out.width; ++x2) {
-      int xr = 0, yr = 0;
-      map_inverse_geometry(x2, y2, out.width, out.height, w, h, rot, hflip, vflip, xr, yr);
-      const uint16_t* s = src.px[(size_t)(y + yr) * src.width + (x + xr)];
-      uint16_t* d = &out.rgb[((size_t)y2 * out.width + x2) * 3];
-      d[0] = s[0];
-      d[1] = (uint16_t)(((uint32_t)s[1] + s[3]) >> 1);
-      d[2] = s[2];
-    }
-  }
-}
 
 // The centred inner crop of a w x h image: crop_ratio of each side, the margins rounded to whole pixels. (x0, y0) is
 // its top-left corner in the w x h image, w x h its size: w - 2 x0 by h - 2 y0, about crop_ratio w by crop_ratio h.
@@ -172,6 +115,16 @@ InnerCrop compute_inner_crop(int w, int h, float crop_ratio) {
   const int x0 = std::clamp(static_cast<int>(roundf(w * (1.0f - crop_ratio) * 0.5f)), 0, (w - 1) / 2);
   const int y0 = std::clamp(static_cast<int>(roundf(h * (1.0f - crop_ratio) * 0.5f)), 0, (h - 1) / 2);
   return {x0, y0, w - 2 * x0, h - 2 * y0};
+}
+
+// The crop of src, crop.w x crop.h pixels.
+void cut_crop(const RgbImage& src, const InnerCrop& crop, RgbImage& out) {
+  out.width = crop.w;
+  out.height = crop.h;
+  out.rgb.resize((size_t)crop.w * crop.h * 3);
+  for (int y = 0; y < crop.h; ++y) {
+    std::copy_n(pixel_at(src, crop.x0, crop.y0 + y), (size_t)crop.w * 3, &out.rgb[(size_t)y * crop.w * 3]);
+  }
 }
 
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
@@ -702,23 +655,21 @@ float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.ex
 
 // ---- The frame the search works on -------------------------------------------------------------------------
 
-// The frame cut out of the half-size decode in the output's orientation, its inner crop, statistics and input
-// matrix, and the measurements every step of the search makes on them: previews, DINOv3, the residual, the
+// The upright frame, its inner crop, statistics and input matrix, and the measurements every step of the search makes on them: previews, DINOv3, the residual, the
 // coordinate descent and the highlight clipping. Their time is added up into the result.
 class SearchFrame {
  public:
   SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, ParamSearchResult& out)
       : bundle_(bundle), engine_(engine), verbose_(verbose), out_(out) {}
 
-  // Cuts the frame (bbox in the half-size decode) and its inner crop, oriented, and takes the statistics.
-  void cut(const HalfSizeImage& half, const int bbox[4], int rot_cw, bool hflip, bool vflip, float crop_ratio) {
+  // Takes the upright frame (kept by reference) and its inner crop, and the statistics.
+  void set_frame(const RgbImage& frame, float crop_ratio) {
+    frame_ = &frame;
     crop_ratio_ = crop_ratio;
-    // TODO: Optimize away inner_crop_: it copies pixels frame_ already holds, so it can be dropped or share
-    // frame_'s rgb buffer (a view with an offset and stride). Copying the frame once into frame_ is fine.
-    cut_and_orient(half, bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip, frame_);
-    compute_frame_stats(frame_, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
-    const InnerCrop in = compute_inner_crop(bbox[2], bbox[3], crop_ratio);
-    cut_and_orient(half, bbox[0] + in.x0, bbox[1] + in.y0, in.w, in.h, rot_cw, hflip, vflip, inner_crop_);
+    compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
+    // TODO: Optimize away inner_crop_: it copies pixels the frame already holds, so it can be dropped or share the
+    // frame's rgb buffer (a view with an offset and stride).
+    cut_crop(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), inner_crop_);
   }
 
   // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; the search runs on
@@ -864,13 +815,13 @@ class SearchFrame {
   // The highlight clipping of the frame's inner crop through bracket target_idx, per candidate (E, g, b).
   std::vector<ClipStats> highlight_clip(int target_idx, const std::vector<ConversionParams>& candidates,
                                         const float ceil[3]) {
-    const InnerCrop crop = compute_inner_crop(frame_.width, frame_.height, crop_ratio_);
+    const InnerCrop crop = compute_inner_crop(frame_->width, frame_->height, crop_ratio_);
     std::vector<float> matrices(candidates.size() * 9);
     for (size_t i = 0; i < candidates.size(); ++i) {
       const ConversionParams& p = candidates[i];
       candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
     }
-    return measure_highlight_clip(frame_, crop, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
+    return measure_highlight_clip(*frame_, crop, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
                                   ceil);
   }
 
@@ -889,10 +840,8 @@ class SearchFrame {
   ParamSearchResult& out_;
 
   float crop_ratio_ = 0.90f;
-  // The frame within bbox of the half-size image, oriented as the output: bbox[2] x bbox[3] pixels, or
-  // bbox[3] x bbox[2] when rotated by 90 or 270 degrees.
-  RgbImage frame_;
-  // The centred inner crop of frame_ (compute_inner_crop with crop_ratio_): what DINOv3 sees.
+  const RgbImage* frame_ = nullptr;  // the upright frame (search_conversion_params)
+  // The centred inner crop of the frame (compute_inner_crop with crop_ratio_): what DINOv3 sees.
   RgbImage inner_crop_;
   FrameStats stats_;  // over the inner crop
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
@@ -997,19 +946,9 @@ struct Screened {
 
 // ---- Public API ----------------------------------------------------------------------------------------------
 
-// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
-void clamp_rect(int r[4], int bw, int bh) {
-  r[2] = std::min(r[2], bw);
-  r[3] = std::min(r[3], bh);
-  r[0] = std::min(std::max(0, r[0]), bw - r[2]);
-  r[1] = std::min(std::max(0, r[1]), bh - r[3]);
-}
-
-// TODO: Take the frame upright (already cut out and oriented) and only search on it. Clamping the bbox, cutting the
-// frame out of the half-size image and orienting it belong to the caller.
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const HalfSizeImage& half,
-                              const int bbox_in[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
-                              float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
+                              float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
+                              ParamSearchResult& out) {
   const Clock::time_point t_start = Clock::now();
   const bool verbose = opts.verbose;
   if (bundle.targets.empty()) {
@@ -1019,11 +958,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
-  // The frame and its inner crop, oriented.
-  int bbox[4] = {bbox_in[0], bbox_in[1], bbox_in[2], bbox_in[3]};
-  clamp_rect(bbox, half.width, half.height);
-  std::copy(bbox, bbox + 4, out.bbox);
-  fr.cut(half, bbox, rot_cw, hflip, vflip, opts.crop_ratio);
+  fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
   // Step 1: the enclosure of each bracket.
@@ -1067,7 +1002,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   if (verbose) {
     std::ostringstream os;
-    os << "Auto: frame " << bbox[2] << "x" << bbox[3] << " at (" << bbox[0] << ", " << bbox[1] << ") (half size), crop "
+    os << "Auto: frame " << frame.width << "x" << frame.height << " (half size, upright), crop "
        << fr.inner_crop().width << "x" << fr.inner_crop().height << ", grid " << stats.grid_w << "x" << stats.grid_h
        << "\n";
     os << "Auto: scene green " << fixed(g_lo, 1) << ".." << fixed(g_hi, 1) << " (" << fixed(out.scene_ev, 2)

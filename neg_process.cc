@@ -437,11 +437,13 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   return true;
 }
 
-// Called with LibRaw's half-size image of a RAW while load_raw holds it (read_half_size), and the LibRaw it came from.
-using HalfSizeAnalysis = std::function<void(const LibRaw& proc, const HalfSizeImage& half)>;
+// Called with a LibRaw whose imgdata.image holds the half-size image of its RAW (read_half_size): iwidth x iheight
+// pixels, row-major, LibRaw's 4 channels each (R, G, B in the first three); a point (x, y) of the RAW is (x / 2, y / 2)
+// there.
+using HalfSizeAnalysis = std::function<void(const LibRaw& proc)>;
 
 // Reads LibRaw's half-size image of the unpacked RAW of proc (black subtracted, every 2x2 quad one pixel), before any
-// processing, and hands it to analyse in place. proc is then left as unpack() left it. False when proc is not a
+// processing, and hands proc holding it to analyse. proc is then left as unpack() left it. False when proc is not a
 // 3-colour Bayer RAW.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
@@ -457,7 +459,7 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
     fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n", libraw_strerror(ret));
     return false;
   }
-  analyse(*proc, HalfSizeImage{proc->imgdata.image, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight});
+  analyse(*proc);
 
   // raw2image_ex subtracted the black level from imgdata.color and resized imgdata.sizes; put back what unpack() read.
   proc->free_image();
@@ -701,6 +703,26 @@ float dot_product(const std::vector<float>& v1, const std::vector<T>& v2) {
 }
 
 // Extract a sub-rectangle from decoded LibRaw image buffer with rotation and flip.
+// A 180-degree rotation is both flips; leaves rot_cw 0, 90 or 270.
+static void normalize_rotation(int& rot_cw, bool& hflip, bool& vflip) {
+  rot_cw = ((rot_cw % 360) + 360) % 360;
+  if (rot_cw == 180) {
+    hflip = !hflip;
+    vflip = !vflip;
+    rot_cw = 0;
+  }
+}
+
+// Where pixel (x, y) of a rw x rh region lands, (dx, dy), when the region is rotated clockwise by rot_cw (0, 90 or
+// 270, see normalize_rotation) and then flipped. The result is dst_w x dst_h: rw x rh, or rh x rw when rotated.
+static inline void oriented_pos(int x, int y, int rw, int rh, int dst_w, int dst_h, int rot_cw, bool hflip,
+                                bool vflip, int& dx, int& dy) {
+  const int x1 = (rot_cw == 0) ? x : ((rot_cw == 90) ? (rh - 1 - y) : y);
+  const int y1 = (rot_cw == 0) ? y : ((rot_cw == 90) ? x : (rw - 1 - x));
+  dx = hflip ? (dst_w - 1 - x1) : x1;
+  dy = vflip ? (dst_h - 1 - y1) : y1;
+}
+
 bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
                                int rot_cw, bool hflip, bool vflip) {
   if (!proc || !proc->imgdata.image) return false;
@@ -712,15 +734,7 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
   rw = std::max(1, std::min(rw, cur_w - rx));
   rh = std::max(1, std::min(rh, cur_h - ry));
 
-  rot_cw = ((rot_cw % 360) + 360) % 360;
-
-  // 180-degree rotation is equivalent to flipping both axes.
-  if (rot_cw == 180) {
-    hflip = !hflip;
-    vflip = !vflip;
-    rot_cw = 0;
-  }
-
+  normalize_rotation(rot_cw, hflip, vflip);
   const bool swap_dims = (rot_cw == 90 || rot_cw == 270);
   const int dst_w = swap_dims ? rh : rw;
   const int dst_h = swap_dims ? rw : rh;
@@ -748,10 +762,8 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < rh; ++y) {
       for (int x = 0; x < rw; ++x) {
-        int x1 = (rot_cw == 0)  ? x : ((rot_cw == 90) ? (rh - 1 - y) : y);
-        int y1 = (rot_cw == 0)  ? y : ((rot_cw == 90) ? x : (rw - 1 - x));
-        int dx = hflip ? (dst_w - 1 - x1) : x1;
-        int dy = vflip ? (dst_h - 1 - y1) : y1;
+        int dx = 0, dy = 0;
+        oriented_pos(x, y, rw, rh, dst_w, dst_h, rot_cw, hflip, vflip, dx, dy);
 
         const ushort* s = src_image[(size_t)(ry + y) * cur_w + (rx + x)];
         ushort* d = new_image[(size_t)dy * dst_w + dx];
@@ -768,6 +780,39 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
   proc->imgdata.sizes.iwidth = dst_w;
   proc->imgdata.sizes.iheight = dst_h;
   return true;
+}
+
+// Moves rect (x, y, w, h) inside bw x bh, shrinking it only when it is larger.
+// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
+static void clamp_rect(int r[4], int bw, int bh) {
+  r[2] = std::min(r[2], bw);
+  r[3] = std::min(r[3], bh);
+  r[0] = std::min(std::max(0, r[0]), bw - r[2]);
+  r[1] = std::min(std::max(0, r[1]), bh - r[3]);
+}
+
+// The frame the parameter search runs on, upright: rect (x, y, w, h) of the image proc holds, cut out and oriented
+// as the output is (extract_roi_and_transform), as camera RGB from LibRaw's first three channels. It is w x h, or
+// h x w when rotated by 90 or 270 degrees.
+static void cut_upright_frame(const LibRaw& proc, const int rect[4], int rot_cw, bool hflip, bool vflip,
+                              RgbImage& out) {
+  normalize_rotation(rot_cw, hflip, vflip);
+  const int rw = rect[2], rh = rect[3];
+  const bool swap_dims = (rot_cw == 90 || rot_cw == 270);
+  out.width = swap_dims ? rh : rw;
+  out.height = swap_dims ? rw : rh;
+  out.rgb.resize((size_t)out.width * out.height * 3);
+  const int src_w = proc.imgdata.sizes.iwidth;
+  const ushort (*src)[4] = proc.imgdata.image;
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < rh; ++y) {
+    for (int x = 0; x < rw; ++x) {
+      int dx = 0, dy = 0;
+      oriented_pos(x, y, rw, rh, out.width, out.height, rot_cw, hflip, vflip, dx, dy);
+      const ushort* s = src[(size_t)(rect[1] + y) * src_w + (rect[0] + x)];
+      std::copy_n(s, 3, &out.rgb[((size_t)dy * out.width + dx) * 3]);
+    }
+  }
 }
 
 void adjust_correction_matrix(const std::vector<float>& r_coef, 
@@ -973,6 +1018,7 @@ static bool write_json_sidecar(
     const std::string& bundle_target_name = "",
     int bundle_target_idx = -1,
     const ParamSearchResult* auto_res = nullptr,
+    const int* auto_frame_half = nullptr,
     double t_auto_ms = 0.0) {
   const std::string json_path = output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
@@ -1129,8 +1175,8 @@ static bool write_json_sidecar(
             json_num(a.residual, "%.6g").c_str(), to_string(a.status), json_num(a.e_norm, "%.9g").c_str());
     for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.input_matrix[i], "%.9g").c_str());
     fprintf(fp, "],\n");
-    fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n", a.bbox[0],
-            a.bbox[1], a.bbox[2], a.bbox[3], json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(),
+    fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n",
+            auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3], json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(),
             json_num(a.scene_ev, "%.4g").c_str());
     fprintf(fp, "    \"headroom\": {\"applied\": %s, \"ev\": %s, \"reason\": \"%s\"},\n",
             headroom_applied(a.headroom) ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
@@ -1689,29 +1735,36 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
-  // The bracket search runs on the half-size image of the RAW, within --roi, while load_raw holds it before the
-  // decode.
+  // The bracket search runs on the frame cut upright out of the half-size image of the RAW, within --roi, while
+  // load_raw holds that image before the decode.
   bool has_auto_res = false;
   ParamSearchResult auto_res;
+  int auto_frame_half[4] = {0, 0, 0, 0};  // the frame (x, y, w, h) in the half-size image
   double t_auto_ms = 0.0;
   HalfSizeAnalysis analyse;
   if (bundle_search) {
-    analyse = [&](const LibRaw& raw, const HalfSizeImage& half) {
+    analyse = [&](const LibRaw& raw) {
       const double t_auto_0 = omp_get_wtime();
       const float scan_shutter_s = raw.imgdata.other.shutter > 0 ? raw.imgdata.other.shutter : 0.125f;
       const float scan_iso = raw.imgdata.other.iso_speed > 0 ? std::round(raw.imgdata.other.iso_speed) : 100.0f;
-      // The frame (x, y, w, h) in the half-size image: --roi halved, or the whole image.
-      int bbox[4] = {0, 0, half.width, half.height};
+      // --roi halved, or the whole image.
+      const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
+      int* bbox = auto_frame_half;
+      bbox[0] = 0;
+      bbox[1] = 0;
+      bbox[2] = half_w;
+      bbox[3] = half_h;
       if (has_roi) {
         bbox[0] = roi_coords[0] / 2;
         bbox[1] = roi_coords[1] / 2;
         bbox[2] = std::max(1, (roi_coords[0] + roi_coords[2]) / 2 - bbox[0]);
         bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
-        clamp_rect(bbox, half.width, half.height);
+        clamp_rect(bbox, half_w, half_h);
       }
+      RgbImage frame;
+      cut_upright_frame(raw, bbox, rot_cw, hflip, vflip, frame);
       ParamSearchOptions opts;
-      if (!search_conversion_params(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
-                                    auto_res)) {
+      if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         throw std::runtime_error("the conversion parameter search failed");
       }
       has_auto_res = true;
@@ -2246,7 +2299,7 @@ int main(int ac, char *av[]) {
                        cs_name,
                        t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms,
                        is_bundle, bundle_target_name, bundle_target_idx,
-                       has_auto_res ? &auto_res : nullptr, t_auto_ms);
+                       has_auto_res ? &auto_res : nullptr, auto_frame_half, t_auto_ms);
   }
 
   proc->free_image();
