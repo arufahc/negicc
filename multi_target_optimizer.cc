@@ -267,8 +267,12 @@ class GreyPoint {
     return lab_out[0][0];
   }
 
-  // The input rendered as neutral L* 50: a coarse scan along an orange-mask-like line, then Newton. False when the
-  // bracket has none within 0.25 dE.
+  // Whether the bracket can render some camera-linear input as a neutral mid grey (L* 50, a* = b* = 0) within
+  // 0.25 dE. The bootstrap does not meter a bracket that cannot.
+  //
+  // The start point: inputs k * (1.4, 1.0, 0.88), the green-normalised neutral input of the Portra brackets (a
+  // colour like the orange mask, only a starting direction), for k = 2^-10 .. 2^3 in half stops; the k whose L* is
+  // nearest 50 wins. newton() then moves all three channels freely from there to hit (50, 0, 0) exactly.
   bool reference_grey() const {
     const float dir[3] = {1.4f, 1.0f, 0.88f};
     float best_k = 0.0f, best_d = std::numeric_limits<float>::infinity();
@@ -288,7 +292,15 @@ class GreyPoint {
   }
 
  private:
-  // Solves Lab(exp(log_t)) = target; returns the error in Lab units.
+  // Finds the camera-linear input t that the bracket renders as the Lab colour target, starting from log_t, and
+  // leaves it in log_t (as log(t), so every step is a ratio and t stays positive). Returns the distance from the
+  // render of the final t to target, in Lab units (dE76).
+  //
+  // Each iteration renders t and, for the Jacobian d Lab / d log t by central differences, t with each channel
+  // scaled by exp(+-FD_STEP): 7 renders in one lab() call. It stops when every Lab component is within TOLERANCE
+  // of target. Otherwise it takes the least-squares Newton step J * step = target - Lab(t) (lstsq3 drops
+  // directions the render barely responds to), clamps each channel's step to +-MAX_LOG_STEP (a factor of about
+  // 1.28) so the knee and the profile's curves cannot throw it far, and repeats, at most iters times.
   float newton(const float target[3], float log_t[3], int iters) const {
     constexpr float FD_STEP = 0.05f, MAX_LOG_STEP = 0.25f, TOLERANCE = 0.02f;
     for (int it = 0; it < iters; ++it) {
