@@ -111,15 +111,16 @@ static bool is_regular_file(const std::string& path) {
   return std::filesystem::is_regular_file(path, ec);
 }
 
-// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). 1 when loaded, 0
-// when the argument is not a bundle (an ICC profile), -1 on error.
-int load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
+// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). False when the
+// argument is not a bundle (an ICC profile).
+bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
   const std::string resolved = resolve_profile_path(arg);
-  if (!is_regular_file(resolved) || !is_json_bundle(resolved)) return 0;
-  return load_profile_bundle(resolved, bundle) ? 1 : -1;
+  if (!is_regular_file(resolved) || !is_json_bundle(resolved)) return false;
+  load_profile_bundle(resolved, bundle);
+  return true;
 }
 
-// Loads the built-in profile bundle with this key (embedded_bundle_key).
+// Loads the built-in profile bundle with this key (embedded_bundle_key). False when none has that key.
 bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle) {
   std::string dir;
   const EmbeddedFile* f = find_embedded_bundle(key, dir);
@@ -130,8 +131,9 @@ bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle) {
     out.assign(e->data, e->data + e->size);
     return true;
   };
-  return load_profile_bundle_from_memory((const char*)f->data, f->size, std::string("[built-in] ") + f->name,
-                                         read_file, bundle);
+  load_profile_bundle_from_memory((const char*)f->data, f->size, std::string("[built-in] ") + f->name, read_file,
+                                  bundle);
+  return true;
 }
 
 // The TensorRT engine of the built-in backbone (make dinov3_engine, on the device that runs it): models/dinov3-small
@@ -1552,12 +1554,7 @@ int main(int ac, char *av[]) {
   }
   if (parser.is_used("--film_profile")) {
     film_prof_arg = parser.get<std::string>("--film_profile");
-    const int loaded = load_bundle_arg(film_prof_arg, bundle);
-    if (loaded < 0) {
-      fprintf(stderr, "ERROR! Cannot load profile bundle %s\n", film_prof_arg.c_str());
-      return 1;
-    }
-    is_bundle = (loaded == 1);
+    is_bundle = load_bundle_arg(film_prof_arg, bundle);
     if (!is_bundle && !is_regular_file(resolve_profile_path(film_prof_arg))) {
       fprintf(stderr, "ERROR! No profile bundle JSON or ICC profile '%s'\n", film_prof_arg.c_str());
       return 1;
