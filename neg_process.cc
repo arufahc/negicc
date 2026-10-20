@@ -43,7 +43,7 @@
 #include "auto_convert.h"
 #include "embedded_data.h"
 #include "film_frame_detector.h"
-#include "frame_analysis.h"
+#include "frame_crop.h"
 #include "profile_bundle.h"
 
 #include <sys/stat.h>

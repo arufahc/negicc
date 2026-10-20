@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-// Data files built into neg_process (embed_data.sh): the profile bundles under profiles/<Key>/ (bundle.json and
+// Data files built into neg_process (EMBED_FILES in the Makefile): the profile bundles under profiles/<Key>/ (bundle.json and
 // its ICC profiles), the DINOv3 intent adapters under models/dinov3-small_<stock>/ and the DINOv3 backbone when it
 // was exported before the build (models/dinov3-small/backbone.engine in USE_CUDA=1 builds, backbone.onnx in
 // USE_CUDA=0 builds). Names are the files' paths in the

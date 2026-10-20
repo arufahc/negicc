@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@
 
 #include "dinov3_auto_solver.h"
 #include "dinov3_preprocess.h"
-#include "frame_analysis.h"
+#include "param_search.h"
 #include "neg_pipeline.h"
 
 namespace {
