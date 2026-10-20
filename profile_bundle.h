@@ -42,7 +42,7 @@ struct BundleTarget {
   std::vector<uint8_t> icc_bytes;
   ParsedFilmProfile film_prof;
 
-  // For the conversion parameter search (param_search.h): the patches' green range, the bracket's camera
+  // For the conversion parameter search (multi_target_optimizer.h): the patches' green range, the bracket's camera
   // exposure (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
   float g_min = 0.0f;
   float g_max = 0.0f;
@@ -61,7 +61,7 @@ struct BundleTarget {
 };
 
 // TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
-// profile_highlight_ceiling in param_search.cc) once the profile bundle files are backfilled with it and the
+// profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and the
 // profiling code writes it.
 struct ProfileBundle {
   std::string path;

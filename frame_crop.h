@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-// Cropping for the parameter search (param_search.h): the frame and its inner crop cut out of the half-size analysis
+// Cropping for the parameter search (multi_target_optimizer.h): the frame and its inner crop cut out of the half-size analysis
 // decode in the orientation of the output.
 
 // Interleaved 16-bit camera RGB.
