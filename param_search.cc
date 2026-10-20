@@ -15,10 +15,9 @@
 
 #include "param_search.h"
 
-#include <omp.h>
-
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -85,7 +84,9 @@ constexpr float RESCUE_RESID_TOL = 0.10f;
 constexpr float REFERENCE_SHUTTER_S = 0.125f;
 constexpr float REFERENCE_ISO = 100.0f;
 
-double now_ms() { return omp_get_wtime() * 1000.0; }
+using Clock = std::chrono::steady_clock;
+
+int whole_ms(Clock::duration d) { return std::chrono::duration_cast<std::chrono::milliseconds>(d).count(); }
 
 // v with prec decimals ("%.<prec>f", or "%+.<prec>f" with sign), for the verbose log.
 std::string fixed(float v, int prec, bool sign = false) {
@@ -361,12 +362,12 @@ struct FrameStats {
   std::vector<uint16_t> grid;  // grid_w x grid_h RGB
 };
 
-double u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, double q) {
-  if (total == 0) return 0.0;
-  const double pos = q * (total - 1);
+float u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, float q) {
+  if (total == 0) return 0.0f;
+  const float pos = q * (total - 1);
   const uint64_t idx_lo = std::floor(pos);
   const uint64_t idx_hi = std::ceil(pos);
-  const double frac = pos - idx_lo;
+  const float frac = pos - idx_lo;
   uint64_t cum = 0;
   int v_lo = -1, v_hi = -1;
   for (int v = 0; v < 65536; ++v) {
@@ -379,7 +380,7 @@ double u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, 
   }
   if (v_lo < 0) v_lo = 65535;
   if (v_hi < 0) v_hi = 65535;
-  return (1.0 - frac) * v_lo + frac * v_hi;
+  return (1.0f - frac) * v_lo + frac * v_hi;
 }
 
 void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, int patch_size, FrameStats& st) {
@@ -387,23 +388,23 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
   // compute_aspect_preserved_shape of color_pipeline.h (round half away from zero)
   const int p = std::max(1, patch_size);
   const int crop_w = std::max(crop.w, 1), crop_h = std::max(crop.h, 1);
-  const double scale = std::max(max_size, p) / double(std::max(crop_w, crop_h));
+  const float scale = std::max(max_size, p) / float(std::max(crop_w, crop_h));
   const int gw = std::max(1, int(std::round(crop_w * scale / p)));
   const int gh = std::max(1, int(std::round(crop_h * scale / p)));
   const int dino_w = gw * p, dino_h = gh * p;
 
-  std::vector<double> log_lut(65536);
+  std::vector<float> log_lut(65536);
   for (int v = 0; v < 65536; ++v) log_lut[v] = std::log(std::max(v, 1));
 
   std::vector<uint64_t> g_hist(65536, 0);
-  std::vector<double> row_logs(crop.h * 3, 0.0);
+  std::vector<float> row_logs(crop.h * 3, 0.0f);
 #pragma omp parallel
   {
     std::vector<uint64_t> loc(65536, 0);
 #pragma omp for schedule(static)
     for (int ry = 0; ry < crop.h; ++ry) {
       const uint16_t* row = pixel_at(frame, crop.x0, crop.y0 + ry);
-      double lr = 0.0, lg = 0.0, lb = 0.0;
+      float lr = 0.0f, lg = 0.0f, lb = 0.0f;
       for (int rx = 0; rx < crop.w; ++rx, row += 3) {
         loc[row[1]]++;
         lr += log_lut[row[0]];
@@ -419,65 +420,65 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
   }
   const uint64_t npx = uint64_t(crop.w) * crop.h;
   if (npx > 0) {
-    double tot[3] = {0, 0, 0};
+    float tot[3] = {0, 0, 0};
     for (int ry = 0; ry < crop.h; ++ry)
       for (int c = 0; c < 3; ++c) tot[c] += row_logs[ry * 3 + c];
-    for (int c = 0; c < 3; ++c) st.log_avg_rgb[c] = std::exp(tot[c] * (1.0 / npx)) / 65535.0;
-    const double p_lo = u16_percentile_linear(g_hist, npx, SCENE_TAIL);
-    const double p_hi = u16_percentile_linear(g_hist, npx, 1.0 - SCENE_TAIL);
-    st.g_lo = std::max(1.0, p_lo);
-    st.g_hi = std::max(st.g_lo + 1.0, p_hi);
+    for (int c = 0; c < 3; ++c) st.log_avg_rgb[c] = std::exp(tot[c] * (1.0f / npx)) / 65535.0f;
+    const float p_lo = u16_percentile_linear(g_hist, npx, SCENE_TAIL);
+    const float p_hi = u16_percentile_linear(g_hist, npx, 1.0f - SCENE_TAIL);
+    st.g_lo = std::max(1.0f, p_lo);
+    st.g_hi = std::max(st.g_lo + 1.0f, p_hi);
   }
 
-  // Inner crop resampled to the DINOv3 input size in double (area average, bilinear when enlarging), then each
+  // Inner crop resampled to the DINOv3 input size (area average, bilinear when enlarging), then each
   // patch averaged into the grid.
-  std::vector<double> dino(dino_w * dino_h * 3, 0.0);
-  const double sx = crop.w / double(dino_w);
-  const double sy = crop.h / double(dino_h);
-  if (sx >= 1.0 && sy >= 1.0) {
+  std::vector<float> dino(dino_w * dino_h * 3, 0.0f);
+  const float sx = crop.w / float(dino_w);
+  const float sy = crop.h / float(dino_h);
+  if (sx >= 1.0f && sy >= 1.0f) {
 #pragma omp parallel for schedule(static)
     for (int dy = 0; dy < dino_h; ++dy) {
-      const double y0 = dy * sy, y1 = (dy + 1) * sy;
+      const float y0 = dy * sy, y1 = (dy + 1) * sy;
       const int ys = std::floor(y0), ye = std::min<int>(crop.h, std::ceil(y1));
       for (int dx = 0; dx < dino_w; ++dx) {
-        const double x0 = dx * sx, x1 = (dx + 1) * sx;
+        const float x0 = dx * sx, x1 = (dx + 1) * sx;
         const int xs = std::floor(x0), xe = std::min<int>(crop.w, std::ceil(x1));
-        double acc[3] = {0, 0, 0}, wsum = 0.0;
+        float acc[3] = {0, 0, 0}, wsum = 0.0f;
         for (int yy = ys; yy < ye; ++yy) {
-          const double wy = std::min(y1, yy + 1.0) - std::max(y0, yy + 0.0);
-          if (wy <= 0.0) continue;
+          const float wy = std::min(y1, yy + 1.0f) - std::max(y0, yy + 0.0f);
+          if (wy <= 0.0f) continue;
           const uint16_t* row = pixel_at(frame, crop.x0, crop.y0 + yy);
           for (int xx = xs; xx < xe; ++xx) {
-            const double wx = std::min(x1, xx + 1.0) - std::max(x0, xx + 0.0);
-            if (wx <= 0.0) continue;
-            const double w = wx * wy;
+            const float wx = std::min(x1, xx + 1.0f) - std::max(x0, xx + 0.0f);
+            if (wx <= 0.0f) continue;
+            const float w = wx * wy;
             acc[0] += row[xx * 3] * w;
             acc[1] += row[xx * 3 + 1] * w;
             acc[2] += row[xx * 3 + 2] * w;
             wsum += w;
           }
         }
-        const double inv = (wsum > 0.0) ? (1.0 / wsum) : 0.0;
+        const float inv = (wsum > 0.0f) ? (1.0f / wsum) : 0.0f;
         for (int c = 0; c < 3; ++c) dino[(dy * dino_w + dx) * 3 + c] = acc[c] * inv;
       }
     }
   } else {
 #pragma omp parallel for schedule(static)
     for (int dy = 0; dy < dino_h; ++dy) {
-      const double fy = (dy + 0.5) * sy - 0.5;
+      const float fy = (dy + 0.5f) * sy - 0.5f;
       const int y0 = std::clamp<int>(std::floor(fy), 0, crop.h - 1);
       const int y1 = std::clamp(y0 + 1, 0, crop.h - 1);
-      const double wy1 = fy - y0, wy0 = 1.0 - wy1;
+      const float wy1 = fy - y0, wy0 = 1.0f - wy1;
       const uint16_t* row0 = pixel_at(frame, crop.x0, crop.y0 + y0);
       const uint16_t* row1 = pixel_at(frame, crop.x0, crop.y0 + y1);
       for (int dx = 0; dx < dino_w; ++dx) {
-        const double fx = (dx + 0.5) * sx - 0.5;
+        const float fx = (dx + 0.5f) * sx - 0.5f;
         const int x0 = std::clamp<int>(std::floor(fx), 0, crop.w - 1);
         const int x1 = std::clamp(x0 + 1, 0, crop.w - 1);
-        const double wx1 = fx - x0, wx0 = 1.0 - wx1;
+        const float wx1 = fx - x0, wx0 = 1.0f - wx1;
         for (int c = 0; c < 3; ++c) {
-          const double top = row0[x0 * 3 + c] * wx0 + row0[x1 * 3 + c] * wx1;
-          const double bot = row1[x0 * 3 + c] * wx0 + row1[x1 * 3 + c] * wx1;
+          const float top = row0[x0 * 3 + c] * wx0 + row0[x1 * 3 + c] * wx1;
+          const float bot = row1[x0 * 3 + c] * wx0 + row1[x1 * 3 + c] * wx1;
           dino[(dy * dino_w + dx) * 3 + c] = top * wy0 + bot * wy1;
         }
       }
@@ -486,12 +487,12 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
   st.grid_w = gw;
   st.grid_h = gh;
   st.grid.assign(gw * gh * 3, 0);
-  const double inv_patch = 1.0 / (p * p);
+  const float inv_patch = 1.0f / (p * p);
   for (int gy = 0; gy < gh; ++gy) {
     for (int gx = 0; gx < gw; ++gx) {
-      double acc[3] = {0, 0, 0};
+      float acc[3] = {0, 0, 0};
       for (int py = 0; py < p; ++py) {
-        const double* drow = &dino[((gy * p + py) * dino_w + gx * p) * 3];
+        const float* drow = &dino[((gy * p + py) * dino_w + gx * p) * 3];
         for (int px = 0; px < p; ++px, drow += 3) {
           acc[0] += drow[0];
           acc[1] += drow[1];
@@ -499,7 +500,7 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
         }
       }
       for (int c = 0; c < 3; ++c) {
-        st.grid[(gy * gw + gx) * 3 + c] = std::clamp(std::round(acc[c] * inv_patch), 0.0, 65535.0);
+        st.grid[(gy * gw + gx) * 3 + c] = std::clamp(std::round(acc[c] * inv_patch), 0.0f, 65535.0f);
       }
     }
   }
@@ -538,16 +539,16 @@ constexpr int kLabBins = 1000;
 
 int lab_bin(float L) { return std::clamp(static_cast<int>(L * (kLabBins / 100.0f)), 0, kLabBins - 1); }
 
-double percentile_from_hist_L(const std::vector<uint64_t>& hist, double tot, double q) {
-  if (tot <= 0.0) return 0.0;
-  const double target = tot * q;
-  double cum = 0.0;
+float percentile_from_hist_L(const std::vector<uint64_t>& hist, uint64_t total, float q) {
+  if (total == 0) return 0.0f;
+  const float target = q * total;
+  uint64_t cum = 0;
   int k = 0;
   for (; k < kLabBins; ++k) {
     cum += hist[k];
     if (cum >= target) break;
   }
-  return (std::min(k, kLabBins - 1) + 0.5) * (100.0 / kLabBins);
+  return (std::min(k, kLabBins - 1) + 0.5f) * (100.0f / kLabBins);
 }
 
 // Highlight clipping of one render, in percent of the pixels measured (float, as the station's kernel).
@@ -565,8 +566,8 @@ std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCr
                                               const ProfileData& prof, const std::array<float, 3>& ceil_rgb) {
   std::vector<ClipStats> res(matrices.size(), ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
-  const double tot = double(crop.w) * crop.h;
-  if (tot <= 0) return res;
+  const uint64_t npx = uint64_t(crop.w) * crop.h;
+  if (npx == 0) return res;
   float ceil_lin[3];
   for (int k = 0; k < 3; ++k) {
     const float ceil = ceil_rgb[k];
@@ -604,9 +605,9 @@ std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCr
         for (int k = 0; k < kLabBins; ++k) hist[k] += l_hist[k];
       }
     }
-    for (int k = 0; k < 3; ++k) res[c].exc[k] = exc[k] / tot * 100.0;
-    res[c].white_clip = wc / tot * 100.0;
-    res[c].median_L = percentile_from_hist_L(hist, tot, 0.50f);
+    for (int k = 0; k < 3; ++k) res[c].exc[k] = exc[k] * 100.0f / npx;
+    res[c].white_clip = wc * 100.0f / npx;
+    res[c].median_L = percentile_from_hist_L(hist, npx, 0.50f);
   }
   return res;
 }
@@ -657,7 +658,7 @@ class SearchFrame {
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
-    const double t0 = now_ms();
+    const Clock::time_point t0 = Clock::now();
     const std::array<float, 9> m = conversion_matrix(input_matrix_, params);
     const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
     const size_t n = inner_crop_.rgb.size() / 3;
@@ -669,12 +670,12 @@ class SearchFrame {
       out[i * 3 + 1] = quantize_u8(v.g);
       out[i * 3 + 2] = quantize_u8(v.b);
     }
-    render_ms_ += now_ms() - t0;
+    render_time_ += Clock::now() - t0;
   }
 
   // The intent field (mu, sigma) DINOv3 predicts from a preview, on the statistics' grid.
   bool predict(const std::vector<uint8_t>& preview, std::vector<float>& mu, std::vector<float>& sigma) {
-    const double t0 = now_ms();
+    const Clock::time_point t0 = Clock::now();
     DinoV3InferenceResult r;
     try {
       r = engine_.infer(preview.data(), inner_crop_.width, inner_crop_.height, inner_crop_.width * 3);
@@ -682,7 +683,7 @@ class SearchFrame {
       std::cerr << "ERROR! DINOv3 inference failed: " << e.what() << std::endl;
       return false;
     }
-    infer_ms_ += now_ms() - t0;
+    infer_time_ += Clock::now() - t0;
     out_.inferences++;
     const size_t n = stats_.grid.size();
     if (r.grid_w != stats_.grid_w || r.grid_h != stats_.grid_h || r.mu.size() != n || r.sigma.size() != n) {
@@ -697,10 +698,10 @@ class SearchFrame {
 
   // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
-    const double t0 = now_ms();
+    const Clock::time_point t0 = Clock::now();
     const float err = self_consistency_residual(preview.data(), inner_crop_.width, inner_crop_.height,
                                                  stats_.grid_w, stats_.grid_h, mu.data(), sigma.data());
-    residual_ms_ += now_ms() - t0;
+    residual_time_ += Clock::now() - t0;
     return err;
   }
 
@@ -710,7 +711,7 @@ class SearchFrame {
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out) {
-    const double t0 = now_ms();
+    const Clock::time_point t0 = Clock::now();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
@@ -720,7 +721,7 @@ class SearchFrame {
                                                   stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
                                                   e_bounds, 0, res);
     out = {res.e, res.g, res.b};
-    search_ms_ += now_ms() - t0;
+    search_time_ += Clock::now() - t0;
     return loss;
   }
 
@@ -790,10 +791,10 @@ class SearchFrame {
 
   // Writes the time spent per measurement into the result, in whole milliseconds.
   void write_timings() const {
-    out_.timing_render_ms = std::lround(render_ms_);
-    out_.timing_infer_ms = std::lround(infer_ms_);
-    out_.timing_search_ms = std::lround(search_ms_);
-    out_.timing_residual_ms = std::lround(residual_ms_);
+    out_.timing_render_ms = whole_ms(render_time_);
+    out_.timing_infer_ms = whole_ms(infer_time_);
+    out_.timing_search_ms = whole_ms(search_time_);
+    out_.timing_residual_ms = whole_ms(residual_time_);
   }
 
  private:
@@ -809,7 +810,7 @@ class SearchFrame {
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
-  double render_ms_ = 0, infer_ms_ = 0, search_ms_ = 0, residual_ms_ = 0;
+  Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};
 };
 
 // ---- Highlight headroom ------------------------------------------------------------------------------------
@@ -911,7 +912,7 @@ struct Screened {
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
                               const int bbox_in[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
                               float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
-  const double t_start = now_ms();
+  const Clock::time_point t_start = Clock::now();
   const bool verbose = opts.verbose;
   if (bundle.targets.empty()) {
     std::cerr << "ERROR! The profile bundle has no targets" << std::endl;
@@ -1209,6 +1210,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.headroom = headroom.outcome;
   out.headroom_ev = headroom.delta_ev;
   fr.write_timings();
-  out.timing_total_ms = std::lround(now_ms() - t_start);
+  out.timing_total_ms = whole_ms(Clock::now() - t_start);
   return true;
 }
