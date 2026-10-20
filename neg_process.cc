@@ -26,7 +26,9 @@
 #include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -436,12 +438,14 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   return true;
 }
 
-// The half-size analysis decode of the parameter search: LibRaw's half-size readout of the unpacked RAW of proc
-// (black subtracted, every 2x2 quad one pixel), as (R, the mean of the two greens, B), before any processing. proc is
-// left as unpack() left it. False when proc is not a 3-colour Bayer RAW.
+// Called with LibRaw's half-size image of a RAW while load_raw holds it (read_half_size), and the LibRaw it came from.
+using HalfSizeAnalysis = std::function<void(const LibRaw& proc, const HalfSizeImage& half)>;
+
+// Reads LibRaw's half-size image of the unpacked RAW of proc (black subtracted, every 2x2 quad one pixel), before any
+// processing, and hands it to analyse in place. proc is then left as unpack() left it. False when proc is not a
+// 3-colour Bayer RAW.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
-static bool half_size_mosaic(LibRaw* proc, RgbImage& out) {
+static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   if (!proc->imgdata.rawdata.raw_image || proc->imgdata.idata.filters <= 1000 || proc->imgdata.idata.colors != 3) {
     fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer RAW files\n");
     return false;
@@ -454,18 +458,7 @@ static bool half_size_mosaic(LibRaw* proc, RgbImage& out) {
     fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n", libraw_strerror(ret));
     return false;
   }
-
-  // Each pixel holds R, G1, B, G2.
-  out.width = proc->imgdata.sizes.iwidth;
-  out.height = proc->imgdata.sizes.iheight;
-  out.rgb.resize((size_t)out.width * out.height * 3);
-  const ushort (*img)[4] = proc->imgdata.image;
-#pragma omp parallel for schedule(static)
-  for (size_t i = 0; i < (size_t)out.width * out.height; ++i) {
-    out.rgb[i * 3] = img[i][0];
-    out.rgb[i * 3 + 1] = (uint16_t)(((uint32_t)img[i][1] + img[i][3]) >> 1);
-    out.rgb[i * 3 + 2] = img[i][2];
-  }
+  analyse(*proc, HalfSizeImage{proc->imgdata.image, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight});
 
   // raw2image_ex subtracted the black level from imgdata.color and resized imgdata.sizes; put back what unpack() read.
   proc->free_image();
@@ -488,8 +481,10 @@ static bool half_size_mosaic(LibRaw* proc, RgbImage& out) {
 //
 // When |crop| is false, the entire RAW file is used, disregarding aspect ratio
 // and cropbox specified in the RAW metadata.
+//
+// |analyse|, when set, is called with the half-size image of the RAW before it is decoded (read_half_size).
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
-                 bool crosstalk_specified = false, const int* roi = nullptr, RgbImage* analysis = nullptr) {
+                 bool crosstalk_specified = false, const int* roi = nullptr, const HalfSizeAnalysis& analyse = {}) {
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -511,7 +506,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     delete proc;
     return NULL;
   }
-  if (analysis && !half_size_mosaic(proc, *analysis)) {
+  if (analyse && !read_half_size(proc, analyse)) {
     delete proc;
     return NULL;
   }
@@ -629,10 +624,10 @@ void merge_pixel_shift_frame(LibRaw* base, LibRaw* frame, int mi) {
 }
 
 // Merge 4 RAW files from Sony pixel-shift into camera linear RGB, loading one frame at a time to save memory.
-LibRaw* merge_pixel_shift_streaming(const std::vector<std::string>& files, RgbImage* analysis = nullptr) {
+LibRaw* merge_pixel_shift_streaming(const std::vector<std::string>& files, const HalfSizeAnalysis& analyse = {}) {
   if (files.size() < 4) return nullptr;
   printf("Merging 4 images...\n");
-  LibRaw* base = load_raw(files[0], false, false, 0, false, false, nullptr, analysis);
+  LibRaw* base = load_raw(files[0], false, false, 0, false, false, nullptr, analyse);
   if (!base) return nullptr;
   if (!is_sony_a7rm4(base)) {
     fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
@@ -1695,12 +1690,39 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
+  // The bracket search runs on the half-size image of the RAW, within --roi, while load_raw holds it before the
+  // decode.
+  bool has_auto_res = false;
+  ParamSearchResult auto_res;
+  double t_auto_ms = 0.0;
+  HalfSizeAnalysis analyse;
+  if (bundle_search) {
+    analyse = [&](const LibRaw& raw, const HalfSizeImage& half) {
+      const double t_auto_0 = omp_get_wtime();
+      const float scan_shutter_s = raw.imgdata.other.shutter > 0 ? raw.imgdata.other.shutter : 0.125f;
+      const float scan_iso = raw.imgdata.other.iso_speed > 0 ? std::round(raw.imgdata.other.iso_speed) : 100.0f;
+      int bbox[4] = {0, 0, half.width, half.height};
+      if (has_roi) {
+        bbox[0] = roi_coords[0] / 2;
+        bbox[1] = roi_coords[1] / 2;
+        bbox[2] = std::max(1, (roi_coords[0] + roi_coords[2]) / 2 - bbox[0]);
+        bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
+        clamp_rect(bbox, half.width, half.height);
+      }
+      ParamSearchOptions opts;
+      if (!search_conversion_params(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
+                                    auto_res)) {
+        throw std::runtime_error("the conversion parameter search failed");
+      }
+      has_auto_res = true;
+      t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+    };
+  }
+
   const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
-  RgbImage half;
-  RgbImage* analysis = bundle_search ? &half : nullptr;
   if (files.size() == 4) {
-    proc = merge_pixel_shift_streaming(files, analysis);
+    proc = merge_pixel_shift_streaming(files, analyse);
     if (!proc) {
       fprintf(stderr, "ERROR! Failed to merge pixel-shift files\n");
       return 1;
@@ -1725,7 +1747,7 @@ int main(int ac, char *av[]) {
                     !parser.get<bool>("--no_crop") && !has_roi && !is_roi_auto,
                     has_crosstalk,
                     (!is_roi_auto && has_roi) ? roi_coords : nullptr,
-                    analysis);
+                    analyse);
     if (!proc) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
       return 1;
@@ -1742,33 +1764,8 @@ int main(int ac, char *av[]) {
     }
   }
 
-  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0;
-
-  // The bracket search runs on the half-size analysis decode (read from the RAW with it), within --roi.
-  bool has_auto_res = false;
-  ParamSearchResult auto_res;
-  double t_auto_ms = 0.0;
-  if (bundle_search) {
-    const double t_auto_0 = omp_get_wtime();
-    const float scan_shutter_s = proc->imgdata.other.shutter > 0 ? proc->imgdata.other.shutter : 0.125f;
-    const float scan_iso = proc->imgdata.other.iso_speed > 0 ? std::round(proc->imgdata.other.iso_speed) : 100.0f;
-    int bbox[4] = {0, 0, half.width, half.height};
-    if (has_roi) {
-      bbox[0] = roi_coords[0] / 2;
-      bbox[1] = roi_coords[1] / 2;
-      bbox[2] = std::max(1, (roi_coords[0] + roi_coords[2]) / 2 - bbox[0]);
-      bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
-      clamp_rect(bbox, half.width, half.height);
-    }
-    ParamSearchOptions opts;
-    if (!search_conversion_params(bundle, engine, half, bbox, rot_cw, hflip, vflip, scan_shutter_s, scan_iso, opts,
-                                  auto_res)) {
-      fprintf(stderr, "ERROR! The conversion parameter search failed.\n");
-      return 1;
-    }
-    has_auto_res = true;
-    t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
-  }
+  // The search ran inside the decode; its time is reported apart.
+  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms;
   const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.width;
   const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.height;
 

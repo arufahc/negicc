@@ -646,7 +646,7 @@ class SearchFrame {
       : bundle_(bundle), engine_(engine), verbose_(verbose), out_(out) {}
 
   // Cuts the frame (bbox in the half-size decode) and its inner crop, oriented, and takes the statistics.
-  void cut(const RgbImage& half, const int bbox[4], int rot_cw, bool hflip, bool vflip, float crop_ratio) {
+  void cut(const HalfSizeImage& half, const int bbox[4], int rot_cw, bool hflip, bool vflip, float crop_ratio) {
     crop_ratio_ = crop_ratio;
     // TODO: Optimize away inner_crop_: it copies pixels frame_ already holds, so it can be dropped or share
     // frame_'s rgb buffer (a view with an offset and stride). Copying the frame once into frame_ is fine.
@@ -923,7 +923,7 @@ struct Screened {
 
 // ---- Public API ----------------------------------------------------------------------------------------------
 
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const HalfSizeImage& half,
                               const int bbox_in[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
                               float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out) {
   const Clock::time_point t_start = Clock::now();
