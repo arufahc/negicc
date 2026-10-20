@@ -17,11 +17,10 @@
 #define FRAME_CROP_H
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
-// Cropping for the parameter search (param_search.h): the half-size analysis decode, and the frame and its inner
-// crop cut out of it in the orientation of the output.
+// Cropping for the parameter search (param_search.h): the frame and its inner crop cut out of the half-size analysis
+// decode in the orientation of the output.
 
 // Interleaved 16-bit camera RGB.
 struct RgbImage {
@@ -29,12 +28,6 @@ struct RgbImage {
   int height = 0;
   std::vector<uint16_t> rgb;
 };
-
-// The half-size analysis decode of a RAW file: its black-subtracted Bayer mosaic with every 2x2 quad binned into
-// one pixel (R, the mean of the greens, B). shutter_s and iso are the capture's.
-// py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_preview_debayer)
-bool load_half_size_mosaic(const std::string& path, RgbImage& out, float& shutter_s, float& iso);
 
 // Moves rect (x, y, w, h) inside bw x bh, shrinking it only when it is larger.
 // py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)

@@ -15,12 +15,8 @@
 
 #include "frame_crop.h"
 
-#include <libraw/libraw.h>
-#include <omp.h>
-
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 
 namespace {
 
@@ -47,16 +43,6 @@ inline void map_inverse_geometry(int x_dst, int y_dst, int dst_w, int dst_h, int
   }
 }
 
-inline int bayer_color(int r, int c, unsigned filters) { return (filters >> (((r << 1 & 14) + (c & 1)) << 1)) & 3; }
-
-inline uint16_t px_reflect(const uint16_t* m, int r, int c, int h, int w) {
-  int rr = (r < 0) ? -r : (r >= h ? 2 * (h - 1) - r : r);
-  int cc = (c < 0) ? -c : (c >= w ? 2 * (w - 1) - c : c);
-  rr = std::max(0, std::min(h - 1, rr));
-  cc = std::max(0, std::min(w - 1, cc));
-  return m[(size_t)rr * w + cc];
-}
-
 }  // namespace
 
 // py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
@@ -65,76 +51,6 @@ void clamp_rect(int r[4], int bw, int bh) {
   r[3] = std::min(r[3], bh);
   r[0] = std::min(std::max(0, r[0]), bw - r[2]);
   r[1] = std::min(std::max(0, r[1]), bh - r[3]);
-}
-
-bool load_half_size_mosaic(const std::string& path, RgbImage& out, float& shutter_s, float& iso) {
-  LibRaw proc;
-  int ret;
-  if ((ret = proc.open_file(path.c_str())) != LIBRAW_SUCCESS) {
-    std::cerr << "Cannot open " << path << ": " << libraw_strerror(ret) << std::endl;
-    return false;
-  }
-  if ((ret = proc.unpack()) != LIBRAW_SUCCESS) {
-    std::cerr << "Cannot unpack " << path << ": " << libraw_strerror(ret) << std::endl;
-    return false;
-  }
-  if (!proc.imgdata.rawdata.raw_image || proc.imgdata.idata.filters <= 1000 || proc.imgdata.idata.colors != 3) {
-    std::cerr << "Only 3-color Bayer RAW files are supported by the parameter search: " << path << std::endl;
-    return false;
-  }
-  const int w = proc.imgdata.sizes.width, h = proc.imgdata.sizes.height;
-  const int top = proc.imgdata.sizes.top_margin, left = proc.imgdata.sizes.left_margin;
-  const int pitch = proc.imgdata.sizes.raw_pitch / 2;
-  if (w < 2 || h < 2 || top + h > proc.imgdata.sizes.raw_height || left + w > pitch) {
-    std::cerr << "Unexpected RAW geometry in " << path << std::endl;
-    return false;
-  }
-  const unsigned filters = proc.imgdata.idata.filters;
-  const int black = proc.imgdata.color.black;
-  int cblk[4];
-  for (int i = 0; i < 4; ++i) cblk[i] = black + (int)proc.imgdata.color.cblack[i];
-  const uint16_t* raw = proc.imgdata.rawdata.raw_image;
-
-  // Black-subtracted visible mosaic.
-  std::vector<uint16_t> mosaic((size_t)w * h);
-#pragma omp parallel for schedule(static)
-  for (int r = 0; r < h; ++r) {
-    const uint16_t* src = &raw[(size_t)(r + top) * pitch + left];
-    const int blk[2] = {cblk[bayer_color(r, 0, filters)], cblk[bayer_color(r, 1, filters)]};
-    for (int c = 0; c < w; ++c) {
-      const int v = src[c] - blk[c & 1];
-      mosaic[(size_t)r * w + c] = v > 0 ? (uint16_t)v : 0;
-    }
-  }
-
-  // One pixel per 2x2 quad: R, (G1 + G2) >> 1, B.
-  out.width = w / 2;
-  out.height = h / 2;
-  out.rgb.assign((size_t)out.width * out.height * 3, 0);
-#pragma omp parallel for schedule(static)
-  for (int y2 = 0; y2 < out.height; ++y2) {
-    for (int x2 = 0; x2 < out.width; ++x2) {
-      const int r = y2 * 2, c = x2 * 2;
-      uint16_t R = 0, B = 0;
-      uint32_t g_sum = 0;
-      for (int k = 0; k < 4; ++k) {
-        const int rr = r + (k >> 1), cc = c + (k & 1);
-        const uint16_t s = px_reflect(mosaic.data(), rr, cc, h, w);
-        const int col = bayer_color(rr, cc, filters);
-        if (col & 1) g_sum += s;
-        else if (col == 0) R = s;
-        else B = s;
-      }
-      uint16_t* o = &out.rgb[((size_t)y2 * out.width + x2) * 3];
-      o[0] = R;
-      o[1] = (uint16_t)(g_sum >> 1);
-      o[2] = B;
-    }
-  }
-
-  shutter_s = proc.imgdata.other.shutter > 0 ? proc.imgdata.other.shutter : 0.125f;
-  iso = proc.imgdata.other.iso_speed > 0 ? std::round(proc.imgdata.other.iso_speed) : 100.0f;
-  return true;
 }
 
 void cut_and_orient(const RgbImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
