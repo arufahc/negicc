@@ -16,6 +16,7 @@
 #ifndef MULTI_TARGET_OPTIMIZER_H
 #define MULTI_TARGET_OPTIMIZER_H
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -162,8 +163,8 @@ struct ParamSearchResult {
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
   int inferences = 0;  // DINOv3 inferences of the whole search: the bootstrap plus every fixed-point step
-  int timing_render_ms = 0, timing_infer_ms = 0, timing_search_ms = 0, timing_residual_ms = 0;
-  int timing_total_ms = 0;
+  // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
+  std::chrono::milliseconds render_time{0}, infer_time{0}, search_time{0}, residual_time{0}, total_time{0};
 };
 
 // Searches the conversion parameters of one frame. half is LibRaw's half-size image of the RAW (read in place, only

@@ -1955,9 +1955,10 @@ int main(int ac, char *av[]) {
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
-    printf("Timings (ms): render %d, infer %d, residual %d, search %d, total %d\n",
-           auto_res.timing_render_ms, auto_res.timing_infer_ms, auto_res.timing_residual_ms,
-           auto_res.timing_search_ms, auto_res.timing_total_ms);
+    printf("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
+           (long long)auto_res.render_time.count(), (long long)auto_res.infer_time.count(),
+           (long long)auto_res.residual_time.count(), (long long)auto_res.search_time.count(),
+           (long long)auto_res.total_time.count());
     printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
            gain_b, bundle_target_idx);
   } else if (use_dino) {
