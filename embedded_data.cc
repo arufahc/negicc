@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,9 +20,13 @@
 
 #include "profile_bundle.h"
 
-// Defined by bin_out/embedded_data.S (embed_data.sh).
-extern "C" const EmbeddedFile negicc_embedded_table[];
-extern "C" const uint64_t negicc_embedded_count;
+// Defined by bin_out/embedded_data.S, which the Makefile writes; it passes the symbol names as EMBED_TABLE and
+// EMBED_COUNT.
+#if !defined(EMBED_TABLE) || !defined(EMBED_COUNT)
+#error Build with -DEMBED_TABLE=... -DEMBED_COUNT=... (see the Makefile)
+#endif
+extern "C" const EmbeddedFile EMBED_TABLE[];
+extern "C" const uint64_t EMBED_COUNT;
 
 static std::string lower(std::string s) {
   for (char& c : s) c = (char)std::tolower((unsigned char)c);
@@ -39,12 +43,12 @@ static bool ends_with(const std::string& s, const std::string& suffix) {
 }
 
 std::vector<EmbeddedFile> list_embedded_files() {
-  return std::vector<EmbeddedFile>(negicc_embedded_table, negicc_embedded_table + negicc_embedded_count);
+  return std::vector<EmbeddedFile>(EMBED_TABLE, EMBED_TABLE + EMBED_COUNT);
 }
 
 const EmbeddedFile* find_embedded_file(const std::string& name) {
-  for (uint64_t i = 0; i < negicc_embedded_count; ++i) {
-    if (name == negicc_embedded_table[i].name) return &negicc_embedded_table[i];
+  for (uint64_t i = 0; i < EMBED_COUNT; ++i) {
+    if (name == EMBED_TABLE[i].name) return &EMBED_TABLE[i];
   }
   return nullptr;
 }
@@ -52,8 +56,8 @@ const EmbeddedFile* find_embedded_file(const std::string& name) {
 const EmbeddedFile* find_embedded_bundle(const std::string& key, std::string& bundle_dir) {
   const std::string want = lower(key);
   if (want.empty()) return nullptr;
-  for (uint64_t i = 0; i < negicc_embedded_count; ++i) {
-    const EmbeddedFile& f = negicc_embedded_table[i];
+  for (uint64_t i = 0; i < EMBED_COUNT; ++i) {
+    const EmbeddedFile& f = EMBED_TABLE[i];
     const std::string path = f.name;
     if (path.rfind("profiles/", 0) != 0 || !ends_with(path, "/bundle.json")) continue;
     const std::string dir = path.substr(0, path.size() - std::strlen("/bundle.json"));
@@ -93,8 +97,8 @@ std::string embedded_bundle_key(const std::string& film_stock, const std::string
 
 std::vector<std::string> list_embedded_bundles() {
   std::vector<std::string> keys;
-  for (uint64_t i = 0; i < negicc_embedded_count; ++i) {
-    const std::string path = negicc_embedded_table[i].name;
+  for (uint64_t i = 0; i < EMBED_COUNT; ++i) {
+    const std::string path = EMBED_TABLE[i].name;
     if (path.rfind("profiles/", 0) == 0 && ends_with(path, "/bundle.json")) {
       keys.push_back(base_name(path.substr(0, path.size() - std::strlen("/bundle.json"))));
     }

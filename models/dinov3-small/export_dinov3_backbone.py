@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+# Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,10 +15,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Exports the frozen DINOv3 backbone neg_process runs in its parameter search to ONNX, and optionally its TensorRT engine.
 
-    make dinov3_model                 # or: python3 export_dinov3_backbone.py [--source ID_OR_DIR] [--engine]
+    make dinov3_model                 # or: python3 models/dinov3-small/export_dinov3_backbone.py [--source ID_OR_DIR] [--engine]
 
 The backbone is shared by every film stock; the per-stock intent adapters (models/dinov3-small_<stock>/adapter.onnx,
-built into neg_process) turn its tokens into the intent field. Writes to models/dinov3-small/:
+built into neg_process) turn its tokens into the intent field. Writes next to this script, in models/dinov3-small/:
 
     backbone.onnx    inputs "pixel_values" [1, 3, H, W] (ImageNet-normalised, H and W multiples of 16 up to 512)
                      and "pool_weights" [1, N, 3]; outputs "tokens" [1, N, 768] (patch tokens of layers 9 and 12,
@@ -44,7 +44,7 @@ import types
 import torch
 
 DEFAULT_SOURCE = "Tooony133/dinov3-vits16-pretrain-lvd1689m"
-DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "dinov3-small")
+DEFAULT_OUT = os.path.dirname(os.path.abspath(__file__))
 IMAGE_SIZE = 512
 PATCH_SIZE = 16
 TONE_MASS_GATE = 0.03  # mass fraction at which a tone bin's pooled features reach full weight

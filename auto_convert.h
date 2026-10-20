@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "dinov3_engine.h"
-#include "frame_analysis.h"
+#include "param_search.h"
 #include "profile_bundle.h"
 
 // The automatic conversion of negicc-station (PerTargetConverter.convert with its defaults: intent exposure,
