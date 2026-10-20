@@ -43,7 +43,7 @@ public:
     // std::runtime_error when the adapter cannot be read or loaded.
     void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1);
     void load_adapter_file(const std::string& path, int num_threads = 1);
-    const std::string& adapter_name() const { return m_adapter_name; }
+    const std::string& adapter_name() const { return adapter_name_; }
     // The loaded model is a backbone and needs an adapter.
     bool needs_adapter() const;
 
@@ -53,20 +53,20 @@ public:
     bool has_pooled_tone() const;
     bool has_pool_weights() const;
     size_t memory_bytes() const;
-    int max_size() const { return m_max_size; }
-    int patch_size() const { return m_patch_size; }
+    int max_size() const { return max_size_; }
+    int patch_size() const { return patch_size_; }
 
     // Run inference on 8-bit sRGB preview image
     // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict)
     DinoV3InferenceResult infer(const uint8_t* srgb_data, int width, int height, int stride);
 
 private:
-    std::unique_ptr<DinoV3Runner> m_runner;
-    std::unique_ptr<DinoV3AdapterRunner> m_adapter;
-    std::vector<uint8_t> m_adapter_file;
-    std::string m_adapter_name;
-    int m_max_size = 512;
-    int m_patch_size = 16;
+    std::unique_ptr<DinoV3Runner> runner_;
+    std::unique_ptr<DinoV3AdapterRunner> adapter_;
+    std::vector<uint8_t> adapter_file_;
+    std::string adapter_name_;
+    int max_size_ = 512;
+    int patch_size_ = 16;
 };
 
 #endif  // DINOV3_ENGINE_H
