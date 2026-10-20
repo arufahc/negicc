@@ -1176,8 +1176,8 @@ static bool write_json_sidecar(
     for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.input_matrix[i], "%.9g").c_str());
     fprintf(fp, "],\n");
     fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n",
-            auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3], json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(),
-            json_num(a.scene_ev, "%.4g").c_str());
+            auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
+            json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(), json_num(a.scene_ev, "%.4g").c_str());
     fprintf(fp, "    \"headroom\": {\"applied\": %s, \"ev\": %s, \"reason\": \"%s\"},\n",
             headroom_applied(a.headroom) ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
             to_string(a.headroom));
