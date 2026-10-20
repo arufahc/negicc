@@ -24,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -179,6 +180,10 @@ static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
   return true;
 }
 
+// The profiles record a bracket's shutter speed as the camera displays it, a string: a fraction ("1/8s"), or
+// decimal seconds ("0.4s", "2"), with or without the trailing "s". Trims the string and the "s", then divides a
+// fraction or reads the decimal.
+// TODO: Normalize the shutter speed into float seconds in the profile bundle files and drop this parsing.
 float shutter_to_seconds(const std::string& shutter) {
   std::string s = shutter;
   const size_t b = s.find_first_not_of(" \t\r\n");
@@ -243,285 +248,265 @@ void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, st
   stock_key = stock_key.substr(0, stock_key.find('_'));
 }
 
-static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path, const BundleFileReader& read_file,
-                                 ProfileBundle& bundle);
+static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
+                                 const BundleFileReader& read_file, ProfileBundle& bundle);
 
-bool load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
-                                     const BundleFileReader& read_file, ProfileBundle& bundle) {
+// nlohmann's errors do not name the file, so they are rethrown with it.
+static nlohmann::json parse_bundle_json(const char* begin, const char* end, const std::string& name) {
   try {
-    nlohmann::json j = nlohmann::json::parse(data, data + size);
-    return parse_profile_bundle(j, name, read_file, bundle);
-  } catch (const std::exception& e) {
-    fprintf(stderr, "ERROR! Profile bundle loading failed for %s: %s\n", name.c_str(), e.what());
-    return false;
+    return nlohmann::json::parse(begin, end);
+  } catch (const nlohmann::json::exception& e) {
+    throw std::runtime_error("profile bundle " + name + ": " + e.what());
   }
 }
 
-static bool is_directory(const std::string& path) {
-  std::error_code ec;
-  return std::filesystem::is_directory(path, ec);
+void load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
+                                     const BundleFileReader& read_file, ProfileBundle& bundle) {
+  parse_profile_bundle(parse_bundle_json(data, data + size, name), name, read_file, bundle);
 }
 
-bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
-  const std::filesystem::path raw(raw_path);
-  std::vector<std::string> candidates = {raw_path, (std::filesystem::path("profiles") / raw).string()};
-  if (raw.has_parent_path()) candidates.push_back((std::filesystem::path("profiles") / raw.filename()).string());
-  std::ifstream f;
-  std::string opened;
-  for (std::string c : candidates) {
-    if (is_directory(c)) c = (std::filesystem::path(c) / "bundle.json").string();
-    f.open(c);
-    if (f.is_open()) {
+static bool read_file_bytes(const std::filesystem::path& path, std::vector<uint8_t>& out) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.is_open()) return false;
+  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return true;
+}
+
+void load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
+  namespace fs = std::filesystem;
+  const fs::path raw(raw_path);
+  std::vector<fs::path> candidates = {raw, fs::path("profiles") / raw};
+  if (raw.has_parent_path()) candidates.push_back(fs::path("profiles") / raw.filename());
+  fs::path opened;
+  std::vector<uint8_t> json_bytes;
+  for (fs::path c : candidates) {
+    std::error_code ec;
+    if (fs::is_directory(c, ec)) c /= "bundle.json";
+    if (read_file_bytes(c, json_bytes)) {
       opened = c;
       break;
     }
-    f.clear();
   }
-  if (!f.is_open()) return false;
+  if (opened.empty()) throw std::runtime_error("cannot open profile bundle " + raw_path);
 
   // ICC profiles of a split bundle (profiles/<Key>/bundle.json) sit next to it.
-  const size_t dir_end = opened.find_last_of("/\\");
-  const std::string dir = (dir_end == std::string::npos) ? std::string() : opened.substr(0, dir_end + 1);
+  const fs::path dir = opened.parent_path();
   const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
-    std::ifstream in(dir + name, std::ios::binary);
-    if (!in.is_open()) return false;
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    return true;
+    return read_file_bytes(dir / name, out);
   };
-
-  try {
-    nlohmann::json j;
-    f >> j;
-    return parse_profile_bundle(j, raw_path, read_file, bundle);
-  } catch (const std::exception& e) {
-    fprintf(stderr, "ERROR! Profile bundle loading failed for %s: %s\n", raw_path.c_str(), e.what());
-    return false;
-  }
+  const char* begin = reinterpret_cast<const char*>(json_bytes.data());
+  parse_profile_bundle(parse_bundle_json(begin, begin + json_bytes.size(), raw_path), raw_path, read_file, bundle);
 }
 
-static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path, const BundleFileReader& read_file,
-                                 ProfileBundle& bundle) {
-  try {
-    bundle.path = raw_path;
-    if (j.contains("export") && j["export"].is_object()) {
-      bundle.key = j["export"].value("bundle_key", "");
-      bundle.source_file = j["export"].value("source_file", "");
+static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
+                                 const BundleFileReader& read_file, ProfileBundle& bundle) {
+  bundle.path = raw_path;
+  if (j.contains("export") && j["export"].is_object()) {
+    bundle.key = j["export"].value("bundle_key", "");
+    bundle.source_file = j["export"].value("source_file", "");
+  }
+  if (bundle.key.empty()) {
+    std::string stock;
+    parse_profile_stem(raw_path, bundle.key, stock);
+  }
+  bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
+  bundle.normalization_target = j.value("normalization_target", 55000.0);
+
+  if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
+    const auto& ct = j["crosstalk_profile"];
+    if (ct.contains("crosstalk_correction_matrix")) {
+      bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
     }
-    if (bundle.key.empty()) {
-      std::string stock;
-      parse_profile_stem(raw_path, bundle.key, stock);
+  } else if (j.contains("crosstalk_correction_matrix")) {
+    bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+  }
+
+  if (j.contains("film_base") && j["film_base"].is_object()) {
+    const auto& fb = j["film_base"];
+    double r_avg = 0.0, g_avg = 0.0, b_avg = 0.0;
+    if (fb.contains("r") && fb["r"].contains("avg") && fb["r"]["avg"].is_number()) {
+      r_avg = fb["r"]["avg"].get<double>();
     }
-    bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
-    bundle.normalization_target = j.value("normalization_target", 55000.0);
+    if (fb.contains("g") && fb["g"].contains("avg") && fb["g"]["avg"].is_number()) {
+      g_avg = fb["g"]["avg"].get<double>();
+    }
+    if (fb.contains("b") && fb["b"].contains("avg") && fb["b"]["avg"].is_number()) {
+      b_avg = fb["b"]["avg"].get<double>();
+    }
+    bundle.film_base_avg[0] = r_avg;
+    bundle.film_base_avg[1] = g_avg;
+    bundle.film_base_avg[2] = b_avg;
+    if (fb.contains("shutter")) {
+      if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
+      else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
+    }
+    if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<float>();
+    if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {
+      bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
+      bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
+      bundle.profile_film_base_rgb[2] = (int)std::round(b_avg);
+      bundle.has_film_base = true;
+    }
+  }
 
-    if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
-      const auto& ct = j["crosstalk_profile"];
-      if (ct.contains("crosstalk_correction_matrix")) {
-        bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
-      }
-    } else if (j.contains("crosstalk_correction_matrix")) {
-      bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+  if (!j.contains("targets") || !j["targets"].is_array()) {
+    throw std::runtime_error("profile bundle " + raw_path + " has no targets array");
+  }
+
+  bundle.targets.clear();
+  for (const auto& tj : j["targets"]) {
+    if (!tj.is_object()) continue;
+    BundleTarget tgt;
+    tgt.index = (int)bundle.targets.size();
+    tgt.name = tj.value("name", "Target " + std::to_string(tgt.index + 1));
+    tgt.iso = tj.value("iso", 100.0);
+    if (tj.contains("shutter")) {
+      if (tj["shutter"].is_string()) tgt.shutter = tj["shutter"].get<std::string>();
+      else if (tj["shutter"].is_number()) tgt.shutter = std::to_string(tj["shutter"].get<double>());
     }
 
-    if (j.contains("film_base") && j["film_base"].is_object()) {
-      const auto& fb = j["film_base"];
-      double r_avg = 0.0, g_avg = 0.0, b_avg = 0.0;
-      if (fb.contains("r") && fb["r"].contains("avg") && fb["r"]["avg"].is_number()) {
-        r_avg = fb["r"]["avg"].get<double>();
-      }
-      if (fb.contains("g") && fb["g"].contains("avg") && fb["g"]["avg"].is_number()) {
-        g_avg = fb["g"]["avg"].get<double>();
-      }
-      if (fb.contains("b") && fb["b"].contains("avg") && fb["b"]["avg"].is_number()) {
-        b_avg = fb["b"]["avg"].get<double>();
-      }
-      bundle.film_base_avg[0] = r_avg;
-      bundle.film_base_avg[1] = g_avg;
-      bundle.film_base_avg[2] = b_avg;
-      if (fb.contains("shutter")) {
-        if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
-        else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
-      }
-      if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<float>();
-      if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {
-        bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
-        bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
-        bundle.profile_film_base_rgb[2] = (int)std::round(b_avg);
-        bundle.has_film_base = true;
-      }
+    if (tj.contains("target_ev") && tj["target_ev"].is_number()) {
+      tgt.has_target_ev = true;
+      tgt.target_ev = tj["target_ev"].get<double>();
+    } else if (tj.contains("ev") && tj["ev"].is_number()) {
+      tgt.has_target_ev = true;
+      tgt.target_ev = tj["ev"].get<double>();
     }
 
-    if (!j.contains("targets") || !j["targets"].is_array()) {
-      fprintf(stderr, "ERROR! Profile bundle has no targets array: %s\n", raw_path.c_str());
-      return false;
+    // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_exposure)
+    tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
+
+    if (tj.contains("patches") && tj["patches"].is_object()) {
+      std::vector<float> all_g, gs_g;
+      for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
+        if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
+          tgt.patches_g.push_back(it.value()["g"].get<float>());
+          all_g.push_back(it.value()["g"].get<float>());
+        }
+      }
+      // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
+      // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)
+      for (int k = 0; k < 24; ++k) {
+        const std::string key = "gs" + std::to_string(k);
+        if (tj["patches"].contains(key) && tj["patches"][key].is_object() && tj["patches"][key].contains("g") &&
+            tj["patches"][key]["g"].is_number()) {
+          gs_g.push_back(tj["patches"][key]["g"].get<float>());
+        }
+      }
+      const std::vector<float>& cap_g = gs_g.empty() ? all_g : gs_g;
+      if (!cap_g.empty()) {
+        const float mx = *std::max_element(cap_g.begin(), cap_g.end());
+        const float mn = *std::min_element(cap_g.begin(), cap_g.end());
+        tgt.tonal_capacity_ev = std::log2(mx / std::max(1e-6f, mn));
+      }
+      if (!tgt.patches_g.empty()) {
+        tgt.tgt_min_g = *std::min_element(tgt.patches_g.begin(), tgt.patches_g.end());
+        tgt.tgt_max_g = *std::max_element(tgt.patches_g.begin(), tgt.patches_g.end());
+        tgt.g_min = *std::min_element(all_g.begin(), all_g.end());
+        tgt.g_max = *std::max_element(all_g.begin(), all_g.end());
+      }
+    }
+    if (tj.contains("profcheck_output") && tj["profcheck_output"].is_string()) {
+      tgt.profcheck_output = tj["profcheck_output"].get<std::string>();
     }
 
-    bundle.targets.clear();
-    for (const auto& tj : j["targets"]) {
-      if (!tj.is_object()) continue;
-      BundleTarget tgt;
-      tgt.index = (int)bundle.targets.size();
-      tgt.name = tj.value("name", "Target " + std::to_string(tgt.index + 1));
-      tgt.iso = tj.value("iso", 100.0);
-      if (tj.contains("shutter")) {
-        if (tj["shutter"].is_string()) tgt.shutter = tj["shutter"].get<std::string>();
-        else if (tj["shutter"].is_number()) tgt.shutter = std::to_string(tj["shutter"].get<double>());
+    bool have_icc = false;
+    if (tj.contains("icc_profile_base64") && tj["icc_profile_base64"].is_string()) {
+      have_icc = base64_decode(tj["icc_profile_base64"].get<std::string>(), tgt.icc_bytes);
+    } else if (tj.contains("icc_profile") && tj["icc_profile"].is_string()) {
+      const std::string icc_name = tj["icc_profile"].get<std::string>();
+      if (!read_file || !read_file(icc_name, tgt.icc_bytes)) {
+        throw std::runtime_error("profile bundle " + raw_path + ": cannot read ICC profile " + icc_name +
+                                 " of target " + tgt.name);
       }
-
-      if (tj.contains("target_ev") && tj["target_ev"].is_number()) {
-        tgt.has_target_ev = true;
-        tgt.target_ev = tj["target_ev"].get<double>();
-      } else if (tj.contains("ev") && tj["ev"].is_number()) {
-        tgt.has_target_ev = true;
-        tgt.target_ev = tj["ev"].get<double>();
-      }
-
-      // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_exposure)
-      try {
-        tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
-      } catch (const std::exception&) {
-        fprintf(stderr, "Warning: cannot read shutter '%s' of target '%s'; using 1/8s\n", tgt.shutter.c_str(),
-                tgt.name.c_str());
-        tgt.exposure_s = std::max(1e-6f, 0.125f * float(tgt.iso) / 100.0f);
-      }
-
-      if (tj.contains("patches") && tj["patches"].is_object()) {
-        std::vector<float> all_g, gs_g;
-        for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
-          if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
-            tgt.patches_g.push_back(it.value()["g"].get<float>());
-            all_g.push_back(it.value()["g"].get<float>());
+      have_icc = true;
+    }
+    {
+      if (have_icc && !tgt.icc_bytes.empty()) {
+        cmsHPROFILE hprof = cmsOpenProfileFromMem(tgt.icc_bytes.data(), tgt.icc_bytes.size());
+        if (hprof) {
+          if (parse_film_profile_pipeline(hprof, tgt.film_prof)) {
+            tgt.film_prof.rebind_pointers();
           }
-        }
-        // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
-        // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)
-        for (int k = 0; k < 24; ++k) {
-          const std::string key = "gs" + std::to_string(k);
-          if (tj["patches"].contains(key) && tj["patches"][key].is_object() && tj["patches"][key].contains("g") &&
-              tj["patches"][key]["g"].is_number()) {
-            gs_g.push_back(tj["patches"][key]["g"].get<float>());
-          }
-        }
-        const std::vector<float>& cap_g = gs_g.empty() ? all_g : gs_g;
-        if (!cap_g.empty()) {
-          const float mx = *std::max_element(cap_g.begin(), cap_g.end());
-          const float mn = *std::min_element(cap_g.begin(), cap_g.end());
-          tgt.tonal_capacity_ev = std::log2(mx / std::max(1e-6f, mn));
-        }
-        if (!tgt.patches_g.empty()) {
-          tgt.tgt_min_g = *std::min_element(tgt.patches_g.begin(), tgt.patches_g.end());
-          tgt.tgt_max_g = *std::max_element(tgt.patches_g.begin(), tgt.patches_g.end());
-          tgt.g_min = *std::min_element(all_g.begin(), all_g.end());
-          tgt.g_max = *std::max_element(all_g.begin(), all_g.end());
+          cmsCloseProfile(hprof);
         }
       }
-      if (tj.contains("profcheck_output") && tj["profcheck_output"].is_string()) {
-        tgt.profcheck_output = tj["profcheck_output"].get<std::string>();
-      }
-
-      bool have_icc = false;
-      if (tj.contains("icc_profile_base64") && tj["icc_profile_base64"].is_string()) {
-        have_icc = base64_decode(tj["icc_profile_base64"].get<std::string>(), tgt.icc_bytes);
-      } else if (tj.contains("icc_profile") && tj["icc_profile"].is_string()) {
-        const std::string icc_name = tj["icc_profile"].get<std::string>();
-        have_icc = read_file && read_file(icc_name, tgt.icc_bytes);
-        if (!have_icc) {
-          fprintf(stderr, "Warning: cannot read ICC profile '%s' of target '%s'\n", icc_name.c_str(), tgt.name.c_str());
-        }
-      }
-      {
-        if (have_icc && !tgt.icc_bytes.empty()) {
-          cmsHPROFILE hprof = cmsOpenProfileFromMem(tgt.icc_bytes.data(), tgt.icc_bytes.size());
-          if (hprof) {
-            if (parse_film_profile_pipeline(hprof, tgt.film_prof)) {
-              tgt.film_prof.rebind_pointers();
-            }
-            cmsCloseProfile(hprof);
-          }
-        }
-      }
-
-      if (tgt.film_prof.data.has_profile == 0) {
-        fprintf(stderr, "Warning: Target '%s' has no valid ICC profile; skipping\n", tgt.name.c_str());
-        continue;
-      }
-
-      tgt.index = (int)bundle.targets.size();
-      bundle.targets.push_back(std::move(tgt));
     }
 
-    if (bundle.targets.empty()) {
-      fprintf(stderr, "ERROR! Bundle has 0 valid targets: %s\n", raw_path.c_str());
-      return false;
+    if (tgt.film_prof.data.has_profile == 0) {
+      std::cerr << "Warning: Target '" << tgt.name << "' has no valid ICC profile; skipping" << std::endl;
+      continue;
     }
 
-    int nominal_idx = -1;
+    tgt.index = (int)bundle.targets.size();
+    bundle.targets.push_back(std::move(tgt));
+  }
+
+  if (bundle.targets.empty()) {
+    throw std::runtime_error("profile bundle " + raw_path + " has no valid targets");
+  }
+
+  int nominal_idx = -1;
+  for (size_t i = 0; i < bundle.targets.size(); ++i) {
+    if (bundle.targets[i].has_target_ev && std::abs(bundle.targets[i].target_ev) < 0.01) {
+      nominal_idx = (int)i;
+      break;
+    }
+  }
+  if (nominal_idx < 0) {
     for (size_t i = 0; i < bundle.targets.size(); ++i) {
-      if (bundle.targets[i].has_target_ev && std::abs(bundle.targets[i].target_ev) < 0.01) {
+      std::string lower_name = bundle.targets[i].name;
+      for (char& c : lower_name) c = (char)std::tolower((unsigned char)c);
+      if (lower_name.find("box_speed") != std::string::npos ||
+          lower_name.find("nominal") != std::string::npos ||
+          lower_name.find("0.0ev") != std::string::npos ||
+          lower_name.find("+0ev") != std::string::npos ||
+          lower_name.find("_0ev") != std::string::npos ||
+          lower_name.find(" 0ev") != std::string::npos ||
+          lower_name == "0ev") {
         nominal_idx = (int)i;
         break;
       }
     }
-    if (nominal_idx < 0) {
-      for (size_t i = 0; i < bundle.targets.size(); ++i) {
-        std::string lower_name = bundle.targets[i].name;
-        for (char& c : lower_name) c = (char)std::tolower((unsigned char)c);
-        if (lower_name.find("box_speed") != std::string::npos ||
-            lower_name.find("nominal") != std::string::npos ||
-            lower_name.find("0.0ev") != std::string::npos ||
-            lower_name.find("+0ev") != std::string::npos ||
-            lower_name.find("_0ev") != std::string::npos ||
-            lower_name.find(" 0ev") != std::string::npos ||
-            lower_name == "0ev") {
-          nominal_idx = (int)i;
-          break;
-        }
+  }
+  if (nominal_idx < 0) {
+    for (size_t i = 0; i < bundle.targets.size(); ++i) {
+      std::string lower_name = bundle.targets[i].name;
+      for (char& c : lower_name) c = (char)std::tolower((unsigned char)c);
+      if (lower_name == "target 5" || lower_name == "target5" || lower_name == "target_5") {
+        nominal_idx = (int)i;
+        break;
       }
     }
-    if (nominal_idx < 0) {
-      for (size_t i = 0; i < bundle.targets.size(); ++i) {
-        std::string lower_name = bundle.targets[i].name;
-        for (char& c : lower_name) c = (char)std::tolower((unsigned char)c);
-        if (lower_name == "target 5" || lower_name == "target5" || lower_name == "target_5") {
-          nominal_idx = (int)i;
-          break;
-        }
-      }
-    }
-    if (nominal_idx < 0) {
-      nominal_idx = (int)bundle.targets.size() / 2;
-    }
+  }
+  if (nominal_idx < 0) {
+    nominal_idx = (int)bundle.targets.size() / 2;
+  }
 
-    double nom_center = 0.0;
-    if (nominal_idx >= 0 && nominal_idx < (int)bundle.targets.size()) {
-      const auto& nt = bundle.targets[nominal_idx];
-      if (nt.tgt_min_g > 0.0f && nt.tgt_max_g > 0.0f) {
-        nom_center = std::sqrt((double)nt.tgt_min_g * (double)nt.tgt_max_g);
-      }
+  double nom_center = 0.0;
+  if (nominal_idx >= 0 && nominal_idx < (int)bundle.targets.size()) {
+    const auto& nt = bundle.targets[nominal_idx];
+    if (nt.tgt_min_g > 0.0f && nt.tgt_max_g > 0.0f) {
+      nom_center = std::sqrt((double)nt.tgt_min_g * (double)nt.tgt_max_g);
     }
+  }
 
-    for (auto& tgt : bundle.targets) {
-      if (tgt.has_target_ev) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), " (%+.2f EV)", tgt.target_ev);
-        tgt.display_name = tgt.name + buf;
-      } else if (tgt.name.find("EV") != std::string::npos || tgt.name.find("ev") != std::string::npos) {
-        tgt.display_name = tgt.name;
-      } else if (nom_center > 0.0 && tgt.tgt_min_g > 0.0f && tgt.tgt_max_g > 0.0f) {
-        double tgt_center = std::sqrt((double)tgt.tgt_min_g * (double)tgt.tgt_max_g);
-        double delta_ev = std::log2(tgt_center / nom_center);
-        char buf[32];
-        snprintf(buf, sizeof(buf), " (%+.2f EV)", delta_ev);
-        tgt.display_name = tgt.name + buf;
-      } else {
-        tgt.display_name = tgt.name;
-      }
+  for (auto& tgt : bundle.targets) {
+    if (tgt.has_target_ev) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), " (%+.2f EV)", tgt.target_ev);
+      tgt.display_name = tgt.name + buf;
+    } else if (tgt.name.find("EV") != std::string::npos || tgt.name.find("ev") != std::string::npos) {
+      tgt.display_name = tgt.name;
+    } else if (nom_center > 0.0 && tgt.tgt_min_g > 0.0f && tgt.tgt_max_g > 0.0f) {
+      double tgt_center = std::sqrt((double)tgt.tgt_min_g * (double)tgt.tgt_max_g);
+      double delta_ev = std::log2(tgt_center / nom_center);
+      char buf[32];
+      snprintf(buf, sizeof(buf), " (%+.2f EV)", delta_ev);
+      tgt.display_name = tgt.name + buf;
+    } else {
+      tgt.display_name = tgt.name;
     }
-
-    return true;
-  } catch (const std::exception& e) {
-    fprintf(stderr, "ERROR! Profile bundle loading failed for %s: %s\n", raw_path.c_str(), e.what());
-    return false;
   }
 }
 

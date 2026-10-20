@@ -60,6 +60,9 @@ struct BundleTarget {
   float tgt_capacity_ev = 0.0f;
 };
 
+// TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
+// profile_highlight_ceiling in param_search.cc) once the profile bundle files are backfilled with it and the
+// profiling code writes it.
 struct ProfileBundle {
   std::string path;
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
@@ -76,8 +79,8 @@ struct ProfileBundle {
   std::vector<BundleTarget> targets;
 };
 
-// Seconds of a shutter speed as profiles write it ("1/8s", "0.4s", "2"); throws std::invalid_argument when it
-// cannot be read.
+// Seconds of a shutter speed as the profiles record it, a string ("1/8s", "0.4s", "2"); throws
+// std::invalid_argument when it cannot be read.
 // py-ref: negicc_station/src/film_profiling.py @ 93be1ec (shutter_to_seconds)
 float shutter_to_seconds(const std::string& shutter);
 
@@ -100,12 +103,12 @@ using BundleFileReader = std::function<bool(const std::string& name, std::vector
 
 // Load and parse a multi-bracket JSON profile bundle: an all-in-one bundle from negicc-station (ICC profiles in
 // base64), or a split one (profiles/<Key>/bundle.json, its directory, with the ICC profiles in files next to it;
-// negicc-station tools/export_negicc_data.py).
-bool load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle);
+// negicc-station tools/export_negicc_data.py). Throws when the bundle cannot be read or has no usable bracket.
+void load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle);
 
 // Parse a JSON profile bundle held in memory (one embedded in neg_process); name is reported as bundle.path and
-// read_file supplies the ICC profiles of a split bundle.
-bool load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
+// read_file supplies the ICC profiles of a split bundle. Throws as load_profile_bundle.
+void load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
                                      const BundleFileReader& read_file, ProfileBundle& bundle);
 
 // Compute scene green percentiles [0.5%, 99.5%] and gamut volume enclosures for all targets
