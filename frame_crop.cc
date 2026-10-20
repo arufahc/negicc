@@ -53,7 +53,7 @@ void clamp_rect(int r[4], int bw, int bh) {
   r[1] = std::min(std::max(0, r[1]), bh - r[3]);
 }
 
-void cut_and_orient(const RgbImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
+void cut_and_orient(const HalfSizeImage& src, int x, int y, int w, int h, int rot_cw, bool hflip, bool vflip,
                     RgbImage& out) {
   const int rot = ((rot_cw % 360) + 360) % 360;
   const bool swap = (rot == 90 || rot == 270);
@@ -65,10 +65,10 @@ void cut_and_orient(const RgbImage& src, int x, int y, int w, int h, int rot_cw,
     for (int x2 = 0; x2 < out.width; ++x2) {
       int xr = 0, yr = 0;
       map_inverse_geometry(x2, y2, out.width, out.height, w, h, rot, hflip, vflip, xr, yr);
-      const uint16_t* s = &src.rgb[((size_t)(y + yr) * src.width + (x + xr)) * 3];
+      const uint16_t* s = src.px[(size_t)(y + yr) * src.width + (x + xr)];
       uint16_t* d = &out.rgb[((size_t)y2 * out.width + x2) * 3];
       d[0] = s[0];
-      d[1] = s[1];
+      d[1] = (uint16_t)(((uint32_t)s[1] + s[3]) >> 1);
       d[2] = s[2];
     }
   }

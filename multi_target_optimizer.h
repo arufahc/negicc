@@ -166,9 +166,10 @@ struct ParamSearchResult {
   int timing_total_ms = 0;
 };
 
-// Searches the conversion parameters of one frame. half is the half-size analysis decode, bbox the frame in it;
-// rot_cw, hflip and vflip orient the frame as the output; scan_shutter_s and scan_iso are the capture's exposure.
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& half,
+// Searches the conversion parameters of one frame. half is LibRaw's half-size image of the RAW (read in place, only
+// the frame is copied out of it), bbox the frame in it; rot_cw, hflip and vflip orient the frame as the output;
+// scan_shutter_s and scan_iso are the capture's exposure.
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const HalfSizeImage& half,
                               const int bbox[4], int rot_cw, bool hflip, bool vflip, float scan_shutter_s,
                               float scan_iso, const ParamSearchOptions& opts, ParamSearchResult& out);
 
