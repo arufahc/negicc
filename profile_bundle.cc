@@ -22,9 +22,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <sys/stat.h>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -258,18 +258,18 @@ bool load_profile_bundle_from_memory(const char* data, size_t size, const std::s
 }
 
 static bool is_directory(const std::string& path) {
-  struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+  std::error_code ec;
+  return std::filesystem::is_directory(path, ec);
 }
 
 bool load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
-  std::vector<std::string> candidates = {raw_path, "profiles/" + raw_path};
-  const size_t last_slash = raw_path.find_last_of("/\\");
-  if (last_slash != std::string::npos) candidates.push_back("profiles/" + raw_path.substr(last_slash + 1));
+  const std::filesystem::path raw(raw_path);
+  std::vector<std::string> candidates = {raw_path, (std::filesystem::path("profiles") / raw).string()};
+  if (raw.has_parent_path()) candidates.push_back((std::filesystem::path("profiles") / raw.filename()).string());
   std::ifstream f;
   std::string opened;
   for (std::string c : candidates) {
-    if (is_directory(c)) c += "/bundle.json";
+    if (is_directory(c)) c = (std::filesystem::path(c) / "bundle.json").string();
     f.open(c);
     if (f.is_open()) {
       opened = c;

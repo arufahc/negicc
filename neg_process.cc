@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,7 +47,6 @@
 #include "param_search.h"
 #include "profile_bundle.h"
 
-#include <sys/stat.h>
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 14))
 #error This code is for LibRaw 0.14+ only
@@ -102,13 +102,13 @@ bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof) {
 }
 
 static bool is_directory(const std::string& path) {
-  struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+  std::error_code ec;
+  return std::filesystem::is_directory(path, ec);
 }
 
 static bool is_regular_file(const std::string& path) {
-  struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+  std::error_code ec;
+  return std::filesystem::is_regular_file(path, ec);
 }
 
 // Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). 1 when loaded, 0
@@ -1632,7 +1632,7 @@ int main(int ac, char *av[]) {
     engine.load_memory(backbone->data, backbone->size, is_trt_engine, dino_backend);
     if (parser.is_used("--dino")) {
       std::string adapter = parser.get<std::string>("--dino");
-      if (is_directory(adapter)) adapter += "/adapter.onnx";
+      if (is_directory(adapter)) adapter = (std::filesystem::path(adapter) / "adapter.onnx").string();
       engine.load_adapter_file(adapter);
     } else {
       std::string adapter_dir;

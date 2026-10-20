@@ -12,20 +12,25 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <filesystem>
 #include <fstream>
-#include <sys/stat.h>
 #include <vector>
 
 namespace {
 
 bool file_exists(const std::string& p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+    std::error_code ec;
+    return std::filesystem::is_regular_file(p, ec);
 }
 
 bool dir_exists(const std::string& p) {
-    struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+    std::error_code ec;
+    return std::filesystem::is_directory(p, ec);
+}
+
+// dir/name with the platform's separator.
+std::string join_path(const std::string& dir, const std::string& name) {
+    return (std::filesystem::path(dir) / name).string();
 }
 
 bool ends_with(const std::string& s, const std::string& suffix) {
@@ -81,10 +86,11 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     std::string onnx_path, engine_path;
     if (dir_exists(model_spec)) {
         // The backbone alone (adapters supplied separately) wins over a fused model in the same directory.
-        const char* stem = (file_exists(model_spec + "/backbone.onnx") || file_exists(model_spec + "/backbone.engine"))
-                               ? "backbone" : "model";
-        if (file_exists(model_spec + "/" + stem + ".onnx")) onnx_path = model_spec + "/" + stem + ".onnx";
-        if (file_exists(model_spec + "/" + stem + ".engine")) engine_path = model_spec + "/" + stem + ".engine";
+        const std::string stem =
+            (file_exists(join_path(model_spec, "backbone.onnx")) || file_exists(join_path(model_spec, "backbone.engine")))
+                ? "backbone" : "model";
+        if (file_exists(join_path(model_spec, stem + ".onnx"))) onnx_path = join_path(model_spec, stem + ".onnx");
+        if (file_exists(join_path(model_spec, stem + ".engine"))) engine_path = join_path(model_spec, stem + ".engine");
     } else if (ends_with(model_spec, ".engine")) {
         engine_path = model_spec;
     } else {
