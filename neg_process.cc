@@ -1607,13 +1607,9 @@ int main(int ac, char *av[]) {
   if (is_bundle) {
     for (int r = 0; r < 3; ++r) {
       if (row_given[r]) {
-        for (int c = 0; c < 3; ++c) {
-          bundle.crosstalk_matrix[r * 3 + c] = (*rows[r])[c];
-          bundle.crosstalk_matrix_d[r * 3 + c] = (*rows[r])[c];
-        }
+        for (int c = 0; c < 3; ++c) bundle.crosstalk_matrix[r * 3 + c] = (*rows[r])[c];
       } else if (bundle.has_crosstalk) {
-        *rows[r] = {bundle.crosstalk_matrix[r * 3], bundle.crosstalk_matrix[r * 3 + 1],
-                    bundle.crosstalk_matrix[r * 3 + 2]};
+        rows[r]->assign(bundle.crosstalk_matrix + r * 3, bundle.crosstalk_matrix + r * 3 + 3);
       }
     }
   }

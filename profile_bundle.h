@@ -65,8 +65,9 @@ struct ProfileBundle {
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
   std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
-  float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  double crosstalk_matrix_d[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  // In double, as the station computes the merged input matrix from it (param_search.h); the float pixel pipeline
+  // rounds it where it takes it.
+  double crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   bool has_crosstalk = false;
   bool has_film_base = false;
   int profile_film_base_rgb[3] = {1, 1, 1};
