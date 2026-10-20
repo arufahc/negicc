@@ -39,13 +39,13 @@ DinoV3Engine::~DinoV3Engine() = default;
 DinoV3Engine::DinoV3Engine(DinoV3Engine&&) noexcept = default;
 DinoV3Engine& DinoV3Engine::operator=(DinoV3Engine&&) noexcept = default;
 
-bool DinoV3Engine::is_loaded() const { return m_runner != nullptr; }
+bool DinoV3Engine::is_loaded() const { return runner_ != nullptr; }
 
-bool DinoV3Engine::needs_adapter() const { return m_runner && m_runner->has_tokens(); }
+bool DinoV3Engine::needs_adapter() const { return runner_ && runner_->has_tokens(); }
 
 void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads) {
-    m_adapter = make_ort_adapter(onnx_data, onnx_size, num_threads);
-    m_adapter_name = name;
+    adapter_ = make_ort_adapter(onnx_data, onnx_size, num_threads);
+    adapter_name_ = name;
 }
 
 void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
@@ -55,24 +55,24 @@ void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
     f.seekg(0);
     f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
     // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session.
-    m_adapter_file = std::move(bytes);
-    set_adapter(m_adapter_file.data(), m_adapter_file.size(), path, num_threads);
+    adapter_file_ = std::move(bytes);
+    set_adapter(adapter_file_.data(), adapter_file_.size(), path, num_threads);
 }
 
-const char* DinoV3Engine::backend_name() const { return m_runner ? m_runner->name() : "none"; }
-bool DinoV3Engine::has_pooled() const { return m_runner ? m_runner->has_pooled() : false; }
-bool DinoV3Engine::has_pooled_tone() const { return m_runner ? m_runner->has_pooled_tone() : false; }
-bool DinoV3Engine::has_pool_weights() const { return m_runner ? m_runner->has_pool_weights() : false; }
+const char* DinoV3Engine::backend_name() const { return runner_ ? runner_->name() : "none"; }
+bool DinoV3Engine::has_pooled() const { return runner_ ? runner_->has_pooled() : false; }
+bool DinoV3Engine::has_pooled_tone() const { return runner_ ? runner_->has_pooled_tone() : false; }
+bool DinoV3Engine::has_pool_weights() const { return runner_ ? runner_->has_pool_weights() : false; }
 size_t DinoV3Engine::memory_bytes() const {
-    return (m_runner ? m_runner->memory_bytes() : 0) + (m_adapter ? m_adapter->memory_bytes() : 0);
+    return (runner_ ? runner_->memory_bytes() : 0) + (adapter_ ? adapter_->memory_bytes() : 0);
 }
 
 // py-ref: negicc_station/src/intent_model.py:320-375 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
 bool DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
                         int max_size, int patch_size) {
-    m_runner.reset();
-    m_max_size = max_size;
-    m_patch_size = patch_size;
+    runner_.reset();
+    max_size_ = max_size;
+    patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
         std::cerr << "DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" << backend << "'" << std::endl;
         return false;
@@ -99,13 +99,13 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
             const bool has_gpu = cuda_device_available();
             if (has_gpu && !engine_path.empty()) {
                 try {
-                    m_runner = make_trt_runner(engine_path);
+                    runner_ = make_trt_runner(engine_path);
                     return true;
                 } catch (const std::exception& e) {
                     if (backend == "gpu") throw;
                     std::cerr << "DinoV3Engine: TensorRT runner failed to load (" << e.what()
                               << "), falling back to CPU ONNX Runtime" << std::endl;
-                    m_runner.reset();
+                    runner_.reset();
                 }
             }
             if (backend == "gpu") {
@@ -121,20 +121,20 @@ bool DinoV3Engine::load(const std::string& model_spec, const std::string& backen
                       << " (expected backbone.onnx or model.onnx; run `make dinov3_model`)" << std::endl;
             return false;
         }
-        m_runner = make_ort_runner(onnx_path, num_threads);
+        runner_ = make_ort_runner(onnx_path, num_threads);
         return true;
     } catch (const std::exception& e) {
         std::cerr << "DinoV3Engine load failed: " << e.what() << std::endl;
-        m_runner.reset();
+        runner_.reset();
         return false;
     }
 }
 
 bool DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
                                int num_threads, int max_size, int patch_size) {
-    m_runner.reset();
-    m_max_size = max_size;
-    m_patch_size = patch_size;
+    runner_.reset();
+    max_size_ = max_size;
+    patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
         std::cerr << "DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" << backend << "'" << std::endl;
         return false;
@@ -145,11 +145,11 @@ bool DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine
         return false;
     }
     try {
-        m_runner = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
+        runner_ = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
         return true;
     } catch (const std::exception& e) {
         std::cerr << "DinoV3Engine load failed: " << e.what() << std::endl;
-        m_runner.reset();
+        runner_.reset();
         return false;
     }
 }
@@ -167,7 +167,7 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     DinoV3InferenceResult res;
     // py-ref: negicc_station/src/dino_geometry.py:30-40 @ 2f7ee4a (compute_aspect_preserved_shape)
-    compute_aspect_preserved_shape(width, height, m_max_size, m_patch_size,
+    compute_aspect_preserved_shape(width, height, max_size_, patch_size_,
                                   res.target_w, res.target_h, res.grid_w, res.grid_h);
     res.num_patches = res.grid_w * res.grid_h;
 
@@ -197,7 +197,7 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     // 3. pool_weights [1, N, 3]
     // py-ref: negicc_station/src/dino_geometry.py:43-74 @ 2f7ee4a (compute_tone_weights)
     std::vector<float> pool_weights((size_t)res.num_patches * 3);
-    compute_tone_weights(resized_u8.data(), res.grid_w, res.grid_h, m_patch_size, pool_weights.data());
+    compute_tone_weights(resized_u8.data(), res.grid_w, res.grid_h, patch_size_, pool_weights.data());
 
     // 4. Multi-head forward pass
     // py-ref: negicc_station/src/tensorrt_intent_model.py:202-273 @ 2f7ee4a
@@ -206,8 +206,8 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     DinoV3RunnerOutputs outs;
     std::vector<float> tokens;
-    if (m_runner->has_tokens()) {
-        if (!m_adapter) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
+    if (runner_->has_tokens()) {
+        if (!adapter_) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
         tokens.resize((size_t)res.num_patches * 768);
         outs.tokens = tokens.data();
     } else {
@@ -215,23 +215,23 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
         outs.sigma = res.sigma.data();
     }
 
-    const bool want_ranker = m_runner->has_pooled() || m_runner->has_pooled_tone();
+    const bool want_ranker = runner_->has_pooled() || runner_->has_pooled_tone();
     if (want_ranker) {
         // py-ref: negicc_station/src/tensorrt_intent_model.py:269-270 @ 2f7ee4a (features_3459 contiguous buffer)
         res.features_3459.assign(1152 + 3 * 768 + 3, 0.0f);
-        if (m_runner->has_pooled()) {
+        if (runner_->has_pooled()) {
             outs.pooled = res.features_3459.data();
             res.has_pooled = true;
         }
-        if (m_runner->has_pooled_tone()) {
+        if (runner_->has_pooled_tone()) {
             outs.pooled_tone = res.features_3459.data() + 1152;
             res.has_pooled_tone = true;
         }
     }
 
-    m_runner->run(pixel_values.data(), res.target_h, res.target_w, pool_weights.data(), res.num_patches, outs);
+    runner_->run(pixel_values.data(), res.target_h, res.target_w, pool_weights.data(), res.num_patches, outs);
     // py-ref: negicc_station/src/export_intent_engine.py @ 93be1ec (FusedIntentNetwork: adapter(cat(h_photo, h_sem)))
-    if (!tokens.empty()) m_adapter->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
+    if (!tokens.empty()) adapter_->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
 
     if (res.has_pooled_tone) {
         // py-ref: negicc_station/src/tensorrt_intent_model.py:268 @ 2f7ee4a (tone_mass = tone_weights.mean(axis=0))
