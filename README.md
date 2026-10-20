@@ -185,4 +185,4 @@ imported again for further editting.
 
 Please see the code in build_prof.py and neg_process.{cc, py} for details of the algorithm.
 
-> **TODO:** `build_prof.py` and `neg_process.py` are removed; point to `neg_process.cc`, `auto_convert.cc` (the automatic conversion) and negicc-station.
+> **TODO:** `build_prof.py` and `neg_process.py` are removed; point to `neg_process.cc`, `param_search.cc` (the conversion parameter search) and negicc-station.
