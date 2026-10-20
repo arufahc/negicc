@@ -893,7 +893,7 @@ Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionPar
 void merged_matrix(const ProfileBundle& bundle, const double fb[3], double exposure_ratio, double out[9]) {
   for (int r = 0; r < 3; ++r) {
     const double scale = fb[r] > 0 ? (bundle.normalization_target / fb[r]) * exposure_ratio : 1.0;
-    for (int c = 0; c < 3; ++c) out[r * 3 + c] = bundle.crosstalk_matrix_d[r * 3 + c] * scale;
+    for (int c = 0; c < 3; ++c) out[r * 3 + c] = bundle.crosstalk_matrix[r * 3 + c] * scale;
   }
 }
 

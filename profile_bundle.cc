@@ -167,14 +167,13 @@ static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& ou
   return !out.empty();
 }
 
-static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double out_d[9]) {
+static bool parse_3x3_matrix(const nlohmann::json& node, double out_m[9]) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
     if (!node[r].is_array() || node[r].size() != 3) return false;
     for (int c = 0; c < 3; ++c) {
       if (!node[r][c].is_number()) return false;
-      out_m[r * 3 + c] = node[r][c].get<float>();
-      out_d[r * 3 + c] = node[r][c].get<double>();
+      out_m[r * 3 + c] = node[r][c].get<double>();
     }
   }
   return true;
@@ -318,10 +317,10 @@ static bool parse_profile_bundle(nlohmann::json& j, const std::string& raw_path,
     if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
       const auto& ct = j["crosstalk_profile"];
       if (ct.contains("crosstalk_correction_matrix")) {
-        bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix, bundle.crosstalk_matrix_d);
+        bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
       }
     } else if (j.contains("crosstalk_correction_matrix")) {
-      bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix, bundle.crosstalk_matrix_d);
+      bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
     }
 
     if (j.contains("film_base") && j["film_base"].is_object()) {
