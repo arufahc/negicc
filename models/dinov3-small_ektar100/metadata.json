@@ -1,0 +1,162 @@
+{
+  "model_name": "dinov3-small_ektar100_intent_field",
+  "profile": "ektar100",
+  "backbone": "dinov3-small",
+  "aspect_mode": "approach_1_native_aspect_bicubic",
+  "is_native_aspect": true,
+  "arithmetic_precision": "float32",
+  "mantissa_bits": 24,
+  "resampling_method": "srgb_to_linear_rgb_scale_to_srgb_to_cielab",
+  "color_pipeline": "Exact IEC 61966-2-1 inverse EOTF -> cv2.INTER_AREA linear scale -> forward EOTF -> cv2.COLOR_RGB2LAB (float32)",
+  "backbone_details": {
+    "model_id": "Tooony133/dinov3-vits16-pretrain-lvd1689m",
+    "image_size": 512,
+    "patch_size": 16,
+    "grid_size": 32,
+    "num_patches": 1024,
+    "raw_dim": 384,
+    "fused_dim": 768,
+    "adapter_hidden_dim": 384,
+    "token_start_idx": 5,
+    "description": "Meta DINOv3 Small (ViT-S/16, 512x512, 1,024 patches, Layers 9+12 fused 768-D)"
+  },
+  "parameters": 595590,
+  "in_dim": 768,
+  "hidden_dim": 384,
+  "export_date": "2026-10-18T23:26:08.766691+00:00",
+  "input_dimensions": {
+    "batch_size": "variable",
+    "num_patches": "variable_native_aspect (e.g. 672 for 3:2, 768 for 4:3, 1024 for 1:1)",
+    "token_dim": 768
+  },
+  "output_dimensions": {
+    "mu": [
+      "batch_size",
+      "num_patches",
+      3
+    ],
+    "sigma": [
+      "batch_size",
+      "num_patches",
+      3
+    ],
+    "log_var": [
+      "batch_size",
+      "num_patches",
+      3
+    ]
+  },
+  "color_space": "CIE L*a*b*",
+  "channel_ranges": {
+    "L*": [
+      0.0,
+      100.0
+    ],
+    "a*": [
+      -128.0,
+      127.0
+    ],
+    "b*": [
+      -128.0,
+      127.0
+    ]
+  },
+  "metrics": {
+    "epoch": 8,
+    "val_loss": 2.078434329661373,
+    "val_mae": 4.604477267271972,
+    "val_mae_L": 3.979635529573947,
+    "val_mae_ab": 4.916898164594702,
+    "train_loss": 1.8960331498106942,
+    "train_mae": 4.138766085128094,
+    "mean_sigma": 3.7132042503461054,
+    "profile": "ektar100",
+    "backbone": "dinov3-small",
+    "in_dim": 768,
+    "hidden_dim": 384
+  },
+  "acceptance_gates": {
+    "gates": {
+      "gate_val_loss_le_2_30": true,
+      "gate_mae_ab_le_5_00": true,
+      "gate_mae_L_le_8_00": true
+    },
+    "all_passed": true
+  },
+  "exported_files": {
+    "pytorch_weights": "model.pt",
+    "torchscript": "adapter.torchscript",
+    "adapter_onnx": "adapter.onnx",
+    "metadata": "metadata.json"
+  },
+  "stock_key": "ektar100",
+  "source_profile_bundle": "Ektar100-A7R4-D65",
+  "source_profile_json": "profile_Ektar100-A7R4-D65_20261004_004750.json",
+  "source_profile_sha256": "a0c4afd49a2fc899d2e7bc9a3626978decbf7f75e59ed586fac6dd8e31f75c23",
+  "associated_profiles": [
+    "profile_Ektar100-A7R4-D65_20261004_004750.json",
+    "profile_Ektar100-A7R4-TriLED_20261003_183828.json"
+  ],
+  "training_regime": "clean_s0_unperturbed_web_corpus",
+  "split_mode": "photographer",
+  "split_hash": "de84985f720b",
+  "split_seed": 42,
+  "corpus_manifest": "ektar100.json",
+  "corpus_manifest_sha256": "75bef32d3b71e7bec98a360389b06a4ebce9fa751feff558de9caf749b577a11",
+  "feature_cache_sha256": "5e7805e16129af8ceec1dec48e85cb923ae3cbdee81c31afb5045565053860c4",
+  "n_train_photos": 4351,
+  "n_val_photos": 682,
+  "n_train_tokens": 3262784,
+  "n_val_tokens": 527584,
+  "selected_seed": 42,
+  "seeds_evaluated": [
+    42,
+    43,
+    44
+  ],
+  "seed_summary": {
+    "val_loss_mean": 2.088796419398499,
+    "val_loss_std": 0.008028516606415698,
+    "val_mae_L_mean": 4.108363835893223,
+    "val_mae_L_std": 0.12902941517229224,
+    "val_mae_ab_mean": 5.078751642606977,
+    "val_mae_ab_std": 0.11539735495178878
+  },
+  "seed_runs": [
+    {
+      "seed": 42,
+      "best_epoch": 8,
+      "val_loss": 2.078434329661373,
+      "val_mae": 4.604477267271972,
+      "val_mae_L": 3.979635529573947,
+      "val_mae_ab": 4.916898164594702,
+      "train_loss": 1.8960331498106942,
+      "train_mae": 4.138766085128094,
+      "checkpoint_sha256": "4456ed775b16ad78c633e65bd250338c12b3c6735dac0c912c1e5f605617ac20"
+    },
+    {
+      "seed": 43,
+      "best_epoch": 6,
+      "val_loss": 2.089958018962166,
+      "val_mae": 4.805423392631738,
+      "val_mae_L": 4.060725076886777,
+      "val_mae_ab": 5.177772939808917,
+      "train_loss": 1.9801954088209002,
+      "train_mae": 4.495010298232492,
+      "checkpoint_sha256": "7e312fdc5c81f90ae5bef0fe00d7932a7d0c44c8a98689b496c66d0018be1bae"
+    },
+    {
+      "seed": 44,
+      "best_epoch": 5,
+      "val_loss": 2.097996909571958,
+      "val_mae": 4.855967827286347,
+      "val_mae_L": 4.284730901218945,
+      "val_mae_ab": 5.141583823417311,
+      "train_loss": 2.0373910184639006,
+      "train_mae": 4.753611111434691,
+      "checkpoint_sha256": "e60799596579c8bc99df9ecb218ad2a9f3c7b06de15ee0a4ce53d2a88a3c1035"
+    }
+  ],
+  "git_commit": "8404fda26d492a947b719d636f18343597a1115d",
+  "hostname": "wp0"
+}
