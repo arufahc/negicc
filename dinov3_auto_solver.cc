@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "dinov3_preprocess.h"
+#include "colorspace_conversion.h"
 
 static constexpr double TOL_PARAM = 0.02;
 static constexpr double TOL_REL_ERR = 0.015;
@@ -86,9 +87,12 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
     double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
     for (int i = 0; i < n_px; ++i) {
       const uint16_t* px = grid_rgb16 + i * 3;
-      const Rgb v = convert_pixel_srgb(px, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof);
-      clip += channel_white_clipped(v.r) + channel_white_clipped(v.g) + channel_white_clipped(v.b);
-      const Lab lab = srgb_to_lab(v);
+      // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule and L*a*b* are the
+      // linear equivalents of the encoded ones and skip the sRGB curve round trip.
+      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof));
+      clip += linear_channel_white_clipped(lin.r) + linear_channel_white_clipped(lin.g) +
+              linear_channel_white_clipped(lin.b);
+      const Lab lab = linear_srgb_to_lab(lin);
       const float dL = (lab.L - mu[i * 3]) / sigma[i * 3];
       const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
       const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
@@ -284,8 +288,8 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
   return (float)score;
 }
 
-static float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
-                                       const float* mu, const float* sigma) {
+float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
+                                const float* mu, const float* sigma) {
   std::vector<uint8_t> resized(gw * gh * 3);
   cv_linear_resize_rgb(preview_u8, w, h, w * 3, resized.data(), gw, gh);
 

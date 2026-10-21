@@ -123,6 +123,11 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
                                  const IntentGains* initial, const float* e_bounds /* lo, hi, center or null */,
                                  unsigned pin_mask, IntentGains& out);
 
+// Mean squared z-score of the preview, resized to the grid, against the intent field predicted from it.
+// py-ref: negicc_station/src/optimizer.py @ 93be1ec (self_consistency_residual)
+float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
+                                const float* mu, const float* sigma);
+
 // Solves optimal (E, g, b) parameters against active DINOv3 intent field
 bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
                          const uint16_t (*image)[4], int w, int h,
