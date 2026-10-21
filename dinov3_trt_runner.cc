@@ -144,6 +144,8 @@ public:
     }
 
 private:
+    // Serializes run(): the station's Python binding calls infer without the GIL, so several threads can share one
+    // engine. TODO: Move this lock back into the station code (its binding), the only caller with several threads.
     std::mutex infer_mutex_;
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine> engine_;
