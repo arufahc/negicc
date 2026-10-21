@@ -668,7 +668,8 @@ class SearchFrame {
     frame_ = &frame;
     crop_ratio_ = crop_ratio;
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
-    // TODO: Optimize away inner_crop_: it copies pixels the frame already holds, so it can be dropped or share the
+    // TODO: Optimize away inner_crop_. The inner crop's pixels are now held three times: in LibRaw's half-size image,
+    // in the upright frame neg_process cuts from it, and in inner_crop_. inner_crop_ can be dropped or share the
     // frame's rgb buffer (a view with an offset and stride).
     cut_crop(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), inner_crop_);
   }

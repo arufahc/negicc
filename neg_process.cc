@@ -447,6 +447,8 @@ using HalfSizeAnalysis = std::function<void(const LibRaw& proc)>;
 // 3-colour Bayer RAW.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
+  // TODO: Support X-Trans sensors (filters == 9): check what LibRaw's half-size readout gives for their 6x6 CFA
+  // and whether its first three channels are R, G and B as for Bayer.
   if (!proc->imgdata.rawdata.raw_image || proc->imgdata.idata.filters <= 1000 || proc->imgdata.idata.colors != 3) {
     fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer RAW files\n");
     return false;
