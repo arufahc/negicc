@@ -114,6 +114,8 @@ static bool is_regular_file(const std::string& path) {
 
 // Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). False when the
 // argument is not a bundle (an ICC profile).
+// TODO: Accept a split-bundle directory (profiles/<Key>), which load_profile_bundle already reads; the
+// is_regular_file check here rejects it.
 bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
   const std::string resolved = resolve_profile_path(arg);
   if (!is_regular_file(resolved) || !is_json_bundle(resolved)) return false;
@@ -135,25 +137,6 @@ bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle) {
   load_profile_bundle_from_memory((const char*)f->data, f->size, std::string("[built-in] ") + f->name, read_file,
                                   bundle);
   return true;
-}
-
-// The TensorRT engine of the built-in backbone (make dinov3_engine, on the device that runs it): models/dinov3-small
-// next to the executable's directory, or in the working directory. Empty when there is none.
-std::string default_backbone_engine() {
-  std::vector<std::string> dirs;
-  char exe[4096];
-  const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-  if (n > 0) {
-    exe[n] = '\0';
-    std::string dir(exe);
-    dir = dir.substr(0, dir.find_last_of('/'));
-    dirs.push_back(dir + "/../models/dinov3-small");
-  }
-  dirs.push_back("models/dinov3-small");
-  for (const std::string& d : dirs) {
-    if (is_regular_file(d + "/backbone.engine")) return d + "/backbone.engine";
-  }
-  return "";
 }
 
 int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *size) {
@@ -514,6 +497,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     return NULL;
   }
 
+  // TODO: Move this check (and the clamp) before the analysis read, which runs the whole bracket search, so that an
+  // ROI outside the sensor fails before the DINOv3 inferences rather than after them.
   if (roi) {
     if (roi[0] < 0 || roi[1] < 0 ||
         roi[0] >= (int)proc->imgdata.sizes.width || roi[1] >= (int)proc->imgdata.sizes.height ||
@@ -1386,6 +1371,8 @@ int main(int ac, char *av[]) {
           "--target picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
+  // TODO: Remove --post_correction_gamma. The bracket search scores its renders without it while the TIFF is
+  // written with it, so the two disagree; gamma needs deciding before it can be honoured.
   parser.add_argument("-G", "--post_correction_gamma")
     .help("Apply a gamma to linear RGB after correction but before ICC profile is applied.")
     .scan<'g', float>()
@@ -1415,7 +1402,9 @@ int main(int ac, char *av[]) {
     .help("Linear (uncorrected) R G B values of the film base from captured image, or 'auto'.")
     .nargs(1, 3);
   parser.add_argument("--film_stock")
-    .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400.");
+    .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
+          "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
+          "back to the portra400 intent adapter.");
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED) or d65 (white).");
   parser.add_argument("-p", "--film_profile")
@@ -1650,8 +1639,9 @@ int main(int ac, char *av[]) {
   }
 
   // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is negicc-station's
-  // conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure and the gains; with --target
-  // or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on one profile.
+  // conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure and the gains;
+  // with --target or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on
+  // one profile.
   const bool exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
   const bool use_dino = has_profile && !parser.is_used("--gain_g") && !parser.is_used("--gain_b");
   const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0 && !exposure_given;

@@ -130,7 +130,7 @@ void cut_crop(const RgbImage& src, const InnerCrop& crop, RgbImage& out) {
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
 
 // The range of E that keeps the scene inside a bracket's calibrated range. The bracket's grey wedge was
-// calibrated over green values g_min .. g_max in its own capture; E scales the scene's green 0.5 % and 99.5 %
+// calibrated over green values tgt_min_g .. tgt_max_g in its own capture; E scales the scene's green 0.5 % and 99.5 %
 // points (g_lo, g_hi, at the reference exposure) onto them:
 //
 //   e_min = g_min / g_lo * k,   e_max = g_max / g_hi * k,   k = reference exposure / the bracket's exposure.
@@ -152,7 +152,7 @@ struct Enclosure {
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
   if (tgt.patches_g.empty()) return false;
-  const float tgt_min = tgt.g_min, tgt_max = tgt.g_max;
+  const float tgt_min = tgt.tgt_min_g, tgt_max = tgt.tgt_max_g;
   const float k_t = (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f)) / tgt.exposure_s;
   r.target_idx = target_idx;
   r.e_min = (tgt_min / g_lo) * k_t;

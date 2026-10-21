@@ -42,10 +42,8 @@ struct BundleTarget {
   std::vector<uint8_t> icc_bytes;
   ParsedFilmProfile film_prof;
 
-  // For the conversion parameter search (multi_target_optimizer.h): the patches' green range, the bracket's camera
-  // exposure (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
-  float g_min = 0.0f;
-  float g_max = 0.0f;
+  // For the conversion parameter search (multi_target_optimizer.h): the bracket's camera exposure
+  // (shutter * ISO / 100, seconds), the tonal capacity of its grey wedge and the profcheck record.
   float exposure_s = 0.125f;
   float tonal_capacity_ev = 0.0f;
   std::string profcheck_output;

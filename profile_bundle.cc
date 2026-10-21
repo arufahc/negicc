@@ -377,11 +377,10 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
 
     if (tj.contains("patches") && tj["patches"].is_object()) {
-      std::vector<float> all_g, gs_g;
+      std::vector<float> gs_g;
       for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
         if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
           tgt.patches_g.push_back(it.value()["g"].get<float>());
-          all_g.push_back(it.value()["g"].get<float>());
         }
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
@@ -393,7 +392,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           gs_g.push_back(tj["patches"][key]["g"].get<float>());
         }
       }
-      const std::vector<float>& cap_g = gs_g.empty() ? all_g : gs_g;
+      const std::vector<float>& cap_g = gs_g.empty() ? tgt.patches_g : gs_g;
       if (!cap_g.empty()) {
         const float mx = *std::max_element(cap_g.begin(), cap_g.end());
         const float mn = *std::min_element(cap_g.begin(), cap_g.end());
@@ -402,8 +401,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       if (!tgt.patches_g.empty()) {
         tgt.tgt_min_g = *std::min_element(tgt.patches_g.begin(), tgt.patches_g.end());
         tgt.tgt_max_g = *std::max_element(tgt.patches_g.begin(), tgt.patches_g.end());
-        tgt.g_min = *std::min_element(all_g.begin(), all_g.end());
-        tgt.g_max = *std::max_element(all_g.begin(), all_g.end());
       }
     }
     if (tj.contains("profcheck_output") && tj["profcheck_output"].is_string()) {
