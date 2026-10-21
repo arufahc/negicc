@@ -126,6 +126,9 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     runner_ = make_ort_runner(onnx_path, num_threads);
 }
 
+// TODO: Fall back to CPU ONNX Runtime when the built-in TensorRT engine fails to load, as load() does. That needs an
+// ONNX backbone embedded beside the engine in USE_CUDA=1 builds (Makefile: BACKBONE_FILE), so it waits on the CUDA
+// work; until then a TensorRT failure ends the run even with backend "auto".
 void DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
                                int num_threads, int max_size, int patch_size) {
     runner_.reset();

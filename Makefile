@@ -180,7 +180,13 @@ endef
 bin_out:
 	mkdir -p $@
 
-bin_out/embedded_data.S: $(EMBED_FILES) Makefile $(BUILD_STAMP) | bin_out
+# neg_process throws on a bundle it cannot read, so the bundles are checked before they are embedded: every bracket
+# needs a shutter speed shutter_to_seconds (profile_bundle.cc) can read.
+bin_out/.bundles_checked: $(filter %/bundle.json,$(EMBED_FILES)) check_profile_bundles.py | bin_out
+	$(PYTHON) check_profile_bundles.py $(filter %/bundle.json,$(EMBED_FILES))
+	touch $@
+
+bin_out/embedded_data.S: $(EMBED_FILES) bin_out/.bundles_checked Makefile $(BUILD_STAMP) | bin_out
 	$(file > $@,$(foreach i,$(EMBED_IDX),$(call EMBED_FILE_ASM,$(i),$(word $(i),$(EMBED_FILES))))$(EMBED_TABLE_ASM))
 
 bin_out/embedded_data_files.o: bin_out/embedded_data.S
@@ -212,7 +218,7 @@ dinov3_engine:
 clean: clean_lib
 
 clean_lib:
-	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_*
+	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked
 
 clean_all: clean_lib
 	rm -f bin_out/raw_info bin_out/neg_process

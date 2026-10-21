@@ -101,6 +101,10 @@ enum class RescueOutcome {
 };
 const char* to_string(RescueOutcome outcome);
 
+// TODO: Honour neg_process's --dino_iters here. The fixed-point loop caps itself at MAX_STEPS (8) in
+// multi_target_optimizer.cc, so the option is ignored when the bundle search runs.
+// TODO: Honour neg_process's --dino_iters here. The fixed-point loop caps itself at MAX_STEPS (8) in
+// multi_target_optimizer.cc, so the option is ignored when the bundle search runs.
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
