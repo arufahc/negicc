@@ -52,97 +52,118 @@ public:
     explicit TrtRunner(const std::string& engine_path) {
         std::ifstream f(engine_path, std::ios::binary | std::ios::ate);
         if (!f) throw std::runtime_error("cannot open TensorRT engine " + engine_path);
-        m_engine_bytes = (size_t)f.tellg();
-        std::vector<char> blob(m_engine_bytes);
+        std::vector<char> blob((size_t)f.tellg());
         f.seekg(0);
         f.read(blob.data(), (std::streamsize)blob.size());
+        init(blob.data(), blob.size(), engine_path);
+    }
 
-        m_runtime.reset(nvinfer1::createInferRuntime(g_logger));
-        if (!m_runtime) throw std::runtime_error("createInferRuntime failed");
-        m_engine.reset(m_runtime->deserializeCudaEngine(blob.data(), blob.size()));
-        if (!m_engine) throw std::runtime_error("cannot deserialise TensorRT engine " + engine_path);
-        m_context.reset(m_engine->createExecutionContext());
-        if (!m_context) throw std::runtime_error("createExecutionContext failed");
+    // From a serialized engine held in memory (the backbone built into neg_process).
+    TrtRunner(const void* engine_data, size_t engine_size) { init(engine_data, engine_size, "[built-in]"); }
+
+    void init(const void* engine_data, size_t engine_size, const std::string& name) {
+        engine_bytes_ = engine_size;
+        runtime_.reset(nvinfer1::createInferRuntime(g_logger));
+        if (!runtime_) throw std::runtime_error("createInferRuntime failed");
+        engine_.reset(runtime_->deserializeCudaEngine(engine_data, engine_size));
+        if (!engine_) throw std::runtime_error("cannot deserialise TensorRT engine " + name);
+        context_.reset(engine_->createExecutionContext());
+        if (!context_) throw std::runtime_error("createExecutionContext failed");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:118-122 @ 2f7ee4a (detecting optional multi-head outputs)
-        for (int i = 0; i < m_engine->getNbIOTensors(); ++i) {
-            const char* name = m_engine->getIOTensorName(i);
-            if (std::strcmp(name, "pool_weights") == 0) m_has_pool_weights = true;
-            if (std::strcmp(name, "pooled") == 0) m_has_pooled = true;
-            if (std::strcmp(name, "pooled_tone") == 0) m_has_pooled_tone = true;
+        for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
+            const char* name = engine_->getIOTensorName(i);
+            if (std::strcmp(name, "pool_weights") == 0) has_pool_weights_ = true;
+            if (std::strcmp(name, "tokens") == 0) has_tokens_ = true;
+            if (std::strcmp(name, "pooled") == 0) has_pooled_ = true;
+            if (std::strcmp(name, "pooled_tone") == 0) has_pooled_tone_ = true;
         }
-        check_cuda(cudaStreamCreate(&m_stream), "cudaStreamCreate");
+        check_cuda(cudaStreamCreate(&stream_), "cudaStreamCreate");
     }
 
     ~TrtRunner() override {
-        if (m_stream) cudaStreamDestroy(m_stream);
+        if (stream_) cudaStreamDestroy(stream_);
     }
 
     const char* name() const override { return "gpu (TensorRT)"; }
-    bool has_pool_weights() const override { return m_has_pool_weights; }
-    bool has_pooled() const override { return m_has_pooled; }
-    bool has_pooled_tone() const override { return m_has_pooled_tone; }
+    bool has_pool_weights() const override { return has_pool_weights_; }
+    bool has_tokens() const override { return has_tokens_; }
+    bool has_pooled() const override { return has_pooled_; }
+    bool has_pooled_tone() const override { return has_pooled_tone_; }
 
     // py-ref: negicc_station/src/tensorrt_intent_model.py:153-169 @ 2f7ee4a (memory_bytes)
     size_t memory_bytes() const override {
-        return m_engine_bytes + m_pv.bytes + m_pw.bytes + m_mu.bytes + m_sigma.bytes +
-               m_pooled.bytes + m_pooled_tone.bytes;
+        return engine_bytes_ + pv_.bytes + pw_.bytes + tok_.bytes + mu_.bytes + sigma_.bytes +
+               pooled_.bytes + pooled_tone_.bytes;
     }
 
     // py-ref: negicc_station/src/tensorrt_intent_model.py:200-274 @ 2f7ee4a (predict / execution loop)
     void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
              const DinoV3RunnerOutputs& outputs) override {
-        std::lock_guard<std::mutex> lock(m_infer_mutex);
+        std::lock_guard<std::mutex> lock(infer_mutex_);
         const size_t pv_bytes = (size_t)3 * height * width * sizeof(float);
         const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:202-206 @ 2f7ee4a (input shapes must be set before output shapes)
-        if (!m_context->setInputShape("pixel_values", nvinfer1::Dims4{1, 3, height, width}))
+        if (!context_->setInputShape("pixel_values", nvinfer1::Dims4{1, 3, height, width}))
             throw std::runtime_error("TensorRT engine rejects input shape (profile range)");
-        m_context->setTensorAddress("pixel_values", m_pv.reserve(pv_bytes));
-        check_cuda(cudaMemcpyAsync(m_pv.ptr, pixel_values, pv_bytes, cudaMemcpyHostToDevice, m_stream), "H2D");
-        if (m_has_pool_weights) {
-            m_context->setInputShape("pool_weights", nvinfer1::Dims3{1, patches, 3});
-            m_context->setTensorAddress("pool_weights", m_pw.reserve(field_bytes));
-            check_cuda(cudaMemcpyAsync(m_pw.ptr, pool_weights, field_bytes, cudaMemcpyHostToDevice, m_stream), "H2D");
+        context_->setTensorAddress("pixel_values", pv_.reserve(pv_bytes));
+        check_cuda(cudaMemcpyAsync(pv_.ptr, pixel_values, pv_bytes, cudaMemcpyHostToDevice, stream_), "H2D");
+        if (has_pool_weights_) {
+            context_->setInputShape("pool_weights", nvinfer1::Dims3{1, patches, 3});
+            context_->setTensorAddress("pool_weights", pw_.reserve(field_bytes));
+            check_cuda(cudaMemcpyAsync(pw_.ptr, pool_weights, field_bytes, cudaMemcpyHostToDevice, stream_), "H2D");
         }
-        m_context->setTensorAddress("mu", m_mu.reserve(field_bytes));
-        m_context->setTensorAddress("sigma", m_sigma.reserve(field_bytes));
-        if (m_has_pooled) m_context->setTensorAddress("pooled", m_pooled.reserve(1152 * sizeof(float)));
-        if (m_has_pooled_tone) m_context->setTensorAddress("pooled_tone", m_pooled_tone.reserve(3 * 768 * sizeof(float)));
+        const size_t tok_bytes = (size_t)patches * 768 * sizeof(float);
+        if (has_tokens_) {
+            context_->setTensorAddress("tokens", tok_.reserve(tok_bytes));
+        } else {
+            context_->setTensorAddress("mu", mu_.reserve(field_bytes));
+            context_->setTensorAddress("sigma", sigma_.reserve(field_bytes));
+        }
+        if (has_pooled_) context_->setTensorAddress("pooled", pooled_.reserve(1152 * sizeof(float)));
+        if (has_pooled_tone_) context_->setTensorAddress("pooled_tone", pooled_tone_.reserve(3 * 768 * sizeof(float)));
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:245 @ 2f7ee4a (enqueue execution)
-        if (!m_context->enqueueV3(m_stream)) throw std::runtime_error("TensorRT enqueueV3 failed");
+        if (!context_->enqueueV3(stream_)) throw std::runtime_error("TensorRT enqueueV3 failed");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:252-266 @ 2f7ee4a (D2H output copy on stream)
-        if (outputs.mu)
-            check_cuda(cudaMemcpyAsync(outputs.mu, m_mu.ptr, field_bytes, cudaMemcpyDeviceToHost, m_stream), "D2H mu");
-        if (outputs.sigma)
-            check_cuda(cudaMemcpyAsync(outputs.sigma, m_sigma.ptr, field_bytes, cudaMemcpyDeviceToHost, m_stream), "D2H sigma");
-        if (outputs.pooled && m_has_pooled)
-            check_cuda(cudaMemcpyAsync(outputs.pooled, m_pooled.ptr, 1152 * sizeof(float), cudaMemcpyDeviceToHost, m_stream), "D2H pooled");
-        if (outputs.pooled_tone && m_has_pooled_tone)
-            check_cuda(cudaMemcpyAsync(outputs.pooled_tone, m_pooled_tone.ptr, 3 * 768 * sizeof(float), cudaMemcpyDeviceToHost, m_stream), "D2H pooled_tone");
+        if (outputs.tokens && has_tokens_)
+            check_cuda(cudaMemcpyAsync(outputs.tokens, tok_.ptr, tok_bytes, cudaMemcpyDeviceToHost, stream_), "D2H tokens");
+        if (outputs.mu && !has_tokens_)
+            check_cuda(cudaMemcpyAsync(outputs.mu, mu_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H mu");
+        if (outputs.sigma && !has_tokens_)
+            check_cuda(cudaMemcpyAsync(outputs.sigma, sigma_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H sigma");
+        if (outputs.pooled && has_pooled_)
+            check_cuda(cudaMemcpyAsync(outputs.pooled, pooled_.ptr, 1152 * sizeof(float), cudaMemcpyDeviceToHost, stream_), "D2H pooled");
+        if (outputs.pooled_tone && has_pooled_tone_)
+            check_cuda(cudaMemcpyAsync(outputs.pooled_tone, pooled_tone_.ptr, 3 * 768 * sizeof(float), cudaMemcpyDeviceToHost, stream_), "D2H pooled_tone");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:246 @ 2f7ee4a (sync stream before host access)
-        check_cuda(cudaStreamSynchronize(m_stream), "cudaStreamSynchronize");
+        check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
     }
 
 private:
-    std::mutex m_infer_mutex;
-    std::unique_ptr<nvinfer1::IRuntime> m_runtime;
-    std::unique_ptr<nvinfer1::ICudaEngine> m_engine;
-    std::unique_ptr<nvinfer1::IExecutionContext> m_context;
-    cudaStream_t m_stream = nullptr;
-    size_t m_engine_bytes = 0;
-    bool m_has_pool_weights = false, m_has_pooled = false, m_has_pooled_tone = false;
-    DeviceBuffer m_pv, m_pw, m_mu, m_sigma, m_pooled, m_pooled_tone;
+    // Serializes run(): the station's Python binding calls infer without the GIL, so several threads can share one
+    // engine. TODO: Move this lock back into the station code (its binding), the only caller with several threads.
+    std::mutex infer_mutex_;
+    std::unique_ptr<nvinfer1::IRuntime> runtime_;
+    std::unique_ptr<nvinfer1::ICudaEngine> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext> context_;
+    cudaStream_t stream_ = nullptr;
+    size_t engine_bytes_ = 0;
+    bool has_pool_weights_ = false, has_tokens_ = false, has_pooled_ = false, has_pooled_tone_ = false;
+    DeviceBuffer pv_, pw_, tok_, mu_, sigma_, pooled_, pooled_tone_;
 };
 
 }  // namespace
 
 std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path) {
     return std::make_unique<TrtRunner>(engine_path);
+}
+
+std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size) {
+    return std::make_unique<TrtRunner>(engine_data, engine_size);
 }
 
 bool cuda_device_available() {

@@ -1,13 +1,14 @@
-# neg_process converts film negative RAW scans; the profiles are built in negicc-station.
+# neg_process: converts film negative RAW scans with the profiles and intent adapters built into it.
+#
+#   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
+#   make dinov3_engine      # its TensorRT engine, for USE_CUDA=1 builds (on the machine that runs it)
+#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
+#   make lib                # bin_out/libnegicc_dinov3.a, linked by negicc-station
 
-.PHONY: clean clean_lib clean_all lib neg_process raw_info
-clean: clean_lib
+PYTHON ?= python3
 
-clean_lib:
-	rm -f bin_out/*.o bin_out/*.a bin_out/.use_cuda_*
-
-clean_all: clean_lib
-	rm -f bin_out/raw_info bin_out/neg_process
+.PHONY: all lib neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+all: neg_process
 
 raw_info: raw_info.cc
 	mkdir -p bin_out
@@ -80,7 +81,10 @@ $(BUILD_STAMP):
 
 DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(ORT_INC) $(DINOV3_EXTRA_INC)
 
-DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o $(DINOV3_RUNNER_OBJ)
+# The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
+# neg_process (profile bundles, cropping, the conversion parameter search).
+DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
+              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -94,7 +98,7 @@ bin_out/dinov3_ort_runner.o: dinov3_ort_runner.cc dinov3_ort_runner.h dinov3_run
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_ort_runner.cc -o $@
 
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h neg_pipeline.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h neg_pipeline.h colorspace_conversion.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
@@ -105,6 +109,14 @@ bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_trt_runner.h dinov3_run
 bin_out/dinov3_nocuda.o: dinov3_nocuda.cc dinov3_runner.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_nocuda.cc -o $@
+
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
+
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
 bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -119,14 +131,94 @@ bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BU
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
 
-bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+# Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
+# (tools/export_negicc_data.py), and the DINOv3 backbone: its TensorRT engine in USE_CUDA=1 builds (make
+# dinov3_engine, on the machine that runs it), else backbone.onnx (make dinov3_model). Without the backbone
+# neg_process still builds, but converts only with --gain_g or --gain_b given.
+BACKBONE_FILE = models/dinov3-small/backbone.$(if $(filter 1,$(USE_CUDA)),engine,onnx)
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx)) \
+              $(wildcard $(BACKBONE_FILE))
+
+EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
+
+# The symbols of the embedded data, shared by bin_out/embedded_data.S and embedded_data.cc: EMBED_TABLE, an array of
+# {name, data, size} entries (EmbeddedFile), and EMBED_COUNT, the number of entries.
+EMBED_TABLE = negicc_embedded_table
+EMBED_COUNT = negicc_embedded_count
+
+define newline
+
+
+endef
+
+# Embeds file $(2) as entry $(1): its bytes, a NUL byte after them (so text files parse in place) and its path,
+# which is its name in the table.
+define EMBED_FILE_ASM
+    .section .rodata
+    .balign 16
+$(EMBED_TABLE)_data_$(1):
+    .incbin "$(2)"
+$(EMBED_TABLE)_end_$(1):
+    .byte 0
+$(EMBED_TABLE)_name_$(1):
+    .asciz "$(2)"
+
+endef
+
+define EMBED_TABLE_ASM
+    .section .data.rel.ro, "aw"
+    .balign 8
+    .globl $(EMBED_TABLE)
+$(EMBED_TABLE):
+$(foreach i,$(EMBED_IDX),    .quad $(EMBED_TABLE)_name_$(i), $(EMBED_TABLE)_data_$(i), $(EMBED_TABLE)_end_$(i) - $(EMBED_TABLE)_data_$(i)$(newline))
+    .globl $(EMBED_COUNT)
+$(EMBED_COUNT):
+    .quad $(words $(EMBED_FILES))
+    .section .note.GNU-stack, "", %progbits
+endef
+
+bin_out:
+	mkdir -p $@
+
+# neg_process throws on a bundle it cannot read, so the bundles are checked before they are embedded: every bracket
+# needs a shutter speed shutter_to_seconds (profile_bundle.cc) can read.
+bin_out/.bundles_checked: $(filter %/bundle.json,$(EMBED_FILES)) check_profile_bundles.py | bin_out
+	$(PYTHON) check_profile_bundles.py $(filter %/bundle.json,$(EMBED_FILES))
+	touch $@
+
+bin_out/embedded_data.S: $(EMBED_FILES) bin_out/.bundles_checked Makefile $(BUILD_STAMP) | bin_out
+	$(file > $@,$(foreach i,$(EMBED_IDX),$(call EMBED_FILE_ASM,$(i),$(word $(i),$(EMBED_FILES))))$(EMBED_TABLE_ASM))
+
+bin_out/embedded_data_files.o: bin_out/embedded_data.S
+	$(CC) -c $< -o $@
+
+bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makefile $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party -c profile_bundle.cc -o $@
+	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -DEMBED_TABLE=$(EMBED_TABLE) -DEMBED_COUNT=$(EMBED_COUNT) \
+	    -c embedded_data.cc -o $@
+
+NEG_PROCESS_OBJS = bin_out/film_frame_detector.o bin_out/embedded_data.o bin_out/embedded_data_files.o
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h $(BUILD_STAMP)
-	mkdir -p bin_out profiles
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc bin_out/film_frame_detector.o bin_out/profile_bundle.o bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h multi_target_optimizer.h embedded_data.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
+# The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
+# transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
+DINOV3_SOURCE ?= Tooony133/dinov3-vits16-pretrain-lvd1689m
 
+dinov3_model:
+	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --source $(DINOV3_SOURCE)
+
+dinov3_engine:
+	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only
+
+clean: clean_lib
+
+clean_lib:
+	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked
+
+clean_all: clean_lib
+	rm -f bin_out/raw_info bin_out/neg_process

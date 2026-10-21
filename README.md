@@ -4,6 +4,8 @@
 > **This repository is no longer maintained.**
 > This project was created for research purposes. The active, fully integrated capture and conversion station software—including automated USB tethering, GTK3 desktop UIs, CUDA hardware acceleration, and optimized multi-exposure profiling—is now maintained in the **[negicc-station](https://github.com/arufahc/negicc-station)** repository. Please check the new [negicc-station README](https://github.com/arufahc/negicc-station/blob/main/README.md) for setup and instructions.
 
+> **TODO:** update this notice: this repository is now negicc-station's conversion engine (`neg_process` with the automatic conversion and the built-in profiles).
+
 NegICC is a project for creating ICC profiles for color negatives. The main
 objective of the tool is to have consistent colors for images of negative
 film taken with a digital camera.
@@ -12,6 +14,8 @@ The ICC profiles created should have the following properties:
 * Allow color balance adjustments
 * Produces netural color which allows further asdjustments
 * Can be used with commonly available photo editting tools
+
+> **TODO:** the profiles are now built in negicc-station and exported here as profile bundles (`profiles/<Key>/`, one ICC profile per calibration bracket).
 
 ![sample conversion](samples/sample.png)
 
@@ -41,6 +45,8 @@ luminance values.
 
 ![IT8 used for profiling](samples/it8.png)
 
+> **TODO:** describe the capture with trichromatic (narrowband RGB) LEDs: one shot with a crosstalk correction matrix (`--light_source tri`, the bundle's matrix or `-r -g -b`), and in future three shots, one per LED colour, needing no correction matrix.
+
 The tool provided in this repo will generate the following curves.
 
 ![TRC Curves](samples/trc_curves.png)
@@ -65,6 +71,8 @@ The cLUT or matrix is to map the resultant linerized RGB values into XYZ
 values. cLUT usually is more accurate but could cause clipping and hence
 not ideal for photo editting. Matrix is much less accurate but is more
 robust for editting.
+
+> **TODO:** update for the profiles negicc-station builds (bundles of cLUT profiles, one per calibration bracket); the data files and profiling tools described below have moved to negicc-station.
 
 The matrix in the third profile includes a crosstalk correction matrix to
 account for crosstalk between RGB channels of the digital sensor, the
@@ -103,6 +111,8 @@ sudo apt-get install python3 pip argyll liblcms2-dev libraw-dev libtiff-dev
 pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
 ```
 
+> **TODO:** the profiling requirements (ArgyllCMS, the Python packages) moved to negicc-station. `neg_process` needs libraw, lcms2, zlib, ONNX Runtime (`3rd_party/onnxruntime`) and the DINOv3 backbone (`make dinov3_model`).
+
 # Hardware Used
 
 ## Creating Profiles
@@ -121,6 +131,8 @@ pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
 * Edmund Optics #87-254
 * Sony A7RM4
 * Rayfact QVM05041MF
+
+> **TODO:** add the trichromatic LED setup; creating profiles is now done with negicc-station.
 
 # Usage Example
 
@@ -146,6 +158,8 @@ In single shot mode, libRAW processing is used and scales automatically but
 without auto brightness. Either mode will give consistent results as long
 as you don't switch between the two modes.
 
+> **TODO:** the profile make targets above are removed. Update for `--film_stock` and `--light_source`, the parameter search that runs by default, and `--list_profiles` (see `bin_out/neg_process --help`).
+
 Usage like this:
 ```
 # Single shot mode. The output format is PPM.
@@ -170,3 +184,5 @@ imported again for further editting.
 # More details
 
 Please see the code in build_prof.py and neg_process.{cc, py} for details of the algorithm.
+
+> **TODO:** `build_prof.py` and `neg_process.py` are removed; point to `neg_process.cc`, `multi_target_optimizer.cc` (the conversion parameter search) and negicc-station.
