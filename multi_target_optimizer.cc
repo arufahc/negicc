@@ -264,7 +264,7 @@ class GreyPoint {
         const float vv = std::isfinite(v) ? v : 0.0f;
         px[c] = std::lround(std::fmin(1.0f, std::fmax(0.0f, vv)) * 65535.0f);
       }
-      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, false, 1.0f, prof_));
+      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, prof_));
       out[i][0] = lab.L;
       out[i][1] = lab.a;
       out[i][2] = lab.b;
@@ -686,7 +686,7 @@ class SearchFrame {
       const uint16_t* row = pixel_at(*frame_, crop_.x0, crop_.y0 + y);
       uint8_t* dst = &out[(size_t)y * crop_.w * 3];
       for (int x = 0; x < crop_.w; ++x, row += 3, dst += 3) {
-        const Rgb v = convert_pixel_srgb(row, m, AUTO_KNEE, false, 1.0f, prof);
+        const Rgb v = convert_pixel_srgb(row, m, AUTO_KNEE, prof);
         dst[0] = quantize_u8(v.r);
         dst[1] = quantize_u8(v.g);
         dst[2] = quantize_u8(v.b);
