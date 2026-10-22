@@ -67,7 +67,6 @@ namespace {
 // Fixed-point loop thresholds (see FixedPointStatus).
 constexpr float TOL_PARAM = 0.02f;     // |dE| + |dg| + |db| <= 0.02
 constexpr float TOL_REL_ERR = 0.015f;  // relative residual change <= 1.5 %
-constexpr int MAX_STEPS = 8;
 // The scene's range is taken between its SCENE_TAIL and 1 - SCENE_TAIL points.
 constexpr float SCENE_TAIL = 0.005f;
 constexpr float SLACK_PENALTY_SCALE = 0.5f;
@@ -660,8 +659,8 @@ float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.ex
 // added up into the result.
 class SearchFrame {
  public:
-  SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, ParamSearchResult& out)
-      : bundle_(bundle), engine_(engine), verbose_(verbose), out_(out) {}
+  SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, int max_steps, ParamSearchResult& out)
+      : bundle_(bundle), engine_(engine), verbose_(verbose), max_steps_(std::max(1, max_steps)), out_(out) {}
 
   // Takes the upright frame (kept by reference) and its inner crop, and the statistics.
   void set_frame(const RgbImage& frame, float crop_ratio) {
@@ -776,7 +775,7 @@ class SearchFrame {
     float best_err = 0.0f;
     std::vector<uint8_t> preview;
     std::vector<float> mu, sigma;
-    for (int it = 0; it < MAX_STEPS; ++it) {
+    for (int it = 0; it < max_steps_; ++it) {
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
       const float err = residual(preview, mu, sigma);
@@ -839,6 +838,7 @@ class SearchFrame {
   const ProfileBundle& bundle_;
   DinoV3Engine& engine_;
   const bool verbose_;
+  const int max_steps_;
   ParamSearchResult& out_;
 
   float crop_ratio_ = 0.90f;
@@ -957,7 +957,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::cerr << "ERROR! The profile bundle has no targets" << std::endl;
     return false;
   }
-  SearchFrame fr(bundle, engine, verbose, out);
+  SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
   fr.set_frame(frame, opts.crop_ratio);
