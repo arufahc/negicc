@@ -1890,8 +1890,9 @@ int main(int ac, char *av[]) {
   std::string dino_path;
   const std::string dino_backend = parser.get<std::string>("--dino_backend");
   if (use_dino) {
-    bool is_trt_engine = false;
-    const EmbeddedFile* backbone = find_embedded_backbone(is_trt_engine);
+    const EmbeddedFile* trt = find_embedded_backbone(true);
+    const EmbeddedFile* onnx = find_embedded_backbone(false);
+    const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
       fprintf(stderr, "ERROR! This neg_process was built without the DINOv3 backbone of the parameter search (make "
                       "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild); give --gain_g or --gain_b "
@@ -1900,7 +1901,12 @@ int main(int ac, char *av[]) {
     }
     dino_path = std::string("[built-in] ") + backbone->name;
     printf("Loading DINOv3 backbone %s (backend: %s)...\n", dino_path.c_str(), dino_backend.c_str());
-    engine.load_memory(backbone->data, backbone->size, is_trt_engine, dino_backend);
+    engine.load_memory(trt ? trt->data : nullptr, trt ? trt->size : 0, onnx ? onnx->data : nullptr,
+                       onnx ? onnx->size : 0, dino_backend);
+    // The file that runs: the .onnx when the engine was not loaded.
+    if (trt && engine.backend_name() != std::string("gpu (TensorRT)")) {
+      dino_path = std::string("[built-in] ") + onnx->name;
+    }
     if (parser.is_used("--dino")) {
       std::string adapter = parser.get<std::string>("--dino");
       if (is_directory(adapter)) adapter = (std::filesystem::path(adapter) / "adapter.onnx").string();

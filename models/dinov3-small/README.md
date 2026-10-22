@@ -10,5 +10,6 @@ make dinov3_model        # DINOV3_SOURCE=<Hugging Face id or local directory> to
 which writes `backbone.onnx`, `backbone.json` (where the weights came from) and the weights' licence files. The
 weights are Meta's DINOv3, distributed under the DINOv3 License: keep its licence files next to `backbone.onnx`.
 
-`neg_process` packs the backbone into the binary: `backbone.onnx` in `USE_CUDA=0` builds, and in `USE_CUDA=1` builds
-`backbone.engine`, the TensorRT engine `make dinov3_engine` builds on the machine that runs it (not checked in).
+`neg_process` packs the backbone into the binary: `backbone.onnx`, and in `USE_CUDA=1` builds also `backbone.engine`,
+the TensorRT engine `make dinov3_engine` builds on the machine that runs it (not checked in). The engine runs when the
+machine has a CUDA device; when it cannot be loaded, `--dino_backend auto` falls back to `backbone.onnx`.
