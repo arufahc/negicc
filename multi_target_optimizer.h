@@ -72,7 +72,7 @@ struct ConversionParams {
 enum class FixedPointStatus {
   kConverged,  // E, g, b moved by 0.02 or less in total, or the residual by 1.5 % or less, in the last step
   kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
-  kMaxIters,   // neither within 8 steps
+  kMaxIters,   // neither within ParamSearchOptions::max_steps steps
 };
 const char* to_string(FixedPointStatus status);
 
@@ -101,12 +101,9 @@ enum class RescueOutcome {
 };
 const char* to_string(RescueOutcome outcome);
 
-// TODO: Honour neg_process's --dino_iters here. The fixed-point loop caps itself at MAX_STEPS (8) in
-// multi_target_optimizer.cc, so the option is ignored when the bundle search runs.
-// TODO: Honour neg_process's --dino_iters here. The fixed-point loop caps itself at MAX_STEPS (8) in
-// multi_target_optimizer.cc, so the option is ignored when the bundle search runs.
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
+  int max_steps = 8;         // the most steps of each bracket's fixed-point loop (neg_process's --dino_iters)
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
   const float* film_base_rgb = nullptr;
   bool verbose = true;
