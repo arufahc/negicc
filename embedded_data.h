@@ -23,8 +23,8 @@
 
 // Data files built into neg_process (EMBED_FILES in the Makefile): the profile bundles under profiles/<Key>/ (bundle.json and
 // its ICC profiles), the DINOv3 intent adapters under models/dinov3-small_<stock>/ and the DINOv3 backbone when it
-// was exported before the build (models/dinov3-small/backbone.engine in USE_CUDA=1 builds, backbone.onnx in
-// USE_CUDA=0 builds). Names are the files' paths in the
+// was exported before the build (models/dinov3-small/backbone.onnx, and backbone.engine in USE_CUDA=1 builds). Names
+// are the files' paths in the
 // repository, e.g. "profiles/Portra400-A7R4-TriLED/bundle.json" or "models/dinov3-small_portra400/adapter.onnx".
 struct EmbeddedFile {
   const char* name;
@@ -56,8 +56,8 @@ std::vector<std::string> list_embedded_bundles();
 // py-ref: negicc_station/src/intent_model.py @ 93be1ec (resolve_model_for_profile)
 const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::string& adapter_dir);
 
-// The DINOv3 backbone built in, or null when the build had none. is_trt_engine tells a TensorRT engine
-// (backbone.engine) from an ONNX model (backbone.onnx).
-const EmbeddedFile* find_embedded_backbone(bool& is_trt_engine);
+// The DINOv3 backbone built in: its TensorRT engine (backbone.engine) when trt_engine, else its ONNX model
+// (backbone.onnx). Null when the build has none.
+const EmbeddedFile* find_embedded_backbone(bool trt_engine);
 
 #endif  // EMBEDDED_DATA_H
