@@ -57,7 +57,8 @@ public:
     int max_size() const { return max_size_; }
     int patch_size() const { return patch_size_; }
 
-    // Run inference on 8-bit sRGB preview image
+    // Run inference on 8-bit sRGB preview image. Not thread-safe (a TensorRT execution context runs one inference at
+    // a time): callers that share one engine between threads serialize their calls, as negicc-station's binding does.
     // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict)
     DinoV3InferenceResult infer(const uint8_t* srgb_data, int width, int height, int stride);
 
