@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -452,6 +453,125 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   return true;
 }
 
+// How load_raw decodes a RAW to RGB.
+enum class RawDecode {
+  kRec2020,     // LibRaw to linear Rec.2020 with unit channel multipliers (no profile bundle, no -r -g -b)
+  kCameraRgb,   // sensor RGB, unit channel multipliers: a camera_raw_rgb (TriLED) bundle or -r -g -b
+  kWhiteLight,  // a rec2020_linear (D65) bundle: prepare_white_light_mosaic, then decode_white_light
+};
+
+// White-light decode of a rec2020_linear profile bundle, in two steps on an unpacked proc. First, in place on the
+// CFA mosaic and in sensor-linear units, the black level is subtracted and the camera's daylight white balance
+// (pre_mul over its green) applied. Then (decode_white_light) LibRaw demosaics bilinearly to linear sRGB through its
+// own camera matrix with no rescaling, and the pixels go from linear sRGB to linear Rec.2020, so values stay in
+// sensor units. LibRaw clamps its sRGB output to [0, 65535], so colours outside sRGB lose their negative component;
+// negicc-station records that as a known limitation of the white-light path. There is no flat field here (neg_process
+// applies none on any path).
+// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light)
+// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked)
+//
+// Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
+// when the RAW has no 3-colour CFA or no daylight white balance.
+static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
+  auto& S = proc->imgdata.sizes;
+  auto& C = proc->imgdata.color;
+  uint16_t* raw = proc->imgdata.rawdata.raw_image;
+  if (!raw || !proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3) {
+    fprintf(stderr, "ERROR! The white-light decode needs a 3-colour CFA RAW file\n");
+    return false;
+  }
+  const int w = S.width, h = S.height, top = S.top_margin, left = S.left_margin;
+  const size_t pitch = S.raw_pitch / 2;
+  if (w <= 0 || h <= 0 || top + h > S.raw_height || left + w > (int)pitch) {
+    fprintf(stderr, "ERROR! RAW margins exceed the raw buffer\n");
+    return false;
+  }
+  // Colour of each photosite in a 6x6 tile (Bayer repeats every 2): 0..3 for the black level, 0..2 for the gains.
+  uint8_t col4[36];
+  for (int r = 0; r < 6; ++r)
+    for (int c = 0; c < 6; ++c) col4[r * 6 + c] = (uint8_t)(proc->COLOR(r, c) & 3);
+  float pre[4];
+  for (int i = 0; i < 4; ++i) pre[i] = C.pre_mul[i];
+  if (pre[3] <= 0) pre[3] = pre[1];
+  if (!(pre[0] > 0 && pre[1] > 0 && pre[2] > 0)) {
+    fprintf(stderr, "ERROR! No daylight white balance (pre_mul) for this camera; the white-light decode needs one\n");
+    return false;
+  }
+  float wb[4];
+  for (int i = 0; i < 4; ++i) wb[i] = pre[i] / pre[1];
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  const bool pattern = dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6;
+  const unsigned white = C.maximum;
+  const unsigned clip_level = white - white / 200;
+
+  size_t clipped = 0;
+  #pragma omp parallel for reduction(+ : clipped) schedule(static)
+  for (int y = 0; y < h; ++y) {
+    uint16_t* p = raw + (size_t)(y + top) * pitch + left;
+    for (int x = 0; x < w; ++x) {
+      const int k = col4[(y % 6) * 6 + x % 6];
+      int black = (int)C.black + (int)C.cblack[k];
+      if (pattern) black += (int)C.cblack[6 + (y % dr) * dc + (x % dc)];
+      clipped += p[x] >= clip_level ? 1 : 0;
+      const float v = std::max(0, (int)p[x] - black) * wb[k];
+      p[x] = (uint16_t)std::min(std::nearbyint(v), 65535.0f);
+    }
+  }
+  clip_fraction = (double)clipped / ((double)w * h);
+
+  // The mosaic is black-subtracted and white-balanced: LibRaw must neither subtract nor rescale again. user_black and
+  // user_cblack make every dcraw_process (each restores imgdata.color from the unpacked RAW) take a zero black level,
+  // so the mosaic can be decoded more than once (half-size for the search, then the output).
+  C.black = 0;
+  std::memset(C.cblack, 0, sizeof(C.cblack));
+  auto& O = proc->imgdata.params;
+  O.user_black = 0;
+  for (int i = 0; i < 4; ++i) O.user_cblack[i] = 0;
+  O.no_auto_scale = 1;
+  O.use_camera_wb = 0;
+  O.use_auto_wb = 0;
+  for (int i = 0; i < 4; ++i) O.user_mul[i] = 1;
+  O.output_color = 1;  // sRGB, through LibRaw's own camera matrix for this camera
+  O.output_bps = 16;
+  O.gamm[0] = 1;
+  O.gamm[1] = 1;
+  O.no_auto_bright = 1;
+  O.highlight = 1;
+  O.user_flip = 0;
+  O.four_color_rgb = 0;
+  return true;
+}
+
+// Demosaics the mosaic prepare_white_light_mosaic prepared (half: LibRaw's half-size decode; qual: LibRaw's user_qual,
+// negicc-station uses 0, bilinear) and converts imgdata.image from linear sRGB to linear Rec.2020 in place. The
+// cropbox, if any, is set by the caller. False when LibRaw cannot process it.
+static bool decode_white_light(LibRaw* proc, bool half, int qual) {
+  proc->imgdata.params.half_size = half ? 1 : 0;
+  proc->imgdata.params.user_qual = qual;
+  const int ret = proc->dcraw_process();
+  if (ret != LIBRAW_SUCCESS) {
+    fprintf(stderr, "ERROR! Cannot process the white-light decode: %s\n", libraw_strerror(ret));
+    return false;
+  }
+  // Linear sRGB (D65) to linear Rec.2020 (D65), as negicc-station's film_profiling.M_SRGB_TO_REC2020. Every
+  // coefficient is positive and each row sums to 1, so the result needs no clamping below 0 or above the input's
+  // maximum.
+  static const float M[3][3] = {{0.6274039f, 0.32928304f, 0.04331307f},
+                                {0.06909729f, 0.9195404f, 0.01136232f},
+                                {0.01639144f, 0.08801331f, 0.89559525f}};
+  auto* img = proc->imgdata.image;
+  const long long n = (long long)proc->imgdata.sizes.iwidth * proc->imgdata.sizes.iheight;
+  #pragma omp parallel for schedule(static)
+  for (long long i = 0; i < n; ++i) {
+    const float r = img[i][0], g = img[i][1], b = img[i][2];
+    for (int c = 0; c < 3; ++c) {
+      const float v = M[c][0] * r + M[c][1] * g + M[c][2] * b;
+      img[i][c] = (uint16_t)std::min(std::nearbyint(v), 65535.0f);
+    }
+  }
+  return true;
+}
+
 // Load a RAW file and decode it into linear values.
 //
 // If |debayer| is true, interpolation is performed to generate missing pixels
@@ -468,9 +588,16 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // When |crop| is false, the entire RAW file is used, disregarding aspect ratio
 // and cropbox specified in the RAW metadata.
 //
-// |analyse|, when set, is called with the half-size image of the RAW before it is decoded (read_half_size).
+// |decode| picks the colour path of a debayered decode (RawDecode); kWhiteLight decodes with LibRaw's bilinear
+// demosaic (or qual when it is >= 0), never grain-aware.
+//
+// |analyse|, when set, is called with the half-size image of the RAW before it is decoded: LibRaw's half-size readout
+// of the mosaic (read_half_size), or for kWhiteLight its half-size white-light decode, in the same space as the
+// output.
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
-                 bool crosstalk_specified = false, const int* roi = nullptr, const HalfSizeAnalysis& analyse = {}) {
+                 RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
+                 const HalfSizeAnalysis& analyse = {}) {
+  const bool white_light = debayer && decode == RawDecode::kWhiteLight;
   int ret;
   LibRaw* proc = new LibRaw();
 
@@ -492,7 +619,22 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     delete proc;
     return NULL;
   }
-  if (analyse && !read_half_size(proc, analyse)) {
+  if (white_light) {
+    double clip_fraction = 0.0;
+    if (!prepare_white_light_mosaic(proc, clip_fraction)) {
+      delete proc;
+      return NULL;
+    }
+    printf("White-light decode (linear Rec.2020): %.4f%% of photosites clipped\n", clip_fraction * 100.0);
+    if (analyse) {
+      if (!decode_white_light(proc, true, 0)) {
+        delete proc;
+        return NULL;
+      }
+      analyse(*proc);
+      proc->free_image();
+    }
+  } else if (analyse && !read_half_size(proc, analyse)) {
     delete proc;
     return NULL;
   }
@@ -522,11 +664,12 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     proc->imgdata.sizes.iwidth = proc->imgdata.sizes.width;
     proc->imgdata.sizes.iheight = proc->imgdata.sizes.height;
   } else {
-    // When -r -g -b is specified, assume camera linear RGB (output_color = 0) regardless of debayer.
-    // Otherwise fallback to Rec.2020 (output_color = 8).
-    proc->imgdata.params.output_color = crosstalk_specified ? 0 : 8;
+    // Camera linear RGB (output_color = 0) for a crosstalk correction (a camera_raw_rgb bundle or -r -g -b);
+    // otherwise Rec.2020 (output_color = 8). The white-light decode set its own (prepare_white_light_mosaic).
+    const bool camera_rgb = decode == RawDecode::kCameraRgb;
+    if (!white_light) proc->imgdata.params.output_color = camera_rgb ? 0 : 8;
 
-    bool use_grain_aware = (!half_size && qual < 0 && crosstalk_specified && is_sony_cfa_geometry(proc));
+    bool use_grain_aware = (!half_size && qual < 0 && camera_rgb && is_sony_cfa_geometry(proc));
     if (use_grain_aware) {
       printf("Debayer quality: grain-aware\n");
       if (!debayer_grain_aware(proc, crop, roi)) {
@@ -540,6 +683,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       proc->imgdata.params.half_size = half_size;
       proc->imgdata.params.user_qual = effective_qual;
       proc->imgdata.params.use_auto_wb = 0;
+      // Unit multipliers on every path: the white-light decode has applied its white balance to the mosaic.
       proc->imgdata.params.user_mul[0] = 1;
       proc->imgdata.params.user_mul[1] = 1;
       proc->imgdata.params.user_mul[2] = 1;
@@ -560,14 +704,25 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
 #else
         auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
 #endif
-        if (crop && (crop_ref.cleft || crop_ref.ctop)) {
+        // LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff
+        // with a zero size; dcraw_process would refuse that as a bad crop box.
+        const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 && crop_ref.cleft != 0xffff &&
+                                    crop_ref.ctop != 0xffff;
+        if (crop && has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
           proc->imgdata.params.cropbox[0] = crop_ref.cleft;
           proc->imgdata.params.cropbox[1] = crop_ref.ctop;
           proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
           proc->imgdata.params.cropbox[3] = crop_ref.cheight;
         }
       }
-      proc->dcraw_process();
+      if (white_light) {
+        if (!decode_white_light(proc, half_size, effective_qual)) {
+          delete proc;
+          return NULL;
+        }
+      } else {
+        proc->dcraw_process();
+      }
     }
   }
   printf("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
@@ -615,7 +770,7 @@ void merge_pixel_shift_frame(LibRaw* base, LibRaw* frame, int mi) {
 LibRaw* merge_pixel_shift_streaming(const std::vector<std::string>& files, const HalfSizeAnalysis& analyse = {}) {
   if (files.size() < 4) return nullptr;
   printf("Merging 4 images...\n");
-  LibRaw* base = load_raw(files[0], false, false, 0, false, false, nullptr, analyse);
+  LibRaw* base = load_raw(files[0], false, false, 0, false, RawDecode::kCameraRgb, nullptr, analyse);
   if (!base) return nullptr;
   if (!is_sony_a7rm4(base)) {
     fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
@@ -1006,7 +1161,8 @@ static bool write_json_sidecar(
     int bundle_target_idx = -1,
     const ParamSearchResult* auto_res = nullptr,
     const int* auto_frame_half = nullptr,
-    double t_auto_ms = 0.0) {
+    double t_auto_ms = 0.0,
+    InputSpace input_space = InputSpace::kCameraRawRgb) {
   const std::string json_path = output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
   FILE* fp = fopen(tmp_path.c_str(), "w");
@@ -1104,8 +1260,10 @@ static bool write_json_sidecar(
   // profile
   if (!film_profile_path.empty()) {
     if (is_bundle) {
-      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"bundle\", \"bundle_target\": \"%s\"},\n",
-              json_escape(film_profile_path).c_str(), json_escape(bundle_target_name).c_str());
+      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"bundle\", \"bundle_target\": \"%s\", "
+              "\"input_space\": \"%s\"},\n",
+              json_escape(film_profile_path).c_str(), json_escape(bundle_target_name).c_str(),
+              to_string(input_space));
     } else {
       fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"icc\", \"bundle_target\": null},\n",
               json_escape(film_profile_path).c_str());
@@ -1306,8 +1464,10 @@ static bool write_json_sidecar(
 //
 // - A single RAW captured under the narrowband RGB LED (tri) or white (d65) light, e.g.
 //     neg_process --film_stock portra400 --light_source tri --roi 1700 0 6686 6376 -o out.tif scan.ARW
-//   The built-in profile bundle of the film stock and light gives the crosstalk correction; -r, -g and -b
-//   override it with one measured for this capture. -p overrides the bundle with a negicc-station bundle JSON
+//   A tri bundle (input_space camera_raw_rgb) converts the sensor RGB with its crosstalk correction; -r, -g and -b
+//   override it with one measured for this capture. A d65 bundle (rec2020_linear) converts LibRaw's white-light
+//   decode (the camera's daylight white balance and colour matrix, to linear Rec.2020) with no crosstalk
+//   correction, as negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station bundle JSON
 //   (e.g. to test parity with negicc-station) or a single ICC profile (for research).
 // - Four RAW files of a Sony A7R IV 4-shot pixel shift capture, merged into one image, the same way.
 // - TODO: a capture whose R, G and B are already separated, like a film scanner's linear DNG or TIFF, with no
@@ -1350,19 +1510,19 @@ int main(int ac, char *av[]) {
     .default_value(-1);
   parser.add_argument("-r", "--r_coeff")
     .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW. "
-          "Defaults to the profile bundle's crosstalk correction.")
+          "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{1, 0, 0})
     .scan<'g', float>();
   parser.add_argument("-g", "--g_coeff")
     .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW. "
-          "Defaults to the profile bundle's crosstalk correction.")
+          "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 1, 0})
     .scan<'g', float>();
   parser.add_argument("-b", "--b_coeff")
     .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW. "
-          "Defaults to the profile bundle's crosstalk correction.")
+          "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
@@ -1394,19 +1554,21 @@ int main(int ac, char *av[]) {
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--profile_film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from profile.")
+    .help("Linear (uncorrected) R G B values of the film base from profile, in the space the RAW is decoded to (sensor "
+          "RGB, or linear Rec.2020 for a rec2020_linear bundle).")
     .nargs(3)
     .default_value(std::vector<int>{1, 1, 1})
     .scan<'i', int>();
   parser.add_argument("--film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from captured image, or 'auto'.")
+    .help("Linear (uncorrected) R G B values of the film base from captured image, in the same space as --profile_film_base_rgb, or 'auto'.")
     .nargs(1, 3);
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
           "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
           "back to the portra400 intent adapter.");
   parser.add_argument("--light_source")
-    .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED) or d65 (white).");
+    .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
+          "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020).");
   parser.add_argument("-p", "--film_profile")
     .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON (e.g. to test parity with "
           "negicc-station) or a single ICC profile that applies to the corrected RGB values (for research).");
@@ -1674,6 +1836,22 @@ int main(int ac, char *av[]) {
   // The crosstalk correction: the bundle's, with the rows -r, -g and -b give in its place (for the search too).
   const bool row_given[3] = {parser.is_used("--r_coeff"), parser.is_used("--g_coeff"), parser.is_used("--b_coeff")};
   std::vector<float>* rows[3] = {&r_coeff, &g_coeff, &b_coeff};
+  // A rec2020_linear (white-light) bundle takes the white-light decode, which has no crosstalk to correct and, as in
+  // negicc-station, decodes single-shot captures only.
+  // py-ref: negicc_station/src/pipeline_api.py @ 813166c (prepare_image)
+  const bool white_light = is_bundle && bundle.input_space == InputSpace::kRec2020Linear;
+  if (white_light) {
+    if (row_given[0] || row_given[1] || row_given[2]) {
+      fprintf(stderr, "ERROR! -r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
+                      "decode has no crosstalk to correct\n", bundle.key.c_str());
+      return 1;
+    }
+    if (files.size() == 4) {
+      fprintf(stderr, "ERROR! The rec2020_linear profile bundle %s converts single-shot captures only, not pixel "
+                      "shift\n", bundle.key.c_str());
+      return 1;
+    }
+  }
   if (is_bundle) {
     for (int r = 0; r < 3; ++r) {
       if (row_given[r]) {
@@ -1684,6 +1862,9 @@ int main(int ac, char *av[]) {
     }
   }
   const bool has_crosstalk = row_given[0] || row_given[1] || row_given[2] || (is_bundle && bundle.has_crosstalk);
+  const RawDecode raw_decode = white_light ? RawDecode::kWhiteLight
+                               : has_crosstalk ? RawDecode::kCameraRgb
+                                               : RawDecode::kRec2020;
 
   DinoV3Engine engine;
   std::string dino_path;
@@ -1790,7 +1971,7 @@ int main(int ac, char *av[]) {
                     parser.get<bool>("--half_size"),
                     parser.get<int>("--quality"),
                     !parser.get<bool>("--no_crop") && !has_roi && !is_roi_auto,
-                    has_crosstalk,
+                    raw_decode,
                     (!is_roi_auto && has_roi) ? roi_coords : nullptr,
                     analyse);
     if (!proc) {
@@ -2291,7 +2472,7 @@ int main(int ac, char *av[]) {
                        cs_name,
                        t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms,
                        is_bundle, bundle_target_name, bundle_target_idx,
-                       has_auto_res ? &auto_res : nullptr, auto_frame_half, t_auto_ms);
+                       has_auto_res ? &auto_res : nullptr, auto_frame_half, t_auto_ms, bundle.input_space);
   }
 
   proc->free_image();
