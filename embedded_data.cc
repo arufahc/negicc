@@ -127,9 +127,6 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
   return nullptr;
 }
 
-const EmbeddedFile* find_embedded_backbone(bool& is_trt_engine) {
-  is_trt_engine = true;
-  if (const EmbeddedFile* f = find_embedded_file("models/dinov3-small/backbone.engine")) return f;
-  is_trt_engine = false;
-  return find_embedded_file("models/dinov3-small/backbone.onnx");
+const EmbeddedFile* find_embedded_backbone(bool trt_engine) {
+  return find_embedded_file(trt_engine ? "models/dinov3-small/backbone.engine" : "models/dinov3-small/backbone.onnx");
 }

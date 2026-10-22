@@ -173,12 +173,12 @@ bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BU
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
 
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
-# (tools/export_negicc_data.py), and the DINOv3 backbone: its TensorRT engine in USE_CUDA=1 builds (make
-# dinov3_engine, on the machine that runs it), else backbone.onnx (make dinov3_model). Without the backbone
-# neg_process still builds, but converts only with --gain_g or --gain_b given.
-BACKBONE_FILE = models/dinov3-small/backbone.$(if $(filter 1,$(USE_CUDA)),engine,onnx)
+# (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
+# also its TensorRT engine (make dinov3_engine, on the machine that runs it), which falls back to the .onnx when it
+# cannot be loaded. Without the backbone neg_process still builds, but converts only with --gain_g or --gain_b given.
+BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx)) \
-              $(wildcard $(BACKBONE_FILE))
+              $(wildcard $(BACKBONE_FILES))
 
 EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
 
