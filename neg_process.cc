@@ -113,12 +113,11 @@ static bool is_regular_file(const std::string& path) {
   return std::filesystem::is_regular_file(path, ec);
 }
 
-// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). False when the
-// argument is not a bundle (an ICC profile).
-// TODO: Accept a split-bundle directory (profiles/<Key>), which load_profile_bundle already reads; the
-// is_regular_file check here rejects it.
+// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/), or the bundle.json
+// of a split-bundle directory (profiles/<Key>). False when the argument is not a bundle (an ICC profile).
 bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
-  const std::string resolved = resolve_profile_path(arg);
+  std::string resolved = resolve_profile_path(arg);
+  if (is_directory(resolved)) resolved = (std::filesystem::path(resolved) / "bundle.json").string();
   if (!is_regular_file(resolved) || !is_json_bundle(resolved)) return false;
   load_profile_bundle(resolved, bundle);
   return true;
@@ -270,6 +269,7 @@ inline float reconstruct_green_soft(const uint16_t* m, int r, int c, int h, int 
 }
 
 // Caveat: this works best with narrowband light, and on whitelight the blue noise is too high to work well.
+// roi, when given, lies inside the sensor (load_raw clamps it).
 bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   if (!proc || !proc->imgdata.rawdata.raw_image) return false;
 
@@ -291,11 +291,11 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
 #endif
 
   int rx = 0, ry = 0, rw = src_w, rh = src_h;
-  if (roi && roi[2] > 0 && roi[3] > 0) {
-    rx = std::max(0, std::min(roi[0], src_w - 1));
-    ry = std::max(0, std::min(roi[1], src_h - 1));
-    rw = std::max(1, std::min(roi[2], src_w - rx));
-    rh = std::max(1, std::min(roi[3], src_h - ry));
+  if (roi) {
+    rx = roi[0];
+    ry = roi[1];
+    rw = roi[2];
+    rh = roi[3];
   } else if (crop && (crop_ref.cleft || crop_ref.ctop)) {
     rx = crop_ref.cleft;
     ry = crop_ref.ctop;
@@ -649,6 +649,23 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     delete proc;
     return NULL;
   }
+  // The ROI is checked and clamped to the sensor before the analysis read, which runs the whole bracket search, so
+  // that an ROI outside the sensor fails before the DINOv3 inferences.
+  int roi_box[4];
+  if (roi) {
+    const int w = proc->imgdata.sizes.width, h = proc->imgdata.sizes.height;
+    if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
+      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+              roi[0], roi[1], roi[2], roi[3], w, h);
+      delete proc;
+      return NULL;
+    }
+    roi_box[0] = roi[0];
+    roi_box[1] = roi[1];
+    roi_box[2] = std::min(roi[2], w - roi[0]);
+    roi_box[3] = std::min(roi[3], h - roi[1]);
+    roi = roi_box;
+  }
   if (white_light) {
     double clip_fraction = 0.0;
     if (!prepare_white_light_mosaic(proc, clip_fraction)) {
@@ -667,19 +684,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   } else if (analyse && !read_half_size(proc, analyse)) {
     delete proc;
     return NULL;
-  }
-
-  // TODO: Move this check (and the clamp) before the analysis read, which runs the whole bracket search, so that an
-  // ROI outside the sensor fails before the DINOv3 inferences rather than after them.
-  if (roi) {
-    if (roi[0] < 0 || roi[1] < 0 ||
-        roi[0] >= (int)proc->imgdata.sizes.width || roi[1] >= (int)proc->imgdata.sizes.height ||
-        roi[2] <= 0 || roi[3] <= 0) {
-      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
-              roi[0], roi[1], roi[2], roi[3], proc->imgdata.sizes.width, proc->imgdata.sizes.height);
-      delete proc;
-      return NULL;
-    }
   }
 
   proc->imgdata.params.output_bps = 16;
@@ -719,15 +723,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       proc->imgdata.params.user_mul[2] = 1;
       proc->imgdata.params.user_mul[3] = 1;
 
-      if (roi && roi[2] > 0 && roi[3] > 0) {
-        int rx = std::max(0, std::min(roi[0], (int)proc->imgdata.sizes.width - 1));
-        int ry = std::max(0, std::min(roi[1], (int)proc->imgdata.sizes.height - 1));
-        int rw = std::max(1, std::min(roi[2], (int)proc->imgdata.sizes.width - rx));
-        int rh = std::max(1, std::min(roi[3], (int)proc->imgdata.sizes.height - ry));
-        proc->imgdata.params.cropbox[0] = rx;
-        proc->imgdata.params.cropbox[1] = ry;
-        proc->imgdata.params.cropbox[2] = rw;
-        proc->imgdata.params.cropbox[3] = rh;
+      if (roi) {
+        for (int i = 0; i < 4; ++i) proc->imgdata.params.cropbox[i] = roi[i];
       } else {
 #if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
         auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
@@ -1600,8 +1597,9 @@ int main(int ac, char *av[]) {
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020).");
   parser.add_argument("-p", "--film_profile")
-    .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON (e.g. to test parity with "
-          "negicc-station) or a single ICC profile that applies to the corrected RGB values (for research).");
+    .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
+          "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
+          "RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
@@ -1633,7 +1631,8 @@ int main(int ac, char *av[]) {
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_iters")
-    .help("Maximum iterations for DINOv3 parameter solving (defaults to 4).")
+    .help("Maximum iterations for DINOv3 parameter solving: the fixed-point steps of each bracket in the parameter "
+          "search (defaults to 8), else the solver's iterations (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
   parser.add_argument("--target", "--bundle_target")
@@ -1967,6 +1966,7 @@ int main(int ac, char *av[]) {
       RgbImage frame;
       cut_upright_frame(raw, bbox, rot_cw, hflip, vflip, frame);
       ParamSearchOptions opts;
+      if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         throw std::runtime_error("the conversion parameter search failed");
       }
