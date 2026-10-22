@@ -426,23 +426,68 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
 // there.
 using HalfSizeAnalysis = std::function<void(const LibRaw& proc)>;
 
+// LibRaw's half-size readout does not serve an X-Trans RAW (filters 9): its 2x2 quads hold several photosites of one
+// colour, which LibRaw's OpenMP loop writes in a race, and the quads of only green photosites get no R or B. Replaces
+// LibRaw's full-size readout in proc with a half-size image of each quad's mean per colour; R and B of the green-only
+// quads are the mean of their left and right neighbours, as LibRaw's pre_interpolate fills them. False when out of
+// memory.
+static bool shrink_xtrans(LibRaw* proc) {
+  const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
+  const int hw = (w + 1) / 2, hh = (h + 1) / 2;
+  const ushort(*full)[4] = proc->imgdata.image;
+  ushort(*half)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*half));
+  if (!half) return false;
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < hh; ++y) {
+    for (int x = 0; x < hw; ++x) {
+      unsigned sum[3] = {0, 0, 0}, n[3] = {0, 0, 0};
+      for (int r = 2 * y; r < std::min(2 * y + 2, h); ++r) {
+        for (int c = 2 * x; c < std::min(2 * x + 2, w); ++c) {
+          const int k = proc->COLOR(r, c);
+          sum[k] += full[(size_t)r * w + c][k];
+          n[k]++;
+        }
+      }
+      for (int k = 0; k < 3; ++k) half[(size_t)y * hw + x][k] = n[k] ? (ushort)((sum[k] + n[k] / 2) / n[k]) : 0;
+    }
+  }
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < hh; ++y) {
+    for (int x = 0; x < hw; ++x) {
+      ushort* px = half[(size_t)y * hw + x];
+      if ((px[0] | px[2]) || hw < 2) continue;
+      const ushort* l = half[(size_t)y * hw + std::max(x - 1, 0)];
+      const ushort* r = half[(size_t)y * hw + std::min(x + 1, hw - 1)];
+      for (int k = 0; k < 3; k += 2) px[k] = x > 0 && x + 1 < hw ? (l[k] + r[k]) >> 1 : (x > 0 ? l : r)[k];
+    }
+  }
+  proc->free_image();
+  proc->imgdata.image = half;
+  proc->imgdata.sizes.iwidth = hw;
+  proc->imgdata.sizes.iheight = hh;
+  return true;
+}
+
 // Reads LibRaw's half-size image of the unpacked RAW of proc (black subtracted, every 2x2 quad one pixel), before any
 // processing, and hands proc holding it to analyse. proc is then left as unpack() left it. False when proc is not a
-// 3-colour Bayer RAW.
+// 3-colour Bayer or X-Trans RAW (shrink_xtrans). For both, LibRaw's first three channels are R, G and B.
 // py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
-  // TODO: Support X-Trans sensors (filters == 9): check what LibRaw's half-size readout gives for their 6x6 CFA
-  // and whether its first three channels are R, G and B as for Bayer.
-  if (!proc->imgdata.rawdata.raw_image || proc->imgdata.idata.filters <= 1000 || proc->imgdata.idata.colors != 3) {
-    fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer RAW files\n");
+  const unsigned filters = proc->imgdata.idata.filters;
+  const bool xtrans = filters == 9;
+  if (!proc->imgdata.rawdata.raw_image || (filters <= 1000 && !xtrans) || proc->imgdata.idata.colors != 3) {
+    fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer and X-Trans RAW files\n");
     return false;
   }
   const int half_size = proc->imgdata.params.half_size;
-  proc->imgdata.params.half_size = 1;
+  proc->imgdata.params.half_size = xtrans ? 0 : 1;
   const int ret = proc->raw2image_ex(1);
   proc->imgdata.params.half_size = half_size;
-  if (ret != LIBRAW_SUCCESS) {
-    fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n", libraw_strerror(ret));
+  if (ret != LIBRAW_SUCCESS || (xtrans && !shrink_xtrans(proc))) {
+    fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n",
+            ret != LIBRAW_SUCCESS ? libraw_strerror(ret) : "out of memory");
+    proc->free_image();
+    proc->raw2image_start();
     return false;
   }
   analyse(*proc);
