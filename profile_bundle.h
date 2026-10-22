@@ -58,6 +58,19 @@ struct BundleTarget {
   float tgt_capacity_ev = 0.0f;
 };
 
+// The colour space a bundle's brackets were measured in, which is the space a scan is decoded to for it.
+// py-ref: negicc_station/src/film_profiling.py @ 813166c (FilmProfile.input_space)
+enum class InputSpace {
+  // Sensor RGB (narrowband TriLED light): black subtracted, no white balance, then the bundle's crosstalk matrix.
+  kCameraRawRgb,
+  // Linear Rec.2020 (white D65 light): LibRaw's white-light decode (neg_process.cc decode_white_light), with no
+  // crosstalk matrix.
+  kRec2020Linear,
+};
+
+// "camera_raw_rgb" or "rec2020_linear", as the bundles write it.
+const char* to_string(InputSpace space);
+
 // TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
 // profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and
 // the profiling code writes it.
@@ -66,6 +79,8 @@ struct ProfileBundle {
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
   std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
+  InputSpace input_space = InputSpace::kCameraRawRgb;
+  // The crosstalk correction of a camera_raw_rgb bundle; identity (has_crosstalk false) for rec2020_linear.
   float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   bool has_crosstalk = false;
   bool has_film_base = false;
@@ -101,7 +116,9 @@ using BundleFileReader = std::function<bool(const std::string& name, std::vector
 
 // Load and parse a multi-bracket JSON profile bundle: an all-in-one bundle from negicc-station (ICC profiles in
 // base64), or a split one (profiles/<Key>/bundle.json, its directory, with the ICC profiles in files next to it;
-// negicc-station tools/export_negicc_data.py). Throws when the bundle cannot be read or has no usable bracket.
+// negicc-station tools/export_negicc_data.py). Throws when the bundle cannot be read or has no usable bracket, when
+// its input_space is neither camera_raw_rgb nor rec2020_linear (no input_space is camera_raw_rgb: bundles from
+// before the field), or when a rec2020_linear bundle carries a crosstalk correction matrix.
 void load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle);
 
 // Parse a JSON profile bundle held in memory (one embedded in neg_process); name is reported as bundle.path and

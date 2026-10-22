@@ -3,57 +3,6 @@
  "camera_model": "Sony ILCE-7RM4",
  "crosstalk_profile": {
   "camera_model": "Sony ILCE-7RM4 (Linear Rec.2020)",
-  "crosstalk_matrix_raw": [
-   [
-    2.560258,
-    0.268176,
-    -0.277125
-   ],
-   [
-    -0.037437,
-    1.395112,
-    -0.548871
-   ],
-   [
-    0.049895,
-    -0.227464,
-    1.739638
-   ]
-  ],
-  "crosstalk_matrix_normalized": [
-   [
-    2.560258,
-    0.268176,
-    -0.277125
-   ],
-   [
-    -0.037437,
-    1.395112,
-    -0.548871
-   ],
-   [
-    0.049895,
-    -0.227464,
-    1.739638
-   ]
-  ],
-  "crosstalk_correction_matrix": [
-   [
-    2.560258,
-    0.268176,
-    -0.277125
-   ],
-   [
-    -0.037437,
-    1.395112,
-    -0.548871
-   ],
-   [
-    0.049895,
-    -0.227464,
-    1.739638
-   ]
-  ],
   "captured_data": null,
   "camera_metadata": {
    "camera_model": "Sony ILCE-7RM4",
@@ -19806,13 +19755,35 @@
   }
  },
  "flat_corrected": true,
+ "profiling_input_transform": {
+  "kind": "camera_matrix_daylight",
+  "camera": "Sony ILCE-7RM4",
+  "matrix": [
+   [
+    2.560258,
+    0.268176,
+    -0.277125
+   ],
+   [
+    -0.037437,
+    1.395112,
+    -0.548871
+   ],
+   [
+    0.049895,
+    -0.227464,
+    1.739638
+   ]
+  ],
+  "note": "M_sRGB->Rec2020 . rgb_cam . diag(pre_mul / pre_mul[G]) applied to the 2x2-binned mosaic when these patch values were measured (bb3fec5); provenance only, never applied. Removed from crosstalk_profile by tools/fix_d65_profiles.py (plan_white_light_libraw_working_space.md \u00a75.2)."
+ },
  "export": {
   "bundle_key": "Portra160-A7R4-D65",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-D65_20261004_010719.json",
-  "source_sha256": "fcc90a58b0a55085b686aa2f7de4903561a9eadc1703414e804b6a1767e8a8b4",
+  "source_sha256": "192e5a380601fcbf0f2508f04addce8696477b188c0975ffcc35e05039bf2ede",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "93be1eca581098cac18b9fad8256b51c4bc3e1e4"
+  "station_commit": "813166cbf6031a82a4b53ad065b44000ccd95a11"
  }
 }

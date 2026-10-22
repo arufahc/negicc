@@ -168,6 +168,10 @@ static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& ou
   return !out.empty();
 }
 
+const char* to_string(InputSpace space) {
+  return space == InputSpace::kRec2020Linear ? "rec2020_linear" : "camera_raw_rgb";
+}
+
 static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
@@ -312,7 +316,30 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
   bundle.normalization_target = j.value("normalization_target", 55000.0);
 
-  if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
+  // The colour path the bundle was measured in. Bundles from before the field are camera_raw_rgb.
+  // py-ref: negicc_station/src/film_profiling.py @ 813166c (FilmProfile.__init__)
+  const nlohmann::json& space = j.contains("input_space") ? j["input_space"] : nlohmann::json("camera_raw_rgb");
+  if (space == "camera_raw_rgb") {
+    bundle.input_space = InputSpace::kCameraRawRgb;
+  } else if (space == "rec2020_linear") {
+    bundle.input_space = InputSpace::kRec2020Linear;
+  } else {
+    throw std::runtime_error("profile bundle " + raw_path + ": unknown input_space " + space.dump() +
+                             " (camera_raw_rgb or rec2020_linear)");
+  }
+  if (bundle.input_space == InputSpace::kRec2020Linear) {
+    // A common colour space needs no correction; a matrix here would be applied to every camera's decode.
+    const bool nested = j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object() &&
+                        j["crosstalk_profile"].contains("crosstalk_correction_matrix") &&
+                        !j["crosstalk_profile"]["crosstalk_correction_matrix"].is_null();
+    const bool top = j.contains("crosstalk_correction_matrix") && !j["crosstalk_correction_matrix"].is_null();
+    if (nested || top) {
+      throw std::runtime_error("profile bundle " + raw_path + ": a rec2020_linear bundle must not carry a crosstalk "
+                               "correction matrix (re-export it from negicc-station, whose "
+                               "tools/fix_d65_profiles.py removed it)");
+    }
+    // crosstalk_matrix stays the identity and has_crosstalk false.
+  } else if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
     const auto& ct = j["crosstalk_profile"];
     if (ct.contains("crosstalk_correction_matrix")) {
       bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
