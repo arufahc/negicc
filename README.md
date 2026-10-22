@@ -103,19 +103,21 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * Python 3
 * PIP
 * ArgyllCMS
-* libRAW
+* LibRaw: built from the `3rd_party/libraw` submodule (pinned to a LibRaw release), not the system's libraw-dev;
+  clone with `git clone --recursive` or run `git submodule update --init --recursive`. libjpeg-dev, if installed,
+  adds lossy DNG support to it.
 * lcms2
 * Clang
 * Matplotlib
 ```
-sudo apt-get install python3 pip argyll liblcms2-dev libraw-dev libtiff-dev
+sudo apt-get install python3 pip argyll liblcms2-dev libtiff-dev zlib1g-dev libjpeg-dev
 ```
 * Python packages
 ```
 pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
 ```
 
-> **TODO:** the profiling requirements (ArgyllCMS, the Python packages) moved to negicc-station. `neg_process` needs libraw, lcms2, zlib, ONNX Runtime (`3rd_party/onnxruntime`) and the DINOv3 backbone (`make dinov3_model`).
+> **TODO:** the profiling requirements (ArgyllCMS, the Python packages) moved to negicc-station. `neg_process` needs LibRaw (the `3rd_party/libraw` submodule, built by the Makefile), lcms2, zlib, ONNX Runtime (`3rd_party/onnxruntime`) and the DINOv3 backbone (`make dinov3_model`).
 
 # Hardware Used
 

@@ -40,7 +40,7 @@
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "libraw/libraw.h"
-#include "libraw/tiff_head.h"
+#include "tiff_head.h"
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
 #include "dinov3_auto_solver.h"
@@ -462,13 +462,14 @@ enum class RawDecode {
 
 // White-light decode of a rec2020_linear profile bundle, in two steps on an unpacked proc. First, in place on the
 // CFA mosaic and in sensor-linear units, the black level is subtracted and the camera's daylight white balance
-// (pre_mul over its green) applied. Then (decode_white_light) LibRaw demosaics bilinearly to linear sRGB through its
-// own camera matrix with no rescaling, and the pixels go from linear sRGB to linear Rec.2020, so values stay in
-// sensor units. LibRaw clamps its sRGB output to [0, 65535], so colours outside sRGB lose their negative component;
-// negicc-station records that as a known limitation of the white-light path. There is no flat field here (neg_process
-// applies none on any path).
-// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light)
-// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked)
+// (pre_mul over its green) applied. Then (decode_white_light) LibRaw demosaics bilinearly straight to linear Rec.2020
+// (output_color 8) through its own camera matrix with no rescaling, so values stay in sensor units. LibRaw clamps
+// its output to [0, 65535]; going to Rec.2020 directly, rather than to sRGB and then to Rec.2020, keeps the colours
+// between the sRGB and Rec.2020 gamuts that the sRGB clamp lost. This relies on the pinned LibRaw (3rd_party/libraw):
+// older releases (0.20) do not implement the Rec.2020 output. There is no flat field here (neg_process applies none
+// on any path).
+// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
+// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
 //
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.
@@ -531,7 +532,7 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
   O.use_camera_wb = 0;
   O.use_auto_wb = 0;
   for (int i = 0; i < 4; ++i) O.user_mul[i] = 1;
-  O.output_color = 1;  // sRGB, through LibRaw's own camera matrix for this camera
+  O.output_color = 8;  // linear Rec.2020, through LibRaw's own camera matrix for this camera
   O.output_bps = 16;
   O.gamm[0] = 1;
   O.gamm[1] = 1;
@@ -542,9 +543,9 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
   return true;
 }
 
-// Demosaics the mosaic prepare_white_light_mosaic prepared (half: LibRaw's half-size decode; qual: LibRaw's user_qual,
-// negicc-station uses 0, bilinear) and converts imgdata.image from linear sRGB to linear Rec.2020 in place. The
-// cropbox, if any, is set by the caller. False when LibRaw cannot process it.
+// Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
+// half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
+// caller. False when LibRaw cannot process it.
 static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   proc->imgdata.params.half_size = half ? 1 : 0;
   proc->imgdata.params.user_qual = qual;
@@ -552,22 +553,6 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   if (ret != LIBRAW_SUCCESS) {
     fprintf(stderr, "ERROR! Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
-  }
-  // Linear sRGB (D65) to linear Rec.2020 (D65), as negicc-station's film_profiling.M_SRGB_TO_REC2020. Every
-  // coefficient is positive and each row sums to 1, so the result needs no clamping below 0 or above the input's
-  // maximum.
-  static const float M[3][3] = {{0.6274039f, 0.32928304f, 0.04331307f},
-                                {0.06909729f, 0.9195404f, 0.01136232f},
-                                {0.01639144f, 0.08801331f, 0.89559525f}};
-  auto* img = proc->imgdata.image;
-  const long long n = (long long)proc->imgdata.sizes.iwidth * proc->imgdata.sizes.iheight;
-  #pragma omp parallel for schedule(static)
-  for (long long i = 0; i < n; ++i) {
-    const float r = img[i][0], g = img[i][1], b = img[i][2];
-    for (int c = 0; c < 3; ++c) {
-      const float v = M[c][0] * r + M[c][1] * g + M[c][2] * b;
-      img[i][c] = (uint16_t)std::min(std::nearbyint(v), 65535.0f);
-    }
   }
   return true;
 }
