@@ -1586,7 +1586,8 @@ int main(int ac, char *av[]) {
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_iters")
-    .help("Maximum iterations for DINOv3 parameter solving (defaults to 4).")
+    .help("Maximum iterations for DINOv3 parameter solving: the fixed-point steps of each bracket in the parameter "
+          "search (defaults to 8), else the solver's iterations (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
   parser.add_argument("--target", "--bundle_target")
@@ -1920,6 +1921,7 @@ int main(int ac, char *av[]) {
       RgbImage frame;
       cut_upright_frame(raw, bbox, rot_cw, hflip, vflip, frame);
       ParamSearchOptions opts;
+      if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         throw std::runtime_error("the conversion parameter search failed");
       }
