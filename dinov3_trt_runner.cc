@@ -100,7 +100,6 @@ public:
     // py-ref: negicc_station/src/tensorrt_intent_model.py:200-274 @ 2f7ee4a (predict / execution loop)
     void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
              const DinoV3RunnerOutputs& outputs) override {
-        std::lock_guard<std::mutex> lock(infer_mutex_);
         const size_t pv_bytes = (size_t)3 * height * width * sizeof(float);
         const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
 
@@ -144,9 +143,6 @@ public:
     }
 
 private:
-    // Serializes run(): the station's Python binding calls infer without the GIL, so several threads can share one
-    // engine. TODO: Move this lock back into the station code (its binding), the only caller with several threads.
-    std::mutex infer_mutex_;
     std::unique_ptr<nvinfer1::IRuntime> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine> engine_;
     std::unique_ptr<nvinfer1::IExecutionContext> context_;
