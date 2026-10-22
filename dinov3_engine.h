@@ -34,10 +34,13 @@ public:
     void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
               int max_size = 512, int patch_size = 16);
 
-    // The backbone built into neg_process: a TensorRT engine (USE_CUDA=1 builds, for the "gpu" backend) or an
-    // .onnx (USE_CUDA=0, for "cpu"), held in memory. Throws as load() does.
-    void load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend = "auto",
-                     int num_threads = 4, int max_size = 512, int patch_size = 16);
+    // The backbone built into neg_process, held in memory: its TensorRT engine (USE_CUDA=1 builds) and its .onnx,
+    // each null when not built in. backend picks between them as load() does: "auto" runs the engine when this build
+    // has a CUDA device and falls back to the .onnx when the engine is missing or fails to load. Throws as load()
+    // does.
+    void load_memory(const void* engine_data, size_t engine_size, const void* onnx_data, size_t onnx_size,
+                     const std::string& backend = "auto", int num_threads = 4, int max_size = 512,
+                     int patch_size = 16);
 
     // Adapter for a backbone model: an adapter.onnx held in memory (embedded in neg_process) or read from a file.
     // name is reported by adapter_name(). Ignored by fused models, which carry their own adapter. Throws

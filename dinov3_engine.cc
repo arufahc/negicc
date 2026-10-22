@@ -126,22 +126,40 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     runner_ = make_ort_runner(onnx_path, num_threads);
 }
 
-// TODO: Fall back to CPU ONNX Runtime when the built-in TensorRT engine fails to load, as load() does. That needs an
-// ONNX backbone embedded beside the engine in USE_CUDA=1 builds (Makefile: BACKBONE_FILE), so it waits on the CUDA
-// work; until then a TensorRT failure ends the run even with backend "auto".
-void DinoV3Engine::load_memory(const void* data, size_t size, bool is_trt_engine, const std::string& backend,
-                               int num_threads, int max_size, int patch_size) {
+void DinoV3Engine::load_memory(const void* engine_data, size_t engine_size, const void* onnx_data, size_t onnx_size,
+                               const std::string& backend, int num_threads, int max_size, int patch_size) {
     runner_.reset();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
         throw std::invalid_argument("DinoV3Engine: backend must be 'auto', 'cpu' or 'gpu', got '" + backend + "'");
     }
-    if (backend == (is_trt_engine ? "cpu" : "gpu")) {
-        throw std::runtime_error("DinoV3Engine: backend '" + backend + "' requested but the built-in backbone is " +
-                                 (is_trt_engine ? "a TensorRT engine (USE_CUDA=1)" : "an ONNX model (USE_CUDA=0)"));
+
+    if (backend != "cpu") {
+        const bool has_gpu = cuda_device_available();
+        if (has_gpu && engine_data) {
+            try {
+                runner_ = make_trt_runner(engine_data, engine_size);
+                return;
+            } catch (const std::exception& e) {
+                if (backend == "gpu" || !onnx_data) throw;
+                std::cerr << "DinoV3Engine: TensorRT runner failed to load (" << e.what()
+                          << "), falling back to CPU ONNX Runtime" << std::endl;
+                runner_.reset();
+            }
+        }
+        if (backend == "gpu") {
+            throw std::runtime_error(std::string("DinoV3Engine: backend 'gpu' requested but ") +
+                                     (has_gpu ? "the built-in backbone has no TensorRT engine (USE_CUDA=1, run "
+                                                "`make dinov3_engine`)"
+                                              : "no CUDA device"));
+        }
     }
-    runner_ = is_trt_engine ? make_trt_runner(data, size) : make_ort_runner(data, size, num_threads);
+
+    if (!onnx_data) {
+        throw std::runtime_error("DinoV3Engine: the built-in backbone has no ONNX model (run `make dinov3_model`)");
+    }
+    runner_ = make_ort_runner(onnx_data, onnx_size, num_threads);
 }
 
 // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict implementation)
