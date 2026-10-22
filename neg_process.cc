@@ -113,12 +113,11 @@ static bool is_regular_file(const std::string& path) {
   return std::filesystem::is_regular_file(path, ec);
 }
 
-// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/). False when the
-// argument is not a bundle (an ICC profile).
-// TODO: Accept a split-bundle directory (profiles/<Key>), which load_profile_bundle already reads; the
-// is_regular_file check here rejects it.
+// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/), or the bundle.json
+// of a split-bundle directory (profiles/<Key>). False when the argument is not a bundle (an ICC profile).
 bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
-  const std::string resolved = resolve_profile_path(arg);
+  std::string resolved = resolve_profile_path(arg);
+  if (is_directory(resolved)) resolved = (std::filesystem::path(resolved) / "bundle.json").string();
   if (!is_regular_file(resolved) || !is_json_bundle(resolved)) return false;
   load_profile_bundle(resolved, bundle);
   return true;
@@ -1553,8 +1552,9 @@ int main(int ac, char *av[]) {
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020).");
   parser.add_argument("-p", "--film_profile")
-    .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON (e.g. to test parity with "
-          "negicc-station) or a single ICC profile that applies to the corrected RGB values (for research).");
+    .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
+          "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
+          "RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
