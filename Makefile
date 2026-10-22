@@ -3,16 +3,57 @@
 #   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
 #   make dinov3_engine      # its TensorRT engine, for USE_CUDA=1 builds (on the machine that runs it)
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
-#   make lib                # bin_out/libnegicc_dinov3.a, linked by negicc-station
+#   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
+#   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
 
 PYTHON ?= python3
 
-.PHONY: all lib neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
-raw_info: raw_info.cc
+# ----------------------------------------------------------------------
+# LibRaw, pinned by the 3rd_party/libraw submodule (see 3rd_party/README.md) and built here as a static library, so
+# neg_process and negicc-station decode with the same LibRaw on every machine instead of the system's libraw-dev.
+# Consumers include "libraw/libraw.h" with -I$(LIBRAW_DIR) and link bin_out/libraw.a followed by the libraries in
+# bin_out/libraw.ldlibs.
+# ----------------------------------------------------------------------
+LIBRAW_DIR = 3rd_party/libraw
+LIBRAW_INC = -I$(LIBRAW_DIR)
+LIBRAW_LIB = bin_out/libraw.a
+ifeq ($(wildcard $(LIBRAW_DIR)/libraw/libraw.h),)
+    $(error LibRaw submodule missing at $(LIBRAW_DIR): run git submodule update --init --recursive)
+endif
+# The library sources, as LibRaw's Makefile.dist lists them (every src/ file but the *_ph.cpp placeholders).
+LIBRAW_SRCS = $(filter-out %_ph.cpp,$(wildcard $(LIBRAW_DIR)/src/*.cpp $(LIBRAW_DIR)/src/*/*.cpp))
+LIBRAW_OBJS = $(patsubst %.cpp,bin_out/libraw/%.o,$(notdir $(LIBRAW_SRCS)))
+vpath %.cpp $(sort $(dir $(LIBRAW_SRCS)))
+# Lossy (JPEG-compressed) DNG support when libjpeg's headers are installed (libjpeg-dev); LIBRAW_JPEG=0 or 1 forces it.
+LIBRAW_JPEG ?= $(shell printf '\043include <stdio.h>\n\043include <jpeglib.h>\n' | $(CXX) -E -x c++ - >/dev/null 2>&1 && echo 1 || echo 0)
+LIBRAW_DEFS = -DUSE_ZLIB $(if $(filter 1,$(LIBRAW_JPEG)),-DUSE_JPEG -DUSE_JPEG8)
+LIBRAW_LDLIBS = -lz $(if $(filter 1,$(LIBRAW_JPEG)),-ljpeg)
+# Thread-safe build (no LIBRAW_NOTHREADS), with OpenMP as distribution packages build it. -ffp-contract=off as the
+# rest of negicc, so aarch64 (where GCC fuses multiply-adds by default) decodes as x86 does.
+LIBRAW_CXXFLAGS = -O3 -w -fPIC -fopenmp -ffp-contract=off $(LIBRAW_INC) $(LIBRAW_DEFS)
+
+bin_out/libraw/%.o: %.cpp bin_out/.libraw_jpeg_$(LIBRAW_JPEG)
+	@mkdir -p bin_out/libraw
+	$(CXX) $(LIBRAW_CXXFLAGS) -c $< -o $@
+
+bin_out/.libraw_jpeg_$(LIBRAW_JPEG):
 	mkdir -p bin_out
-	$(CXX) -o bin_out/raw_info raw_info.cc -lraw
+	rm -f bin_out/.libraw_jpeg_*
+	touch $@
+
+$(LIBRAW_LIB): $(LIBRAW_OBJS)
+	rm -f $@
+	ar rcs $@ $(LIBRAW_OBJS)
+	echo "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs
+
+libraw: $(LIBRAW_LIB)
+
+raw_info: raw_info.cc $(LIBRAW_LIB)
+	mkdir -p bin_out
+	$(CXX) -o bin_out/raw_info raw_info.cc -I3rd_party $(LIBRAW_INC) $(LIBRAW_LIB) $(LIBRAW_LDLIBS) -fopenmp
 
 # ----------------------------------------------------------------------
 # DINOv3 C++ Inference Engine & Library
@@ -123,7 +164,7 @@ bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	rm -f $@
 	ar rcs $@ $(DINOV3_OBJS)
 
-lib: bin_out/libnegicc_dinov3.a
+lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB)
 
 GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo "master")
 
@@ -201,9 +242,9 @@ NEG_PROCESS_OBJS = bin_out/film_frame_detector.o bin_out/embedded_data.o bin_out
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h multi_target_optimizer.h embedded_data.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) neg_pipeline.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a -I. -I3rd_party $(ORT_INC) $(DINOV3_EXTRA_INC) -lraw -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) -I. -I3rd_party $(LIBRAW_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
 # The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
 # transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
@@ -221,4 +262,5 @@ clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked
 
 clean_all: clean_lib
+	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_*
 	rm -f bin_out/raw_info bin_out/neg_process
