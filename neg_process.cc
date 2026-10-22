@@ -270,6 +270,7 @@ inline float reconstruct_green_soft(const uint16_t* m, int r, int c, int h, int 
 }
 
 // Caveat: this works best with narrowband light, and on whitelight the blue noise is too high to work well.
+// roi, when given, lies inside the sensor (load_raw clamps it).
 bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
   if (!proc || !proc->imgdata.rawdata.raw_image) return false;
 
@@ -291,11 +292,11 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
 #endif
 
   int rx = 0, ry = 0, rw = src_w, rh = src_h;
-  if (roi && roi[2] > 0 && roi[3] > 0) {
-    rx = std::max(0, std::min(roi[0], src_w - 1));
-    ry = std::max(0, std::min(roi[1], src_h - 1));
-    rw = std::max(1, std::min(roi[2], src_w - rx));
-    rh = std::max(1, std::min(roi[3], src_h - ry));
+  if (roi) {
+    rx = roi[0];
+    ry = roi[1];
+    rw = roi[2];
+    rh = roi[3];
   } else if (crop && (crop_ref.cleft || crop_ref.ctop)) {
     rx = crop_ref.cleft;
     ry = crop_ref.ctop;
@@ -604,6 +605,23 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     delete proc;
     return NULL;
   }
+  // The ROI is checked and clamped to the sensor before the analysis read, which runs the whole bracket search, so
+  // that an ROI outside the sensor fails before the DINOv3 inferences.
+  int roi_box[4];
+  if (roi) {
+    const int w = proc->imgdata.sizes.width, h = proc->imgdata.sizes.height;
+    if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
+      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+              roi[0], roi[1], roi[2], roi[3], w, h);
+      delete proc;
+      return NULL;
+    }
+    roi_box[0] = roi[0];
+    roi_box[1] = roi[1];
+    roi_box[2] = std::min(roi[2], w - roi[0]);
+    roi_box[3] = std::min(roi[3], h - roi[1]);
+    roi = roi_box;
+  }
   if (white_light) {
     double clip_fraction = 0.0;
     if (!prepare_white_light_mosaic(proc, clip_fraction)) {
@@ -622,19 +640,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   } else if (analyse && !read_half_size(proc, analyse)) {
     delete proc;
     return NULL;
-  }
-
-  // TODO: Move this check (and the clamp) before the analysis read, which runs the whole bracket search, so that an
-  // ROI outside the sensor fails before the DINOv3 inferences rather than after them.
-  if (roi) {
-    if (roi[0] < 0 || roi[1] < 0 ||
-        roi[0] >= (int)proc->imgdata.sizes.width || roi[1] >= (int)proc->imgdata.sizes.height ||
-        roi[2] <= 0 || roi[3] <= 0) {
-      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
-              roi[0], roi[1], roi[2], roi[3], proc->imgdata.sizes.width, proc->imgdata.sizes.height);
-      delete proc;
-      return NULL;
-    }
   }
 
   proc->imgdata.params.output_bps = 16;
@@ -674,15 +679,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       proc->imgdata.params.user_mul[2] = 1;
       proc->imgdata.params.user_mul[3] = 1;
 
-      if (roi && roi[2] > 0 && roi[3] > 0) {
-        int rx = std::max(0, std::min(roi[0], (int)proc->imgdata.sizes.width - 1));
-        int ry = std::max(0, std::min(roi[1], (int)proc->imgdata.sizes.height - 1));
-        int rw = std::max(1, std::min(roi[2], (int)proc->imgdata.sizes.width - rx));
-        int rh = std::max(1, std::min(roi[3], (int)proc->imgdata.sizes.height - ry));
-        proc->imgdata.params.cropbox[0] = rx;
-        proc->imgdata.params.cropbox[1] = ry;
-        proc->imgdata.params.cropbox[2] = rw;
-        proc->imgdata.params.cropbox[3] = rh;
+      if (roi) {
+        for (int i = 0; i < 4; ++i) proc->imgdata.params.cropbox[i] = roi[i];
       } else {
 #if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
         auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
