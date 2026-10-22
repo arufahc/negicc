@@ -89,7 +89,7 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
       const uint16_t* px = grid_rgb16 + i * 3;
       // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule and L*a*b* are the
       // linear equivalents of the encoded ones and skip the sRGB curve round trip.
-      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof));
+      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, *cfg.prof));
       clip += linear_channel_white_clipped(lin.r) + linear_channel_white_clipped(lin.g) +
               linear_channel_white_clipped(lin.b);
       const Lab lab = linear_srgb_to_lab(lin);
@@ -335,7 +335,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
           const int bin = std::isfinite(mc) ? std::clamp((int)(mc * 2048.0f), 0, 4095) : 0;
           thist[bin]++;
 
-          const Rgb v = convert_pixel_srgb(px, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof);
+          const Rgb v = convert_pixel_srgb(px, m, cfg.knee, *cfg.prof);
           out_row[x * 3 + 0] = quantize_u8(v.r);
           out_row[x * 3 + 1] = quantize_u8(v.g);
           out_row[x * 3 + 2] = quantize_u8(v.b);
@@ -355,7 +355,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
       const uint16_t* in_row = image[(size_t)y * w];
       uint8_t* out_row = out_u8 + (size_t)y * w * 3;
       for (int x = 0; x < w; ++x) {
-        const Rgb v = convert_pixel_srgb(in_row + x * 4, m, cfg.knee, cfg.has_gamma, cfg.inv_gamma, *cfg.prof);
+        const Rgb v = convert_pixel_srgb(in_row + x * 4, m, cfg.knee, *cfg.prof);
         out_row[x * 3 + 0] = quantize_u8(v.r);
         out_row[x * 3 + 1] = quantize_u8(v.g);
         out_row[x * 3 + 2] = quantize_u8(v.b);
@@ -532,8 +532,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
       float m[9];
       candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
       for (int i = 0; i < n_cells; ++i) {
-        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, cfg.knee, cfg.has_gamma,
-                                         cfg.inv_gamma, *cfg.prof);
+        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, cfg.knee, *cfg.prof);
         l_vals[i] = srgb_to_lab(v).L;
       }
       std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
