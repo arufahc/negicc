@@ -17,8 +17,10 @@
 """Checks the profile bundles the build embeds into neg_process, which throws on a bundle it cannot read.
 
 Every bracket needs a shutter speed in a form profile_bundle.cc's shutter_to_seconds reads: a fraction ("1/8s"),
-or decimal seconds ("0.4s", "2"), with or without the trailing "s". The exports come from negicc-station
-(tools/export_negicc_data.py), so a bad one fails the build here rather than a conversion later.
+or decimal seconds ("0.4s", "2"), with or without the trailing "s". The bundle's input_space, when given, must be
+camera_raw_rgb or rec2020_linear, and a rec2020_linear bundle must carry no crosstalk correction matrix (the rules of
+profile_bundle.cc's parse_profile_bundle). The exports come from negicc-station (tools/export_negicc_data.py), so a
+bad one fails the build here rather than a conversion later.
 
 Usage: check_profile_bundles.py <bundle.json> ...
 """
@@ -44,10 +46,19 @@ def check(path):
     """The bundle's problems, one message per bracket that has one."""
     with open(path) as f:
         bundle = json.load(f)
+    problems = []
+    space = bundle.get("input_space", "camera_raw_rgb")
+    if space not in ("camera_raw_rgb", "rec2020_linear"):
+        problems.append("unknown input_space %r (camera_raw_rgb or rec2020_linear)" % (space,))
+    elif space == "rec2020_linear":
+        crosstalk = bundle.get("crosstalk_profile")
+        nested = isinstance(crosstalk, dict) and crosstalk.get("crosstalk_correction_matrix") is not None
+        if nested or bundle.get("crosstalk_correction_matrix") is not None:
+            problems.append("a rec2020_linear bundle carries a crosstalk correction matrix (re-export it from "
+                            "negicc-station)")
     targets = bundle.get("targets")
     if not isinstance(targets, list) or not targets:
-        return ["no targets array"]
-    problems = []
+        return problems + ["no targets array"]
     for i, target in enumerate(targets):
         name = target.get("name", "target %d" % (i + 1)) if isinstance(target, dict) else "target %d" % (i + 1)
         if not isinstance(target, dict) or "shutter" not in target:

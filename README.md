@@ -47,6 +47,10 @@ luminance values.
 
 > **TODO:** describe the capture with trichromatic (narrowband RGB) LEDs: one shot with a crosstalk correction matrix (`--light_source tri`, the bundle's matrix or `-r -g -b`), and in future three shots, one per LED colour, needing no correction matrix.
 
+A capture under white (D65) light (`--light_source d65`) uses a bundle whose `input_space` is `rec2020_linear`: the
+scan goes through LibRaw's white-light decode (the camera's daylight white balance and colour matrix, to linear
+Rec.2020) and no crosstalk correction is applied, as in negicc-station. It takes single-shot captures only.
+
 The tool provided in this repo will generate the following curves.
 
 ![TRC Curves](samples/trc_curves.png)
