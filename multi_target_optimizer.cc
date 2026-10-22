@@ -67,7 +67,6 @@ namespace {
 // Fixed-point loop thresholds (see FixedPointStatus).
 constexpr float TOL_PARAM = 0.02f;     // |dE| + |dg| + |db| <= 0.02
 constexpr float TOL_REL_ERR = 0.015f;  // relative residual change <= 1.5 %
-constexpr int MAX_STEPS = 8;
 // The scene's range is taken between its SCENE_TAIL and 1 - SCENE_TAIL points.
 constexpr float SCENE_TAIL = 0.005f;
 constexpr float SLACK_PENALTY_SCALE = 0.5f;
@@ -115,16 +114,6 @@ InnerCrop compute_inner_crop(int w, int h, float crop_ratio) {
   const int x0 = std::clamp(static_cast<int>(roundf(w * (1.0f - crop_ratio) * 0.5f)), 0, (w - 1) / 2);
   const int y0 = std::clamp(static_cast<int>(roundf(h * (1.0f - crop_ratio) * 0.5f)), 0, (h - 1) / 2);
   return {x0, y0, w - 2 * x0, h - 2 * y0};
-}
-
-// The crop of src, crop.w x crop.h pixels.
-void cut_crop(const RgbImage& src, const InnerCrop& crop, RgbImage& out) {
-  out.width = crop.w;
-  out.height = crop.h;
-  out.rgb.resize((size_t)crop.w * crop.h * 3);
-  for (int y = 0; y < crop.h; ++y) {
-    std::copy_n(pixel_at(src, crop.x0, crop.y0 + y), (size_t)crop.w * 3, &out.rgb[(size_t)y * crop.w * 3]);
-  }
 }
 
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
@@ -660,18 +649,14 @@ float max_excess(const ClipStats& c) { return std::max({c.exc[0], c.exc[1], c.ex
 // added up into the result.
 class SearchFrame {
  public:
-  SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, ParamSearchResult& out)
-      : bundle_(bundle), engine_(engine), verbose_(verbose), out_(out) {}
+  SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, int max_steps, ParamSearchResult& out)
+      : bundle_(bundle), engine_(engine), verbose_(verbose), max_steps_(std::max(1, max_steps)), out_(out) {}
 
-  // Takes the upright frame (kept by reference) and its inner crop, and the statistics.
+  // Takes the upright frame (kept by reference), its inner crop and the statistics.
   void set_frame(const RgbImage& frame, float crop_ratio) {
     frame_ = &frame;
-    crop_ratio_ = crop_ratio;
+    crop_ = compute_inner_crop(frame.width, frame.height, crop_ratio);
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
-    // TODO: Optimize away inner_crop_. The inner crop's pixels are now held three times: in LibRaw's half-size image,
-    // in the upright frame neg_process cuts from it, and in inner_crop_. inner_crop_ can be dropped or share the
-    // frame's rgb buffer (a view with an offset and stride).
-    cut_crop(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), inner_crop_);
   }
 
   // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; the search runs on
@@ -682,27 +667,30 @@ class SearchFrame {
     for (int i = 0; i < 9; ++i) input_matrix_[i] = frame_matrix_[i] / e_norm_;
   }
 
-  const RgbImage& inner_crop() const { return inner_crop_; }
+  const InnerCrop& inner_crop() const { return crop_; }
   const FrameStats& stats() const { return stats_; }
   const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is
-  // inner_crop_.width x inner_crop_.height pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
+  // crop_.w x crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
     candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
     const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
-    const size_t n = inner_crop_.rgb.size() / 3;
-    out.resize(inner_crop_.rgb.size());
+    out.resize((size_t)crop_.w * crop_.h * 3);
 #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < n; ++i) {
-      const Rgb v = convert_pixel_srgb(&inner_crop_.rgb[i * 3], m, AUTO_KNEE, false, 1.0f, prof);
-      out[i * 3] = quantize_u8(v.r);
-      out[i * 3 + 1] = quantize_u8(v.g);
-      out[i * 3 + 2] = quantize_u8(v.b);
+    for (int y = 0; y < crop_.h; ++y) {
+      const uint16_t* row = pixel_at(*frame_, crop_.x0, crop_.y0 + y);
+      uint8_t* dst = &out[(size_t)y * crop_.w * 3];
+      for (int x = 0; x < crop_.w; ++x, row += 3, dst += 3) {
+        const Rgb v = convert_pixel_srgb(row, m, AUTO_KNEE, false, 1.0f, prof);
+        dst[0] = quantize_u8(v.r);
+        dst[1] = quantize_u8(v.g);
+        dst[2] = quantize_u8(v.b);
+      }
     }
     render_time_ += Clock::now() - t0;
   }
@@ -713,7 +701,7 @@ class SearchFrame {
     const Clock::time_point t0 = Clock::now();
     DinoV3InferenceResult r;
     try {
-      r = engine_.infer(preview.data(), inner_crop_.width, inner_crop_.height, inner_crop_.width * 3);
+      r = engine_.infer(preview.data(), crop_.w, crop_.h, crop_.w * 3);
     } catch (const std::exception& e) {
       std::cerr << "ERROR! DINOv3 inference failed: " << e.what() << std::endl;
       return false;
@@ -734,7 +722,7 @@ class SearchFrame {
   // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
-    const float err = self_consistency_residual(preview.data(), inner_crop_.width, inner_crop_.height,
+    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h,
                                                  stats_.grid_w, stats_.grid_h, mu.data(), sigma.data());
     residual_time_ += Clock::now() - t0;
     return err;
@@ -776,7 +764,7 @@ class SearchFrame {
     float best_err = 0.0f;
     std::vector<uint8_t> preview;
     std::vector<float> mu, sigma;
-    for (int it = 0; it < MAX_STEPS; ++it) {
+    for (int it = 0; it < max_steps_; ++it) {
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
       const float err = residual(preview, mu, sigma);
@@ -817,13 +805,12 @@ class SearchFrame {
   // The highlight clipping of the frame's inner crop through bracket target_idx, per candidate (E, g, b).
   std::vector<ClipStats> highlight_clip(int target_idx, const std::vector<ConversionParams>& candidates,
                                         const float ceil[3]) {
-    const InnerCrop crop = compute_inner_crop(frame_->width, frame_->height, crop_ratio_);
     std::vector<float> matrices(candidates.size() * 9);
     for (size_t i = 0; i < candidates.size(); ++i) {
       const ConversionParams& p = candidates[i];
       candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
     }
-    return measure_highlight_clip(*frame_, crop, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
+    return measure_highlight_clip(*frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
                                   ceil);
   }
 
@@ -839,12 +826,12 @@ class SearchFrame {
   const ProfileBundle& bundle_;
   DinoV3Engine& engine_;
   const bool verbose_;
+  const int max_steps_;
   ParamSearchResult& out_;
 
-  float crop_ratio_ = 0.90f;
   const RgbImage* frame_ = nullptr;  // the upright frame (search_conversion_params)
-  // The centred inner crop of the frame (compute_inner_crop with crop_ratio_): what DINOv3 sees.
-  RgbImage inner_crop_;
+  // The centred inner crop of the frame (compute_inner_crop): what DINOv3 sees, read in place from frame_.
+  InnerCrop crop_;
   FrameStats stats_;  // over the inner crop
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
@@ -957,7 +944,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::cerr << "ERROR! The profile bundle has no targets" << std::endl;
     return false;
   }
-  SearchFrame fr(bundle, engine, verbose, out);
+  SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
   fr.set_frame(frame, opts.crop_ratio);
@@ -1005,7 +992,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   if (verbose) {
     std::ostringstream os;
     os << "Auto: frame " << frame.width << "x" << frame.height << " (half size, upright), crop "
-       << fr.inner_crop().width << "x" << fr.inner_crop().height << ", grid " << stats.grid_w << "x" << stats.grid_h
+       << fr.inner_crop().w << "x" << fr.inner_crop().h << ", grid " << stats.grid_w << "x" << stats.grid_h
        << "\n";
     os << "Auto: scene green " << fixed(g_lo, 1) << ".." << fixed(g_hi, 1) << " (" << fixed(out.scene_ev, 2)
        << " EV), scan " << general(scan_shutter_s, 6) << " s ISO " << fixed(scan_iso, 0) << ", e_norm "
