@@ -1516,12 +1516,6 @@ int main(int ac, char *av[]) {
           "--target picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
-  // TODO: Remove --post_correction_gamma. The bracket search scores its renders without it while the TIFF is
-  // written with it, so the two disagree; gamma needs deciding before it can be honoured.
-  parser.add_argument("-G", "--post_correction_gamma")
-    .help("Apply a gamma to linear RGB after correction but before ICC profile is applied.")
-    .scan<'g', float>()
-    .default_value(1.0f);
   parser.add_argument("--knee")
     .help("Soft knee highlight compression threshold in [0, 1], or 'auto' (the parameter search on an ICC profile or a "
           "--target bracket). Defaults to 0.95 (>=1.0 disables).")
@@ -1629,9 +1623,6 @@ int main(int ac, char *av[]) {
   }
   float gain_g = parser.get<float>("--gain_g");
   float gain_b = parser.get<float>("--gain_b");
-  const float gamma = parser.get<float>("--post_correction_gamma");
-  const bool has_gamma = parser.is_used("--post_correction_gamma") && (gamma > 0.0f) && (fabsf(gamma - 1.0f) > 1e-4f);
-  const float inv_gamma = has_gamma ? (1.0f / gamma) : 1.0f;
 
   int rot_cw = 0;
   bool hflip = false;
@@ -2185,8 +2176,6 @@ int main(int ac, char *av[]) {
     SolverConfig cfg;
     cfg.knee = knee;
     cfg.knee_auto = is_knee_auto;
-    cfg.has_gamma = has_gamma;
-    cfg.inv_gamma = inv_gamma;
 
     const int max_iters = parser.get<int>("--dino_iters");
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
@@ -2355,7 +2344,7 @@ int main(int ac, char *av[]) {
     for (int j = 0; j < height; ++j) {
       for (int i = 0; i < width; ++i) {
         ushort* px = proc->imgdata.image[j * width + i];
-        Rgb v = process_pixel(px, merged_matrix, knee, has_gamma, inv_gamma, film_prof.data);
+        Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
         v = pcs_to_linear_srgb(v);
         v = encode_output(v, encoding);
         px[0] = quantize_u16(v.r);
@@ -2374,7 +2363,7 @@ int main(int ac, char *av[]) {
       for (int j = 0; j < height; ++j) {
         for (int i = 0; i < width; ++i) {
           const ushort* px = proc->imgdata.image[j * width + i];
-          Rgb v = process_pixel(px, merged_matrix, knee, has_gamma, inv_gamma, film_prof.data);
+          Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
           xyz_row[i * 3 + 0] = v.r;
           xyz_row[i * 3 + 1] = v.g;
           xyz_row[i * 3 + 2] = v.b;
@@ -2393,11 +2382,6 @@ int main(int ac, char *av[]) {
         Rgb v = load_u16(px);
         v = apply_matrix(merged_matrix, v);
         v = apply_knee(v, knee);
-        if (has_gamma) {
-          v.r = powf(clamp01(v.r), inv_gamma);
-          v.g = powf(clamp01(v.g), inv_gamma);
-          v.b = powf(clamp01(v.b), inv_gamma);
-        }
         px[0] = quantize_u16(v.r);
         px[1] = quantize_u16(v.g);
         px[2] = quantize_u16(v.b);

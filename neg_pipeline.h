@@ -197,25 +197,18 @@ static inline uint16_t quantize_u16(float v) {
   return (uint16_t)roundf(clamp01(v) * 65535.0f);
 }
 
-static inline Rgb process_pixel(const uint16_t* in_px, const float* matrix, float knee,
-                                bool has_gamma, float inv_gamma, const ProfileData& prof) {
+static inline Rgb process_pixel(const uint16_t* in_px, const float* matrix, float knee, const ProfileData& prof) {
   Rgb v = load_u16(in_px);
   v = apply_matrix(matrix, v);
   v = apply_knee(v, knee);
-  if (has_gamma) {
-    v.r = powf(clamp01(v.r), inv_gamma);
-    v.g = powf(clamp01(v.g), inv_gamma);
-    v.b = powf(clamp01(v.b), inv_gamma);
-  }
   if (prof.has_profile) {
     v = apply_profile(prof, v);
   }
   return v;
 }
 
-static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, float knee,
-                                     bool has_gamma, float inv_gamma, const ProfileData& prof) {
-  Rgb v = process_pixel(in_px, matrix, knee, has_gamma, inv_gamma, prof);
+static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, float knee, const ProfileData& prof) {
+  Rgb v = process_pixel(in_px, matrix, knee, prof);
   v = pcs_to_linear_srgb(v);
   return encode_output(v, ENCODE_SRGB);
 }

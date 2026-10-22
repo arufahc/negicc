@@ -275,7 +275,7 @@ class GreyPoint {
         const float vv = std::isfinite(v) ? v : 0.0f;
         px[c] = std::lround(std::fmin(1.0f, std::fmax(0.0f, vv)) * 65535.0f);
       }
-      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, false, 1.0f, prof_));
+      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, prof_));
       out[i][0] = lab.L;
       out[i][1] = lab.a;
       out[i][2] = lab.b;
@@ -699,7 +699,7 @@ class SearchFrame {
     out.resize(inner_crop_.rgb.size());
 #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < n; ++i) {
-      const Rgb v = convert_pixel_srgb(&inner_crop_.rgb[i * 3], m, AUTO_KNEE, false, 1.0f, prof);
+      const Rgb v = convert_pixel_srgb(&inner_crop_.rgb[i * 3], m, AUTO_KNEE, prof);
       out[i * 3] = quantize_u8(v.r);
       out[i * 3 + 1] = quantize_u8(v.g);
       out[i * 3 + 2] = quantize_u8(v.b);
