@@ -1356,8 +1356,12 @@ static bool write_json_sidecar(
         g_cnt++;
       }
     }
-    fprintf(fp, "], \"segments\": %d, \"n_gaps\": %d, \"selected\": 0,\n",
-            1 + (int)frame_det->secondaries.size(), frame_det->n_gaps);
+    // segments: the frames on the strip, in strip order (secondaries are sorted by index, negative before the
+    // primary); selected: the primary's position among them.
+    int selected = 0;
+    for (const FilmFrame& f : frame_det->secondaries) selected += f.index < 0 ? 1 : 0;
+    fprintf(fp, "], \"segments\": %d, \"n_gaps\": %d, \"selected\": %d,\n",
+            1 + (int)frame_det->secondaries.size(), frame_det->n_gaps, selected);
     fprintf(fp, "    \"aspect\": %s, \"format\": \"%s\", \"film_format\": \"%s\", \"orientation\": \"%s\",\n",
             json_num(aspect, "%.4g").c_str(), ratio, film_format_name(frame_det->format),
             json_escape(frame_det->orientation).c_str());
