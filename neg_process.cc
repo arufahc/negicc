@@ -2116,8 +2116,9 @@ int main(int ac, char *av[]) {
   }
 
   // --roi auto. A single RAW: the frame is detected on the unpacked CFA mosaic, read in place (film_image_from_raw),
-  // before anything is decoded; load_raw then decodes only the region of the crop and the film base patch beside it
-  // (decode_region), and the crop is cut out of that. Four pixel-shift RAWs: detected on the merged image.
+  // before anything is decoded; load_raw then decodes only the region of the crop, and with --film_base_rgb auto the
+  // film base patch beside it (decode_region), and the crop is cut out of that. Four pixel-shift RAWs: detected on the
+  // merged image.
   FrameDetection frame_det;
   FrameDetectionParams det_params;
   det_params.format = film_format;
@@ -2140,11 +2141,11 @@ int main(int ac, char *av[]) {
         return false;
       }
       t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
-      // The decoded region: the crop, grown to take in the base patch when there is one (it lies next to the frame:
-      // an inter-frame gap or the rebate), aligned to the CFA period.
+      // The decoded region: the crop, grown for --film_base_rgb auto to take in the base patch when there is one (it
+      // lies next to the frame: an inter-frame gap or the rebate), aligned to the CFA period.
       int x0 = frame_det.crop[0], y0 = frame_det.crop[1];
       int x1 = x0 + frame_det.crop[2], y1 = y0 + frame_det.crop[3];
-      if (frame_det.has_base) {
+      if (is_film_base_auto && frame_det.has_base) {
         const int* b = frame_det.base_box;
         const int a = mosaic.step;
         x0 = std::min(x0, b[0] / a * a);
@@ -2253,6 +2254,14 @@ int main(int ac, char *av[]) {
 
     // The decoded image holds decode_region, at half its size with -H.
     const float dscale = (float)decode_region[2] / (float)std::max(1, (int)proc->imgdata.sizes.iwidth);
+    if (frame_det.has_base) {
+      // Sampled only where decoded: without --film_base_rgb auto the region was not grown to take in the patch.
+      const int* b = frame_det.base_box;
+      if (b[0] < decode_region[0] || b[1] < decode_region[1] || b[0] + b[2] > decode_region[0] + decode_region[2] ||
+          b[1] + b[3] > decode_region[1] + decode_region[3]) {
+        frame_det.has_base = false;
+      }
+    }
     if (frame_det.has_base) {
       // The base in the decoded image's units (its colour space and scale): the same patch, sampled again there.
       FilmRect patch = frame_det.base_patch;
