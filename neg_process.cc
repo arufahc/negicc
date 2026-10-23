@@ -1226,6 +1226,10 @@ static std::string json_num(double val, const char* fmt = "%.6g") {
   return buf;
 }
 
+// Below this frame detection confidence neg_process warns and the sidecar sets frame_detection.low_confidence. The
+// crop is still the detector's frame: there is no fallback region.
+static constexpr float kLowFrameConfidence = 0.5f;
+
 static bool write_json_sidecar(
     const std::string& output_path,
     int ac, char* av[],
@@ -1340,8 +1344,9 @@ static bool write_json_sidecar(
       default: break;
     }
     fprintf(fp, "  \"frame_detection\": {\n");
-    fprintf(fp, "    \"axis\": \"%c\", \"confidence\": %s, \"reason\": \"%s\",\n",
-            frame_det->axis, json_num(frame_det->conf, "%.2f").c_str(), json_escape(frame_det->reason).c_str());
+    fprintf(fp, "    \"axis\": \"%c\", \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
+            frame_det->axis, json_num(frame_det->conf, "%.2f").c_str(),
+            frame_det->conf < kLowFrameConfidence ? "true" : "false", json_escape(frame_det->reason).c_str());
     fprintf(fp, "    \"gaps\": [");
     int g_cnt = 0;
     for (int g = 0; g < 2; ++g) {
@@ -2269,8 +2274,8 @@ int main(int ac, char *av[]) {
     } else if (is_film_base_auto) {
       printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
     }
-    if (frame_det.conf < 0.5f) {
-      printf("Warning: low detection confidence (conf=%.2f%s%s)\n",
+    if (frame_det.conf < kLowFrameConfidence) {
+      printf("Warning: low detection confidence (conf=%.2f%s%s); the crop is the detected frame, check it\n",
              frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
     }
     if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
@@ -2662,7 +2667,7 @@ int main(int ac, char *av[]) {
 
     std::string roi_source = "none";
     if (is_roi_auto) {
-      roi_source = (frame_det.conf >= 0.5f) ? "auto" : "auto_fallback";
+      roi_source = "auto";  // also at low confidence (frame_detection.low_confidence): there is no fallback region
     } else if (has_roi) {
       roi_source = "cli";
     }
