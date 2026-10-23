@@ -435,7 +435,7 @@ using RawRegionFinder = std::function<bool(LibRaw& proc, int roi[4])>;
 // first visible photosite (top_margin, left_margin), raw_pitch / 2 elements per row; the R, G and B lattices take one
 // photosite of their colour per 2x2 (Bayer) or 6x6 (X-Trans) cell, each with its black level (black + cblack[colour])
 // subtracted; maximum - black is the clipping point. A monochrome RAW is its one plane three times. False when proc
-// holds no mosaic (e.g. a linear DNG).
+// holds no mosaic (e.g. a linear DNG) or when its margins put the visible area outside the raw buffer.
 //
 // When LibRaw holds the black level as a cblack[6..] pattern (cblack[4] rows x cblack[5] columns, indexed by the
 // visible row and column as prepare_white_light_mosaic applies it), each lattice's black also takes the pattern's mean
@@ -447,6 +447,11 @@ static bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
   if (!raw) return false;
   const auto& sz = proc.imgdata.sizes;
   const ptrdiff_t stride = sz.raw_pitch / 2;
+  // The visible area must lie inside the raw buffer (prepare_white_light_mosaic refuses such a RAW the same way).
+  if (sz.width <= 0 || sz.height <= 0 || sz.top_margin + sz.height > sz.raw_height ||
+      sz.left_margin + sz.width > stride) {
+    return false;
+  }
   const ushort* origin = raw + (size_t)sz.top_margin * stride + sz.left_margin;
   const auto& C = proc.imgdata.color;
   const float black = (float)C.black;
@@ -2115,7 +2120,7 @@ int main(int ac, char *av[]) {
       const double t_det_0 = omp_get_wtime();
       FilmImage mosaic;
       if (!film_image_from_raw(raw, mosaic)) {
-        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW\n");
+        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
         return false;
       }
       det_params.crop_align = mosaic.step;
