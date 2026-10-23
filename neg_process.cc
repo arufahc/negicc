@@ -1325,7 +1325,8 @@ static bool write_json_sidecar(
   // frame_detection
   if (frame_det) {
     // Sensor pixel coordinates throughout (the detector ran on the RAW before the decode). aspect and format describe
-    // the frame as the previous detector did ("3:2", ...); film_format is the format the detection used.
+    // the frame as the previous detector did ("3:2", ...); film_format is the format the detection used. axis is
+    // "h" or "v", or null when the detector left it undecided (a single square frame with nothing to orient it).
     auto rect_json = [](const FilmRect& r) {
       char b[160];
       snprintf(b, sizeof(b), "{\"cx\": %.1f, \"cy\": %.1f, \"w\": %.1f, \"h\": %.1f, \"angle_deg\": %.3f}",
@@ -1344,8 +1345,9 @@ static bool write_json_sidecar(
       default: break;
     }
     fprintf(fp, "  \"frame_detection\": {\n");
-    fprintf(fp, "    \"axis\": \"%c\", \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
-            frame_det->axis, json_num(frame_det->conf, "%.2f").c_str(),
+    const bool has_axis = frame_det->axis == 'h' || frame_det->axis == 'v';
+    fprintf(fp, "    \"axis\": %s, \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
+            has_axis ? (frame_det->axis == 'h' ? "\"h\"" : "\"v\"") : "null", json_num(frame_det->conf, "%.2f").c_str(),
             frame_det->conf < kLowFrameConfidence ? "true" : "false", json_escape(frame_det->reason).c_str());
     fprintf(fp, "    \"gaps\": [");
     int g_cnt = 0;
@@ -2231,8 +2233,9 @@ int main(int ac, char *av[]) {
     roi_coords[3] = frame_det.crop[3];
     has_roi = true;
 
-    printf("Film frame: axis=%c format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
-           frame_det.axis, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
+    const char* axis_name = frame_det.axis == 'h' ? "h" : (frame_det.axis == 'v' ? "v" : "undecided");
+    printf("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
+           axis_name, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
            frame_det.n_gaps, 1 + (int)frame_det.secondaries.size(), frame_det.conf,
            frame_det.reason.empty() ? "" : " reason: ", frame_det.reason.c_str());
     if (frame_det.n_gaps > 0) {
