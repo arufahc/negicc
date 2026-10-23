@@ -1390,6 +1390,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   const FormatGeom fg = format_geom(fmt);
   const int W = cv.w, H = cv.h;
   const bool positive = P.polarity == FILM_POSITIVE;
+  // A canvas class on the film: picture or base, and on a positive also its dense (dark) parts.
+  auto film = [positive](uint8_t c) { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); };
   std::vector<std::string> reasons;
   FrameDetection& out = res.det;
 
@@ -1419,7 +1421,6 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // bottom borders see no film, and some rows (beyond the strip) hold no film at all.
   int axis_ev = 0;  // 1 along x, -1 along y
   {
-    auto film = [&](uint8_t c) { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); };
     auto no_film_lines = [&](bool rows) {
       const int n = rows ? H : W, m = rows ? W : H;
       int cnt = 0, tot = 0;
@@ -1756,7 +1757,6 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
 
   // The strip's edges (s0, s1): from the frame band outward while rows over the frame are film; its ends (e0, e1):
   // from the frame outward while columns over the strip are film.
-  auto film = [positive](uint8_t c) { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); };
   const int fx0 = std::max(0, (int)pr.x0), fx1 = std::min(VW, (int)pr.x1);
   int s0 = (int)pr.y0, s1 = (int)pr.y1;
   bool edge0 = false, edge1 = false;
