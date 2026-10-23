@@ -426,6 +426,69 @@ bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
 // there.
 using HalfSizeAnalysis = std::function<void(const LibRaw& proc)>;
 
+// Called by load_raw with the unpacked RAW in proc (imgdata.rawdata.raw_image holds the CFA mosaic, margins
+// included), before the half-size analysis and the decode. Sets roi to the region to decode (x, y, w, h in the
+// visible sensor area, imgdata.sizes.width x height), as --roi would; false fails the load.
+using RawRegionFinder = std::function<bool(LibRaw& proc, int roi[4])>;
+
+// The unpacked CFA mosaic of proc as the frame detector reads it, in place (no copy): rawdata.raw_image from its
+// first visible photosite (top_margin, left_margin), raw_pitch / 2 elements per row; the R, G and B lattices take one
+// photosite of their colour per 2x2 (Bayer) or 6x6 (X-Trans) cell, each with its black level (black + cblack[colour])
+// subtracted; maximum - black is the clipping point. A monochrome RAW is its one plane three times. False when proc
+// holds no mosaic (e.g. a linear DNG) or when its margins put the visible area outside the raw buffer.
+//
+// When LibRaw holds the black level as a cblack[6..] pattern (cblack[4] rows x cblack[5] columns, indexed by the
+// visible row and column as prepare_white_light_mosaic applies it), each lattice's black also takes the pattern's mean
+// over the pattern entries its photosites land on: the rows y0 + j * step and columns x0 + i * step, modulo the
+// pattern size. When the pattern period divides the CFA period (the usual case) that is the single entry at the
+// lattice's phase, exactly the black of every photosite of the lattice; otherwise it is the mean over the lattice.
+static bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
+  const ushort* raw = proc.imgdata.rawdata.raw_image;
+  if (!raw) return false;
+  const auto& sz = proc.imgdata.sizes;
+  const ptrdiff_t stride = sz.raw_pitch / 2;
+  // The visible area must lie inside the raw buffer (prepare_white_light_mosaic refuses such a RAW the same way).
+  if (sz.width <= 0 || sz.height <= 0 || sz.top_margin + sz.height > sz.raw_height ||
+      sz.left_margin + sz.width > stride) {
+    return false;
+  }
+  const ushort* origin = raw + (size_t)sz.top_margin * stride + sz.left_margin;
+  const auto& C = proc.imgdata.color;
+  const float black = (float)C.black;
+  float cblack[4];
+  for (int c = 0; c < 4; ++c) cblack[c] = black + (float)C.cblack[c];
+  const float white = std::max(1.0f, (float)C.maximum - black);
+  const unsigned filters = proc.imgdata.idata.filters;
+  if (!filters) {
+    img = film_image_from_planes(origin, origin, origin, sz.width, sz.height, stride, white);
+    for (FilmChannel& ch : img.ch) ch.black = cblack[0];
+  } else if (!film_image_from_cfa(origin, sz.width, sz.height, stride, filters == 9 ? 6 : 2,
+                                  [&proc](int row, int col) { return proc.COLOR(row, col); }, cblack, white, img)) {
+    return false;
+  }
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  if (dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6) {
+    for (FilmChannel& ch : img.ch) {
+      // The pattern rows (columns) the lattice visits: y0 + j * step modulo dr (dc), for every j.
+      std::vector<char> row_hit(dr, 0), col_hit(dc, 0);
+      for (unsigned j = 0; j < dr; ++j) row_hit[(ch.y0 + j * img.step) % dr] = 1;
+      for (unsigned i = 0; i < dc; ++i) col_hit[(ch.x0 + i * img.step) % dc] = 1;
+      double sum = 0.0;
+      int n = 0;
+      for (unsigned r = 0; r < dr; ++r) {
+        if (!row_hit[r]) continue;
+        for (unsigned c = 0; c < dc; ++c) {
+          if (!col_hit[c]) continue;
+          sum += C.cblack[6 + r * dc + c];
+          ++n;
+        }
+      }
+      ch.black += (float)(sum / n);
+    }
+  }
+  return true;
+}
+
 // LibRaw's half-size readout does not serve an X-Trans RAW (filters 9): its 2x2 quads hold several photosites of one
 // colour, which LibRaw's OpenMP loop writes in a race, and the quads of only green photosites get no R or B. Replaces
 // LibRaw's full-size readout in proc with a half-size image of each quad's mean per colour; R and B of the green-only
@@ -624,9 +687,12 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
 // |analyse|, when set, is called with the half-size image of the RAW before it is decoded: LibRaw's half-size readout
 // of the mosaic (read_half_size), or for kWhiteLight its half-size white-light decode, in the same space as the
 // output.
+//
+// |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
+// (--roi auto: the detected frame), so that the analysis and the decode see only that region.
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
-                 const HalfSizeAnalysis& analyse = {}) {
+                 const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {}) {
   const bool white_light = debayer && decode == RawDecode::kWhiteLight;
   int ret;
   LibRaw* proc = new LibRaw();
@@ -648,6 +714,14 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     printf("Only Bayer-pattern RAW files supported, sorry....\n");
     delete proc;
     return NULL;
+  }
+  int found_roi[4];
+  if (find_region) {
+    if (!find_region(*proc, found_roi)) {
+      delete proc;
+      return NULL;
+    }
+    roi = found_roi;
   }
   // The ROI is checked and clamped to the sensor before the analysis read, which runs the whole bracket search, so
   // that an ROI outside the sensor fails before the DINOv3 inferences.
@@ -1152,6 +1226,10 @@ static std::string json_num(double val, const char* fmt = "%.6g") {
   return buf;
 }
 
+// Below this frame detection confidence neg_process warns and the sidecar sets frame_detection.low_confidence. The
+// crop is still the detector's frame: there is no fallback region.
+static constexpr float kLowFrameConfidence = 0.5f;
+
 static bool write_json_sidecar(
     const std::string& output_path,
     int ac, char* av[],
@@ -1246,23 +1324,66 @@ static bool write_json_sidecar(
 
   // frame_detection
   if (frame_det) {
-    const int s_scale = (half_size && files.size() != 4) ? 2 : 1;
+    // Sensor pixel coordinates throughout (the detector ran on the RAW before the decode). aspect and format describe
+    // the frame as the previous detector did ("3:2", ...); film_format is the format the detection used. axis is
+    // "h" or "v", or null when the detector left it undecided (a single square frame with nothing to orient it).
+    auto rect_json = [](const FilmRect& r) {
+      char b[160];
+      snprintf(b, sizeof(b), "{\"cx\": %.1f, \"cy\": %.1f, \"w\": %.1f, \"h\": %.1f, \"angle_deg\": %.3f}",
+               r.cx, r.cy, r.w, r.h, r.angle_deg);
+      return std::string(b);
+    };
+    const FilmRect& pr = frame_det->primary.rect;
+    const float aspect = std::max(pr.w, pr.h) / std::max(1.0f, std::min(pr.w, pr.h));
+    const char* ratio = "-";
+    switch (frame_det->format) {
+      case FILM_35MM: ratio = "3:2"; break;
+      case FILM_645: ratio = "4:3"; break;
+      case FILM_6X6: ratio = "1:1"; break;
+      case FILM_6X7: ratio = "7:6"; break;
+      case FILM_6X9: ratio = "3:2"; break;
+      default: break;
+    }
     fprintf(fp, "  \"frame_detection\": {\n");
-    fprintf(fp, "    \"axis\": \"%c\", \"confidence\": %s, \"reason\": \"%s\",\n",
-            frame_det->axis, json_num(frame_det->conf, "%.2f").c_str(), json_escape(frame_det->reason).c_str());
+    const bool has_axis = frame_det->axis == 'h' || frame_det->axis == 'v';
+    fprintf(fp, "    \"axis\": %s, \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
+            has_axis ? (frame_det->axis == 'h' ? "\"h\"" : "\"v\"") : "null", json_num(frame_det->conf, "%.2f").c_str(),
+            frame_det->conf < kLowFrameConfidence ? "true" : "false", json_escape(frame_det->reason).c_str());
     fprintf(fp, "    \"gaps\": [");
     int g_cnt = 0;
     for (int g = 0; g < 2; ++g) {
-      if (frame_det->gap[g][0] >= 0) {
+      if (frame_det->gaps[g][0] >= 0) {
         if (g_cnt > 0) fprintf(fp, ", ");
-        fprintf(fp, "[%d, %d]", frame_det->gap[g][0] * s_scale, frame_det->gap[g][1] * s_scale);
+        fprintf(fp, "[%d, %d]", frame_det->gaps[g][0], frame_det->gaps[g][1]);
         g_cnt++;
       }
     }
+    // segments: the frames on the strip, in strip order (secondaries are sorted by index, negative before the
+    // primary); selected: the primary's position among them.
+    int selected = 0;
+    for (const FilmFrame& f : frame_det->secondaries) selected += f.index < 0 ? 1 : 0;
     fprintf(fp, "], \"segments\": %d, \"n_gaps\": %d, \"selected\": %d,\n",
-            frame_det->n_segments, frame_det->n_gaps, frame_det->selected);
-    fprintf(fp, "    \"aspect\": %s, \"format\": \"%s\"\n",
-            json_num(frame_det->aspect, "%.4g").c_str(), json_escape(frame_det->format).c_str());
+            1 + (int)frame_det->secondaries.size(), frame_det->n_gaps, selected);
+    fprintf(fp, "    \"aspect\": %s, \"format\": \"%s\", \"film_format\": \"%s\", \"orientation\": \"%s\",\n",
+            json_num(aspect, "%.4g").c_str(), ratio, film_format_name(frame_det->format),
+            json_escape(frame_det->orientation).c_str());
+    fprintf(fp, "    \"rotation_deg\": %s, \"px_per_mm\": %s, \"light_clipped\": %s,\n",
+            json_num(frame_det->rotation_deg, "%.3f").c_str(), json_num(frame_det->px_per_mm, "%.2f").c_str(),
+            frame_det->light_clipped ? "true" : "false");
+    fprintf(fp, "    \"crop\": [%d, %d, %d, %d], \"primary\": %s,\n", frame_det->crop[0], frame_det->crop[1],
+            frame_det->crop[2], frame_det->crop[3], rect_json(pr).c_str());
+    fprintf(fp, "    \"secondaries\": [");
+    for (size_t i = 0; i < frame_det->secondaries.size(); ++i) {
+      const FilmFrame& f = frame_det->secondaries[i];
+      fprintf(fp, "%s{\"index\": %d, \"rect\": %s, \"visible\": [%d, %d, %d, %d], \"visible_fraction\": %s}",
+              i ? ", " : "", f.index, rect_json(f.rect).c_str(), f.visible[0], f.visible[1], f.visible[2],
+              f.visible[3], json_num(f.visible_fraction, "%.3f").c_str());
+    }
+    fprintf(fp, "],\n");
+    fprintf(fp, "    \"film_base\": %s, \"base_patch\": %s, \"sprockets\": %d\n",
+            frame_det->has_film_base ? rect_json(frame_det->film_base).c_str() : "null",
+            frame_det->has_base ? rect_json(frame_det->base_patch).c_str() : "null",
+            (int)frame_det->sprockets.size());
     fprintf(fp, "  },\n");
   } else {
     fprintf(fp, "  \"frame_detection\": null,\n");
@@ -1508,6 +1629,13 @@ static bool write_json_sidecar(
 // whenever a profile is given, unless --gain_g or --gain_b is; then the conversion takes the values as given. -E
 // keeps the exposure as given and solves only the gains, on the bracket --target picks (or the bundle's default).
 // TODO: the bracket search on the frame --roi auto finds; for now it needs the frame given with --roi.
+//
+// --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in
+// a strip holder or in a frame holder, tilted up to 5 degrees, partial neighbour frames beside it. --film_format gives
+// the format (more accurate than trying each); h or v gives the strip direction. The detection reads the RAW's CFA
+// mosaic in place before anything is decoded, and only the frame (and the film base patch beside it, for
+// --film_base_rgb auto) is decoded, e.g.
+//     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char *av[]) {
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--list_profiles") == 0) {
@@ -1599,6 +1727,9 @@ int main(int ac, char *av[]) {
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'.")
     .nargs(1, 7);
+  parser.add_argument("--film_format")
+    .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, 6x9, or auto (each in turn; less accurate).")
+    .default_value(std::string("auto"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
     .scan<'i', int>()
@@ -1729,6 +1860,18 @@ int main(int ac, char *av[]) {
 
   if (rot_cw % 90 != 0) {
     fprintf(stderr, "ERROR! Rotation must be a multiple of 90 degrees (got %d)\n", rot_cw);
+    return 1;
+  }
+
+  const std::string film_format_arg = parser.get<std::string>("--film_format");
+  const FilmFormat film_format = film_format_from_name(film_format_arg);
+  if (film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
+    fprintf(stderr, "ERROR! Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9 or auto)\n",
+            film_format_arg.c_str());
+    return 1;
+  }
+  if (parser.is_used("--film_format") && !is_roi_auto) {
+    fprintf(stderr, "ERROR! --film_format requires --roi auto\n");
     return 1;
   }
 
@@ -1972,6 +2115,52 @@ int main(int ac, char *av[]) {
     };
   }
 
+  // --roi auto. A single RAW: the frame is detected on the unpacked CFA mosaic, read in place (film_image_from_raw),
+  // before anything is decoded; load_raw then decodes only the region of the crop, and with --film_base_rgb auto the
+  // film base patch beside it (decode_region), and the crop is cut out of that. Four pixel-shift RAWs: detected on the
+  // merged image.
+  FrameDetection frame_det;
+  FrameDetectionParams det_params;
+  det_params.format = film_format;
+  det_params.axis_hint = roi_axis_hint;
+  int decode_region[4] = {0, 0, 0, 0};  // sensor x, y, w, h that load_raw decoded for --roi auto
+  double t_frame_det_ms = 0.0;
+  bool rebate_applied = false;
+  RawRegionFinder find_frame;
+  if (is_roi_auto && files.size() != 4) {
+    find_frame = [&](LibRaw& raw, int roi[4]) {
+      const double t_det_0 = omp_get_wtime();
+      FilmImage mosaic;
+      if (!film_image_from_raw(raw, mosaic)) {
+        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
+        return false;
+      }
+      det_params.crop_align = mosaic.step;
+      if (!detect_film_frame(mosaic, det_params, frame_det)) {
+        fprintf(stderr, "ERROR! Film frame detection failed\n");
+        return false;
+      }
+      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      // The decoded region: the crop, grown for --film_base_rgb auto to take in the base patch when there is one (it
+      // lies next to the frame: an inter-frame gap or the rebate), aligned to the CFA period.
+      int x0 = frame_det.crop[0], y0 = frame_det.crop[1];
+      int x1 = x0 + frame_det.crop[2], y1 = y0 + frame_det.crop[3];
+      if (is_film_base_auto && frame_det.has_base) {
+        const int* b = frame_det.base_box;
+        const int a = mosaic.step;
+        x0 = std::min(x0, b[0] / a * a);
+        y0 = std::min(y0, b[1] / a * a);
+        x1 = std::max(x1, std::min(mosaic.width, (b[0] + b[2] + a - 1) / a * a));
+        y1 = std::max(y1, std::min(mosaic.height, (b[1] + b[3] + a - 1) / a * a));
+      }
+      roi[0] = decode_region[0] = x0;
+      roi[1] = decode_region[1] = y0;
+      roi[2] = decode_region[2] = x1 - x0;
+      roi[3] = decode_region[3] = y1 - y0;
+      return true;
+    };
+  }
+
   const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
   if (files.size() == 4) {
@@ -1993,6 +2182,22 @@ int main(int ac, char *av[]) {
       printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
     }
+    if (is_roi_auto) {
+      // The merged image is sensor-sized camera RGB, black subtracted: read in place as interleaved RGB.
+      const double t_det_0 = omp_get_wtime();
+      const FilmImage merged = film_image_from_interleaved(
+          &proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, 4, 0,
+          std::max(1.0f, (float)(proc->imgdata.color.maximum - proc->imgdata.color.black)));
+      if (!detect_film_frame(merged, det_params, frame_det)) {
+        fprintf(stderr, "ERROR! Film frame detection failed\n");
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      decode_region[2] = proc->imgdata.sizes.iwidth;
+      decode_region[3] = proc->imgdata.sizes.iheight;
+    }
   } else {
     proc = load_raw(files[0], true,
                     parser.get<bool>("--half_size"),
@@ -2000,7 +2205,7 @@ int main(int ac, char *av[]) {
                     !parser.get<bool>("--no_crop") && !has_roi && !is_roi_auto,
                     raw_decode,
                     (!is_roi_auto && has_roi) ? roi_coords : nullptr,
-                    analyse);
+                    analyse, find_frame);
     if (!proc) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
       return 1;
@@ -2017,79 +2222,88 @@ int main(int ac, char *av[]) {
     }
   }
 
-  // The search ran inside the decode; its time is reported apart.
-  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms;
+  // The search and the detection ran inside the decode; their times are reported apart.
+  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
   const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.width;
   const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.height;
 
-  FrameDetection frame_det;
-  double t_frame_det_ms = 0.0;
-  bool rebate_applied = false;
-
   if (is_roi_auto) {
-    const double t_det_0 = omp_get_wtime();
-    const bool half_size = parser.get<bool>("--half_size");
-    const int cur_w = proc->imgdata.sizes.iwidth;
-    const int cur_h = proc->imgdata.sizes.iheight;
-    const unsigned filters = proc->imgdata.idata.filters;
-
-    bool det_ok = detect_film_frame(
-        (const uint16_t (*)[4])proc->imgdata.image,
-        cur_w, cur_h, filters, half_size,
-        roi_axis_hint, frame_det);
-
-    t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
-
-    if (!det_ok) {
-      fprintf(stderr, "ERROR! Film frame detection failed\n");
-      proc->free_image();
-      delete proc;
-      return 1;
-    }
-
-    const int s_scale = (half_size && files.size() != 4) ? 2 : 1;
-    roi_coords[0] = frame_det.x * s_scale;
-    roi_coords[1] = frame_det.y * s_scale;
-    roi_coords[2] = frame_det.w * s_scale;
-    roi_coords[3] = frame_det.h * s_scale;
+    roi_coords[0] = frame_det.crop[0];
+    roi_coords[1] = frame_det.crop[1];
+    roi_coords[2] = frame_det.crop[2];
+    roi_coords[3] = frame_det.crop[3];
     has_roi = true;
 
-    printf("Film frame: axis=%c gaps=%d segments=%d selected=%d conf=%.2f\n",
-           frame_det.axis, frame_det.n_gaps, frame_det.n_segments, frame_det.selected, frame_det.conf);
-    if (frame_det.gap[0][0] >= 0 || frame_det.gap[1][0] >= 0) {
+    const char* axis_name = frame_det.axis == 'h' ? "h" : (frame_det.axis == 'v' ? "v" : "undecided");
+    printf("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
+           axis_name, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
+           frame_det.n_gaps, 1 + (int)frame_det.secondaries.size(), frame_det.conf,
+           frame_det.reason.empty() ? "" : " reason: ", frame_det.reason.c_str());
+    if (frame_det.n_gaps > 0) {
       printf("  Gaps (sensor px):");
-      if (frame_det.gap[0][0] >= 0) printf(" [%d, %d]", frame_det.gap[0][0] * s_scale, frame_det.gap[0][1] * s_scale);
-      if (frame_det.gap[1][0] >= 0) printf(" [%d, %d]", frame_det.gap[1][0] * s_scale, frame_det.gap[1][1] * s_scale);
+      for (int g = 0; g < 2; ++g)
+        if (frame_det.gaps[g][0] >= 0) printf(" [%d, %d]", frame_det.gaps[g][0], frame_det.gaps[g][1]);
       printf("\n");
     }
-    printf("  Frame (sensor px): x=%d y=%d w=%d h=%d aspect=%.3f format=%s\n",
-           roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
-           frame_det.aspect, frame_det.format.c_str());
+    printf("  Frame (sensor px): x=%d y=%d w=%d h=%d (frame centre %.1f, %.1f, size %.1f x %.1f, %.1f px/mm)\n",
+           roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], frame_det.primary.rect.cx,
+           frame_det.primary.rect.cy, frame_det.primary.rect.w, frame_det.primary.rect.h, frame_det.px_per_mm);
+    for (const FilmFrame& f : frame_det.secondaries)
+      printf("  Frame %+d (sensor px): visible x=%d y=%d w=%d h=%d (%.0f%% of a frame)\n", f.index, f.visible[0],
+             f.visible[1], f.visible[2], f.visible[3], 100.0f * f.visible_fraction);
 
+    // The decoded image holds decode_region, at half its size with -H.
+    const float dscale = (float)decode_region[2] / (float)std::max(1, (int)proc->imgdata.sizes.iwidth);
+    if (frame_det.has_base) {
+      // Sampled only where decoded: without --film_base_rgb auto the region was not grown to take in the patch.
+      const int* b = frame_det.base_box;
+      if (b[0] < decode_region[0] || b[1] < decode_region[1] || b[0] + b[2] > decode_region[0] + decode_region[2] ||
+          b[1] + b[3] > decode_region[1] + decode_region[3]) {
+        frame_det.has_base = false;
+      }
+    }
+    if (frame_det.has_base) {
+      // The base in the decoded image's units (its colour space and scale): the same patch, sampled again there.
+      FilmRect patch = frame_det.base_patch;
+      patch.cx = (patch.cx - decode_region[0]) / dscale;
+      patch.cy = (patch.cy - decode_region[1]) / dscale;
+      patch.w /= dscale;
+      patch.h /= dscale;
+      const FilmImage decoded = film_image_from_interleaved(&proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth,
+                                                            proc->imgdata.sizes.iheight, 4);
+      float rgb[3], std_d;
+      if (film_sample_patch(decoded, patch, rgb, &std_d)) {
+        for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+      } else {
+        frame_det.has_base = false;
+      }
+    }
     if (frame_det.has_base) {
       if (is_film_base_auto) {
         rebate_applied = true;
-        printf("  Rebate base: R=%d G=%d B=%d (std %.3f D) applied\n",
+        printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
                frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
       } else {
-        printf("  Rebate base: R=%d G=%d B=%d (std %.3f D) sampled, unused\n",
+        printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
                frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
       }
     } else if (is_film_base_auto) {
       printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
     }
-
-    if (frame_det.conf < 0.5f) {
-      printf("Warning: low detection confidence (conf=%.2f%s%s), using envelope fallback\n",
+    if (frame_det.conf < kLowFrameConfidence) {
+      printf("Warning: low detection confidence (conf=%.2f%s%s); the crop is the detected frame, check it\n",
              frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
     }
-
     if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
       printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
     }
 
-    if (!extract_roi_and_transform(proc, frame_det.x, frame_det.y, frame_det.w, frame_det.h,
-                                   rot_cw, hflip, vflip)) {
+    // The crop out of the decoded region (one copy, with the rotation and flips).
+    const int cx = (int)std::lround((roi_coords[0] - decode_region[0]) / dscale);
+    const int cy = (int)std::lround((roi_coords[1] - decode_region[1]) / dscale);
+    const int cw = (int)std::lround(roi_coords[2] / dscale);
+    const int ch = (int)std::lround(roi_coords[3] / dscale);
+    if (!extract_roi_and_transform(proc, cx, cy, cw, ch, rot_cw, hflip, vflip)) {
       fprintf(stderr, "ERROR! Failed to extract detected frame ROI\n");
       proc->free_image();
       delete proc;
@@ -2126,7 +2340,8 @@ int main(int ac, char *av[]) {
   std::string film_base_source = "none";
 
   if (rebate_applied) {
-    effective_film_base_rgb = {frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2]};
+    effective_film_base_rgb = {(int)std::lround(frame_det.base_rgb[0]), (int)std::lround(frame_det.base_rgb[1]),
+                               (int)std::lround(frame_det.base_rgb[2])};
     sidecar_film_base_rgb = effective_film_base_rgb;
     film_base_applied = true;
     film_base_source = "rebate";
@@ -2143,7 +2358,8 @@ int main(int ac, char *av[]) {
     }
   } else {
     if (frame_det.has_base) {
-      sidecar_film_base_rgb = {frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2]};
+      sidecar_film_base_rgb = {(int)std::lround(frame_det.base_rgb[0]), (int)std::lround(frame_det.base_rgb[1]),
+                             (int)std::lround(frame_det.base_rgb[2])};
     } else {
       sidecar_film_base_rgb = {1, 1, 1};
     }
@@ -2467,7 +2683,7 @@ int main(int ac, char *av[]) {
 
     std::string roi_source = "none";
     if (is_roi_auto) {
-      roi_source = (frame_det.conf >= 0.5f) ? "auto" : "auto_fallback";
+      roi_source = "auto";  // also at low confidence (frame_detection.low_confidence): there is no fallback region
     } else if (has_roi) {
       roi_source = "cli";
     }
