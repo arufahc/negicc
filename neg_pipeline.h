@@ -44,6 +44,7 @@ struct ProfileData {
   int in_trc_size[3] = {0, 0, 0};
   const float* out_trc[3] = {nullptr, nullptr, nullptr};
   int out_trc_size[3] = {0, 0, 0};
+  int has_matrix = 0;
   float matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   float offset[3] = {0, 0, 0};
   const float* clut = nullptr;

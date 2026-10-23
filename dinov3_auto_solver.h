@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "cfa_pipeline.h"
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
 
@@ -129,6 +130,10 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
 // Solves optimal (E, g, b) parameters against active DINOv3 intent field
 bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
                          const uint16_t (*image)[4], int w, int h,
+                         IntentGains user_gains, unsigned pin_mask,
+                         int max_iters, DinoSolveResult& out);
+bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
+                         const negicc::RgbView& view,
                          IntentGains user_gains, unsigned pin_mask,
                          int max_iters, DinoSolveResult& out);
 
