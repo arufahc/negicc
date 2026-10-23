@@ -436,24 +436,52 @@ using RawRegionFinder = std::function<bool(LibRaw& proc, int roi[4])>;
 // photosite of their colour per 2x2 (Bayer) or 6x6 (X-Trans) cell, each with its black level (black + cblack[colour])
 // subtracted; maximum - black is the clipping point. A monochrome RAW is its one plane three times. False when proc
 // holds no mosaic (e.g. a linear DNG).
+//
+// When LibRaw holds the black level as a cblack[6..] pattern (cblack[4] rows x cblack[5] columns, indexed by the
+// visible row and column as prepare_white_light_mosaic applies it), each lattice's black also takes the pattern's mean
+// over the pattern entries its photosites land on: the rows y0 + j * step and columns x0 + i * step, modulo the
+// pattern size. When the pattern period divides the CFA period (the usual case) that is the single entry at the
+// lattice's phase, exactly the black of every photosite of the lattice; otherwise it is the mean over the lattice.
 static bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
   const ushort* raw = proc.imgdata.rawdata.raw_image;
   if (!raw) return false;
   const auto& sz = proc.imgdata.sizes;
   const ptrdiff_t stride = sz.raw_pitch / 2;
   const ushort* origin = raw + (size_t)sz.top_margin * stride + sz.left_margin;
-  const float black = (float)proc.imgdata.color.black;
+  const auto& C = proc.imgdata.color;
+  const float black = (float)C.black;
   float cblack[4];
-  for (int c = 0; c < 4; ++c) cblack[c] = black + (float)proc.imgdata.color.cblack[c];
-  const float white = std::max(1.0f, (float)proc.imgdata.color.maximum - black);
+  for (int c = 0; c < 4; ++c) cblack[c] = black + (float)C.cblack[c];
+  const float white = std::max(1.0f, (float)C.maximum - black);
   const unsigned filters = proc.imgdata.idata.filters;
   if (!filters) {
     img = film_image_from_planes(origin, origin, origin, sz.width, sz.height, stride, white);
     for (FilmChannel& ch : img.ch) ch.black = cblack[0];
-    return true;
+  } else if (!film_image_from_cfa(origin, sz.width, sz.height, stride, filters == 9 ? 6 : 2,
+                                  [&proc](int row, int col) { return proc.COLOR(row, col); }, cblack, white, img)) {
+    return false;
   }
-  return film_image_from_cfa(origin, sz.width, sz.height, stride, filters == 9 ? 6 : 2,
-                             [&proc](int row, int col) { return proc.COLOR(row, col); }, cblack, white, img);
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  if (dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6) {
+    for (FilmChannel& ch : img.ch) {
+      // The pattern rows (columns) the lattice visits: y0 + j * step modulo dr (dc), for every j.
+      std::vector<char> row_hit(dr, 0), col_hit(dc, 0);
+      for (unsigned j = 0; j < dr; ++j) row_hit[(ch.y0 + j * img.step) % dr] = 1;
+      for (unsigned i = 0; i < dc; ++i) col_hit[(ch.x0 + i * img.step) % dc] = 1;
+      double sum = 0.0;
+      int n = 0;
+      for (unsigned r = 0; r < dr; ++r) {
+        if (!row_hit[r]) continue;
+        for (unsigned c = 0; c < dc; ++c) {
+          if (!col_hit[c]) continue;
+          sum += C.cblack[6 + r * dc + c];
+          ++n;
+        }
+      }
+      ch.black += (float)(sum / n);
+    }
+  }
+  return true;
 }
 
 // LibRaw's half-size readout does not serve an X-Trans RAW (filters 9): its 2x2 quads hold several photosites of one
