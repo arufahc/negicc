@@ -133,7 +133,8 @@ struct FrameDetection {
   FilmFormat format = FILM_FORMAT_AUTO;
   float px_per_mm = 0.0f;             // image pixels per mm of film
   // The film gaps at the primary frame's two ends (before, after it along the strip): their extent along the strip
-  // axis in image pixels (x for axis 'h', y for 'v'), {-1, -1} where the end is bounded otherwise or open.
+  // axis in image pixels (x for axis 'h', y for 'v'), within [0, width or height], {-1, -1} where the end is
+  // bounded otherwise or open. n_gaps counts the ends that have one.
   int n_gaps = 0;
   int gaps[2][2] = {{-1, -1}, {-1, -1}};
   // A flat patch of unexposed film next to the primary frame (an inter-frame gap or the rebate, tilted with the

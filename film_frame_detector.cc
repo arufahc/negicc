@@ -1973,8 +1973,11 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     g.y1 = pr.y1;
     const FilmRect gi = G.to_image(g);
     const float c = tr ? gi.cy : gi.cx, half = 0.5f * (tr ? gi.h : gi.w);
-    out.gaps[side][0] = (int)std::lround(c - half);
-    out.gaps[side][1] = (int)std::lround(c + half);
+    // Clamped to the image: the work grid and a tilted band can reach past the border, and a negative start would
+    // read as the {-1, -1} sentinel.
+    const int lim = tr ? im.height : im.width;
+    out.gaps[side][0] = std::clamp((int)std::lround(c - half), 0, lim);
+    out.gaps[side][1] = std::clamp((int)std::lround(c + half), 0, lim);
     out.n_gaps++;
   }
   out.axis = axis;
