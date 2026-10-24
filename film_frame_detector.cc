@@ -429,9 +429,8 @@ void build_canvas(const WorkImage& wi, float theta, const float clip_level[3], C
       cv.g.d[i] = bil(wi.g);
       cv.b.d[i] = bil(wi.b);
       cv.valid[i] = 1;
-      const int nx = std::clamp((int)std::lround(fx), 0, wi.w - 1), ny = std::clamp((int)std::lround(fy), 0, wi.h - 1);
-      cv.clip[i] = (wi.mr.at(nx, ny) >= clip_level[0] || wi.mg.at(nx, ny) >= clip_level[1] ||
-                    wi.mb.at(nx, ny) >= clip_level[2]) ? 1 : 0;
+      cv.clip[i] = (cv.r.d[i] >= clip_level[0] || cv.g.d[i] >= clip_level[1] ||
+                    cv.b.d[i] >= clip_level[2]) ? 1 : 0;
     }
   }
 }
@@ -791,8 +790,25 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         }
         outside_film = tot == 0 || between < 0.25 * tot;
       }
-      if (outside_film && flat + other > 0 && flat >= (valley ? 0.45 : 0.6) * (double)(flat + other)) {
-        keep_light_parts(cand, 0.5f * ref);
+      // On a colour negative the orange mask absorbs blue, so bare light (air) is less orange (lower log2(R/B))
+      // than the film mode at mnext.
+      double q_cand_sum = 0.0, q_nxt_sum = 0.0;
+      size_t q_cand_n = 0, q_nxt_n = 0;
+      for (size_t i = 0; i < N; ++i) {
+        if (!cv.valid[i] || black[i] || light[i]) continue;
+        const float qi = std::log2(std::max(cv.r.d[i], 1e-6f) / std::max(cv.b.d[i], 1e-6f));
+        if (cand[i]) {
+          q_cand_sum += qi;
+          q_cand_n++;
+        } else if (std::fabs(mall[i] - mnext) <= 0.25f) {
+          q_nxt_sum += qi;
+          q_nxt_n++;
+        }
+      }
+      const double q_diff = (q_cand_n && q_nxt_n) ? (q_nxt_sum / q_nxt_n - q_cand_sum / q_cand_n) : 0.0;
+      if (outside_film && q_diff >= 0.80 && (mh.center(top) - mnext) >= 0.75f && flat + other > 0 &&
+          flat >= (valley ? 0.45 : 0.6) * (double)(flat + other)) {
+        keep_light_parts(cand, 0.65f * ref);
         for (size_t i = 0; i < N; ++i) light[i] |= cand[i];
       }
     }
@@ -815,8 +831,8 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     if (black[i] || !cv.valid[i]) light[i] = 0;
 
   // Film base. A first estimate from the film's percentiles (the thinnest film for a negative, the densest for a
-  // slide); for a negative then the brightest mode of m that forms large connected regions (rebate bands, gaps),
-  // not only small blobs (unclipped holes, blended edges), walking down from the brightest mode.
+  // slide); for a negative, if the top of m consists only of small blobs (unclipped sprocket holes, blended edges),
+  // step down to the brightest mode that forms large connected regions (rebate bands, gaps).
   {
     std::vector<float> fr[3];
     for (size_t i = 0, k = 0; i < N; ++i) {
@@ -839,50 +855,6 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     for (int c = 0; c < 3; ++c)
       ci.base[c] = std::max(1e-6f, percentile(fr[c], pol == FILM_POSITIVE ? 0.005 : 0.995));
     ci.base_valid = !fr[0].empty();
-  }
-  if (pol == FILM_NEGATIVE) {
-    ModeHist mh;
-    mh.build(mall, [&](size_t i) { return cv.valid[i] && !black[i] && !light[i]; }, step);
-    int pk = -1;
-    const std::vector<int> pks = mh.peaks(0.004);
-    int hi = -1;
-    for (int b = ModeHist::nb - 1; b >= 0; --b) {
-      if (mh.h[b] > 0.0005 * mh.tot) {
-        hi = b;
-        break;
-      }
-    }
-    std::vector<uint8_t> mm(N, 0);
-    for (int k = (int)pks.size() - 1; k >= 0 && hi >= 0; --k) {
-      if ((hi - pks[k]) * ModeHist::bw > 2.5f) break;
-      const float mc = mh.center(pks[k]);
-      for (size_t i = 0; i < N; ++i)
-        mm[i] = (cv.valid[i] && !black[i] && !light[i] && std::fabs(mall[i] - mc) <= 0.15f) ? 1 : 0;
-      Labels L;
-      components(mm, cv.valid, lum, W, H, L);
-      double big = 0.0;
-      for (size_t c = 0; c < L.area.size(); ++c)
-        if (L.area[c] >= 0.0015 * (double)nvalid) big += L.area[c];
-      if (big >= 0.003 * (double)nvalid) {
-        pk = pks[k];
-        break;
-      }
-    }
-    if (pk < 0) pk = mh.top_mode(0.004, 2.5f);
-    if (pk >= 0) {
-      const float mc = mh.center(pk);
-      std::vector<float> cr[3];
-      for (size_t i = 0, k = 0; i < N; ++i) {
-        if (!cv.valid[i] || black[i] || light[i] || std::fabs(mall[i] - mc) > 0.12f) continue;
-        if ((k++ % step) == 0) {
-          cr[0].push_back(cv.r.d[i]);
-          cr[1].push_back(cv.g.d[i]);
-          cr[2].push_back(cv.b.d[i]);
-        }
-      }
-      if (cr[0].size() >= 16)
-        for (int c = 0; c < 3; ++c) ci.base[c] = std::max(1e-6f, percentile(cr[c], 0.5));
-    }
   }
   const float base_lum = (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f;
   const float base_q = std::log2(ci.base[0] / ci.base[2]);  // how orange the base is (log2 R / B)
@@ -970,6 +942,25 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     } else {
       const bool dense = std::log2(std::max(l, 1e-7f) / ref) <= slide_dark;
       ci.cls[i] = (dense || holder[i]) ? CL_DARK : CL_IMAGE;
+    }
+  }
+  if (pol == FILM_NEGATIVE) {
+    size_t nbase = 0, nfilm = 0;
+    for (size_t i = 0; i < N; ++i) {
+      if (ci.cls[i] == CL_BASE) {
+        nbase++;
+        nfilm++;
+      } else if (ci.cls[i] == CL_IMAGE) {
+        nfilm++;
+      }
+    }
+    if (nfilm > 0 && (double)nbase > 0.28 * (double)nfilm) {
+      const float kt = std::exp2(-0.10f);
+      for (size_t i = 0; i < N; ++i) {
+        if (ci.cls[i] != CL_BASE) continue;
+        const bool thin = cv.r.d[i] >= ci.base[0] * kt && cv.g.d[i] >= ci.base[1] * kt && cv.b.d[i] >= ci.base[2] * kt;
+        if (!thin) ci.cls[i] = CL_IMAGE;
+      }
     }
   }
 }
@@ -1474,7 +1465,19 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   res.score = r0.score / ((double)sw * sh);
 
   // ---- 5b. The strip model, in the view (strip along view x).
-  const View v{&ci.cls, W, H, tr};
+  // Non-image blobs inside the picture that failed the line gate count as picture for segmenting the strip and
+  // placing frame edges; ci.cls itself is kept for sprocket holes and film-base patches.
+  std::vector<uint8_t> vcls = ci.cls;
+  for (int y = 0; y < H; ++y) {
+    const int sy = std::min(sh - 1, y / f);
+    for (int x = 0; x < W; ++x) {
+      const int sx = std::min(sw - 1, x / f);
+      const size_t i = (size_t)y * W + x;
+      if (vcls[i] != CL_INVALID && vcls[i] != CL_IMAGE && gated[(size_t)sy * sw + sx] == 0.0f) vcls[i] = CL_IMAGE;
+    }
+  }
+  const View v{&vcls, W, H, tr};
+  const View v_raw{&ci.cls, W, H, tr};
   const int VW = v.w(), VH = v.h();
   Rect fr;  // the frame estimate, view coordinates
   {
@@ -1679,6 +1682,15 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         r.x0 = c - 0.5f * L_exp;
         r.x1 = c + 0.5f * L_exp;
       }
+      if (segs.size() == 1 && L_exp <= (float)VW) {
+        if (r.x1 > (float)VW) {
+          r.x1 = (float)VW;
+          r.x0 = std::max(0.0f, r.x1 - L_exp);
+        } else if (r.x0 < 0.0f) {
+          r.x0 = 0.0f;
+          r.x1 = std::min((float)VW, L_exp);
+        }
+      }
     }
     float vis = 0.0f;
     for (int x = (int)std::floor(r.x0); x < (int)std::ceil(r.x1); ++x) vis += (x >= 0 && x < VW) ? cvalid[x] : 0.0f;
@@ -1824,7 +1836,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       if (yb2 - ya2 < hh * 0.5f) continue;
       int hy0 = -1, hy1 = -1, cur = -1;
       for (int y = ya2; y <= yb2; ++y) {
-        const float lr = y < yb2 ? row_frac(v, y, e0, e1, light) : 0.0f;
+        const float lr = y < yb2 ? row_frac(v_raw, y, e0, e1, light) : 0.0f;
         const bool in = y < yb2 && lr >= 0.2f && lr <= 0.8f;
         if (in && cur < 0) cur = y;
         if (!in && cur >= 0) {
@@ -1839,9 +1851,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       std::vector<Rect> found;
       int x = 0;
       while (x < VW) {
-        while (x < VW && col_frac(v, x, hy0, hy1, light) < 0.5f) ++x;
+        while (x < VW && col_frac(v_raw, x, hy0, hy1, light) < 0.5f) ++x;
         const int a = x;
-        while (x < VW && col_frac(v, x, hy0, hy1, light) >= 0.5f) ++x;
+        while (x < VW && col_frac(v_raw, x, hy0, hy1, light) >= 0.5f) ++x;
         if (x > a && x - a >= 0.5f * hw && x - a <= 1.7f * hw) {
           Rect h;
           h.x0 = (float)a;
@@ -2177,7 +2189,7 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
       const float mx = *std::max_element(mp[c]->d.begin(), mp[c]->d.end());
       size_t cnt = 0;
       for (float v : mp[c]->d) cnt += v >= 0.995f * mx;
-      const bool plateau = cnt >= std::max<size_t>(4, mp[c]->d.size() / 2000) && mx > 0.05f;
+      const bool plateau = cnt >= std::max<size_t>(4, mp[c]->d.size() / 2000) && mx >= 0.90f;
       clip_level[c] = plateau ? 0.98f * mx : 1e9f;
     }
   }
@@ -2227,13 +2239,30 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
     const int a = std::max(1, P.crop_align);
     auto up = [a](float v) { return (int)std::ceil(v / a) * a; };
     auto down = [a](float v) { return (int)std::floor(v / a) * a; };
-    const int x0 = std::max(0, up(out.primary.rect.cx - p)), y0 = std::max(0, up(out.primary.rect.cy - q));
-    const int x1 = std::min(down((float)im.width), down(out.primary.rect.cx + p));
-    const int y1 = std::min(down((float)im.height), down(out.primary.rect.cy + q));
+    int x0 = std::max(0, up(out.primary.rect.cx - p)), y0 = std::max(0, up(out.primary.rect.cy - q));
+    int x1 = std::min(down((float)im.width), down(out.primary.rect.cx + p));
+    int y1 = std::min(down((float)im.height), down(out.primary.rect.cy + q));
+    int cw = std::max(0, x1 - x0), ch = std::max(0, y1 - y0);
+    if (cw > 0 && ch > 0 && p > 0.0f && q > 0.0f) {
+      const FormatGeom fg_out = format_geom(out.format);
+      const float nom_hi = std::max(fg_out.along, fg_out.across) / std::min(fg_out.along, fg_out.across);
+      const float target_a = (out.format == FILM_6X6) ? 1.0f : (p >= q ? nom_hi : 1.0f / nom_hi);
+      if (std::fabs((float)cw / ch - target_a) / target_a > 0.015f) {
+        if ((float)cw / ch > target_a) {
+          const int nw = std::max(a, down(ch * target_a));
+          x0 = up(x0 + 0.5f * (cw - nw));
+          cw = nw;
+        } else {
+          const int nh = std::max(a, down(cw / target_a));
+          y0 = up(y0 + 0.5f * (ch - nh));
+          ch = nh;
+        }
+      }
+    }
     out.crop[0] = x0;
     out.crop[1] = y0;
-    out.crop[2] = std::max(0, x1 - x0);
-    out.crop[3] = std::max(0, y1 - y0);
+    out.crop[2] = cw;
+    out.crop[3] = ch;
     if (out.crop[2] < 16 || out.crop[3] < 16) return false;
   }
   // The base patch: the flattest candidate on the full-resolution image.
