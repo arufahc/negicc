@@ -673,7 +673,11 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
 static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   proc->imgdata.params.half_size = half ? 1 : 0;
   proc->imgdata.params.user_qual = qual;
+  const bool xtrans_full = !half && proc->imgdata.idata.filters == 9;
+  const int prev_threads = xtrans_full ? omp_get_max_threads() : 0;
+  if (xtrans_full) omp_set_num_threads(1);
   const int ret = proc->dcraw_process();
+  if (xtrans_full) omp_set_num_threads(prev_threads);
   if (ret != LIBRAW_SUCCESS) {
     fprintf(stderr, "ERROR! Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
