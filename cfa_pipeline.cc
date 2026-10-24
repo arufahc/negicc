@@ -393,6 +393,8 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
     out.grid_h = grid_h;
 
     const RawStatTables& tbl = raw_stat_tables();
+    const bool is_contig = !view.is_xtrans_cfa && !view.g2_ptr && !view.flat.gain &&
+                           view.pitch == 3 && view.g_ptr == view.r_ptr + 1 && view.b_ptr == view.r_ptr + 2;
 
     uint64_t g_hist[65536] = {};
     struct RowLog { double r = 0, g = 0, b = 0; };
@@ -408,17 +410,31 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
         for (int ry = 0; ry < crop.h; ++ry) {
             const int sy = crop.y0 + ry;
             double lr = 0.0, lg = 0.0, lb = 0.0;
-            for (int rx = 0; rx < crop.w; ++rx) {
-                uint16_t px[3];
-                view.sample(crop.x0 + rx, sy, px);
-                const uint16_t r = px[0], g = px[1], b = px[2];
-                loc_g[g]++;
-                lr += tbl.log_lut[r];
-                lg += tbl.log_lut[g];
-                lb += tbl.log_lut[b];
-                loc_raw[0][tbl.ev_bin[r]]++;
-                loc_raw[1][tbl.ev_bin[g]]++;
-                loc_raw[2][tbl.ev_bin[b]]++;
+            if (is_contig) {
+                const uint16_t* row = view.r_ptr + (ptrdiff_t)sy * view.stride + (ptrdiff_t)crop.x0 * 3;
+                for (int rx = 0; rx < crop.w; ++rx, row += 3) {
+                    const uint16_t r = row[0], g = row[1], b = row[2];
+                    loc_g[g]++;
+                    lr += tbl.log_lut[r];
+                    lg += tbl.log_lut[g];
+                    lb += tbl.log_lut[b];
+                    loc_raw[0][tbl.ev_bin[r]]++;
+                    loc_raw[1][tbl.ev_bin[g]]++;
+                    loc_raw[2][tbl.ev_bin[b]]++;
+                }
+            } else {
+                for (int rx = 0; rx < crop.w; ++rx) {
+                    uint16_t px[3];
+                    view.sample(crop.x0 + rx, sy, px);
+                    const uint16_t r = px[0], g = px[1], b = px[2];
+                    loc_g[g]++;
+                    lr += tbl.log_lut[r];
+                    lg += tbl.log_lut[g];
+                    lb += tbl.log_lut[b];
+                    loc_raw[0][tbl.ev_bin[r]]++;
+                    loc_raw[1][tbl.ev_bin[g]]++;
+                    loc_raw[2][tbl.ev_bin[b]]++;
+                }
             }
             row_logs[ry] = {lr, lg, lb};
         }
@@ -472,16 +488,30 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
                 for (int sy = sy_start; sy < sy_end; ++sy) {
                     const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
                     if (wy <= 0.0) continue;
-                    for (int sx = sx_start; sx < sx_end; ++sx) {
-                        const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
-                        if (wx <= 0.0) continue;
-                        const double w = wx * wy;
-                        uint16_t px[3];
-                        view.sample(crop.x0 + sx, crop.y0 + sy, px);
-                        r_acc += px[0] * w;
-                        g_acc += px[1] * w;
-                        b_acc += px[2] * w;
-                        w_acc += w;
+                    if (is_contig) {
+                        const uint16_t* row = view.r_ptr + (ptrdiff_t)(crop.y0 + sy) * view.stride +
+                                              (ptrdiff_t)(crop.x0 + sx_start) * 3;
+                        for (int sx = sx_start; sx < sx_end; ++sx, row += 3) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            r_acc += row[0] * w;
+                            g_acc += row[1] * w;
+                            b_acc += row[2] * w;
+                            w_acc += w;
+                        }
+                    } else {
+                        for (int sx = sx_start; sx < sx_end; ++sx) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            uint16_t px[3];
+                            view.sample(crop.x0 + sx, crop.y0 + sy, px);
+                            r_acc += px[0] * w;
+                            g_acc += px[1] * w;
+                            b_acc += px[2] * w;
+                            w_acc += w;
+                        }
                     }
                 }
                 const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
@@ -559,8 +589,14 @@ void resample_view_rgb16(const RgbView& src, uint16_t* dst, int dst_w, int dst_h
     if (!src.valid() || !dst || dst_w <= 0 || dst_h <= 0) return;
     const int src_w = src.width;
     const int src_h = src.height;
+    const bool is_contig = !src.is_xtrans_cfa && !src.g2_ptr && !src.flat.gain &&
+                           src.pitch == 3 && src.g_ptr == src.r_ptr + 1 && src.b_ptr == src.r_ptr + 2;
     if (src_w == dst_w && src_h == dst_h) {
-        src.materialize(dst);
+        if (is_contig && src.stride == (ptrdiff_t)src_w * 3) {
+            std::memcpy(dst, src.r_ptr, (size_t)src_w * src_h * 3 * sizeof(uint16_t));
+        } else {
+            src.materialize(dst);
+        }
         return;
     }
 
@@ -585,16 +621,29 @@ void resample_view_rgb16(const RgbView& src, uint16_t* dst, int dst_w, int dst_h
                 for (int sy = sy_start; sy < sy_end; ++sy) {
                     const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
                     if (wy <= 0.0) continue;
-                    for (int sx = sx_start; sx < sx_end; ++sx) {
-                        const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
-                        if (wx <= 0.0) continue;
-                        const double w = wx * wy;
-                        uint16_t px[3];
-                        src.sample(sx, sy, px);
-                        r_acc += px[0] * w;
-                        g_acc += px[1] * w;
-                        b_acc += px[2] * w;
-                        w_acc += w;
+                    if (is_contig) {
+                        const uint16_t* row = src.r_ptr + (ptrdiff_t)sy * src.stride + (ptrdiff_t)sx_start * 3;
+                        for (int sx = sx_start; sx < sx_end; ++sx, row += 3) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            r_acc += row[0] * w;
+                            g_acc += row[1] * w;
+                            b_acc += row[2] * w;
+                            w_acc += w;
+                        }
+                    } else {
+                        for (int sx = sx_start; sx < sx_end; ++sx) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            uint16_t px[3];
+                            src.sample(sx, sy, px);
+                            r_acc += px[0] * w;
+                            g_acc += px[1] * w;
+                            b_acc += px[2] * w;
+                            w_acc += w;
+                        }
                     }
                 }
                 const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
