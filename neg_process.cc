@@ -692,11 +692,24 @@ static bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
     return false;
   }
   const int base_black = (int)C.black;
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  const bool pattern = dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6;
+  int pat_sum[4] = {0, 0, 0, 0}, pat_n[4] = {0, 0, 0, 0};
+  if (pattern) {
+    for (unsigned r = 0; r < dr; ++r) {
+      for (unsigned c = 0; c < dc; ++c) {
+        const int k = proc->COLOR(r, c) & 3;
+        pat_sum[k] += (int)C.cblack[6 + r * dc + c];
+        pat_n[k]++;
+      }
+    }
+  }
   int max_blk = base_black;
   int cblk[4];
   for (int i = 0; i < 4; ++i) {
     cblk[i] = base_black + (int)C.cblack[i];
-    max_blk = std::max(max_blk, cblk[i]);
+    const int avg_pat = pat_n[i] > 0 ? pat_sum[i] / pat_n[i] : 0;
+    max_blk = std::max(max_blk, cblk[i] + avg_pat);
   }
   out_white_level = std::max(1.0f, (float)((int)C.maximum - max_blk));
   uint16_t* cfa = proc->imgdata.rawdata.raw_image + (size_t)top * pitch + left;
@@ -704,9 +717,18 @@ static bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
   for (int r = 0; r < h; ++r) {
     uint16_t* row = cfa + (size_t)r * pitch;
     const int blk_pair[2] = {cblk[proc->FC(r, 0)], cblk[proc->FC(r, 1)]};
-    for (int c = 0; c < w; ++c) {
-      const int v = (int)row[c] - blk_pair[c & 1];
-      row[c] = (v > 0) ? (uint16_t)v : 0;
+    if (!pattern) {
+      for (int c = 0; c < w; ++c) {
+        const int v = (int)row[c] - blk_pair[c & 1];
+        row[c] = (v > 0) ? (uint16_t)v : 0;
+      }
+    } else {
+      const unsigned pr = (unsigned)r % dr;
+      for (int c = 0; c < w; ++c) {
+        const int blk = blk_pair[c & 1] + (int)C.cblack[6 + pr * dc + ((unsigned)c % dc)];
+        const int v = (int)row[c] - blk;
+        row[c] = (v > 0) ? (uint16_t)v : 0;
+      }
     }
   }
   C.black = 0;
@@ -2371,13 +2393,12 @@ int main(int ac, char *av[]) {
     // Step 3: Crop, rotate, flip & inline ROI search on the zero-copy view.
     if (is_roi_auto) {
       const double t_det_0 = omp_get_wtime();
-      FilmImage mosaic;
-      if (!film_image_from_raw(*proc, mosaic)) {
+      FilmImage mosaic = full_half_view.to_film_image(cfa_white_level, 2);
+      if (mosaic.width <= 0 || mosaic.height <= 0) {
         fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
         delete proc;
         return 1;
       }
-      mosaic.white = cfa_white_level;
       det_params.crop_align = mosaic.step;
       if (!detect_film_frame(mosaic, det_params, frame_det)) {
         fprintf(stderr, "ERROR! Film frame detection failed\n");
