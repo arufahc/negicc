@@ -1125,9 +1125,9 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
                 }
             }
 
-            uint16_t px[3] = {(uint16_t)std::round(std::max(0.0f, std::min(65535.0f, R))),
-                              (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, G))),
-                              (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, B)))};
+            uint16_t px[3] = {(uint16_t)std::nearbyint(std::max(0.0f, std::min(65535.0f, R))),
+                              (uint16_t)std::nearbyint(std::max(0.0f, std::min(65535.0f, G))),
+                              (uint16_t)std::nearbyint(std::max(0.0f, std::min(65535.0f, B)))};
             if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
             const long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
             a.rgb_out[dst_idx + 0] = px[0];
