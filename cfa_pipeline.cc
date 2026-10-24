@@ -169,18 +169,34 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     v.pitch = 2;
     v.stride = 2 * (ptrdiff_t)cfa_pitch;
 
-    for (int dr = 0; dr < 2; ++dr) {
-        for (int dc = 0; dc < 2; ++dc) {
-            const int col = bayer_color_at(dr, dc, filters);
-            const uint16_t* p = cfa + (ptrdiff_t)dr * (ptrdiff_t)cfa_pitch + dc;
-            if (col == 0) {
-                v.r_ptr = p;
-            } else if (col == 2) {
-                v.b_ptr = p;
-            } else if (!v.g_ptr) {
-                v.g_ptr = p;
-            } else {
-                v.g2_ptr = p;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int dr = 0; dr < 2; ++dr) {
+            for (int dc = 0; dc < 2; ++dc) {
+                const int col = bayer_color_at(dr, dc, filters);
+                const uint16_t* p = cfa + (ptrdiff_t)dr * (ptrdiff_t)cfa_pitch + dc;
+                if (pass == 0) {
+                    if (col == 0 && !v.r_ptr) {
+                        v.r_ptr = p;
+                        v.ch_x0[0] = (uint8_t)dc;
+                        v.ch_y0[0] = (uint8_t)dr;
+                    } else if (col == 2 && !v.b_ptr) {
+                        v.b_ptr = p;
+                        v.ch_x0[2] = (uint8_t)dc;
+                        v.ch_y0[2] = (uint8_t)dr;
+                    } else if (col == 1 && !v.g_ptr) {
+                        v.g_ptr = p;
+                        v.ch_x0[1] = (uint8_t)dc;
+                        v.ch_y0[1] = (uint8_t)dr;
+                    }
+                } else if (col == 1 || col == 3) {
+                    if (!v.g_ptr) {
+                        v.g_ptr = p;
+                        v.ch_x0[1] = (uint8_t)dc;
+                        v.ch_y0[1] = (uint8_t)dr;
+                    } else if (p != v.g_ptr && !v.g2_ptr) {
+                        v.g2_ptr = p;
+                    }
+                }
             }
         }
     }
@@ -303,20 +319,29 @@ void RgbView::sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const {
     }
 }
 
-FilmImage RgbView::to_film_image(float white_level) const {
+FilmImage RgbView::to_film_image(float white_level, int step) const {
     FilmImage img;
-    if (!valid() || is_xtrans_cfa) return img;
-    img.width = width;
-    img.height = height;
-    img.step = 1;
+    if (!valid()) return img;
+    if (is_xtrans_cfa) {
+        const float zblk[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        film_image_from_cfa(
+            cfa_base, cfa_w, cfa_h, (ptrdiff_t)cfa_pitch, 6,
+            [this](int r, int c) { return (int)xtrans_col[(r % 6) * 6 + (c % 6)]; },
+            zblk, std::max(1.0f, white_level), img);
+        return img;
+    }
+    const int s = (step >= 2) ? 2 : 1;
+    img.width = width * s;
+    img.height = height * s;
+    img.step = s;
     img.white = std::max(1.0f, white_level);
     const uint16_t* ptrs[3] = {r_ptr, g_ptr, b_ptr};
     for (int c = 0; c < 3; ++c) {
         img.ch[c].data = ptrs[c];
         img.ch[c].pitch = pitch;
         img.ch[c].stride = stride;
-        img.ch[c].x0 = 0;
-        img.ch[c].y0 = 0;
+        img.ch[c].x0 = (s == 2) ? (int)ch_x0[c] : 0;
+        img.ch[c].y0 = (s == 2) ? (int)ch_y0[c] : 0;
         img.ch[c].black = 0.0f;
     }
     return img;
@@ -331,6 +356,20 @@ void RgbView::materialize(uint16_t* dst_rgb) const {
             sample(x, y, d);
         }
     }
+}
+
+size_t count_clipped_view(const RgbView& view, uint16_t clip_level) {
+    if (!view.valid()) return 0;
+    size_t n = 0;
+    #pragma omp parallel for reduction(+:n) schedule(static) if ((size_t)view.width * view.height > 8192)
+    for (int y = 0; y < view.height; ++y) {
+        for (int x = 0; x < view.width; ++x) {
+            uint16_t px[3];
+            view.sample(x, y, px);
+            if (px[0] >= clip_level || px[1] >= clip_level || px[2] >= clip_level) ++n;
+        }
+    }
+    return n;
 }
 
 // ---- compute_raw_stats -------------------------------------------------------------------------------------
@@ -783,12 +822,19 @@ void cpu_render(const RenderArgs& a) {
 
 void cpu_intent_loss(const IntentLossArgs& a) {
     const long long npx = (long long)a.width * a.height;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     #pragma omp parallel for schedule(dynamic)
     for (int c = 0; c < a.n; ++c) {
         const float* m = a.matrices + (size_t)c * 9;
         double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
         for (long long i = 0; i < npx; ++i) {
-            const Rgb lin = convert_pixel_linear(a.cfg, m, a.in + i * 3);
+            uint16_t px_buf[3];
+            const uint16_t* px = a.in ? (a.in + i * 3) : nullptr;
+            if (use_view) {
+                a.in_view->sample((int)(i % a.width), (int)(i / a.width), px_buf);
+                px = px_buf;
+            }
+            const Rgb lin = convert_pixel_linear(a.cfg, m, px);
             clip += linear_channel_white_clipped(lin.r) +
                     linear_channel_white_clipped(lin.g) +
                     linear_channel_white_clipped(lin.b);
@@ -894,6 +940,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
 
 void cpu_lab_stats(const LabStatsArgs& a) {
     const long long npx = (long long)a.width * a.height;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     #pragma omp parallel for schedule(dynamic)
     for (int c = 0; c < a.n; ++c) {
         const float* m = a.matrices + (size_t)c * 9;
@@ -901,7 +948,13 @@ void cpu_lab_stats(const LabStatsArgs& a) {
         std::memset(&row, 0, sizeof(row));
         std::vector<long long> hist(kLabBins, 0);
         for (long long i = 0; i < npx; ++i) {
-            const Rgb lin = convert_pixel_linear(a.cfg, m, a.in + i * 3);
+            uint16_t px_buf[3];
+            const uint16_t* px = a.in ? (a.in + i * 3) : nullptr;
+            if (use_view) {
+                a.in_view->sample((int)(i % a.width), (int)(i / a.width), px_buf);
+                px = px_buf;
+            }
+            const Rgb lin = convert_pixel_linear(a.cfg, m, px);
             if (linear_channel_white_clipped(lin.r) ||
                 linear_channel_white_clipped(lin.g) ||
                 linear_channel_white_clipped(lin.b)) row.white_clip += 1;

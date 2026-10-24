@@ -66,6 +66,8 @@ struct RgbView {
     size_t cfa_pitch = 0;
     int cfa_w = 0, cfa_h = 0;
     uint8_t xtrans_col[36] = {};
+    uint8_t ch_x0[3] = {0, 0, 0};
+    uint8_t ch_y0[3] = {0, 0, 0};
 
     // Affine mapping from view pixel (x, y) to unoriented half-size sensor pixel (fx, fy):
     //   fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx
@@ -85,6 +87,12 @@ struct RgbView {
                                  unsigned int filters, const uint8_t xtrans_col36[36] = nullptr,
                                  FlatSampleArgs flat = {},
                                  std::shared_ptr<const FlatTables> flat_pin = nullptr);
+
+    static RgbView from_cfa_half(const uint16_t* cfa, int sensor_w, int sensor_h,
+                                 unsigned int filters, FlatSampleArgs flat = {},
+                                 std::shared_ptr<const FlatTables> flat_pin = nullptr) {
+        return from_cfa_half(cfa, (size_t)sensor_w, sensor_w, sensor_h, filters, nullptr, flat, std::move(flat_pin));
+    }
 
     // Construct a zero-copy view over an interleaved 16-bit RGB (channels=3) or RGBA (channels=4) buffer.
     // TODO RGB - Subsampled: cover InputFormat::TODO_RGB, TODO_3X_CFA, TODO_3X_MONO by subsampling with
@@ -115,7 +123,8 @@ struct RgbView {
     }
 
     // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3.
-    FilmImage to_film_image(float white_level = 65535.0f) const;
+    // step=1 returns half-size coordinates (width x height); step=2 returns sensor coordinates (2*width x 2*height).
+    FilmImage to_film_image(float white_level = 65535.0f, int step = 1) const;
 
     // Materialize into a contiguous width * height * 3 uint16_t buffer (only when explicitly requested).
     void materialize(uint16_t* dst_rgb) const;
@@ -123,6 +132,9 @@ struct RgbView {
 private:
     void sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const;
 };
+
+// Pixels of an RgbView with any channel >= clip_level.
+size_t count_clipped_view(const RgbView& view, uint16_t clip_level);
 
 // Summary produced by compute_raw_stats (shared by FrameView::raw_stats and multi_target_optimizer).
 struct RawStatsSummary {
@@ -182,6 +194,7 @@ struct RenderArgs {
 
 struct IntentLossArgs {
     const uint16_t* in = nullptr;
+    const RgbView* in_view = nullptr;  // When non-null, reads directly from in_view (zero copy)
     int width = 0, height = 0;         // == DINOv3 grid
     const float* matrices = nullptr;   // n * 9
     int n = 0;
@@ -215,6 +228,7 @@ struct LabStatsRow {
 
 struct LabStatsArgs {
     const uint16_t* in = nullptr;
+    const RgbView* in_view = nullptr;  // When non-null, reads directly from in_view (zero copy)
     int width = 0, height = 0;
     const float* matrices = nullptr;
     int n = 0;
