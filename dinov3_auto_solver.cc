@@ -309,11 +309,12 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
 }
 
 static void render_crop_preview(const SolverConfig& cfg, const float* merged_norm,
-                                const uint16_t (*image)[4], int w, int h,
+                                const negicc::RgbView& view,
                                 float e, float g, float b, uint8_t* out_u8,
                                 std::vector<uint64_t>* out_hist = nullptr) {
   float m[9];
   candidate_matrix(merged_norm, e, g, b, m);
+  const int w = view.width, h = view.height;
 
   if (out_hist != nullptr) {
     const int num_threads = omp_get_max_threads();
@@ -326,10 +327,10 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
 
       #pragma omp for schedule(static)
       for (int y = 0; y < h; ++y) {
-        const uint16_t* in_row = image[(size_t)y * w];
         uint8_t* out_row = out_u8 + (size_t)y * w * 3;
         for (int x = 0; x < w; ++x) {
-          const uint16_t* px = in_row + x * 4;
+          uint16_t px[3];
+          view.sample(x, y, px);
           const Rgb pre = apply_matrix(m, load_u16(px));
           const float mc = std::max(pre.r, std::max(pre.g, pre.b));
           const int bin = std::isfinite(mc) ? std::clamp((int)(mc * 2048.0f), 0, 4095) : 0;
@@ -350,17 +351,17 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
       }
     }
   } else {
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < h; ++y) {
-      const uint16_t* in_row = image[(size_t)y * w];
-      uint8_t* out_row = out_u8 + (size_t)y * w * 3;
-      for (int x = 0; x < w; ++x) {
-        const Rgb v = convert_pixel_srgb(in_row + x * 4, m, cfg.knee, *cfg.prof);
-        out_row[x * 3 + 0] = quantize_u8(v.r);
-        out_row[x * 3 + 1] = quantize_u8(v.g);
-        out_row[x * 3 + 2] = quantize_u8(v.b);
-      }
-    }
+    negicc::RenderArgs ra{};
+    ra.in_view = &view;
+    ra.width = w;
+    ra.height = h;
+    ra.matrix = m;
+    ra.cfg.knee = cfg.knee;
+    std::memcpy(&ra.cfg.profile, cfg.prof, sizeof(ra.cfg.profile));
+    ra.cfg.encoding = negicc::ENCODE_SRGB;
+    ra.out_type = 1;
+    ra.out = out_u8;
+    negicc::cpu_render(ra);
   }
 }
 
@@ -495,7 +496,18 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
                          const uint16_t (*image)[4], int w, int h,
                          IntentGains user_gains, unsigned pin_mask,
                          int max_iters, DinoSolveResult& out) {
-  if (!image || w <= 0 || h <= 0 || !cfg.prof || !user_merged) return false;
+  if (!image || w <= 0 || h <= 0) return false;
+  return solve_dinov3_intent(eng, cfg, user_merged,
+                             negicc::RgbView::from_interleaved_rgb(&image[0][0], w, h, 4, (ptrdiff_t)w * 4),
+                             user_gains, pin_mask, max_iters, out);
+}
+
+bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
+                         const negicc::RgbView& view,
+                         IntentGains user_gains, unsigned pin_mask,
+                         int max_iters, DinoSolveResult& out) {
+  const int w = view.width, h = view.height;
+  if (!view.valid() || w <= 0 || h <= 0 || !cfg.prof || !user_merged) return false;
 
   const double t0_total = omp_get_wtime();
 
@@ -511,7 +523,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   std::vector<uint16_t> grid_rgb16((size_t)n_cells * 3);
 
   const double t0_views = omp_get_wtime();
-  resample_grid_rgb16(image, w, h, grid_rgb16.data(), grid_w, grid_h);
+  negicc::resample_view_rgb16(view, grid_rgb16.data(), grid_w, grid_h);
   out.timing_views_ms += (omp_get_wtime() - t0_views) * 1000.0;
 
   // Bootstrap gains (reference (e_c, 1.10, 1.15)); a pinned gain stays at relative 1.
@@ -574,7 +586,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     const double t0_r = omp_get_wtime();
     std::vector<uint64_t> curr_hist;
     if (cfg.knee_auto) curr_hist.assign(4096, 0);
-    render_crop_preview(cfg, merged_norm, image, w, h, 1.0f, 1.0f, 1.0f, preview_u8.data(),
+    render_crop_preview(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, preview_u8.data(),
                         cfg.knee_auto ? &curr_hist : nullptr);
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
@@ -599,7 +611,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   // 2. Bootstrap: render at (1, boot_g, boot_b), infer, search with initial = null.
   const GainsD boot{1.0, boot_g, boot_b};
   const double t0_r_boot = omp_get_wtime();
-  render_crop_preview(cfg, merged_norm, image, w, h, (float)boot.e, (float)boot.g, (float)boot.b, preview_u8.data(), nullptr);
+  render_crop_preview(cfg, merged_norm, view, (float)boot.e, (float)boot.g, (float)boot.b, preview_u8.data(), nullptr);
   out.timing_render_ms += (omp_get_wtime() - t0_r_boot) * 1000.0;
   if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
@@ -629,7 +641,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     const double t0_r = omp_get_wtime();
     std::vector<uint64_t> curr_hist;
     if (cfg.knee_auto) curr_hist.assign(4096, 0);
-    render_crop_preview(cfg, merged_norm, image, w, h, (float)curr.e, (float)curr.g, (float)curr.b,
+    render_crop_preview(cfg, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b,
                         preview_u8.data(), cfg.knee_auto ? &curr_hist : nullptr);
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
