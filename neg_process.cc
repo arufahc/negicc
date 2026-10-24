@@ -2315,6 +2315,7 @@ int main(int ac, char *av[]) {
                                                          : negicc::InputFormat::CFA_BAYER_OR_XTRANS;
   const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
+  std::unique_ptr<LibRaw> ps_extra_procs[3];
   float cfa_white_level = 65535.0f;
   int cfa_rx = 0, cfa_ry = 0, cfa_rw = 0, cfa_rh = 0;
   negicc::RgbView full_half_view;
@@ -2371,6 +2372,33 @@ int main(int ac, char *av[]) {
     const uint16_t* cfa_origin = proc->imgdata.rawdata.raw_image +
                                  (size_t)proc->imgdata.sizes.top_margin * cfa_pitch +
                                  proc->imgdata.sizes.left_margin;
+
+    // For 4x pixel shift, unpack and black-subtract frames 1..3 in Step 1 and keep all 4 CFA mosaics in memory.
+    if (files.size() == 4 && !half_size_flag) {
+      for (int mi = 1; mi < 4; ++mi) {
+        ps_extra_procs[mi - 1] = std::make_unique<LibRaw>();
+        LibRaw* fp = ps_extra_procs[mi - 1].get();
+        printf("Loading RAW file %s\n", files[mi].c_str());
+        int fret = fp->open_file(files[mi].c_str());
+        if (fret != LIBRAW_SUCCESS || (fret = fp->unpack()) != LIBRAW_SUCCESS) {
+          fprintf(stderr, "Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
+          delete proc;
+          return 1;
+        }
+        const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
+        if (!is_sony_a7rm4(fp) || fp->imgdata.sizes.width != src_w || fp->imgdata.sizes.height != src_h ||
+            fpitch != cfa_pitch) {
+          fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with matching Sony A7RM4 frames\n");
+          delete proc;
+          return 1;
+        }
+        float fw_white = 0.0f;
+        if (!subtract_cfa_black_in_place(fp, fw_white)) {
+          delete proc;
+          return 1;
+        }
+      }
+    }
 
     // Step 2: Downsizing via zero-copy RgbView over the CFA mosaic.
     const int half_w = src_w / 2;
@@ -3006,7 +3034,19 @@ int main(int ac, char *av[]) {
         free_libraw_cfa(proc);
       } else {
         printf("Merging 4 images...\n");
+        const uint16_t* fcfa[3] = {nullptr, nullptr, nullptr};
+        for (int i = 0; i < 3; ++i) {
+          LibRaw* fp = ps_extra_procs[i].get();
+          const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
+          fcfa[i] = fp->imgdata.rawdata.raw_image +
+                    (size_t)fp->imgdata.sizes.top_margin * fpitch +
+                    fp->imgdata.sizes.left_margin;
+        }
         negicc::PixelShiftMergeArgs pm{};
+        pm.bayer_f0 = cfa_origin;
+        pm.bayer_f1 = fcfa[0];
+        pm.bayer_f2 = fcfa[1];
+        pm.bayer_f3 = fcfa[2];
         pm.src_w = src_w;
         pm.src_h = src_h;
         pm.rx = cfa_rx;
@@ -3025,34 +3065,10 @@ int main(int ac, char *av[]) {
         pm.flat_x0 = cfa_rx;
         pm.flat_y0 = cfa_ry;
         pm.cfa_pitch = cfa_pitch;
-        negicc::cpu_pixel_shift_merge_frame(pm, 0, cfa_origin);
+        negicc::cpu_pixel_shift_merge(pm);
         free_libraw_cfa(proc);
-        for (int mi = 1; mi < 4; ++mi) {
-          LibRaw frame_proc;
-          printf("Loading RAW file %s\n", files[mi].c_str());
-          int fret = frame_proc.open_file(files[mi].c_str());
-          if (fret != LIBRAW_SUCCESS || (fret = frame_proc.unpack()) != LIBRAW_SUCCESS) {
-            fprintf(stderr, "Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
-            delete proc;
-            return 1;
-          }
-          if (!is_sony_a7rm4(&frame_proc) || frame_proc.imgdata.sizes.width != src_w ||
-              frame_proc.imgdata.sizes.height != src_h) {
-            fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with matching Sony A7RM4 frames\n");
-            delete proc;
-            return 1;
-          }
-          float fw_white = 0.0f;
-          if (!subtract_cfa_black_in_place(&frame_proc, fw_white)) {
-            delete proc;
-            return 1;
-          }
-          const size_t fpitch = frame_proc.imgdata.sizes.raw_pitch / 2;
-          const uint16_t* fcfa = frame_proc.imgdata.rawdata.raw_image +
-                                 (size_t)frame_proc.imgdata.sizes.top_margin * fpitch +
-                                 frame_proc.imgdata.sizes.left_margin;
-          pm.cfa_pitch = fpitch;
-          negicc::cpu_pixel_shift_merge_frame(pm, mi, fcfa);
+        for (int i = 0; i < 3; ++i) {
+          ps_extra_procs[i].reset();
         }
       }
     }

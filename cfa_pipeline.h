@@ -2,14 +2,14 @@
 //
 // Five-step pipeline architecture:
 //   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for RGB/3xCFA/3xMono),
-//     per-channel black subtraction in-place on the CFA mosaic, keeping at most 1 CFA in memory at a time.
+//     per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory for 4x pixel shift).
 //   Step 2 (Downsizing): Zero-copy half-size RgbView over the CFA mosaic (r_ptr, g_ptr, g2_ptr, b_ptr, pitch, stride).
 //   Step 3 (Crop, rotate, flip & inline ROI search): detect_film_frame operates inline on the Step 2 view;
 //     crop_and_orient adjusts pointers, pitch, stride, and sensor flat-field coordinates with zero memory copy.
 //   Step 4 (Conversion parameter search): Operates inline on the oriented RgbView (compute_raw_stats, cpu_render,
 //     cpu_highlight_clip) with zero large intermediate copies.
 //   Step 5 (Full export): The only step that allocates a cropped full-size RGB buffer, fusing grain-aware debayer
-//     (or 1-frame-at-a-time pixel-shift merge), crop/rotate/flip, and flat_divide.
+//     (or 4x pixel-shift merge), crop/rotate/flip, and flat_divide.
 //   TODO: Upstream the matching CUDA kernels (kernels_cuda.cu) from negicc-station into negicc.
 #ifndef NEGICC_CFA_PIPELINE_H
 #define NEGICC_CFA_PIPELINE_H
@@ -291,11 +291,6 @@ void cpu_lab_stats(const LabStatsArgs& a);
 void cpu_preview_debayer(const PreviewDebayerArgs& a);
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
-
-// Streaming 1-CFA-at-a-time Sony 4-shot pixel shift merge: call for frame_idx = 0, 1, 2, 3 in order.
-// Accumulates directly into a.rgb_out (zero extra buffer, only 1 CFA mosaic in memory at a time),
-// and applies a.flat on frame_idx == 3, producing bit-identical output to cpu_pixel_shift_merge.
-void cpu_pixel_shift_merge_frame(const PixelShiftMergeArgs& a, int frame_idx, const uint16_t* bayer_frame);
 
 }  // namespace negicc
 
