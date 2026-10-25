@@ -1974,11 +1974,8 @@ int main(int ac, char *av[]) {
   if (bundle_search) {
     analyse = [&](const LibRaw& raw) {
       const double t_auto_0 = omp_get_wtime();
-      // TODO: Use `get_scan_exposure(raw, ...)` (double rational EXIF shutter speed via `read_exif_exposure_d`) here
-      // and in the `use_cfa_pipeline` `bundle_search` path so non-dyadic shutter speeds (e.g. 1/5s = 0.2s, 1/6s) match
-      // `negicc-station` and `--station_egb` without float32 rounding drift.
-      const float scan_shutter_s = raw.imgdata.other.shutter > 0 ? raw.imgdata.other.shutter : 0.125f;
-      const float scan_iso = raw.imgdata.other.iso_speed > 0 ? std::round(raw.imgdata.other.iso_speed) : 100.0f;
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      get_scan_exposure(raw, scan_shutter_s, scan_iso);
       // --roi halved, or the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
       int* bbox = auto_frame_half;
@@ -2043,10 +2040,8 @@ int main(int ac, char *av[]) {
         const int a = mosaic.step;
         x0 = std::min(x0, b[0] / a * a);
         y0 = std::min(y0, b[1] / a * a);
-        // TODO: Clamp to `(mosaic.width / a) * a` and `(mosaic.height / a) * a` so `x1 - x0` and `y1 - y0` remain
-        // multiples of `a = mosaic.step` even if sensor dimensions are not divisible by `a`.
-        x1 = std::max(x1, std::min(mosaic.width, (b[0] + b[2] + a - 1) / a * a));
-        y1 = std::max(y1, std::min(mosaic.height, (b[1] + b[3] + a - 1) / a * a));
+        x1 = std::max(x1, std::min(mosaic.width / a * a, (b[0] + b[2] + a - 1) / a * a));
+        y1 = std::max(y1, std::min(mosaic.height / a * a, (b[1] + b[3] + a - 1) / a * a));
       }
       roi[0] = decode_region[0] = x0;
       roi[1] = decode_region[1] = y0;
@@ -2268,10 +2263,9 @@ int main(int ac, char *av[]) {
           patch.h /= dscale;
           const FilmImage decoded = film_image_from_interleaved(base_rgb_buf.data(), hbw, hbh, 3);
           float rgb[3], std_d;
-          // TODO: Also update `frame_det.base_std_d = std_d` when re-sampling the rebate patch in decoded space so the
-          // logged `(std %.3f D)` reflects the flat-field-corrected / decoded patch rather than the raw mosaic.
           if (film_sample_patch(decoded, patch, rgb, &std_d)) {
             for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+            frame_det.base_std_d = std_d;
           } else {
             frame_det.has_base = false;
           }
@@ -2348,9 +2342,9 @@ int main(int ac, char *av[]) {
           patch.cy -= (float)by0;
           const FilmImage decoded = film_image_from_interleaved(base_rgb_buf.data(), bw, bh, 3);
           float rgb[3], std_d;
-          // TODO: Also update `frame_det.base_std_d = std_d` when re-sampling the rebate patch in decoded space.
           if (film_sample_patch(decoded, patch, rgb, &std_d)) {
             for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+            frame_det.base_std_d = std_d;
           } else {
             frame_det.has_base = false;
           }
@@ -2409,14 +2403,14 @@ int main(int ac, char *av[]) {
       }
     }
 
-    // TODO: When `!has_roi && !no_crop_flag && !station_egb_given && files.size() == 1` narrows `cfa_rx..cfa_rh` to
-    // `raw_inset_crops[0]`, `has_roi` stays false so `auto_frame_half` uses `(0, 0, half_w, half_h)` while `out_half`
-    // and the full-size export crop to `cfa_rx..cfa_rh`. Unify `auto_frame_half` with `out_half`.
-    auto_frame_half[0] = has_roi ? cfa_rx / 2 : 0;
-    auto_frame_half[1] = has_roi ? cfa_ry / 2 : 0;
-    auto_frame_half[2] = has_roi ? std::max(1, (cfa_rx + cfa_rw) / 2 - auto_frame_half[0]) : half_w;
-    auto_frame_half[3] = has_roi ? std::max(1, (cfa_ry + cfa_rh) / 2 - auto_frame_half[1]) : half_h;
-    clamp_rect(auto_frame_half, half_w, half_h);
+    int out_half[4] = {
+        cfa_rx / 2,
+        cfa_ry / 2,
+        std::max(1, (cfa_rx + cfa_rw) / 2 - cfa_rx / 2),
+        std::max(1, (cfa_ry + cfa_rh) / 2 - cfa_ry / 2),
+    };
+    clamp_rect(out_half, half_w, half_h);
+    for (int i = 0; i < 4; ++i) auto_frame_half[i] = out_half[i];
     negicc::RgbView search_half_view = full_half_view.crop_and_orient(
         auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
         rot_cw, hflip, vflip);
@@ -2425,13 +2419,6 @@ int main(int ac, char *av[]) {
     // `oriented_half_view`, and `flat_half` average both greens `(G1 + G2) >> 1`. Unify both pipelines on the same
     // green sampling and regenerate parameter-search baselines in a follow-up.
     search_half_view.g2_ptr = nullptr;
-    int out_half[4] = {
-        cfa_rx / 2,
-        cfa_ry / 2,
-        std::max(1, (cfa_rx + cfa_rw) / 2 - cfa_rx / 2),
-        std::max(1, (cfa_ry + cfa_rh) / 2 - cfa_ry / 2),
-    };
-    clamp_rect(out_half, half_w, half_h);
     oriented_half_view = full_half_view.crop_and_orient(
         out_half[0], out_half[1], out_half[2], out_half[3],
         rot_cw, hflip, vflip);
@@ -2439,24 +2426,9 @@ int main(int ac, char *av[]) {
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
     if (bundle_search) {
       const double t_auto_0 = omp_get_wtime();
-      // TODO: Use `get_scan_exposure(*proc, ...)` here so `search_conversion_params` receives the exact rational EXIF
-      // shutter speed in double (matching `negicc-station` and `--station_egb`) rather than float32 `other.shutter`.
-      const float scan_shutter_s = proc->imgdata.other.shutter > 0 ? proc->imgdata.other.shutter : 0.125f;
-      const float scan_iso = proc->imgdata.other.iso_speed > 0 ? std::round(proc->imgdata.other.iso_speed) : 100.0f;
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
-      // TODO: Currently unreachable because `--film_base_rgb` is rejected when `bundle_search` is true (lines 1863+).
-      // See the TODO there for the 4 changes needed before enabling custom/rebate film-base overrides in `bundle_search`.
-      double fb_override_d[3] = {user_film_base_rgb_d[0], user_film_base_rgb_d[1], user_film_base_rgb_d[2]};
-      if (rebate_applied) {
-        fb_override_d[0] = (double)frame_det.base_rgb[0];
-        fb_override_d[1] = (double)frame_det.base_rgb[1];
-        fb_override_d[2] = (double)frame_det.base_rgb[2];
-        opts.film_base_rgb_d = fb_override_d;
-        opts.film_base_from_scan = true;
-      } else if (film_base_cli_used) {
-        opts.film_base_rgb_d = fb_override_d;
-        opts.film_base_from_scan = false;
-      }
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
@@ -2520,9 +2492,9 @@ int main(int ac, char *av[]) {
         const FilmImage decoded = film_image_from_interleaved(&proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth,
                                                               proc->imgdata.sizes.iheight, 4);
         float rgb[3], std_d;
-        // TODO: Also update `frame_det.base_std_d = std_d` when re-sampling the rebate patch in decoded space.
         if (film_sample_patch(decoded, patch, rgb, &std_d)) {
           for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+          frame_det.base_std_d = std_d;
         } else {
           frame_det.has_base = false;
         }
@@ -2753,21 +2725,23 @@ int main(int ac, char *av[]) {
   int bundle_target_idx = -1;
 
   if (is_bundle && !bundle_search) {
-    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-    int num_feasible = 0;
-    if (use_cfa_pipeline) {
-      // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
-      // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
-      compute_bundle_enclosures(bundle,
-                                negicc::RgbView::from_interleaved_rgb(
-                                    cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                                g_lo, g_hi, scene_ev, num_feasible);
-    } else {
-      compute_bundle_enclosures(bundle,
-                                (const uint16_t (*)[4])proc->imgdata.image,
-                                proc->imgdata.sizes.iwidth,
-                                proc->imgdata.sizes.iheight,
-                                g_lo, g_hi, scene_ev, num_feasible);
+    if (use_dino || manual_target_idx < 0) {
+      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+      int num_feasible = 0;
+      if (use_cfa_pipeline) {
+        // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
+        // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
+        compute_bundle_enclosures(bundle,
+                                  negicc::RgbView::from_interleaved_rgb(
+                                      cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                                  g_lo, g_hi, scene_ev, num_feasible);
+      } else {
+        compute_bundle_enclosures(bundle,
+                                  (const uint16_t (*)[4])proc->imgdata.image,
+                                  proc->imgdata.sizes.iwidth,
+                                  proc->imgdata.sizes.iheight,
+                                  g_lo, g_hi, scene_ev, num_feasible);
+      }
     }
   } else if (!is_bundle) {
     if (!film_prof_arg.empty() && !load_film_profile(film_prof_arg, film_prof)) {
@@ -2784,14 +2758,14 @@ int main(int ac, char *av[]) {
     film_prof.rebind_pointers();
     // The solved conversion written as the bundle's crosstalk with an exposure and gains (the film base and
     // exposure ratio folded in), so the sidecar's cli_equivalent reproduces it with --target.
-    // TODO: `auto_res.row_scale` already folds `normalization_target / fb[r]` into `global_exposure_comp`, `gain_g`,
-    // and `gain_b`; if `bundle_search` is ever combined with `rebate_applied` or `film_base_cli_used`, pass `{1,1,1}`
-    // for the film-base arguments of `adjust_correction_matrix` below so the film-base ratio is not applied twice.
+    // Note: `auto_res.row_scale` already folds `normalization_target / fb[r]` into `global_exposure_comp`, `gain_g`,
+    // and `gain_b`, so pass `{1, 1, 1}` for the film-base arguments of `adjust_correction_matrix`.
+    const std::vector<int> unit_fb = {1, 1, 1};
     global_exposure_comp = (float)(auto_res.row_scale[0] * auto_res.params.e * auto_res.e_norm);
     gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.params.g);
     gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.params.b);
     adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
-                             effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
+                             unit_fb, unit_fb, merged_matrix);
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
