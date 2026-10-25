@@ -215,6 +215,9 @@ float shutter_to_seconds(const std::string& shutter) {
   return (float)shutter_to_seconds_d(shutter);
 }
 
+// TODO: Support Fujifilm .RAF containers (which start with "FUJIFILMCCD-RAW " and store an embedded JPEG+EXIF
+// preview at the big-endian uint32 offset at bytes 84..87) and EXIF ISOSpeedRatings tag 0x8827 with fmt == 4 (LONG)
+// in addition to fmt == 3 (SHORT), so .RAF files do not fall back to float32 LibRaw shutter/ISO in neg_process.
 bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double& iso) {
   FILE* fp = fopen(filepath.c_str(), "rb");
   if (!fp) return false;

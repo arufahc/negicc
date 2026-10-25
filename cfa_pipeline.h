@@ -247,6 +247,8 @@ struct PreviewDebayerArgs {
     uint16_t* rgb_out = nullptr;
     FlatSampleArgs flat{};
     int flat_x0 = 0, flat_y0 = 0;
+    // TODO: Add `size_t cfa_pitch = 0` (matching GrainAwareDebayerArgs and PixelShiftMergeArgs) and honor it in both
+    // cpu_preview_debayer and gpu_preview_debayer so pitched LibRaw CFA buffers work without packed staging.
 };
 
 struct GrainAwareDebayerArgs {
