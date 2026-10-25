@@ -319,6 +319,8 @@ void RgbView::sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const {
     }
 }
 
+// TODO: RgbView::to_film_image has no remaining internal callers in negicc or negicc-station; remove in a follow-up
+// cleanup.
 FilmImage RgbView::to_film_image(float white_level, int step) const {
     FilmImage img;
     if (!valid()) return img;
