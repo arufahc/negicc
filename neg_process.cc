@@ -765,6 +765,9 @@ static bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
 //
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
 // (--roi auto: the detected frame), so that the analysis and the decode see only that region.
+bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
+                               int rot_cw, bool hflip, bool vflip);
+
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
                  const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
@@ -876,8 +879,30 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       proc->imgdata.params.user_mul[2] = 1;
       proc->imgdata.params.user_mul[3] = 1;
 
+      int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
       if (roi) {
-        for (int i = 0; i < 4; ++i) proc->imgdata.params.cropbox[i] = roi[i];
+        // Align LibRaw's cropbox origin down to the CFA period (6x6 for X-Trans, 2x2 for Bayer) so LibRaw's
+        // raw2image does not shift the mosaic phase or truncate X-Trans sub-cell offsets without trimming.
+        const int a = (proc->imgdata.idata.filters == 9) ? 6 : 2;
+        const int box_x = (roi[0] / a) * a;
+        const int box_y = (roi[1] / a) * a;
+        const int box_w = std::min((int)proc->imgdata.sizes.width - box_x, roi[0] + roi[2] - box_x);
+        const int box_h = std::min((int)proc->imgdata.sizes.height - box_y, roi[1] + roi[3] - box_y);
+        proc->imgdata.params.cropbox[0] = box_x;
+        proc->imgdata.params.cropbox[1] = box_y;
+        proc->imgdata.params.cropbox[2] = box_w;
+        proc->imgdata.params.cropbox[3] = box_h;
+        if (!half_size) {
+          sub_x = roi[0] - box_x;
+          sub_y = roi[1] - box_y;
+          sub_w = roi[2];
+          sub_h = roi[3];
+        } else {
+          sub_x = roi[0] / 2 - box_x / 2;
+          sub_y = roi[1] / 2 - box_y / 2;
+          sub_w = std::max(1, (roi[0] + roi[2]) / 2 - roi[0] / 2);
+          sub_h = std::max(1, (roi[1] + roi[3]) / 2 - roi[1] / 2);
+        }
       } else {
 #if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
         auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
@@ -902,6 +927,14 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
         }
       } else {
         proc->dcraw_process();
+      }
+      if (roi && !find_region &&
+          (sub_x != 0 || sub_y != 0 || sub_w != proc->imgdata.sizes.iwidth || sub_h != proc->imgdata.sizes.iheight)) {
+        if (!extract_roi_and_transform(proc, sub_x, sub_y, sub_w, sub_h, 0, false, false)) {
+          proc->free_image();
+          delete proc;
+          return NULL;
+        }
       }
     }
   }
