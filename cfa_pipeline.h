@@ -79,7 +79,8 @@ struct RgbView {
     static RgbView from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor_w, int sensor_h,
                                  unsigned int filters, const uint8_t xtrans_col36[36] = nullptr,
                                  FlatSampleArgs flat = {},
-                                 std::shared_ptr<const FlatTables> flat_pin = nullptr);
+                                 std::shared_ptr<const FlatTables> flat_pin = nullptr,
+                                 int cfa_x0 = 0, int cfa_y0 = 0);
 
     static RgbView from_cfa_half(const uint16_t* cfa, int sensor_w, int sensor_h,
                                  unsigned int filters, FlatSampleArgs flat = {},
@@ -247,8 +248,7 @@ struct PreviewDebayerArgs {
     uint16_t* rgb_out = nullptr;
     FlatSampleArgs flat{};
     int flat_x0 = 0, flat_y0 = 0;
-    // TODO: Add `size_t cfa_pitch = 0` (matching GrainAwareDebayerArgs and PixelShiftMergeArgs) and honor it in both
-    // cpu_preview_debayer and gpu_preview_debayer so pitched LibRaw CFA buffers work without packed staging.
+    size_t cfa_pitch = 0;  // 0 defaults to src_w
 };
 
 struct GrainAwareDebayerArgs {
