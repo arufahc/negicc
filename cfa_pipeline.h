@@ -45,9 +45,9 @@ inline int bayer_color_at(int r, int c, unsigned int filters) {
 }
 
 // Step 2 & Step 3 zero-copy image view.
-// Points directly into a black-subtracted CFA mosaic (half-size 2x2 cells) or an RGB buffer, with arbitrary crop,
-// 90-degree rotation, and horizontal/vertical flip represented via (r_ptr, g_ptr, g2_ptr, b_ptr, pitch, stride)
-// and an affine sensor coordinate mapping for inline flat-field division.
+// Points directly into a black-subtracted CFA mosaic (Bayer 2x2 or X-Trans 6x6 cells) or an RGB buffer, with
+// arbitrary crop, 90-degree rotation, and horizontal/vertical flip represented via (r_ptr, g_ptr, g2_ptr, b_ptr,
+// pitch, stride) and a private affine sensor coordinate mapping for inline flat-field division.
 struct RgbView {
     int width = 0;
     int height = 0;
@@ -60,33 +60,27 @@ struct RgbView {
     ptrdiff_t pitch = 0;   // step in uint16_t elements when x increases by 1
     ptrdiff_t stride = 0;  // step in uint16_t elements when y increases by 1
 
-    // X-Trans 6x6 half-size fallback (zero-copy over the CFA mosaic when filters == 9).
-    bool is_xtrans_cfa = false;
-    const uint16_t* cfa_base = nullptr;
-    size_t cfa_pitch = 0;
-    int cfa_w = 0, cfa_h = 0;
-    uint8_t xtrans_col[36] = {};
     uint8_t ch_x0[3] = {0, 0, 0};
     uint8_t ch_y0[3] = {0, 0, 0};
-
-    // Affine mapping from view pixel (x, y) to unoriented half-size sensor pixel (fx, fy):
-    //   fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx
-    //   fy = sensor_y0 + x * sensor_dxy + y * sensor_dyy
-    int sensor_x0 = 0, sensor_y0 = 0;
-    int sensor_dxx = 1, sensor_dxy = 0;
-    int sensor_dyx = 0, sensor_dyy = 1;
+    uint8_t cfa_step = 2;
 
     FlatSampleArgs flat{};
     std::shared_ptr<const FlatTables> flat_tables;
 
-    bool valid() const { return width > 0 && height > 0 && (r_ptr != nullptr || is_xtrans_cfa); }
+    bool valid() const { return width > 0 && height > 0 && r_ptr != nullptr && g_ptr != nullptr && b_ptr != nullptr; }
 
-    // Construct a zero-copy half-size view over a black-subtracted CFA mosaic (Bayer 2x2 or X-Trans 6x6).
+    bool is_contiguous_rgb() const {
+        return g2_ptr == nullptr && flat.gain == nullptr && pitch == 3 &&
+               r_ptr != nullptr && g_ptr == r_ptr + 1 && b_ptr == r_ptr + 2;
+    }
+
+    // Construct a zero-copy strided view over a black-subtracted CFA mosaic (Bayer 2x2 period=2 or X-Trans 6x6 period=6).
     // For 4xCFA (SONY_PIXEL_SHIFT_4), pass the first CFA mosaic.
     static RgbView from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor_w, int sensor_h,
                                  unsigned int filters, const uint8_t xtrans_col36[36] = nullptr,
                                  FlatSampleArgs flat = {},
-                                 std::shared_ptr<const FlatTables> flat_pin = nullptr);
+                                 std::shared_ptr<const FlatTables> flat_pin = nullptr,
+                                 int cfa_x0 = 0, int cfa_y0 = 0);
 
     static RgbView from_cfa_half(const uint16_t* cfa, int sensor_w, int sensor_h,
                                  unsigned int filters, FlatSampleArgs flat = {},
@@ -94,7 +88,7 @@ struct RgbView {
         return from_cfa_half(cfa, (size_t)sensor_w, sensor_w, sensor_h, filters, nullptr, flat, std::move(flat_pin));
     }
 
-    // Construct a zero-copy view over an interleaved 16-bit RGB (channels=3) or RGBA (channels=4) buffer.
+    // Construct a zero-copy view over an interleaved 16-bit 3-channel RGB or 4-channel (LibRaw image[][4]) buffer.
     // TODO RGB - Subsampled: cover InputFormat::TODO_RGB, TODO_3X_CFA, TODO_3X_MONO by subsampling with
     // pitch = 2 * channels and stride = 2 * row_elems.
     static RgbView from_interleaved_rgb(const uint16_t* rgb, int w, int h, int channels = 3,
@@ -107,30 +101,37 @@ struct RgbView {
 
     // Sample pixel (x, y) in [0, width) x [0, height) into px[0..2] (including inline flat_divide if flat is set).
     inline void sample(int x, int y, uint16_t px[3]) const {
-        const int fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx;
-        const int fy = sensor_y0 + x * sensor_dxy + y * sensor_dyy;
-        if (!is_xtrans_cfa) {
-            const ptrdiff_t off = (ptrdiff_t)y * stride + (ptrdiff_t)x * pitch;
-            px[0] = r_ptr[off];
-            px[1] = g2_ptr ? (uint16_t)(((uint32_t)g_ptr[off] + (uint32_t)g2_ptr[off]) >> 1) : g_ptr[off];
-            px[2] = b_ptr[off];
-        } else {
-            sample_xtrans_quad(fx, fy, px);
-        }
+        const ptrdiff_t off = (ptrdiff_t)y * stride + (ptrdiff_t)x * pitch;
+        px[0] = r_ptr[off];
+        px[1] = g2_ptr ? (uint16_t)(((uint32_t)g_ptr[off] + (uint32_t)g2_ptr[off]) >> 1) : g_ptr[off];
+        px[2] = b_ptr[off];
         if (flat.gain) {
+            const int fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx;
+            const int fy = sensor_y0 + x * sensor_dxy + y * sensor_dyy;
             flat_divide(flat, fx, fy, px);
         }
     }
 
     // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3.
-    // step=1 returns half-size coordinates (width x height); step=2 returns sensor coordinates (2*width x 2*height).
+    // step=1 returns view cell coordinates (width x height); step>=2 returns sensor coordinates (cfa_step*width x cfa_step*height).
     FilmImage to_film_image(float white_level = 65535.0f, int step = 1) const;
 
     // Materialize into a contiguous width * height * 3 uint16_t buffer (only when explicitly requested).
     void materialize(uint16_t* dst_rgb) const;
 
 private:
-    void sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const;
+    // Affine mapping from view pixel (x, y) to unoriented half-size sensor pixel (fx, fy) for flat_divide:
+    //   fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx
+    //   fy = sensor_y0 + x * sensor_dxy + y * sensor_dyy
+    int sensor_x0 = 0, sensor_y0 = 0;
+    int sensor_dxx = 1, sensor_dxy = 0;
+    int sensor_dyx = 0, sensor_dyy = 1;
+
+    bool is_unoriented() const {
+        const int d = (cfa_step == 6) ? 3 : 1;
+        return sensor_x0 == 0 && sensor_y0 == 0 &&
+               sensor_dxx == d && sensor_dxy == 0 && sensor_dyx == 0 && sensor_dyy == d;
+    }
 };
 
 // Pixels of an RgbView with any channel >= clip_level.
@@ -247,6 +248,7 @@ struct PreviewDebayerArgs {
     uint16_t* rgb_out = nullptr;
     FlatSampleArgs flat{};
     int flat_x0 = 0, flat_y0 = 0;
+    size_t cfa_pitch = 0;  // 0 defaults to src_w
 };
 
 struct GrainAwareDebayerArgs {

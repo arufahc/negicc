@@ -231,6 +231,48 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
              : ((uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) | uint32_t(b[3]));
     return true;
   };
+  long tiff_base = 0;
+  uint8_t hdr[16];
+  if (fread(hdr, 1, 16, fp) == 16 && std::memcmp(hdr, "FUJIFILMCCD-RAW ", 16) == 0) {
+    uint32_t jpeg_off = 0, jpeg_len = 0;
+    if (fseek(fp, 84, SEEK_SET) != 0 || !rd32(false, jpeg_off) || !rd32(false, jpeg_len) ||
+        jpeg_off == 0 || jpeg_len < 12 || fseek(fp, (long)jpeg_off, SEEK_SET) != 0) {
+      fclose(fp);
+      return false;
+    }
+    uint8_t soi[2];
+    if (fread(soi, 1, 2, fp) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) {
+      fclose(fp);
+      return false;
+    }
+    long pos = (long)jpeg_off + 2;
+    const long end = (long)jpeg_off + (long)jpeg_len;
+    bool found_exif = false;
+    while (pos + 4 <= end) {
+      if (fseek(fp, pos, SEEK_SET) != 0) break;
+      uint8_t m[2];
+      uint16_t seg_len = 0;
+      if (fread(m, 1, 2, fp) != 2 || m[0] != 0xFF || !rd16(false, seg_len) || seg_len < 2) break;
+      if (m[1] == 0xE1 && seg_len >= 8) {
+        char exif_hdr[6];
+        if (fread(exif_hdr, 1, 6, fp) == 6 && std::memcmp(exif_hdr, "Exif\0\0", 6) == 0) {
+          tiff_base = pos + 10;
+          found_exif = true;
+          break;
+        }
+      }
+      if (m[1] == 0xDA || m[1] == 0xD9) break;
+      pos += 2 + (long)seg_len;
+    }
+    if (!found_exif) {
+      fclose(fp);
+      return false;
+    }
+  }
+  if (fseek(fp, tiff_base, SEEK_SET) != 0) {
+    fclose(fp);
+    return false;
+  }
   uint8_t bo[2];
   if (fread(bo, 1, 2, fp) != 2 || !((bo[0] == 'I' && bo[1] == 'I') || (bo[0] == 'M' && bo[1] == 'M'))) {
     fclose(fp);
@@ -239,7 +281,7 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
   const bool le = (bo[0] == 'I');
   uint16_t magic = 0;
   uint32_t ifd0_off = 0;
-  if (!rd16(le, magic) || magic != 42 || !rd32(le, ifd0_off) || fseek(fp, ifd0_off, SEEK_SET) != 0) {
+  if (!rd16(le, magic) || magic != 42 || !rd32(le, ifd0_off) || fseek(fp, tiff_base + (long)ifd0_off, SEEK_SET) != 0) {
     fclose(fp);
     return false;
   }
@@ -258,7 +300,7 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
       break;
     }
   }
-  if (!exif_off || fseek(fp, exif_off, SEEK_SET) != 0) {
+  if (!exif_off || fseek(fp, tiff_base + (long)exif_off, SEEK_SET) != 0) {
     fclose(fp);
     return false;
   }
@@ -279,16 +321,23 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
   for (const auto& e : entries) {
     if (e.tag == 0x829A) {
       uint32_t num = 0, den = 0;
-      if (fseek(fp, e.val, SEEK_SET) == 0 && rd32(le, num) && rd32(le, den) && den > 0) {
+      if (fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0 && rd32(le, num) && rd32(le, den) && den > 0) {
         shutter_s = (double)num / (double)den;
         got_shutter = true;
       }
     } else if (e.tag == 0x8827 && e.fmt == 3) {
       if (e.cnt == 1) {
         iso = (double)(le ? (e.val & 0xFFFFu) : ((e.val >> 16) & 0xFFFFu));
-      } else if (e.cnt > 1 && fseek(fp, e.val, SEEK_SET) == 0) {
+      } else if (e.cnt > 1 && fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0) {
         uint16_t v16 = 0;
         if (rd16(le, v16)) iso = (double)v16;
+      }
+    } else if (e.tag == 0x8827 && e.fmt == 4) {
+      if (e.cnt == 1) {
+        iso = (double)e.val;
+      } else if (e.cnt > 1 && fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0) {
+        uint32_t v32 = 0;
+        if (rd32(le, v32)) iso = (double)v32;
       }
     }
   }
@@ -708,11 +757,20 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
   if (total_px == 0) return;
 
   std::vector<uint32_t> hist(65536, 0);
-  for (int y = 0; y < view.height; ++y) {
-    for (int x = 0; x < view.width; ++x) {
-      uint16_t px[3];
-      view.sample(x, y, px);
-      hist[px[1]]++;
+  if (view.is_contiguous_rgb()) {
+    for (int y = 0; y < view.height; ++y) {
+      const uint16_t* g_row = view.g_ptr + (ptrdiff_t)y * view.stride;
+      for (int x = 0; x < view.width; ++x) {
+        hist[g_row[(ptrdiff_t)x * 3]]++;
+      }
+    }
+  } else {
+    for (int y = 0; y < view.height; ++y) {
+      for (int x = 0; x < view.width; ++x) {
+        uint16_t px[3];
+        view.sample(x, y, px);
+        hist[px[1]]++;
+      }
     }
   }
 
