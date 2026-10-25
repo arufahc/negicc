@@ -422,19 +422,34 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
 
   std::vector<uint64_t> g_hist(65536, 0);
   std::vector<float> row_logs(crop.h * 3, 0.0f);  // per inner crop row, the sum of log R, log G and log B
+  const bool contiguous_rgb = !frame.is_xtrans_cfa && frame.g2_ptr == nullptr && frame.flat.gain == nullptr &&
+                              frame.sensor_dxx == 1 && frame.sensor_dxy == 0 && frame.sensor_dyx == 0 &&
+                              frame.sensor_dyy == 1 && frame.pitch == 3 && frame.r_ptr != nullptr &&
+                              frame.g_ptr == frame.r_ptr + 1 && frame.b_ptr == frame.r_ptr + 2;
 #pragma omp parallel
   {
     std::vector<uint64_t> loc(65536, 0);
 #pragma omp for schedule(static)
     for (int ry = 0; ry < crop.h; ++ry) {
       float lr = 0.0f, lg = 0.0f, lb = 0.0f;
-      for (int rx = 0; rx < crop.w; ++rx) {
-        uint16_t px[3];
-        frame.sample(crop.x0 + rx, crop.y0 + ry, px);
-        loc[px[1]]++;
-        lr += log_lut[px[0]];
-        lg += log_lut[px[1]];
-        lb += log_lut[px[2]];
+      if (contiguous_rgb) {
+        const uint16_t* p = frame.r_ptr + (ptrdiff_t)(frame.sensor_y0 + crop.y0 + ry) * frame.stride +
+                            (ptrdiff_t)(frame.sensor_x0 + crop.x0) * 3;
+        for (int rx = 0; rx < crop.w; ++rx, p += 3) {
+          loc[p[1]]++;
+          lr += log_lut[p[0]];
+          lg += log_lut[p[1]];
+          lb += log_lut[p[2]];
+        }
+      } else {
+        for (int rx = 0; rx < crop.w; ++rx) {
+          uint16_t px[3];
+          frame.sample(crop.x0 + rx, crop.y0 + ry, px);
+          loc[px[1]]++;
+          lr += log_lut[px[0]];
+          lg += log_lut[px[1]];
+          lb += log_lut[px[2]];
+        }
       }
       row_logs[ry * 3] = lr;
       row_logs[ry * 3 + 1] = lg;

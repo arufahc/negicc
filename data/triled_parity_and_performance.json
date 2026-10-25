@@ -1,8 +1,8 @@
 {
   "schema": "negicc.triled_parity_and_performance/2",
   "baseline_commit": "674c90b",
-  "pr_branch_commit": "335918c",
-  "station_parity_commit": "c95ac16",
+  "pr_branch_commit": "de45b29",
+  "station_parity_commit": "c734633",
   "summary": {
     "neg_process_vs_station_parity_68_cases": {
       "wp0": "68/68 bit-exact PASS",
