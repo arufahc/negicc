@@ -149,30 +149,23 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     RgbView v;
     v.flat = flat_args;
     v.flat_tables = std::move(flat_pin);
-    if (!cfa || sensor_w < 2 || sensor_h < 2) return v;
+    const int period = (filters == 9) ? 6 : 2;
+    if (!cfa || sensor_w < period || sensor_h < period) return v;
+    if (filters == 9 && !xtrans_col36) return v;
 
-    if (filters == 9) {
-        // X-Trans 6x6 CFA: zero-copy half-size view over the mosaic
-        v.width = (sensor_w + 1) / 2;
-        v.height = (sensor_h + 1) / 2;
-        v.is_xtrans_cfa = true;
-        v.cfa_base = cfa;
-        v.cfa_pitch = cfa_pitch;
-        v.cfa_w = sensor_w;
-        v.cfa_h = sensor_h;
-        if (xtrans_col36) std::memcpy(v.xtrans_col, xtrans_col36, 36);
-        return v;
-    }
+    v.width = sensor_w / period;
+    v.height = sensor_h / period;
+    v.pitch = period;
+    v.stride = (ptrdiff_t)period * (ptrdiff_t)cfa_pitch;
+    v.cfa_step = (uint8_t)period;
+    v.sensor_dxx = period / 2;
+    v.sensor_dyy = period / 2;
 
-    v.width = sensor_w / 2;
-    v.height = sensor_h / 2;
-    v.pitch = 2;
-    v.stride = 2 * (ptrdiff_t)cfa_pitch;
-
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int dr = 0; dr < 2; ++dr) {
-            for (int dc = 0; dc < 2; ++dc) {
-                const int col = bayer_color_at(dr, dc, filters);
+    for (int pass = 0; pass < (period == 2 ? 2 : 1); ++pass) {
+        for (int dr = 0; dr < period; ++dr) {
+            for (int dc = 0; dc < period; ++dc) {
+                const int col = (filters == 9) ? (int)(xtrans_col36[dr * 6 + dc] & 3)
+                                               : bayer_color_at(dr, dc, filters);
                 const uint16_t* p = cfa + (ptrdiff_t)dr * (ptrdiff_t)cfa_pitch + dc;
                 if (pass == 0) {
                     if (col == 0 && !v.r_ptr) {
@@ -183,7 +176,7 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
                         v.b_ptr = p;
                         v.ch_x0[2] = (uint8_t)dc;
                         v.ch_y0[2] = (uint8_t)dr;
-                    } else if (col == 1 && !v.g_ptr) {
+                    } else if ((col == 1 || (period == 6 && col == 3)) && !v.g_ptr) {
                         v.g_ptr = p;
                         v.ch_x0[1] = (uint8_t)dc;
                         v.ch_y0[1] = (uint8_t)dr;
@@ -200,6 +193,7 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
             }
         }
     }
+    if (!v.r_ptr || !v.g_ptr || !v.b_ptr) return {};
     return v;
 }
 
@@ -270,15 +264,13 @@ RgbView RgbView::crop_and_orient(int rx, int ry, int rw, int rh, int rot_cw, boo
     RgbView out = *this;
     out.width = dst_w;
     out.height = dst_h;
-    if (!is_xtrans_cfa) {
-        const ptrdiff_t base_off = (ptrdiff_t)oy0 * stride + (ptrdiff_t)ox0 * pitch;
-        out.r_ptr = r_ptr + base_off;
-        out.g_ptr = g_ptr + base_off;
-        out.g2_ptr = g2_ptr ? (g2_ptr + base_off) : nullptr;
-        out.b_ptr = b_ptr + base_off;
-        out.pitch = (ptrdiff_t)uy0 * stride + (ptrdiff_t)ux0 * pitch;
-        out.stride = (ptrdiff_t)vy0 * stride + (ptrdiff_t)vx0 * pitch;
-    }
+    const ptrdiff_t base_off = (ptrdiff_t)oy0 * stride + (ptrdiff_t)ox0 * pitch;
+    out.r_ptr = r_ptr + base_off;
+    out.g_ptr = g_ptr + base_off;
+    out.g2_ptr = g2_ptr ? (g2_ptr + base_off) : nullptr;
+    out.b_ptr = b_ptr + base_off;
+    out.pitch = (ptrdiff_t)uy0 * stride + (ptrdiff_t)ux0 * pitch;
+    out.stride = (ptrdiff_t)vy0 * stride + (ptrdiff_t)vx0 * pitch;
     out.sensor_x0 = sensor_x0 + ox0 * sensor_dxx + oy0 * sensor_dyx;
     out.sensor_y0 = sensor_y0 + ox0 * sensor_dxy + oy0 * sensor_dyy;
     out.sensor_dxx = ux0 * sensor_dxx + uy0 * sensor_dyx;
@@ -288,37 +280,6 @@ RgbView RgbView::crop_and_orient(int rx, int ry, int rw, int rh, int rot_cw, boo
     return out;
 }
 
-void RgbView::sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const {
-    const int hw = (cfa_w + 1) / 2;
-    const int hh = (cfa_h + 1) / 2;
-    hx = std::clamp(hx, 0, std::max(0, hw - 1));
-    hy = std::clamp(hy, 0, std::max(0, hh - 1));
-    auto raw_quad = [&](int qx, int qy, uint16_t q[3]) {
-        unsigned sum[3] = {0, 0, 0}, n[3] = {0, 0, 0};
-        for (int r = 2 * qy; r < std::min(2 * qy + 2, cfa_h); ++r) {
-            const uint16_t* row = cfa_base + (size_t)r * cfa_pitch;
-            const uint8_t* pat = xtrans_col + (r % 6) * 6;
-            for (int c = 2 * qx; c < std::min(2 * qx + 2, cfa_w); ++c) {
-                const int k = pat[c % 6] & 3;
-                if (k < 3) {
-                    sum[k] += row[c];
-                    n[k]++;
-                }
-            }
-        }
-        for (int k = 0; k < 3; ++k) q[k] = n[k] ? (uint16_t)((sum[k] + n[k] / 2) / n[k]) : 0;
-    };
-    raw_quad(hx, hy, px);
-    if ((px[0] | px[2]) == 0 && hw >= 2) {
-        uint16_t ql[3], qr[3];
-        raw_quad(std::max(hx - 1, 0), hy, ql);
-        raw_quad(std::min(hx + 1, hw - 1), hy, qr);
-        for (int k = 0; k < 3; k += 2) {
-            px[k] = (hx > 0 && hx + 1 < hw) ? (uint16_t)((ql[k] + qr[k]) >> 1) : (hx > 0 ? ql[k] : qr[k]);
-        }
-    }
-}
-
 // TODO: RgbView::to_film_image has no remaining internal callers in negicc or negicc-station; remove in a follow-up
 // cleanup.
 FilmImage RgbView::to_film_image(float white_level, int step) const {
@@ -326,19 +287,10 @@ FilmImage RgbView::to_film_image(float white_level, int step) const {
     if (!valid()) return img;
     // FilmImage is a direct un-oriented strided view over raw channel pointers without flat-field tables or 2-green
     // averaging; refuse views with an attached flat field or non-identity crop/orientation.
-    if (flat.gain != nullptr || sensor_x0 != 0 || sensor_y0 != 0 ||
-        sensor_dxx != 1 || sensor_dxy != 0 || sensor_dyx != 0 || sensor_dyy != 1) {
+    if (flat.gain != nullptr || !is_unoriented()) {
         return img;
     }
-    if (is_xtrans_cfa) {
-        const float zblk[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        film_image_from_cfa(
-            cfa_base, cfa_w, cfa_h, (ptrdiff_t)cfa_pitch, 6,
-            [this](int r, int c) { return (int)xtrans_col[(r % 6) * 6 + (c % 6)]; },
-            zblk, std::max(1.0f, white_level), img);
-        return img;
-    }
-    const int s = (step >= 2) ? 2 : 1;
+    const int s = (step >= 2) ? (int)cfa_step : 1;
     img.width = width * s;
     img.height = height * s;
     img.step = s;
@@ -348,8 +300,8 @@ FilmImage RgbView::to_film_image(float white_level, int step) const {
         img.ch[c].data = ptrs[c];
         img.ch[c].pitch = pitch;
         img.ch[c].stride = stride;
-        img.ch[c].x0 = (s == 2) ? (int)ch_x0[c] : 0;
-        img.ch[c].y0 = (s == 2) ? (int)ch_y0[c] : 0;
+        img.ch[c].x0 = (s > 1) ? (int)ch_x0[c] : 0;
+        img.ch[c].y0 = (s > 1) ? (int)ch_y0[c] : 0;
         img.ch[c].black = 0.0f;
     }
     return img;
@@ -401,8 +353,7 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
     out.grid_h = grid_h;
 
     const RawStatTables& tbl = raw_stat_tables();
-    const bool is_contig = !view.is_xtrans_cfa && !view.g2_ptr && !view.flat.gain &&
-                           view.pitch == 3 && view.g_ptr == view.r_ptr + 1 && view.b_ptr == view.r_ptr + 2;
+    const bool is_contig = view.is_contiguous_rgb();
 
     uint64_t g_hist[65536] = {};
     struct RowLog { double r = 0, g = 0, b = 0; };
@@ -597,8 +548,7 @@ void resample_view_rgb16(const RgbView& src, uint16_t* dst, int dst_w, int dst_h
     if (!src.valid() || !dst || dst_w <= 0 || dst_h <= 0) return;
     const int src_w = src.width;
     const int src_h = src.height;
-    const bool is_contig = !src.is_xtrans_cfa && !src.g2_ptr && !src.flat.gain &&
-                           src.pitch == 3 && src.g_ptr == src.r_ptr + 1 && src.b_ptr == src.r_ptr + 2;
+    const bool is_contig = src.is_contiguous_rgb();
     if (src_w == dst_w && src_h == dst_h) {
         if (is_contig && src.stride == (ptrdiff_t)src_w * 3) {
             std::memcpy(dst, src.r_ptr, (size_t)src_w * src_h * 3 * sizeof(uint16_t));
