@@ -322,6 +322,12 @@ void RgbView::sample_xtrans_quad(int hx, int hy, uint16_t px[3]) const {
 FilmImage RgbView::to_film_image(float white_level, int step) const {
     FilmImage img;
     if (!valid()) return img;
+    // FilmImage is a direct un-oriented strided view over raw channel pointers without flat-field tables or 2-green
+    // averaging; refuse views with an attached flat field or non-identity crop/orientation.
+    if (flat.gain != nullptr || sensor_x0 != 0 || sensor_y0 != 0 ||
+        sensor_dxx != 1 || sensor_dxy != 0 || sensor_dyx != 0 || sensor_dyy != 1) {
+        return img;
+    }
     if (is_xtrans_cfa) {
         const float zblk[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         film_image_from_cfa(
