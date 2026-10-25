@@ -1850,6 +1850,16 @@ int main(int ac, char *av[]) {
     fprintf(stderr, "ERROR! --knee auto requires the parameter search on an ICC profile or a --target bracket\n");
     return 1;
   }
+  // TODO: `--film_base_rgb` (including `--film_base_rgb auto`) is rejected here when `bundle_search` is true, which
+  // makes the `if (rebate_applied) ... else if (film_base_cli_used) ...` branch in Step 4 (`use_cfa_pipeline`) dead
+  // code. If custom/rebate film-base overrides are enabled for `bundle_search`:
+  //   1. Remove `--film_base_rgb` from `conflicting` below (or allow `--film_base_rgb auto`).
+  //   2. On the `!use_cfa_pipeline` path (`analyse`), sample the rebate before `search_conversion_params` and pass
+  //      `opts.film_base_rgb_d` / `opts.film_base_from_scan`.
+  //   3. Preserve `sidecar_film_base_rgb` and `film_base_source` ("rebate" / "cli") instead of overwriting them with
+  //      "bundle" when `rebate_applied || film_base_cli_used`.
+  //   4. Do not re-apply `effective_profile_film_base_rgb / effective_film_base_rgb` in `adjust_correction_matrix`
+  //      when `has_auto_res` is true, because `auto_res.row_scale` already folds `normalization_target / fb[r]` in.
   if (bundle_search) {
     const char* conflicting[] = {"--film_base_rgb", "--profile_film_base_rgb"};
     for (const char* opt : conflicting) {
@@ -1964,8 +1974,8 @@ int main(int ac, char *av[]) {
   if (bundle_search) {
     analyse = [&](const LibRaw& raw) {
       const double t_auto_0 = omp_get_wtime();
-      const float scan_shutter_s = raw.imgdata.other.shutter > 0 ? raw.imgdata.other.shutter : 0.125f;
-      const float scan_iso = raw.imgdata.other.iso_speed > 0 ? std::round(raw.imgdata.other.iso_speed) : 100.0f;
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      get_scan_exposure(raw, scan_shutter_s, scan_iso);
       // --roi halved, or the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
       int* bbox = auto_frame_half;
@@ -2030,8 +2040,8 @@ int main(int ac, char *av[]) {
         const int a = mosaic.step;
         x0 = std::min(x0, b[0] / a * a);
         y0 = std::min(y0, b[1] / a * a);
-        x1 = std::max(x1, std::min(mosaic.width, (b[0] + b[2] + a - 1) / a * a));
-        y1 = std::max(y1, std::min(mosaic.height, (b[1] + b[3] + a - 1) / a * a));
+        x1 = std::max(x1, std::min(mosaic.width / a * a, (b[0] + b[2] + a - 1) / a * a));
+        y1 = std::max(y1, std::min(mosaic.height / a * a, (b[1] + b[3] + a - 1) / a * a));
       }
       roi[0] = decode_region[0] = x0;
       roi[1] = decode_region[1] = y0;
@@ -2255,6 +2265,7 @@ int main(int ac, char *av[]) {
           float rgb[3], std_d;
           if (film_sample_patch(decoded, patch, rgb, &std_d)) {
             for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+            frame_det.base_std_d = std_d;
           } else {
             frame_det.has_base = false;
           }
@@ -2333,6 +2344,7 @@ int main(int ac, char *av[]) {
           float rgb[3], std_d;
           if (film_sample_patch(decoded, patch, rgb, &std_d)) {
             for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+            frame_det.base_std_d = std_d;
           } else {
             frame_det.has_base = false;
           }
@@ -2391,15 +2403,6 @@ int main(int ac, char *av[]) {
       }
     }
 
-    auto_frame_half[0] = has_roi ? cfa_rx / 2 : 0;
-    auto_frame_half[1] = has_roi ? cfa_ry / 2 : 0;
-    auto_frame_half[2] = has_roi ? std::max(1, (cfa_rx + cfa_rw) / 2 - auto_frame_half[0]) : half_w;
-    auto_frame_half[3] = has_roi ? std::max(1, (cfa_ry + cfa_rh) / 2 - auto_frame_half[1]) : half_h;
-    clamp_rect(auto_frame_half, half_w, half_h);
-    negicc::RgbView search_half_view = full_half_view.crop_and_orient(
-        auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
-        rot_cw, hflip, vflip);
-    search_half_view.g2_ptr = nullptr;
     int out_half[4] = {
         cfa_rx / 2,
         cfa_ry / 2,
@@ -2407,6 +2410,15 @@ int main(int ac, char *av[]) {
         std::max(1, (cfa_ry + cfa_rh) / 2 - cfa_ry / 2),
     };
     clamp_rect(out_half, half_w, half_h);
+    for (int i = 0; i < 4; ++i) auto_frame_half[i] = out_half[i];
+    negicc::RgbView search_half_view = full_half_view.crop_and_orient(
+        auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
+        rot_cw, hflip, vflip);
+    // TODO: `search_half_view.g2_ptr = nullptr` reads only `G1` per 2x2 quad to preserve bit-exact parity with
+    // master's `LibRaw::raw2image_ex(1)` half-size buffer, whereas `negicc-station` (`cpu_preview_debayer`),
+    // `oriented_half_view`, and `flat_half` average both greens `(G1 + G2) >> 1`. Unify both pipelines on the same
+    // green sampling and regenerate parameter-search baselines in a follow-up.
+    search_half_view.g2_ptr = nullptr;
     oriented_half_view = full_half_view.crop_and_orient(
         out_half[0], out_half[1], out_half[2], out_half[3],
         rot_cw, hflip, vflip);
@@ -2414,20 +2426,9 @@ int main(int ac, char *av[]) {
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
     if (bundle_search) {
       const double t_auto_0 = omp_get_wtime();
-      const float scan_shutter_s = proc->imgdata.other.shutter > 0 ? proc->imgdata.other.shutter : 0.125f;
-      const float scan_iso = proc->imgdata.other.iso_speed > 0 ? std::round(proc->imgdata.other.iso_speed) : 100.0f;
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
-      double fb_override_d[3] = {user_film_base_rgb_d[0], user_film_base_rgb_d[1], user_film_base_rgb_d[2]};
-      if (rebate_applied) {
-        fb_override_d[0] = (double)frame_det.base_rgb[0];
-        fb_override_d[1] = (double)frame_det.base_rgb[1];
-        fb_override_d[2] = (double)frame_det.base_rgb[2];
-        opts.film_base_rgb_d = fb_override_d;
-        opts.film_base_from_scan = true;
-      } else if (film_base_cli_used) {
-        opts.film_base_rgb_d = fb_override_d;
-        opts.film_base_from_scan = false;
-      }
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
@@ -2493,6 +2494,7 @@ int main(int ac, char *av[]) {
         float rgb[3], std_d;
         if (film_sample_patch(decoded, patch, rgb, &std_d)) {
           for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+          frame_det.base_std_d = std_d;
         } else {
           frame_det.has_base = false;
         }
@@ -2582,6 +2584,8 @@ int main(int ac, char *av[]) {
 
   if (bundle_search) {
     // The bundle's film base is folded into the solved exposure and gains (not applied as a film base scale).
+    // TODO: If `bundle_search` is enabled with `rebate_applied` or `film_base_cli_used`, preserve `"rebate"` / `"cli"`
+    // and the custom `sidecar_film_base_rgb` instead of unconditionally overwriting with `"bundle"`.
     sidecar_film_base_rgb = sidecar_profile_film_base_rgb;
     film_base_source = "bundle";
   }
@@ -2600,6 +2604,11 @@ int main(int ac, char *av[]) {
                            merged_matrix);
 
   // Step 5a: Debayer the cropped/oriented output RGB buffer (after Step 4's zero-copy search_conversion_params).
+  // TODO: When `!bundle_search` (e.g. single-target `compute_bundle_enclosures` or `solve_dinov3_intent`), deferring
+  // Step 5a full-resolution debayer until after `compute_bundle_enclosures` and `solve_dinov3_intent` have run on
+  // `oriented_half_view` avoids running histogramming/solver passes over the full-resolution (e.g. 61 MP) buffer.
+  // Currently kept before `compute_bundle_enclosures` / `solve_dinov3_intent` to preserve exact single-target parity
+  // with master.
   std::vector<uint16_t> cfa_export_rgb;
   if (use_cfa_pipeline) {
     const double t_step5_debayer_0 = omp_get_wtime();
@@ -2716,19 +2725,23 @@ int main(int ac, char *av[]) {
   int bundle_target_idx = -1;
 
   if (is_bundle && !bundle_search) {
-    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-    int num_feasible = 0;
-    if (use_cfa_pipeline) {
-      compute_bundle_enclosures(bundle,
-                                negicc::RgbView::from_interleaved_rgb(
-                                    cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                                g_lo, g_hi, scene_ev, num_feasible);
-    } else {
-      compute_bundle_enclosures(bundle,
-                                (const uint16_t (*)[4])proc->imgdata.image,
-                                proc->imgdata.sizes.iwidth,
-                                proc->imgdata.sizes.iheight,
-                                g_lo, g_hi, scene_ev, num_feasible);
+    if (use_dino || manual_target_idx < 0) {
+      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+      int num_feasible = 0;
+      if (use_cfa_pipeline) {
+        // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
+        // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
+        compute_bundle_enclosures(bundle,
+                                  negicc::RgbView::from_interleaved_rgb(
+                                      cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                                  g_lo, g_hi, scene_ev, num_feasible);
+      } else {
+        compute_bundle_enclosures(bundle,
+                                  (const uint16_t (*)[4])proc->imgdata.image,
+                                  proc->imgdata.sizes.iwidth,
+                                  proc->imgdata.sizes.iheight,
+                                  g_lo, g_hi, scene_ev, num_feasible);
+      }
     }
   } else if (!is_bundle) {
     if (!film_prof_arg.empty() && !load_film_profile(film_prof_arg, film_prof)) {
@@ -2745,11 +2758,14 @@ int main(int ac, char *av[]) {
     film_prof.rebind_pointers();
     // The solved conversion written as the bundle's crosstalk with an exposure and gains (the film base and
     // exposure ratio folded in), so the sidecar's cli_equivalent reproduces it with --target.
+    // Note: `auto_res.row_scale` already folds `normalization_target / fb[r]` into `global_exposure_comp`, `gain_g`,
+    // and `gain_b`, so pass `{1, 1, 1}` for the film-base arguments of `adjust_correction_matrix`.
+    const std::vector<int> unit_fb = {1, 1, 1};
     global_exposure_comp = (float)(auto_res.row_scale[0] * auto_res.params.e * auto_res.e_norm);
     gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.params.g);
     gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.params.b);
     adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
-                             effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
+                             unit_fb, unit_fb, merged_matrix);
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
@@ -2790,6 +2806,8 @@ int main(int ac, char *av[]) {
       cfg.prof = &film_prof.data;
     }
 
+    // TODO: Run `solve_dinov3_intent` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
+    // full-resolution `cfa_export_rgb` buffer once single-target solver baselines are updated.
     const bool solve_ok = use_cfa_pipeline
         ? solve_dinov3_intent(engine, cfg, merged_matrix,
                               negicc::RgbView::from_interleaved_rgb(

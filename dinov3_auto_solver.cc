@@ -578,6 +578,9 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   out.bounds_lo = (float)e_bounds[0];
   out.bounds_hi = (float)e_bounds[1];
 
+  // TODO: `preview_u8` is allocated at full `view.width x view.height` (e.g. 61 MP = 183 MB when `solve_dinov3_intent`
+  // is called on `cfa_export_rgb`) and downsampled on every iteration inside `eng.infer`. Pass `oriented_half_view`
+  // (or pre-downsample to `target_w x target_h` once before the loop) after updating single-target solver baselines.
   std::vector<uint8_t> preview_u8((size_t)w * h * 3);
   DinoV3InferenceResult inf;
 
