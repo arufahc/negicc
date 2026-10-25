@@ -2242,6 +2242,8 @@ int main(int ac, char *av[]) {
           const int hbh = std::max(1, hby1 - hby0);
           std::vector<uint16_t> base_rgb_buf((size_t)hbw * hbh * 3);
           full_half_view.crop_and_orient(hbx0, hby0, hbw, hbh, 0, false, false).materialize(base_rgb_buf.data());
+          // TODO: Simplify patch coordinate scaling to patch.cx * 0.5f - hbx0 (or remove this branch entirely when
+          // -H / --half_size is removed).
           const float dscale = (float)decode_region[2] /
                                (float)std::max(1, (decode_region[0] + decode_region[2]) / 2 - decode_region[0] / 2);
           FilmRect patch = frame_det.base_patch;
