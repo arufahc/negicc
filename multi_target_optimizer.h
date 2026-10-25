@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "cfa_pipeline.h"
 #include "dinov3_engine.h"
 #include "profile_bundle.h"
 
@@ -106,6 +107,9 @@ struct ParamSearchOptions {
   int max_steps = 8;         // the most steps of each bracket's fixed-point loop (neg_process's --dino_iters)
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
   const float* film_base_rgb = nullptr;
+  const double* film_base_rgb_d = nullptr;
+  // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
+  bool film_base_from_scan = false;
   bool verbose = true;
 };
 
@@ -176,6 +180,10 @@ struct ParamSearchResult {
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso
 // are the capture's exposure.
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                              double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                              ParamSearchResult& out);
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);

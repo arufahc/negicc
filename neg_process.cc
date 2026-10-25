@@ -43,6 +43,10 @@
 #include "tiff_head.h"
 #include "dinov3_engine.h"
 #include "neg_pipeline.h"
+#include "cfa_pipeline.h"
+#include "color_pipeline.h"
+#include "flat_field.h"
+#include "flat_sample.h"
 #include "dinov3_auto_solver.h"
 #include "embedded_data.h"
 #include "film_frame_detector.h"
@@ -230,196 +234,8 @@ bool is_sony_cfa_geometry(LibRaw* proc) {
 //
 // Caveat: This works best with narrowband light (e.g. RGB LED); on whitelight
 // the blue noise is too high to work well.
+// Implemented in cfa_pipeline.cc (negicc::cpu_grain_aware_debayer).
 // -----------------------------------------------------------------------------
-
-inline float get_px_refl(const uint16_t* raw_img, int r, int c, int h, int w, int pitch, int black) {
-  int r_refl = (r < 0) ? -r : (r >= h ? 2 * (h - 1) - r : r);
-  int c_refl = (c < 0) ? -c : (c >= w ? 2 * (w - 1) - c : c);
-  r_refl = std::max(0, std::min(h - 1, r_refl));
-  c_refl = std::max(0, std::min(w - 1, c_refl));
-  int val = (int)raw_img[(size_t)r_refl * pitch + c_refl] - black;
-  return (val > 0) ? (float)val : 0.0f;
-}
-
-inline float reconstruct_green_soft(const uint16_t* m, int r, int c, int h, int w, int pitch, int black, float white, float eps) {
-  if ((r + c) & 1) {
-    return get_px_refl(m, r, c, h, w, pitch, black);
-  }
-  float c_center = get_px_refl(m, r, c, h, w, pitch, black);
-  float g_up     = get_px_refl(m, r - 1, c, h, w, pitch, black);
-  float g_down   = get_px_refl(m, r + 1, c, h, w, pitch, black);
-  float g_left   = get_px_refl(m, r, c - 1, h, w, pitch, black);
-  float g_right  = get_px_refl(m, r, c + 1, h, w, pitch, black);
-
-  float c_up2    = get_px_refl(m, r - 2, c, h, w, pitch, black);
-  float c_down2  = get_px_refl(m, r + 2, c, h, w, pitch, black);
-  float c_left2  = get_px_refl(m, r, c - 2, h, w, pitch, black);
-  float c_right2 = get_px_refl(m, r, c + 2, h, w, pitch, black);
-
-  float dv = std::abs(g_up - g_down) + std::abs(2.0f * c_center - c_up2 - c_down2);
-  float dh = std::abs(g_left - g_right) + std::abs(2.0f * c_center - c_left2 - c_right2);
-
-  float g_v = 0.5f * (g_up + g_down) + 0.25f * (2.0f * c_center - c_up2 - c_down2);
-  float g_h = 0.5f * (g_left + g_right) + 0.25f * (2.0f * c_center - c_left2 - c_right2);
-
-  float wv = 1.0f / (eps + dv * dv);
-  float wh = 1.0f / (eps + dh * dh);
-  float g_est = (wv * g_v + wh * g_h) / (wv + wh);
-  return std::max(0.0f, std::min(white, g_est));
-}
-
-// Caveat: this works best with narrowband light, and on whitelight the blue noise is too high to work well.
-// roi, when given, lies inside the sensor (load_raw clamps it).
-bool debayer_grain_aware(LibRaw* proc, bool crop, const int* roi = nullptr) {
-  if (!proc || !proc->imgdata.rawdata.raw_image) return false;
-
-  const int src_w = proc->imgdata.sizes.width;
-  const int src_h = proc->imgdata.sizes.height;
-  const int pitch = proc->imgdata.sizes.raw_pitch / 2;
-  const int black = proc->imgdata.color.black;
-  int max_blk = black;
-  for (int c = 0; c < 4; ++c) {
-    max_blk = std::max(max_blk, black + (int)proc->imgdata.color.cblack[c]);
-  }
-  const auto* raw_img = proc->imgdata.rawdata.raw_image;
-  const float white_level = (float)(proc->imgdata.color.maximum - max_blk);
-
-#if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
-  const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-#else
-  const auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
-#endif
-
-  int rx = 0, ry = 0, rw = src_w, rh = src_h;
-  if (roi) {
-    rx = roi[0];
-    ry = roi[1];
-    rw = roi[2];
-    rh = roi[3];
-  } else if (crop && (crop_ref.cleft || crop_ref.ctop)) {
-    rx = crop_ref.cleft;
-    ry = crop_ref.ctop;
-    rw = crop_ref.cwidth;
-    rh = crop_ref.cheight;
-  }
-
-  if (proc->imgdata.image) {
-    proc->free_image();
-  }
-  proc->imgdata.image = (ushort (*)[4]) malloc((size_t)rw * rh * sizeof(*proc->imgdata.image));
-  if (!proc->imgdata.image) {
-    fprintf(stderr, "ERROR! Failed to allocate memory for debayered image (%dx%d)\n", rw, rh);
-    return false;
-  }
-
-  const float k = 16.0f;
-  const float eps = 4096.0f;
-
-  #pragma omp parallel for schedule(static)
-  for (int y = 0; y < rh; ++y) {
-    int r = ry + y;
-    bool r_even = ((r & 1) == 0);
-
-    for (int x = 0; x < rw; ++x) {
-      int c = rx + x;
-      bool c_even = ((c & 1) == 0);
-
-      float G = reconstruct_green_soft(raw_img, r, c, src_h, src_w, pitch, black, white_level, eps);
-      float c_center = get_px_refl(raw_img, r, c, src_h, src_w, pitch, black);
-      bool near_clip = (c_center >= (white_level - 64.0f)) || (G >= (white_level - 64.0f));
-
-      float R = 0.0f;
-      float B = 0.0f;
-
-      if (near_clip) {
-        if (r_even && c_even) {
-          R = c_center;
-          float b00 = get_px_refl(raw_img, r - 1, c - 1, src_h, src_w, pitch, black);
-          float b01 = get_px_refl(raw_img, r - 1, c + 1, src_h, src_w, pitch, black);
-          float b10 = get_px_refl(raw_img, r + 1, c - 1, src_h, src_w, pitch, black);
-          float b11 = get_px_refl(raw_img, r + 1, c + 1, src_h, src_w, pitch, black);
-          B = 0.25f * (b00 + b01 + b10 + b11);
-        } else if (!r_even && !c_even) {
-          B = c_center;
-          float r00 = get_px_refl(raw_img, r - 1, c - 1, src_h, src_w, pitch, black);
-          float r01 = get_px_refl(raw_img, r - 1, c + 1, src_h, src_w, pitch, black);
-          float r10 = get_px_refl(raw_img, r + 1, c - 1, src_h, src_w, pitch, black);
-          float r11 = get_px_refl(raw_img, r + 1, c + 1, src_h, src_w, pitch, black);
-          R = 0.25f * (r00 + r01 + r10 + r11);
-        } else if (r_even && !c_even) {
-          R = 0.5f * (get_px_refl(raw_img, r, c - 1, src_h, src_w, pitch, black) + get_px_refl(raw_img, r, c + 1, src_h, src_w, pitch, black));
-          B = 0.5f * (get_px_refl(raw_img, r - 1, c, src_h, src_w, pitch, black) + get_px_refl(raw_img, r + 1, c, src_h, src_w, pitch, black));
-        } else {
-          R = 0.5f * (get_px_refl(raw_img, r - 1, c, src_h, src_w, pitch, black) + get_px_refl(raw_img, r + 1, c, src_h, src_w, pitch, black));
-          B = 0.5f * (get_px_refl(raw_img, r, c - 1, src_h, src_w, pitch, black) + get_px_refl(raw_img, r, c + 1, src_h, src_w, pitch, black));
-        }
-      } else {
-        if (r_even && c_even) {
-          R = c_center;
-        } else if (r_even && !c_even) {
-          float g_l = reconstruct_green_soft(raw_img, r, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g_r = reconstruct_green_soft(raw_img, r, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float rl = (get_px_refl(raw_img, r, c - 1, src_h, src_w, pitch, black) + k) / (g_l + k);
-          float rr = (get_px_refl(raw_img, r, c + 1, src_h, src_w, pitch, black) + k) / (g_r + k);
-          R = (G + k) * (0.5f * (rl + rr)) - k;
-        } else if (!r_even && c_even) {
-          float g_u = reconstruct_green_soft(raw_img, r - 1, c, src_h, src_w, pitch, black, white_level, eps);
-          float g_d = reconstruct_green_soft(raw_img, r + 1, c, src_h, src_w, pitch, black, white_level, eps);
-          float ru = (get_px_refl(raw_img, r - 1, c, src_h, src_w, pitch, black) + k) / (g_u + k);
-          float rd = (get_px_refl(raw_img, r + 1, c, src_h, src_w, pitch, black) + k) / (g_d + k);
-          R = (G + k) * (0.5f * (ru + rd)) - k;
-        } else {
-          float g00 = reconstruct_green_soft(raw_img, r - 1, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g01 = reconstruct_green_soft(raw_img, r - 1, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float g10 = reconstruct_green_soft(raw_img, r + 1, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g11 = reconstruct_green_soft(raw_img, r + 1, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float r00 = (get_px_refl(raw_img, r - 1, c - 1, src_h, src_w, pitch, black) + k) / (g00 + k);
-          float r01 = (get_px_refl(raw_img, r - 1, c + 1, src_h, src_w, pitch, black) + k) / (g01 + k);
-          float r10 = (get_px_refl(raw_img, r + 1, c - 1, src_h, src_w, pitch, black) + k) / (g10 + k);
-          float r11 = (get_px_refl(raw_img, r + 1, c + 1, src_h, src_w, pitch, black) + k) / (g11 + k);
-          R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
-        }
-
-        if (!r_even && !c_even) {
-          B = c_center;
-        } else if (!r_even && c_even) {
-          float g_l = reconstruct_green_soft(raw_img, r, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g_r = reconstruct_green_soft(raw_img, r, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float bl = (get_px_refl(raw_img, r, c - 1, src_h, src_w, pitch, black) + k) / (g_l + k);
-          float br = (get_px_refl(raw_img, r, c + 1, src_h, src_w, pitch, black) + k) / (g_r + k);
-          B = (G + k) * (0.5f * (bl + br)) - k;
-        } else if (r_even && !c_even) {
-          float g_u = reconstruct_green_soft(raw_img, r - 1, c, src_h, src_w, pitch, black, white_level, eps);
-          float g_d = reconstruct_green_soft(raw_img, r + 1, c, src_h, src_w, pitch, black, white_level, eps);
-          float bu = (get_px_refl(raw_img, r - 1, c, src_h, src_w, pitch, black) + k) / (g_u + k);
-          float bd = (get_px_refl(raw_img, r + 1, c, src_h, src_w, pitch, black) + k) / (g_d + k);
-          B = (G + k) * (0.5f * (bu + bd)) - k;
-        } else {
-          float g00 = reconstruct_green_soft(raw_img, r - 1, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g01 = reconstruct_green_soft(raw_img, r - 1, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float g10 = reconstruct_green_soft(raw_img, r + 1, c - 1, src_h, src_w, pitch, black, white_level, eps);
-          float g11 = reconstruct_green_soft(raw_img, r + 1, c + 1, src_h, src_w, pitch, black, white_level, eps);
-          float b00 = (get_px_refl(raw_img, r - 1, c - 1, src_h, src_w, pitch, black) + k) / (g00 + k);
-          float b01 = (get_px_refl(raw_img, r - 1, c + 1, src_h, src_w, pitch, black) + k) / (g01 + k);
-          float b10 = (get_px_refl(raw_img, r + 1, c - 1, src_h, src_w, pitch, black) + k) / (g10 + k);
-          float b11 = (get_px_refl(raw_img, r + 1, c + 1, src_h, src_w, pitch, black) + k) / (g11 + k);
-          B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
-        }
-      }
-
-      ushort* dst = proc->imgdata.image[(size_t)y * rw + x];
-      dst[0] = (ushort)std::round(std::max(0.0f, std::min(65535.0f, R)));
-      dst[1] = (ushort)std::round(std::max(0.0f, std::min(65535.0f, G)));
-      dst[2] = (ushort)std::round(std::max(0.0f, std::min(65535.0f, B)));
-      dst[3] = 0;
-    }
-  }
-
-  proc->imgdata.sizes.iwidth = rw;
-  proc->imgdata.sizes.iheight = rh;
-  proc->imgdata.idata.colors = 3;
-  return true;
-}
 
 // Called with a LibRaw whose imgdata.image holds the half-size image of its RAW (read_half_size): iwidth x iheight
 // pixels, row-major, LibRaw's 4 channels each (R, G, B in the first three); a point (x, y) of the RAW is (x / 2, y / 2)
@@ -574,14 +390,14 @@ enum class RawDecode {
 // (output_color 8) through its own camera matrix with no rescaling, so values stay in sensor units. LibRaw clamps
 // its output to [0, 65535]; going to Rec.2020 directly, rather than to sRGB and then to Rec.2020, keeps the colours
 // between the sRGB and Rec.2020 gamuts that the sRGB clamp lost. This relies on the pinned LibRaw (3rd_party/libraw):
-// older releases (0.20) do not implement the Rec.2020 output. There is no flat field here (neg_process applies none
-// on any path).
+// older releases (0.20) do not implement the Rec.2020 output. When flat is given, it is applied in place on the CFA
+// mosaic after black subtraction and white balance.
 // py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
 // py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
 //
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.
-static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
+static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, const negicc::FlatField* flat = nullptr) {
   auto& S = proc->imgdata.sizes;
   auto& C = proc->imgdata.color;
   uint16_t* raw = proc->imgdata.rawdata.raw_image;
@@ -596,9 +412,13 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
     return false;
   }
   // Colour of each photosite in a 6x6 tile (Bayer repeats every 2): 0..3 for the black level, 0..2 for the gains.
-  uint8_t col4[36];
+  uint8_t col4[36], col3[36];
   for (int r = 0; r < 6; ++r)
-    for (int c = 0; c < 6; ++c) col4[r * 6 + c] = (uint8_t)(proc->COLOR(r, c) & 3);
+    for (int c = 0; c < 6; ++c) {
+      const int k = proc->COLOR(r, c);
+      col4[r * 6 + c] = (uint8_t)(k & 3);
+      col3[r * 6 + c] = (uint8_t)(k == 3 ? 1 : k);
+    }
   float pre[4];
   for (int i = 0; i < 4; ++i) pre[i] = C.pre_mul[i];
   if (pre[3] <= 0) pre[3] = pre[1];
@@ -627,6 +447,14 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
     }
   }
   clip_fraction = (double)clipped / ((double)w * h);
+  if (flat) {
+    try {
+      flat->apply_cfa(raw + (size_t)top * pitch + left, pitch, w, h, col3);
+    } catch (const std::exception& e) {
+      fprintf(stderr, "ERROR! %s\n", e.what());
+      return false;
+    }
+  }
 
   // The mosaic is black-subtracted and white-balanced: LibRaw must neither subtract nor rescale again. user_black and
   // user_cblack make every dcraw_process (each restores imgdata.color from the unpacked RAW) take a zero black level,
@@ -657,11 +485,76 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction) {
 static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   proc->imgdata.params.half_size = half ? 1 : 0;
   proc->imgdata.params.user_qual = qual;
+  const bool xtrans_full = !half && proc->imgdata.idata.filters == 9;
+  const int prev_threads = xtrans_full ? omp_get_max_threads() : 0;
+  if (xtrans_full) omp_set_num_threads(1);
   const int ret = proc->dcraw_process();
+  if (xtrans_full) omp_set_num_threads(prev_threads);
   if (ret != LIBRAW_SUCCESS) {
     fprintf(stderr, "ERROR! Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
   }
+  return true;
+}
+
+// Step 1 helper: subtract per-channel black in-place on the unpacked CFA mosaic.
+static bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
+  if (!proc || !proc->imgdata.rawdata.raw_image) return false;
+  const auto& S = proc->imgdata.sizes;
+  auto& C = proc->imgdata.color;
+  const int w = S.width, h = S.height, top = S.top_margin, left = S.left_margin;
+  const size_t pitch = S.raw_pitch / 2;
+  if (w <= 0 || h <= 0 || top < 0 || left < 0 || top + h > S.raw_height || left + w > (int)pitch) {
+    return false;
+  }
+  const int base_black = (int)C.black;
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  const bool pattern = dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6;
+  int pat_sum[4] = {0, 0, 0, 0}, pat_n[4] = {0, 0, 0, 0};
+  if (pattern) {
+    for (unsigned r = 0; r < dr; ++r) {
+      for (unsigned c = 0; c < dc; ++c) {
+        const int k = proc->COLOR(r, c) & 3;
+        pat_sum[k] += (int)C.cblack[6 + r * dc + c];
+        pat_n[k]++;
+      }
+    }
+  }
+  int max_blk = base_black;
+  int cblk[4];
+  for (int i = 0; i < 4; ++i) {
+    cblk[i] = base_black + (int)C.cblack[i];
+    const int avg_pat = pat_n[i] > 0 ? pat_sum[i] / pat_n[i] : 0;
+    max_blk = std::max(max_blk, cblk[i] + avg_pat);
+  }
+  out_white_level = std::max(1.0f, (float)((int)C.maximum - max_blk));
+  uint8_t col4[36];
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {
+      col4[r * 6 + c] = (uint8_t)(proc->COLOR(r, c) & 3);
+    }
+  }
+  uint16_t* cfa = proc->imgdata.rawdata.raw_image + (size_t)top * pitch + left;
+  #pragma omp parallel for schedule(static)
+  for (int r = 0; r < h; ++r) {
+    uint16_t* row = cfa + (size_t)r * pitch;
+    const uint8_t* pat = col4 + (r % 6) * 6;
+    if (!pattern) {
+      for (int c = 0; c < w; ++c) {
+        const int v = (int)row[c] - cblk[pat[c % 6]];
+        row[c] = (v > 0) ? (uint16_t)v : 0;
+      }
+    } else {
+      const unsigned pr = (unsigned)r % dr;
+      for (int c = 0; c < w; ++c) {
+        const int blk = cblk[pat[c % 6]] + (int)C.cblack[6 + pr * dc + ((unsigned)c % dc)];
+        const int v = (int)row[c] - blk;
+        row[c] = (v > 0) ? (uint16_t)v : 0;
+      }
+    }
+  }
+  C.black = 0;
+  std::memset(C.cblack, 0, sizeof(C.cblack));
   return true;
 }
 
@@ -690,9 +583,13 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
 //
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
 // (--roi auto: the detected frame), so that the analysis and the decode see only that region.
+bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
+                               int rot_cw, bool hflip, bool vflip);
+
 LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
-                 const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {}) {
+                 const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
+                 const negicc::FlatField* flat = nullptr) {
   const bool white_light = debayer && decode == RawDecode::kWhiteLight;
   int ret;
   LibRaw* proc = new LibRaw();
@@ -742,7 +639,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
   }
   if (white_light) {
     double clip_fraction = 0.0;
-    if (!prepare_white_light_mosaic(proc, clip_fraction)) {
+    if (!prepare_white_light_mosaic(proc, clip_fraction, flat)) {
       delete proc;
       return NULL;
     }
@@ -754,10 +651,47 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
       }
       analyse(*proc);
       proc->free_image();
+      proc->raw2image_start();
+      proc->imgdata.color.black = 0;
+      std::memset(proc->imgdata.color.cblack, 0, sizeof(proc->imgdata.color.cblack));
     }
-  } else if (analyse && !read_half_size(proc, analyse)) {
-    delete proc;
-    return NULL;
+  } else {
+    if (flat) {
+      float dummy_white = 0.0f;
+      if (!proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3 ||
+          !subtract_cfa_black_in_place(proc, dummy_white)) {
+        fprintf(stderr, "ERROR! --flat requires a 3-colour CFA RAW file with valid sensor margins\n");
+        delete proc;
+        return NULL;
+      }
+      uint8_t col3[36];
+      for (int r = 0; r < 6; ++r) {
+        for (int c = 0; c < 6; ++c) {
+          const int k = proc->COLOR(r, c);
+          col3[r * 6 + c] = (uint8_t)(k == 3 ? 1 : k);
+        }
+      }
+      const auto& S = proc->imgdata.sizes;
+      const size_t pitch = S.raw_pitch / 2;
+      try {
+        flat->apply_cfa(proc->imgdata.rawdata.raw_image + (size_t)S.top_margin * pitch + S.left_margin,
+                        pitch, S.width, S.height, col3);
+      } catch (const std::exception& e) {
+        fprintf(stderr, "ERROR! %s\n", e.what());
+        delete proc;
+        return NULL;
+      }
+      proc->imgdata.params.user_black = 0;
+      for (int i = 0; i < 4; ++i) proc->imgdata.params.user_cblack[i] = 0;
+    }
+    if (analyse && !read_half_size(proc, analyse)) {
+      delete proc;
+      return NULL;
+    }
+    if (flat) {
+      proc->imgdata.color.black = 0;
+      std::memset(proc->imgdata.color.cblack, 0, sizeof(proc->imgdata.color.cblack));
+    }
   }
 
   proc->imgdata.params.output_bps = 16;
@@ -777,163 +711,81 @@ LibRaw* load_raw(const std::string& fn, bool debayer, bool half_size, int qual, 
     const bool camera_rgb = decode == RawDecode::kCameraRgb;
     if (!white_light) proc->imgdata.params.output_color = camera_rgb ? 0 : 8;
 
-    bool use_grain_aware = (!half_size && qual < 0 && camera_rgb && is_sony_cfa_geometry(proc));
-    if (use_grain_aware) {
-      printf("Debayer quality: grain-aware\n");
-      if (!debayer_grain_aware(proc, crop, roi)) {
-        fprintf(stderr, "Grain-aware debayer failed, falling back to bilinear\n");
-        use_grain_aware = false;
+    int effective_qual = (qual < 0) ? 0 : qual;
+    printf("Debayer quality: %d\n", effective_qual);
+    proc->imgdata.params.half_size = half_size;
+    proc->imgdata.params.user_qual = effective_qual;
+    proc->imgdata.params.use_auto_wb = 0;
+    // Unit multipliers on every path: the white-light decode has applied its white balance to the mosaic.
+    proc->imgdata.params.user_mul[0] = 1;
+    proc->imgdata.params.user_mul[1] = 1;
+    proc->imgdata.params.user_mul[2] = 1;
+    proc->imgdata.params.user_mul[3] = 1;
+
+    int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
+    if (roi) {
+      // Align LibRaw's cropbox origin down to the CFA period (6x6 for X-Trans, 2x2 for Bayer) so LibRaw's
+      // raw2image does not shift the mosaic phase, and include a 1-tile halo for explicit ROIs (!find_region)
+      // so LibRaw's demosaic stencil has full boundary neighbors identical to a full-sensor decode.
+      const int a = (proc->imgdata.idata.filters == 9) ? 6 : 2;
+      const int pad = find_region ? 0 : a * 2;
+      const int box_x = std::max(0, ((roi[0] - pad) / a) * a);
+      const int box_y = std::max(0, ((roi[1] - pad) / a) * a);
+      const int box_x1 = std::min((int)proc->imgdata.sizes.width, ((roi[0] + roi[2] + pad + a - 1) / a) * a);
+      const int box_y1 = std::min((int)proc->imgdata.sizes.height, ((roi[1] + roi[3] + pad + a - 1) / a) * a);
+      const int box_w = box_x1 - box_x;
+      const int box_h = box_y1 - box_y;
+      proc->imgdata.params.cropbox[0] = box_x;
+      proc->imgdata.params.cropbox[1] = box_y;
+      proc->imgdata.params.cropbox[2] = box_w;
+      proc->imgdata.params.cropbox[3] = box_h;
+      if (!half_size) {
+        sub_x = roi[0] - box_x;
+        sub_y = roi[1] - box_y;
+        sub_w = roi[2];
+        sub_h = roi[3];
+      } else {
+        sub_x = roi[0] / 2 - box_x / 2;
+        sub_y = roi[1] / 2 - box_y / 2;
+        sub_w = std::max(1, (roi[0] + roi[2]) / 2 - roi[0] / 2);
+        sub_h = std::max(1, (roi[1] + roi[3]) / 2 - roi[1] / 2);
+      }
+    } else {
+#if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
+      auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
+#else
+      auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
+#endif
+      // LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff
+      // with a zero size; dcraw_process would refuse that as a bad crop box.
+      const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 && crop_ref.cleft != 0xffff &&
+                                  crop_ref.ctop != 0xffff;
+      if (crop && has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
+        proc->imgdata.params.cropbox[0] = crop_ref.cleft;
+        proc->imgdata.params.cropbox[1] = crop_ref.ctop;
+        proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
+        proc->imgdata.params.cropbox[3] = crop_ref.cheight;
       }
     }
-    if (!use_grain_aware) {
-      int effective_qual = (qual < 0) ? 0 : qual;
-      printf("Debayer quality: %d\n", effective_qual);
-      proc->imgdata.params.half_size = half_size;
-      proc->imgdata.params.user_qual = effective_qual;
-      proc->imgdata.params.use_auto_wb = 0;
-      // Unit multipliers on every path: the white-light decode has applied its white balance to the mosaic.
-      proc->imgdata.params.user_mul[0] = 1;
-      proc->imgdata.params.user_mul[1] = 1;
-      proc->imgdata.params.user_mul[2] = 1;
-      proc->imgdata.params.user_mul[3] = 1;
-
-      if (roi) {
-        for (int i = 0; i < 4; ++i) proc->imgdata.params.cropbox[i] = roi[i];
-      } else {
-#if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
-        auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-#else
-        auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
-#endif
-        // LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff
-        // with a zero size; dcraw_process would refuse that as a bad crop box.
-        const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 && crop_ref.cleft != 0xffff &&
-                                    crop_ref.ctop != 0xffff;
-        if (crop && has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
-          proc->imgdata.params.cropbox[0] = crop_ref.cleft;
-          proc->imgdata.params.cropbox[1] = crop_ref.ctop;
-          proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
-          proc->imgdata.params.cropbox[3] = crop_ref.cheight;
-        }
+    if (white_light) {
+      if (!decode_white_light(proc, half_size, effective_qual)) {
+        delete proc;
+        return NULL;
       }
-      if (white_light) {
-        if (!decode_white_light(proc, half_size, effective_qual)) {
-          delete proc;
-          return NULL;
-        }
-      } else {
-        proc->dcraw_process();
+    } else {
+      proc->dcraw_process();
+    }
+    if (roi && !find_region &&
+        (sub_x != 0 || sub_y != 0 || sub_w != proc->imgdata.sizes.iwidth || sub_h != proc->imgdata.sizes.iheight)) {
+      if (!extract_roi_and_transform(proc, sub_x, sub_y, sub_w, sub_h, 0, false, false)) {
+        proc->free_image();
+        delete proc;
+        return NULL;
       }
     }
   }
   printf("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   return proc;
-}
-
-static const int kPixelShiftMoves[4][2] = {
-  {0, 0},
-  {0, 1},
-  {-1, 1},
-  {-1, 0},
-};
-
-void merge_pixel_shift_frame(LibRaw* base, LibRaw* frame, int mi) {
-  const int dc = kPixelShiftMoves[mi][0];
-  const int dr = kPixelShiftMoves[mi][1];
-  const int bw = base->imgdata.sizes.iwidth;
-  const int fw = frame->imgdata.sizes.width;
-  const int fh = frame->imgdata.sizes.height;
-  const ushort* raw_img = frame->imgdata.rawdata.raw_image;
-  const int pitch = frame->imgdata.sizes.raw_pitch / 2;
-  const int top = frame->imgdata.sizes.top_margin;
-  const int left = frame->imgdata.sizes.left_margin;
-  const int black = frame->imgdata.color.black;
-  int cblk[4];
-  for (int i = 0; i < 4; ++i) cblk[i] = black + (int)frame->imgdata.color.cblack[i];
-
-  #pragma omp parallel for schedule(static)
-  for (int r = 0; r < fh - 1; ++r) {
-    const size_t raw_row = (size_t)(r + top) * pitch + left;
-    for (int c = 1; c < fw; ++c) {
-      const int col = frame->COLOR(r, c);
-      int raw_val = (int)raw_img[raw_row + c] - cblk[col];
-      const ushort v = (raw_val > 0) ? (ushort)raw_val : 0;
-      ushort* dst = base->imgdata.image[(size_t)(r + dr) * bw + (c + dc)];
-      if (col & 1)
-        dst[1] = (mi < 2) ? v : (ushort)((v + dst[1]) / 2);
-      else
-        dst[col] = v;
-    }
-  }
-}
-
-// Merge 4 RAW files from Sony pixel-shift into camera linear RGB, loading one frame at a time to save memory.
-LibRaw* merge_pixel_shift_streaming(const std::vector<std::string>& files, const HalfSizeAnalysis& analyse = {}) {
-  if (files.size() < 4) return nullptr;
-  printf("Merging 4 images...\n");
-  LibRaw* base = load_raw(files[0], false, false, 0, false, RawDecode::kCameraRgb, nullptr, analyse);
-  if (!base) return nullptr;
-  if (!is_sony_a7rm4(base)) {
-    fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
-            base->imgdata.idata.make, base->imgdata.idata.model);
-    base->recycle();
-    delete base;
-    return nullptr;
-  }
-
-  const int bw = base->imgdata.sizes.width;
-  const int bh = base->imgdata.sizes.height;
-  base->imgdata.sizes.iwidth = bw;
-  base->imgdata.sizes.iheight = bh;
-  base->imgdata.image = (ushort (*)[4]) calloc((size_t)bw * bh, sizeof(*base->imgdata.image));
-  if (!base->imgdata.image) {
-    fprintf(stderr, "ERROR: Failed to allocate memory for pixel shift merge\n");
-    base->recycle();
-    delete base;
-    return nullptr;
-  }
-
-  const ushort* raw0 = base->imgdata.rawdata.raw_image;
-  const int pitch0 = base->imgdata.sizes.raw_pitch / 2;
-  const int top0 = base->imgdata.sizes.top_margin;
-  const int left0 = base->imgdata.sizes.left_margin;
-  const int blk0 = base->imgdata.color.black;
-  int cblk0[4];
-  for (int i = 0; i < 4; ++i) cblk0[i] = blk0 + (int)base->imgdata.color.cblack[i];
-
-  #pragma omp parallel for schedule(static)
-  for (int r = 0; r < bh; ++r) {
-    const size_t raw_row = (size_t)(r + top0) * pitch0 + left0;
-    for (int c = 0; c < bw; ++c) {
-      int col = base->COLOR(r, c);
-      int v = (int)raw0[raw_row + c] - cblk0[col];
-      base->imgdata.image[(size_t)r * bw + c][col] = (v > 0) ? (ushort)v : 0;
-    }
-  }
-
-  merge_pixel_shift_frame(base, base, 0);
-  for (int mi = 1; mi < 4; ++mi) {
-    LibRaw* frame = load_raw(files[mi], false, false, 0, false);
-    if (!frame) {
-      base->recycle();
-      delete base;
-      return nullptr;
-    }
-    if (!is_sony_a7rm4(frame)) {
-      fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
-              frame->imgdata.idata.make, frame->imgdata.idata.model);
-      frame->recycle();
-      delete frame;
-      base->recycle();
-      delete base;
-      return nullptr;
-    }
-    merge_pixel_shift_frame(base, frame, mi);
-    frame->recycle();
-    delete frame;
-  }
-  base->imgdata.idata.colors = 3;
-  return base;
 }
 
 template <class T>
@@ -1034,30 +886,6 @@ static void clamp_rect(int r[4], int bw, int bh) {
   r[1] = std::min(std::max(0, r[1]), bh - r[3]);
 }
 
-// The frame the parameter search runs on, upright: rect (x, y, w, h) of the image proc holds, cut out and oriented
-// as the output is (extract_roi_and_transform), as camera RGB from LibRaw's first three channels. It is w x h, or
-// h x w when rotated by 90 or 270 degrees.
-static void cut_upright_frame(const LibRaw& proc, const int rect[4], int rot_cw, bool hflip, bool vflip,
-                              RgbImage& out) {
-  normalize_rotation(rot_cw, hflip, vflip);
-  const int rw = rect[2], rh = rect[3];
-  const bool swap_dims = (rot_cw == 90 || rot_cw == 270);
-  out.width = swap_dims ? rh : rw;
-  out.height = swap_dims ? rw : rh;
-  out.rgb.resize((size_t)out.width * out.height * 3);
-  const int src_w = proc.imgdata.sizes.iwidth;
-  const ushort (*src)[4] = proc.imgdata.image;
-  #pragma omp parallel for schedule(static)
-  for (int y = 0; y < rh; ++y) {
-    for (int x = 0; x < rw; ++x) {
-      int dx = 0, dy = 0;
-      oriented_pos(x, y, rw, rh, out.width, out.height, rot_cw, hflip, vflip, dx, dy);
-      const ushort* s = src[(size_t)(rect[1] + y) * src_w + (rect[0] + x)];
-      std::copy_n(s, 3, &out.rgb[((size_t)dy * out.width + dx) * 3]);
-    }
-  }
-}
-
 void adjust_correction_matrix(const std::vector<float>& r_coef, 
                               const std::vector<float>& g_coef,
                               const std::vector<float>& b_coef,
@@ -1131,7 +959,7 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
 }
 
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
-               const std::vector<uint8_t>& embedded_icc = {}) {
+               const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr) {
   unsigned* output_profile = NULL;
   unsigned profile_size = 0;
   bool dynamically_allocated = false;
@@ -1176,14 +1004,18 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
     free(output_profile);
   }
 
-  std::vector<ushort> row_buf(width * 3);
-  for (unsigned row = 0; row < height; ++row) {
-    for (unsigned col = 0; col < width; ++col) {
-      row_buf[col * 3]     = proc->imgdata.image[row * width + col][0];
-      row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
-      row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
+  if (rgb3) {
+    fwrite(rgb3, 3 * sizeof(uint16_t), (size_t)width * height, fp);
+  } else {
+    std::vector<ushort> row_buf(width * 3);
+    for (unsigned row = 0; row < height; ++row) {
+      for (unsigned col = 0; col < width; ++col) {
+        row_buf[col * 3]     = proc->imgdata.image[row * width + col][0];
+        row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
+        row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
+      }
+      fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp);
     }
-    fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp);
   }
   fclose(fp);
   return 0;
@@ -1651,6 +1483,7 @@ int main(int ac, char *av[]) {
     }
   }
   argparse::ArgumentParser parser("neg_process");
+  // TODO: -H (--half_size) will be removed in a follow-up cleanup.
   parser.add_argument("-H", "--half_size")
     .help("Half size.")
     .default_value(false)
@@ -1763,6 +1596,15 @@ int main(int ac, char *av[]) {
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
+  // TODO: Expand --flat to accept a flat-field capture image directly in addition to a precomputed .npz file.
+  parser.add_argument("--flat")
+    .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
+  parser.add_argument("--station_egb")
+    .help("Conversion parameters E, g and b as negicc-station applies them (multi_target_optimizer.h): the bundle's "
+          "merged matrix (crosstalk, film base and exposure ratio) scaled per row by E, E*g and E*b. Turns the "
+          "parameter search off.")
+    .nargs(3)
+    .scan<'g', float>();
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -1878,6 +1720,7 @@ int main(int ac, char *av[]) {
   bool is_film_base_auto = false;
   bool film_base_cli_used = false;
   std::vector<int> user_film_base_rgb = {1, 1, 1};
+  double user_film_base_rgb_d[3] = {1.0, 1.0, 1.0};
 
   if (parser.is_used("--film_base_rgb")) {
     const auto fb_tokens = parser.get<std::vector<std::string>>("--film_base_rgb");
@@ -1885,9 +1728,13 @@ int main(int ac, char *av[]) {
       is_film_base_auto = true;
     } else if (fb_tokens.size() == 3) {
       try {
-        user_film_base_rgb[0] = std::stoi(fb_tokens[0]);
-        user_film_base_rgb[1] = std::stoi(fb_tokens[1]);
-        user_film_base_rgb[2] = std::stoi(fb_tokens[2]);
+        for (int c = 0; c < 3; ++c) {
+          size_t pos = 0;
+          const double val = std::stod(fb_tokens[c], &pos);
+          if (pos != fb_tokens[c].size() || !std::isfinite(val)) throw std::invalid_argument("bad float");
+          user_film_base_rgb_d[c] = val;
+          user_film_base_rgb[c] = (int)std::lround(val);
+        }
         film_base_cli_used = true;
       } catch (const std::exception& e) {
         fprintf(stderr, "ERROR! Invalid integer argument for --film_base_rgb\n");
@@ -1895,6 +1742,17 @@ int main(int ac, char *av[]) {
       }
     } else {
       fprintf(stderr, "ERROR! --film_base_rgb requires 3 integers or 'auto'\n");
+      return 1;
+    }
+  }
+
+  // TODO: Expand --flat to take a flat-field capture image directly and compute the flat field on the fly.
+  negicc::FlatFieldPtr flat_field;
+  if (parser.is_used("--flat")) {
+    try {
+      flat_field = negicc::load_flat_field_file(parser.get<std::string>("--flat"));
+    } catch (const std::exception& e) {
+      fprintf(stderr, "ERROR! %s\n", e.what());
       return 1;
     }
   }
@@ -1963,12 +1821,25 @@ int main(int ac, char *av[]) {
     }
   }
 
-  // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is negicc-station's
-  // conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure and the gains;
-  // with --target or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E gives it, on
-  // one profile.
-  const bool exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
-  const bool use_dino = has_profile && !parser.is_used("--gain_g") && !parser.is_used("--gain_b");
+  const bool station_egb_given = parser.is_used("--station_egb");
+  if (station_egb_given && !is_bundle) {
+    fprintf(stderr, "ERROR! --station_egb requires a JSON profile bundle\n");
+    return 1;
+  }
+  float station_egb[3] = {1.0f, 1.0f, 1.0f};
+  if (station_egb_given) {
+    const auto v = parser.get<std::vector<float>>("--station_egb");
+    station_egb[0] = v[0];
+    station_egb[1] = v[1];
+    station_egb[2] = v[2];
+  }
+
+  // The parameter search runs with a profile unless --gain_g, --gain_b or --station_egb is given. On a bundle it is
+  // negicc-station's conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure
+  // and the gains; with --target or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E
+  // gives it, on one profile.
+  const bool exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp") || station_egb_given;
+  const bool use_dino = has_profile && !parser.is_used("--gain_g") && !parser.is_used("--gain_b") && !station_egb_given;
   const bool bundle_search = use_dino && is_bundle && manual_target_idx < 0 && !exposure_given;
   if (parser.is_used("--dino") && !use_dino) {
     fprintf(stderr, "ERROR! --dino requires the parameter search: a profile (--film_stock and --light_source, or "
@@ -1987,12 +1858,6 @@ int main(int ac, char *av[]) {
                         "bracket with --target to use it\n", opt);
         return 1;
       }
-    }
-    if (is_roi_auto) {
-      // TODO: run the bracket search on the frame --roi auto finds.
-      fprintf(stderr, "ERROR! --roi auto is not supported with the bracket search yet; give the frame with --roi "
-                      "x y w h, or pick a bracket with --target\n");
-      return 1;
     }
   }
 
@@ -2018,7 +1883,10 @@ int main(int ac, char *av[]) {
   if (is_bundle) {
     for (int r = 0; r < 3; ++r) {
       if (row_given[r]) {
-        for (int c = 0; c < 3; ++c) bundle.crosstalk_matrix[r * 3 + c] = (*rows[r])[c];
+        for (int c = 0; c < 3; ++c) {
+          bundle.crosstalk_matrix[r * 3 + c] = (*rows[r])[c];
+          bundle.crosstalk_matrix_d[r * 3 + c] = (double)(*rows[r])[c];
+        }
       } else if (bundle.has_crosstalk) {
         rows[r]->assign(bundle.crosstalk_matrix + r * 3, bundle.crosstalk_matrix + r * 3 + 3);
       }
@@ -2077,8 +1945,17 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
-  // The bracket search runs on the frame cut upright out of the half-size image of the RAW, within --roi, while
-  // load_raw holds that image before the decode.
+  double exif_shutter_d = 0.0, exif_iso_d = 0.0;
+  const bool has_exif_exp = read_exif_exposure_d(files[0], exif_shutter_d, exif_iso_d);
+  auto get_scan_exposure = [&](const LibRaw& r, double& shutter_out, double& iso_out) {
+    shutter_out = (has_exif_exp && exif_shutter_d > 0.0)
+                      ? exif_shutter_d
+                      : (r.imgdata.other.shutter > 0 ? (double)r.imgdata.other.shutter : 0.125);
+    iso_out = (has_exif_exp && exif_iso_d > 0.0)
+                  ? std::round(exif_iso_d)
+                  : (r.imgdata.other.iso_speed > 0 ? std::round((double)r.imgdata.other.iso_speed) : 100.0);
+  };
+
   bool has_auto_res = false;
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0};  // the frame (x, y, w, h) in the half-size image
@@ -2103,8 +1980,10 @@ int main(int ac, char *av[]) {
         bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
         clamp_rect(bbox, half_w, half_h);
       }
-      RgbImage frame;
-      cut_upright_frame(raw, bbox, rot_cw, hflip, vflip, frame);
+      // Step 3 & Step 4: zero-copy RgbView over the half-size image, cropped and oriented in place.
+      negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
+          &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
+      negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
       ParamSearchOptions opts;
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
@@ -2115,10 +1994,6 @@ int main(int ac, char *av[]) {
     };
   }
 
-  // --roi auto. A single RAW: the frame is detected on the unpacked CFA mosaic, read in place (film_image_from_raw),
-  // before anything is decoded; load_raw then decodes only the region of the crop, and with --film_base_rgb auto the
-  // film base patch beside it (decode_region), and the crop is cut out of that. Four pixel-shift RAWs: detected on the
-  // merged image.
   FrameDetection frame_det;
   FrameDetectionParams det_params;
   det_params.format = film_format;
@@ -2141,6 +2016,11 @@ int main(int ac, char *av[]) {
         return false;
       }
       t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      roi_coords[0] = frame_det.crop[0];
+      roi_coords[1] = frame_det.crop[1];
+      roi_coords[2] = frame_det.crop[2];
+      roi_coords[3] = frame_det.crop[3];
+      has_roi = true;
       // The decoded region: the crop, grown for --film_base_rgb auto to take in the base patch when there is one (it
       // lies next to the frame: an inter-frame gap or the rebate), aligned to the CFA period.
       int x0 = frame_det.crop[0], y0 = frame_det.crop[1];
@@ -2161,79 +2041,7 @@ int main(int ac, char *av[]) {
     };
   }
 
-  const double t_raw_0 = omp_get_wtime();
-  LibRaw *proc = nullptr;
-  if (files.size() == 4) {
-    proc = merge_pixel_shift_streaming(files, analyse);
-    if (!proc) {
-      fprintf(stderr, "ERROR! Failed to merge pixel-shift files\n");
-      return 1;
-    }
-    if (!is_roi_auto && (has_roi || rot_cw != 0 || hflip || vflip)) {
-      int rx = has_roi ? roi_coords[0] : 0;
-      int ry = has_roi ? roi_coords[1] : 0;
-      int rw = has_roi ? roi_coords[2] : proc->imgdata.sizes.iwidth;
-      int rh = has_roi ? roi_coords[3] : proc->imgdata.sizes.iheight;
-      if (!extract_roi_and_transform(proc, rx, ry, rw, rh, rot_cw, hflip, vflip)) {
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
-      printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
-    }
-    if (is_roi_auto) {
-      // The merged image is sensor-sized camera RGB, black subtracted: read in place as interleaved RGB.
-      const double t_det_0 = omp_get_wtime();
-      const FilmImage merged = film_image_from_interleaved(
-          &proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, 4, 0,
-          std::max(1.0f, (float)(proc->imgdata.color.maximum - proc->imgdata.color.black)));
-      if (!detect_film_frame(merged, det_params, frame_det)) {
-        fprintf(stderr, "ERROR! Film frame detection failed\n");
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
-      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
-      decode_region[2] = proc->imgdata.sizes.iwidth;
-      decode_region[3] = proc->imgdata.sizes.iheight;
-    }
-  } else {
-    proc = load_raw(files[0], true,
-                    parser.get<bool>("--half_size"),
-                    parser.get<int>("--quality"),
-                    !parser.get<bool>("--no_crop") && !has_roi && !is_roi_auto,
-                    raw_decode,
-                    (!is_roi_auto && has_roi) ? roi_coords : nullptr,
-                    analyse, find_frame);
-    if (!proc) {
-      fprintf(stderr, "Cannot open %s\n", files[0].c_str());
-      return 1;
-    }
-    if (!is_roi_auto && (rot_cw != 0 || hflip || vflip)) {
-      if (!extract_roi_and_transform(proc, 0, 0, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                                     rot_cw, hflip, vflip)) {
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
-      printf("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
-    }
-  }
-
-  // The search and the detection ran inside the decode; their times are reported apart.
-  const double t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
-  const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.width;
-  const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.height;
-
-  if (is_roi_auto) {
-    roi_coords[0] = frame_det.crop[0];
-    roi_coords[1] = frame_det.crop[1];
-    roi_coords[2] = frame_det.crop[2];
-    roi_coords[3] = frame_det.crop[3];
-    has_roi = true;
-
+  auto print_frame_detection = [&]() {
     const char* axis_name = frame_det.axis == 'h' ? "h" : (frame_det.axis == 'v' ? "v" : "undecided");
     printf("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
            axis_name, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
@@ -2251,83 +2059,486 @@ int main(int ac, char *av[]) {
     for (const FilmFrame& f : frame_det.secondaries)
       printf("  Frame %+d (sensor px): visible x=%d y=%d w=%d h=%d (%.0f%% of a frame)\n", f.index, f.visible[0],
              f.visible[1], f.visible[2], f.visible[3], 100.0f * f.visible_fraction);
+  };
 
-    // The decoded image holds decode_region, at half its size with -H.
-    const float dscale = (float)decode_region[2] / (float)std::max(1, (int)proc->imgdata.sizes.iwidth);
-    if (frame_det.has_base) {
-      // Sampled only where decoded: without --film_base_rgb auto the region was not grown to take in the patch.
-      const int* b = frame_det.base_box;
-      if (b[0] < decode_region[0] || b[1] < decode_region[1] || b[0] + b[2] > decode_region[0] + decode_region[2] ||
-          b[1] + b[3] > decode_region[1] + decode_region[3]) {
-        frame_det.has_base = false;
+  // TODO: Remove -H (--half_size) and its half-size export branch once callers migrate off -H.
+  const bool half_size_flag = parser.get<bool>("--half_size");
+  const int qual_flag = parser.get<int>("--quality");
+  const bool no_crop_flag = parser.get<bool>("--no_crop");
+
+  // Determine whether the 5-step zero-copy CFA pipeline applies (Step 1..5).
+  bool use_cfa_pipeline = false;
+  negicc::InputFormat input_format = (files.size() == 4) ? negicc::InputFormat::SONY_PIXEL_SHIFT_4
+                                                         : negicc::InputFormat::CFA_BAYER_OR_XTRANS;
+  const double t_raw_0 = omp_get_wtime();
+  LibRaw *proc = nullptr;
+  std::unique_ptr<LibRaw> ps_extra_procs[3];
+  float cfa_white_level = 65535.0f;
+  int cfa_rx = 0, cfa_ry = 0, cfa_rw = 0, cfa_rh = 0;
+  negicc::RgbView full_half_view;
+  negicc::RgbView oriented_half_view;
+  std::shared_ptr<const negicc::FlatTables> flat_full_tables;
+  negicc::FlatSampleArgs flat_full{};
+
+  if (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0)) {
+    LibRaw* probe = new LibRaw();
+    printf("Loading RAW file %s\n", files[0].c_str());
+    int ret = probe->open_file(files[0].c_str());
+    if (ret != LIBRAW_SUCCESS) {
+      fprintf(stderr, "Cannot open %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      delete probe;
+      return 1;
+    }
+    printf("Image size: %dx%d\n", probe->imgdata.sizes.iwidth, probe->imgdata.sizes.iheight);
+    if ((ret = probe->unpack()) != LIBRAW_SUCCESS) {
+      fprintf(stderr, "Cannot unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      delete probe;
+      return 1;
+    }
+    if (files.size() == 4) {
+      if (!is_sony_a7rm4(probe)) {
+        fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
+                probe->imgdata.idata.make, probe->imgdata.idata.model);
+        delete probe;
+        return 1;
       }
+      use_cfa_pipeline = true;
+    } else if (is_sony_cfa_geometry(probe) && probe->imgdata.rawdata.raw_image) {
+      use_cfa_pipeline = true;
     }
-    if (frame_det.has_base) {
-      // The base in the decoded image's units (its colour space and scale): the same patch, sampled again there.
-      FilmRect patch = frame_det.base_patch;
-      patch.cx = (patch.cx - decode_region[0]) / dscale;
-      patch.cy = (patch.cy - decode_region[1]) / dscale;
-      patch.w /= dscale;
-      patch.h /= dscale;
-      const FilmImage decoded = film_image_from_interleaved(&proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth,
-                                                            proc->imgdata.sizes.iheight, 4);
-      float rgb[3], std_d;
-      if (film_sample_patch(decoded, patch, rgb, &std_d)) {
-        for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
-      } else {
-        frame_det.has_base = false;
+    if (use_cfa_pipeline) {
+      proc = probe;
+    } else {
+      delete probe;
+    }
+  }
+
+  double t_raw_decode_ms = 0.0;
+
+  if (use_cfa_pipeline) {
+    (void)input_format;
+    if (is_roi_auto) {
+      const double t_det_0 = omp_get_wtime();
+      FilmImage mosaic;
+      if (!film_image_from_raw(*proc, mosaic)) {
+        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
+        delete proc;
+        return 1;
       }
-    }
-    if (frame_det.has_base) {
-      if (is_film_base_auto) {
-        rebate_applied = true;
-        printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
-               frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
-      } else {
-        printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
-               frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+      det_params.crop_align = mosaic.step;
+      if (!detect_film_frame(mosaic, det_params, frame_det)) {
+        fprintf(stderr, "ERROR! Film frame detection failed\n");
+        delete proc;
+        return 1;
       }
-    } else if (is_film_base_auto) {
-      printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
-    }
-    if (frame_det.conf < kLowFrameConfidence) {
-      printf("Warning: low detection confidence (conf=%.2f%s%s); the crop is the detected frame, check it\n",
-             frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
-    }
-    if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
-      printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
     }
 
-    // The crop out of the decoded region (one copy, with the rotation and flips).
-    const int cx = (int)std::lround((roi_coords[0] - decode_region[0]) / dscale);
-    const int cy = (int)std::lround((roi_coords[1] - decode_region[1]) / dscale);
-    const int cw = (int)std::lround(roi_coords[2] / dscale);
-    const int ch = (int)std::lround(roi_coords[3] / dscale);
-    if (!extract_roi_and_transform(proc, cx, cy, cw, ch, rot_cw, hflip, vflip)) {
-      fprintf(stderr, "ERROR! Failed to extract detected frame ROI\n");
-      proc->free_image();
+    // Step 1: Per-channel black subtraction in-place on the unpacked CFA mosaic.
+    if (!subtract_cfa_black_in_place(proc, cfa_white_level)) {
+      fprintf(stderr, "ERROR! Invalid CFA mosaic geometry in %s\n", files[0].c_str());
       delete proc;
       return 1;
     }
-    printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-           proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+    const int src_w = proc->imgdata.sizes.width;
+    const int src_h = proc->imgdata.sizes.height;
+    const size_t cfa_pitch = proc->imgdata.sizes.raw_pitch / 2;
+    const unsigned int filters = proc->imgdata.idata.filters;
+    const uint16_t* cfa_origin = proc->imgdata.rawdata.raw_image +
+                                 (size_t)proc->imgdata.sizes.top_margin * cfa_pitch +
+                                 proc->imgdata.sizes.left_margin;
+
+    // For 4x pixel shift, unpack and black-subtract frames 1..3 in Step 1 and keep all 4 CFA mosaics in memory.
+    if (files.size() == 4 && !half_size_flag) {
+      for (int mi = 1; mi < 4; ++mi) {
+        ps_extra_procs[mi - 1] = std::make_unique<LibRaw>();
+        LibRaw* fp = ps_extra_procs[mi - 1].get();
+        printf("Loading RAW file %s\n", files[mi].c_str());
+        int fret = fp->open_file(files[mi].c_str());
+        if (fret != LIBRAW_SUCCESS || (fret = fp->unpack()) != LIBRAW_SUCCESS) {
+          fprintf(stderr, "Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
+          delete proc;
+          return 1;
+        }
+        const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
+        if (!is_sony_a7rm4(fp) || fp->imgdata.sizes.width != src_w || fp->imgdata.sizes.height != src_h ||
+            fpitch != cfa_pitch) {
+          fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with matching Sony A7RM4 frames\n");
+          delete proc;
+          return 1;
+        }
+        float fw_white = 0.0f;
+        if (!subtract_cfa_black_in_place(fp, fw_white)) {
+          delete proc;
+          return 1;
+        }
+      }
+    }
+
+    // Step 2: Downsizing via zero-copy RgbView over the CFA mosaic.
+    const int half_w = src_w / 2;
+    const int half_h = src_h / 2;
+    std::shared_ptr<const negicc::FlatTables> flat_half_tables;
+    negicc::FlatSampleArgs flat_half{};
+    if (flat_field) {
+      try {
+        flat_half_tables = flat_field->tables(half_w, half_h, true);
+        flat_half = flat_half_tables->host();
+        if (!half_size_flag) {
+          flat_full_tables = flat_field->tables(src_w, src_h, false);
+          flat_full = flat_full_tables->host();
+        }
+      } catch (const std::exception& e) {
+        fprintf(stderr, "ERROR! %s\n", e.what());
+        delete proc;
+        return 1;
+      }
+    }
+    full_half_view = negicc::RgbView::from_cfa_half(
+        cfa_origin, cfa_pitch, src_w, src_h, filters, nullptr, flat_half, flat_half_tables);
+
+    // Step 3: Crop, rotate, flip & inline ROI search on the zero-copy view.
+    if (is_roi_auto) {
+      roi_coords[0] = frame_det.crop[0];
+      roi_coords[1] = frame_det.crop[1];
+      roi_coords[2] = frame_det.crop[2];
+      roi_coords[3] = frame_det.crop[3];
+      has_roi = true;
+      print_frame_detection();
+
+      int x0 = frame_det.crop[0], y0 = frame_det.crop[1];
+      int x1 = x0 + frame_det.crop[2], y1 = y0 + frame_det.crop[3];
+      if (is_film_base_auto && frame_det.has_base) {
+        const int* b = frame_det.base_box;
+        const int a = 2;
+        x0 = std::min(x0, b[0] / a * a);
+        y0 = std::min(y0, b[1] / a * a);
+        x1 = std::max(x1, std::min(src_w, (b[0] + b[2] + a - 1) / a * a));
+        y1 = std::max(y1, std::min(src_h, (b[1] + b[3] + a - 1) / a * a));
+      }
+      decode_region[0] = x0;
+      decode_region[1] = y0;
+      decode_region[2] = x1 - x0;
+      decode_region[3] = y1 - y0;
+
+      if (frame_det.has_base) {
+        const int* b = frame_det.base_box;
+        if (b[0] < decode_region[0] || b[1] < decode_region[1] ||
+            b[0] + b[2] > decode_region[0] + decode_region[2] ||
+            b[1] + b[3] > decode_region[1] + decode_region[3]) {
+          frame_det.has_base = false;
+        }
+      }
+      if (frame_det.has_base) {
+        const int* b = frame_det.base_box;
+        if (half_size_flag) {
+          // Sample the base patch in the half-size decoded units (2-green average + flat_half), materializing only
+          // the small base_box bounding box.
+          const int hbx0 = std::max(decode_region[0] / 2, b[0] / 2 - 2);
+          const int hby0 = std::max(decode_region[1] / 2, b[1] / 2 - 2);
+          const int hbx1 = std::min((decode_region[0] + decode_region[2]) / 2, (b[0] + b[2] + 1) / 2 + 2);
+          const int hby1 = std::min((decode_region[1] + decode_region[3]) / 2, (b[1] + b[3] + 1) / 2 + 2);
+          const int hbw = std::max(1, hbx1 - hbx0);
+          const int hbh = std::max(1, hby1 - hby0);
+          std::vector<uint16_t> base_rgb_buf((size_t)hbw * hbh * 3);
+          full_half_view.crop_and_orient(hbx0, hby0, hbw, hbh, 0, false, false).materialize(base_rgb_buf.data());
+          // TODO: Simplify patch coordinate scaling to patch.cx * 0.5f - hbx0 (or remove this branch entirely when
+          // -H / --half_size is removed).
+          const float dscale = (float)decode_region[2] /
+                               (float)std::max(1, (decode_region[0] + decode_region[2]) / 2 - decode_region[0] / 2);
+          FilmRect patch = frame_det.base_patch;
+          patch.cx = (patch.cx - (float)decode_region[0]) / dscale - (float)(hbx0 - decode_region[0] / 2);
+          patch.cy = (patch.cy - (float)decode_region[1]) / dscale - (float)(hby0 - decode_region[1] / 2);
+          patch.w /= dscale;
+          patch.h /= dscale;
+          const FilmImage decoded = film_image_from_interleaved(base_rgb_buf.data(), hbw, hbh, 3);
+          float rgb[3], std_d;
+          if (film_sample_patch(decoded, patch, rgb, &std_d)) {
+            for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+          } else {
+            frame_det.has_base = false;
+          }
+        } else {
+          // Sample the base patch in the full-size decoded units (grain-aware or 4-shot pixel-shift merge, with
+          // flat_full), debayering only the small base_box bounding box.
+          const int bx0 = std::max(decode_region[0], (b[0] / 2) * 2 - 2);
+          const int by0 = std::max(decode_region[1], (b[1] / 2) * 2 - 2);
+          const int bx1 = std::min(decode_region[0] + decode_region[2], ((b[0] + b[2] + 1) / 2) * 2 + 2);
+          const int by1 = std::min(decode_region[1] + decode_region[3], ((b[1] + b[3] + 1) / 2) * 2 + 2);
+          const int bw = std::max(2, bx1 - bx0);
+          const int bh = std::max(2, by1 - by0);
+          std::vector<uint16_t> base_rgb_buf((size_t)bw * bh * 3);
+          if (files.size() == 1) {
+            negicc::GrainAwareDebayerArgs bga{};
+            bga.cfa_bayer = cfa_origin;
+            bga.src_w = src_w;
+            bga.src_h = src_h;
+            bga.rx = bx0;
+            bga.ry = by0;
+            bga.rw = bw;
+            bga.rh = bh;
+            bga.rot_cw = 0;
+            bga.hflip = false;
+            bga.vflip = false;
+            bga.dst_w = bw;
+            bga.dst_h = bh;
+            bga.filters = filters;
+            bga.white_level = cfa_white_level;
+            bga.eps = 4096.0f;
+            bga.rgb_out = base_rgb_buf.data();
+            bga.flat = flat_full;
+            bga.flat_x0 = bx0;
+            bga.flat_y0 = by0;
+            bga.cfa_pitch = cfa_pitch;
+            negicc::cpu_grain_aware_debayer(bga);
+          } else {
+            const uint16_t* fcfa[3] = {nullptr, nullptr, nullptr};
+            for (int i = 0; i < 3; ++i) {
+              LibRaw* fp = ps_extra_procs[i].get();
+              const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
+              fcfa[i] = fp->imgdata.rawdata.raw_image +
+                        (size_t)fp->imgdata.sizes.top_margin * fpitch +
+                        fp->imgdata.sizes.left_margin;
+            }
+            negicc::PixelShiftMergeArgs bpm{};
+            bpm.bayer_f0 = cfa_origin;
+            bpm.bayer_f1 = fcfa[0];
+            bpm.bayer_f2 = fcfa[1];
+            bpm.bayer_f3 = fcfa[2];
+            bpm.src_w = src_w;
+            bpm.src_h = src_h;
+            bpm.rx = bx0;
+            bpm.ry = by0;
+            bpm.rw = bw;
+            bpm.rh = bh;
+            bpm.rot_cw = 0;
+            bpm.hflip = false;
+            bpm.vflip = false;
+            bpm.dst_w = bw;
+            bpm.dst_h = bh;
+            bpm.filters = filters;
+            bpm.white_level = cfa_white_level;
+            bpm.rgb_out = base_rgb_buf.data();
+            bpm.flat = flat_full;
+            bpm.flat_x0 = bx0;
+            bpm.flat_y0 = by0;
+            bpm.cfa_pitch = cfa_pitch;
+            negicc::cpu_pixel_shift_merge(bpm);
+          }
+
+          FilmRect patch = frame_det.base_patch;
+          patch.cx -= (float)bx0;
+          patch.cy -= (float)by0;
+          const FilmImage decoded = film_image_from_interleaved(base_rgb_buf.data(), bw, bh, 3);
+          float rgb[3], std_d;
+          if (film_sample_patch(decoded, patch, rgb, &std_d)) {
+            for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+          } else {
+            frame_det.has_base = false;
+          }
+        }
+      }
+      if (frame_det.has_base) {
+        if (is_film_base_auto) {
+          rebate_applied = true;
+          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
+                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+        } else {
+          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
+                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+        }
+      } else if (is_film_base_auto) {
+        printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
+      }
+      if (frame_det.conf < kLowFrameConfidence) {
+        printf("Warning: low detection confidence (conf=%.2f%s%s); the crop is the detected frame, check it\n",
+               frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
+      }
+      if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
+        printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+      }
+    }
+
+    cfa_rx = 0;
+    cfa_ry = 0;
+    cfa_rw = src_w;
+    cfa_rh = src_h;
+    if (has_roi) {
+      if (roi_coords[0] < 0 || roi_coords[1] < 0 || roi_coords[0] >= src_w || roi_coords[1] >= src_h ||
+          roi_coords[2] <= 0 || roi_coords[3] <= 0) {
+        fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+                roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], src_w, src_h);
+        delete proc;
+        return 1;
+      }
+      cfa_rx = roi_coords[0];
+      cfa_ry = roi_coords[1];
+      cfa_rw = std::min(roi_coords[2], src_w - cfa_rx);
+      cfa_rh = std::min(roi_coords[3], src_h - cfa_ry);
+    } else if (!no_crop_flag && !station_egb_given && files.size() == 1) {
+#if LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21)
+      const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
+#else
+      const auto& crop_ref = proc->imgdata.sizes.raw_inset_crop;
+#endif
+      const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
+                                  crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
+      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
+        cfa_rx = std::max(0, std::min((int)crop_ref.cleft, src_w - 1));
+        cfa_ry = std::max(0, std::min((int)crop_ref.ctop, src_h - 1));
+        cfa_rw = std::max(1, std::min((int)crop_ref.cwidth, src_w - cfa_rx));
+        cfa_rh = std::max(1, std::min((int)crop_ref.cheight, src_h - cfa_ry));
+      }
+    }
+
+    auto_frame_half[0] = has_roi ? cfa_rx / 2 : 0;
+    auto_frame_half[1] = has_roi ? cfa_ry / 2 : 0;
+    auto_frame_half[2] = has_roi ? std::max(1, (cfa_rx + cfa_rw) / 2 - auto_frame_half[0]) : half_w;
+    auto_frame_half[3] = has_roi ? std::max(1, (cfa_ry + cfa_rh) / 2 - auto_frame_half[1]) : half_h;
+    clamp_rect(auto_frame_half, half_w, half_h);
+    negicc::RgbView search_half_view = full_half_view.crop_and_orient(
+        auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
+        rot_cw, hflip, vflip);
+    search_half_view.g2_ptr = nullptr;
+    int out_half[4] = {
+        cfa_rx / 2,
+        cfa_ry / 2,
+        std::max(1, (cfa_rx + cfa_rw) / 2 - cfa_rx / 2),
+        std::max(1, (cfa_ry + cfa_rh) / 2 - cfa_ry / 2),
+    };
+    clamp_rect(out_half, half_w, half_h);
+    oriented_half_view = full_half_view.crop_and_orient(
+        out_half[0], out_half[1], out_half[2], out_half[3],
+        rot_cw, hflip, vflip);
+
+    // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
+    if (bundle_search) {
+      const double t_auto_0 = omp_get_wtime();
+      const float scan_shutter_s = proc->imgdata.other.shutter > 0 ? proc->imgdata.other.shutter : 0.125f;
+      const float scan_iso = proc->imgdata.other.iso_speed > 0 ? std::round(proc->imgdata.other.iso_speed) : 100.0f;
+      ParamSearchOptions opts;
+      double fb_override_d[3] = {user_film_base_rgb_d[0], user_film_base_rgb_d[1], user_film_base_rgb_d[2]};
+      if (rebate_applied) {
+        fb_override_d[0] = (double)frame_det.base_rgb[0];
+        fb_override_d[1] = (double)frame_det.base_rgb[1];
+        fb_override_d[2] = (double)frame_det.base_rgb[2];
+        opts.film_base_rgb_d = fb_override_d;
+        opts.film_base_from_scan = true;
+      } else if (film_base_cli_used) {
+        opts.film_base_rgb_d = fb_override_d;
+        opts.film_base_from_scan = false;
+      }
+      if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
+      if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
+        fprintf(stderr, "ERROR! The conversion parameter search failed\n");
+        delete proc;
+        return 1;
+      }
+      has_auto_res = true;
+      t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+    }
+    t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
+  } else {
+    proc = load_raw(files[0], true,
+                    half_size_flag,
+                    qual_flag,
+                    !no_crop_flag && !has_roi && !is_roi_auto,
+                    raw_decode,
+                    (!is_roi_auto && has_roi) ? roi_coords : nullptr,
+                    analyse, find_frame, flat_field.get());
+    if (!proc) {
+      fprintf(stderr, "Cannot open %s\n", files[0].c_str());
+      return 1;
+    }
+    if (!is_roi_auto && (rot_cw != 0 || hflip || vflip)) {
+      if (!extract_roi_and_transform(proc, 0, 0, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                                     rot_cw, hflip, vflip)) {
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+      printf("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+    }
+    t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
+
+    if (is_roi_auto) {
+      roi_coords[0] = frame_det.crop[0];
+      roi_coords[1] = frame_det.crop[1];
+      roi_coords[2] = frame_det.crop[2];
+      roi_coords[3] = frame_det.crop[3];
+      has_roi = true;
+      print_frame_detection();
+
+      // The decoded image holds decode_region, at half its size with -H.
+      const float dscale = (float)decode_region[2] / (float)std::max(1, (int)proc->imgdata.sizes.iwidth);
+      if (frame_det.has_base) {
+        // Sampled only where decoded: without --film_base_rgb auto the region was not grown to take in the patch.
+        const int* b = frame_det.base_box;
+        if (b[0] < decode_region[0] || b[1] < decode_region[1] ||
+            b[0] + b[2] > decode_region[0] + decode_region[2] ||
+            b[1] + b[3] > decode_region[1] + decode_region[3]) {
+          frame_det.has_base = false;
+        }
+      }
+      if (frame_det.has_base) {
+        // The base in the decoded image's units (its colour space and scale): the same patch, sampled again there.
+        FilmRect patch = frame_det.base_patch;
+        patch.cx = (patch.cx - decode_region[0]) / dscale;
+        patch.cy = (patch.cy - decode_region[1]) / dscale;
+        patch.w /= dscale;
+        patch.h /= dscale;
+        const FilmImage decoded = film_image_from_interleaved(&proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth,
+                                                              proc->imgdata.sizes.iheight, 4);
+        float rgb[3], std_d;
+        if (film_sample_patch(decoded, patch, rgb, &std_d)) {
+          for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
+        } else {
+          frame_det.has_base = false;
+        }
+      }
+      if (frame_det.has_base) {
+        if (is_film_base_auto) {
+          rebate_applied = true;
+          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
+                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+        } else {
+          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
+                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
+        }
+      } else if (is_film_base_auto) {
+        printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
+      }
+      if (frame_det.conf < kLowFrameConfidence) {
+        printf("Warning: low detection confidence (conf=%.2f%s%s); the crop is the detected frame, check it\n",
+               frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
+      }
+      if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
+        printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+      }
+
+      // The crop out of the decoded region (one copy, with the rotation and flips).
+      const int cx = (int)std::lround((roi_coords[0] - decode_region[0]) / dscale);
+      const int cy = (int)std::lround((roi_coords[1] - decode_region[1]) / dscale);
+      const int cw = (int)std::lround(roi_coords[2] / dscale);
+      const int ch = (int)std::lround(roi_coords[3] / dscale);
+      if (!extract_roi_and_transform(proc, cx, cy, cw, ch, rot_cw, hflip, vflip)) {
+        fprintf(stderr, "ERROR! Failed to extract detected frame ROI\n");
+        proc->free_image();
+        delete proc;
+        return 1;
+      }
+      printf("Extracted subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+    }
   }
+
+  const int orig_w = proc->imgdata.sizes.raw_width ? proc->imgdata.sizes.raw_width : proc->imgdata.sizes.width;
+  const int orig_h = proc->imgdata.sizes.raw_height ? proc->imgdata.sizes.raw_height : proc->imgdata.sizes.height;
 
   printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
   printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
 
-  // A conversion matrix is applied the linear image from RAW file to:
-  // 1. Remove crosstalk between color channels.
-  // 2. Scale the color channels independently such that mid-grey values are aligned.
-  // 3. Scale the color channels independently to compensate for density difference
-  //    between target and the captured film.
-  // 4. Global scale factor for brightness.
-  // 5. Scale the color channels independently according to user input (optional).
-  // 6. Scale from 14-bit to 16-bit in pixel-shift mode (optional).
-  //
-  // A single matrix is combined with the above steps combined. Note that scaling is
-  // always done after crosstalk correction, hence the scale factor can be applied
-  // separately to the R, G and B coefficients.
   const auto orig_profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
   std::vector<int> effective_profile_film_base_rgb = orig_profile_film_base_rgb;
   if (is_bundle && bundle.has_film_base && !parser.is_used("--profile_film_base_rgb")) {
@@ -2388,6 +2599,117 @@ int main(int ac, char *av[]) {
                            effective_film_base_rgb,
                            merged_matrix);
 
+  // Step 5a: Debayer the cropped/oriented output RGB buffer (after Step 4's zero-copy search_conversion_params).
+  std::vector<uint16_t> cfa_export_rgb;
+  if (use_cfa_pipeline) {
+    const double t_step5_debayer_0 = omp_get_wtime();
+    const int src_w = proc->imgdata.sizes.width;
+    const int src_h = proc->imgdata.sizes.height;
+    const size_t cfa_pitch = proc->imgdata.sizes.raw_pitch / 2;
+    const unsigned int filters = proc->imgdata.idata.filters;
+    const uint16_t* cfa_origin = proc->imgdata.rawdata.raw_image +
+                                 (size_t)proc->imgdata.sizes.top_margin * cfa_pitch +
+                                 proc->imgdata.sizes.left_margin;
+    int norm_rot = rot_cw;
+    bool norm_hf = hflip, norm_vf = vflip;
+    normalize_rotation(norm_rot, norm_hf, norm_vf);
+    const bool swap_dims = (norm_rot == 90 || norm_rot == 270);
+    int dst_w = 0, dst_h = 0;
+
+    auto free_libraw_cfa = [](LibRaw* r) {
+      if (!r) return;
+      if (r->imgdata.rawdata.raw_alloc && !r->imgdata.image) {
+        r->imgdata.image = (ushort (*)[4])r->imgdata.rawdata.raw_alloc;
+        r->imgdata.rawdata.raw_alloc = nullptr;
+        r->imgdata.rawdata.raw_image = nullptr;
+        r->free_image();
+      }
+      r->recycle_datastream();
+    };
+
+    if (half_size_flag) {
+      dst_w = oriented_half_view.width;
+      dst_h = oriented_half_view.height;
+      cfa_export_rgb.resize((size_t)dst_w * dst_h * 3);
+      oriented_half_view.materialize(cfa_export_rgb.data());
+      free_libraw_cfa(proc);
+    } else {
+      dst_w = swap_dims ? cfa_rh : cfa_rw;
+      dst_h = swap_dims ? cfa_rw : cfa_rh;
+      cfa_export_rgb.resize((size_t)dst_w * dst_h * 3);
+      if (files.size() == 1) {
+        printf("Debayer quality: grain-aware\n");
+        negicc::GrainAwareDebayerArgs ga{};
+        ga.cfa_bayer = cfa_origin;
+        ga.src_w = src_w;
+        ga.src_h = src_h;
+        ga.rx = cfa_rx;
+        ga.ry = cfa_ry;
+        ga.rw = cfa_rw;
+        ga.rh = cfa_rh;
+        ga.rot_cw = rot_cw;
+        ga.hflip = hflip;
+        ga.vflip = vflip;
+        ga.dst_w = dst_w;
+        ga.dst_h = dst_h;
+        ga.filters = filters;
+        ga.white_level = cfa_white_level;
+        ga.eps = 4096.0f;
+        ga.rgb_out = cfa_export_rgb.data();
+        ga.flat = flat_full;
+        ga.flat_x0 = cfa_rx;
+        ga.flat_y0 = cfa_ry;
+        ga.cfa_pitch = cfa_pitch;
+        negicc::cpu_grain_aware_debayer(ga);
+        free_libraw_cfa(proc);
+      } else {
+        printf("Merging 4 images...\n");
+        const uint16_t* fcfa[3] = {nullptr, nullptr, nullptr};
+        for (int i = 0; i < 3; ++i) {
+          LibRaw* fp = ps_extra_procs[i].get();
+          const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
+          fcfa[i] = fp->imgdata.rawdata.raw_image +
+                    (size_t)fp->imgdata.sizes.top_margin * fpitch +
+                    fp->imgdata.sizes.left_margin;
+        }
+        negicc::PixelShiftMergeArgs pm{};
+        pm.bayer_f0 = cfa_origin;
+        pm.bayer_f1 = fcfa[0];
+        pm.bayer_f2 = fcfa[1];
+        pm.bayer_f3 = fcfa[2];
+        pm.src_w = src_w;
+        pm.src_h = src_h;
+        pm.rx = cfa_rx;
+        pm.ry = cfa_ry;
+        pm.rw = cfa_rw;
+        pm.rh = cfa_rh;
+        pm.rot_cw = rot_cw;
+        pm.hflip = hflip;
+        pm.vflip = vflip;
+        pm.dst_w = dst_w;
+        pm.dst_h = dst_h;
+        pm.filters = filters;
+        pm.white_level = cfa_white_level;
+        pm.rgb_out = cfa_export_rgb.data();
+        pm.flat = flat_full;
+        pm.flat_x0 = cfa_rx;
+        pm.flat_y0 = cfa_ry;
+        pm.cfa_pitch = cfa_pitch;
+        negicc::cpu_pixel_shift_merge(pm);
+        free_libraw_cfa(proc);
+        for (int i = 0; i < 3; ++i) {
+          ps_extra_procs[i].reset();
+        }
+      }
+    }
+    proc->imgdata.sizes.iwidth = dst_w;
+    proc->imgdata.sizes.iheight = dst_h;
+    proc->imgdata.idata.colors = 3;
+    proc->imgdata.params.output_bps = 16;
+    printf("Processed image size: %dx%d\n", dst_w, dst_h);
+    t_raw_decode_ms += (omp_get_wtime() - t_step5_debayer_0) * 1000.0;
+  }
+
   ParsedFilmProfile film_prof;
   std::vector<uint8_t> embedded_icc;
   std::string bundle_target_name;
@@ -2396,11 +2718,18 @@ int main(int ac, char *av[]) {
   if (is_bundle && !bundle_search) {
     float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
     int num_feasible = 0;
-    compute_bundle_enclosures(bundle,
-                              (const uint16_t (*)[4])proc->imgdata.image,
-                              proc->imgdata.sizes.iwidth,
-                              proc->imgdata.sizes.iheight,
-                              g_lo, g_hi, scene_ev, num_feasible);
+    if (use_cfa_pipeline) {
+      compute_bundle_enclosures(bundle,
+                                negicc::RgbView::from_interleaved_rgb(
+                                    cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                                g_lo, g_hi, scene_ev, num_feasible);
+    } else {
+      compute_bundle_enclosures(bundle,
+                                (const uint16_t (*)[4])proc->imgdata.image,
+                                proc->imgdata.sizes.iwidth,
+                                proc->imgdata.sizes.iheight,
+                                g_lo, g_hi, scene_ev, num_feasible);
+    }
   } else if (!is_bundle) {
     if (!film_prof_arg.empty() && !load_film_profile(film_prof_arg, film_prof)) {
       fprintf(stderr, "ERROR! Cannot load film profile %s\n", film_prof_arg.c_str());
@@ -2457,27 +2786,23 @@ int main(int ac, char *av[]) {
       film_prof = tgt.film_prof;
       film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
-
-      if (!solve_dinov3_intent(engine, cfg, merged_matrix,
-                               (const uint16_t (*)[4])proc->imgdata.image,
-                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                               user_gains, pin_mask, max_iters, dino_res)) {
-        fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
     } else {
       cfg.prof = &film_prof.data;
-      if (!solve_dinov3_intent(engine, cfg, merged_matrix,
-                               (const uint16_t (*)[4])proc->imgdata.image,
-                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                               user_gains, pin_mask, max_iters, dino_res)) {
-        fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
-        proc->free_image();
-        delete proc;
-        return 1;
-      }
+    }
+
+    const bool solve_ok = use_cfa_pipeline
+        ? solve_dinov3_intent(engine, cfg, merged_matrix,
+                              negicc::RgbView::from_interleaved_rgb(
+                                  cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                              user_gains, pin_mask, max_iters, dino_res)
+        : solve_dinov3_intent(engine, cfg, merged_matrix, (const uint16_t (*)[4])proc->imgdata.image,
+                              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                              user_gains, pin_mask, max_iters, dino_res);
+    if (!solve_ok) {
+      fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
+      proc->free_image();
+      delete proc;
+      return 1;
     }
 
     if (is_knee_auto && dino_res.dynamic_knee.active) {
@@ -2551,7 +2876,30 @@ int main(int ac, char *av[]) {
     bundle_target_name = bundle.targets[bundle_target_idx].name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
-    if (!(pin_mask & PIN_E) && bundle.targets[bundle_target_idx].e_center > 0.0f) {
+    if (station_egb_given) {
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
+      double fb_override_d[3] = {user_film_base_rgb_d[0], user_film_base_rgb_d[1], user_film_base_rgb_d[2]};
+      const double* fb_ptr = nullptr;
+      bool fb_from_scan = false;
+      if (rebate_applied) {
+        fb_override_d[0] = (double)frame_det.base_rgb[0];
+        fb_override_d[1] = (double)frame_det.base_rgb[1];
+        fb_override_d[2] = (double)frame_det.base_rgb[2];
+        fb_ptr = fb_override_d;
+        fb_from_scan = true;
+      } else if (film_base_cli_used) {
+        fb_ptr = fb_override_d;
+      }
+      float base_matrix[9];
+      double row_scale[3];
+      compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, fb_ptr, fb_from_scan,
+                                    base_matrix, nullptr, row_scale);
+      negicc::candidate_matrix(base_matrix, station_egb[0], station_egb[1], station_egb[2], merged_matrix);
+      global_exposure_comp = (float)(row_scale[0] * (double)station_egb[0]);
+      gain_g = (float)(row_scale[1] / row_scale[0] * (double)station_egb[1]);
+      gain_b = (float)(row_scale[2] / row_scale[0] * (double)station_egb[2]);
+    } else if (!(pin_mask & PIN_E) && bundle.targets[bundle_target_idx].e_center > 0.0f) {
       global_exposure_comp = bundle.targets[bundle_target_idx].e_center;
       adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
                                global_exposure_comp,
@@ -2606,7 +2954,58 @@ int main(int ac, char *av[]) {
   const int height = proc->imgdata.sizes.iheight;
   const double t_start = omp_get_wtime();
 
-  if (encoding == ENCODE_SRGB || encoding == ENCODE_SRGB_LINEAR) {
+  if (!cfa_export_rgb.empty()) {
+    uint16_t* rgb3 = cfa_export_rgb.data();
+    if (encoding == ENCODE_SRGB || encoding == ENCODE_SRGB_LINEAR) {
+      #pragma omp parallel for schedule(static)
+      for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i) {
+          uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
+          Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
+          v = pcs_to_linear_srgb(v);
+          v = encode_output(v, encoding);
+          px[0] = quantize_u16(v.r);
+          px[1] = quantize_u16(v.g);
+          px[2] = quantize_u16(v.b);
+        }
+      }
+    } else if (encoding == ENCODE_CUSTOM) {
+      #pragma omp parallel
+      {
+        cmsHTRANSFORM thread_xform = cmsCreateTransform(
+            hXYZ, TYPE_XYZ_FLT, hCustomOut, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+        std::vector<float> xyz_row(width * 3);
+
+        #pragma omp for schedule(static)
+        for (int j = 0; j < height; ++j) {
+          for (int i = 0; i < width; ++i) {
+            const uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
+            Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
+            xyz_row[i * 3 + 0] = v.r;
+            xyz_row[i * 3 + 1] = v.g;
+            xyz_row[i * 3 + 2] = v.b;
+          }
+          cmsDoTransform(thread_xform, xyz_row.data(), &rgb3[(size_t)j * width * 3], width);
+        }
+        cmsDeleteTransform(thread_xform);
+      }
+      cmsCloseProfile(hXYZ);
+      cmsCloseProfile(hCustomOut);
+    } else {
+      #pragma omp parallel for schedule(static)
+      for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i) {
+          uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
+          Rgb v = load_u16(px);
+          v = apply_matrix(merged_matrix, v);
+          v = apply_knee(v, knee);
+          px[0] = quantize_u16(v.r);
+          px[1] = quantize_u16(v.g);
+          px[2] = quantize_u16(v.b);
+        }
+      }
+    }
+  } else if (encoding == ENCODE_SRGB || encoding == ENCODE_SRGB_LINEAR) {
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < height; ++j) {
       for (int i = 0; i < width; ++i) {
@@ -2663,7 +3062,9 @@ int main(int ac, char *av[]) {
   const auto output = parser.get<std::string>("--output");
   printf("Writing TIFF '%s'\n", output.c_str());
   const double t_tiff_0 = omp_get_wtime();
-  int ret = write_tiff(proc, attach_profile, output, is_bundle ? embedded_icc : std::vector<uint8_t>{});
+  int ret = write_tiff(proc, attach_profile, output,
+                       is_bundle ? embedded_icc : std::vector<uint8_t>{},
+                       cfa_export_rgb.empty() ? nullptr : cfa_export_rgb.data());
   const double t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
 
   if (ret != 0 || parser.get<bool>("--no-metadata")) {

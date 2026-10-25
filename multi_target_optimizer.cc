@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -99,8 +100,6 @@ std::string general(float v, int prec) {
 }
 
 // ---- The inner crop ---------------------------------------------------------------------------------------
-
-const uint16_t* pixel_at(const RgbImage& img, int x, int y) { return &img.rgb[(size_t(y) * img.width + x) * 3]; }
 
 // The centred inner crop of a w x h image: crop_ratio of each side, the margins rounded to whole pixels. (x0, y0) is
 // its top-left corner in the w x h image, w x h its size: w - 2 x0 by h - 2 y0, about crop_ratio w by crop_ratio h.
@@ -408,7 +407,7 @@ float u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, f
   return (1.0f - frac) * v_lo + frac * v_hi;
 }
 
-void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, int patch_size, FrameStats& st) {
+void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max_size, int patch_size, FrameStats& st) {
   const InnerCrop crop = compute_inner_crop(frame.width, frame.height, crop_ratio);
   // compute_aspect_preserved_shape of color_pipeline.h (round half away from zero)
   const int p = std::max(1, patch_size);
@@ -423,18 +422,34 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
 
   std::vector<uint64_t> g_hist(65536, 0);
   std::vector<float> row_logs(crop.h * 3, 0.0f);  // per inner crop row, the sum of log R, log G and log B
+  const bool contiguous_rgb = !frame.is_xtrans_cfa && frame.g2_ptr == nullptr && frame.flat.gain == nullptr &&
+                              frame.sensor_dxx == 1 && frame.sensor_dxy == 0 && frame.sensor_dyx == 0 &&
+                              frame.sensor_dyy == 1 && frame.pitch == 3 && frame.r_ptr != nullptr &&
+                              frame.g_ptr == frame.r_ptr + 1 && frame.b_ptr == frame.r_ptr + 2;
 #pragma omp parallel
   {
     std::vector<uint64_t> loc(65536, 0);
 #pragma omp for schedule(static)
     for (int ry = 0; ry < crop.h; ++ry) {
-      const uint16_t* row = pixel_at(frame, crop.x0, crop.y0 + ry);
       float lr = 0.0f, lg = 0.0f, lb = 0.0f;
-      for (int rx = 0; rx < crop.w; ++rx, row += 3) {
-        loc[row[1]]++;
-        lr += log_lut[row[0]];
-        lg += log_lut[row[1]];
-        lb += log_lut[row[2]];
+      if (contiguous_rgb) {
+        const uint16_t* p = frame.r_ptr + (ptrdiff_t)(frame.sensor_y0 + crop.y0 + ry) * frame.stride +
+                            (ptrdiff_t)(frame.sensor_x0 + crop.x0) * 3;
+        for (int rx = 0; rx < crop.w; ++rx, p += 3) {
+          loc[p[1]]++;
+          lr += log_lut[p[0]];
+          lg += log_lut[p[1]];
+          lb += log_lut[p[2]];
+        }
+      } else {
+        for (int rx = 0; rx < crop.w; ++rx) {
+          uint16_t px[3];
+          frame.sample(crop.x0 + rx, crop.y0 + ry, px);
+          loc[px[1]]++;
+          lr += log_lut[px[0]];
+          lg += log_lut[px[1]];
+          lb += log_lut[px[2]];
+        }
       }
       row_logs[ry * 3] = lr;
       row_logs[ry * 3 + 1] = lg;
@@ -472,14 +487,15 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
         for (int yy = ys; yy < ye; ++yy) {
           const float wy = std::min(y1, yy + 1.0f) - std::max(y0, yy + 0.0f);
           if (wy <= 0.0f) continue;
-          const uint16_t* row = pixel_at(frame, crop.x0, crop.y0 + yy);
           for (int xx = xs; xx < xe; ++xx) {
             const float wx = std::min(x1, xx + 1.0f) - std::max(x0, xx + 0.0f);
             if (wx <= 0.0f) continue;
             const float w = wx * wy;
-            acc[0] += row[xx * 3] * w;
-            acc[1] += row[xx * 3 + 1] * w;
-            acc[2] += row[xx * 3 + 2] * w;
+            uint16_t px[3];
+            frame.sample(crop.x0 + xx, crop.y0 + yy, px);
+            acc[0] += px[0] * w;
+            acc[1] += px[1] * w;
+            acc[2] += px[2] * w;
             wsum += w;
           }
         }
@@ -494,16 +510,19 @@ void compute_frame_stats(const RgbImage& frame, float crop_ratio, int max_size, 
       const int y0 = std::clamp<int>(std::floor(fy), 0, crop.h - 1);
       const int y1 = std::clamp(y0 + 1, 0, crop.h - 1);
       const float wy1 = fy - y0, wy0 = 1.0f - wy1;
-      const uint16_t* row0 = pixel_at(frame, crop.x0, crop.y0 + y0);
-      const uint16_t* row1 = pixel_at(frame, crop.x0, crop.y0 + y1);
       for (int dx = 0; dx < dino_w; ++dx) {
         const float fx = (dx + 0.5f) * sx - 0.5f;
         const int x0 = std::clamp<int>(std::floor(fx), 0, crop.w - 1);
         const int x1 = std::clamp(x0 + 1, 0, crop.w - 1);
         const float wx1 = fx - x0, wx0 = 1.0f - wx1;
+        uint16_t p00[3], p01[3], p10[3], p11[3];
+        frame.sample(crop.x0 + x0, crop.y0 + y0, p00);
+        frame.sample(crop.x0 + x1, crop.y0 + y0, p01);
+        frame.sample(crop.x0 + x0, crop.y0 + y1, p10);
+        frame.sample(crop.x0 + x1, crop.y0 + y1, p11);
         for (int c = 0; c < 3; ++c) {
-          const float top = row0[x0 * 3 + c] * wx0 + row0[x1 * 3 + c] * wx1;
-          const float bot = row1[x0 * 3 + c] * wx0 + row1[x1 * 3 + c] * wx1;
+          const float top = p00[c] * wx0 + p01[c] * wx1;
+          const float bot = p10[c] * wx0 + p11[c] * wx1;
           dino[(dy * dino_w + dx) * 3 + c] = top * wy0 + bot * wy1;
         }
       }
@@ -560,23 +579,6 @@ void profile_highlight_ceiling(const std::string& profcheck_output, float ceil[3
   }
 }
 
-// L* histogram of kLabBins bins over [0, 100].
-constexpr int kLabBins = 1000;
-
-int lab_bin(float L) { return std::clamp(static_cast<int>(L * (kLabBins / 100.0f)), 0, kLabBins - 1); }
-
-float percentile_from_hist_L(const std::vector<uint64_t>& hist, uint64_t total, float q) {
-  if (total == 0) return 0.0f;
-  const float target = q * total;
-  uint64_t cum = 0;
-  int k = 0;
-  for (; k < kLabBins; ++k) {
-    cum += hist[k];
-    if (cum >= target) break;
-  }
-  return (std::min(k, kLabBins - 1) + 0.5f) * (100.0f / kLabBins);
-}
-
 // Highlight clipping of one render, in percent of the pixels measured (float, as the station's kernel).
 struct ClipStats {
   float exc[3];      // at or above the bracket's ceiling, per channel
@@ -587,54 +589,33 @@ struct ClipStats {
 // The highlight clipping of img's crop rendered with each conversion matrix (9 floats per candidate in matrices).
 // py-ref: negicc_station/src/pipeline/converter.cpp @ 93be1ec (Converter::highlight_clip)
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
-std::vector<ClipStats> measure_highlight_clip(const RgbImage& img, const InnerCrop& crop_in,
+std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const InnerCrop& crop_in,
                                               const std::vector<float>& matrices, float knee,
                                               const ProfileData& prof, const float ceil_rgb[3]) {
   const size_t n = matrices.size() / 9;
   std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
   const uint64_t npx = uint64_t(crop.w) * crop.h;
-  if (npx == 0) return res;
-  float ceil_lin[3];
-  for (int k = 0; k < 3; ++k) {
-    const float ceil = ceil_rgb[k];
-    const float c_u8 = (ceil > 1.0001f) ? ceil : (ceil * 255.0f);
-    const float thr_u8 = std::min(std::floor(c_u8) + 1.0f, 255.0f);
-    ceil_lin[k] = srgb_decode(std::max(0.0f, (thr_u8 - 0.5f) / 255.0f));
-  }
+  if (npx == 0 || n == 0) return res;
+  std::vector<float> hc_out(n * 5, 0.0f);
+  negicc::HighlightClipArgs ha{};
+  ha.in_view = &img;
+  ha.width = img.width;
+  ha.height = img.height;
+  ha.crop = {crop.x0, crop.y0, crop.w, crop.h};
+  ha.matrices = matrices.data();
+  ha.n = (int)n;
+  ha.cfg.knee = knee;
+  std::memcpy(&ha.cfg.profile, &prof, sizeof(ha.cfg.profile));
+  for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = srgb_decode(ceil_rgb[c] / 255.0f);
+  ha.out = hc_out.data();
+  negicc::cpu_highlight_clip(ha);
   for (size_t c = 0; c < n; ++c) {
-    const float* m = &matrices[c * 9];
-    uint64_t exc[3] = {0, 0, 0}, wc = 0;
-    std::vector<uint64_t> hist(kLabBins, 0);
-#pragma omp parallel
-    {
-      uint64_t l_exc[3] = {0, 0, 0}, l_wc = 0;
-      std::vector<uint64_t> l_hist(kLabBins, 0);
-#pragma omp for schedule(static)
-      for (int y = crop.y0; y < crop.y0 + crop.h; ++y) {
-        const uint16_t* row = pixel_at(img, crop.x0, y);
-        for (int x = 0; x < crop.w; ++x, row += 3) {
-          const Rgb lin = convert_pixel_linear(row, m, knee, prof);
-          if (lin.r >= ceil_lin[0]) l_exc[0]++;
-          if (lin.g >= ceil_lin[1]) l_exc[1]++;
-          if (lin.b >= ceil_lin[2]) l_exc[2]++;
-          if (linear_channel_white_clipped(lin.r) || linear_channel_white_clipped(lin.g) ||
-              linear_channel_white_clipped(lin.b)) {
-            l_wc++;
-          }
-          l_hist[lab_bin(linear_srgb_to_L(lin))]++;
-        }
-      }
-#pragma omp critical
-      {
-        for (int k = 0; k < 3; ++k) exc[k] += l_exc[k];
-        wc += l_wc;
-        for (int k = 0; k < kLabBins; ++k) hist[k] += l_hist[k];
-      }
-    }
-    for (int k = 0; k < 3; ++k) res[c].exc[k] = exc[k] * 100.0f / npx;
-    res[c].white_clip = wc * 100.0f / npx;
-    res[c].median_L = percentile_from_hist_L(hist, npx, 0.50f);
+    res[c].exc[0] = hc_out[c * 5 + 0];
+    res[c].exc[1] = hc_out[c * 5 + 1];
+    res[c].exc[2] = hc_out[c * 5 + 2];
+    res[c].white_clip = hc_out[c * 5 + 3];
+    res[c].median_L = hc_out[c * 5 + 4];
   }
   return res;
 }
@@ -652,9 +633,9 @@ class SearchFrame {
   SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, int max_steps, ParamSearchResult& out)
       : bundle_(bundle), engine_(engine), verbose_(verbose), max_steps_(std::max(1, max_steps)), out_(out) {}
 
-  // Takes the upright frame (kept by reference), its inner crop and the statistics.
-  void set_frame(const RgbImage& frame, float crop_ratio) {
-    frame_ = &frame;
+  // Takes the upright frame view, its inner crop and the statistics.
+  void set_frame(const negicc::RgbView& frame, float crop_ratio) {
+    frame_ = frame;
     crop_ = compute_inner_crop(frame.width, frame.height, crop_ratio);
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
   }
@@ -662,9 +643,11 @@ class SearchFrame {
   // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; the search runs on
   // M_frame / e_norm.
   void set_frame_matrix(const float frame_matrix[9], float e_norm) {
-    std::copy(frame_matrix, frame_matrix + 9, frame_matrix_);
     e_norm_ = e_norm;
-    for (int i = 0; i < 9; ++i) input_matrix_[i] = frame_matrix_[i] / e_norm_;
+    for (int i = 0; i < 9; ++i) {
+      frame_matrix_[i] = frame_matrix[i];
+      input_matrix_[i] = frame_matrix[i] / e_norm;
+    }
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
@@ -681,17 +664,18 @@ class SearchFrame {
     candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
     const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
     out.resize((size_t)crop_.w * crop_.h * 3);
-#pragma omp parallel for schedule(static)
-    for (int y = 0; y < crop_.h; ++y) {
-      const uint16_t* row = pixel_at(*frame_, crop_.x0, crop_.y0 + y);
-      uint8_t* dst = &out[(size_t)y * crop_.w * 3];
-      for (int x = 0; x < crop_.w; ++x, row += 3, dst += 3) {
-        const Rgb v = convert_pixel_srgb(row, m, AUTO_KNEE, prof);
-        dst[0] = quantize_u8(v.r);
-        dst[1] = quantize_u8(v.g);
-        dst[2] = quantize_u8(v.b);
-      }
-    }
+    negicc::RgbView crop_view = frame_.crop_and_orient(crop_.x0, crop_.y0, crop_.w, crop_.h, 0, false, false);
+    negicc::RenderArgs ra{};
+    ra.in_view = &crop_view;
+    ra.width = crop_.w;
+    ra.height = crop_.h;
+    ra.matrix = m;
+    ra.cfg.knee = AUTO_KNEE;
+    std::memcpy(&ra.cfg.profile, &prof, sizeof(ra.cfg.profile));
+    ra.cfg.encoding = negicc::ENCODE_SRGB;
+    ra.out_type = 1;
+    ra.out = out.data();
+    negicc::cpu_render(ra);
     render_time_ += Clock::now() - t0;
   }
 
@@ -810,7 +794,7 @@ class SearchFrame {
       const ConversionParams& p = candidates[i];
       candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
     }
-    return measure_highlight_clip(*frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
+    return measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
                                   ceil);
   }
 
@@ -829,7 +813,7 @@ class SearchFrame {
   const int max_steps_;
   ParamSearchResult& out_;
 
-  const RgbImage* frame_ = nullptr;  // the upright frame (search_conversion_params)
+  negicc::RgbView frame_;  // the upright frame (search_conversion_params)
   // The centred inner crop of the frame (compute_inner_crop): what DINOv3 sees, read in place from frame_.
   InnerCrop crop_;
   FrameStats stats_;  // over the inner crop
@@ -938,6 +922,16 @@ struct Screened {
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
+  return search_conversion_params(
+      bundle, engine, negicc::RgbView::from_interleaved_rgb(frame.rgb.data(), frame.width, frame.height),
+      (double)scan_shutter_s, (double)scan_iso, opts, out);
+}
+
+bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                              double scan_shutter_s_in, double scan_iso_in, const ParamSearchOptions& opts,
+                              ParamSearchResult& out) {
+  const float scan_shutter_s = (float)scan_shutter_s_in;
+  const float scan_iso = (float)scan_iso_in;
   const Clock::time_point t_start = Clock::now();
   const bool verbose = opts.verbose;
   if (bundle.targets.empty()) {
@@ -968,7 +962,13 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
 
   // The input matrix in reference units (ParamSearchResult).
-  const float* fb = opts.film_base_rgb ? opts.film_base_rgb : bundle.film_base_avg;
+  float custom_fb_buf[3];
+  const float* fb = opts.film_base_rgb;
+  if (!fb && opts.film_base_rgb_d) {
+    for (int i = 0; i < 3; ++i) custom_fb_buf[i] = (float)opts.film_base_rgb_d[i];
+    fb = custom_fb_buf;
+  }
+  if (!fb) fb = bundle.film_base_avg;
   float fb_t = 0.125f;
   try {
     fb_t = shutter_to_seconds(bundle.film_base_shutter);
@@ -976,7 +976,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
   const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
   // A measured base comes from this capture: no exposure ratio.
-  const float ratio_frame = opts.film_base_rgb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
+  const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
+  const float ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
   const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
   float frame_matrix[9], ref_matrix[9];
   merged_matrix(bundle, fb, ratio_frame, frame_matrix);

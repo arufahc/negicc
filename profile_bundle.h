@@ -23,6 +23,7 @@
 #include <lcms2.h>
 
 #include "neg_pipeline.h"
+#include "cfa_pipeline.h"
 #include "dinov3_auto_solver.h"
 
 // Default minimum target bracket index to consider (skips extreme highlight overexposure brackets, e.g. +2EV, +1.5EV)
@@ -82,10 +83,12 @@ struct ProfileBundle {
   InputSpace input_space = InputSpace::kCameraRawRgb;
   // The crosstalk correction of a camera_raw_rgb bundle; identity (has_crosstalk false) for rec2020_linear.
   float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double crosstalk_matrix_d[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   bool has_crosstalk = false;
   bool has_film_base = false;
   int profile_film_base_rgb[3] = {1, 1, 1};
-  float film_base_avg[3] = {0.0f, 0.0f, 0.0f};  // unrounded film base (profile_film_base_rgb rounds it)
+  float film_base_avg[3] = {0.0f, 0.0f, 0.0f};    // unrounded film base (profile_film_base_rgb rounds it)
+  double film_base_avg_d[3] = {0.0, 0.0, 0.0};    // double precision for exact station parity
   std::string film_base_shutter = "1/8s";
   float film_base_iso = 100.0f;
   double normalization_target = 55000.0;
@@ -96,6 +99,18 @@ struct ProfileBundle {
 // std::invalid_argument when it cannot be read.
 // py-ref: negicc_station/src/film_profiling.py @ 93be1ec (shutter_to_seconds)
 float shutter_to_seconds(const std::string& shutter);
+double shutter_to_seconds_d(const std::string& shutter);
+
+// Reads (ExposureTime in seconds, ISO) in double precision from a TIFF-based RAW's EXIF IFD (matching
+// auto_exposure.read_exif_exposure). Returns true when ExposureTime was read.
+bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double& iso);
+
+// Computes negicc-station's merged crosstalk matrix (film_profiling.compute_merged_crosstalk) in double precision
+// and rounds to float32 when out_f32 is non-null. When film_base_from_scan is true (e.g. rebate sampled from the
+// scan itself), exposure_ratio is 1.0; otherwise exposure_ratio is exposure_base / exposure_scan.
+void compute_station_merged_matrix(const ProfileBundle& bundle, double scan_shutter_s, double scan_iso,
+                                   const double* custom_film_base_rgb, bool film_base_from_scan,
+                                   float* out_f32, double* out_f64 = nullptr, double* out_row_scale_f64 = nullptr);
 
 // Bundle and stock keys of a profile name: "profile_Portra160-A7R4-TriLED_20261003_190751.json" gives
 // ("Portra160-A7R4-TriLED", "portra160"). Empty strings when the name has none.
@@ -130,6 +145,8 @@ void load_profile_bundle_from_memory(const char* data, size_t size, const std::s
 void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4],
                               int width, int height, float& g_lo, float& g_hi,
                               float& scene_ev, int& num_feasible);
+void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& view,
+                              float& g_lo, float& g_hi, float& scene_ev, int& num_feasible);
 
 // Target selection without DINOv3 (picks feasible target minimizing |fill_ratio - 0.85|)
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx = kDefaultMinTargetIdx);

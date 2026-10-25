@@ -172,16 +172,39 @@ const char* to_string(InputSpace space) {
   return space == InputSpace::kRec2020Linear ? "rec2020_linear" : "camera_raw_rgb";
 }
 
-static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
+static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double out_d[9] = nullptr) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
     if (!node[r].is_array() || node[r].size() != 3) return false;
     for (int c = 0; c < 3; ++c) {
       if (!node[r][c].is_number()) return false;
-      out_m[r * 3 + c] = node[r][c].get<float>();
+      const double vd = node[r][c].get<double>();
+      out_m[r * 3 + c] = (float)vd;
+      if (out_d) out_d[r * 3 + c] = vd;
     }
   }
   return true;
+}
+
+double shutter_to_seconds_d(const std::string& shutter) {
+  std::string s = shutter;
+  const size_t b = s.find_first_not_of(" \t\r\n");
+  const size_t e = s.find_last_not_of(" \t\r\n");
+  s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
+  while (!s.empty() && s.back() == 's') s.pop_back();
+  auto to_double = [&](const std::string& t) {
+    size_t used = 0;
+    const double v = std::stod(t, &used);
+    if (used != t.size()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    return v;
+  };
+  const size_t slash = s.find('/');
+  if (slash != std::string::npos) {
+    const double den = to_double(s.substr(slash + 1));
+    if (den == 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    return to_double(s.substr(0, slash)) / den;
+  }
+  return to_double(s);
 }
 
 // The profiles record a bracket's shutter speed as the camera displays it, a string: a fraction ("1/8s"), or
@@ -189,24 +212,113 @@ static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9]) {
 // fraction or reads the decimal.
 // TODO: Normalize the shutter speed into float seconds in the profile bundle files and drop this parsing.
 float shutter_to_seconds(const std::string& shutter) {
-  std::string s = shutter;
-  const size_t b = s.find_first_not_of(" \t\r\n");
-  const size_t e = s.find_last_not_of(" \t\r\n");
-  s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
-  while (!s.empty() && s.back() == 's') s.pop_back();
-  auto to_float = [&](const std::string& t) {
-    size_t used = 0;
-    const float v = std::stof(t, &used);
-    if (used != t.size()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
-    return v;
+  return (float)shutter_to_seconds_d(shutter);
+}
+
+bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double& iso) {
+  FILE* fp = fopen(filepath.c_str(), "rb");
+  if (!fp) return false;
+  auto rd16 = [&](bool le, uint16_t& out) {
+    uint8_t b[2];
+    if (fread(b, 1, 2, fp) != 2) return false;
+    out = le ? (uint16_t(b[0]) | (uint16_t(b[1]) << 8)) : ((uint16_t(b[0]) << 8) | uint16_t(b[1]));
+    return true;
   };
-  const size_t slash = s.find('/');
-  if (slash != std::string::npos) {
-    const float den = to_float(s.substr(slash + 1));
-    if (den == 0.0f) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
-    return to_float(s.substr(0, slash)) / den;
+  auto rd32 = [&](bool le, uint32_t& out) {
+    uint8_t b[4];
+    if (fread(b, 1, 4, fp) != 4) return false;
+    out = le ? (uint32_t(b[0]) | (uint32_t(b[1]) << 8) | (uint32_t(b[2]) << 16) | (uint32_t(b[3]) << 24))
+             : ((uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) | uint32_t(b[3]));
+    return true;
+  };
+  uint8_t bo[2];
+  if (fread(bo, 1, 2, fp) != 2 || !((bo[0] == 'I' && bo[1] == 'I') || (bo[0] == 'M' && bo[1] == 'M'))) {
+    fclose(fp);
+    return false;
   }
-  return to_float(s);
+  const bool le = (bo[0] == 'I');
+  uint16_t magic = 0;
+  uint32_t ifd0_off = 0;
+  if (!rd16(le, magic) || magic != 42 || !rd32(le, ifd0_off) || fseek(fp, ifd0_off, SEEK_SET) != 0) {
+    fclose(fp);
+    return false;
+  }
+  uint16_t n0 = 0;
+  if (!rd16(le, n0)) {
+    fclose(fp);
+    return false;
+  }
+  uint32_t exif_off = 0;
+  for (uint16_t i = 0; i < n0; ++i) {
+    uint16_t tag = 0, fmt = 0;
+    uint32_t cnt = 0, val = 0;
+    if (!rd16(le, tag) || !rd16(le, fmt) || !rd32(le, cnt) || !rd32(le, val)) break;
+    if (tag == 0x8769) {
+      exif_off = val;
+      break;
+    }
+  }
+  if (!exif_off || fseek(fp, exif_off, SEEK_SET) != 0) {
+    fclose(fp);
+    return false;
+  }
+  uint16_t ne = 0;
+  if (!rd16(le, ne)) {
+    fclose(fp);
+    return false;
+  }
+  struct TagEntry { uint16_t tag, fmt; uint32_t cnt, val; };
+  std::vector<TagEntry> entries;
+  entries.reserve(ne);
+  for (uint16_t i = 0; i < ne; ++i) {
+    TagEntry e{};
+    if (!rd16(le, e.tag) || !rd16(le, e.fmt) || !rd32(le, e.cnt) || !rd32(le, e.val)) break;
+    entries.push_back(e);
+  }
+  bool got_shutter = false;
+  for (const auto& e : entries) {
+    if (e.tag == 0x829A) {
+      uint32_t num = 0, den = 0;
+      if (fseek(fp, e.val, SEEK_SET) == 0 && rd32(le, num) && rd32(le, den) && den > 0) {
+        shutter_s = (double)num / (double)den;
+        got_shutter = true;
+      }
+    } else if (e.tag == 0x8827 && e.fmt == 3) {
+      if (e.cnt == 1) {
+        iso = (double)(le ? (e.val & 0xFFFFu) : ((e.val >> 16) & 0xFFFFu));
+      } else if (e.cnt > 1 && fseek(fp, e.val, SEEK_SET) == 0) {
+        uint16_t v16 = 0;
+        if (rd16(le, v16)) iso = (double)v16;
+      }
+    }
+  }
+  fclose(fp);
+  return got_shutter;
+}
+
+void compute_station_merged_matrix(const ProfileBundle& bundle, double scan_shutter_s, double scan_iso,
+                                   const double* custom_film_base_rgb, bool film_base_from_scan,
+                                   float* out_f32, double* out_f64, double* out_row_scale_f64) {
+  const double* fb = custom_film_base_rgb ? custom_film_base_rgb : bundle.film_base_avg_d;
+  double base_t = 0.125;
+  try {
+    base_t = shutter_to_seconds_d(bundle.film_base_shutter);
+  } catch (const std::exception&) {
+  }
+  const double base_iso = (double)bundle.film_base_iso;
+  const double exposure_base = base_t * (base_iso / 100.0);
+  const double exposure_scan = scan_shutter_s * (scan_iso / 100.0);
+  const double exposure_ratio =
+      film_base_from_scan ? 1.0 : (exposure_scan > 0.0 ? (exposure_base / exposure_scan) : 1.0);
+  for (int r = 0; r < 3; ++r) {
+    const double scale = (fb[r] > 0.0) ? (bundle.normalization_target / fb[r]) * exposure_ratio : 1.0;
+    if (out_row_scale_f64) out_row_scale_f64[r] = scale;
+    for (int c = 0; c < 3; ++c) {
+      const double v = bundle.crosstalk_matrix_d[r * 3 + c] * scale;
+      if (out_f64) out_f64[r * 3 + c] = v;
+      if (out_f32) out_f32[r * 3 + c] = (float)v;
+    }
+  }
 }
 
 void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, std::string& stock_key) {
@@ -342,10 +454,12 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   } else if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
     const auto& ct = j["crosstalk_profile"];
     if (ct.contains("crosstalk_correction_matrix")) {
-      bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+      bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix,
+                                              bundle.crosstalk_matrix_d);
     }
   } else if (j.contains("crosstalk_correction_matrix")) {
-    bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix);
+    bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix,
+                                            bundle.crosstalk_matrix_d);
   }
 
   if (j.contains("film_base") && j["film_base"].is_object()) {
@@ -360,9 +474,12 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     if (fb.contains("b") && fb["b"].contains("avg") && fb["b"]["avg"].is_number()) {
       b_avg = fb["b"]["avg"].get<double>();
     }
-    bundle.film_base_avg[0] = r_avg;
-    bundle.film_base_avg[1] = g_avg;
-    bundle.film_base_avg[2] = b_avg;
+    bundle.film_base_avg[0] = (float)r_avg;
+    bundle.film_base_avg[1] = (float)g_avg;
+    bundle.film_base_avg[2] = (float)b_avg;
+    bundle.film_base_avg_d[0] = r_avg;
+    bundle.film_base_avg_d[1] = g_avg;
+    bundle.film_base_avg_d[2] = b_avg;
     if (fb.contains("shutter")) {
       if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
       else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
@@ -544,6 +661,59 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
   std::vector<uint32_t> hist(65536, 0);
   for (size_t i = 0; i < total_px; ++i) {
     hist[image[i][1]]++;
+  }
+
+  const double p005 = 0.005 * (double)total_px;
+  const double p995 = 0.995 * (double)total_px;
+
+  uint64_t cum = 0;
+  int g_005 = 1, g_995 = 65535;
+  bool found_005 = false;
+  for (int v = 0; v < 65536; ++v) {
+    cum += hist[v];
+    if (!found_005 && cum >= p005) {
+      g_005 = v;
+      found_005 = true;
+    }
+    if (cum >= p995) {
+      g_995 = v;
+      break;
+    }
+  }
+
+  g_lo = std::max(1.0f, (float)g_005);
+  g_hi = std::max(g_lo + 1.0f, (float)g_995);
+  scene_ev = (float)std::log2(g_hi / g_lo);
+
+  for (auto& tgt : bundle.targets) {
+    if (tgt.patches_g.empty() || tgt.tgt_min_g <= 0.0f || tgt.tgt_max_g <= 0.0f) {
+      tgt.is_feasible = false;
+      continue;
+    }
+    tgt.e_min = tgt.tgt_min_g / g_lo;
+    tgt.e_max = tgt.tgt_max_g / g_hi;
+    tgt.is_feasible = (tgt.e_max >= tgt.e_min);
+    tgt.tgt_capacity_ev = (float)std::log2(tgt.tgt_max_g / tgt.tgt_min_g);
+    tgt.e_center = (float)std::sqrt(tgt.e_min * tgt.e_max);
+    tgt.slack_ev = (float)std::log2(tgt.e_max / tgt.e_min);
+    tgt.fill_ratio = (g_hi / g_lo) / (tgt.tgt_max_g / tgt.tgt_min_g);
+    if (tgt.is_feasible) num_feasible++;
+  }
+}
+
+void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& view,
+                              float& g_lo, float& g_hi, float& scene_ev, int& num_feasible) {
+  num_feasible = 0;
+  const size_t total_px = (size_t)view.width * view.height;
+  if (total_px == 0) return;
+
+  std::vector<uint32_t> hist(65536, 0);
+  for (int y = 0; y < view.height; ++y) {
+    for (int x = 0; x < view.width; ++x) {
+      uint16_t px[3];
+      view.sample(x, y, px);
+      hist[px[1]]++;
+    }
   }
 
   const double p005 = 0.005 * (double)total_px;
