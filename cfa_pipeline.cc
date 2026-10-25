@@ -158,6 +158,10 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     v.pitch = period;
     v.stride = (ptrdiff_t)period * (ptrdiff_t)cfa_pitch;
     v.cfa_step = (uint8_t)period;
+    // TODO: For X-Trans (`period == 6`), `sensor_dxx = 3, sensor_dyy = 3` with `sensor_x0 = 0, sensor_y0 = 0` samples
+    // the half-size flat field at the top-left of each 6x6 cell `(3*x, 3*y)` rather than the cell center `(3*x+1, 3*y+1)`
+    // or per-channel photosite offsets `(ch_x0, ch_y0)`, and reads only 1 green photosite (`g2_ptr == nullptr`) per 6x6
+    // cell. Evaluate centering the flat-field coordinate and multi-green averaging on X-Trans in a follow-up.
     v.sensor_dxx = period / 2;
     v.sensor_dyy = period / 2;
 
@@ -210,6 +214,9 @@ RgbView RgbView::from_interleaved_rgb(const uint16_t* rgb, int w, int h, int cha
     v.b_ptr = rgb + 2;
     v.pitch = channels;
     v.stride = row_elems > 0 ? row_elems : (ptrdiff_t)w * channels;
+    // TODO: `RgbView` defaults `cfa_step = 2` in `cfa_pipeline.h`; set `v.cfa_step = 1` here so `to_film_image` on an
+    // interleaved RGB view does not misinterpret it as a 2x2 CFA mosaic with 2x width/height.
+    v.cfa_step = 1;
     v.flat = flat_args;
     v.flat_tables = std::move(flat_pin);
     return v;
@@ -985,6 +992,7 @@ void cpu_lab_stats(const LabStatsArgs& a) {
 void cpu_preview_debayer(const PreviewDebayerArgs& a) {
     const int half_rw = a.rw / 2;
     const int half_rh = a.rh / 2;
+    // TODO: Honor `a.cfa_pitch` once added to `PreviewDebayerArgs` (instead of assuming `pitch == a.src_w`).
     const size_t pitch = a.src_w;
 
     #pragma omp parallel for schedule(static)
