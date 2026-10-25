@@ -11,7 +11,9 @@
     "full_auto_55_inventory_frames": {
       "count": 55,
       "median_crop_iou_vs_persisted": 0.982
-    }
+    },
+    "roi_orientation_d4_parity": "14 ROI baselines (8 Sony 2x2 Bayer + 6 Fuji 3x3/6x6 X-Trans) x 16 D4 orientations = 224/224 SHA-256 PASS",
+    "auto_conversion_parity_main_vs_pr": "10/10 neg_process (master vs PR) + 5/5 negicc-station (main vs PR) Sony & Fuji RAW auto SHA-256 PASS"
   },
   "input_parity_frames_sha256": {
     "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW": "3a1408b68bc5931c098351f069d9fc32c2b9c5168b91a797d0c02f771d0afea3",
@@ -23,7 +25,10 @@
     "pixel_shift/live_ps_frame_2.ARW": "488f5072a9a749ce3ef21780e3e6d4fde005889afef3dff0e7f5230ce8097758",
     "pixel_shift/live_ps_frame_3.ARW": "de7429a08f9a2c266cfe143743e770cd2c9798637823d4e67a12e577659d3d6a",
     "flat/flat.json": "9e9d4c37fe9973911e6df06949e64f612d72c2192e062237cb25b2825f5f28b3",
-    "flat/flat.npz": "325f06006c6443530537bfb9c08c914da2481771703bfae618752cbd60560b4d"
+    "flat/flat.npz": "325f06006c6443530537bfb9c08c914da2481771703bfae618752cbd60560b4d",
+    "_DSF9243.RAF": "1aa2cad3bbbb315de5ff03c9ff8e284af4657d4ccd89b21a14b47314d132fdc0",
+    "_DSF9238.RAF": "be99fa6a39acb700a08686b07a5231658f5b4f037e4b8bf41e6b6a3281e182e2",
+    "profiles/profile_Portra400-A7R4-D65_20261004_002832.json": "29cf72073eb81cda3906b6582707476dbb44b1a7f7da35c05f20a522ce59f993"
   },
   "triled_parity_gate_spec": {
     "flat_field": {
@@ -11535,5 +11540,4088 @@
         "full_conversion": 597.9
       }
     }
-  ]
+  ],
+  "roi_orientation_parity": {
+    "description": "Comprehensive sub-CFA ROI (2x2 Bayer on Sony RAW & 3x3/6x6 X-Trans on Fuji RAW) upright baseline (rot_cw=0, hflip=False, vflip=False) and all 16 D4 (rot_cw, hflip, vflip) oriented output SHA-256 hashes, verified bit-exact against apply_orientation_numpy(upright_baseline, rot_cw, hflip, vflip) and between negicc-station and neg_process.",
+    "sony_bayer_2x2_baselines_count": 8,
+    "fuji_xtrans_6x6_baselines_count": 6,
+    "orientations_per_baseline": 16,
+    "total_oriented_hashes_verified": 224,
+    "sony_bayer_2x2_baselines": [
+      {
+        "id": "bayer_p00_even",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          400,
+          300,
+          96,
+          64
+        ],
+        "bayer_phase_2x2": [
+          0,
+          0
+        ],
+        "size_parity_2x2": [
+          0,
+          0
+        ],
+        "upright_shape": [
+          64,
+          96,
+          3
+        ],
+        "upright_baseline_sha256": "a61320c93b7ea8eebf5f8df7aa06f0731a049925adf5f1c0fe06b8340e94d51f",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "a61320c93b7ea8eebf5f8df7aa06f0731a049925adf5f1c0fe06b8340e94d51f"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "d4f8405646d15947bbf960225a4502ee2792b5794e3a8dd0023f754bde021f95"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "bd6e3faadbc1713873d9512157c219108de7f9e631d20f4b100e55a7730ad1b5"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "0730178f04e1786645882f08c2dbf466de08ffe2ba400e41701d3626e132f92d"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "f2b97320be0027da94b72e62f85e6e471449bc39081ee8865fd69b0288b888d1"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "65568c901b0fb303e8564c5aa2e92880ec376559687d4acba8d1f03e977ccbef"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "fe7d27b16fab4d86aee208dbab76a899201bcf1ed6be14405c1745a073154345"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "c753ed97a467083d2037ac010cc2d50cc9877e70c4f144d2dc05c2811d44044f"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "0730178f04e1786645882f08c2dbf466de08ffe2ba400e41701d3626e132f92d"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "bd6e3faadbc1713873d9512157c219108de7f9e631d20f4b100e55a7730ad1b5"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "d4f8405646d15947bbf960225a4502ee2792b5794e3a8dd0023f754bde021f95"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "a61320c93b7ea8eebf5f8df7aa06f0731a049925adf5f1c0fe06b8340e94d51f"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "c753ed97a467083d2037ac010cc2d50cc9877e70c4f144d2dc05c2811d44044f"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "fe7d27b16fab4d86aee208dbab76a899201bcf1ed6be14405c1745a073154345"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "65568c901b0fb303e8564c5aa2e92880ec376559687d4acba8d1f03e977ccbef"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "f2b97320be0027da94b72e62f85e6e471449bc39081ee8865fd69b0288b888d1"
+          }
+        }
+      },
+      {
+        "id": "bayer_p10_odd_w",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          401,
+          300,
+          97,
+          64
+        ],
+        "bayer_phase_2x2": [
+          1,
+          0
+        ],
+        "size_parity_2x2": [
+          1,
+          0
+        ],
+        "upright_shape": [
+          64,
+          97,
+          3
+        ],
+        "upright_baseline_sha256": "2724a47a5167f72c3266df02b55ecd5130aba1fa2c8f9800a22982534e71076e",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "2724a47a5167f72c3266df02b55ecd5130aba1fa2c8f9800a22982534e71076e"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "a929c7718f3f9a91b7270877f648741597bf0bfb52b159bff9aea5edb5b66acc"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "2d0cedb0e51e17cc1848fb038cabdba3eab063d51db3d6f9197158ec4c298b81"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "b3d7ef4f5809c7ed59e87e00ad4cb0e0c9e95c623527cdaeef1d96a70feda10c"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "8d485591eea9cb513924ee5bc9b0e45afc41decbb8a0eabd7beed263fd3d5da7"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "4508cc3960b00a2fd3cdc64c26df817a4315362412624481d36ed6241c14eb9f"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "cebd61f99aae142ca141ea89823291f79068d05e1658fe1d4b1319af92ce1819"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "bb1665cf2c5eb3596d79cfd3d6b7263a9dd8e00780fdbcc58b9b94a148d20064"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "b3d7ef4f5809c7ed59e87e00ad4cb0e0c9e95c623527cdaeef1d96a70feda10c"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "2d0cedb0e51e17cc1848fb038cabdba3eab063d51db3d6f9197158ec4c298b81"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "a929c7718f3f9a91b7270877f648741597bf0bfb52b159bff9aea5edb5b66acc"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "2724a47a5167f72c3266df02b55ecd5130aba1fa2c8f9800a22982534e71076e"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "bb1665cf2c5eb3596d79cfd3d6b7263a9dd8e00780fdbcc58b9b94a148d20064"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "cebd61f99aae142ca141ea89823291f79068d05e1658fe1d4b1319af92ce1819"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "4508cc3960b00a2fd3cdc64c26df817a4315362412624481d36ed6241c14eb9f"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "8d485591eea9cb513924ee5bc9b0e45afc41decbb8a0eabd7beed263fd3d5da7"
+          }
+        }
+      },
+      {
+        "id": "bayer_p01_odd_h",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          400,
+          301,
+          96,
+          65
+        ],
+        "bayer_phase_2x2": [
+          0,
+          1
+        ],
+        "size_parity_2x2": [
+          0,
+          1
+        ],
+        "upright_shape": [
+          65,
+          96,
+          3
+        ],
+        "upright_baseline_sha256": "05b5b31825e71bf72d37da23d2f954cb13981b60a0699ab3efa89b933abb6a0e",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "05b5b31825e71bf72d37da23d2f954cb13981b60a0699ab3efa89b933abb6a0e"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "1508b57c04b789edbe52b078651a68d3cf064baf87dcc47e4fae93bc9497c7ad"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "e50e0fb3f253996a67d1394126aff3cede42e28507148abc5cc4ba3c26c0b1de"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "9bd1075f4629bdd774c7ed14e4ccf54c40b016737dd9b8df24d15e75d09f88b3"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "cb252868cfcdf737c3e9105fd5b8302539eb6d4a31da3dad6ae6ecd3defd4c5e"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "7fb7fd8ca85788ae033d30bdcdc136053d6b6cf0b137302838ea10e9b77424ee"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "737c3d386163411bc650f58d8638cc9ecd51f32f9547e95359b4e91d6aa6053b"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "0724e549b2681a1826554487469952082423276ad47d94e6cbec4bddffae30b7"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "9bd1075f4629bdd774c7ed14e4ccf54c40b016737dd9b8df24d15e75d09f88b3"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "e50e0fb3f253996a67d1394126aff3cede42e28507148abc5cc4ba3c26c0b1de"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "1508b57c04b789edbe52b078651a68d3cf064baf87dcc47e4fae93bc9497c7ad"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              96,
+              3
+            ],
+            "sha256": "05b5b31825e71bf72d37da23d2f954cb13981b60a0699ab3efa89b933abb6a0e"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "0724e549b2681a1826554487469952082423276ad47d94e6cbec4bddffae30b7"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "737c3d386163411bc650f58d8638cc9ecd51f32f9547e95359b4e91d6aa6053b"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "7fb7fd8ca85788ae033d30bdcdc136053d6b6cf0b137302838ea10e9b77424ee"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              65,
+              3
+            ],
+            "sha256": "cb252868cfcdf737c3e9105fd5b8302539eb6d4a31da3dad6ae6ecd3defd4c5e"
+          }
+        }
+      },
+      {
+        "id": "bayer_p11_odd_wh",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          401,
+          301,
+          97,
+          65
+        ],
+        "bayer_phase_2x2": [
+          1,
+          1
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          65,
+          97,
+          3
+        ],
+        "upright_baseline_sha256": "14d68166eb117bc572977999270eee091695a2a8d2d1659503514cee845311bd",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "14d68166eb117bc572977999270eee091695a2a8d2d1659503514cee845311bd"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "5af355d1c4e7bd1e3b01dd80c6c5b1ca0034fc2a191fcf7610279a3eee18d8b6"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "c4f06db329d954af8e8138c3abfe1ded617a8d33a1c43d269d396cfc3f696870"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "2c0abe25b2f0d63991032ff72be78ee159cf16ba2106dc3ee26ea9d71697164c"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "8526020bccc6477cf59f2a76229d72afb8c503e5ed3cde58d81f1cde3a1616f1"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "76daa4e294fe3790be57e0274bd59f1c57017769fbec213b272b0fe5b4b50335"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "92344e67d63fb41e6c6d56ffb675aa7b60c093a979fdf3303e83c500e6d118fb"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "30118e1e8f6425b87d5971eadb3fc603943f9aa8fd24d191bcde697257e0f040"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "2c0abe25b2f0d63991032ff72be78ee159cf16ba2106dc3ee26ea9d71697164c"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "c4f06db329d954af8e8138c3abfe1ded617a8d33a1c43d269d396cfc3f696870"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "5af355d1c4e7bd1e3b01dd80c6c5b1ca0034fc2a191fcf7610279a3eee18d8b6"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "14d68166eb117bc572977999270eee091695a2a8d2d1659503514cee845311bd"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "30118e1e8f6425b87d5971eadb3fc603943f9aa8fd24d191bcde697257e0f040"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "92344e67d63fb41e6c6d56ffb675aa7b60c093a979fdf3303e83c500e6d118fb"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "76daa4e294fe3790be57e0274bd59f1c57017769fbec213b272b0fe5b4b50335"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "8526020bccc6477cf59f2a76229d72afb8c503e5ed3cde58d81f1cde3a1616f1"
+          }
+        }
+      },
+      {
+        "id": "bayer_p10_even_flat",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": "flat/flat.npz",
+        "roi_xywh": [
+          401,
+          300,
+          96,
+          64
+        ],
+        "bayer_phase_2x2": [
+          1,
+          0
+        ],
+        "size_parity_2x2": [
+          0,
+          0
+        ],
+        "upright_shape": [
+          64,
+          96,
+          3
+        ],
+        "upright_baseline_sha256": "9a0bc35b5249b7dbc8bdad741b0f16bfa7af0c7e9caf601de62ee82744c4ed60",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "9a0bc35b5249b7dbc8bdad741b0f16bfa7af0c7e9caf601de62ee82744c4ed60"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "10b8757c10bf6968b615dcedecb686df6760d00675881bc1c4813fffc4eb85f7"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "b983311a6ee5c95b53d8fda2753c74c932f0881db381ee1ddd2b87479e09c056"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "3c1f0515780b63ef8dda8e8a63e9443342439ebdc4ffa00aa0618ea154a813ea"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "525d2b0227629018c05d8c0e20bf07540ff5e4411c04a2e4da635d23d3d85ebc"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "8ec264aa5dca3e2d4f6e6f6cd27332bcb7ed1250394b352141c07f3de7eef66e"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "eb5f54e5fae0b7b04dbb1c66421c41bdbb07cc8e34721a7c69ddf4c35f40e9e1"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "d9dbcf6af93e7a4092678e0ebcc416bf452abe32fb22936ea19af80a03a541fd"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "3c1f0515780b63ef8dda8e8a63e9443342439ebdc4ffa00aa0618ea154a813ea"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "b983311a6ee5c95b53d8fda2753c74c932f0881db381ee1ddd2b87479e09c056"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "10b8757c10bf6968b615dcedecb686df6760d00675881bc1c4813fffc4eb85f7"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              96,
+              3
+            ],
+            "sha256": "9a0bc35b5249b7dbc8bdad741b0f16bfa7af0c7e9caf601de62ee82744c4ed60"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "d9dbcf6af93e7a4092678e0ebcc416bf452abe32fb22936ea19af80a03a541fd"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "eb5f54e5fae0b7b04dbb1c66421c41bdbb07cc8e34721a7c69ddf4c35f40e9e1"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "8ec264aa5dca3e2d4f6e6f6cd27332bcb7ed1250394b352141c07f3de7eef66e"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              64,
+              3
+            ],
+            "sha256": "525d2b0227629018c05d8c0e20bf07540ff5e4411c04a2e4da635d23d3d85ebc"
+          }
+        }
+      },
+      {
+        "id": "bayer_p11_odd_wh_flat",
+        "raw": "test_imgs/test_capture_ref.ARW",
+        "capture_type": "single_shot_bayer",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": "flat/flat.npz",
+        "roi_xywh": [
+          401,
+          301,
+          97,
+          65
+        ],
+        "bayer_phase_2x2": [
+          1,
+          1
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          65,
+          97,
+          3
+        ],
+        "upright_baseline_sha256": "b624a1e28dfe021c8bc9e206c0314ba719f443f8ebcb4203db2a05e080da1c79",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "b624a1e28dfe021c8bc9e206c0314ba719f443f8ebcb4203db2a05e080da1c79"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "796406fd63b0962a3e4adad2c5f9c917d555cc3021a3fecd22dcd64d461dd3cb"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "5c0b9e0bc6251a754a95e7b8ebe2414d01731bf3d7b99fe10fcad2713b0eaadf"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "52295128099900e25ba3ec2f4de9d1553ac42b5afc34f73c6f0d484ee30cdb5f"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "75e1074f6d340b01d7013ee422ad924b6cbc2551db80ca941eb1b5a03aee38b4"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "f1a6662a5005e46d4d41888c3f33dbecea119582d0b17142d20d6254c07b1e54"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "0c63ba3e547bcf19d56238fdb90be81ac0755abae9bdf9d40f120746aa056d88"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "2c455332cf24b8aebc9625ce3ac53924e75d10c6d7df0850160b930cd73373b3"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "52295128099900e25ba3ec2f4de9d1553ac42b5afc34f73c6f0d484ee30cdb5f"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "5c0b9e0bc6251a754a95e7b8ebe2414d01731bf3d7b99fe10fcad2713b0eaadf"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "796406fd63b0962a3e4adad2c5f9c917d555cc3021a3fecd22dcd64d461dd3cb"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "b624a1e28dfe021c8bc9e206c0314ba719f443f8ebcb4203db2a05e080da1c79"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "2c455332cf24b8aebc9625ce3ac53924e75d10c6d7df0850160b930cd73373b3"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "0c63ba3e547bcf19d56238fdb90be81ac0755abae9bdf9d40f120746aa056d88"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "f1a6662a5005e46d4d41888c3f33dbecea119582d0b17142d20d6254c07b1e54"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "75e1074f6d340b01d7013ee422ad924b6cbc2551db80ca941eb1b5a03aee38b4"
+          }
+        }
+      },
+      {
+        "id": "bayer_ps4_p01_odd_w",
+        "raw": [
+          "pixel_shift/live_ps_frame_0.ARW",
+          "pixel_shift/live_ps_frame_1.ARW",
+          "pixel_shift/live_ps_frame_2.ARW",
+          "pixel_shift/live_ps_frame_3.ARW"
+        ],
+        "capture_type": "pixel_shift_4",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          400,
+          301,
+          97,
+          64
+        ],
+        "bayer_phase_2x2": [
+          0,
+          1
+        ],
+        "size_parity_2x2": [
+          1,
+          0
+        ],
+        "upright_shape": [
+          64,
+          97,
+          3
+        ],
+        "upright_baseline_sha256": "15ca3a796bc1a34028d807b4adb3b2570bb512d73976e7473e35d1c55396ca14",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "15ca3a796bc1a34028d807b4adb3b2570bb512d73976e7473e35d1c55396ca14"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "0ded81db0a78591c12d2422ccd45536f2d5a6042bfbbd8fed7ca64c1d0922cd3"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "0cadfba3474d99b9acb42c4d603de2382557b24878828488bd429a3c6ce27505"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "1ceae18c28e10b31c45a75f2ea34b1b5fbef048bd4cf0e70f59a38bef9d799a8"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "69f6d03b6535865f03561130a321c71435bcb65b70420910e88d18b93acc4eb6"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "0921e5e288186b252c621c29409746a71979291a494bbf88e6804efb99df6c52"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "482c2b1270b8dd0c9fee35affa93252a5fd043b6526b9331a496a224da25cf00"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "c4adc048b79f8fcc7382fc821e5f9459ed7633557b29f8f6b2a7cded61833a64"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "1ceae18c28e10b31c45a75f2ea34b1b5fbef048bd4cf0e70f59a38bef9d799a8"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "0cadfba3474d99b9acb42c4d603de2382557b24878828488bd429a3c6ce27505"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "0ded81db0a78591c12d2422ccd45536f2d5a6042bfbbd8fed7ca64c1d0922cd3"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              64,
+              97,
+              3
+            ],
+            "sha256": "15ca3a796bc1a34028d807b4adb3b2570bb512d73976e7473e35d1c55396ca14"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "c4adc048b79f8fcc7382fc821e5f9459ed7633557b29f8f6b2a7cded61833a64"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "482c2b1270b8dd0c9fee35affa93252a5fd043b6526b9331a496a224da25cf00"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "0921e5e288186b252c621c29409746a71979291a494bbf88e6804efb99df6c52"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              64,
+              3
+            ],
+            "sha256": "69f6d03b6535865f03561130a321c71435bcb65b70420910e88d18b93acc4eb6"
+          }
+        }
+      },
+      {
+        "id": "bayer_ps4_p11_odd_wh_flat",
+        "raw": [
+          "pixel_shift/live_ps_frame_0.ARW",
+          "pixel_shift/live_ps_frame_1.ARW",
+          "pixel_shift/live_ps_frame_2.ARW",
+          "pixel_shift/live_ps_frame_3.ARW"
+        ],
+        "capture_type": "pixel_shift_4",
+        "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.8,
+          1.05
+        ],
+        "flat_field": "flat/flat.npz",
+        "roi_xywh": [
+          401,
+          301,
+          97,
+          65
+        ],
+        "bayer_phase_2x2": [
+          1,
+          1
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          65,
+          97,
+          3
+        ],
+        "upright_baseline_sha256": "389d4f983be54163832307e119ee6bde331fd3eb1b2c01ed0b998a872fccad89",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "389d4f983be54163832307e119ee6bde331fd3eb1b2c01ed0b998a872fccad89"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "4d960c540c11ad3d4e63d1f725efecbdb84a0879949b1b83527f76e787f45649"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "d6202e2522fd12625eb9e0702f544b392fb47a9e01a9bb5dc75b632f6fa57b9e"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "d18bbf99c3626fb94cf1880dfa5232e0f57867649ecbe91de2cb955f126cb818"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "5d7f71e8ea9c2509374fbb0ef1f6ab7ff9a2f6bbcd8cbee1ba9cf2d2a8cab809"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "dc1ecf82e2f50ce1f92d50596218811e1bb4b857ac9fa5acf1ac957ead0c2454"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "85ad2482546ce36e5dc3c2bb86308f2800d9b4e09bb4672f98318d4cc3532f3a"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "7200ad778e561be1d4718165d7ed642238fa011be1251d7b50d52f25153a6b01"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "d18bbf99c3626fb94cf1880dfa5232e0f57867649ecbe91de2cb955f126cb818"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "d6202e2522fd12625eb9e0702f544b392fb47a9e01a9bb5dc75b632f6fa57b9e"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "4d960c540c11ad3d4e63d1f725efecbdb84a0879949b1b83527f76e787f45649"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              65,
+              97,
+              3
+            ],
+            "sha256": "389d4f983be54163832307e119ee6bde331fd3eb1b2c01ed0b998a872fccad89"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "7200ad778e561be1d4718165d7ed642238fa011be1251d7b50d52f25153a6b01"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "85ad2482546ce36e5dc3c2bb86308f2800d9b4e09bb4672f98318d4cc3532f3a"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "dc1ecf82e2f50ce1f92d50596218811e1bb4b857ac9fa5acf1ac957ead0c2454"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              65,
+              3
+            ],
+            "sha256": "5d7f71e8ea9c2509374fbb0ef1f6ab7ff9a2f6bbcd8cbee1ba9cf2d2a8cab809"
+          }
+        }
+      }
+    ],
+    "fuji_xtrans_6x6_baselines": [
+      {
+        "id": "xtrans_off0_even",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          300,
+          240,
+          120,
+          96
+        ],
+        "xtrans_phase_6x6": [
+          0,
+          0
+        ],
+        "xtrans_phase_3x3": [
+          0,
+          0
+        ],
+        "size_parity_2x2": [
+          0,
+          0
+        ],
+        "upright_shape": [
+          96,
+          120,
+          3
+        ],
+        "upright_baseline_sha256": "a63f33fb172453dabb38a160bbd8d040ec2ef76ca749870d6d8e4d2e776b512c",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "a63f33fb172453dabb38a160bbd8d040ec2ef76ca749870d6d8e4d2e776b512c"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "639741945be2582b85d0b6b73c05b7b0ec881971d8a03a82dd5678a6cdfe55ed"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "4e4d1729d671b675bbe893d85f13fcdd33347a4c0b618045b81f0a5568350b6c"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "014c19df31933d5cdb8199459b320d45e0d8f5665582ab15cb5dc384f4fed61f"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "f1da67d8d4cadfa892f35f20c2789bbdf326be5e316ec264bf5003d8fe7d216c"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "88200d03279a54d955f672d2c0cd837f5abcdee6a6ce1826ba4ad4c431f532f0"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "74e737cdad6e7b5725b451a8928192cd7ed75389cd009ca4392fe6e3e4b327c5"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "c377ccb26c10b1147647d2dbc4b5b0582ac4eb68edfa30d163b21277943d3cbc"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "014c19df31933d5cdb8199459b320d45e0d8f5665582ab15cb5dc384f4fed61f"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "4e4d1729d671b675bbe893d85f13fcdd33347a4c0b618045b81f0a5568350b6c"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "639741945be2582b85d0b6b73c05b7b0ec881971d8a03a82dd5678a6cdfe55ed"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              96,
+              120,
+              3
+            ],
+            "sha256": "a63f33fb172453dabb38a160bbd8d040ec2ef76ca749870d6d8e4d2e776b512c"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "c377ccb26c10b1147647d2dbc4b5b0582ac4eb68edfa30d163b21277943d3cbc"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "74e737cdad6e7b5725b451a8928192cd7ed75389cd009ca4392fe6e3e4b327c5"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "88200d03279a54d955f672d2c0cd837f5abcdee6a6ce1826ba4ad4c431f532f0"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              120,
+              96,
+              3
+            ],
+            "sha256": "f1da67d8d4cadfa892f35f20c2789bbdf326be5e316ec264bf5003d8fe7d216c"
+          }
+        }
+      },
+      {
+        "id": "xtrans_off1_odd",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          301,
+          241,
+          121,
+          97
+        ],
+        "xtrans_phase_6x6": [
+          1,
+          1
+        ],
+        "xtrans_phase_3x3": [
+          1,
+          1
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          97,
+          121,
+          3
+        ],
+        "upright_baseline_sha256": "89f6c3c7217d9e75613f0df0533ba898447713ead7c70fd185d4eb6f3f27a6cc",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "89f6c3c7217d9e75613f0df0533ba898447713ead7c70fd185d4eb6f3f27a6cc"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "5e1406f3af20e802588fb2deece424a02e36821f5656416b762292045fe45036"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "c52b045f5f12684af19412c4dc6fb8df54da3446e6134c410040f6f2f9176f6d"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "afb9a5e3f30c8794f6a50ed6a6835d3d26a4e5c3aff78c37403ab296ba54db2e"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "876ccaf36eaf8862133320fd9b2dbe97fcc271078c9dc01cc6488b1ef1ac0c97"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "bb902a06a65d299c5ab28bbf881d0476b01278c15e48d9718fcaf5a08bc12f4b"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "cf98fb8b317591bf13e6ecc760d409fe061c99c076f717a1ed90957a453e5d8b"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "e68ed95624ca7e09a86823e21a77c86f723e3aeab1923d29a08207521a97ca96"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "afb9a5e3f30c8794f6a50ed6a6835d3d26a4e5c3aff78c37403ab296ba54db2e"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "c52b045f5f12684af19412c4dc6fb8df54da3446e6134c410040f6f2f9176f6d"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "5e1406f3af20e802588fb2deece424a02e36821f5656416b762292045fe45036"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              97,
+              121,
+              3
+            ],
+            "sha256": "89f6c3c7217d9e75613f0df0533ba898447713ead7c70fd185d4eb6f3f27a6cc"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "e68ed95624ca7e09a86823e21a77c86f723e3aeab1923d29a08207521a97ca96"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "cf98fb8b317591bf13e6ecc760d409fe061c99c076f717a1ed90957a453e5d8b"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "bb902a06a65d299c5ab28bbf881d0476b01278c15e48d9718fcaf5a08bc12f4b"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              121,
+              97,
+              3
+            ],
+            "sha256": "876ccaf36eaf8862133320fd9b2dbe97fcc271078c9dc01cc6488b1ef1ac0c97"
+          }
+        }
+      },
+      {
+        "id": "xtrans_off2_even",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          302,
+          242,
+          122,
+          98
+        ],
+        "xtrans_phase_6x6": [
+          2,
+          2
+        ],
+        "xtrans_phase_3x3": [
+          2,
+          2
+        ],
+        "size_parity_2x2": [
+          0,
+          0
+        ],
+        "upright_shape": [
+          98,
+          122,
+          3
+        ],
+        "upright_baseline_sha256": "9dd1d9bf90839217524d5dd4c7f8d6528dbbf2d3600c23cd978fb793fe4cc64e",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "9dd1d9bf90839217524d5dd4c7f8d6528dbbf2d3600c23cd978fb793fe4cc64e"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "9b365e0fc757c8b1b5b6cd85bfe91d6ef8e1a299f308e3283acb2af720f28a36"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "7245a351b887f40e2756ff94f0d0f9bbcce2c44a422bd3e8ee9968cad44fcd6b"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "02241c7380d2f6231f679443d7ab3b4fe947ceaf2d0f5c23c4bda890a330a8d0"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "396c3463900c3922b7f38eea2fa2c3b346efbcdfdd97d9f047037d89c0180375"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "871028f145679f9cc37f8fb7b8ea74ec298ec614f86790310f5a64a8c087d315"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "624d2541d372061f2a97ad925be34768fb259493fc7229e1de831e467e53eb4f"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "1e9d2e139ab06771ccc710a6a11c8552fec027a9c1a9321c85b0c2e8375ff5e7"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "02241c7380d2f6231f679443d7ab3b4fe947ceaf2d0f5c23c4bda890a330a8d0"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "7245a351b887f40e2756ff94f0d0f9bbcce2c44a422bd3e8ee9968cad44fcd6b"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "9b365e0fc757c8b1b5b6cd85bfe91d6ef8e1a299f308e3283acb2af720f28a36"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              98,
+              122,
+              3
+            ],
+            "sha256": "9dd1d9bf90839217524d5dd4c7f8d6528dbbf2d3600c23cd978fb793fe4cc64e"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "1e9d2e139ab06771ccc710a6a11c8552fec027a9c1a9321c85b0c2e8375ff5e7"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "624d2541d372061f2a97ad925be34768fb259493fc7229e1de831e467e53eb4f"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "871028f145679f9cc37f8fb7b8ea74ec298ec614f86790310f5a64a8c087d315"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              122,
+              98,
+              3
+            ],
+            "sha256": "396c3463900c3922b7f38eea2fa2c3b346efbcdfdd97d9f047037d89c0180375"
+          }
+        }
+      },
+      {
+        "id": "xtrans_off3_odd",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          303,
+          243,
+          123,
+          99
+        ],
+        "xtrans_phase_6x6": [
+          3,
+          3
+        ],
+        "xtrans_phase_3x3": [
+          0,
+          0
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          99,
+          123,
+          3
+        ],
+        "upright_baseline_sha256": "c106ca1451b20f1cd5fcc0c0024111ef949d71fbebc18abed3747efb03f9e272",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "c106ca1451b20f1cd5fcc0c0024111ef949d71fbebc18abed3747efb03f9e272"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "ab06bcd4bcf2df6f87c5482d255f9d03a9f6ee8f042a4ef474d7144d390d4679"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "78d49d2ffc3c5de4201fe9838528afb9c4f57d1869a25ebe89a251bcb1155b81"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "d4c4163f15b7318d37d811189c2e75fe809e58d1186214e1389c99591147d2c4"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "d21636f812200be714a4a3defde329c84eedd51343287cb78d27171bf27ea3c7"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "08c770da473dc821ac738f4fb824da3c6ca3e8cb698c30ee6536845710cf90d8"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "d39cb1e289b483ca71221a108035e0b8d137aa11eed0b56d527b25c2f80193a8"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "1b6c2347df779ec7f04bb2a38cdedbdf72b4de74e830a20f4defa7bafc44127d"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "d4c4163f15b7318d37d811189c2e75fe809e58d1186214e1389c99591147d2c4"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "78d49d2ffc3c5de4201fe9838528afb9c4f57d1869a25ebe89a251bcb1155b81"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "ab06bcd4bcf2df6f87c5482d255f9d03a9f6ee8f042a4ef474d7144d390d4679"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              99,
+              123,
+              3
+            ],
+            "sha256": "c106ca1451b20f1cd5fcc0c0024111ef949d71fbebc18abed3747efb03f9e272"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "1b6c2347df779ec7f04bb2a38cdedbdf72b4de74e830a20f4defa7bafc44127d"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "d39cb1e289b483ca71221a108035e0b8d137aa11eed0b56d527b25c2f80193a8"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "08c770da473dc821ac738f4fb824da3c6ca3e8cb698c30ee6536845710cf90d8"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              123,
+              99,
+              3
+            ],
+            "sha256": "d21636f812200be714a4a3defde329c84eedd51343287cb78d27171bf27ea3c7"
+          }
+        }
+      },
+      {
+        "id": "xtrans_off4_even",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          304,
+          244,
+          124,
+          100
+        ],
+        "xtrans_phase_6x6": [
+          4,
+          4
+        ],
+        "xtrans_phase_3x3": [
+          1,
+          1
+        ],
+        "size_parity_2x2": [
+          0,
+          0
+        ],
+        "upright_shape": [
+          100,
+          124,
+          3
+        ],
+        "upright_baseline_sha256": "5c91dbc165e5e6d689dfad2ecbf457f7a5cb0d765d230bcd1b46cc33dc041885",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "5c91dbc165e5e6d689dfad2ecbf457f7a5cb0d765d230bcd1b46cc33dc041885"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "25ed1cfec79b4865a318aa130218d3eb0f4907c53c09c2efc72f81746ff9488d"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "b8669e30b49c786db90e94ee021b9ae5085a5292ba5add2e6414ef6f674fa8c2"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "350a01e68f1171cda53166c66afe0b33f93cfc79ba53b67a8b3c6346ce604b56"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "398980f904fa8116fbd201e61f146caa81d00e32325bbd0c977022e2391f1e3c"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "cf2ece7fd035bd376ab71e1215e9b46a3be4bb5b9c94656f86fb1cc8c731898e"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "71e43dcdb7a43712eaf26ee4654afe7a49d95588c1dd4eca8bbf703eaa3c9f88"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "a1c757d245ded6f25062d55161ef13127864cfa8c6f9793d053b77c48bcd4344"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "350a01e68f1171cda53166c66afe0b33f93cfc79ba53b67a8b3c6346ce604b56"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "b8669e30b49c786db90e94ee021b9ae5085a5292ba5add2e6414ef6f674fa8c2"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "25ed1cfec79b4865a318aa130218d3eb0f4907c53c09c2efc72f81746ff9488d"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              100,
+              124,
+              3
+            ],
+            "sha256": "5c91dbc165e5e6d689dfad2ecbf457f7a5cb0d765d230bcd1b46cc33dc041885"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "a1c757d245ded6f25062d55161ef13127864cfa8c6f9793d053b77c48bcd4344"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "71e43dcdb7a43712eaf26ee4654afe7a49d95588c1dd4eca8bbf703eaa3c9f88"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "cf2ece7fd035bd376ab71e1215e9b46a3be4bb5b9c94656f86fb1cc8c731898e"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              124,
+              100,
+              3
+            ],
+            "sha256": "398980f904fa8116fbd201e61f146caa81d00e32325bbd0c977022e2391f1e3c"
+          }
+        }
+      },
+      {
+        "id": "xtrans_off5_odd",
+        "raw": "_DSF9243.RAF",
+        "capture_type": "single_shot_xtrans",
+        "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+        "target_idx": 2,
+        "egb": [
+          1.2,
+          0.95,
+          1.15
+        ],
+        "flat_field": null,
+        "roi_xywh": [
+          305,
+          245,
+          125,
+          101
+        ],
+        "xtrans_phase_6x6": [
+          5,
+          5
+        ],
+        "xtrans_phase_3x3": [
+          2,
+          2
+        ],
+        "size_parity_2x2": [
+          1,
+          1
+        ],
+        "upright_shape": [
+          101,
+          125,
+          3
+        ],
+        "upright_baseline_sha256": "486e394f41aa7f5b377bddb43983038e41815cd2ccf7819193b9d0d086b1837a",
+        "matches_full_sensor_slice": true,
+        "station_matches_neg_process": true,
+        "orientations_d4": {
+          "rot0_hf0_vf0": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "486e394f41aa7f5b377bddb43983038e41815cd2ccf7819193b9d0d086b1837a"
+          },
+          "rot0_hf0_vf1": {
+            "rot_cw": 0,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "94e6aa93377603ef9aa5139514a62e042363a40a9248a9ec815629fdfacde70e"
+          },
+          "rot0_hf1_vf0": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "31a5263a5f57b121ff37385ec8ccdac3f731ff91e4ee125b15bf5f60dd039368"
+          },
+          "rot0_hf1_vf1": {
+            "rot_cw": 0,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "0b6f1a90d92f401658a12101c5a4875581cb6924a4c038e780e90a86b48f026c"
+          },
+          "rot90_hf0_vf0": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "fa68306a4fedc1d9da2ddf13c945b827a34b119d0dc6660ea4d58d16d58904cf"
+          },
+          "rot90_hf0_vf1": {
+            "rot_cw": 90,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "15f166dca50e2699e6bf1296a05d109ee852ecb8ec3b6db23bcc53148eb8080c"
+          },
+          "rot90_hf1_vf0": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "2e45280f1f1279eb73b9bf99f4a7b0e65a73f6dc557a709a3e8bffb459fdecb6"
+          },
+          "rot90_hf1_vf1": {
+            "rot_cw": 90,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "ed70867b4bb14830729c3540e34c17bb3b80289c1a368360e6224de713eb4fed"
+          },
+          "rot180_hf0_vf0": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "0b6f1a90d92f401658a12101c5a4875581cb6924a4c038e780e90a86b48f026c"
+          },
+          "rot180_hf0_vf1": {
+            "rot_cw": 180,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "31a5263a5f57b121ff37385ec8ccdac3f731ff91e4ee125b15bf5f60dd039368"
+          },
+          "rot180_hf1_vf0": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "94e6aa93377603ef9aa5139514a62e042363a40a9248a9ec815629fdfacde70e"
+          },
+          "rot180_hf1_vf1": {
+            "rot_cw": 180,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              101,
+              125,
+              3
+            ],
+            "sha256": "486e394f41aa7f5b377bddb43983038e41815cd2ccf7819193b9d0d086b1837a"
+          },
+          "rot270_hf0_vf0": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": false,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "ed70867b4bb14830729c3540e34c17bb3b80289c1a368360e6224de713eb4fed"
+          },
+          "rot270_hf0_vf1": {
+            "rot_cw": 270,
+            "hflip": false,
+            "vflip": true,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "2e45280f1f1279eb73b9bf99f4a7b0e65a73f6dc557a709a3e8bffb459fdecb6"
+          },
+          "rot270_hf1_vf0": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": false,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "15f166dca50e2699e6bf1296a05d109ee852ecb8ec3b6db23bcc53148eb8080c"
+          },
+          "rot270_hf1_vf1": {
+            "rot_cw": 270,
+            "hflip": true,
+            "vflip": true,
+            "shape": [
+              125,
+              101,
+              3
+            ],
+            "sha256": "fa68306a4fedc1d9da2ddf13c945b827a34b119d0dc6660ea4d58d16d58904cf"
+          }
+        }
+      }
+    ]
+  },
+  "auto_conversion_parity": {
+    "description": "End-to-end auto conversion (--roi auto + automatic conversion parameter search) bit-exact SHA-256 parity between main/master and PR branch across Sony RAW (2x2 Bayer) and Fuji RAW (6x6 X-Trans).",
+    "neg_process_master_vs_pr": {
+      "master_commit": "674c90b",
+      "pr_branch": "frame-pipeline",
+      "cases_verified": 10,
+      "all_sha256_match": true,
+      "cases": [
+        {
+          "id": "sony_test_capture_ref_target2_roi_auto_film_base_auto",
+          "mode": "single_target_roi_auto_film_base_auto",
+          "raw": "test_imgs/test_capture_ref.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags": [
+            "--target",
+            "2",
+            "--roi",
+            "auto",
+            "--film_base_rgb",
+            "auto"
+          ],
+          "master_detected_roi_xywh": [
+            3380,
+            4480,
+            2806,
+            1872
+          ],
+          "pr_detected_roi_xywh": [
+            3380,
+            4480,
+            2806,
+            1872
+          ],
+          "film_format": "35mm",
+          "orientation_label": "landscape",
+          "film_base_rgb": [
+            105,
+            190,
+            91
+          ],
+          "profile_film_base_rgb": [
+            9343,
+            5433,
+            7411
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "solved_relative_egb": {
+              "e": 38.8595,
+              "g": 1.16,
+              "b": 1.53
+            },
+            "exposure_comp": 38.85952,
+            "gain_g": 1.15999997,
+            "gain_b": 1.52999997,
+            "merged_matrix": [
+              39.4135933,
+              -3.19906187,
+              -1.0342052,
+              -0.395330578,
+              2.46800995,
+              -1.10322559,
+              3.1607573,
+              -29.2898083,
+              103.688904
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            1872,
+            2806,
+            3
+          ],
+          "master_output_tiff_sha256": "b967213e6bf2383b21b1c307a139b17bf60dfa57c52ca2a7895d96caedcd62b2",
+          "pr_output_tiff_sha256": "b967213e6bf2383b21b1c307a139b17bf60dfa57c52ca2a7895d96caedcd62b2",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_test_capture_ref_bundle_auto_roi_auto",
+          "mode": "multi_target_bundle_search_with_roi_auto",
+          "raw": "test_imgs/test_capture_ref.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags_pr": [
+            "--roi",
+            "auto"
+          ],
+          "cli_flags_master": [
+            "--roi",
+            "3380",
+            "4480",
+            "2806",
+            "1872"
+          ],
+          "master_roi_xywh": [
+            3380,
+            4480,
+            2806,
+            1872
+          ],
+          "pr_detected_roi_xywh": [
+            3380,
+            4480,
+            2806,
+            1872
+          ],
+          "conversion_params": {
+            "target": "Target 7",
+            "target_idx": 6,
+            "e": 10.2477779,
+            "g": 0.599999964,
+            "b": 1.85000026,
+            "residual": 18.5431,
+            "status": "CONVERGED",
+            "e_norm": 1,
+            "exposure_comp": 48.2635422,
+            "gain_g": 1.03175628,
+            "gain_b": 2.33200908,
+            "merged_matrix": [
+              48.9517021,
+              -3.97323632,
+              -1.28448331,
+              -9.26677513,
+              57.8515663,
+              -25.8602409,
+              3.93094015,
+              -36.4268646,
+              128.954803
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            1872,
+            2806,
+            3
+          ],
+          "master_output_tiff_sha256": "52b865150542b1792323901a16cbd1619affcb13ac5019a1a8da059df175f5d7",
+          "pr_output_tiff_sha256": "52b865150542b1792323901a16cbd1619affcb13ac5019a1a8da059df175f5d7",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0001_target2_roi_auto_film_base_auto",
+          "mode": "single_target_roi_auto_film_base_auto",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags": [
+            "--target",
+            "2",
+            "--roi",
+            "auto",
+            "--film_base_rgb",
+            "auto"
+          ],
+          "master_detected_roi_xywh": [
+            2330,
+            62,
+            4962,
+            6248
+          ],
+          "pr_detected_roi_xywh": [
+            2330,
+            62,
+            4962,
+            6248
+          ],
+          "film_format": "645",
+          "orientation_label": "portrait",
+          "film_base_rgb": null,
+          "profile_film_base_rgb": [
+            9343,
+            5433,
+            7411
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "solved_relative_egb": {
+              "e": 1.53716,
+              "g": 0.9,
+              "b": 1.45
+            },
+            "exposure_comp": 1.53716457,
+            "gain_g": 0.899999976,
+            "gain_b": 1.45000005,
+            "merged_matrix": [
+              1.55908203,
+              -0.126545161,
+              -0.0409100167,
+              -0.257451385,
+              1.60724354,
+              -0.718454301,
+              0.0778458416,
+              -0.721374452,
+              2.55373907
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            6248,
+            4962,
+            3
+          ],
+          "master_output_tiff_sha256": "c7b50fc2de546a842ff3b6ad073db61d1832fb3d506824c2a7ac8e37fbf2673c",
+          "pr_output_tiff_sha256": "c7b50fc2de546a842ff3b6ad073db61d1832fb3d506824c2a7ac8e37fbf2673c",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0001_bundle_auto_roi_auto",
+          "mode": "multi_target_bundle_search_with_roi_auto",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags_pr": [
+            "--roi",
+            "auto"
+          ],
+          "cli_flags_master": [
+            "--roi",
+            "2330",
+            "62",
+            "4962",
+            "6248"
+          ],
+          "master_roi_xywh": [
+            2330,
+            62,
+            4962,
+            6248
+          ],
+          "pr_detected_roi_xywh": [
+            2330,
+            62,
+            4962,
+            6248
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "e": 1.50298536,
+            "g": 0.779999971,
+            "b": 1.00999999,
+            "residual": 21.4548,
+            "status": "CONVERGED",
+            "e_norm": 1,
+            "exposure_comp": 7.07854843,
+            "gain_g": 1.34128332,
+            "gain_b": 1.27315068,
+            "merged_matrix": [
+              7.17947721,
+              -0.582732737,
+              -0.188388109,
+              -1.76683939,
+              11.0302038,
+              -4.93061399,
+              0.31475386,
+              -2.91673112,
+              10.3255253
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            6248,
+            4962,
+            3
+          ],
+          "master_output_tiff_sha256": "183f18660b936fbf8a35be1e62ee5653cda5a915ca15de5bf6056fd5b93b34c3",
+          "pr_output_tiff_sha256": "183f18660b936fbf8a35be1e62ee5653cda5a915ca15de5bf6056fd5b93b34c3",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0002_target2_roi_auto_film_base_auto",
+          "mode": "single_target_roi_auto_film_base_auto",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0002.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags": [
+            "--target",
+            "2",
+            "--roi",
+            "auto",
+            "--film_base_rgb",
+            "auto"
+          ],
+          "master_detected_roi_xywh": [
+            2546,
+            3494,
+            4294,
+            2854
+          ],
+          "pr_detected_roi_xywh": [
+            2546,
+            3494,
+            4294,
+            2854
+          ],
+          "film_format": "35mm",
+          "orientation_label": "landscape",
+          "film_base_rgb": null,
+          "profile_film_base_rgb": [
+            9343,
+            5433,
+            7411
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "solved_relative_egb": {
+              "e": 0.98379,
+              "g": 1.42,
+              "b": 1.55
+            },
+            "exposure_comp": 0.983789623,
+            "gain_g": 1.41999996,
+            "gain_b": 1.54999995,
+            "merged_matrix": [
+              0.997816861,
+              -0.080989264,
+              -0.0261825249,
+              -0.259969801,
+              1.62296593,
+              -0.725482285,
+              0.0532575175,
+              -0.49352175,
+              1.74711716
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            2854,
+            4294,
+            3
+          ],
+          "master_output_tiff_sha256": "1e3d5db3110946fb16cb78b9b8a6dcc98c0a69245f203e7b2e1c860b2b7a9ffb",
+          "pr_output_tiff_sha256": "1e3d5db3110946fb16cb78b9b8a6dcc98c0a69245f203e7b2e1c860b2b7a9ffb",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0002_bundle_auto_roi_auto",
+          "mode": "multi_target_bundle_search_with_roi_auto",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0002.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags_pr": [
+            "--roi",
+            "auto"
+          ],
+          "cli_flags_master": [
+            "--roi",
+            "2546",
+            "3494",
+            "4294",
+            "2854"
+          ],
+          "master_roi_xywh": [
+            2546,
+            3494,
+            4294,
+            2854
+          ],
+          "pr_detected_roi_xywh": [
+            2546,
+            3494,
+            4294,
+            2854
+          ],
+          "conversion_params": {
+            "target": "Target 4",
+            "target_idx": 3,
+            "e": 1.31089723,
+            "g": 0.699999928,
+            "b": 0.940000117,
+            "residual": 6.28685,
+            "status": "CONVERGED",
+            "e_norm": 0.625,
+            "exposure_comp": 3.85867453,
+            "gain_g": 1.20371568,
+            "gain_b": 1.18491268,
+            "merged_matrix": [
+              3.91369295,
+              -0.3176606,
+              -0.102694556,
+              -0.864359558,
+              5.39611149,
+              -2.41211677,
+              0.159687713,
+              -1.47977901,
+              5.23856831
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            2854,
+            4294,
+            3
+          ],
+          "master_output_tiff_sha256": "612a53dfb191f46ba10d9d82fc7d557769a483b9d311e6d3df6517a9573e8568",
+          "pr_output_tiff_sha256": "612a53dfb191f46ba10d9d82fc7d557769a483b9d311e6d3df6517a9573e8568",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9243_target2_roi_auto_film_base_auto",
+          "mode": "single_target_roi_auto_film_base_auto",
+          "raw": "_DSF9243.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags": [
+            "--target",
+            "2",
+            "--roi",
+            "auto",
+            "--film_base_rgb",
+            "auto"
+          ],
+          "master_detected_roi_xywh": [
+            1056,
+            168,
+            3672,
+            3660
+          ],
+          "pr_detected_roi_xywh": [
+            1056,
+            168,
+            3672,
+            3660
+          ],
+          "film_format": "6x6",
+          "orientation_label": "square",
+          "film_base_rgb": [
+            9854,
+            8622,
+            2816
+          ],
+          "profile_film_base_rgb": [
+            9343,
+            5433,
+            7411
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "solved_relative_egb": {
+              "e": 0.941761,
+              "g": 1.22,
+              "b": 1.43
+            },
+            "exposure_comp": 0.941760778,
+            "gain_g": 1.22000003,
+            "gain_b": 1.42999995,
+            "merged_matrix": [
+              0.955188751,
+              -0.0775292888,
+              -0.0250639711,
+              -0.0240366533,
+              0.150058463,
+              -0.0670776665,
+              0.443843007,
+              -4.11296225,
+              14.5603056
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            3660,
+            3672,
+            3
+          ],
+          "master_output_tiff_sha256": "23709e544cf3f46b005413655f3ec277caa442e8536d5183bf018e37dc126d4f",
+          "pr_output_tiff_sha256": "23709e544cf3f46b005413655f3ec277caa442e8536d5183bf018e37dc126d4f",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9243_bundle_auto_roi_auto",
+          "mode": "multi_target_bundle_search_with_roi_auto",
+          "raw": "_DSF9243.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags_pr": [
+            "--roi",
+            "auto"
+          ],
+          "cli_flags_master": [
+            "--roi",
+            "1056",
+            "168",
+            "3672",
+            "3660"
+          ],
+          "master_roi_xywh": [
+            1056,
+            168,
+            3672,
+            3660
+          ],
+          "pr_detected_roi_xywh": [
+            1056,
+            168,
+            3672,
+            3660
+          ],
+          "conversion_params": {
+            "target": "Target 7",
+            "target_idx": 6,
+            "e": 0.794079065,
+            "g": 0.719999969,
+            "b": 1.69000018,
+            "residual": 130.454,
+            "status": "CONVERGED",
+            "e_norm": 0.3125,
+            "exposure_comp": 1.16870058,
+            "gain_g": 1.23810768,
+            "gain_b": 2.13032174,
+            "merged_matrix": [
+              1.18536437,
+              -0.0962118283,
+              -0.0311037358,
+              -0.269273758,
+              1.68104947,
+              -0.751446247,
+              0.0869551823,
+              -0.80578804,
+              2.85257173
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            3660,
+            3672,
+            3
+          ],
+          "master_output_tiff_sha256": "0e11faa2fb9e0fe3961f54bf5c08406cb969c02648078d41a70f2460e355b9d4",
+          "pr_output_tiff_sha256": "0e11faa2fb9e0fe3961f54bf5c08406cb969c02648078d41a70f2460e355b9d4",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9238_target2_roi_auto_film_base_auto",
+          "mode": "single_target_roi_auto_film_base_auto",
+          "raw": "_DSF9238.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags": [
+            "--target",
+            "2",
+            "--roi",
+            "auto",
+            "--film_base_rgb",
+            "auto"
+          ],
+          "master_detected_roi_xywh": [
+            1062,
+            210,
+            3690,
+            3672
+          ],
+          "pr_detected_roi_xywh": [
+            1062,
+            210,
+            3690,
+            3672
+          ],
+          "film_format": "6x6",
+          "orientation_label": "square",
+          "film_base_rgb": [
+            8606,
+            6369,
+            1986
+          ],
+          "profile_film_base_rgb": [
+            9343,
+            5433,
+            7411
+          ],
+          "conversion_params": {
+            "target": "Target 3",
+            "target_idx": 2,
+            "solved_relative_egb": {
+              "e": 1.29577,
+              "g": 1.4,
+              "b": 1.53
+            },
+            "exposure_comp": 1.29576707,
+            "gain_g": 1.39999998,
+            "gain_b": 1.52999997,
+            "merged_matrix": [
+              1.3142426,
+              -0.106672414,
+              -0.034485478,
+              -0.0473626219,
+              0.295680195,
+              -0.132172063,
+              0.876481533,
+              -8.12209606,
+              28.7530479
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            3672,
+            3690,
+            3
+          ],
+          "master_output_tiff_sha256": "d23ccf268836f5cfcbbbffd7fb5bbd030eeaa613645262e764f717171599b7ff",
+          "pr_output_tiff_sha256": "d23ccf268836f5cfcbbbffd7fb5bbd030eeaa613645262e764f717171599b7ff",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9238_bundle_auto_roi_auto",
+          "mode": "multi_target_bundle_search_with_roi_auto",
+          "raw": "_DSF9238.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "cli_flags_pr": [
+            "--roi",
+            "auto"
+          ],
+          "cli_flags_master": [
+            "--roi",
+            "1062",
+            "210",
+            "3690",
+            "3672"
+          ],
+          "master_roi_xywh": [
+            1062,
+            210,
+            3690,
+            3672
+          ],
+          "pr_detected_roi_xywh": [
+            1062,
+            210,
+            3690,
+            3672
+          ],
+          "conversion_params": {
+            "target": "Target 4",
+            "target_idx": 3,
+            "e": 3.67374563,
+            "g": 0.539999962,
+            "b": 1.68999994,
+            "residual": 27.3981,
+            "status": "CONVERGED",
+            "e_norm": 0.3125,
+            "exposure_comp": 5.40690327,
+            "gain_g": 0.928580701,
+            "gain_b": 2.1303215,
+            "merged_matrix": [
+              5.48399687,
+              -0.445116609,
+              -0.143899038,
+              -0.934330702,
+              5.83293438,
+              -2.60738111,
+              0.402291417,
+              -3.727916,
+              13.1972017
+            ],
+            "knee": 0.949999988
+          },
+          "output_shape": [
+            3672,
+            3690,
+            3
+          ],
+          "master_output_tiff_sha256": "5c08cb210dff67819abb9d2843385e4d191dfecffdb33ba36c17a91d1b2c3d6f",
+          "pr_output_tiff_sha256": "5c08cb210dff67819abb9d2843385e4d191dfecffdb33ba36c17a91d1b2c3d6f",
+          "sha256_match": true
+        }
+      ]
+    },
+    "negicc_station_main_vs_pr": {
+      "main_commit": "4368883",
+      "pr_branch": "auto-crop-and-memory-opt",
+      "cases_verified": 5,
+      "all_sha256_match": true,
+      "cases": [
+        {
+          "id": "sony_test_capture_ref",
+          "raw": "test_imgs/test_capture_ref.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "film_format": "35mm",
+          "main_detected_lit_area_half_xywh": [
+            0,
+            0,
+            4784,
+            3188
+          ],
+          "pr_detected_lit_area_half_xywh": [
+            0,
+            0,
+            4784,
+            3188
+          ],
+          "main_detected_frame_bbox_half_xywh": [
+            1,
+            0,
+            4782,
+            3188
+          ],
+          "pr_detected_frame_bbox_half_xywh": [
+            1,
+            0,
+            4782,
+            3188
+          ],
+          "main_detected_roi_full_xywh": [
+            2,
+            0,
+            9564,
+            6376
+          ],
+          "pr_detected_roi_full_xywh": [
+            2,
+            0,
+            9564,
+            6376
+          ],
+          "orientation": [
+            0,
+            false,
+            false
+          ],
+          "conversion_params": {
+            "target_idx": 2,
+            "target_name": "Target 3",
+            "e": 57.83637860583228,
+            "g": 0.5399999999999996,
+            "b": 1.9300000000000006,
+            "residual": 26.138193130493164,
+            "status": "MAX_ITERS",
+            "merged_matrix": [
+              4.776811122894287,
+              -0.3877168595790863,
+              -0.12534260749816895,
+              -1.5071196556091309,
+              9.408799171447754,
+              -4.205829620361328,
+              0.207345649600029,
+              -1.9214110374450684,
+              6.801990509033203
+            ]
+          },
+          "output_shape": [
+            6376,
+            9564,
+            3
+          ],
+          "main_preview_u8_sha256": "699824cc0ad4b82c75ccdc43ad4cfd66df323f789a855cc225a7636c02cd930b",
+          "pr_preview_u8_sha256": "699824cc0ad4b82c75ccdc43ad4cfd66df323f789a855cc225a7636c02cd930b",
+          "main_output_tiff_sha256": "3f39f5b40ca52cc5839d58d3f1543191586394f05d8ec12e5cdcc7ae41892c74",
+          "pr_output_tiff_sha256": "3f39f5b40ca52cc5839d58d3f1543191586394f05d8ec12e5cdcc7ae41892c74",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0001",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "film_format": "645",
+          "main_detected_lit_area_half_xywh": [
+            690,
+            0,
+            3340,
+            3188
+          ],
+          "pr_detected_lit_area_half_xywh": [
+            690,
+            0,
+            3340,
+            3188
+          ],
+          "main_detected_frame_bbox_half_xywh": [
+            690,
+            356,
+            3340,
+            2475
+          ],
+          "pr_detected_frame_bbox_half_xywh": [
+            690,
+            356,
+            3340,
+            2475
+          ],
+          "main_detected_roi_full_xywh": [
+            1380,
+            712,
+            6680,
+            4950
+          ],
+          "pr_detected_roi_full_xywh": [
+            1380,
+            712,
+            6680,
+            4950
+          ],
+          "orientation": [
+            0,
+            false,
+            false
+          ],
+          "conversion_params": {
+            "target_idx": 3,
+            "target_name": "Target 4",
+            "e": 0.919135014711255,
+            "g": 0.6799999999999997,
+            "b": 0.7899999999999998,
+            "residual": 16.589645385742188,
+            "status": "CONVERGED",
+            "merged_matrix": [
+              4.776811122894287,
+              -0.3877168595790863,
+              -0.12534260749816895,
+              -1.5071196556091309,
+              9.408799171447754,
+              -4.205829620361328,
+              0.207345649600029,
+              -1.9214110374450684,
+              6.801990509033203
+            ]
+          },
+          "output_shape": [
+            4950,
+            6680,
+            3
+          ],
+          "main_preview_u8_sha256": "a3617a35c22e94229398d5a317eed3b6413121ecf7621051bbeac93bb48ab237",
+          "pr_preview_u8_sha256": "a3617a35c22e94229398d5a317eed3b6413121ecf7621051bbeac93bb48ab237",
+          "main_output_tiff_sha256": "a216a97933f129b1104013f6e1a36423379395d2587a5f21e8ae9d9a42f6627f",
+          "pr_output_tiff_sha256": "a216a97933f129b1104013f6e1a36423379395d2587a5f21e8ae9d9a42f6627f",
+          "sha256_match": true
+        },
+        {
+          "id": "sony_portra400_0002",
+          "raw": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0002.ARW",
+          "profile": "profiles/profile_Portra400-A7R4-TriLED_20261003_172952.json",
+          "film_format": "35mm",
+          "main_detected_lit_area_half_xywh": [
+            700,
+            0,
+            3324,
+            3188
+          ],
+          "pr_detected_lit_area_half_xywh": [
+            700,
+            0,
+            3324,
+            3188
+          ],
+          "main_detected_frame_bbox_half_xywh": [
+            700,
+            486,
+            3324,
+            2216
+          ],
+          "pr_detected_frame_bbox_half_xywh": [
+            700,
+            486,
+            3324,
+            2216
+          ],
+          "main_detected_roi_full_xywh": [
+            1400,
+            972,
+            6648,
+            4432
+          ],
+          "pr_detected_roi_full_xywh": [
+            1400,
+            972,
+            6648,
+            4432
+          ],
+          "orientation": [
+            0,
+            false,
+            false
+          ],
+          "conversion_params": {
+            "target_idx": 2,
+            "target_name": "Target 3",
+            "e": 1.4030638859380486,
+            "g": 0.9199999999999999,
+            "b": 1.1,
+            "residual": 17.548320770263672,
+            "status": "CONVERGED",
+            "merged_matrix": [
+              2.985507011413574,
+              -0.24232302606105804,
+              -0.07833912968635559,
+              -0.9419497847557068,
+              5.880499839782715,
+              -2.62864351272583,
+              0.12959103286266327,
+              -1.2008819580078125,
+              4.251244068145752
+            ]
+          },
+          "output_shape": [
+            4432,
+            6648,
+            3
+          ],
+          "main_preview_u8_sha256": "bf7a78f66a13c02bdb889bfe3d48fd088c2138f8e941c45c1600df18ce69b340",
+          "pr_preview_u8_sha256": "bf7a78f66a13c02bdb889bfe3d48fd088c2138f8e941c45c1600df18ce69b340",
+          "main_output_tiff_sha256": "e072699104e7bae555bac5afa6dcc00d0965648b931f3c0196c4f09ac7908e98",
+          "pr_output_tiff_sha256": "e072699104e7bae555bac5afa6dcc00d0965648b931f3c0196c4f09ac7908e98",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9243",
+          "raw": "_DSF9243.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+          "film_format": "6x6",
+          "main_detected_lit_area_half_xywh": [
+            0,
+            0,
+            3016,
+            1967
+          ],
+          "pr_detected_lit_area_half_xywh": [
+            0,
+            0,
+            3016,
+            1967
+          ],
+          "main_detected_frame_bbox_half_xywh": [
+            524,
+            0,
+            1967,
+            1967
+          ],
+          "pr_detected_frame_bbox_half_xywh": [
+            524,
+            0,
+            1967,
+            1967
+          ],
+          "main_detected_roi_full_xywh": [
+            1048,
+            0,
+            3934,
+            3934
+          ],
+          "pr_detected_roi_full_xywh": [
+            1048,
+            0,
+            3934,
+            3934
+          ],
+          "orientation": [
+            90,
+            false,
+            false
+          ],
+          "conversion_params": {
+            "target_idx": 5,
+            "target_name": "Target 6",
+            "e": 1.3073426963017947,
+            "g": 1.02,
+            "b": 1.6800000000000004,
+            "residual": 11.370383262634277,
+            "status": "CONVERGED",
+            "merged_matrix": [
+              1.1338740587234497,
+              0.0,
+              0.0,
+              0.0,
+              2.0309340953826904,
+              0.0,
+              0.0,
+              0.0,
+              3.814474582672119
+            ]
+          },
+          "output_shape": [
+            3934,
+            3934,
+            3
+          ],
+          "main_preview_u8_sha256": "cd7ba0cd6ac9af2a79eca47a3241367a5c2ac615cb55f0d4cf1090d90c145f87",
+          "pr_preview_u8_sha256": "cd7ba0cd6ac9af2a79eca47a3241367a5c2ac615cb55f0d4cf1090d90c145f87",
+          "main_output_tiff_sha256": "dc10e8c2d86bfeecc01a13798fc15a10a1e45a8a41949b20c7b30ea5fd16ec57",
+          "pr_output_tiff_sha256": "dc10e8c2d86bfeecc01a13798fc15a10a1e45a8a41949b20c7b30ea5fd16ec57",
+          "sha256_match": true
+        },
+        {
+          "id": "fuji_DSF9238",
+          "raw": "_DSF9238.RAF",
+          "profile": "profiles/profile_Portra400-A7R4-D65_20261004_002832.json",
+          "film_format": "6x6",
+          "main_detected_lit_area_half_xywh": [
+            0,
+            41,
+            2868,
+            1975
+          ],
+          "pr_detected_lit_area_half_xywh": [
+            0,
+            41,
+            2868,
+            1975
+          ],
+          "main_detected_frame_bbox_half_xywh": [
+            446,
+            41,
+            1975,
+            1975
+          ],
+          "pr_detected_frame_bbox_half_xywh": [
+            446,
+            41,
+            1975,
+            1975
+          ],
+          "main_detected_roi_full_xywh": [
+            892,
+            82,
+            3950,
+            3950
+          ],
+          "pr_detected_roi_full_xywh": [
+            892,
+            82,
+            3950,
+            3950
+          ],
+          "orientation": [
+            90,
+            false,
+            false
+          ],
+          "conversion_params": {
+            "target_idx": 6,
+            "target_name": "Target 7",
+            "e": 1.5268871452234969,
+            "g": 1.2600000000000002,
+            "b": 1.8700000000000006,
+            "residual": 6.744945049285889,
+            "status": "MAX_ITERS",
+            "merged_matrix": [
+              1.1338740587234497,
+              0.0,
+              0.0,
+              0.0,
+              2.0309340953826904,
+              0.0,
+              0.0,
+              0.0,
+              3.814474582672119
+            ]
+          },
+          "output_shape": [
+            3950,
+            3950,
+            3
+          ],
+          "main_preview_u8_sha256": "524805020daf11c9431d8f86a1b9bef1eba508f23debfe068aae5906e99f1af0",
+          "pr_preview_u8_sha256": "524805020daf11c9431d8f86a1b9bef1eba508f23debfe068aae5906e99f1af0",
+          "main_output_tiff_sha256": "6ac46bc3848c1a2485d9781563030ad68d78b2957d0c26cfd5be26ff3eaa42bd",
+          "pr_output_tiff_sha256": "6ac46bc3848c1a2485d9781563030ad68d78b2957d0c26cfd5be26ff3eaa42bd",
+          "sha256_match": true
+        }
+      ]
+    }
+  }
 }
