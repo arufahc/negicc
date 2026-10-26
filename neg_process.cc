@@ -1666,7 +1666,10 @@ int main(int ac, char *av[]) {
         }
       }
     }
+    // The file counters must increase from frame to frame, modulo the counter's wrap (DCF numbers files 0001-9999, so
+    // a Sony DSC09999 is followed by DSC00001): each step forward, by less than half the counter's range.
     int trailing_idx[4] = {-1, -1, -1, -1};
+    int idx_mod = 1;
     bool all_have_idx = true;
     for (size_t i = 0; i < 4; ++i) {
       const std::string stem = std::filesystem::path(files[i]).stem().string();
@@ -1677,10 +1680,16 @@ int main(int ac, char *av[]) {
         break;
       }
       trailing_idx[i] = std::stoi(stem.substr(p));
+      int mod = 1;
+      for (size_t d = p; d < stem.size() && mod < 10000; ++d) mod *= 10;
+      idx_mod = std::max(idx_mod, mod);
     }
-    if (all_have_idx &&
-        !(trailing_idx[0] < trailing_idx[1] && trailing_idx[1] < trailing_idx[2] &&
-          trailing_idx[2] < trailing_idx[3])) {
+    bool in_order = true;
+    for (int i = 0; all_have_idx && i < 3; ++i) {
+      const int step = ((trailing_idx[i + 1] - trailing_idx[i]) % idx_mod + idx_mod) % idx_mod;
+      if (step == 0 || 2 * step >= idx_mod) in_order = false;
+    }
+    if (all_have_idx && !in_order) {
       fprintf(stderr, "ERROR! 4-shot pixel shift files are out of frame order\n");
       return 1;
     }
