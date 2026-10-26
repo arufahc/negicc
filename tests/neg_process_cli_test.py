@@ -244,6 +244,18 @@ def test_pixel_shift_rejection():
         assert res.returncode == 1
         assert "out of frame order" in res.stderr
 
+        # A file counter that wraps (DSC09999 -> DSC00001) is in order: the check passes on to the camera check
+        w = [os.path.join(tmp, n) for n in ("DSC09998.dng", "DSC09999.dng", "DSC00001.dng", "DSC00002.dng")]
+        for p in w:
+            write_synthetic_dng(p, 160, 120, pix, make="Fujifilm", model="X-T3")
+        res = subprocess.run([NEG_PROCESS, "-o", out_tif] + w, capture_output=True, text=True)
+        assert res.returncode == 1
+        assert "out of frame order" not in res.stderr, res.stderr
+        assert "only available with Sony A7RM4" in res.stderr, res.stderr
+        res = subprocess.run([NEG_PROCESS, "-o", out_tif, w[0], w[2], w[1], w[3]], capture_output=True, text=True)
+        assert res.returncode == 1
+        assert "out of frame order" in res.stderr
+
         # Mismatched geometry in frame 2 rejected
         write_synthetic_dng(f2, 164, 120, make_picture_only_cfa(164, 120))
         res = subprocess.run([NEG_PROCESS, "-o", out_tif, f0, f1, f2, f3], capture_output=True, text=True)
