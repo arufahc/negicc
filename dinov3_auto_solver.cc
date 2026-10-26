@@ -124,6 +124,20 @@ static inline double compute_penalties(double e, float hi_clip, double e_center,
   return pen_clip + pen_e;
 }
 
+static inline double compute_penalties(const SolverConfig& cfg, double e, float hi_clip, double e_center,
+                                       double& pen_clip, double& pen_e) {
+  if (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f && e > 0.0) {
+    const double clip_excess = std::max(0.0, (double)hi_clip - 2.5) / 2.0;
+    pen_clip = 15.0 * (clip_excess * clip_excess);
+    const double d_hi = std::max(0.0, std::log2((double)cfg.enc_e_min / e));
+    const double d_sh = std::max(0.0, std::log2(e / (double)cfg.enc_e_max));
+    const double neg_slack = std::max(0.0, std::log2((double)cfg.enc_e_min / (double)cfg.enc_e_max));
+    pen_e = 4.5 * d_hi * d_hi + 1.2 * d_sh * d_sh + 0.8 * neg_slack * neg_slack;
+    return pen_clip + pen_e;
+  }
+  return compute_penalties(e, hi_clip, e_center, pen_clip, pen_e);
+}
+
 static inline IntentLoss eval_one(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                                   double e, double g, double b, const float* mu, const float* sigma) {
   const IntentGains cand{(float)e, (float)g, (float)b};
@@ -188,7 +202,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   size_t best_k = 0;
   double best_score_e = 0.0;
   for (size_t i = 0; i < e_cands_d.size(); ++i) {
-    const double score = (double)losses[i].L + compute_penalties(e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+    const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
     if (i == 0 || score < best_score_e) {
       best_score_e = score;
       best_k = i;
@@ -204,7 +218,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
       const double e_test = base_e + de;
       if (e_test < e_min || e_test > e_max) continue;
       const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, curr_g, curr_b, mu, sigma);
-      const double s = (double)r.L + compute_penalties(e_test, r.clip, e_center, p_clip, p_e);
+      const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
       if (s < best_score_e) {
         best_score_e = s;
         best_e = e_test;
@@ -213,11 +227,14 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   }
 
   // 2. Chromatic gains: g sweep, then b sweep
+  const bool rescue_mode = (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f);
   std::vector<double> g_cands_d, b_cands_d;
   if (pin_mask & PIN_G) {
     g_cands_d = {curr_g};
   } else if (initial) {
     for (double d : {-0.04, -0.02, 0.0, 0.02, 0.04}) g_cands_d.push_back(initial->g + d);
+  } else if (rescue_mode) {
+    g_cands_d = {0.74, 0.80, 0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   } else {
     g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   }
@@ -225,6 +242,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     b_cands_d = {curr_b};
   } else if (initial) {
     for (double d : {-0.06, -0.03, 0.0, 0.03, 0.06}) b_cands_d.push_back(initial->b + d);
+  } else if (rescue_mode) {
+    b_cands_d = {0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   } else {
     b_cands_d = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   }
@@ -265,11 +284,106 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     }
   }
 
+  // If rescue screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on (e, g, b).
+  if (rescue_mode && !initial) {
+    if (!(pin_mask & PIN_E)) {
+      cands.resize(e_cands_d.size());
+      losses.resize(e_cands_d.size());
+      for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      best_k = 0;
+      for (size_t i = 0; i < e_cands_d.size(); ++i) {
+        const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+        if (i == 0 || score < best_score_e) {
+          best_score_e = score;
+          best_k = i;
+        }
+      }
+      best_e = e_cands_d[best_k];
+      const double step = (e_max > e_min) ? std::max(0.01, (e_max - e_min) / 40.0) : 0.02;
+      const double base_e = best_e;
+      for (double de : {-2.0 * step, -step, step, 2.0 * step}) {
+        const double e_test = base_e + de;
+        if (e_test < e_min || e_test > e_max) continue;
+        const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, best_g, best_b, mu, sigma);
+        const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
+        if (s < best_score_e) {
+          best_score_e = s;
+          best_e = e_test;
+        }
+      }
+    }
+    if (!(pin_mask & PIN_G)) {
+      cands.resize(g_cands_d.size());
+      losses.resize(g_cands_d.size());
+      for (size_t i = 0; i < g_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)g_cands_d[i], (float)best_b};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      k = 0;
+      for (size_t i = 1; i < g_cands_d.size(); ++i) {
+        if (losses[i].a < losses[k].a) k = i;
+      }
+      best_g = g_cands_d[k];
+    }
+    if (!(pin_mask & PIN_B)) {
+      cands.resize(b_cands_d.size());
+      losses.resize(b_cands_d.size());
+      for (size_t i = 0; i < b_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)best_g, (float)b_cands_d[i]};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      k = 0;
+      for (size_t i = 1; i < b_cands_d.size(); ++i) {
+        if (losses[i].b < losses[k].b) k = i;
+      }
+      best_b = b_cands_d[k];
+    }
+    const IntentLoss r0 = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g, best_b, mu, sigma);
+    best_gb = (double)r0.a + (double)r0.b;
+    for (const auto& d : chain) {
+      if ((pin_mask & PIN_G) && d[0] != 0.0) continue;
+      if ((pin_mask & PIN_B) && d[1] != 0.0) continue;
+      const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g + d[0], best_b + d[1], mu, sigma);
+      if ((double)r.a + (double)r.b < best_gb) {
+        best_gb = (double)r.a + (double)r.b;
+        best_g += d[0];
+        best_b += d[1];
+      }
+    }
+  }
+
+  // Re-align E at the final (best_g, best_b) so L* matches mu_L after chromatic gain updates.
+  if (rescue_mode && !(pin_mask & PIN_E) && (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
+    cands.resize(e_cands_d.size());
+    losses.resize(e_cands_d.size());
+    for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};
+    intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+    best_k = 0;
+    for (size_t i = 0; i < e_cands_d.size(); ++i) {
+      const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+      if (i == 0 || score < best_score_e) {
+        best_score_e = score;
+        best_k = i;
+      }
+    }
+    best_e = e_cands_d[best_k];
+    const double step = (e_max > e_min) ? std::max(0.01, (e_max - e_min) / 40.0) : 0.02;
+    const double base_e = best_e;
+    for (double de : {-2.0 * step, -step, step, 2.0 * step}) {
+      const double e_test = base_e + de;
+      if (e_test < e_min || e_test > e_max) continue;
+      const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, best_g, best_b, mu, sigma);
+      const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
+      if (s < best_score_e) {
+        best_score_e = s;
+        best_e = e_test;
+      }
+    }
+  }
+
   // 4. Final balanced intent loss
   const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g, best_b, mu, sigma);
   const double loss_intent = ((double)r.L + (double)r.a + (double)r.b) / 3.0;
+  const double pen = compute_penalties(cfg, best_e, r.clip, e_center, p_clip, p_e);
   out = {best_e, best_g, best_b};
-  return loss_intent + compute_penalties(best_e, r.clip, e_center, p_clip, p_e);
+  return loss_intent + pen;
 }
 
 float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,

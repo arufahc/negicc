@@ -2980,7 +2980,8 @@ int main(int ac, char *av[]) {
         for (int i = 0; i < width; ++i) {
           uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
           Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-          v = pcs_to_linear_srgb(v);
+          v = pcs_to_linear_srgb_unclamped(v);
+          v = apply_fit3_highlight_shoulder_rgb(v);
           v = encode_output(v, encoding);
           px[0] = quantize_u16(v.r);
           px[1] = quantize_u16(v.g);
@@ -3029,7 +3030,8 @@ int main(int ac, char *av[]) {
       for (int i = 0; i < width; ++i) {
         ushort* px = proc->imgdata.image[j * width + i];
         Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-        v = pcs_to_linear_srgb(v);
+        v = pcs_to_linear_srgb_unclamped(v);
+        v = apply_fit3_highlight_shoulder_rgb(v);
         v = encode_output(v, encoding);
         px[0] = quantize_u16(v.r);
         px[1] = quantize_u16(v.g);
