@@ -11,6 +11,8 @@
 #include <cmath>
 #include <vector>
 
+#include "color_pipeline.h"
+
 namespace {
 
 // ---- Antialiased Bilinear Resampling with Support Widening ----------------------------------------------------
@@ -96,11 +98,11 @@ void cv_linear_coeffs(int in_size, int out_size, std::vector<int>& ofs, std::vec
 
 void compute_aspect_preserved_shape(int w, int h, int max_size, int patch_size,
                                     int& target_w, int& target_h, int& grid_w, int& grid_h) {
-    double scale = (double)max_size / (double)std::max(w, h);
-    target_w = std::max(patch_size, (int)std::nearbyint((w * scale) / patch_size) * patch_size);
-    target_h = std::max(patch_size, (int)std::nearbyint((h * scale) / patch_size) * patch_size);
-    grid_w = target_w / patch_size;
-    grid_h = target_h / patch_size;
+    const negicc::AspectPreservedShape s = negicc::compute_aspect_preserved_shape(w, h, max_size, patch_size);
+    target_w = s.target_w;
+    target_h = s.target_h;
+    grid_w = s.grid_w;
+    grid_h = s.grid_h;
 }
 
 void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,

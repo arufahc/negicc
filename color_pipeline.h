@@ -290,8 +290,8 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     const int mh = h > 1 ? h : 1;
     const double max_dim = mw > mh ? (double)mw : (double)mh;
     const double scale = (double)m / max_dim;
-    int gw = (int)round((double)mw * scale / (double)p);
-    int gh = (int)round((double)mh * scale / (double)p);
+    int gw = (int)std::nearbyint((double)mw * scale / (double)p);
+    int gh = (int)std::nearbyint((double)mh * scale / (double)p);
     if (gw < 1) gw = 1;
     if (gh < 1) gh = 1;
     return {gw * p, gh * p, gw, gh};
