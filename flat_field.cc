@@ -202,12 +202,13 @@ std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& 
             throw std::runtime_error("zip EOCD not found in flat field file: " + path);
         --eocd;
     }
+    constexpr uint32_t kMaxFlatZipEntryBytes = 64u * 1024u * 1024u;
     const uint16_t num_entries = rd_u16(&buf[eocd + 10]);
     const uint32_t cd_offset = rd_u32(&buf[eocd + 16]);
     size_t pos = cd_offset;
     std::map<std::string, std::vector<uint8_t>> out;
     for (uint16_t i = 0; i < num_entries; ++i) {
-        if (pos + 46 > buf.size() || rd_u32(&buf[pos]) != 0x02014b50u)
+        if (pos > buf.size() || buf.size() - pos < 46 || rd_u32(&buf[pos]) != 0x02014b50u)
             throw std::runtime_error("corrupt zip central directory in: " + path);
         const uint16_t method = rd_u16(&buf[pos + 10]);
         const uint32_t comp_sz = rd_u32(&buf[pos + 20]);
@@ -216,17 +217,23 @@ std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& 
         const uint16_t extra_len = rd_u16(&buf[pos + 30]);
         const uint16_t comment_len = rd_u16(&buf[pos + 32]);
         const uint32_t lhoff = rd_u32(&buf[pos + 42]);
-        if (pos + 46 + name_len > buf.size())
+        if (uncomp_sz > kMaxFlatZipEntryBytes || comp_sz > buf.size())
+            throw std::runtime_error("zip entry size exceeds limit in: " + path);
+        const size_t entry_hdr_len = 46u + (size_t)name_len + (size_t)extra_len + (size_t)comment_len;
+        if (buf.size() - pos < entry_hdr_len)
             throw std::runtime_error("corrupt zip entry name in: " + path);
         std::string name(reinterpret_cast<const char*>(&buf[pos + 46]), name_len);
-        pos += 46 + name_len + extra_len + comment_len;
+        pos += entry_hdr_len;
 
-        if (lhoff + 30 > buf.size() || rd_u32(&buf[lhoff]) != 0x04034b50u)
+        if ((size_t)lhoff > buf.size() || buf.size() - (size_t)lhoff < 30 || rd_u32(&buf[lhoff]) != 0x04034b50u)
             throw std::runtime_error("corrupt zip local header in: " + path);
         const uint16_t lname_len = rd_u16(&buf[lhoff + 26]);
         const uint16_t lextra_len = rd_u16(&buf[lhoff + 28]);
-        const size_t data_off = (size_t)lhoff + 30 + lname_len + lextra_len;
-        if (data_off + comp_sz > buf.size())
+        const size_t local_hdr_len = 30u + (size_t)lname_len + (size_t)lextra_len;
+        if (buf.size() - (size_t)lhoff < local_hdr_len)
+            throw std::runtime_error("corrupt zip local header length in: " + path);
+        const size_t data_off = (size_t)lhoff + local_hdr_len;
+        if (buf.size() - data_off < (size_t)comp_sz)
             throw std::runtime_error("corrupt zip entry payload in: " + path);
 
         std::vector<uint8_t> data(uncomp_sz);
