@@ -132,7 +132,7 @@ bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_engine.cc -o $@
 
-bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h color_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_preprocess.cc -o $@
 
@@ -267,12 +267,39 @@ dinov3_engine:
 
 TEST_CXXFLAGS = -std=c++17 -O2 -fopenmp -ffp-contract=off -fsigned-char -fsanitize=address,undefined -Wall -Wextra -I. -I3rd_party
 
-bin_out/detector_test: tests/detector_test.cc film_frame_detector.cc film_frame_detector.h
+bin_out/film_frame_detector_asan.o: film_frame_detector.cc film_frame_detector.h
 	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/detector_test.cc film_frame_detector.cc -o $@
+	$(CXX) $(TEST_CXXFLAGS) -c film_frame_detector.cc -o $@
 
-test: bin_out/detector_test
+bin_out/cfa_pipeline_asan.o: cfa_pipeline.cc cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) -c cfa_pipeline.cc -o $@
+
+bin_out/flat_field_asan.o: flat_field.cc flat_field.h flat_sample.h
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) -Wno-maybe-uninitialized -c flat_field.cc -o $@
+
+bin_out/detector_test: tests/detector_test.cc bin_out/film_frame_detector_asan.o
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/detector_test.cc bin_out/film_frame_detector_asan.o -o $@
+
+bin_out/rgbview_test: tests/rgbview_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/rgbview_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -lz -o $@
+
+bin_out/kernels_test: tests/kernels_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/kernels_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -lz -o $@
+
+bin_out/dinov3_shape_test: tests/dinov3_shape_test.cc dinov3_preprocess.cc color_pipeline.h dinov3_preprocess.h
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/dinov3_shape_test.cc dinov3_preprocess.cc -o $@
+
+test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test
 	./bin_out/detector_test
+	./bin_out/rgbview_test
+	./bin_out/kernels_test
+	./bin_out/dinov3_shape_test
 
 clean: clean_lib
 	rm -f bin_out/*_test
