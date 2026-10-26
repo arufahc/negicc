@@ -89,7 +89,7 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
       const uint16_t* px = grid_rgb16 + i * 3;
       // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule and L*a*b* are the
       // linear equivalents of the encoded ones and skip the sRGB curve round trip.
-      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, *cfg.prof));
+      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, *cfg.prof), cfg.prof->pcs_is_lab);
       clip += linear_channel_white_clipped(lin.r) + linear_channel_white_clipped(lin.g) +
               linear_channel_white_clipped(lin.b);
       const Lab lab = linear_srgb_to_lab(lin);

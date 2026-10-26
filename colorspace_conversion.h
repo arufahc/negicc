@@ -36,7 +36,7 @@ static inline Rgb convert_pixel_linear(const uint16_t* in_px, const float* matri
   if (prof.has_profile) {
     v = apply_profile(prof, v);
   }
-  return pcs_to_linear_srgb(v);
+  return pcs_to_linear_srgb(v, prof.pcs_is_lab);
 }
 
 // Linear sRGB D65 to CIELAB D65 (OpenCV's constants, evaluated exactly).

@@ -30,6 +30,9 @@ struct Lab {
 };
 
 constexpr float kPcsScale = 1.99996948f;
+constexpr float kPcsLabLScale = 100.390625f;
+constexpr float kPcsLabABScale = 255.99609375f;
+constexpr float kPcsLabABOffset = -128.0f;
 
 enum OutputEncoding : int {
   ENCODE_SRGB = 0,
@@ -40,6 +43,7 @@ enum OutputEncoding : int {
 
 struct ProfileData {
   int has_profile = 0;
+  int pcs_is_lab = 0;
   const float* in_trc[3] = {nullptr, nullptr, nullptr};
   int in_trc_size[3] = {0, 0, 0};
   const float* out_trc[3] = {nullptr, nullptr, nullptr};
@@ -162,13 +166,41 @@ static inline Rgb apply_profile(const ProfileData& p, Rgb v) {
   if (p.clut && p.clut_dim[0] > 0 && p.clut_dim[1] > 0 && p.clut_dim[2] > 0) {
     v = interpolate_clut(t.r, t.g, t.b, p.clut, p.clut_dim[0], p.clut_dim[1], p.clut_dim[2]);
   }
-  v.r = apply_trc(v.r, p.out_trc[0], p.out_trc_size[0]) * kPcsScale;
-  v.g = apply_trc(v.g, p.out_trc[1], p.out_trc_size[1]) * kPcsScale;
-  v.b = apply_trc(v.b, p.out_trc[2], p.out_trc_size[2]) * kPcsScale;
+  v.r = apply_trc(v.r, p.out_trc[0], p.out_trc_size[0]);
+  v.g = apply_trc(v.g, p.out_trc[1], p.out_trc_size[1]);
+  v.b = apply_trc(v.b, p.out_trc[2], p.out_trc_size[2]);
+  if (p.pcs_is_lab) {
+    v.r = v.r * kPcsLabLScale;
+    v.g = v.g * kPcsLabABScale + kPcsLabABOffset;
+    v.b = v.b * kPcsLabABScale + kPcsLabABOffset;
+  } else {
+    v.r = v.r * kPcsScale;
+    v.g = v.g * kPcsScale;
+    v.b = v.b * kPcsScale;
+  }
   return v;
 }
 
-static inline Rgb pcs_to_linear_srgb(Rgb v) {
+static inline float lab_f_inv(float t) {
+  constexpr float kDelta = 6.0f / 29.0f;
+  constexpr float kOffset = 4.0f / 29.0f;
+  constexpr float kLinearScale = 108.0f / 841.0f;  // 3 * (6/29)^2
+  return (t > kDelta) ? (t * t * t) : ((t - kOffset) * kLinearScale);
+}
+
+static inline Rgb pcs_lab_to_xyz(Rgb lab) {
+  constexpr float kInv116 = 1.0f / 116.0f;
+  constexpr float kInv500 = 1.0f / 500.0f;
+  constexpr float kInv200 = 1.0f / 200.0f;
+  const float fy = (lab.r + 16.0f) * kInv116;
+  const float fx = fy + lab.g * kInv500;
+  const float fz = fy - lab.b * kInv200;
+  return { 0.9642f * lab_f_inv(fx),
+           1.0000f * lab_f_inv(fy),
+           0.8249f * lab_f_inv(fz) };
+}
+
+static inline Rgb pcs_xyz_to_linear_srgb(Rgb v) {
   // Bradford D50 -> D65
   const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
   const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
@@ -177,6 +209,17 @@ static inline Rgb pcs_to_linear_srgb(Rgb v) {
   return { clamp01(xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
            clamp01(xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
            clamp01(xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
+}
+
+static inline Rgb pcs_lab_to_linear_srgb(Rgb lab) {
+  return pcs_xyz_to_linear_srgb(pcs_lab_to_xyz(lab));
+}
+
+static inline Rgb pcs_to_linear_srgb(Rgb v, int pcs_is_lab = 0) {
+  if (pcs_is_lab) {
+    v = pcs_lab_to_xyz(v);
+  }
+  return pcs_xyz_to_linear_srgb(v);
 }
 
 static inline float srgb_encode(float l) {
@@ -210,7 +253,7 @@ static inline Rgb process_pixel(const uint16_t* in_px, const float* matrix, floa
 
 static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, float knee, const ProfileData& prof) {
   Rgb v = process_pixel(in_px, matrix, knee, prof);
-  v = pcs_to_linear_srgb(v);
+  v = pcs_to_linear_srgb(v, prof.pcs_is_lab);
   return encode_output(v, ENCODE_SRGB);
 }
 

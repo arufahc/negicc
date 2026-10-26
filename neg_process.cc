@@ -2956,7 +2956,7 @@ int main(int ac, char *av[]) {
         delete proc;
         return 1;
       }
-      hXYZ = cmsCreateXYZProfile();
+      hXYZ = film_prof.data.pcs_is_lab ? cmsCreateLab4Profile(nullptr) : cmsCreateXYZProfile();
       encoding = ENCODE_CUSTOM;
       attach_profile = resolved_custom;
       printf("Reading output ICC profile: %s\n", resolved_custom.c_str());
@@ -2980,7 +2980,7 @@ int main(int ac, char *av[]) {
         for (int i = 0; i < width; ++i) {
           uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
           Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-          v = pcs_to_linear_srgb(v);
+          v = pcs_to_linear_srgb(v, film_prof.data.pcs_is_lab);
           v = encode_output(v, encoding);
           px[0] = quantize_u16(v.r);
           px[1] = quantize_u16(v.g);
@@ -2988,10 +2988,11 @@ int main(int ac, char *av[]) {
         }
       }
     } else if (encoding == ENCODE_CUSTOM) {
+      const cmsUInt32Number pcs_type = film_prof.data.pcs_is_lab ? TYPE_Lab_FLT : TYPE_XYZ_FLT;
       #pragma omp parallel
       {
         cmsHTRANSFORM thread_xform = cmsCreateTransform(
-            hXYZ, TYPE_XYZ_FLT, hCustomOut, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+            hXYZ, pcs_type, hCustomOut, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
         std::vector<float> xyz_row(width * 3);
 
         #pragma omp for schedule(static)
@@ -3029,7 +3030,7 @@ int main(int ac, char *av[]) {
       for (int i = 0; i < width; ++i) {
         ushort* px = proc->imgdata.image[j * width + i];
         Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-        v = pcs_to_linear_srgb(v);
+        v = pcs_to_linear_srgb(v, film_prof.data.pcs_is_lab);
         v = encode_output(v, encoding);
         px[0] = quantize_u16(v.r);
         px[1] = quantize_u16(v.g);
@@ -3037,10 +3038,11 @@ int main(int ac, char *av[]) {
       }
     }
   } else if (encoding == ENCODE_CUSTOM) {
+    const cmsUInt32Number pcs_type = film_prof.data.pcs_is_lab ? TYPE_Lab_FLT : TYPE_XYZ_FLT;
     #pragma omp parallel
     {
       cmsHTRANSFORM thread_xform = cmsCreateTransform(
-          hXYZ, TYPE_XYZ_FLT, hCustomOut, TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
+          hXYZ, pcs_type, hCustomOut, TYPE_RGBA_16, INTENT_PERCEPTUAL, 0);
       std::vector<float> xyz_row(width * 3);
 
       #pragma omp for schedule(static)

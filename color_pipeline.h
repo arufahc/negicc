@@ -37,6 +37,7 @@ enum OutputEncoding : int {
 // stages; the layout is identical. A null pointer / zero size skips that element.
 struct ProfileData {
     int has_profile;
+    int pcs_is_lab;          // 1 if ICC PCS is D50 CIELAB ('Lab '), 0 if D50 XYZ ('XYZ ')
     const float* in_trc[3];
     int in_trc_size[3];
     const float* out_trc[3];
@@ -57,8 +58,16 @@ struct PipelineConfig {
 
 // Bradford D50 -> D65 and XYZ -> linear sRGB constants are written inline in pcs_to_linear_srgb() so they are
 // usable from device code.
-// ICC PCS encoding scale applied after the output TRCs (1 + 32767/32768).
+// ICC PCS XYZ encoding scale applied after the output TRCs (1 + 32767/32768).
 constexpr float kPcsScale = 1.99996948f;
+// ICC v2 mft2 (lut16Type) 16-bit CIELAB encoding scales for normalized [0, 1] table values (w / 65535.0f).
+// All three constants are exact dyadic rationals in IEEE-754 float32:
+//   L* = w / 652.800       = v * (65535 / 65280) * 100 = v * (6425 / 64)   = v * 100.390625f
+//   a* = w / 256.0 - 128.0 = v * (65535 / 256) - 128   = v * 255.99609375f - 128.0f
+//   b* = w / 256.0 - 128.0 = v * (65535 / 256) - 128   = v * 255.99609375f - 128.0f
+constexpr float kPcsLabLScale = 100.390625f;
+constexpr float kPcsLabABScale = 255.99609375f;
+constexpr float kPcsLabABOffset = -128.0f;
 
 NEGICC_HD float clamp01(float v) {
     return fminf(1.0f, fmaxf(0.0f, v));
@@ -165,14 +174,43 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
     if (p.clut && p.clut_dim[0] > 0 && p.clut_dim[1] > 0 && p.clut_dim[2] > 0) {
         v = interpolate_clut(t.r, t.g, t.b, p.clut, p.clut_dim[0], p.clut_dim[1], p.clut_dim[2]);
     }
-    v.r = apply_trc(v.r, p.out_trc[0], p.out_trc_size[0]) * kPcsScale;
-    v.g = apply_trc(v.g, p.out_trc[1], p.out_trc_size[1]) * kPcsScale;
-    v.b = apply_trc(v.b, p.out_trc[2], p.out_trc_size[2]) * kPcsScale;
+    v.r = apply_trc(v.r, p.out_trc[0], p.out_trc_size[0]);
+    v.g = apply_trc(v.g, p.out_trc[1], p.out_trc_size[1]);
+    v.b = apply_trc(v.b, p.out_trc[2], p.out_trc_size[2]);
+    if (p.pcs_is_lab) {
+        v.r = v.r * kPcsLabLScale;
+        v.g = v.g * kPcsLabABScale + kPcsLabABOffset;
+        v.b = v.b * kPcsLabABScale + kPcsLabABOffset;
+    } else {
+        v.r = v.r * kPcsScale;
+        v.g = v.g * kPcsScale;
+        v.b = v.b * kPcsScale;
+    }
     return v;
 }
 
-// ---- Stage: PCS (XYZ D50) -> linear sRGB -------------------------------------------------------------------
-NEGICC_HD Rgb pcs_to_linear_srgb(Rgb v) {
+// ---- Stage: PCS (CIELAB D50 or XYZ D50) -> linear sRGB -----------------------------------------------------
+NEGICC_HD float lab_f_inv(float t) {
+    constexpr float kDelta = 6.0f / 29.0f;
+    constexpr float kOffset = 4.0f / 29.0f;
+    constexpr float kLinearScale = 108.0f / 841.0f;  // 3 * (6/29)^2
+    return (t > kDelta) ? (t * t * t) : ((t - kOffset) * kLinearScale);
+}
+
+NEGICC_HD Rgb pcs_lab_to_xyz(Rgb lab) {
+    // ICC D50 illuminant white point (X_n = 0.9642, Y_n = 1.0000, Z_n = 0.8249)
+    constexpr float kInv116 = 1.0f / 116.0f;
+    constexpr float kInv500 = 1.0f / 500.0f;
+    constexpr float kInv200 = 1.0f / 200.0f;
+    const float fy = (lab.r + 16.0f) * kInv116;
+    const float fx = fy + lab.g * kInv500;
+    const float fz = fy - lab.b * kInv200;
+    return { 0.9642f * lab_f_inv(fx),
+             1.0000f * lab_f_inv(fy),
+             0.8249f * lab_f_inv(fz) };
+}
+
+NEGICC_HD Rgb pcs_xyz_to_linear_srgb(Rgb v) {
     // Bradford D50 -> D65
     const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
     const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
@@ -181,6 +219,17 @@ NEGICC_HD Rgb pcs_to_linear_srgb(Rgb v) {
     return { clamp01(xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
              clamp01(xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
              clamp01(xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
+}
+
+NEGICC_HD Rgb pcs_lab_to_linear_srgb(Rgb lab) {
+    return pcs_xyz_to_linear_srgb(pcs_lab_to_xyz(lab));
+}
+
+NEGICC_HD Rgb pcs_to_linear_srgb(Rgb v, int pcs_is_lab = 0) {
+    if (pcs_is_lab) {
+        v = pcs_lab_to_xyz(v);
+    }
+    return pcs_xyz_to_linear_srgb(v);
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
@@ -200,7 +249,7 @@ NEGICC_HD Rgb convert_pixel_linear(const PipelineConfig& cfg, const float* matri
     v = apply_matrix(matrix, v);
     v = apply_knee(v, cfg.knee);
     v = apply_profile(cfg.profile, v);
-    return pcs_to_linear_srgb(v);
+    return pcs_to_linear_srgb(v, cfg.profile.pcs_is_lab);
 }
 
 // Returns the encoded output in [0,1] for one camera-linear pixel and one 3x3 input matrix.
