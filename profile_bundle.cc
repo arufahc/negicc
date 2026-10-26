@@ -67,6 +67,7 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
   if (!pipeline) return false;
 
   prof.data.has_profile = 1;
+  prof.data.pcs_is_lab = (cmsGetPCS(hprof) == cmsSigLabData) ? 1 : 0;
   const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   memcpy(prof.data.matrix, ident, sizeof(ident));
   prof.data.offset[0] = prof.data.offset[1] = prof.data.offset[2] = 0.0f;
