@@ -123,6 +123,9 @@ bool is_json_bundle(const std::string& resolved_path);
 // Parse AToB0 pipeline tags from an open cmsHPROFILE into ParsedFilmProfile
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof);
 
+// Apply C1 power-8 FIT3 highlight shoulder to linear sRGB in [0, 1] after pcs_to_linear_srgb
+Rgb apply_fit3_highlight_shoulder_rgb(Rgb lin);
+
 // Configure solver bounds and anchor for a specific target bracket
 void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt);
 

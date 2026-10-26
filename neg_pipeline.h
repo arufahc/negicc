@@ -179,6 +179,17 @@ static inline Rgb pcs_to_linear_srgb(Rgb v) {
            clamp01(xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
 }
 
+static inline Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
+  // Bradford D50 -> D65
+  const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
+  const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
+  const float xb = v.r * 0.0122982f + v.g * -0.0204830f + v.b * 1.3299098f;
+  // XYZ -> linear sRGB (clamped only at 0 so >1 out-of-gamut highlight excursions roll off smoothly)
+  return { fmaxf(0.0f, xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
+           fmaxf(0.0f, xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
+           fmaxf(0.0f, xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
+}
+
 static inline float srgb_encode(float l) {
   return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
 }

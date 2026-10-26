@@ -714,11 +714,20 @@ class SearchFrame {
   // (ScreeningResult::intent_loss).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
-                const ConversionParams* initial, const float e_bounds[3], ConversionParams& out) {
+                const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
+                bool rescue_mode = false) {
     const Clock::time_point t0 = Clock::now();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
+    if (rescue_mode) {
+      Enclosure enc;
+      if (bracket_enclosure(bundle_.targets[target_idx], target_idx, std::max(1.0f, stats_.g_lo),
+                            std::max(std::max(1.0f, stats_.g_lo) + 1.0f, stats_.g_hi), enc)) {
+        cfg.enc_e_min = enc.e_min;
+        cfg.enc_e_max = enc.e_max;
+      }
+    }
     IntentGains init, res;
     if (initial) init = {initial->e, initial->g, initial->b};
     const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
@@ -732,7 +741,8 @@ class SearchFrame {
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
   // kept within the trust region e_bounds = {lo, hi, centre}; the centre is where the search's penalty pulls E.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
-  bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp) {
+  bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
+                   bool rescue_mode = false) {
     if (e_bounds[0] > e_bounds[1]) {
       std::swap(e_bounds[0], e_bounds[1]);
       e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
@@ -760,7 +770,7 @@ class SearchFrame {
         break;
       }
       ConversionParams next;
-      search(target_idx, mu, sigma, &curr, e_bounds, next);
+      search(target_idx, mu, sigma, &curr, e_bounds, next, rescue_mode);
       const float dp = std::fabs(next.e - curr.e) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
       const float rel = it > 0 ? std::fabs(err - prev_err) / std::max(1e-4f, prev_err) : 1.0f;
       steps++;
@@ -768,7 +778,7 @@ class SearchFrame {
         std::cout << "    T" << target_idx + 1 << " step " << it << ": E " << fixed(curr.e, 4) << " g "
                   << fixed(curr.g, 4) << " b " << fixed(curr.b, 4) << " resid " << fixed(err, 4) << "\n";
       }
-      if (it > 0 && (dp <= TOL_PARAM || rel <= TOL_REL_ERR)) {
+      if (it > 0 && (dp <= TOL_PARAM || ((!rescue_mode || err <= prev_err) && rel <= TOL_REL_ERR))) {
         status = FixedPointStatus::kConverged;
         break;
       }
@@ -1127,7 +1137,18 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     adaptive.push_back(fp);
     out.tournament.push_back(fp);
   }
-  // The lowest residual wins, among the converged brackets when any converged.
+  // The lowest enclosure-regularized residual wins, among the converged brackets when any converged.
+  auto tourney_score = [&](const FixedPointResult& a) {
+    for (const auto& c : enclosure) {
+      if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
+        const float d_hi = std::max(0.0f, std::log2(c.e_min / a.params.e));
+        const float d_sh = std::max(0.0f, std::log2(a.params.e / c.e_max));
+        const float neg_slack = std::max(0.0f, -c.slack_ev);
+        return a.residual + 4.5f * d_hi * d_hi + 1.2f * d_sh * d_sh + 0.8f * neg_slack * neg_slack;
+      }
+    }
+    return a.residual;
+  };
   bool any_converged = false;
   for (const auto& a : adaptive) any_converged |= (a.status == FixedPointStatus::kConverged);
   const FixedPointResult* win = nullptr;
@@ -1223,6 +1244,136 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     if (verbose && (out.rescue == RescueOutcome::kNotScreened || out.rescue == RescueOutcome::kNotAdmissible)) {
       std::cout << "Auto: highlight rescue: " << to_string(out.rescue) << "\n";
+    }
+  }
+
+  // Part 1B: Enclosure-Guided Highlight Rescue when the chosen bracket is highlight-constrained and exhibits
+  // significant pre-shoulder highlight excess without being a dark/backlit silhouette.
+  if (out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
+    const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
+    const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
+    const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
+    const ClipStats hc_235 = fr.highlight_clip(chosen.target_idx, {params}, ceil_235)[0];
+    const float exc_242 = max_excess(hc_242);
+    const float exc_235 = max_excess(hc_235);
+    Enclosure enc_chosen{};
+    const bool has_enc_chosen = bounds_of(chosen.target_idx, enc_chosen);
+    const bool tier1_hi = (hc_242.median_L >= 58.0f) && (exc_242 >= 0.022f);
+    const bool tier2_hi =
+        (hc_242.median_L >= 48.0f) && (exc_242 >= 0.075f || (chosen.target_idx >= 3 && exc_235 >= 0.110f));
+    if (has_enc_chosen && enc_chosen.feasible && params.e < enc_chosen.e_min && (tier1_hi || tier2_hi)) {
+      const float e_pull = std::min(enc_chosen.e_max, std::min(enc_chosen.e_min, params.e * std::pow(2.0f, 0.15f)));
+      if (e_pull > params.e) {
+        params.e = e_pull;
+        out.rescue = RescueOutcome::kTaken;
+      }
+    } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
+      std::vector<Depth> depths_res;
+      for (const auto& c : pool) {
+        float e_met = 0.0f;
+        bool found_met = false;
+        for (const auto& d : depths) {
+          if (d.cand.target_idx == c.target_idx) {
+            e_met = d.e_met;
+            found_met = true;
+            break;
+          }
+        }
+        if (!found_met) continue;
+        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
+        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
+        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
+        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
+        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
+        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
+        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
+        const float lo = base_lo;
+        const float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        const float depth_r = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
+                              SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
+        depths_res.push_back({c, e_met, depth_r, lo, hi});
+      }
+      std::vector<float> mu_res = mu1, sig_res = sig1;
+      if (!depths_res.empty()) {
+        std::stable_sort(depths_res.begin(), depths_res.end(),
+                         [](const Depth& a, const Depth& b) { return a.depth > b.depth; });
+        const Enclosure cand_res = depths_res[0].cand;
+        const float e_res_init = std::clamp(depths_res[0].e_met, depths_res[0].lo, depths_res[0].hi);
+        if (cand_res.target_idx != cand1.target_idx || std::fabs(e_res_init - e1_init) > 1e-4f) {
+          std::vector<uint8_t> preview_res;
+          fr.render_preview(cand_res.target_idx, {e_res_init, 1.10f, 1.15f}, preview_res);
+          if (!fr.predict(preview_res, mu_res, sig_res)) return false;
+        }
+      }
+      std::vector<Screened> res_screening;
+      auto screen_res = [&](const Enclosure& c, float lo, float hi, float e_met) {
+        Screened s;
+        s.enclosure = c;
+        s.result.target_idx = c.target_idx;
+        s.result.e_lo = lo;
+        s.result.e_hi = hi;
+        s.result.e_metered = e_met;
+        const float eb[3] = {lo, hi, c.e_center};
+        s.result.intent_loss =
+            fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*rescue_mode=*/true);
+        res_screening.push_back(s);
+      };
+      if (!depths_res.empty()) {
+        for (const auto& d : depths_res) screen_res(d.cand, d.lo, d.hi, d.e_met);
+      } else {
+        for (const auto& c : pool) screen_res(c, c.search_lo, c.search_hi, c.e_center);
+      }
+      if (!res_screening.empty()) {
+        std::stable_sort(res_screening.begin(), res_screening.end(), [](const Screened& a, const Screened& b) {
+          return a.result.intent_loss < b.result.intent_loss;
+        });
+        std::vector<Screened> res_shortlist;
+        for (const auto& s : res_screening) {
+          if (s.result.intent_loss <= res_screening[0].result.intent_loss + 2.0f && res_shortlist.size() < 2) {
+            res_shortlist.push_back(s);
+          }
+        }
+        if (res_shortlist.size() < 2 && res_screening.size() >= 2) {
+          res_shortlist.assign(res_screening.begin(), res_screening.begin() + 2);
+        }
+        std::vector<FixedPointResult> res_adaptive;
+        for (const auto& c : res_shortlist) {
+          float eb[3];
+          trust_bounds(c, eb);
+          FixedPointResult fp;
+          if (!fr.fixed_point(c.result.target_idx, c.result.params, eb, fp, /*rescue_mode=*/true)) return false;
+          res_adaptive.push_back(fp);
+        }
+        bool res_any_conv = false;
+        for (const auto& a : res_adaptive) res_any_conv |= (a.status == FixedPointStatus::kConverged);
+        const FixedPointResult* win_res = nullptr;
+        for (const auto& a : res_adaptive) {
+          if (res_any_conv && a.status != FixedPointStatus::kConverged) continue;
+          if (!win_res || tourney_score(a) < tourney_score(*win_res)) win_res = &a;
+        }
+        if (win_res) {
+          FixedPointResult fp_res = *win_res;
+          ConversionParams p_res = fp_res.params;
+          Headroom h_res = apply_headroom(fp_res.target_idx, p_res);
+          ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
+          const float dl_min = (hc_242.median_L >= 58.0f) ? -7.5f : -4.5f;
+          float dl = hc_res_242.median_L - hc_242.median_L;
+          if (dl < dl_min) {
+            p_res.e *= std::pow(2.0f, (dl - dl_min) * 0.038f);
+            hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
+            dl = hc_res_242.median_L - hc_242.median_L;
+          }
+          const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
+          const float exc_res_242 = max_excess(hc_res_242);
+          if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
+              (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
+            chosen = fp_res;
+            params = p_res;
+            headroom = h_res;
+            out.rescue = RescueOutcome::kTaken;
+          }
+        }
+      }
     }
   }
 

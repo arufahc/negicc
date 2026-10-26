@@ -49,6 +49,8 @@ struct SolverConfig {
   bool has_custom_bounds = false;
   float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
   float custom_e_center = 0.0f;
+  float enc_e_min = 0.0f;
+  float enc_e_max = 0.0f;
 };
 
 struct DynamicKneeResult {
