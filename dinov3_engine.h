@@ -53,6 +53,7 @@ public:
 
     bool is_loaded() const;
     const char* backend_name() const;
+    const char* backend_used() const;
     bool has_pooled() const;
     bool has_pooled_tone() const;
     bool has_pool_weights() const;
