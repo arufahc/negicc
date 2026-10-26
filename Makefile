@@ -8,7 +8,7 @@
 
 PYTHON ?= python3
 
-.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine test clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -265,7 +265,17 @@ dinov3_model:
 dinov3_engine:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only
 
+TEST_CXXFLAGS = -std=c++17 -O2 -fopenmp -ffp-contract=off -fsigned-char -fsanitize=address,undefined -Wall -Wextra -I. -I3rd_party
+
+bin_out/detector_test: tests/detector_test.cc film_frame_detector.cc film_frame_detector.h
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/detector_test.cc film_frame_detector.cc -o $@
+
+test: bin_out/detector_test
+	./bin_out/detector_test
+
 clean: clean_lib
+	rm -f bin_out/*_test
 
 clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked
