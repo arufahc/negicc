@@ -140,7 +140,7 @@ bin_out/dinov3_ort_runner.o: dinov3_ort_runner.cc dinov3_ort_runner.h dinov3_run
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_ort_runner.cc -o $@
 
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h cfa_pipeline.h color_pipeline.h neg_pipeline.h colorspace_conversion.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h neg_pipeline.h colorspace_conversion.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
@@ -160,11 +160,11 @@ bin_out/dinov3_nocuda.o: dinov3_nocuda.cc dinov3_runner.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_nocuda.cc -o $@
 
-bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h color_pipeline.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h cfa_pipeline.h color_pipeline.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -230,13 +230,22 @@ endef
 bin_out:
 	mkdir -p $@
 
+# Track the list of embedded files so removing a file from profiles/ or models/ triggers regeneration of embedded_data.S.
+EMBED_MANIFEST = bin_out/.embed_manifest
+$(shell mkdir -p bin_out; printf '%s\n' $(EMBED_FILES) > $(EMBED_MANIFEST).tmp; \
+        if ! cmp -s $(EMBED_MANIFEST).tmp $(EMBED_MANIFEST) 2>/dev/null; then \
+            mv $(EMBED_MANIFEST).tmp $(EMBED_MANIFEST); \
+        else \
+            rm -f $(EMBED_MANIFEST).tmp; \
+        fi)
+
 # neg_process throws on a bundle it cannot read, so the bundles are checked before they are embedded: every bracket
 # needs a shutter speed shutter_to_seconds (profile_bundle.cc) can read.
-bin_out/.bundles_checked: $(filter %/bundle.json,$(EMBED_FILES)) check_profile_bundles.py | bin_out
+bin_out/.bundles_checked: $(filter %/bundle.json,$(EMBED_FILES)) $(EMBED_MANIFEST) check_profile_bundles.py | bin_out
 	$(PYTHON) check_profile_bundles.py $(filter %/bundle.json,$(EMBED_FILES))
 	touch $@
 
-bin_out/embedded_data.S: $(EMBED_FILES) bin_out/.bundles_checked Makefile $(BUILD_STAMP) | bin_out
+bin_out/embedded_data.S: $(EMBED_FILES) $(EMBED_MANIFEST) bin_out/.bundles_checked Makefile $(BUILD_STAMP) | bin_out
 	$(file > $@,$(foreach i,$(EMBED_IDX),$(call EMBED_FILE_ASM,$(i),$(word $(i),$(EMBED_FILES))))$(EMBED_TABLE_ASM))
 
 bin_out/embedded_data_files.o: bin_out/embedded_data.S
@@ -295,17 +304,23 @@ bin_out/dinov3_shape_test: tests/dinov3_shape_test.cc dinov3_preprocess.cc color
 	mkdir -p bin_out
 	$(CXX) $(TEST_CXXFLAGS) tests/dinov3_shape_test.cc dinov3_preprocess.cc -o $@
 
-test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test
+bin_out/shutter_test: tests/shutter_test.cc profile_bundle.cc profile_bundle.h bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) $(ORT_INC) $(DINOV3_EXTRA_INC) tests/shutter_test.cc profile_bundle.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -llcms2 -lz -o $@
+
+test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test bin_out/shutter_test bin_out/neg_process
 	./bin_out/detector_test
 	./bin_out/rgbview_test
 	./bin_out/kernels_test
 	./bin_out/dinov3_shape_test
+	./bin_out/shutter_test
+	PYTHONPATH=. $(PYTHON) tests/neg_process_cli_test.py
 
 clean: clean_lib
 	rm -f bin_out/*_test
 
 clean_lib:
-	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked
+	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked $(EMBED_MANIFEST)
 
 clean_all: clean_lib
 	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_*
