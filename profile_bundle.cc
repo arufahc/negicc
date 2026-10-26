@@ -103,15 +103,20 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
 }
 
 bool is_json_bundle(const std::string& raw_path) {
-  FILE* fp = fopen(raw_path.c_str(), "rb");
+  auto open_regular = [](const std::string& p) -> FILE* {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(p, ec)) return nullptr;
+    return fopen(p.c_str(), "rb");
+  };
+  FILE* fp = open_regular(raw_path);
   if (!fp) {
     std::string alt = "profiles/" + raw_path;
-    fp = fopen(alt.c_str(), "rb");
+    fp = open_regular(alt);
     if (!fp) {
       size_t last_slash = raw_path.find_last_of("/\\");
       if (last_slash != std::string::npos) {
         std::string base = "profiles/" + raw_path.substr(last_slash + 1);
-        fp = fopen(base.c_str(), "rb");
+        fp = open_regular(base);
       }
     }
   }
@@ -192,19 +197,25 @@ double shutter_to_seconds_d(const std::string& shutter) {
   const size_t e = s.find_last_not_of(" \t\r\n");
   s = (b == std::string::npos) ? std::string() : s.substr(b, e - b + 1);
   while (!s.empty() && s.back() == 's') s.pop_back();
+  if (s.empty()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
   auto to_double = [&](const std::string& t) {
+    if (t.empty()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
     size_t used = 0;
     const double v = std::stod(t, &used);
-    if (used != t.size()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    if (used != t.size() || !std::isfinite(v)) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
     return v;
   };
   const size_t slash = s.find('/');
+  double val = 0.0;
   if (slash != std::string::npos) {
     const double den = to_double(s.substr(slash + 1));
-    if (den == 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
-    return to_double(s.substr(0, slash)) / den;
+    if (den <= 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    val = to_double(s.substr(0, slash)) / den;
+  } else {
+    val = to_double(s);
   }
-  return to_double(s);
+  if (!std::isfinite(val) || val <= 0.0) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+  return val;
 }
 
 // The profiles record a bracket's shutter speed as the camera displays it, a string: a fraction ("1/8s"), or
@@ -349,11 +360,7 @@ void compute_station_merged_matrix(const ProfileBundle& bundle, double scan_shut
                                    const double* custom_film_base_rgb, bool film_base_from_scan,
                                    float* out_f32, double* out_f64, double* out_row_scale_f64) {
   const double* fb = custom_film_base_rgb ? custom_film_base_rgb : bundle.film_base_avg_d;
-  double base_t = 0.125;
-  try {
-    base_t = shutter_to_seconds_d(bundle.film_base_shutter);
-  } catch (const std::exception&) {
-  }
+  const double base_t = bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(bundle.film_base_shutter);
   const double base_iso = (double)bundle.film_base_iso;
   const double exposure_base = base_t * (base_iso / 100.0);
   const double exposure_scan = scan_shutter_s * (scan_iso / 100.0);
@@ -532,6 +539,8 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     if (fb.contains("shutter")) {
       if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
       else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
+      else throw std::invalid_argument("bad film_base shutter in " + raw_path);
+      (void)shutter_to_seconds_d(bundle.film_base_shutter);
     }
     if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<float>();
     if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {

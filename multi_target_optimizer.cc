@@ -953,11 +953,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     fb = custom_fb_buf;
   }
   if (!fb) fb = bundle.film_base_avg;
-  float fb_t = 0.125f;
-  try {
-    fb_t = shutter_to_seconds(bundle.film_base_shutter);
-  } catch (const std::exception&) {
-  }
+  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
   const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
   // A measured base comes from this capture: no exposure ratio.
   const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
