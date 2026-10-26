@@ -34,4 +34,4 @@ Do **not** embed machine-specific absolute paths (e.g., `/home/user/Projects/...
 
 ## Code Style Rules
 
-- Do not introduce arbitrary namespaces (e.g. `namespace negicc` or `namespace dinov3`). Code in this repository resides in the global namespace consistent with existing files (`neg_process.cc`, `raw_info.cc`, etc.).
+- Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`, `raw_info.cc`, etc.), which reside in the global namespace. The six shared pipeline files consumed by `negicc-station` (`cfa_pipeline.h`, `cfa_pipeline.cc`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`, and `flat_sample.h`) use `namespace negicc`.
