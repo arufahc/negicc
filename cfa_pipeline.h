@@ -53,8 +53,9 @@ struct RgbView {
     int height = 0;
     const uint16_t* r_ptr = nullptr;
     const uint16_t* g_ptr = nullptr;
-    // Retained as nullptr for layout compatibility; half-size views and cpu_preview_debayer sample G1 only (g_ptr)
-    // to match film_image_from_cfa and LibRaw's 0xB4B4B4B4 channel layout.
+    // The second green of a Bayer 2x2 cell: half-size views average it with g_ptr ((G1 + G2) >> 1), as
+    // cpu_preview_debayer and negicc-station's CUDA preview kernel do. Null for X-Trans and interleaved RGB.
+    // film_image_from_cfa (the frame detector's input) still takes G1 only.
     const uint16_t* g2_ptr = nullptr;
     const uint16_t* b_ptr = nullptr;
     ptrdiff_t pitch = 0;   // step in uint16_t elements when x increases by 1
