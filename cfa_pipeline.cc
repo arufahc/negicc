@@ -193,10 +193,14 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
                         v.ch_x0[1] = (uint8_t)dc;
                         v.ch_y0[1] = (uint8_t)dr;
                     }
-                } else if ((col == 1 || col == 3) && !v.g_ptr) {
-                    v.g_ptr = p;
-                    v.ch_x0[1] = (uint8_t)dc;
-                    v.ch_y0[1] = (uint8_t)dr;
+                } else if (col == 1 || col == 3) {
+                    if (!v.g_ptr) {
+                        v.g_ptr = p;
+                        v.ch_x0[1] = (uint8_t)dc;
+                        v.ch_y0[1] = (uint8_t)dr;
+                    } else if (p != v.g_ptr && !v.g2_ptr) {
+                        v.g2_ptr = p;
+                    }
                 }
             }
         }
@@ -1025,17 +1029,16 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a) {
             const int col10 = bayer_color_at(r + 1, c, a.filters);
             const int col11 = bayer_color_at(r + 1, c + 1, a.filters);
 
-            uint16_t R = 0, G = 0, G2 = 0, B = 0;
-            bool have_g1 = false;
+            uint16_t R = 0, B = 0;
+            uint32_t G_sum = 0;
             const uint16_t samples[4] = {s00, s01, s10, s11};
             const int cols[4] = {col00, col01, col10, col11};
             for (int k = 0; k < 4; ++k) {
-                if (cols[k] == 1 && !have_g1) { G = samples[k]; have_g1 = true; }
-                else if (cols[k] == 3) G2 = samples[k];
+                if (cols[k] & 1) G_sum += samples[k];
                 else if (cols[k] == 0) R = samples[k];
-                else if (cols[k] == 2) B = samples[k];
+                else B = samples[k];
             }
-            if (!have_g1) G = G2;
+            const uint16_t G = (uint16_t)(G_sum >> 1);
 
             uint16_t px[3] = {R, G, B};
             if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
