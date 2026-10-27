@@ -34,14 +34,14 @@ static void test_from_cfa_half_validation_and_g1() {
     // X-Trans without xtrans_col36 must fail
     assert(!RgbView::from_cfa_half(cfa.data(), 16, 16, 12, 9u, nullptr).valid());
 
-    // Valid RGGB view: G1 only (no g2_ptr averaging), matching film_image_from_cfa
+    // Valid RGGB view: green is the average of G1 and G2 ((G1 + G2) >> 1), as cpu_preview_debayer computes it
     RgbView v = RgbView::from_cfa_half(cfa.data(), 16, 12, rggb);
     assert(v.valid());
     assert(v.width == 8 && v.height == 6);
-    assert(v.g2_ptr == nullptr);
+    assert(v.g2_ptr != nullptr);
     assert(v.cfa_step == 2);
 
-    // Compare against film_image_from_cfa green channel
+    // film_image_from_cfa (the frame detector's input) keeps one photosite per colour: G1
     const float black[4] = {0, 0, 0, 0};
     FilmImage fimg;
     const bool ok = film_image_from_cfa(
@@ -54,10 +54,12 @@ static void test_from_cfa_half_validation_and_g1() {
             uint16_t px[3];
             v.sample(x, y, px);
             assert(px[0] == cfa[(2 * y + 0) * 16 + (2 * x + 0)]); // R at (0,0)
-            assert(px[1] == cfa[(2 * y + 0) * 16 + (2 * x + 1)]); // G1 at (0,1)
+            const uint32_t g1 = cfa[(2 * y + 0) * 16 + (2 * x + 1)];  // G1 at (0,1)
+            const uint32_t g2 = cfa[(2 * y + 1) * 16 + (2 * x + 0)];  // G2 at (1,0)
+            assert(px[1] == (uint16_t)((g1 + g2) >> 1));
             assert(px[2] == cfa[(2 * y + 1) * 16 + (2 * x + 1)]); // B at (1,1)
             const uint16_t fg = fimg.ch[1].data[y * fimg.ch[1].stride + x * fimg.ch[1].pitch];
-            assert(px[1] == fg);
+            assert(fg == g1);
         }
     }
 }

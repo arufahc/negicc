@@ -14,13 +14,13 @@
 
 using namespace negicc;
 
-static void test_preview_debayer_matches_rgbview_g1() {
+static void test_preview_debayer_matches_rgbview_averaged_green() {
     const unsigned int filters = 0xB4B4B4B4u; // RGGB with G1=1, G2=3
     const int W = 24, H = 16, PITCH = 28;
     std::vector<uint16_t> cfa(PITCH * H, 0);
     for (int r = 0; r < H; ++r) {
         for (int c = 0; c < W; ++c) {
-            // Make G1 and G2 distinctly different so G1-only vs (G1+G2)>>1 would differ
+            // Make G1 and G2 distinctly different so G1-only and (G1+G2)>>1 differ
             const int col = bayer_color_at(r, c, filters);
             cfa[r * PITCH + c] = (uint16_t)(col * 5000 + r * 37 + c * 13 + 100);
         }
@@ -213,7 +213,7 @@ static void test_corrupt_npz_overflow_guards() {
 }
 
 int main() {
-    test_preview_debayer_matches_rgbview_g1();
+    test_preview_debayer_matches_rgbview_averaged_green();
     test_grain_aware_debayer_and_pixel_shift();
     test_extract_and_transform_roi_throws_on_mismatch();
     test_corrupt_npz_overflow_guards();
