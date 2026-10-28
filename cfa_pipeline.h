@@ -135,9 +135,6 @@ private:
     }
 };
 
-// Pixels of an RgbView with any channel >= clip_level.
-size_t count_clipped_view(const RgbView& view, uint16_t clip_level);
-
 // Summary produced by compute_raw_stats (shared by FrameView::raw_stats and multi_target_optimizer).
 struct RawStatsSummary {
     int dino_w = 0, dino_h = 0;
