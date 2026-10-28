@@ -46,9 +46,16 @@ struct SolverConfig {
   const ProfileData* prof = nullptr;
   float knee = 0.95f;
   bool knee_auto = false;
+  bool verbose = true;  // the solver's diagnostic lines (dynamic knee, shoulder), as the multi-target search's verbose
+  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
+  // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
+  float shoulder = 1.0f;
+  bool shoulder_auto = false;
   bool has_custom_bounds = false;
   float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
   float custom_e_center = 0.0f;
+  float enc_e_min = 0.0f;
+  float enc_e_max = 0.0f;
 };
 
 struct DynamicKneeResult {
@@ -59,6 +66,17 @@ struct DynamicKneeResult {
   float s = 0.0f;
   float delta_J = 0.0f;
   bool guard_triggered = false;
+};
+
+struct ShoulderResult {
+  bool active = false;       // x_hi > 1 was applied
+  bool measured = false;     // x_hi came from the auto measurement
+  float x_hi = 1.0f;         // the frozen parameter
+  float q995 = 0.0f;         // the measured 99.5% point before clamping (auto only)
+  float knee = 1.0f;         // the linear knee x_k
+  bool guard = false;        // the intent loss with the shoulder is more than 2% worse than without
+  float loss_with = 0.0f;    // mean(L, a, b) intent loss of the final params with x_hi
+  float loss_without = 0.0f; // and with the shoulder off
 };
 
 struct DinoIterationLog {
@@ -94,6 +112,7 @@ struct DinoSolveResult {
   std::vector<float> best_sigma;
   std::vector<float> tone_mass;
   DynamicKneeResult dynamic_knee;
+  ShoulderResult shoulder;
   std::vector<uint64_t> best_hist;
   int grid_w = 0;
   int grid_h = 0;
@@ -115,6 +134,10 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
 // Batched loss calculation across candidate matrices
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out);
+
+// The shoulder x_hi (color_pipeline.h) of a max-channel histogram of the pre-shoulder render (max_hist_bin layout):
+// its 99.5% point clamped to [1, kShoulderXHiMax]; q995_out gets the point before clamping.
+float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr);
 
 // Coordinate descent parameter search against a frozen intent field (mu, sigma)
 float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,

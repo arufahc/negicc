@@ -179,6 +179,23 @@ struct PositiveStats {
     float sh_a  = 0.0f, sh_b  = 0.0f;
 };
 
+// The q point (0..1) of a max-channel histogram, linearly interpolated within its bin.
+inline double max_hist_quantile(const uint64_t* hist, double q) {
+    double total = 0.0;
+    for (int i = 0; i < kMaxHistBins; ++i) total += (double)hist[i];
+    if (total <= 0.0) return 0.0;
+    const double rank = q * total;
+    double accum = 0.0;
+    for (int i = 0; i < kMaxHistBins; ++i) {
+        if (accum + (double)hist[i] >= rank) {
+            const double frac = hist[i] > 0 ? (rank - accum) / (double)hist[i] : 0.5;
+            return ((double)i + (frac < 0.0 ? 0.0 : (frac > 1.0 ? 1.0 : frac))) * (kMaxHistRange / kMaxHistBins);
+        }
+        accum += (double)hist[i];
+    }
+    return kMaxHistRange;
+}
+
 struct RenderArgs {
     const uint16_t* in = nullptr;
     const RgbView* in_view = nullptr;  // When non-null, reads directly from in_view (zero copy)
@@ -213,6 +230,10 @@ struct HighlightClipArgs {
     PipelineConfig cfg{};
     float ceil_lin[3] = {1.0f, 1.0f, 1.0f};
     float* out = nullptr;              // n * 5 floats
+    // Optional: n * kMaxHistBins counts of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] per candidate (the
+    // source of the shoulder's x_hi). Filled when non-null. The clip and exceedance counts read the pre-shoulder
+    // value; the L* median (out[4]) is post-shoulder.
+    uint64_t* max_hist = nullptr;
 };
 
 struct LabStatsRow {

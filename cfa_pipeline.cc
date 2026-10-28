@@ -758,8 +758,9 @@ void cpu_render(const RenderArgs& a) {
                 } else {
                     px = a.in + i * 3;
                 }
-                const Rgb lin = convert_pixel_linear(a.cfg, a.matrix, px);
-                const Rgb v = encode_output(lin, a.cfg.encoding);
+                const Rgb lin = convert_pixel_linear(a.cfg, a.matrix, px);  // pre-shoulder: clip rules
+                const Rgb disp = to_display(a.cfg, lin);                    // post-shoulder: render and Lab
+                const Rgb v = encode_output(disp, a.cfg.encoding);
                 const uint8_t r8 = quantize_u8(v.r);
                 const uint8_t g8 = quantize_u8(v.g);
                 const uint8_t b8 = quantize_u8(v.b);
@@ -788,7 +789,7 @@ void cpu_render(const RenderArgs& a) {
                         linear_channel_black_clipped(lin.b)) {
                         loc_bc++;
                     }
-                    const Lab lab = linear_srgb_to_lab(lin);
+                    const Lab lab = linear_srgb_to_lab(disp);
                     loc_hist_L[lab_bin(lab.L)]++;
                     rsum.all_a += lab.a; rsum.all_b += lab.b;
                     if (lab.L >= 20.0f && lab.L <= 75.0f) { rsum.mid_a += lab.a; rsum.mid_b += lab.b; loc_mid_n++; }
@@ -851,7 +852,7 @@ void cpu_intent_loss(const IntentLossArgs& a) {
             clip += linear_channel_white_clipped(lin.r) +
                     linear_channel_white_clipped(lin.g) +
                     linear_channel_white_clipped(lin.b);
-            const Lab lab = linear_srgb_to_lab(lin);
+            const Lab lab = linear_srgb_to_lab(to_display(a.cfg, lin));
             const float dL = (lab.L - a.mu[i * 3]) / a.sigma[i * 3];
             const float da = (lab.a - a.mu[i * 3 + 1]) / a.sigma[i * 3 + 1];
             const float db = (lab.b - a.mu[i * 3 + 2]) / a.sigma[i * 3 + 2];
@@ -888,9 +889,14 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
     const int x0 = crop.x0, x1 = crop.x0 + crop.w;
     const int y0 = crop.y0, y1 = crop.y0 + crop.h;
 
+    std::vector<uint64_t> total_max_hist;
+    if (a.max_hist) total_max_hist.assign((size_t)a.n * kMaxHistBins, 0);
+
     #pragma omp parallel
     {
         std::vector<CandAccum> local(a.n);
+        std::vector<uint64_t> local_max_hist;
+        if (a.max_hist) local_max_hist.assign((size_t)a.n * kMaxHistBins, 0);
         #pragma omp for collapse(2) schedule(static)
         for (int c = 0; c < a.n; ++c) {
             for (int y = y0; y < y1; ++y) {
@@ -908,8 +914,12 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
                             linear_channel_white_clipped(lin.b)) {
                             acc.wc++;
                         }
-                        const float L = linear_srgb_to_L(lin);
+                        const float L = linear_srgb_to_L(to_display(a.cfg, lin));
                         acc.hist_L[lab_bin(L)]++;
+                        if (a.max_hist) {
+                            const float mc = std::max(lin.r, std::max(lin.g, lin.b));
+                            local_max_hist[(size_t)c * kMaxHistBins + max_hist_bin(mc)]++;
+                        }
                     }
                 } else {
                     for (int x = x0; x < x1; ++x) {
@@ -924,8 +934,12 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
                             linear_channel_white_clipped(lin.b)) {
                             acc.wc++;
                         }
-                        const float L = linear_srgb_to_L(lin);
+                        const float L = linear_srgb_to_L(to_display(a.cfg, lin));
                         acc.hist_L[lab_bin(L)]++;
+                        if (a.max_hist) {
+                            const float mc = std::max(lin.r, std::max(lin.g, lin.b));
+                            local_max_hist[(size_t)c * kMaxHistBins + max_hist_bin(mc)]++;
+                        }
                     }
                 }
             }
@@ -938,7 +952,9 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
             totals[c].wc    += local[c].wc;
             for (int k = 0; k < kLabBins; ++k) totals[c].hist_L[k] += local[c].hist_L[k];
         }
+        for (size_t k = 0; k < local_max_hist.size(); ++k) total_max_hist[k] += local_max_hist[k];
     }
+    if (a.max_hist) std::memcpy(a.max_hist, total_max_hist.data(), total_max_hist.size() * sizeof(uint64_t));
 
     const double tot = (double)npx;
     for (int c = 0; c < a.n; ++c) {
@@ -974,7 +990,7 @@ void cpu_lab_stats(const LabStatsArgs& a) {
             if (linear_channel_black_clipped(lin.r) &&
                 linear_channel_black_clipped(lin.g) &&
                 linear_channel_black_clipped(lin.b)) row.black_clip += 1;
-            const Lab lab = linear_srgb_to_lab(lin);
+            const Lab lab = linear_srgb_to_lab(to_display(a.cfg, lin));
             hist[lab_bin(lab.L)]++;
             row.all_a += lab.a; row.all_b += lab.b;
             if (lab.L >= 20.0f && lab.L <= 75.0f) { row.mid_a += lab.a; row.mid_b += lab.b; row.mid_n += 1; }
