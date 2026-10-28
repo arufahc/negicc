@@ -1326,7 +1326,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Part 1B: Enclosure-Guided Highlight Rescue when the chosen bracket is highlight-constrained and exhibits
   // significant pre-shoulder highlight excess without being a dark/backlit silhouette.
-  if (out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
+  if (opts.enclosure_rescue && out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
     const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
     const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
