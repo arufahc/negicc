@@ -212,11 +212,210 @@ static void test_corrupt_npz_overflow_guards() {
     std::remove(path.c_str());
 }
 
+// ---- Highlight shoulder ------------------------------------------------------------------------------------
+
+static PipelineConfig make_test_cfg(float x_hi, int encoding = ENCODE_SRGB) {
+    PipelineConfig cfg{};
+    cfg.knee = 1.0f;  // no soft knee: the test controls the pre-shoulder value through the matrix
+    cfg.encoding = encoding;
+    set_shoulder(cfg, x_hi);
+    return cfg;
+}
+
+static void test_shoulder_off_is_bit_identical() {
+    const PipelineConfig cfg = make_test_cfg(1.0f);
+    const float m[9] = {1.9f, 0.1f, 0.0f, 0.05f, 1.7f, 0.02f, 0.0f, 0.1f, 1.5f};
+    int n = 0;
+    for (int r = 0; r < 65536; r += 4099) {
+        for (int g = 0; g < 65536; g += 5003) {
+            for (int b = 0; b < 65536; b += 6007) {
+                const uint16_t px[3] = {(uint16_t)r, (uint16_t)g, (uint16_t)b};
+                // The pipeline before the shoulder existed: clamp in the PCS to linear sRGB step, then encode.
+                Rgb v = load_u16(px);
+                v = apply_matrix(m, v);
+                v = apply_knee(v, cfg.knee);
+                v = apply_profile(cfg.profile, v);
+                const Rgb want = encode_output(pcs_to_linear_srgb(v), ENCODE_SRGB);
+                const Rgb got = convert_pixel(cfg, m, px);
+                assert(std::memcmp(&want, &got, sizeof(Rgb)) == 0);
+                // The pre-shoulder value is the same, clamped at 0 only.
+                const Rgb pre = convert_pixel_linear(cfg, m, px);
+                const Rgb clamped = pcs_to_linear_srgb(v);
+                assert(clamp01(pre.r) == clamped.r && clamp01(pre.g) == clamped.g && clamp01(pre.b) == clamped.b);
+                ++n;
+            }
+        }
+    }
+    assert(n > 100);
+}
+
+static void test_shoulder_curve() {
+    for (float x_hi : {1.01f, 1.1f, 1.333f, 1.5f}) {
+        for (float n : {2.0f, 8.0f}) {
+            PipelineConfig cfg{};
+            cfg.encoding = ENCODE_SRGB;
+            set_shoulder(cfg, x_hi, n);
+            assert(cfg.shoulder_x_k > 0.5f && cfg.shoulder_x_k < 1.0f);
+            // The identity up to the knee, continuous and with a continuous slope there.
+            const float k = cfg.shoulder_x_k;
+            assert(apply_shoulder_channel(cfg, 0.5f * k) == 0.5f * k);
+            assert(std::fabs(apply_shoulder_channel(cfg, k * 1.0001f) - k * 1.0001f) < 2e-5f);
+            const float h = 1e-3f;
+            const float slope_below = (apply_shoulder_channel(cfg, k) - apply_shoulder_channel(cfg, k * (1 - h))) / (k * h);
+            const float slope_above =
+                (apply_shoulder_channel(cfg, k * (1 + h)) - apply_shoulder_channel(cfg, k)) / (k * h);
+            assert(std::fabs(slope_below - 1.0f) < 0.01f);
+            assert(std::fabs(slope_above - 1.0f) < 0.1f);  // C1 join; the tightest spans curve fastest
+            // The ceiling is reached at x_hi, holds above it, and the curve never decreases.
+            const float ceiling = srgb_decode(kShoulderCeiling);
+            assert(std::fabs(apply_shoulder_channel(cfg, x_hi * 0.99999f) - ceiling) < 5e-3f);
+            assert(std::fabs(apply_shoulder_channel(cfg, x_hi) - ceiling) < 1e-5f);
+            assert(apply_shoulder_channel(cfg, 3.0f) == cfg.shoulder_y_c && std::fabs(cfg.shoulder_y_c - ceiling) < 1e-5f);
+            float prev = 0.0f;
+            for (float x = 0.0f; x < 2.0f; x += 0.001f) {
+                const float y = apply_shoulder_channel(cfg, x);
+                assert(y >= prev - 1e-6f);
+                prev = y;
+            }
+        }
+    }
+    // Measured values (double precision bisection): x_hi 1.333, n = 2 -> knee 0.735, the chart white lands at code 245.
+    PipelineConfig cfg{};
+    cfg.encoding = ENCODE_SRGB;
+    set_shoulder(cfg, 1.333f);
+    assert(std::fabs(cfg.shoulder_x_k - 0.735f) < 0.005f);
+    const float white_code = 255.0f * srgb_encode(apply_shoulder_channel(cfg, 1.0f));
+    assert(std::fabs(white_code - 245.1f) < 0.3f);
+    // Off, and out of range.
+    PipelineConfig off{};
+    set_shoulder(off, 1.0f);
+    assert(off.shoulder_x_hi == 1.0f);
+    set_shoulder(off, 9.0f);
+    assert(off.shoulder_x_hi == kShoulderXHiMax);
+    // Only the sRGB encoding applies it.
+    const PipelineConfig lin = make_test_cfg(1.3f, ENCODE_SRGB_LINEAR);
+    const Rgb v = {1.2f, 0.5f, 0.9f};
+    const Rgb same = apply_shoulder(lin, v);
+    assert(same.r == v.r && same.g == v.g && same.b == v.b);
+}
+
+// The statistics read the pre-shoulder value and the render and the Lab the post-shoulder one.
+static void test_shoulder_kernels_agree() {
+    const int W = 64, H = 48;
+    std::vector<uint16_t> rgb((size_t)W * H * 3);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const float t = (x + y * W) / (float)(W * H);  // 0..1 ramp to well above the chart white
+            for (int c = 0; c < 3; ++c) rgb[((size_t)y * W + x) * 3 + c] = (uint16_t)(t * (0.8f + 0.1f * c) * 65535.0f);
+        }
+    }
+    RgbView view = RgbView::from_interleaved_rgb(rgb.data(), W, H, 3);
+    const float m[9] = {1.6f, 0, 0, 0, 1.6f, 0, 0, 0, 1.6f};
+
+    PipelineConfig off = make_test_cfg(1.0f), on = make_test_cfg(1.0f);
+    set_shoulder(on, 1.25f);
+
+    auto clip = [&](const PipelineConfig& cfg, std::vector<uint64_t>* hist, float* out5) {
+        HighlightClipArgs ha{};
+        ha.in_view = &view;
+        ha.width = W;
+        ha.height = H;
+        ha.matrices = m;
+        ha.n = 1;
+        ha.cfg = cfg;
+        ha.ceil_lin[0] = ha.ceil_lin[1] = ha.ceil_lin[2] = 0.9f;
+        ha.out = out5;
+        if (hist) {
+            hist->assign(kMaxHistBins, 0);
+            ha.max_hist = hist->data();
+        }
+        cpu_highlight_clip(ha);
+    };
+    float c_off[5], c_on[5];
+    std::vector<uint64_t> h_off, h_on;
+    clip(off, &h_off, c_off);
+    clip(on, &h_on, c_on);
+    // Exceedance and white clip: pre-shoulder, the same either way. The median L* is post-shoulder: lower.
+    for (int i = 0; i < 4; ++i) assert(c_off[i] == c_on[i]);
+    assert(c_on[4] <= c_off[4]);
+    assert(h_off == h_on);
+    uint64_t total = 0;
+    for (uint64_t v : h_on) total += v;
+    assert(total == (uint64_t)W * H);
+    const double q = max_hist_quantile(h_on.data(), 0.995);
+    assert(q > 1.0 && q < kMaxHistRange);
+    // Without the histogram the statistics are unchanged.
+    float c_nohist[5];
+    clip(on, nullptr, c_nohist);
+    for (int i = 0; i < 5; ++i) assert(c_nohist[i] == c_on[i]);
+
+    // Self-consistency: the Lab the intent loss scores is the Lab of the rendered (encoded) output. With the render's
+    // own Lab as the target (sigma 1) the loss is zero to float noise; a render without the shoulder is not.
+    std::vector<float> rendered((size_t)W * H * 3);
+    RenderArgs ra{};
+    ra.in_view = &view;
+    ra.width = W;
+    ra.height = H;
+    ra.matrix = m;
+    ra.cfg = on;
+    ra.out_type = 2;
+    ra.out = rendered.data();
+    cpu_render(ra);
+    std::vector<float> mu((size_t)W * H * 3), sigma((size_t)W * H * 3, 1.0f);
+    for (int i = 0; i < W * H; ++i) {
+        const Lab lab = srgb_to_lab({rendered[i * 3], rendered[i * 3 + 1], rendered[i * 3 + 2]});
+        mu[i * 3] = lab.L;
+        mu[i * 3 + 1] = lab.a;
+        mu[i * 3 + 2] = lab.b;
+    }
+    auto loss = [&](const PipelineConfig& cfg) {
+        IntentLossArgs ia{};
+        ia.in_view = &view;
+        ia.width = W;
+        ia.height = H;
+        ia.matrices = m;
+        ia.n = 1;
+        ia.cfg = cfg;
+        ia.mu = mu.data();
+        ia.sigma = sigma.data();
+        float out[4];
+        ia.out = out;
+        cpu_intent_loss(ia);
+        return out[0] + out[1] + out[2];
+    };
+    assert(loss(on) < 1e-2f);
+    assert(loss(off) > 1.0f);
+
+    // lab_stats agrees with the render too: its L* histogram counts the post-shoulder values.
+    LabStatsRow rows[2];
+    for (int k = 0; k < 2; ++k) {
+        LabStatsArgs la{};
+        la.in_view = &view;
+        la.width = W;
+        la.height = H;
+        la.matrices = m;
+        la.n = 1;
+        la.cfg = k ? on : off;
+        la.out = &rows[k];
+        cpu_lab_stats(la);
+    }
+    assert(rows[0].white_clip == rows[1].white_clip);  // pre-shoulder
+    float mean_on = 0, mean_off = 0;
+    for (int b = 0; b < kLabBins; ++b) {
+        mean_on += rows[1].hist[b] * b;
+        mean_off += rows[0].hist[b] * b;
+    }
+    assert(mean_on < mean_off);
+}
+
 int main() {
     test_preview_debayer_matches_rgbview_averaged_green();
     test_grain_aware_debayer_and_pixel_shift();
     test_extract_and_transform_roi_throws_on_mismatch();
     test_corrupt_npz_overflow_guards();
+    test_shoulder_off_is_bit_identical();
+    test_shoulder_curve();
+    test_shoulder_kernels_agree();
     std::printf("kernels_test: all assertions passed.\n");
     return 0;
 }

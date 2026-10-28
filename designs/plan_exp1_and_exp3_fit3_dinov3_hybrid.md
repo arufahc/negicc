@@ -1,5 +1,9 @@
 # Hybrid `FIT3` + `DINOv3` Architecture Design: Experiment 1 (Highlight Roll-Off & Multi-Bracket Rescue) and Experiment 3 (Chromatic Trust-Region Prior & Log-Density Slope Pre-Normalization)
 
+> **Part 1A superseded.** The power-8 export-only shoulder described below was replaced by one shared per-frame
+> shoulder stage that the solver, the previews and the export all run; see
+> [plan_exp1_shoulder_gap.md](plan_exp1_shoulder_gap.md). Part 1B (the bracket rescue) is unchanged.
+
 ## 1. Executive Summary & Double-Blind Evaluation Motivation
 
 Across the 106-frame double-blind operator evaluation (`55` Sony A7R4 TriLED narrowband scans + `51` multi-camera Web white-light scans; see [`report_fit3_vs_dinov3_blind_eval.md`](file:///home/alpha/Projects/negicc/designs/report_fit3_vs_dinov3_blind_eval.md)), `DINOv3 + Profile` won **75 / 106 (70.8%)** overall while Epson `FIT3` (`libfit3` reimplementation in [`fit3.cc`](file:///home/alpha/Projects/negicc/fit3.cc)) won **31 / 106 (29.2%)**.
