@@ -638,9 +638,10 @@ class SearchFrame {
 
   // The shoulder: a fixed x_hi for every render, or (auto) the one each ConversionParams carries, which
   // fixed_point() measures. The screening passes carry 1.
-  void set_shoulder(float x_hi, bool automatic) {
+  void set_shoulder(float x_hi, bool automatic, bool anchored = false) {
     shoulder_fixed_ = x_hi;
     shoulder_auto_ = automatic;
+    shoulder_anchored_ = automatic && anchored;
   }
   float shoulder_of(const ConversionParams& p) const { return shoulder_auto_ ? p.shoulder : shoulder_fixed_; }
 
@@ -867,7 +868,8 @@ class SearchFrame {
   }
 
   // The shoulder's x_hi at p: the 99.5% point of the max channel of the pre-shoulder render of the inner crop,
-  // clamped to [1, kShoulderXHiMax]; q995 gets the point before clamping.
+  // clamped to [1, kShoulderXHiMax], or (anchored) the x_hi that maps it to sRGB kShoulderAnchorCode; q995 gets the
+  // point before clamping.
   float measure_shoulder(int target_idx, const ConversionParams& p, float* q995) {
     const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
     static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
@@ -877,7 +879,7 @@ class SearchFrame {
     std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
     measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data, kCeil,
                            1.0f, hist.data());
-    const float x_hi = shoulder_x_hi_from_hist(hist.data(), q995);
+    const float x_hi = shoulder_x_hi_from_hist(hist.data(), q995, shoulder_anchored_);
     render_time_ += Clock::now() - t0;
     return x_hi;
   }
@@ -906,6 +908,7 @@ class SearchFrame {
   float e_norm_ = 1.0f;
   float shoulder_fixed_ = 1.0f;
   bool shoulder_auto_ = false;
+  bool shoulder_anchored_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
 };
 
@@ -1027,7 +1030,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
-  fr.set_shoulder(opts.shoulder_auto ? 1.0f : opts.shoulder, opts.shoulder_auto);
+  fr.set_shoulder(opts.shoulder_auto ? 1.0f : opts.shoulder, opts.shoulder_auto, opts.shoulder_anchored);
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 

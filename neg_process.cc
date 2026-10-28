@@ -1102,7 +1102,7 @@ static constexpr float kLowFrameConfidence = 0.5f;
 // The highlight shoulder as the sidecar records it (tone.shoulder*).
 struct ShoulderInfo {
   float x_hi = 1.0f;                 // the frozen parameter; 1 is off
-  std::string source = "off";        // off | cli | auto
+  std::string source = "off";        // off | cli | auto | anchored
   bool has_q995 = false;
   float q995 = 0.0f;                 // measured before clamping (auto)
   bool has_knee = false;
@@ -1594,7 +1594,9 @@ int main(int ac, char *av[]) {
     .default_value(std::string("0.95"));
   parser.add_argument("--shoulder")
     .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
-          "export applies it), or x_hi in [1, 1.5]: the 99.5% point of the render's max channel in linear sRGB, "
+          "export applies it), 'anchored' (as auto, but x_hi maps the frame's own 99.5% point to sRGB 242 instead of "
+          "being that point, so frames whose highlights stay below the chart white are rolled off too), or x_hi in "
+          "[1, 2.5]: the 99.5% point of the render's max channel in linear sRGB, "
           "where the chart white is 1 (a linear value, not stops: 1.3 is +0.38 stop). 1 is off. The shoulder rolls "
           "the range above its knee into the ceiling at x_hi. It only applies to the sRGB output; srgb-g10 "
           "(scene-referred) and ICC outputs never apply it. Defaults to off.")
@@ -1783,17 +1785,18 @@ int main(int ac, char *av[]) {
     knee = val;
   }
   const std::string shoulder_str = parser.get<std::string>("--shoulder");
-  const bool is_shoulder_auto = (shoulder_str == "auto");
+  const bool is_shoulder_anchored = (shoulder_str == "anchored");
+  const bool is_shoulder_auto = (shoulder_str == "auto") || is_shoulder_anchored;
   ShoulderInfo shoulder_info;
   if (is_shoulder_auto) {
-    shoulder_info.source = "auto";
+    shoulder_info.source = shoulder_str;
   } else if (shoulder_str != "off") {
     char* end = nullptr;
     const float val = strtof(shoulder_str.c_str(), &end);
     if (!end || *end != '\0' || end == shoulder_str.c_str() || !std::isfinite(val) || val < 1.0f ||
-        val > negicc::kShoulderXHiMax) {
-      fprintf(stderr, "ERROR! Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
-              shoulder_str.c_str(), (double)negicc::kShoulderXHiMax);
+        val > negicc::kShoulderXHiLimit) {
+      fprintf(stderr, "ERROR! Invalid --shoulder argument '%s' (off, auto, anchored or x_hi in [1, %g])\n",
+              shoulder_str.c_str(), (double)negicc::kShoulderXHiLimit);
       return 1;
     }
     shoulder_info.x_hi = val;
@@ -2027,8 +2030,8 @@ int main(int ac, char *av[]) {
     return 1;
   }
   if (is_shoulder_auto && !use_dino) {
-    fprintf(stderr, "ERROR! --shoulder auto requires the parameter search (it measures the shoulder from the render "
-                    "at the searched parameters); give an x_hi instead\n");
+    fprintf(stderr, "ERROR! --shoulder %s requires the parameter search (it measures the shoulder from the render "
+                    "at the searched parameters); give an x_hi instead\n", shoulder_str.c_str());
     return 1;
   }
   // TODO: `--film_base_rgb` (including `--film_base_rgb auto`) is rejected here when `bundle_search` is true, which
@@ -2192,6 +2195,7 @@ int main(int ac, char *av[]) {
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       opts.shoulder = shoulder_info.x_hi;
       opts.shoulder_auto = is_shoulder_auto;
+      opts.shoulder_anchored = is_shoulder_anchored;
       opts.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
@@ -2561,6 +2565,7 @@ int main(int ac, char *av[]) {
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       opts.shoulder = shoulder_info.x_hi;
       opts.shoulder_auto = is_shoulder_auto;
+      opts.shoulder_anchored = is_shoulder_anchored;
       opts.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
@@ -2881,6 +2886,7 @@ int main(int ac, char *av[]) {
     cfg.knee_auto = is_knee_auto;
     cfg.shoulder = shoulder_info.x_hi;
     cfg.shoulder_auto = is_shoulder_auto;
+    cfg.shoulder_anchored = is_shoulder_anchored;
 
     const int max_iters = parser.get<int>("--dino_iters");
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};

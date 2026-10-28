@@ -51,6 +51,9 @@ struct SolverConfig {
   // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
   float shoulder = 1.0f;
   bool shoulder_auto = false;
+  // With shoulder_auto: x_hi maps the measured 99.5% point to sRGB kShoulderAnchorCode (shoulder_x_hi_anchored)
+  // instead of being that point.
+  bool shoulder_anchored = false;
   bool has_custom_bounds = false;
   float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
   float custom_e_center = 0.0f;
@@ -136,8 +139,9 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out);
 
 // The shoulder x_hi (color_pipeline.h) of a max-channel histogram of the pre-shoulder render (max_hist_bin layout):
-// its 99.5% point clamped to [1, kShoulderXHiMax]; q995_out gets the point before clamping.
-float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr);
+// its 99.5% point clamped to [1, kShoulderXHiMax], or with anchored the x_hi that maps that point to sRGB
+// kShoulderAnchorCode (shoulder_x_hi_anchored); q995_out gets the point before clamping.
+float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr, bool anchored = false);
 
 // Coordinate descent parameter search against a frozen intent field (mu, sigma)
 float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,

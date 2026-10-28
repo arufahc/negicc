@@ -357,12 +357,16 @@ def test_shoulder_option_sidecar_and_replay():
             res = subprocess.run([*base, *extra, "-o", out_tif, dng], capture_output=True, text=True)
             return res, out_tif
 
-        # Invalid values and 'auto' without the parameter search are errors.
-        for bad in ("2.0", "0.5", "nan", "x"):
+        # Invalid values and 'auto' or 'anchored' without the parameter search are errors.
+        for bad in ("2.6", "0.5", "nan", "x"):
             res, _ = run("--shoulder", bad)
             assert res.returncode != 0 and "Invalid --shoulder" in res.stderr, (bad, res.stderr)
-        res, _ = run("--shoulder", "auto")
-        assert res.returncode != 0 and "--shoulder auto requires the parameter search" in res.stderr, res.stderr
+        for mode in ("auto", "anchored"):
+            res, _ = run("--shoulder", mode)
+            assert res.returncode != 0 and f"--shoulder {mode} requires the parameter search" in res.stderr, res.stderr
+        # An anchored x_hi above the chart-white shoulder's 1.5 cap replays as a fixed value.
+        res, _ = run("-P", "srgb", "--shoulder", "2.1", out="anchored_x.tif")
+        assert res.returncode == 0, res.stderr
 
         def sha(path):
             with open(path, "rb") as f:

@@ -291,7 +291,7 @@ static void test_shoulder_curve() {
     set_shoulder(off, 1.0f);
     assert(off.shoulder_x_hi == 1.0f);
     set_shoulder(off, 9.0f);
-    assert(off.shoulder_x_hi == kShoulderXHiMax);
+    assert(off.shoulder_x_hi == kShoulderXHiLimit);
     // The ceiling is ramped in: continuous at the on/off boundary, the full 0.988 from 1 + kShoulderRamp.
     {
         PipelineConfig a{}, b{}, c{};
@@ -314,12 +314,47 @@ static void test_shoulder_curve() {
         bool threw = false;
         try { set_shoulder(a, 1.2f, 0.5f); } catch (const std::invalid_argument&) { threw = true; }
         assert(threw);
-        for (float x = 1.0002f; x <= 1.5f; x += 0.0007f) {
+        for (float x = 1.0002f; x <= kShoulderXHiLimit; x += 0.0007f) {
             PipelineConfig k{};
             k.encoding = ENCODE_SRGB;
             set_shoulder(k, x);
             assert(k.shoulder_x_hi > 1.0f && k.shoulder_x_k > 0.0f && k.shoulder_x_k < 1.0001f);
         }
+    }
+    // The anchored x_hi maps the frame's 99.5% point q to sRGB 242: off at or below it, the value at q falls with x_hi,
+    // q lands on the anchor code within a hundredth of a code, and past the limit the limit is used.
+    {
+        const float anchor = kShoulderAnchorCode / 255.0f;
+        assert(shoulder_x_hi_anchored(0.5f) == 1.0f);
+        assert(shoulder_x_hi_anchored(srgb_decode(anchor) * 0.999f) == 1.0f);
+        assert(shoulder_x_hi_anchored(0.0f) == 1.0f && shoulder_x_hi_anchored(std::nanf("")) == 1.0f);
+        float prev_x = 1.0f;
+        for (float q = srgb_decode(anchor) * 1.002f; q <= 1.2f; q += 0.002f) {
+            const float x_hi = shoulder_x_hi_anchored(q);
+            PipelineConfig a{};
+            a.encoding = ENCODE_SRGB;
+            set_shoulder(a, x_hi);
+            assert(x_hi > kShoulderOff && x_hi <= kShoulderXHiLimit && x_hi >= prev_x);
+            assert(std::fabs(255.0f * srgb_encode(apply_shoulder_channel(a, q)) - kShoulderAnchorCode) < 0.01f);
+            prev_x = x_hi;
+        }
+        for (float q = 0.9f; q <= 1.2f; q += 0.1f) {
+            float prev = 2.0f;
+            for (float x = 1.0002f; x <= kShoulderXHiLimit; x += 0.01f) {
+                PipelineConfig a{};
+                a.encoding = ENCODE_SRGB;
+                set_shoulder(a, x);
+                const float v = apply_shoulder_channel(a, q);
+                assert(v <= prev + 1e-6f);
+                prev = v;
+            }
+        }
+        // Measured: q = 0.95 (code 249) -> x_hi 1.358, knee at code 221.1.
+        PipelineConfig m{};
+        m.encoding = ENCODE_SRGB;
+        set_shoulder(m, shoulder_x_hi_anchored(0.95f));
+        assert(std::fabs(m.shoulder_x_hi - 1.358f) < 0.002f && std::fabs(255.0f * m.shoulder_s_k - 221.1f) < 0.1f);
+        assert(shoulder_x_hi_anchored(5.0f) == kShoulderXHiLimit);
     }
     // Only the sRGB encoding applies it.
     const PipelineConfig lin = make_test_cfg(1.3f, ENCODE_SRGB_LINEAR);

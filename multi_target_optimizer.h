@@ -118,6 +118,8 @@ struct ParamSearchOptions {
   // pre-shoulder render at each iteration's incoming parameters when shoulder_auto.
   float shoulder = 1.0f;
   bool shoulder_auto = false;
+  // With shoulder_auto: x_hi maps the measured 99.5% point to sRGB kShoulderAnchorCode (shoulder_x_hi_anchored).
+  bool shoulder_anchored = false;
   // Part 1B, the enclosure-guided bracket rescue after Step 5 (multi_target_optimizer.cc). Off by default.
   bool enclosure_rescue = false;
 };

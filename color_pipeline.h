@@ -80,7 +80,12 @@ constexpr float kShoulderRamp = 0.10f;
 // Default n. OPEN: n = 2 (the FIT3 specification's quadratic highlight shoulder) against exp1's 8 is not decided;
 // the evaluation settles it. Never a per-frame parameter.
 constexpr float kShoulderExponent = 2.0f;
-constexpr float kShoulderXHiMax = 1.5f;
+constexpr float kShoulderXHiMax = 1.5f;     // the largest x_hi of the chart-white ("auto") shoulder
+// The anchored shoulder (shoulder_x_hi_anchored) maps the frame's own 99.5% point to sRGB kShoulderAnchorCode instead
+// of the chart white to the ceiling, which needs a longer roll-off: x_hi up to kShoulderXHiLimit (the largest x_hi
+// set_shoulder accepts). 242 is the code above which Part 1B's gate counts a highlight as blown.
+constexpr float kShoulderXHiLimit = 2.5f;
+constexpr float kShoulderAnchorCode = 242.0f;
 
 // Bradford D50 -> D65 and XYZ -> linear sRGB constants are written inline in pcs_to_linear_srgb() so they are
 // usable from device code.
@@ -374,7 +379,7 @@ NEGICC_HD int max_hist_bin(float v) {
 }
 
 // ---- Host: solve the shoulder knee ------------------------------------------------------------------------
-// x_hi in (kShoulderOff, kShoulderXHiMax] enables the shoulder (anything else turns it off). Bisection on the knee
+// x_hi in (kShoulderOff, kShoulderXHiLimit] enables the shoulder (anything else turns it off). Bisection on the knee
 // t_k in [-3, 0] in double precision; the C1 condition changes sign once.
 inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExponent) {
     if (!(n >= 1.0f && n <= 16.0f)) throw std::invalid_argument("shoulder exponent must be in [1, 16]");
@@ -391,7 +396,7 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
         off();
         return;
     }
-    if (x_hi > kShoulderXHiMax) x_hi = kShoulderXHiMax;
+    if (x_hi > kShoulderXHiLimit) x_hi = kShoulderXHiLimit;
     // The ceiling ramps in from the unshouldered white so the curve is continuous in x_hi at the on/off boundary.
     const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
     const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
@@ -421,6 +426,30 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     cfg.shoulder_s_k = (float)enc(std::exp2(t_k));
     cfg.shoulder_c = (float)C;
     cfg.shoulder_y_c = (float)dec(C);
+}
+
+// The anchored shoulder's x_hi for a frame whose pre-shoulder max channel has its 99.5% point at q: the x_hi whose
+// curve maps q to sRGB kShoulderAnchorCode, so the frame's own highlights, not the chart white, set where the roll-off
+// starts. 1.0 (off) when q already encodes at or below the anchor code. A longer roll-off (larger x_hi) has a lower
+// knee (the C1 join) and so a lower value at q: the value falls monotonically with x_hi, and a bisection on x_hi in
+// (kShoulderOff, kShoulderXHiLimit] finds it. Past the limit the limit is used and q lands above the anchor code.
+inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
+    const float anchor = kShoulderAnchorCode / 255.0f;
+    if (!(q > 0.0f) || !(srgb_encode(q) > anchor)) return 1.0f;
+    auto code_at_q = [&](float x_hi) {
+        PipelineConfig c{};
+        c.encoding = ENCODE_SRGB;
+        set_shoulder(c, x_hi, n);
+        return srgb_encode(apply_shoulder_channel(c, q));
+    };
+    float lo = 1.0002f, hi = kShoulderXHiLimit;
+    if (code_at_q(hi) > anchor) return hi;
+    if (!(code_at_q(lo) > anchor)) return lo;
+    for (int i = 0; i < 60; ++i) {
+        const float mid = 0.5f * (lo + hi);
+        if (code_at_q(mid) > anchor) lo = mid; else hi = mid;
+    }
+    return hi;
 }
 
 }  // namespace negicc
