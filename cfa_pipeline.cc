@@ -12,6 +12,9 @@ namespace negicc {
 namespace {
 
 inline void normalize_rot_flips(int& rot_cw, bool& hflip, bool& vflip) {
+    if (rot_cw % 90 != 0) {
+        throw std::invalid_argument("rotation must be a multiple of 90 degrees");
+    }
     rot_cw = ((rot_cw % 360) + 360) % 360;
     if (rot_cw == 180) {
         hflip = !hflip;
@@ -42,9 +45,10 @@ inline void map_inverse_geometry_cpu(
 }
 
 inline bool is_rggb_pattern_cpu(unsigned int filters) {
+    const int c10 = bayer_color_at(1, 0, filters);
     return (bayer_color_at(0, 0, filters) == 0 &&
             bayer_color_at(0, 1, filters) == 1 &&
-            bayer_color_at(1, 0, filters) == 3 &&
+            (c10 == 1 || c10 == 3) &&
             bayer_color_at(1, 1, filters) == 2);
 }
 
@@ -151,6 +155,7 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     v.flat = flat_args;
     v.flat_tables = std::move(flat_pin);
     const int period = (filters == 9) ? 6 : 2;
+    if (filters == 0 || filters == 1) return v;
     if (!cfa || sensor_w < period || sensor_h < period) return v;
     if (filters == 9 && !xtrans_col36) return v;
 
@@ -224,13 +229,17 @@ RgbView RgbView::from_interleaved_rgb(const uint16_t* rgb, int w, int h, int cha
 }
 
 RgbView RgbView::crop_and_orient(int rx, int ry, int rw, int rh, int rot_cw, bool hflip, bool vflip) const {
-    if (!valid()) return {};
-    rx = std::max(0, std::min(rx, width - 1));
-    ry = std::max(0, std::min(ry, height - 1));
-    rw = std::max(1, std::min(rw, width - rx));
-    rh = std::max(1, std::min(rh, height - ry));
-
     normalize_rot_flips(rot_cw, hflip, vflip);
+    if (!valid() || rw <= 0 || rh <= 0) return {};
+    const int x0 = std::max(0, rx);
+    const int y0 = std::max(0, ry);
+    const int x1 = std::min(width, rx + rw);
+    const int y1 = std::min(height, ry + rh);
+    if (x1 <= x0 || y1 <= y0) return {};
+    rx = x0;
+    ry = y0;
+    rw = x1 - x0;
+    rh = y1 - y0;
     const bool swap_dims = (rot_cw == 90 || rot_cw == 270);
     const int dst_w = swap_dims ? rh : rw;
     const int dst_h = swap_dims ? rw : rh;
@@ -288,10 +297,11 @@ RgbView RgbView::crop_and_orient(int rx, int ry, int rw, int rh, int rot_cw, boo
     return out;
 }
 
-// TODO: RgbView::to_film_image has no remaining internal callers in negicc or negicc-station; remove in a follow-up
-// cleanup.
+// Used by negicc-station's _cfa_half_view test binding; returns an empty FilmImage (step == 0) when the view has an
+// attached flat field or non-identity orientation/crop.
 FilmImage RgbView::to_film_image(float white_level, int step) const {
     FilmImage img;
+    img.step = 0;
     if (!valid()) return img;
     // FilmImage is a direct un-oriented strided view over raw channel pointers without flat-field tables or 2-green
     // averaging; refuse views with an attached flat field or non-identity crop/orientation.
@@ -363,7 +373,7 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
     const RawStatTables& tbl = raw_stat_tables();
     const bool is_contig = view.is_contiguous_rgb();
 
-    uint64_t g_hist[65536] = {};
+    std::vector<uint64_t> g_hist(65536, 0);
     struct RowLog { double r = 0, g = 0, b = 0; };
     std::vector<RowLog> row_logs(std::max(0, crop.h));
     std::mutex merge_mtx;
@@ -425,8 +435,8 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
         out.log_avg_rgb[1] = std::exp(tot_lg * inv_n) / 65535.0;
         out.log_avg_rgb[2] = std::exp(tot_lb * inv_n) / 65535.0;
 
-        const double p_lo = u16_percentile_linear(g_hist, npx, 0.005);
-        const double p_hi = u16_percentile_linear(g_hist, npx, 0.995);
+        const double p_lo = u16_percentile_linear(g_hist.data(), npx, 0.005);
+        const double p_hi = u16_percentile_linear(g_hist.data(), npx, 0.995);
         out.g_lo = (float)std::max(1.0, p_lo);
         out.g_hi = (float)std::max((double)out.g_lo + 1.0, p_hi);
     }
@@ -660,7 +670,9 @@ void extract_and_transform_roi(
     int dst_w, int dst_h
 ) {
     RgbView v = RgbView::from_interleaved_rgb(src, src_w, src_h, 3).crop_and_orient(rx, ry, rw, rh, rot_cw, hflip, vflip);
-    if (v.width != dst_w || v.height != dst_h) return;
+    if (!v.valid() || v.width != dst_w || v.height != dst_h) {
+        throw std::invalid_argument("extract_and_transform_roi: ROI dimensions do not match dst_w x dst_h");
+    }
     v.materialize(dst);
 }
 
@@ -991,6 +1003,9 @@ void cpu_lab_stats(const LabStatsArgs& a) {
 // ---- CPU Debayer & Pixel-Shift Kernels ---------------------------------------------------------------------
 
 void cpu_preview_debayer(const PreviewDebayerArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("cpu_preview_debayer: rot_cw must be a multiple of 90");
+    }
     const int half_rw = a.rw / 2;
     const int half_rh = a.rh / 2;
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
@@ -1037,6 +1052,9 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a) {
 }
 
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("cpu_grain_aware_debayer: rot_cw must be a multiple of 90");
+    }
     if (!is_rggb_pattern_cpu(a.filters)) {
         throw std::invalid_argument("cpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
     }
@@ -1153,6 +1171,9 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
 }
 
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("cpu_pixel_shift_merge: rot_cw must be a multiple of 90");
+    }
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)
     for (int y2 = 0; y2 < a.dst_h; ++y2) {

@@ -41,7 +41,7 @@ enum class InputFormat : int {
 };
 
 inline int bayer_color_at(int r, int c, unsigned int filters) {
-    return (filters >> (((r << 1 & 14) + (c & 1)) << 1)) & 3;
+    return (filters >> (((((unsigned int)r << 1) & 14u) | ((unsigned int)c & 1u)) << 1)) & 3;
 }
 
 // Step 2 & Step 3 zero-copy image view.
@@ -53,8 +53,9 @@ struct RgbView {
     int height = 0;
     const uint16_t* r_ptr = nullptr;
     const uint16_t* g_ptr = nullptr;
-    // TODO: read only one green photosite (g_ptr) for later optimization; g2_ptr is kept to average the two greens
-    // for bit-exact parity with cpu_preview_debayer.
+    // The second green of a Bayer 2x2 cell: half-size views average it with g_ptr ((G1 + G2) >> 1), as
+    // cpu_preview_debayer and negicc-station's CUDA preview kernel do. Null for X-Trans and interleaved RGB.
+    // film_image_from_cfa (the frame detector's input) still takes G1 only.
     const uint16_t* g2_ptr = nullptr;
     const uint16_t* b_ptr = nullptr;
     ptrdiff_t pitch = 0;   // step in uint16_t elements when x increases by 1

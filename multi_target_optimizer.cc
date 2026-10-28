@@ -101,19 +101,8 @@ std::string general(float v, int prec) {
 
 // ---- The inner crop ---------------------------------------------------------------------------------------
 
-// The centred inner crop of a w x h image: crop_ratio of each side, the margins rounded to whole pixels. (x0, y0) is
-// its top-left corner in the w x h image, w x h its size: w - 2 x0 by h - 2 y0, about crop_ratio w by crop_ratio h.
-struct InnerCrop {
-  int x0 = 0, y0 = 0, w = 0, h = 0;
-};
-
-InnerCrop compute_inner_crop(int w, int h, float crop_ratio) {
-  if (w <= 0 || h <= 0) return {0, 0, 0, 0};
-  if (crop_ratio >= 1.0f) return {0, 0, w, h};
-  const int x0 = std::clamp(static_cast<int>(roundf(w * (1.0f - crop_ratio) * 0.5f)), 0, (w - 1) / 2);
-  const int y0 = std::clamp(static_cast<int>(roundf(h * (1.0f - crop_ratio) * 0.5f)), 0, (h - 1) / 2);
-  return {x0, y0, w - 2 * x0, h - 2 * y0};
-}
+using negicc::InnerCrop;
+using negicc::compute_inner_crop;
 
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
 
@@ -409,13 +398,11 @@ float u16_percentile_linear(const std::vector<uint64_t>& hist, uint64_t total, f
 
 void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max_size, int patch_size, FrameStats& st) {
   const InnerCrop crop = compute_inner_crop(frame.width, frame.height, crop_ratio);
-  // compute_aspect_preserved_shape of color_pipeline.h (round half away from zero)
+  const negicc::AspectPreservedShape shape =
+      negicc::compute_aspect_preserved_shape(crop.w, crop.h, max_size, patch_size);
   const int p = std::max(1, patch_size);
-  const int crop_w = std::max(crop.w, 1), crop_h = std::max(crop.h, 1);
-  const float scale = std::max(max_size, p) / float(std::max(crop_w, crop_h));
-  const int gw = std::max(1, int(std::round(crop_w * scale / p)));
-  const int gh = std::max(1, int(std::round(crop_h * scale / p)));
-  const int dino_w = gw * p, dino_h = gh * p;  // DINOv3's input size: the grid in pixels
+  const int gw = shape.grid_w, gh = shape.grid_h;
+  const int dino_w = shape.target_w, dino_h = shape.target_h;  // DINOv3's input size: the grid in pixels
 
   std::vector<float> log_lut(65536);
   for (int v = 0; v < 65536; ++v) log_lut[v] = std::log(std::max(v, 1));
@@ -976,11 +963,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     fb = custom_fb_buf;
   }
   if (!fb) fb = bundle.film_base_avg;
-  float fb_t = 0.125f;
-  try {
-    fb_t = shutter_to_seconds(bundle.film_base_shutter);
-  } catch (const std::exception&) {
-  }
+  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
   const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
   // A measured base comes from this capture: no exposure ratio.
   const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
