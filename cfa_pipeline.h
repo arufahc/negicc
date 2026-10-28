@@ -182,14 +182,6 @@ struct PositiveStats {
     float sh_a  = 0.0f, sh_b  = 0.0f;
 };
 
-constexpr int kMaxHistBins = 4096;
-constexpr float kMaxHistRange = 2.0f;
-inline int max_hist_bin(float v) {
-    if (!std::isfinite(v)) return 0;
-    const int k = (int)(v * (kMaxHistBins / kMaxHistRange));
-    return k < 0 ? 0 : (k > kMaxHistBins - 1 ? kMaxHistBins - 1 : k);
-}
-
 // The q point (0..1) of a max-channel histogram, linearly interpolated within its bin.
 inline double max_hist_quantile(const uint64_t* hist, double q) {
     double total = 0.0;
