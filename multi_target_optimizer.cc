@@ -784,7 +784,8 @@ class SearchFrame {
         std::cout << "    T" << target_idx + 1 << " step " << it << ": E " << fixed(curr.e, 4) << " g "
                   << fixed(curr.g, 4) << " b " << fixed(curr.b, 4) << " resid " << fixed(err, 4);
         if (shoulder_auto_ || curr.shoulder > negicc::kShoulderOff) {
-          std::cout << " x_hi " << fixed(curr.shoulder, 3) << " (q995 " << fixed(cur_q995, 3) << ")";
+          std::cout << " x_hi " << fixed(curr.shoulder, 3) << " (q995 " << fixed(cur_q995, 3)
+                    << ", enclosure log2(E/e_max) " << fixed(enclosure_log2(target_idx, curr.e), 2, true) << ")";
         }
         std::cout << "\n";
       }
@@ -807,9 +808,10 @@ class SearchFrame {
     return true;
   }
 
-  // Re-scores the best step with its x_hi and with the shoulder off against the field DINOv3 predicted from it
-  // (mean of the L*, a*, b* losses; the penalties do not depend on the shoulder). The shoulder is kept either way:
-  // the guard is only recorded when it is more than 2% worse, so the evaluation sees how often the loss disagrees.
+  // Re-scores the best step with its x_hi and with the shoulder off against the field DINOv3 predicted from it. The
+  // guard compares the L* loss alone: the shoulder removes lightness, so a 2% worse mean of L*, a*, b* would be about
+  // 6% on L* (the a* and b* terms barely move). The penalties do not depend on the shoulder. The shoulder is kept either
+  // way: the guard is only recorded when the loss is more than 2% worse, so the evaluation sees how often it disagrees.
   void shoulder_guard(int target_idx, const ConversionParams& p, const std::vector<float>& mu,
                       const std::vector<float>& sigma, FixedPointResult& fp) {
     negicc::PipelineConfig pc{};
@@ -825,14 +827,16 @@ class SearchFrame {
       IntentLoss l;
       intent_loss(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w * stats_.grid_h, &cand, 1, mu.data(),
                   sigma.data(), &l);
-      return ((double)l.L + (double)l.a + (double)l.b) / 3.0;
+      return (double)l.L;
     };
     const double with = mean_loss(p.shoulder), without = mean_loss(1.0f);
     fp.shoulder_guard = with > 1.02 * without;
     if (verbose_) {
-      std::cout << "    T" << target_idx + 1 << " shoulder: x_hi " << fixed(p.shoulder, 3) << ", knee "
-                << fixed(fp.shoulder_knee, 3) << ", loss " << fixed((float)with, 3) << " vs "
-                << fixed((float)without, 3) << " without" << (fp.shoulder_guard ? " (guard)" : "") << "\n";
+      std::cout << "    T" << target_idx + 1 << " Shoulder: q995=" << fixed(fp.shoulder_q995, 3)
+                << ", x_hi=" << fixed(p.shoulder, 3) << ", knee=" << fixed(fp.shoulder_knee, 3)
+                << ", enclosure log2(E/e_max)=" << fixed(enclosure_log2(target_idx, p.e), 2, true) << ", L* loss "
+                << fixed((float)with, 3) << " vs " << fixed((float)without, 3) << " without"
+                << (fp.shoulder_guard ? " (guard)" : "") << "\n";
     }
   }
 
@@ -850,9 +854,22 @@ class SearchFrame {
                                   ceil, candidates.empty() ? shoulder_fixed_ : shoulder_of(candidates[0]));
   }
 
+  // log2(E / e_max) of bracket target_idx's enclosure at E: the same quantity as the shoulder's q995 for green (the
+  // cross-check printed next to x_hi, never used for its value); NaN when the bracket has no enclosure.
+  float enclosure_log2(int target_idx, float e) const {
+    Enclosure enc;
+    const float g_lo = std::max(1.0f, stats_.g_lo);
+    if (!(e > 0.0f) ||
+        !bracket_enclosure(bundle_.targets[target_idx], target_idx, g_lo, std::max(g_lo + 1.0f, stats_.g_hi), enc) ||
+        !(enc.e_max > 0.0f))
+      return std::numeric_limits<float>::quiet_NaN();
+    return std::log2(e / enc.e_max);
+  }
+
   // The shoulder's x_hi at p: the 99.5% point of the max channel of the pre-shoulder render of the inner crop,
   // clamped to [1, kShoulderXHiMax]; q995 gets the point before clamping.
   float measure_shoulder(int target_idx, const ConversionParams& p, float* q995) {
+    const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
     static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
     float m[9];
     candidate_matrix(input_matrix_, p.e, p.g, p.b, m);
@@ -860,7 +877,9 @@ class SearchFrame {
     std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
     measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data, kCeil,
                            1.0f, hist.data());
-    return shoulder_x_hi_from_hist(hist.data(), q995);
+    const float x_hi = shoulder_x_hi_from_hist(hist.data(), q995);
+    render_time_ += Clock::now() - t0;
+    return x_hi;
   }
 
   // Writes the time spent per measurement into the result.
@@ -1194,7 +1213,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     adaptive.push_back(fp);
     out.tournament.push_back(fp);
   }
-  // The lowest enclosure-regularized residual wins, among the converged brackets when any converged.
+  // The winner is the lowest plain residual among the converged brackets (when any converged), below. tourney_score,
+  // the enclosure-regularized residual, only ranks the candidates of Part 1B's rescue.
   auto tourney_score = [&](const FixedPointResult& a) {
     for (const auto& c : enclosure) {
       if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
@@ -1431,6 +1451,23 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           }
         }
       }
+    }
+  }
+
+  // The headroom and the rescue move E after the loop froze x_hi; measure it once more at the final parameters
+  // (the same pre-shoulder pass on the inner crop) so the written image's shoulder matches its highlights. The
+  // guard stays that of the converged iteration.
+  if (opts.shoulder_auto) {
+    float q995 = 0.0f;
+    params.shoulder = fr.measure_shoulder(chosen.target_idx, params, &q995);
+    chosen.shoulder_q995 = q995;
+    negicc::PipelineConfig pc{};
+    negicc::set_shoulder(pc, params.shoulder);
+    chosen.shoulder_knee = pc.shoulder_x_k;
+    if (verbose) {
+      std::cout << "Auto: Shoulder: q995=" << fixed(q995, 3) << ", x_hi=" << fixed(params.shoulder, 3)
+                << ", knee=" << fixed(chosen.shoulder_knee, 3) << ", enclosure log2(E/e_max)="
+                << fixed(fr.enclosure_log2(chosen.target_idx, params.e), 2, true) << " (final parameters)\n";
     }
   }
 

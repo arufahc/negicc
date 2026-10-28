@@ -1,19 +1,20 @@
 # Hybrid `FIT3` + `DINOv3` Architecture Design: Experiment 1 (Highlight Roll-Off & Multi-Bracket Rescue) and Experiment 3 (Chromatic Trust-Region Prior & Log-Density Slope Pre-Normalization)
 
-> **Part 1A superseded.** The power-8 export-only shoulder described below was replaced by one shared per-frame
-> shoulder stage that the solver, the previews and the export all run; see
-> [plan_exp1_shoulder_gap.md](plan_exp1_shoulder_gap.md). Part 1B (the bracket rescue) is unchanged.
+> Sources outside this repository: `fit3.cc` (the author's local reimplementation of Epson FIT3) and
+> `report_fit3_vs_dinov3_blind_eval.md` (the double-blind evaluation report) are not in `negicc` or `negicc-station`.
+> Every figure and line reference that cites them is unverifiable from the repository. Code links below point at the
+> current files; line anchors were dropped because they went stale.
 
 ## 1. Executive Summary & Double-Blind Evaluation Motivation
 
-Across the 106-frame double-blind operator evaluation (`55` Sony A7R4 TriLED narrowband scans + `51` multi-camera Web white-light scans; see [`report_fit3_vs_dinov3_blind_eval.md`](file:///home/alpha/Projects/negicc/designs/report_fit3_vs_dinov3_blind_eval.md)), `DINOv3 + Profile` won **75 / 106 (70.8%)** overall while Epson `FIT3` (`libfit3` reimplementation in [`fit3.cc`](file:///home/alpha/Projects/negicc/fit3.cc)) won **31 / 106 (29.2%)**.
+Across the 106-frame double-blind operator evaluation (`55` Sony A7R4 TriLED narrowband scans + `51` multi-camera Web white-light scans; see `report_fit3_vs_dinov3_blind_eval.md` (outside this repository)), `DINOv3 + Profile` won **75 / 106 (70.8%)** overall while Epson `FIT3` (`libfit3` reimplementation in `fit3.cc` (outside this repository)) won **31 / 106 (29.2%)**.
 
 Disaggregating the 31 `FIT3` wins by operator failure annotation reveals that **two distinct structural mechanisms** account for **24 / 31 (77.4%)** of all `DINOv3 + Profile` losses:
 
 | Failure Mode | TriLED Losses ($N=18$) | Web White-Light Losses ($N=13$) | Combined Losses ($N=31$) | Root Cause in `DINOv3 + Profile` | Addressed By |
 | :--- | :---: | :---: | :---: | :--- | :--- |
 | **`highlight_overblown`** | **9 / 18 (50.0%)** | 2 / 13 (15.4%) | **11 / 31 (35.5%)** | (1) Michaelis-Menten `in_trc` + 3D CLUT reaches hard ceiling above $Y_{90}=236.8$; (2) `Target 3` (`1/15s`) selected on dense frames (`idx = 10, 14, 16, 20, 22, 23, 33`) instead of `Target 4/5/6`, with Step 5 `highlight_rescue` failing to trigger. | **Experiment 1** (Part 1A + Part 1B) |
-| **`color_cast`** (`too_cool` / `too_warm` / `shadow_color_cast`) | **5 / 18 (27.8%)** | **10 / 13 (76.9%)** | **15 / 31 (48.4%)** | (1) Zero regularization on $(g, b)$ in [`dinov3_auto_solver.cc`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc) allows chromatic gain drift; (2) 3-scalar $(E, g, b)$ linear model cannot compensate cross-channel dye gamma mismatch on uncalibrated `Unknown Color Negative` film stocks. | **Experiment 3** (Part 3A + Part 3B) |
+| **`color_cast`** (`too_cool` / `too_warm` / `shadow_color_cast`) | **5 / 18 (27.8%)** | **10 / 13 (76.9%)** | **15 / 31 (48.4%)** | (1) Zero regularization on $(g, b)$ in [`dinov3_auto_solver.cc`](../dinov3_auto_solver.cc) allows chromatic gain drift; (2) 3-scalar $(E, g, b)$ linear model cannot compensate cross-channel dye gamma mismatch on uncalibrated `Unknown Color Negative` film stocks. | **Experiment 3** (Part 3A + Part 3B) |
 
 > [!IMPORTANT]
 > **Design Principle — Preserve `DINOv3 + Profile`'s 70.8% Win Rate on Calibrated & Scene-Dominant Frames**
@@ -25,24 +26,34 @@ Disaggregating the 31 `FIT3` wins by operator failure annotation reveals that **
 
 ### 2.1 Root-Cause Diagnosis
 
-1. **Why `FIT3` Preserves Highlight Texture (`hlCurveType = 2`)**:
-   - In [`CFIT::CalcParamNega`](file:///home/alpha/Projects/negicc/fit3.cc#L2601-L2622), `FIT3` sets `hlOut = 51400` ($200.78 / 255 = 78.74\%$ output ceiling at the highlight anchor `hlIn`) and `hlCurveType = 2`.
-   - In [`CLUT::MakeLUT_Highlight2`](file:///home/alpha/Projects/negicc/fit3.cc#L4836-L4911), all highlights above `hlIn` up to the extreme density ceiling `hlMax` are mapped via a $C^1$-continuous power-8 shoulder:
-     $$y(x) = \text{hlMax} - (\text{hlMax} - \text{hlOut}) \cdot \left(\frac{\text{hlIn} - x}{\text{hlIn}}\right)^8$$
-     This reserves $21.3\%$ of the 8-bit sRGB dynamic range ($[201, 252]$) exclusively for smooth highlight roll-off, yielding a mean highlight gradation span of $Y_{99} - Y_{90} = 21.11$ sRGB levels and only $0.05\%$ pixels with $\max(R,G,B) > 252$ across the 9 `highlight_overblown` frames (`hl9`).
+1. **Why `FIT3` Preserves Highlight Texture (`hlCurveType = 2`)**: *open, two documents disagree.*
+   - This document previously described `CFIT::CalcParamNega` setting `hlOut = 51400` (200.78 / 255) with
+     `hlCurveType = 2`, and `CLUT::MakeLUT_Highlight2` mapping the highlights above `hlIn` with a $C^1$ **power-8**
+     shoulder. `fit3.cc` is the author's local file, outside this repository (and the repository of `negicc-station`),
+     so those line references cannot be checked from either repository.
+   - `negicc-station`'s reverse-engineered specification, [epson_fit3_specification.md](../../negicc-station/designs/epson_fit3_specification.md)
+     (Step 5, `CalcHlCurve` at `0x4214b0` and `CalcSdCurve` at `0x4210c0`), says the opposite: the negative
+     highlight shoulder (`hlCurveType == 2`) is **quadratic**, `255 - K (X_end - x)^2` from `hlOut` to 255, and the
+     **8th-order** curve is the shadow *toe* (`sdCurveType == 5`). It also swaps the roles for negative film
+     (`X_hl = sdIn`, `X_sd = hlIn`), so which parameter a "highlight" is called is itself part of the question.
+   - Both cannot be right. Only the specification names addresses a reader can check, so this document's power-8
+     claim is treated as unverified; the new shoulder uses n = 2 and keeps n = 8 as an evaluation variant. Resolving it
+     needs the author's `fit3.cc`.
+   - The "21.3% of the range reserved for roll-off" and the `Y99 - Y90 = 21.11` figures came from a blind evaluation
+     report that is also outside this repository; they are not reproduced here.
 
 2. **Why Pre-CLUT `in_trc` Modification Breaks 3D LUT Color Calibration**:
    - In `negicc-station` (`_highlight_training_rows` in `src/film_profiling.py`), synthetic highlight training rows for the 3D CLUT scale target $a^*, b^*$ chroma by the analytical derivative of the Michaelis-Menten `in_trc` curve ($k_{\text{rolloff}} = 0.5$ above $u_w = 0.75$):
      $$\kappa(H) = \frac{d\ln u}{d\ln H} = \frac{H}{u(H)} \cdot \frac{du}{dH}$$
    - Replacing `in_trc` *before* the 3D CLUT alters the input coordinates $(u_R, u_G, u_B)$ fed into the tetrahedral interpolator, breaking the coupled $(L^*, a^*, b^*)$ desaturated highlight calibration baked into the `.icc` profile.
-   - **Solution (Part 1A)**: Keep `in_trc` and the 3D CLUT 100% untouched. Decode PCS $L^*a^*b^*$ to **unclamped linear sRGB** via [`pcs_to_linear_srgb_unclamped`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L182-L191) and apply the `FIT3` power-8 shoulder **post-CLUT** via [`apply_fit3_highlight_shoulder_rgb`](file:///home/alpha/Projects/negicc/profile_bundle.cc#L75-L91) before `out_trc`.
+   - **Solution (Part 1A)**: leave `in_trc` and the 3D CLUT alone and apply the shoulder after the CLUT, to the linear sRGB value, in the shared pipeline: see [plan_exp1_shoulder_gap.md](plan_exp1_shoulder_gap.md).
 
 3. **Why Step 5 `highlight_rescue` Failed to Trigger on All 7 `Target 3` Overblown Frames**:
    - On 7 of the 9 `hl9` frames (`idx = 10, 14, 16, 20, 22, 23, 33`), `multi_target_optimizer` selected `Target 3` (`1/15s`) even though the human operator's ground-truth bracket was `Target 4`, `5`, or `6`, and `Target 3` had `feasible = 0` (`slack_ev` between $-0.38\text{ EV}$ and $-1.31\text{ EV}$).
-   - Step 5 (`highlight_rescue` in [`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc)) never fired on `Target 3` due to three compounding bugs:
-     1. **`gs0` Synthetic White Row in `profcheck_output`**: [`profile_highlight_ceiling`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L557-L573) parses `profcheck_output` for the maximum patch RGB. Because `gs0` is a synthetic white anchor at $L^* = 100.0$, `profile_highlight_ceiling` returned `[255, 255, 255]` on every bracket, disabling the `c < 254.5f` ceiling branch.
-     2. **`linear_channel_white_clipped` Threshold Above `Target 3`'s CLUT Asymptote**: [`cpu_highlight_clip`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L603-L645) only incremented `white_clip` when linear sRGB $\ge 0.9953029$ ($\text{sRGB} \ge 254.4$). However, `Target 3`'s 3D CLUT rolls off near $\text{sRGB } 246\text{–}252$, yielding `white_clip = 0.000%` even when $15\%\text{–}22\%$ of the frame was blown out above $\text{sRGB } 242$.
-     3. **Per-Bracket Orange-Mask Shift Excluded `Target 5 / 6` During Initial Screening**: In `055e48619a81.json`, the neutral $L^*=50$ chromatic ratios $(t_g/t_r, t_b/t_r)$ shift from $(0.87, 0.82)$ on `Target 3` to $(0.68, 0.60)$ on `Target 6` as dense exposures enter the red dye shoulder. Because [`optimize_impl`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L236-L249) searched only $g \in \{0.98..1.28\}$ and $b \in \{0.85..1.35\}$ when `initial == nullptr`, `Target 5` and `Target 6` were evaluated with a severe green/blue cast during screening and rejected.
+   - Step 5 (`highlight_rescue` in [`multi_target_optimizer.cc`](../multi_target_optimizer.cc)) never fired on `Target 3` due to three compounding bugs:
+     1. **`gs0` Synthetic White Row in `profcheck_output`**: [`profile_highlight_ceiling`](../multi_target_optimizer.cc) parses `profcheck_output` for the maximum patch RGB. Because `gs0` is a synthetic white anchor at $L^* = 100.0$, `profile_highlight_ceiling` returned `[255, 255, 255]` on every bracket, disabling the `c < 254.5f` ceiling branch.
+     2. **`linear_channel_white_clipped` Threshold Above `Target 3`'s CLUT Asymptote**: [`cpu_highlight_clip`](../multi_target_optimizer.cc) only incremented `white_clip` when linear sRGB $\ge 0.9953029$ ($\text{sRGB} \ge 254.4$). However, `Target 3`'s 3D CLUT rolls off near $\text{sRGB } 246\text{–}252$, yielding `white_clip = 0.000%` even when $15\%\text{–}22\%$ of the frame was blown out above $\text{sRGB } 242$.
+     3. **Per-Bracket Orange-Mask Shift Excluded `Target 5 / 6` During Initial Screening**: In `055e48619a81.json`, the neutral $L^*=50$ chromatic ratios $(t_g/t_r, t_b/t_r)$ shift from $(0.87, 0.82)$ on `Target 3` to $(0.68, 0.60)$ on `Target 6` as dense exposures enter the red dye shoulder. Because [`optimize_impl`](../dinov3_auto_solver.cc) searched only $g \in \{0.98..1.28\}$ and $b \in \{0.85..1.35\}$ when `initial == nullptr`, `Target 5` and `Target 6` were evaluated with a severe green/blue cast during screening and rejected.
 
 ---
 
@@ -66,34 +77,18 @@ flowchart LR
     end
 ```
 
-#### Part 1A: Post-CLUT $C^1$ Power-8 Highlight Shoulder
-Implemented in [`neg_pipeline.h`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L182-L191), [`profile_bundle.h`](file:///home/alpha/Projects/negicc/profile_bundle.h#L152-L154), [`profile_bundle.cc`](file:///home/alpha/Projects/negicc/profile_bundle.cc#L33-L91), and [`neg_process.cc`](file:///home/alpha/Projects/negicc/neg_process.cc#L3056-L3108).
+#### Part 1A: highlight shoulder (replaced)
 
-1. **Unclamped PCS-to-Linear-sRGB Decode ([`pcs_to_linear_srgb_unclamped`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L182-L191))**:
-   - Converts 3D CLUT output $L^*a^*b^*$ to linear D50 XYZ and applies the D50-to-sRGB Bradford matrix without upper clamping at $1.0$ (clamping only negative values at $0.0$), preserving super-white highlight headroom $u \in [0.0, 1.50]$.
-2. **Exact Michaelis-Menten Inverse with $C^1$ Tangent Continuation ([`apply_fit3_hl_shoulder_u`](file:///home/alpha/Projects/negicc/profile_bundle.cc#L41-L73))**:
-   - With `kWhiteU` $= u_w = 0.75$, `kRolloff` $= r = 0.50$, `kKneeU` $= u_0 = 0.42$ ($\text{sRGB} \approx 173.4$, $L^* \approx 71$), `kExp` $= n = 8.0$, and `kCeilS` $= s_{\max} = 0.988$ ($\text{sRGB } 251.9$, matching `FIT3`'s $\le 252$ highlight asymptote):
-     - For $u \le u_0 = 0.42$: returns $u$ **bit-identically** (shadows, skin tones, and midtones below $L^* \approx 71$ are 100% untouched).
-     - Reconstructs pseudo-exposure $H(u)$ via the exact analytical inverse of the Michaelis-Menten curve for $u \in (0.42, 0.90]$, and a $C^1$-continuous quadratic tangent continuation above $u = 0.90$ ($t = 0.60, H = 2.0, dH/du = 50/3$):
-       $$H(u) = \begin{cases}
-       \dfrac{u}{u_w} & u \le 0.75 \\[8pt]
-       1 + k \dfrac{t}{1 - t}, \quad k = \dfrac{1 - u_w}{u_w r} = \dfrac{2}{3}, \quad t = \dfrac{u - u_w}{1 - u_w} & 0.75 < u \le 0.90 \\[8pt]
-       2.0 + \dfrac{50}{3}(u - 0.90) + 25.0(u - 0.90)^2 & u > 0.90
-       \end{cases}$$
-3. **$C^1$-Matched `FIT3` Power-8 Shoulder in sRGB Gamma Space**:
-   - Let $H_0 = u_0 / u_w = 0.56$ and $\Delta\text{EV} = \log_2(H(u) / H_0) > 0$.
-   - Let $s_0 = \text{srgb\_enc}(u_0) \approx 0.6801$ and match the exact first derivative with respect to $\Delta\text{EV}$ at $u = u_0$:
-     $$\kappa_0 = \left.\frac{ds}{d(\Delta\text{EV})}\right|_{u_0} = \left.\frac{ds}{du}\right|_{u_0} \cdot u_0 \ln 2, \qquad \Delta\text{EV}_{\max} = \frac{n \cdot (s_{\max} - s_0)}{\kappa_0}$$
-   - Apply the power-8 shoulder (`hlCurveType = 2`):
-     $$s_{\text{sh}}(\Delta\text{EV}) = \begin{cases}
-     s_{\max} - (s_{\max} - s_0)\left(1 - \dfrac{\Delta\text{EV}}{\Delta\text{EV}_{\max}}\right)^8 & 0 < \Delta\text{EV} < \Delta\text{EV}_{\max} \\[6pt]
-     s_{\max} & \Delta\text{EV} \ge \Delta\text{EV}_{\max}
-     \end{cases}$$
-   - Decode back to linear sRGB $u_{\text{sh}} = \text{srgb\_dec}(s_{\text{sh}})$ and return $\min(u, u_{\text{sh}})$, pre-tabulated in a 6144-entry static LUT over $u \in [0, 1.50]$ in [`apply_fit3_highlight_shoulder_rgb`](file:///home/alpha/Projects/negicc/profile_bundle.cc#L75-L91).
+The export-only power-8 shoulder this section described (`pcs_to_linear_srgb_unclamped`, `apply_fit3_highlight_shoulder_rgb`
+and its 6144-entry LUT) is removed. It darkened the sRGB export by 10 to 16 levels without the solver's loss or the
+previews knowing, and it started at linear 0.42, which cut contrast from sRGB 173 up on every frame. Its
+claims of an exact inverse of the profile's roll-off and of leaving the calibrated frames untouched do not hold, and
+are withdrawn. The shoulder is now one shared per-frame stage; its definition, the layer-by-layer changes and the
+tests are in [plan_exp1_shoulder_gap.md](plan_exp1_shoulder_gap.md).
 
 #### Why Highlight Compression Belongs in the `XYZ -> sRGB` Output Profile (Not in the ICC `A2B0` Post-CLUT `XYZ` TRC)
 
-A natural question is whether this post-CLUT highlight shoulder could be placed inside the input `.icc` profile's `A2B0` output TRC (`p.out_trc` in [`apply_profile`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L165-L167), which operates on **D50 PCS `XYZ`**) rather than in the **`XYZ -> sRGB` output transform**. Placing a non-linear highlight curve in PCS `XYZ` is structurally flawed for three reasons:
+A natural question is whether this post-CLUT highlight shoulder could be placed inside the input `.icc` profile's `A2B0` output TRC (`p.out_trc` in [`apply_profile`](../neg_pipeline.h), which operates on **D50 PCS `XYZ`**) rather than in the **`XYZ -> sRGB` output transform**. Placing a non-linear highlight curve in PCS `XYZ` is structurally flawed for three reasons:
 
 1. **D50 `XYZ` Neutral White Has Unequal Tristimulus Channels ($X = 0.9642, Y = 1.0000, Z = 0.8249$)**:
    - Applying an identical non-linear 1D shoulder $f(\cdot)$ directly to $(X, Y, Z)$ evaluates the curve at different abscissas on neutral grey ($0.9642 Y \ne Y \ne 0.8249 Y$), where the shoulder slope $f'(\cdot)$ differs, introducing an artificial yellow/red color cast on neutral highlights unless each channel is pre-/post-scaled by the D50 white point.
@@ -105,11 +100,11 @@ A natural question is whether this post-CLUT highlight shoulder could be placed 
    - Compressing that extended scene dynamic range to fit a specific display medium (`sRGB`) is the role of the **Output Profile (`PCS XYZ -> sRGB`)**—combining the D50 $\to$ D65 `XYZ -> sRGB` matrix with a dynamically computed highlight-compressing output TRC (`apply_fit3_highlight_shoulder_rgb` + `srgb_encode`).
 
 #### Part 1B: Enclosure-Guided Multi-Bracket Highlight Rescue
-Implemented in [`dinov3_auto_solver.h`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.h#L52-L54), [`dinov3_auto_solver.cc`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L127-L380), and [`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L718-L785) & [lines 1250–1378](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L1250-L1378).
+Implemented in [`dinov3_auto_solver.h`](../dinov3_auto_solver.h), [`dinov3_auto_solver.cc`](../dinov3_auto_solver.cc), and [`multi_target_optimizer.cc`](../multi_target_optimizer.cc) & [lines 1250–1378](../multi_target_optimizer.cc).
 
 1. **Zero-Regression Isolation (`rescue_mode = false` in Steps 1–4)**:
-   - Standard Steps 1–4 in [`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc) run with `rescue_mode = false`, keeping bracket selection and $(E, g, b)$ convergence **bit-identical** to `HEAD` on all normal frames.
-2. **Two-Tier Pre-Shoulder Highlight Blowout Gate in Step 5 ([`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L1252-L1270))**:
+   - Standard Steps 1–4 in [`multi_target_optimizer.cc`](../multi_target_optimizer.cc) run with `rescue_mode = false`, keeping bracket selection and $(E, g, b)$ convergence **bit-identical** to `HEAD` on all normal frames.
+2. **Two-Tier Pre-Shoulder Highlight Blowout Gate in Step 5 ([`multi_target_optimizer.cc`](../multi_target_optimizer.cc))**:
    - Evaluates pre-shoulder highlight clipping on the Step 4 winner `chosen` against $242.0$ (`hc_242`) and $235.0$ (`hc_235`) sRGB thresholds:
      - **`tier1_hi` (High-Key Overexposure)**: `hc_242.median_L >= 58.0f && max_excess(hc_242) >= 0.022f`
      - **`tier2_hi` (Normal-Key Severe Highlight Blowout)**: `hc_242.median_L >= 48.0f && (max_excess(hc_242) >= 0.075f || (chosen.target_idx >= 3 && max_excess(hc_235) >= 0.110f))`
@@ -117,11 +112,11 @@ Implemented in [`dinov3_auto_solver.h`](file:///home/alpha/Projects/negicc/dinov
    - **Sub-Case A (`enc_chosen.feasible && params.e < enc_chosen.e_min`)**: Pulls $E$ upward toward $\min(\text{enc\_chosen.e\_max}, \min(\text{enc\_chosen.e\_min}, E \cdot 2^{0.15}))$ to recover up to $+0.15\text{ EV}$ of highlight headroom within the current bracket (`idx 28`, `idx 51`).
    - **Sub-Case B (`!enc_chosen.feasible && (tier1_hi || tier2_hi)`)**: Triggers **Enclosure-Guided Multi-Bracket Rescue** across `pool` with `rescue_mode = true`.
 3. **Asymmetric Enclosure Penalty & Widened Chromatic Screening (`rescue_mode = true`)**:
-   - In [`compute_penalties`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L127-L139), when `cfg.enc_e_min > 0` and `cfg.enc_e_max > 0`:
+   - In [`compute_penalties`](../dinov3_auto_solver.cc), when `cfg.enc_e_min > 0` and `cfg.enc_e_max > 0`:
      $$P_E(E) = 4.5 \cdot \left[\max\!\left(0, \log_2\!\frac{E_{\min}}{E}\right)\right]^2 + 1.2 \cdot \left[\max\!\left(0, \log_2\!\frac{E}{E_{\max}}\right)\right]^2 + 0.8 \cdot \left[\max\!\left(0, \log_2\!\frac{E_{\min}}{E_{\max}}\right)\right]^2$$
      Because $E < E_{\min}$ corresponds to negative highlights denser than the bracket's calibrated highlight patch $g_{\min}$, this $4.5\times$ penalty steers rescue screening away from under-capacity `Target 3` (`slack_ev < 0`) toward `Target 4/5/6` (`slack_ev >= 0`).
-   - Widens the initial screening grid to $g \in \{0.74, 0.80, \dots, 1.28\}$ and $b \in \{0.65, 0.75, \dots, 1.35\}$, performs a 2-pass coordinate descent when `initial == nullptr`, and re-aligns $E$ after $(g, b)$ updates ([`dinov3_auto_solver.cc`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L236-L379)).
-   - Applies a midtone lightness floor `dl_min = (hc_242.median_L >= 58.0f) ? -7.5f : -4.5f` ([`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L1359-L1374)) so rescued frames retain bright, natural midtones.
+   - Widens the initial screening grid to $g \in \{0.74, 0.80, \dots, 1.28\}$ and $b \in \{0.65, 0.75, \dots, 1.35\}$, performs a 2-pass coordinate descent when `initial == nullptr`, and re-aligns $E$ after $(g, b)$ updates ([`dinov3_auto_solver.cc`](../dinov3_auto_solver.cc)).
+   - Applies a midtone lightness floor `dl_min = (hc_242.median_L >= 58.0f) ? -7.5f : -4.5f` ([`multi_target_optimizer.cc`](../multi_target_optimizer.cc)) so rescued frames retain bright, natural midtones.
 
 ---
 
@@ -171,8 +166,8 @@ Implemented in [`dinov3_auto_solver.h`](file:///home/alpha/Projects/negicc/dinov
 A quantitative audit of the solver logs on these 15 frames reveals **two distinct physical sub-modes**:
 
 #### Sub-Mode 3A: Unregularized Pre-LUT Chromatic Gain $(g, b)$ Drift
-- In [`dinov3_auto_solver.cc`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L115-L139), `compute_penalties` regularizes exposure $E$ via $5.0 \cdot [\log_2(E / E_{\text{center}})]^2$ and highlight clipping via `pen_clip`, but places **zero regularization penalty on chromatic gains $(g, b)$**.
-- During coordinate descent ([`optimize_impl`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L229-L285)), $g$ and $b$ are updated solely to minimize `losses[i].a` and `losses[i].b` against DINOv3's predicted $(a^*, b^*)$ patch means $\mu_a, \mu_b$.
+- In [`dinov3_auto_solver.cc`](../dinov3_auto_solver.cc), `compute_penalties` regularizes exposure $E$ via $5.0 \cdot [\log_2(E / E_{\text{center}})]^2$ and highlight clipping via `pen_clip`, but places **zero regularization penalty on chromatic gains $(g, b)$**.
+- During coordinate descent ([`optimize_impl`](../dinov3_auto_solver.cc)), $g$ and $b$ are updated solely to minimize `losses[i].a` and `losses[i].b` against DINOv3's predicted $(a^*, b^*)$ patch means $\mu_a, \mu_b$.
 - When a scene contains large colored regions or warm/cool lighting, or when the fixed-point loop iterates up to `MAX_ITERS`, $(g, b)$ can walk far outside the physical neutral locus of the film base:
   - **TriLED `0028.ARW` (`idx 17`, `color_cast`, `too_cool`)**: Solver drifted to $(E=1.34, g=0.74, b=0.65)$ (`resid = 12.7`), depressing green and blue transmittance by $-26\%$ and $-35\%$ and creating a strong cyan/cool cast.
   - **Web `pixls_14388_wJh.NEF` (`idx 22`, `color_cast`, `too_warm`)**: Solver walked to $(E=1.31, g=0.88, b=1.91)$ (`MAX_ITERS`, `resid = 16.5`), nearly doubling blue negative transmittance ($+91\%$) and starving positive blue output (producing a heavy yellow/warm cast).
@@ -186,14 +181,14 @@ A quantitative audit of the solver logs on these 15 frames reveals **two distinc
   - **`nlp_10184_P1046201.RW2` (`idx 5`, `color_cast`, `too_cool`)**: `resid = 16.8`, midtone `R - G = -48.9`, `B - G = +30.2`.
   - **`nlp_47568_2022_01_29_9999_28.cr2` (`idx 14`, `color_cast`)**: `resid = 20.4`, midtone `R - G = -45.5`, `B - G = +10.0`.
 - **Why 3 Linear Gains $(E, g, b)$ Cannot Solve Sub-Mode 3B**:
-  - In [`candidate_matrix`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L155-L162), $(E, g, b)$ acts purely as a **multiplicative scalar** $(E, E \cdot g, E \cdot b)$ on linear transmittance $T_c$, which corresponds to an **additive offset** $\Delta d_c = -\log_{10}(g_c)$ in optical density $d_c = -\log_{10}(T_c)$.
+  - In [`candidate_matrix`](../neg_pipeline.h), $(E, g, b)$ acts purely as a **multiplicative scalar** $(E, E \cdot g, E \cdot b)$ on linear transmittance $T_c$, which corresponds to an **additive offset** $\Delta d_c = -\log_{10}(g_c)$ in optical density $d_c = -\log_{10}(T_c)$.
   - Different film stocks (e.g., Fuji Superia, CineStill 800T, Agfa Vista, expired consumer stocks, or scans with non-standard camera white-balance pre-multipliers) have different **cross-channel dye contrast slopes** $(\gamma_R, \gamma_G, \gamma_B)$, reflected in their per-channel log-density spans:
     $$r_c = d_{\max}[c] - d_{\min}[c] = \log_{10}\!\left(\frac{P_{99.5\%}[c]}{P_{0.5\%}[c]}\right)$$
   - When $(r_G / r_R, \; r_B / r_R)$ deviates significantly from `Portra 400`'s calibrated density span ratios, no multiplicative scalar $(g, b)$ can align both shadows and highlights onto the `Portra 400` neutral axis simultaneously: neutralizing highlights leaves a severe cyan/magenta shadow-midtone cast, and neutralizing shadows blows out highlights with the opposite cast.
 - **Why `FIT3` Succeeds on Sub-Mode 3B**:
-  - In [`CFIT::CalcParamNega`](file:///home/alpha/Projects/negicc/fit3.cc#L2664-L2687), `FIT3` converts the inner-crop histogram percentiles `m_pHistMin1[c]` ($0.5\%$) and `m_pHistMax1[c]` ($99.5\%$) into weighted log-density spans $r_c = d_{\max}[c] - d_{\min}[c]$ (`coef = {0.807, 0.970, 1.009}`) and runs [`CFIT::RangeBalanceIntensity`](file:///home/alpha/Projects/negicc/fit3.cc#L2293-L2337) (`0x408940`), which enforces pairwise cross-channel density-span ratios:
+  - In `CFIT::CalcParamNega` (outside this repository), `FIT3` converts the inner-crop histogram percentiles `m_pHistMin1[c]` ($0.5\%$) and `m_pHistMax1[c]` ($99.5\%$) into weighted log-density spans $r_c = d_{\max}[c] - d_{\min}[c]$ (`coef = {0.807, 0.970, 1.009}`) and runs `CFIT::RangeBalanceIntensity` (outside this repository) (`0x408940`), which enforces pairwise cross-channel density-span ratios:
     $$r_G \ge c_0 r_R, \quad r_B \ge c_6 r_G, \quad r_B \ge c_5 r_R, \quad r_G \ge c_4 r_B, \quad r_R \ge c_3 r_G, \quad r_R \ge c_1 r_B$$
-    followed by per-channel midtone gamma normalization (`gammaCh[c]` at [lines 3269–3296](file:///home/alpha/Projects/negicc/fit3.cc#L3269-L3296)). This normalizes the cross-channel log-density slopes before tone mapping.
+    followed by per-channel midtone gamma normalization (`gammaCh[c]` at lines 3269–3296 (outside this repository)). This normalizes the cross-channel log-density slopes before tone mapping.
 
 ---
 
@@ -220,13 +215,13 @@ flowchart TD
 #### Part 3A: `FIT3`-Guided Shadow-Anchored Chromatic Trust-Region Prior in `dinov3_auto_solver`
 
 1. **Why Anchor to the Shadow / Film-Base Percentile $P_{99.5\%}[c]$ Instead of Scene Mean (`m_pHistAvg`)**:
-   - In a negative scan, high transmittance $P_{99.5\%}[c]$ (`m_pHistMax1[c]` in [`CHIST`](file:///home/alpha/Projects/negicc/fit3.cc#L175)) corresponds to the **darkest scene shadows / unexposed film base**.
+   - In a negative scan, high transmittance $P_{99.5\%}[c]$ (`m_pHistMax1[c]` in `CHIST` (outside this repository)) corresponds to the **darkest scene shadows / unexposed film base**.
    - Unlike midtone or highlight averages (`m_pHistAvg`, which shift dramatically when a scene is dominated by blue sky, green foliage, or warm tungsten skin), the shadow/base ceiling $P_{99.5\%}[c]$ primarily reflects the **physical orange mask and illumination white balance** of the scan rather than the subject's midtone color!
    - By anchoring the chromatic prior primarily to $P_{99.5\%}[c]$ (with a weak damped geometric-mean contribution from $P_{50\%}[c]$) and placing a **deadzone $\pm\tau_{g,b}$** around it, normal colored scenes experience **zero penalty**, whereas unphysical chromatic drift ($b = 1.91$ or $g = 0.74, b = 0.65$) is smoothly prevented.
 
 2. **Mathematical Formulation of the Chromatic Prior $(g_{\text{prior}}, b_{\text{prior}})$**:
    - Let $\mathbf{p}_{99.5} = (P_{99.5\%}[R], P_{99.5\%}[G], P_{99.5\%}[B])$ and $\mathbf{p}_{50} = (P_{50\%}[R], P_{50\%}[G], P_{50\%}[B])$ be the inner-crop linear transmittance percentiles after multiplying by the bundle's `input_matrix_` (normalized by $65535.0$).
-   - Let $(t_r, t_g, t_b) = \text{GreyPoint::reference\_grey}()$ be the target bracket's calibrated neutral transmittance where the 3D CLUT outputs $L^* = 50, a^* = 0, b^* = 0$ ([`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L161-L214)).
+   - Let $(t_r, t_g, t_b) = \text{GreyPoint::reference\_grey}()$ be the target bracket's calibrated neutral transmittance where the 3D CLUT outputs $L^* = 50, a^* = 0, b^* = 0$ ([`multi_target_optimizer.cc`](../multi_target_optimizer.cc)).
    - For a perfectly film-base-normalized scan of the calibrated film stock, a neutral shadow/midtone requires pre-LUT chromatic gains near the profile's nominal neutral ratio:
      $$g_{\text{prof}} = \frac{t_g}{t_r} \cdot \frac{P_{\text{prof}, R}}{P_{\text{prof}, G}}, \qquad b_{\text{prof}} = \frac{t_b}{t_r} \cdot \frac{P_{\text{prof}, R}}{P_{\text{prof}, B}}$$
      (which equals $(1.10, 1.15)$ in the normalized solver frame when film-base ratios match).
@@ -238,7 +233,7 @@ flowchart TD
      $$g_{\text{prior}} = \text{clamp}\!\left(g_{\text{prof}}^{1-\beta} \cdot g_{\text{emp}}^{\beta},\; 0.72,\; 1.45\right), \qquad b_{\text{prior}} = \text{clamp}\!\left(b_{\text{prof}}^{1-\beta} \cdot b_{\text{emp}}^{\beta},\; 0.70,\; 1.50\right)$$
 
 3. **Deadzone Quadratic Chromatic Trust-Region Penalty $P_{gb}(g, b)$**:
-   - Extend [`SolverConfig`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.h#L45-L54) with:
+   - Extend [`SolverConfig`](../dinov3_auto_solver.h) with:
      ```cpp
      float g_prior = 0.0f;       // 0.0f = disabled
      float b_prior = 0.0f;
@@ -248,7 +243,7 @@ flowchart TD
    - Define the deadzone quadratic penalty in log-gain ($\text{EV}$) units:
      $$P_g(g) = \lambda_{gb} \cdot \left[\max\!\left(0,\; \left|\log_2\!\frac{g}{g_{\text{prior}}}\right| - \tau_g\right)\right]^2, \qquad P_b(b) = \lambda_{gb} \cdot \left[\max\!\left(0,\; \left|\log_2\!\frac{b}{b_{\text{prior}}}\right| - \tau_b\right)\right]^2$$
      with $\tau_g = 0.12\text{ EV}$ ($\pm 8.7\%$ free deadzone), $\tau_b = 0.15\text{ EV}$ ($\pm 11.0\%$ free deadzone), and $\lambda_{gb} = 2.5$.
-   - In [`optimize_impl`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L251-L285):
+   - In [`optimize_impl`](../dinov3_auto_solver.cc):
      - Center the initial `g_cands_d` and `b_cands_d` sweeps around $(g_{\text{prior}}, b_{\text{prior}})$ when `cfg.g_prior > 0 && cfg.b_prior > 0`:
        $$g_{\text{cand}} \in g_{\text{prior}} \cdot 2^{\{-0.30, -0.20, -0.10, 0.0, +0.10, +0.20, +0.30\}}, \quad b_{\text{cand}} \in b_{\text{prior}} \cdot 2^{\{-0.35, -0.23, -0.12, 0.0, +0.12, +0.23, +0.35\}}$$
      - Include $P_g(g)$ when scoring `losses[i].a + P_g(g_cands_d[i])`, $P_b(b)$ when scoring `losses[i].b + P_b(b_cands_d[i])`, and $P_g(g) + P_b(b)$ in the 4-point chain fine-tune and final objective return.
@@ -273,7 +268,7 @@ flowchart TD
    - Compute the inner-crop optical density endpoints in each channel $c \in \{R, G, B\}$:
      $$d_{\min}[c] = -\log_{10}\!\left(\max(10^{-4},\; P_{99.5\%}[c])\right), \qquad d_{\max}[c] = -\log_{10}\!\left(\max(10^{-4},\; P_{0.5\%}[c])\right)$$
      $$r_c = \max(0.10,\; d_{\max}[c] - d_{\min}[c])$$
-   - Apply the pairwise cross-channel lower-bound cascade from [`CFIT::RangeBalanceIntensity`](file:///home/alpha/Projects/negicc/fit3.cc#L2293-L2337) (`c0 = 0.81, c6 = 0.81, c5 = 0.73, c4 = 0.66, c3 = 0.66, c1 = 0.59`) together with [`CFIT::CalcParamNega`](file:///home/alpha/Projects/negicc/fit3.cc#L3269-L3296)'s channel gamma ratio to obtain the target balanced density spans $r^{\text{bal}}_c$:
+   - Apply the pairwise cross-channel lower-bound cascade from `CFIT::RangeBalanceIntensity` (outside this repository) (`c0 = 0.81, c6 = 0.81, c5 = 0.73, c4 = 0.66, c3 = 0.66, c1 = 0.59`) together with `CFIT::CalcParamNega` (outside this repository)'s channel gamma ratio to obtain the target balanced density spans $r^{\text{bal}}_c$:
      - Specifically, let the bracket's calibrated neutral-to-highlight log-transmittance slope ratio be $\rho^{\text{prof}}_c$ (derived from the bracket's `GreyPoint::reference_grey()` $(t_r, t_g, t_b)$ and film-base ceiling, or $1.0$ after film-base normalization).
      - Blend the `FIT3` range-balanced span $r^{\text{bal}}_c$ toward the profile's expected span $r_R \cdot \rho^{\text{prof}}_c$:
        $$r^*_c = (1 - \eta) \cdot r^{\text{bal}}_c + \eta \cdot \left(r_R \cdot \rho^{\text{prof}}_c\right), \qquad \eta = 0.50$$
@@ -287,11 +282,11 @@ flowchart TD
      $$\gamma_c = 1.0 + w_{\text{res}} \cdot \text{clamp}\!\left(\frac{r^*_c}{r_c} - 1.0,\; -0.18,\; +0.22\right), \qquad c \in \{G, B\}$$
 
 4. **DINOv3 Fixed-Point Re-Verification & Strict Acceptance Gate**:
-   - Pre-normalize the downsampled solver grid `stats_.grid` (and preview buffer) using $(\gamma_R=1.0, \gamma_G, \gamma_B)$ around $P_{\text{piv}}[c]$, and run [`fixed_point`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L744-L794) on the chosen bracket to solve for updated $(E, g, b)$.
+   - Pre-normalize the downsampled solver grid `stats_.grid` (and preview buffer) using $(\gamma_R=1.0, \gamma_G, \gamma_B)$ around $P_{\text{piv}}[c]$, and run [`fixed_point`](../multi_target_optimizer.cc) on the chosen bracket to solve for updated $(E, g, b)$.
    - **Strict Improvement Gate**: Accept the slope-normalized conversion $(E, g, b, \gamma_G, \gamma_B)$ **if and only if**:
      $$\text{fp\_slope.residual} \le 0.92 \cdot \text{chosen.residual}$$
      (i.e. DINOv3's own self-consistency residual confirms at least an $8\%$ reduction in patch-level Lab z-score error) and highlight clipping does not increase beyond $+0.5\%$.
-   - When accepted, store `gamma_rgb = {1.0f, gamma_g, gamma_b}` and `pivot_rgb = {P_piv[0], P_piv[1], P_piv[2]}` in [`MultiTargetResult`](file:///home/alpha/Projects/negicc/multi_target_optimizer.h) and apply the exact same pre-CLUT power-law transform during full-resolution export in [`neg_process.cc`](file:///home/alpha/Projects/negicc/neg_process.cc).
+   - When accepted, store `gamma_rgb = {1.0f, gamma_g, gamma_b}` and `pivot_rgb = {P_piv[0], P_piv[1], P_piv[2]}` in [`MultiTargetResult`](../multi_target_optimizer.h) and apply the exact same pre-CLUT power-law transform during full-resolution export in [`neg_process.cc`](../neg_process.cc).
 
 ---
 
@@ -319,12 +314,12 @@ flowchart TD
 
 | File | Symbol / Function | Planned Changes |
 | :--- | :--- | :--- |
-| [`dinov3_auto_solver.h`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.h#L45-L54) | [`SolverConfig`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.h#L45-L54) | Add `float g_prior = 0.0f`, `float b_prior = 0.0f`, `float gb_deadzone_g_ev = 0.12f`, `float gb_deadzone_b_ev = 0.15f`, and `float gb_penalty_weight = 2.5f`. |
-| [`dinov3_auto_solver.cc`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L115-L388) | [`compute_gb_penalty`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L127-L139), [`optimize_impl`](file:///home/alpha/Projects/negicc/dinov3_auto_solver.cc#L149-L387) | Add `compute_gb_penalty(cfg, g, b)` with deadzone $\tau_g, \tau_b$; center `g_cands_d` / `b_cands_d` around `(cfg.g_prior, cfg.b_prior)` when active; include $P_g(g)$ and $P_b(b)$ in `g` sweep, `b` sweep, 4-step chain fine-tune, and final objective. |
-| [`multi_target_optimizer.h`](file:///home/alpha/Projects/negicc/multi_target_optimizer.h) | `MultiTargetResult` | Add `float slope_gamma[3] = {1.0f, 1.0f, 1.0f}` and `float slope_pivot[3] = {1.0f, 1.0f, 1.0f}` (default identity). |
-| [`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L440-L548) | `FrameStats` / `frame_stats` | Record per-channel inner-crop percentiles `p005_rgb[3]` ($0.5\%$), `p500_rgb[3]` ($50\%$), and `p995_rgb[3]` ($99.5\%$) alongside `g_lo` and `g_hi`. |
-| [`multi_target_optimizer.cc`](file:///home/alpha/Projects/negicc/multi_target_optimizer.cc#L716-L794) | `FrameContext::search`, `MultiTargetOptimizer::solve` | (1) Populate `cfg.g_prior` and `cfg.b_prior` in `search()` from `GreyPoint::reference_grey()` and `stats_.p995_rgb` / `stats_.p500_rgb`; (2) After Step 5, if `chosen.residual > 12.0f` and cross-channel density spans deviate by $>8\%$, compute `RangeBalanceIntensity`-guided `slope_gamma` $\in [0.82, 1.22]$, re-run `fixed_point` on the pre-normalized grid, and accept iff `resid_new <= 0.92f * resid_old`. |
-| [`neg_pipeline.h`](file:///home/alpha/Projects/negicc/neg_pipeline.h#L193-L235) & [`neg_process.cc`](file:///home/alpha/Projects/negicc/neg_process.cc#L3040-L3115) | `eval_pixel_float` / export loop | When `slope_gamma[1] != 1.0f || slope_gamma[2] != 1.0f`, apply $\tilde{T}_c = P_{\text{piv}}[c] \cdot (T_c / P_{\text{piv}}[c])^{\gamma_c}$ after `input_matrix` and before `e / g / b` gain scaling. |
+| [`dinov3_auto_solver.h`](../dinov3_auto_solver.h) | [`SolverConfig`](../dinov3_auto_solver.h) | Add `float g_prior = 0.0f`, `float b_prior = 0.0f`, `float gb_deadzone_g_ev = 0.12f`, `float gb_deadzone_b_ev = 0.15f`, and `float gb_penalty_weight = 2.5f`. |
+| [`dinov3_auto_solver.cc`](../dinov3_auto_solver.cc) | [`compute_gb_penalty`](../dinov3_auto_solver.cc), [`optimize_impl`](../dinov3_auto_solver.cc) | Add `compute_gb_penalty(cfg, g, b)` with deadzone $\tau_g, \tau_b$; center `g_cands_d` / `b_cands_d` around `(cfg.g_prior, cfg.b_prior)` when active; include $P_g(g)$ and $P_b(b)$ in `g` sweep, `b` sweep, 4-step chain fine-tune, and final objective. |
+| [`multi_target_optimizer.h`](../multi_target_optimizer.h) | `MultiTargetResult` | Add `float slope_gamma[3] = {1.0f, 1.0f, 1.0f}` and `float slope_pivot[3] = {1.0f, 1.0f, 1.0f}` (default identity). |
+| [`multi_target_optimizer.cc`](../multi_target_optimizer.cc) | `FrameStats` / `frame_stats` | Record per-channel inner-crop percentiles `p005_rgb[3]` ($0.5\%$), `p500_rgb[3]` ($50\%$), and `p995_rgb[3]` ($99.5\%$) alongside `g_lo` and `g_hi`. |
+| [`multi_target_optimizer.cc`](../multi_target_optimizer.cc) | `FrameContext::search`, `MultiTargetOptimizer::solve` | (1) Populate `cfg.g_prior` and `cfg.b_prior` in `search()` from `GreyPoint::reference_grey()` and `stats_.p995_rgb` / `stats_.p500_rgb`; (2) After Step 5, if `chosen.residual > 12.0f` and cross-channel density spans deviate by $>8\%$, compute `RangeBalanceIntensity`-guided `slope_gamma` $\in [0.82, 1.22]$, re-run `fixed_point` on the pre-normalized grid, and accept iff `resid_new <= 0.92f * resid_old`. |
+| [`neg_pipeline.h`](../neg_pipeline.h) & [`neg_process.cc`](../neg_process.cc) | `eval_pixel_float` / export loop | When `slope_gamma[1] != 1.0f || slope_gamma[2] != 1.0f`, apply $\tilde{T}_c = P_{\text{piv}}[c] \cdot (T_c / P_{\text{piv}}[c])^{\gamma_c}$ after `input_matrix` and before `e / g / b` gain scaling. |
 
 ---
 

@@ -16,6 +16,8 @@
 
 #include <stdint.h>
 #include <cmath>
+#include <algorithm>
+#include <stdexcept>
 
 #if defined(__CUDACC__)
 #define NEGICC_HD __host__ __device__ __forceinline__
@@ -65,12 +67,19 @@ struct PipelineConfig {
     float shoulder_t_k = 0.0f;  // log2(x_k)
     float shoulder_t_hi = 0.0f; // log2(x_hi)
     float shoulder_s_k = 1.0f;  // encoded sRGB value at the knee
-    float shoulder_y_c = 1.0f;  // linear value of the ceiling, reached at x_hi
+    float shoulder_c = 1.0f;    // encoded sRGB ceiling C reached at x_hi (shoulder_ceiling(x_hi), set_shoulder())
+    float shoulder_y_c = 1.0f;  // linear value of the ceiling
 };
 
 constexpr float kShoulderOff = 1.0001f;       // x_hi at or below this is "off"
-constexpr float kShoulderCeiling = 0.988f;    // encoded sRGB ceiling C (about code 252)
-constexpr float kShoulderExponent = 2.0f;     // default n; 8 is an evaluation variant, never a per-frame parameter
+constexpr float kShoulderCeiling = 0.988f;    // encoded sRGB ceiling C (about code 252) once x_hi is past the ramp
+// The ceiling is ramped in over x_hi in (1, 1 + kShoulderRamp]: C goes linearly from 1 (code 255, the unshouldered
+// white) to kShoulderCeiling. Without it the step from off (white at 255) to the smallest x_hi (white at about 252)
+// would make neighbouring frames of a roll, one just above and one just below the boundary, differ by 3 codes.
+constexpr float kShoulderRamp = 0.10f;
+// Default n. OPEN: n = 2 (the FIT3 specification's quadratic highlight shoulder) against exp1's 8 is not decided;
+// the evaluation settles it. Never a per-frame parameter.
+constexpr float kShoulderExponent = 2.0f;
 constexpr float kShoulderXHiMax = 1.5f;
 
 // Bradford D50 -> D65 and XYZ -> linear sRGB constants are written inline in pcs_to_linear_srgb() so they are
@@ -237,7 +246,7 @@ NEGICC_HD float apply_shoulder_channel(const PipelineConfig& cfg, float x) {
     if (t >= cfg.shoulder_t_hi) return cfg.shoulder_y_c;
     const float u = 1.0f - (t - cfg.shoulder_t_k) / (cfg.shoulder_t_hi - cfg.shoulder_t_k);
     const float up = (cfg.shoulder_n == 2.0f) ? u * u : powf(u, cfg.shoulder_n);
-    return srgb_decode(kShoulderCeiling - (kShoulderCeiling - cfg.shoulder_s_k) * up);
+    return srgb_decode(cfg.shoulder_c - (cfg.shoulder_c - cfg.shoulder_s_k) * up);
 }
 
 NEGICC_HD Rgb apply_shoulder(const PipelineConfig& cfg, Rgb v) {
@@ -368,25 +377,38 @@ NEGICC_HD int max_hist_bin(float v) {
 // x_hi in (kShoulderOff, kShoulderXHiMax] enables the shoulder (anything else turns it off). Bisection on the knee
 // t_k in [-3, 0] in double precision; the C1 condition changes sign once.
 inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExponent) {
+    if (!(n >= 1.0f && n <= 16.0f)) throw std::invalid_argument("shoulder exponent must be in [1, 16]");
     cfg.shoulder_n = n;
-    if (!(x_hi > kShoulderOff)) {
+    auto off = [&cfg] {
         cfg.shoulder_x_hi = 1.0f;
         cfg.shoulder_x_k = 1.0f;
         cfg.shoulder_t_k = cfg.shoulder_t_hi = 0.0f;
         cfg.shoulder_s_k = 1.0f;
+        cfg.shoulder_c = 1.0f;
         cfg.shoulder_y_c = 1.0f;
+    };
+    if (!(x_hi > kShoulderOff)) {
+        off();
         return;
     }
     if (x_hi > kShoulderXHiMax) x_hi = kShoulderXHiMax;
-    const double C = kShoulderCeiling;
+    // The ceiling ramps in from the unshouldered white so the curve is continuous in x_hi at the on/off boundary.
+    const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
+    const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
     const double ln2 = std::log(2.0);
     auto enc = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
     auto dec = [](double s) { return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4); };
     auto slope = [&](double t) { return (1.055 / 2.4) * std::pow(std::exp2(t), 1.0 / 2.4) * ln2; };
     const double t_hi = std::log2((double)x_hi);
-    auto f = [&](double t_k) { return t_hi - t_k - n * (C - enc(std::exp2(t_k))) / slope(t_k); };
+    auto f = [&](double t_k) { return t_hi - t_k - (double)n * (C - enc(std::exp2(t_k))) / slope(t_k); };
     double lo = -3.0, hi = 0.0;
     const bool lo_pos = f(lo) > 0.0;
+    // The C1 condition changes sign once on [-3, 0] for every x_hi in range; if it ever did not, bisection would
+    // converge to an end of the interval, not a knee. Switch the shoulder off rather than render that.
+    if (lo_pos == (f(hi) > 0.0)) {
+        off();
+        return;
+    }
     for (int i = 0; i < 100; ++i) {
         const double mid = 0.5 * (lo + hi);
         if ((f(mid) > 0.0) == lo_pos) lo = mid; else hi = mid;
@@ -397,6 +419,7 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     cfg.shoulder_x_k = (float)std::exp2(t_k);
     cfg.shoulder_t_hi = (float)t_hi;
     cfg.shoulder_s_k = (float)enc(std::exp2(t_k));
+    cfg.shoulder_c = (float)C;
     cfg.shoulder_y_c = (float)dec(C);
 }
 
