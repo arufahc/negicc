@@ -355,6 +355,15 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     return {gw * p, gh * p, gw, gh};
 }
 
+// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi).
+constexpr int kMaxHistBins = 4096;
+constexpr float kMaxHistRange = 2.0f;
+NEGICC_HD int max_hist_bin(float v) {
+    if (!((v - v) == 0.0f)) return 0;  // NaN or infinite
+    const int k = (int)(v * (kMaxHistBins / kMaxHistRange));
+    return k < 0 ? 0 : (k > kMaxHistBins - 1 ? kMaxHistBins - 1 : k);
+}
+
 // ---- Host: solve the shoulder knee ------------------------------------------------------------------------
 // x_hi in (kShoulderOff, kShoulderXHiMax] enables the shoulder (anything else turns it off). Bisection on the knee
 // t_k in [-3, 0] in double precision; the C1 condition changes sign once.
