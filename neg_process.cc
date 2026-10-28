@@ -1579,9 +1579,10 @@ int main(int ac, char *av[]) {
     .default_value(std::string("0.95"));
   parser.add_argument("--shoulder")
     .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
-          "export applies it), or x_hi in [1, 1.5], the render's 99.5% point above the chart white (1 is off). It "
-          "only applies to the sRGB output; srgb-g10 (scene-referred) and ICC outputs never apply it. Defaults to "
-          "off.")
+          "export applies it), or x_hi in [1, 1.5]: the 99.5% point of the render's max channel in linear sRGB, "
+          "where the chart white is 1 (a linear value, not stops: 1.3 is +0.38 stop). 1 is off. The shoulder rolls "
+          "the range above its knee into the ceiling at x_hi. It only applies to the sRGB output; srgb-g10 "
+          "(scene-referred) and ICC outputs never apply it. Defaults to off.")
     .default_value(std::string("off"));
   parser.add_argument("--no-metadata")
     .help("Disable automatic JSON metadata sidecar generation.")

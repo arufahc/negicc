@@ -46,6 +46,7 @@ struct SolverConfig {
   const ProfileData* prof = nullptr;
   float knee = 0.95f;
   bool knee_auto = false;
+  bool verbose = true;  // the solver's diagnostic lines (dynamic knee, shoulder), as the multi-target search's verbose
   // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
   // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
   float shoulder = 1.0f;

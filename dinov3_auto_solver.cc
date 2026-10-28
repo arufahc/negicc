@@ -637,7 +637,7 @@ static void evaluate_dynamic_knee(const SolverConfig& cfg, const float* merged_n
   out.dynamic_knee.delta_J = (float)delta_J;
   out.dynamic_knee.guard_triggered = guard;
 
-  printf("Dynamic knee: q995=%.3f, s=%.3f, k_fit=%.3f, k_dyn=%.3f, delta_J=%+.2f%% -> knee=%.3f%s\n",
+  if (cfg.verbose) printf("Dynamic knee: q995=%.3f, s=%.3f, k_fit=%.3f, k_dyn=%.3f, delta_J=%+.2f%% -> knee=%.3f%s\n",
          q, s, k_fit, k_dyn, delta_J * 100.0, k_final,
          guard ? " (reverted to base knee: guard triggered)" : "");
 }
@@ -657,18 +657,19 @@ static void evaluate_shoulder(const SolverConfig& cfg, float x_hi, float q995, c
   negicc::set_shoulder(pc, x_hi);
   r.knee = pc.shoulder_x_k;
   if (out.best_mu.empty()) return;
+  // The L* loss alone: the shoulder removes lightness, so 2% on the mean of L*, a*, b* would be about 6% on L*.
   auto mean_loss = [&](float shoulder) {
     SolverConfig c = cfg;
     c.shoulder = shoulder;
     const IntentLoss l = eval_one(c, merged_norm, grid_rgb16, n_cells, best_params.e, best_params.g, best_params.b,
                                   out.best_mu.data(), out.best_sigma.data());
-    return ((double)l.L + (double)l.a + (double)l.b) / 3.0;
+    return (double)l.L;
   };
   const double with = mean_loss(x_hi), without = mean_loss(1.0f);
   r.loss_with = (float)with;
   r.loss_without = (float)without;
   r.guard = with > 1.02 * without;
-  printf("Shoulder: q995=%.3f, x_hi=%.3f, knee=%.3f, loss %.3f vs %.3f without%s\n", q995, x_hi, r.knee, with,
+  if (cfg.verbose) printf("Shoulder: q995=%.3f, x_hi=%.3f, knee=%.3f, L* loss %.3f vs %.3f without%s\n", q995, x_hi, r.knee, with,
          without, r.guard ? " (guard: the intent loss prefers no shoulder)" : "");
 }
 
@@ -773,7 +774,11 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     if (cfg.knee_auto) curr_hist.assign(4096, 0);
     SolverConfig pin_cfg = cfg;
     float pin_q995 = 0.0f;
-    if (cfg.shoulder_auto) pin_cfg.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, &pin_q995);
+    if (cfg.shoulder_auto) {
+      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass is render time
+      pin_cfg.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, &pin_q995);
+      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
+    }
     render_crop_preview(pin_cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, preview_u8.data(),
                         cfg.knee_auto ? &curr_hist : nullptr);
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
@@ -838,7 +843,9 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     SolverConfig itc = cfg;
     float it_q995 = 0.0f;
     if (cfg.shoulder_auto) {
+      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass per iteration is render time
       itc.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b, &it_q995);
+      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
     }
     render_crop_preview(itc, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b,
                         preview_u8.data(), cfg.knee_auto ? &curr_hist : nullptr);

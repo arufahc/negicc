@@ -115,12 +115,16 @@ sidecar records E, g, b, knee and shoulder x_hi, and `cli_equivalent` carries `-
 full-resolution export and the station's export and previews apply the stored x_hi.
 
 One x_hi per iteration, from the render at the iteration's incoming params, held constant through the E, g, b sweeps
-so the loss stays smooth in E. Frozen when the loop converges. Never recomputed from the full-resolution image at
+so the loss stays smooth in E. Frozen when the loop converges. After the headroom and the rescue have moved E, the
+multi-target search measures it once more on the same inner crop at the final parameters, so the written image's
+shoulder matches its highlights; it is never recomputed from the full-resolution image at
 export.
 
 ### 3.3 The curve
 
-Per channel, in stops t = log2(x). Constants: ceiling C = 0.988 in encoded sRGB (about 252); exponent n = 2 by
+Per channel, in stops t = log2(x). Constants: ceiling C = 0.988 in encoded sRGB (about 252), ramped in from 1.0 (code
+255) over x_hi in (1, 1.1] so neighbouring frames either side of the on/off boundary do not differ by 3 codes of white;
+exponent n = 2 by
 default (see the FIT3 note above; n = 8 is a variant to evaluate, never a per-frame parameter).
 
 1. If x_hi <= 1.0001: y = min(x, 1). Today's behaviour, bit for bit.
@@ -135,7 +139,7 @@ Measured values (double precision, bisection as above):
 
 | x_hi | n | knee x_k | code at knee | chart white (x = 1) lands at code |
 |---|---|---|---|---|
-| 1.01 | 2 | 0.938 | 248 | 251.9 |
+| 1.01 | 2 | 0.985 (ceiling ramped to 0.9988) | | 254.5 |
 | 1.1 | 2 | 0.866 | 239 | 249.9 |
 | 1.333 | 2 | 0.735 | 223 | 245.1 |
 | 1.5 | 2 | 0.671 | 214 | 242.2 |
@@ -196,7 +200,8 @@ pixel.
   `Shoulder: q995=1.212, x_hi = 1.212, knee=0.781, enclosure log2(E/e_max)=+0.27`. The enclosure number (`e_max`
   from `bracket_enclosure`) is the cross-check; print it, do not use it for the value.
 * Guard, same pattern as `evaluate_dynamic_knee`: after convergence, re-score the final params with x_hi and with
-  1.0 against the selected field; if the objective with the shoulder is worse by more than 2%, keep x_hi but set
+  1.0 against the selected field; if the L* loss with the shoulder is worse by more than 2% (L* alone: the shoulder only
+  removes lightness, so 2% on the mean of L*, a*, b* would be about 6% on L*), keep x_hi but set
   `shoulder_guard = true` in the result. Do not revert silently; the evaluation needs to see how often the intent
   loss disagrees.
 
@@ -228,15 +233,60 @@ pixel.
 
 ## 5. Tests
 
-1. Bit identity when off: `make test` produces the same TIFF hashes as `b2e160e`. Add a hash check for one sRGB and
-   one sRGB-g10 export.
-2. Self-consistency: with shoulder 1.25 the Lab the solver scores for the final params equals `srgb_to_lab` of the
-   exported preview at the grid points within float noise (compare `render_preview` through the same grid
-   resampling, since the grid is patch means). This is the test that the gap is closed.
-3. CPU vs CUDA parity (station): `intent_loss`, `highlight_clip` including `max_hist`, `lab_stats` and render with
-   shoulder = 1.3 under the existing parity rules; a new nd0 baseline next to the current ones, not replacing them.
-4. Station vs `neg_process` parity: `tests/test_neg_process_parity.py` gets a case with `--shoulder 1.25` in
-   `cli_equivalent` replayed through the station export; existing tolerances.
-5. Sidecar: `tone.shoulder*` fields present, `cli_equivalent` replay reproduces the TIFF. `--shoulder auto` with
-   an explicit-parameter (no search) run errors out.
-6. Unit tests in negicc-station. Keep unit tests of negicc in negicc.
+Every test carries the tags of what it needs, so a machine without them skips it instead of passing vacuously:
+
+* **[synthetic]**: no data, no model, no station; runs on any build (`make test` in negicc).
+* **[frame]**: needs a RAW frame (the checked-in reference capture, or frames from `$NEGICC_PARITY_FRAMES` /
+  `/data/negicc-data/parity_frames`, or the eval roll named in the test); skips when it is absent.
+* **[engine]**: needs the DINOv3 backbone built into `neg_process` or loaded by the station (`make dinov3_model`, the
+  per-stock `model.onnx`); skips when it is absent.
+* **[station]**: needs negicc-station built against this negicc (`python setup.py build_ext --inplace`).
+* **[gpu]**: needs a CUDA build on a GPU host (nd0, the Orin); never run on a CPU-only host.
+
+A test that skips does not count as run: the pull request records the pytest summary line with the skips.
+
+### 5.1 The shoulder
+
+1. **[synthetic]** Bit identity when off: `convert_pixel` with `x_hi` off equals the pipeline before the shoulder over a
+   grid of pixels (`tests/kernels_test.cc`).
+2. **[frame]** Bit identity when off against `b2e160e`: the TIFF SHA-256 of one sRGB and one sRGB-g10 export of the
+   reference capture, and of the plain, knee, single-target and bundle-search exports, equals the `b2e160e` build's.
+3. **[synthetic]** The curve: identity up to the knee, C1 at the knee, the ceiling at `x_hi`, monotone, the measured
+   knee and chart-white values of section 3.3, the ceiling ramp continuous at the on/off boundary, `set_shoulder`
+   rejects a bad exponent and switches off if the C1 condition has no sign change, and only `ENCODE_SRGB` applies it.
+4. **[synthetic]** Self-consistency: with shoulder 1.25 the Lab the intent loss scores equals `srgb_to_lab` of the
+   rendered output (the render's own Lab as the target gives zero loss); a target from the unshouldered render does
+   not. This is the test that the gap is closed. **[station]** the same through the station's `Converter`.
+5. **[synthetic]** `highlight_clip` with `max_hist`: the counts sum to the crop, exceedance and white-clip counts are
+   the same with the shoulder on and off (pre-shoulder), the median L* is lower with it (post-shoulder).
+6. **[station][gpu]** CPU vs CUDA parity: `intent_loss`, `highlight_clip` including `max_hist`, `lab_stats` and render
+   with shoulder = 1.3 under the existing parity rules; a new nd0 baseline next to the current ones, not replacing
+   them.
+7. **[station][frame]** Station vs `neg_process` parity: the station's export and `neg_process --station_egb ...
+   --shoulder x_hi` write the same pixels for x_hi 1 and 1.25; `tools/neg_process_parity.py --check` stays at zero
+   differences.
+8. **[frame]** Sidecar: `tone.shoulder*` fields present, `cli_equivalent` replay reproduces the TIFF; `--shoulder auto`
+   without the parameter search errors out; invalid values error out; srgb-g10 ignores it.
+9. **[engine][frame]** `--shoulder auto` end to end: the bundle search and the single-target solver record
+   `x_hi`, `q995`, the knee and the guard; the final `x_hi` is measured at the final parameters; the verbose lines
+   carry the enclosure cross-check.
+
+### 5.2 Part 1B (the bracket rescue) cases
+
+Part 1B had no test of its own. Each case compares against the `b2e160e` record of the same frame:
+
+1. **[engine][frame]** Must not fire: a frame whose chosen bracket is not highlight-constrained gives the `b2e160e`
+   Auto result (bracket, `E`, `g`, `b`, output hash) exactly (the bundle-search record of
+   `tools/record_bundle_search_parity.py`, frames 0002 and the reference capture).
+2. **[engine][frame]** Must fire: `Portra400_raw_0014.ARW` (the overblown dev frame) picks a different, darker-exposed
+   bracket than `b2e160e`, asserted by index, and the verbose line records the rescue.
+3. **[engine][frame]** The 55 development frames of `experiments/manifests/eval_dataset.json` with `--shoulder off`:
+   the bracket of every frame is compared with the `b2e160e` sidecars; the frames where it differs are exactly the
+   frames Part 1B fires on, and their count and list are reported (a change from the list is a regression to review).
+4. **[synthetic]** The gate itself: `tier1_hi` / `tier2_hi` and the `dl_min` floor, on constructed `ClipStats`, with a
+   case on each side of every threshold, so the gate can fail.
+
+### 5.3 Where the unit tests live
+
+Unit tests of the shared pipeline are in negicc (`tests/kernels_test.cc`, `tests/neg_process_cli_test.py`); tests of the
+`Converter`, the tournament and the session are in negicc-station (`tests/test_shoulder.py`).

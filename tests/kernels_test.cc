@@ -260,14 +260,14 @@ static void test_shoulder_curve() {
             const float k = cfg.shoulder_x_k;
             assert(apply_shoulder_channel(cfg, 0.5f * k) == 0.5f * k);
             assert(std::fabs(apply_shoulder_channel(cfg, k * 1.0001f) - k * 1.0001f) < 2e-5f);
-            const float h = 1e-3f;
+            const float h = 2e-4f;
             const float slope_below = (apply_shoulder_channel(cfg, k) - apply_shoulder_channel(cfg, k * (1 - h))) / (k * h);
             const float slope_above =
                 (apply_shoulder_channel(cfg, k * (1 + h)) - apply_shoulder_channel(cfg, k)) / (k * h);
             assert(std::fabs(slope_below - 1.0f) < 0.01f);
             assert(std::fabs(slope_above - 1.0f) < 0.1f);  // C1 join; the tightest spans curve fastest
             // The ceiling is reached at x_hi, holds above it, and the curve never decreases.
-            const float ceiling = srgb_decode(kShoulderCeiling);
+            const float ceiling = srgb_decode(cfg.shoulder_c);
             assert(std::fabs(apply_shoulder_channel(cfg, x_hi * 0.99999f) - ceiling) < 5e-3f);
             assert(std::fabs(apply_shoulder_channel(cfg, x_hi) - ceiling) < 1e-5f);
             assert(apply_shoulder_channel(cfg, 3.0f) == cfg.shoulder_y_c && std::fabs(cfg.shoulder_y_c - ceiling) < 1e-5f);
@@ -292,6 +292,35 @@ static void test_shoulder_curve() {
     assert(off.shoulder_x_hi == 1.0f);
     set_shoulder(off, 9.0f);
     assert(off.shoulder_x_hi == kShoulderXHiMax);
+    // The ceiling is ramped in: continuous at the on/off boundary, the full 0.988 from 1 + kShoulderRamp.
+    {
+        PipelineConfig a{}, b{}, c{};
+        a.encoding = b.encoding = c.encoding = ENCODE_SRGB;
+        set_shoulder(a, 1.0002f);
+        set_shoulder(b, 1.0f + kShoulderRamp);
+        set_shoulder(c, 1.4f);
+        assert(a.shoulder_x_hi > 1.0f && std::fabs(a.shoulder_c - 1.0f) < 1e-3f);
+        assert(std::fabs(b.shoulder_c - kShoulderCeiling) < 1e-5f && std::fabs(c.shoulder_c - kShoulderCeiling) < 1e-5f);
+        const float white_off = 255.0f * srgb_encode(1.0f);
+        assert(std::fabs(255.0f * srgb_encode(apply_shoulder_channel(a, 1.0f)) - white_off) < 0.5f);
+        // Neighbouring frames either side of the boundary differ by well under a code of white.
+        PipelineConfig lo{}, hi{};
+        lo.encoding = hi.encoding = ENCODE_SRGB;
+        set_shoulder(lo, 1.0f);
+        set_shoulder(hi, 1.005f);
+        assert(std::fabs(255.0f * srgb_encode(apply_shoulder_channel(hi, 1.0f)) -
+                         255.0f * srgb_encode(apply_shoulder_channel(lo, 1.0f))) < 0.7f);
+        // Bad exponents are rejected; every in-range x_hi has a knee.
+        bool threw = false;
+        try { set_shoulder(a, 1.2f, 0.5f); } catch (const std::invalid_argument&) { threw = true; }
+        assert(threw);
+        for (float x = 1.0002f; x <= 1.5f; x += 0.0007f) {
+            PipelineConfig k{};
+            k.encoding = ENCODE_SRGB;
+            set_shoulder(k, x);
+            assert(k.shoulder_x_hi > 1.0f && k.shoulder_x_k > 0.0f && k.shoulder_x_k < 1.0001f);
+        }
+    }
     // Only the sRGB encoding applies it.
     const PipelineConfig lin = make_test_cfg(1.3f, ENCODE_SRGB_LINEAR);
     const Rgb v = {1.2f, 0.5f, 0.9f};
