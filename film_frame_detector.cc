@@ -853,8 +853,12 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       }
     }
     std::vector<uint8_t> mm(N, 0);
+    double above_mass = 0.0;
+    int prev_b = ModeHist::nb;
     for (int k = (int)pks.size() - 1; k >= 0 && hi >= 0; --k) {
-      if ((hi - pks[k]) * ModeHist::bw > 2.5f) break;
+      for (int b = prev_b - 1; b > pks[k] + 3; --b) above_mass += mh.h[b];
+      prev_b = std::min(prev_b, pks[k] + 4);
+      if ((hi - pks[k]) * ModeHist::bw > 2.5f || (nlight == 0 && above_mass > 0.025 * mh.tot)) break;
       const float mc = mh.center(pks[k]);
       for (size_t i = 0; i < N; ++i)
         mm[i] = (cv.valid[i] && !black[i] && !light[i] && std::fabs(mall[i] - mc) <= 0.15f) ? 1 : 0;
@@ -868,7 +872,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         break;
       }
     }
-    if (pk < 0) pk = mh.top_mode(0.004, 2.5f);
+    if (pk < 0) pk = mh.top_mode(0.004, nlight == 0 ? 0.35f : 2.5f);
     if (pk >= 0) {
       const float mc = mh.center(pk);
       std::vector<float> cr[3];
@@ -1392,8 +1396,6 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   const bool positive = P.polarity == FILM_POSITIVE;
   // A canvas class on the film: picture or base, and on a positive also its dense (dark) parts.
   auto film = [positive](uint8_t c) { return c == CL_IMAGE || c == CL_BASE || (positive && c == CL_DARK); };
-  std::vector<std::string> reasons;
-  FrameDetection& out = res.det;
 
   // ---- 5a. The non-image map at <= 320 px (box fraction of non-image canvas pixels), gated, as prefix sums.
   const int f = std::max(1, (int)std::ceil(std::max(W, H) / 320.0));
@@ -1461,19 +1463,23 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     if (t_lr >= 1 && t_tb == 0 && no_film_lines(true) > 0.03f) axis_ev = 1;
     else if (t_tb >= 1 && t_lr == 0 && no_film_lines(false) > 0.03f) axis_ev = -1;
   }
-  bool tr;
-  if (P.axis_hint == 'h' || P.axis_hint == 'H') tr = false;
-  else if (P.axis_hint == 'v' || P.axis_hint == 'V') tr = true;
-  else if (axis_ev != 0) tr = axis_ev < 0;
-  else tr = !square && rv.score > rh.score;
-  if (tr && !square && rv.h <= 0) tr = false;
-  if (!tr && !square && rh.h <= 0) tr = true;
+  bool tr0;
+  if (P.axis_hint == 'h' || P.axis_hint == 'H') tr0 = false;
+  else if (P.axis_hint == 'v' || P.axis_hint == 'V') tr0 = true;
+  else if (axis_ev != 0) tr0 = axis_ev < 0;
+  else tr0 = !square && rv.score > rh.score;
+  if (tr0 && !square && rv.h <= 0) tr0 = false;
+  if (!tr0 && !square && rh.h <= 0) tr0 = true;
   // The frame's w / h on the canvas swaps with the strip direction; a square frame is the same either way.
-  const SearchRes r0 = (tr && !square) ? rv : rh;
+  const SearchRes r0 = (tr0 && !square) ? rv : rh;
   if (r0.h <= 0) return false;
   res.score = r0.score / ((double)sw * sh);
 
   // ---- 5b. The strip model, in the view (strip along view x).
+  auto eval_strip = [&](bool tr, FormatResult& res_out) -> bool {
+  std::vector<std::string> reasons;
+  FrameDetection& out = res_out.det;
+  out = FrameDetection();
   const View v{&ci.cls, W, H, tr};
   const int VW = v.w(), VH = v.h();
   Rect fr;  // the frame estimate, view coordinates
@@ -1638,7 +1644,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // Each segment becomes a frame candidate. Its measured length is kept when both ends are bounded and it is near
   // the nominal length (cameras differ) or when a hard limit cuts it; otherwise the nominal length is laid from the
   // bounded end (or around the centre when neither end is bounded).
-  struct Cand { Rect r; int lt, rt; float vis; bool complete; };
+  struct Cand { Rect r; float meas_x0, meas_x1; int lt, rt; float vis; bool complete; };
   std::vector<Cand> cands;
   const float tol = fg.len_tol;
   for (const Seg& sg : segs) {
@@ -1647,7 +1653,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     r.x1 = (float)sg.b;
     float sl = 0.0f, sr = 0.0f;
     refine_lr(r, &sl, &sr);
-    const int lt = bound_type((int)r.x0 - 1, -1), rt = bound_type((int)r.x1, +1);
+    const float meas_x0 = r.x0, meas_x1 = r.x1;
+    int lt = bound_type((int)r.x0 - 1, -1), rt = bound_type((int)r.x1, +1);
     const bool lg = lt > 0, rg = rt > 0;
     const float len = r.w();
     if (len > L_exp * (1 + tol) || len < L_exp * (1 - tol)) {
@@ -1680,11 +1687,13 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         r.x1 = c + 0.5f * L_exp;
       }
     }
+    if (std::fabs(r.x0 - meas_x0) > 0.5f) lt = 0;
+    if (std::fabs(r.x1 - meas_x1) > 0.5f) rt = 0;
     float vis = 0.0f;
     for (int x = (int)std::floor(r.x0); x < (int)std::ceil(r.x1); ++x) vis += (x >= 0 && x < VW) ? cvalid[x] : 0.0f;
     vis /= std::max(1.0f, L_exp);
     const bool complete = r.x0 >= 0 && r.x1 <= VW && vis >= 0.97f * (r.w() / L_exp);
-    cands.push_back({r, lt, rt, vis, complete});
+    cands.push_back({r, meas_x0, meas_x1, lt, rt, vis, complete});
   }
   // The primary: the complete frame nearest the image centre, else the most visible frame.
   const float centre = tr ? cv.cyc : cv.cxc;
@@ -1835,14 +1844,15 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
           cur = -1;
         }
       }
-      if (hy0 < 0 || hy1 - hy0 < 0.4f * hh || hy1 - hy0 > 1.8f * hh) continue;
+      if (hy0 < 0 || hy1 - hy0 < std::max(1.0f, std::floor(0.4f * hh)) || hy1 - hy0 > std::ceil(1.8f * hh) + 1.0f)
+        continue;
       std::vector<Rect> found;
       int x = 0;
       while (x < VW) {
         while (x < VW && col_frac(v, x, hy0, hy1, light) < 0.5f) ++x;
         const int a = x;
         while (x < VW && col_frac(v, x, hy0, hy1, light) >= 0.5f) ++x;
-        if (x > a && x - a >= 0.5f * hw && x - a <= 1.7f * hw) {
+        if (x > a && x - a >= std::max(1.0f, std::floor(0.5f * hw)) && x - a <= std::ceil(1.7f * hw) + 1.0f) {
           Rect h;
           h.x0 = (float)a;
           h.x1 = (float)x;
@@ -1866,6 +1876,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // Film base patches next to the primary: each adjacent inter-frame gap (bounded by film on both sides), over the
   // middle 60% of the band, and the rebate above and below the frame, each as long as its columns or rows stay >= 90%
   // base, shrunk by a quarter of their width on each side.
+  res_out.base_patches.clear();
   {
     auto base = [](uint8_t c) { return c == CL_BASE; };
     const Geometry G{&cv, &wi, tr};
@@ -1892,7 +1903,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       g.x1 = hi - q;
       g.y0 = (float)by0;
       g.y1 = (float)by1;
-      res.base_patches.push_back(G.to_image(g));
+      res_out.base_patches.push_back(G.to_image(g));
     }
     const int bx0 = (int)(pr.x0 + 0.2f * pr.w()), bx1 = (int)(pr.x1 - 0.2f * pr.w());
     for (int dir = -1; dir <= 1; dir += 2) {
@@ -1917,7 +1928,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       g.y1 = hi - q;
       g.x0 = (float)bx0;
       g.x1 = (float)bx1;
-      res.base_patches.push_back(G.to_image(g));
+      res_out.base_patches.push_back(G.to_image(g));
     }
   }
 
@@ -1954,21 +1965,31 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   }
   out.sprockets.clear();
   for (const Rect& h : holes) out.sprockets.push_back(G.to_image(h));
-  // The film gaps at the primary's ends: from its edge outward over the gap-like columns.
+  // The film gaps at the primary's ends: from its edge outward over the gap-like columns, skipping up to two
+  // leading transition columns at a tilted edge as bound_type does.
   for (int side = 0; side < 2; ++side) {
     if ((side == 0 ? cands[pi].lt : cands[pi].rt) != 1) continue;
     const int dir = side == 0 ? -1 : 1;
     const int start = side == 0 ? (int)std::floor(pr.x0) - 1 : (int)std::ceil(pr.x1);
     const int maxd = std::max(2, (int)std::lround(fg.gap_max * ppm));
-    int far = start;
+    int beg = -1, far = -1, run = 0;
     for (int d = 0; d < maxd; ++d) {
       const int x = start + dir * d;
-      if (x < 0 || x >= VW || cnon[x] < 0.85f) break;
-      far = x;
+      if (x < 0 || x >= VW || cvalid[x] < 0.9f) break;
+      if (cnon[x] >= 0.85f) {
+        if (beg < 0) beg = x;
+        far = x;
+        ++run;
+      } else if (beg < 0 && d < 2 && cps[x] < 0.5f) {
+        continue;
+      } else {
+        break;
+      }
     }
+    if (run < 2) continue;
     Rect g;
-    g.x0 = (float)std::min(start, far);
-    g.x1 = (float)std::max(start, far) + 1;
+    g.x0 = (float)std::min(beg, far);
+    g.x1 = (float)std::max(beg, far) + 1;
     g.y0 = pr.y0;
     g.y1 = pr.y1;
     const FilmRect gi = G.to_image(g);
@@ -1998,9 +2019,34 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     conf *= 0.8f;
     reasons.push_back("weak_transverse_edges");
   }
+  const bool has_hard_bound = edge0 || edge1 || end0 || end1 || cands[pi].lt == 2 || cands[pi].rt == 2 || !holes.empty();
+  const bool strip_reaches_border_or_edge = (edge0 || s0 <= 2) || (edge1 || s1 >= VH - 2);
+  const bool has_base_bound = strip_reaches_border_or_edge && st_tb >= 0.4f &&
+                              (cands[pi].lt == 1 || cands[pi].rt == 1 || !res_out.base_patches.empty());
+  if (!has_hard_bound && !has_base_bound) {
+    conf *= 0.4f;
+    reasons.push_back("no_film_base");
+  }
   out.conf = conf;
   out.reason = join(reasons);
-  out.ok = true;
+  return true;
+  };
+  if (!eval_strip(tr0, res)) return false;
+  if (square && !P.axis_hint && axis_ev == 0) {
+    FormatResult alt;
+    alt.score = res.score;
+    if (eval_strip(!tr0, alt)) {
+      auto better_strip = [](const FormatResult& a, const FormatResult& b) {
+        if (a.det.conf != b.det.conf) return a.det.conf > b.det.conf;
+        if (a.det.secondaries.size() != b.det.secondaries.size())
+          return a.det.secondaries.size() > b.det.secondaries.size();
+        if (a.det.n_gaps != b.det.n_gaps) return a.det.n_gaps > b.det.n_gaps;
+        if ((a.det.axis != '?') != (b.det.axis != '?')) return a.det.axis != '?';
+        return a.base_patches.size() > b.base_patches.size();
+      };
+      if (better_strip(alt, res)) res = std::move(alt);
+    }
+  }
   return true;
 }
 
@@ -2177,7 +2223,7 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
       const float mx = *std::max_element(mp[c]->d.begin(), mp[c]->d.end());
       size_t cnt = 0;
       for (float v : mp[c]->d) cnt += v >= 0.995f * mx;
-      const bool plateau = cnt >= std::max<size_t>(4, mp[c]->d.size() / 2000) && mx > 0.05f;
+      const bool plateau = cnt >= std::max<size_t>(4, mp[c]->d.size() / 2000) && mx >= 0.90f;
       clip_level[c] = plateau ? 0.98f * mx : 1e9f;
     }
   }
@@ -2193,7 +2239,7 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
   classify(cv, P.polarity, ci);
 
   // 5. The format given, or the best of all: the rectangle score, discounted by the confidence and by a strip width
-  // that disagrees with the format.
+  // that disagrees with the format, and boosted when 35mm perforations are confirmed.
   std::vector<FilmFormat> fmts;
   if (P.format == FILM_FORMAT_AUTO) fmts = {FILM_35MM, FILM_645, FILM_6X6, FILM_6X7, FILM_6X9};
   else fmts = {P.format};
@@ -2207,6 +2253,7 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
     if (P.format == FILM_FORMAT_AUTO) {
       key *= r.det.conf;
       if (r.det.reason.find("strip_width_mismatch") != std::string::npos) key *= 0.7;
+      if (!r.det.sprockets.empty()) key *= 1.15;
     }
     if (key > best_key) {
       best_key = key;
@@ -2234,7 +2281,10 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
     out.crop[1] = y0;
     out.crop[2] = std::max(0, x1 - x0);
     out.crop[3] = std::max(0, y1 - y0);
-    if (out.crop[2] < 16 || out.crop[3] < 16) return false;
+    if (out.crop[2] < 16 || out.crop[3] < 16) {
+      out.ok = false;
+      return false;
+    }
   }
   // The base patch: the flattest candidate on the full-resolution image.
   bool any_patch = false;
@@ -2257,5 +2307,6 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, Frame
   out.has_base = any_patch && out.base_std_d <= 0.025f;
   out.light_clipped = ci.light_clipped;
   if (theta != 0.0f) out.reason += out.reason.empty() ? "rotated" : ",rotated";
+  out.ok = true;
   return true;
 }

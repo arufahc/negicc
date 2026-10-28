@@ -36,7 +36,13 @@ def shutter_to_seconds(shutter):
     while s.endswith("s"):
         s = s[:-1]
     num, slash, den = s.partition("/")
-    value = float(num) / float(den) if slash else float(num)
+    if slash:
+        den_f = float(den)
+        if not math.isfinite(den_f) or den_f <= 0.0:
+            raise ValueError("not a positive denominator")
+        value = float(num) / den_f
+    else:
+        value = float(s)
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError("not a positive number of seconds")
     return value
@@ -56,6 +62,12 @@ def check(path):
         if nested or bundle.get("crosstalk_correction_matrix") is not None:
             problems.append("a rec2020_linear bundle carries a crosstalk correction matrix (re-export it from "
                             "negicc-station)")
+    fb = bundle.get("film_base")
+    if isinstance(fb, dict) and "shutter" in fb:
+        try:
+            shutter_to_seconds(fb["shutter"])
+        except (TypeError, ValueError) as e:
+            problems.append("film_base: cannot read shutter %r (%s)" % (fb["shutter"], e))
     targets = bundle.get("targets")
     if not isinstance(targets, list) or not targets:
         return problems + ["no targets array"]

@@ -65,6 +65,10 @@ void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
 }
 
 const char* DinoV3Engine::backend_name() const { return runner_ ? runner_->name() : "none"; }
+const char* DinoV3Engine::backend_used() const {
+    if (!runner_) return "none";
+    return std::strncmp(runner_->name(), "gpu", 3) == 0 ? "gpu" : "cpu";
+}
 bool DinoV3Engine::has_pooled() const { return runner_ ? runner_->has_pooled() : false; }
 bool DinoV3Engine::has_pooled_tone() const { return runner_ ? runner_->has_pooled_tone() : false; }
 bool DinoV3Engine::has_pool_weights() const { return runner_ ? runner_->has_pool_weights() : false; }
