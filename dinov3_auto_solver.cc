@@ -423,9 +423,10 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
   return (float)(sum_res / n);
 }
 
-float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out) {
+float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out, bool anchored) {
   const float q = (float)negicc::max_hist_quantile(hist, 0.995);
   if (q995_out) *q995_out = q;
+  if (anchored) return negicc::shoulder_x_hi_anchored(q);
   return std::min(std::max(q, 1.0f), negicc::kShoulderXHiMax);
 }
 
@@ -456,7 +457,7 @@ static float measure_shoulder_x_hi(const SolverConfig& cfg, const float* merged_
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
   for (const auto& t : thread_hists)
     for (int i = 0; i < negicc::kMaxHistBins; ++i) hist[i] += t[i];
-  return shoulder_x_hi_from_hist(hist.data(), q995_out);
+  return shoulder_x_hi_from_hist(hist.data(), q995_out, cfg.shoulder_anchored);
 }
 
 static void render_crop_preview(const SolverConfig& cfg, const float* merged_norm,
