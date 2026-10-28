@@ -41,7 +41,7 @@ int main() {
   const char* bad_inputs[] = {
       "", "   ", "s", "ss", "0", "0s", "0.0", "-1", "-0.5s", "1/0", "1/0s",
       "0/8", "-1/8", "1/-8", "nan", "NaN", "inf", "-inf", "infinity",
-      "1/8x", "abc", "1/", "/8", "1/2/3",
+      "1/8x", "abc", "1/", "/8", "1/2/3", "0x10", "1_000", "1e", "+",
   };
   for (const char* bad : bad_inputs) {
     expect_throws(bad);

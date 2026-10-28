@@ -27,7 +27,12 @@ Usage: check_profile_bundles.py <bundle.json> ...
 
 import json
 import math
+import re
 import sys
+
+# What profile_bundle.cc's shutter_to_seconds_d reads: ASCII decimals, with an optional exponent. Python's float() also
+# takes "1_000" and any Unicode digits, which neg_process rejects, so they are refused here too.
+_NUMBER = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
 
 
 def shutter_to_seconds(shutter):
@@ -36,6 +41,9 @@ def shutter_to_seconds(shutter):
     while s.endswith("s"):
         s = s[:-1]
     num, slash, den = s.partition("/")
+    for part in ((num, den) if slash else (s,)):
+        if not _NUMBER.fullmatch(part):
+            raise ValueError("not a number")
     if slash:
         den_f = float(den)
         if not math.isfinite(den_f) or den_f <= 0.0:

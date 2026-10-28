@@ -8,7 +8,7 @@
 
 PYTHON ?= python3
 
-.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine test clean clean_lib clean_all
+.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine unit_test test clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -27,8 +27,9 @@ endif
 LIBRAW_SRCS = $(filter-out %_ph.cpp,$(wildcard $(LIBRAW_DIR)/src/*.cpp $(LIBRAW_DIR)/src/*/*.cpp))
 LIBRAW_OBJS = $(patsubst %.cpp,bin_out/libraw/%.o,$(notdir $(LIBRAW_SRCS)))
 vpath %.cpp $(sort $(dir $(LIBRAW_SRCS)))
-# Lossy (JPEG-compressed) DNG support when libjpeg's headers are installed (libjpeg-dev); LIBRAW_JPEG=0 or 1 forces it.
-LIBRAW_JPEG ?= $(shell printf '\043include <stdio.h>\n\043include <jpeglib.h>\n' | $(CXX) -E -x c++ - >/dev/null 2>&1 && echo 1 || echo 0)
+# Lossy (JPEG-compressed) DNG support (needs libjpeg-dev): pinned off so every machine decodes the same files the same
+# way; build with LIBRAW_JPEG=1 to enable it.
+LIBRAW_JPEG ?= 0
 LIBRAW_DEFS = -DUSE_ZLIB $(if $(filter 1,$(LIBRAW_JPEG)),-DUSE_JPEG -DUSE_JPEG8)
 LIBRAW_LDLIBS = -lz $(if $(filter 1,$(LIBRAW_JPEG)),-ljpeg)
 # Thread-safe build (no LIBRAW_NOTHREADS), with OpenMP as distribution packages build it. -ffp-contract=off as the
@@ -260,7 +261,7 @@ NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) -I. -I3rd_party $(LIBRAW_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
@@ -304,15 +305,24 @@ bin_out/dinov3_shape_test: tests/dinov3_shape_test.cc dinov3_preprocess.cc color
 	mkdir -p bin_out
 	$(CXX) $(TEST_CXXFLAGS) tests/dinov3_shape_test.cc dinov3_preprocess.cc -o $@
 
+bin_out/pixel_shift_group_test: tests/pixel_shift_group_test.cc pixel_shift_group.h
+	mkdir -p bin_out
+	$(CXX) $(TEST_CXXFLAGS) tests/pixel_shift_group_test.cc -o $@
+
 bin_out/shutter_test: tests/shutter_test.cc profile_bundle.cc profile_bundle.h bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
 	mkdir -p bin_out
 	$(CXX) $(TEST_CXXFLAGS) $(ORT_INC) $(DINOV3_EXTRA_INC) tests/shutter_test.cc profile_bundle.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -llcms2 -lz -o $@
 
-test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test bin_out/shutter_test bin_out/neg_process
+# The standalone C++ tests (no lcms2, ONNX or LibRaw needed): the cheap gate.
+unit_test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test bin_out/pixel_shift_group_test
 	./bin_out/detector_test
 	./bin_out/rgbview_test
 	./bin_out/kernels_test
 	./bin_out/dinov3_shape_test
+	./bin_out/pixel_shift_group_test
+
+# Everything: the unit tests, shutter_test and the neg_process CLI tests (which need the neg_process binary).
+test: unit_test bin_out/shutter_test bin_out/neg_process
 	./bin_out/shutter_test
 	PYTHONPATH=. $(PYTHON) tests/neg_process_cli_test.py
 

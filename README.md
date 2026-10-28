@@ -104,8 +104,8 @@ to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
 * PIP
 * ArgyllCMS
 * LibRaw: built from the `3rd_party/libraw` submodule (pinned to a LibRaw release), not the system's libraw-dev;
-  clone with `git clone --recursive` or run `git submodule update --init --recursive`. libjpeg-dev, if installed,
-  adds lossy DNG support to it.
+  clone with `git clone --recursive` or run `git submodule update --init --recursive`. Lossy (JPEG-compressed)
+  DNG support is off, so every machine decodes alike; `make LIBRAW_JPEG=1` enables it and needs libjpeg-dev.
 * lcms2
 * Clang
 * Matplotlib
