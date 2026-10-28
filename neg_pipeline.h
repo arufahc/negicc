@@ -18,8 +18,11 @@
 
 #include <stdint.h>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <vector>
+
+#include "color_pipeline.h"
 
 struct Rgb {
   float r, g, b;
@@ -208,10 +211,24 @@ static inline Rgb process_pixel(const uint16_t* in_px, const float* matrix, floa
   return v;
 }
 
-static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, float knee, const ProfileData& prof) {
-  Rgb v = process_pixel(in_px, matrix, knee, prof);
-  v = pcs_to_linear_srgb(v);
-  return encode_output(v, ENCODE_SRGB);
+// The shared pipeline's configuration (color_pipeline.h) for a profile, knee and shoulder, built once per search
+// iteration, never per pixel (set_shoulder() solves the shoulder knee).
+static_assert(sizeof(ProfileData) == sizeof(negicc::ProfileData), "ProfileData layouts must match");
+static inline negicc::PipelineConfig make_pipeline_config(const ProfileData& prof, float knee,
+                                                          float shoulder_x_hi = 1.0f,
+                                                          int encoding = ENCODE_SRGB) {
+  negicc::PipelineConfig cfg{};
+  std::memcpy(&cfg.profile, &prof, sizeof(cfg.profile));
+  cfg.knee = knee;
+  cfg.encoding = encoding;
+  negicc::set_shoulder(cfg, shoulder_x_hi);
+  return cfg;
+}
+
+// One implementation of the pixel pipeline: color_pipeline.h. Encoded sRGB after the shoulder.
+static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, const negicc::PipelineConfig& cfg) {
+  const negicc::Rgb v = negicc::convert_pixel(cfg, matrix, in_px);
+  return { v.r, v.g, v.b };
 }
 
 static inline float srgb_decode(float c) {

@@ -80,6 +80,7 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
 
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out) {
+  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
   #pragma omp parallel for schedule(dynamic)
   for (int c = 0; c < n_cand; ++c) {
     float m[9];
@@ -87,12 +88,12 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
     double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
     for (int i = 0; i < n_px; ++i) {
       const uint16_t* px = grid_rgb16 + i * 3;
-      // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule and L*a*b* are the
-      // linear equivalents of the encoded ones and skip the sRGB curve round trip.
-      const Rgb lin = pcs_to_linear_srgb(process_pixel(px, m, cfg.knee, *cfg.prof));
-      clip += linear_channel_white_clipped(lin.r) + linear_channel_white_clipped(lin.g) +
-              linear_channel_white_clipped(lin.b);
-      const Lab lab = linear_srgb_to_lab(lin);
+      // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule reads the pre-shoulder
+      // value and L*a*b* the displayed one (after the shoulder), the linear equivalents of the encoded ones.
+      const negicc::Rgb lin = negicc::convert_pixel_linear(pc, m, px);
+      clip += negicc::linear_channel_white_clipped(lin.r) + negicc::linear_channel_white_clipped(lin.g) +
+              negicc::linear_channel_white_clipped(lin.b);
+      const negicc::Lab lab = negicc::linear_srgb_to_lab(negicc::to_display(pc, lin));
       const float dL = (lab.L - mu[i * 3]) / sigma[i * 3];
       const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
       const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
@@ -122,6 +123,20 @@ static inline double compute_penalties(double e, float hi_clip, double e_center,
     pen_e = 0.0;
   }
   return pen_clip + pen_e;
+}
+
+static inline double compute_penalties(const SolverConfig& cfg, double e, float hi_clip, double e_center,
+                                       double& pen_clip, double& pen_e) {
+  if (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f && e > 0.0) {
+    const double clip_excess = std::max(0.0, (double)hi_clip - 2.5) / 2.0;
+    pen_clip = 15.0 * (clip_excess * clip_excess);
+    const double d_hi = std::max(0.0, std::log2((double)cfg.enc_e_min / e));
+    const double d_sh = std::max(0.0, std::log2(e / (double)cfg.enc_e_max));
+    const double neg_slack = std::max(0.0, std::log2((double)cfg.enc_e_min / (double)cfg.enc_e_max));
+    pen_e = 4.5 * d_hi * d_hi + 1.2 * d_sh * d_sh + 0.8 * neg_slack * neg_slack;
+    return pen_clip + pen_e;
+  }
+  return compute_penalties(e, hi_clip, e_center, pen_clip, pen_e);
 }
 
 static inline IntentLoss eval_one(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
@@ -188,7 +203,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   size_t best_k = 0;
   double best_score_e = 0.0;
   for (size_t i = 0; i < e_cands_d.size(); ++i) {
-    const double score = (double)losses[i].L + compute_penalties(e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+    const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
     if (i == 0 || score < best_score_e) {
       best_score_e = score;
       best_k = i;
@@ -204,7 +219,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
       const double e_test = base_e + de;
       if (e_test < e_min || e_test > e_max) continue;
       const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, curr_g, curr_b, mu, sigma);
-      const double s = (double)r.L + compute_penalties(e_test, r.clip, e_center, p_clip, p_e);
+      const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
       if (s < best_score_e) {
         best_score_e = s;
         best_e = e_test;
@@ -213,11 +228,14 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   }
 
   // 2. Chromatic gains: g sweep, then b sweep
+  const bool rescue_mode = (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f);
   std::vector<double> g_cands_d, b_cands_d;
   if (pin_mask & PIN_G) {
     g_cands_d = {curr_g};
   } else if (initial) {
     for (double d : {-0.04, -0.02, 0.0, 0.02, 0.04}) g_cands_d.push_back(initial->g + d);
+  } else if (rescue_mode) {
+    g_cands_d = {0.74, 0.80, 0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   } else {
     g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   }
@@ -225,6 +243,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     b_cands_d = {curr_b};
   } else if (initial) {
     for (double d : {-0.06, -0.03, 0.0, 0.03, 0.06}) b_cands_d.push_back(initial->b + d);
+  } else if (rescue_mode) {
+    b_cands_d = {0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   } else {
     b_cands_d = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   }
@@ -265,11 +285,106 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     }
   }
 
+  // If rescue screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on (e, g, b).
+  if (rescue_mode && !initial) {
+    if (!(pin_mask & PIN_E)) {
+      cands.resize(e_cands_d.size());
+      losses.resize(e_cands_d.size());
+      for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      best_k = 0;
+      for (size_t i = 0; i < e_cands_d.size(); ++i) {
+        const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+        if (i == 0 || score < best_score_e) {
+          best_score_e = score;
+          best_k = i;
+        }
+      }
+      best_e = e_cands_d[best_k];
+      const double step = (e_max > e_min) ? std::max(0.01, (e_max - e_min) / 40.0) : 0.02;
+      const double base_e = best_e;
+      for (double de : {-2.0 * step, -step, step, 2.0 * step}) {
+        const double e_test = base_e + de;
+        if (e_test < e_min || e_test > e_max) continue;
+        const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, best_g, best_b, mu, sigma);
+        const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
+        if (s < best_score_e) {
+          best_score_e = s;
+          best_e = e_test;
+        }
+      }
+    }
+    if (!(pin_mask & PIN_G)) {
+      cands.resize(g_cands_d.size());
+      losses.resize(g_cands_d.size());
+      for (size_t i = 0; i < g_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)g_cands_d[i], (float)best_b};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      k = 0;
+      for (size_t i = 1; i < g_cands_d.size(); ++i) {
+        if (losses[i].a < losses[k].a) k = i;
+      }
+      best_g = g_cands_d[k];
+    }
+    if (!(pin_mask & PIN_B)) {
+      cands.resize(b_cands_d.size());
+      losses.resize(b_cands_d.size());
+      for (size_t i = 0; i < b_cands_d.size(); ++i) cands[i] = {(float)best_e, (float)best_g, (float)b_cands_d[i]};
+      intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+      k = 0;
+      for (size_t i = 1; i < b_cands_d.size(); ++i) {
+        if (losses[i].b < losses[k].b) k = i;
+      }
+      best_b = b_cands_d[k];
+    }
+    const IntentLoss r0 = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g, best_b, mu, sigma);
+    best_gb = (double)r0.a + (double)r0.b;
+    for (const auto& d : chain) {
+      if ((pin_mask & PIN_G) && d[0] != 0.0) continue;
+      if ((pin_mask & PIN_B) && d[1] != 0.0) continue;
+      const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g + d[0], best_b + d[1], mu, sigma);
+      if ((double)r.a + (double)r.b < best_gb) {
+        best_gb = (double)r.a + (double)r.b;
+        best_g += d[0];
+        best_b += d[1];
+      }
+    }
+  }
+
+  // Re-align E at the final (best_g, best_b) so L* matches mu_L after chromatic gain updates.
+  if (rescue_mode && !(pin_mask & PIN_E) && (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
+    cands.resize(e_cands_d.size());
+    losses.resize(e_cands_d.size());
+    for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};
+    intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
+    best_k = 0;
+    for (size_t i = 0; i < e_cands_d.size(); ++i) {
+      const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+      if (i == 0 || score < best_score_e) {
+        best_score_e = score;
+        best_k = i;
+      }
+    }
+    best_e = e_cands_d[best_k];
+    const double step = (e_max > e_min) ? std::max(0.01, (e_max - e_min) / 40.0) : 0.02;
+    const double base_e = best_e;
+    for (double de : {-2.0 * step, -step, step, 2.0 * step}) {
+      const double e_test = base_e + de;
+      if (e_test < e_min || e_test > e_max) continue;
+      const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, e_test, best_g, best_b, mu, sigma);
+      const double s = (double)r.L + compute_penalties(cfg, e_test, r.clip, e_center, p_clip, p_e);
+      if (s < best_score_e) {
+        best_score_e = s;
+        best_e = e_test;
+      }
+    }
+  }
+
   // 4. Final balanced intent loss
   const IntentLoss r = eval_one(cfg, merged, grid_rgb16, n_cells, best_e, best_g, best_b, mu, sigma);
   const double loss_intent = ((double)r.L + (double)r.a + (double)r.b) / 3.0;
+  const double pen = compute_penalties(cfg, best_e, r.clip, e_center, p_clip, p_e);
   out = {best_e, best_g, best_b};
-  return loss_intent + compute_penalties(best_e, r.clip, e_center, p_clip, p_e);
+  return loss_intent + pen;
 }
 
 float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
@@ -308,6 +423,42 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
   return (float)(sum_res / n);
 }
 
+float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out) {
+  const float q = (float)negicc::max_hist_quantile(hist, 0.995);
+  if (q995_out) *q995_out = q;
+  return std::min(std::max(q, 1.0f), negicc::kShoulderXHiMax);
+}
+
+// The 99.5% point of the max channel of the pre-shoulder render of the whole view at (e, g, b), clamped: the
+// shoulder's x_hi. A render of the view without the encode; the 32x21 grid of patch means underestimates this point
+// and is not used for it.
+static float measure_shoulder_x_hi(const SolverConfig& cfg, const float* merged_norm, const negicc::RgbView& view,
+                                   float e, float g, float b, float* q995_out) {
+  float m[9];
+  candidate_matrix(merged_norm, e, g, b, m);
+  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, 1.0f);
+  const int w = view.width, h = view.height;
+  const int num_threads = omp_get_max_threads();
+  std::vector<std::vector<uint64_t>> thread_hists(num_threads, std::vector<uint64_t>(negicc::kMaxHistBins, 0));
+  #pragma omp parallel
+  {
+    auto& thist = thread_hists[omp_get_thread_num()];
+    #pragma omp for schedule(static)
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        uint16_t px[3];
+        view.sample(x, y, px);
+        const negicc::Rgb lin = negicc::convert_pixel_linear(pc, m, px);
+        thist[negicc::max_hist_bin(std::max(lin.r, std::max(lin.g, lin.b)))]++;
+      }
+    }
+  }
+  std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+  for (const auto& t : thread_hists)
+    for (int i = 0; i < negicc::kMaxHistBins; ++i) hist[i] += t[i];
+  return shoulder_x_hi_from_hist(hist.data(), q995_out);
+}
+
 static void render_crop_preview(const SolverConfig& cfg, const float* merged_norm,
                                 const negicc::RgbView& view,
                                 float e, float g, float b, uint8_t* out_u8,
@@ -315,6 +466,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
   float m[9];
   candidate_matrix(merged_norm, e, g, b, m);
   const int w = view.width, h = view.height;
+  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
 
   if (out_hist != nullptr) {
     const int num_threads = omp_get_max_threads();
@@ -336,7 +488,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
           const int bin = std::isfinite(mc) ? std::clamp((int)(mc * 2048.0f), 0, 4095) : 0;
           thist[bin]++;
 
-          const Rgb v = convert_pixel_srgb(px, m, cfg.knee, *cfg.prof);
+          const Rgb v = convert_pixel_srgb(px, m, pc);
           out_row[x * 3 + 0] = quantize_u8(v.r);
           out_row[x * 3 + 1] = quantize_u8(v.g);
           out_row[x * 3 + 2] = quantize_u8(v.b);
@@ -356,9 +508,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
     ra.width = w;
     ra.height = h;
     ra.matrix = m;
-    ra.cfg.knee = cfg.knee;
-    std::memcpy(&ra.cfg.profile, cfg.prof, sizeof(ra.cfg.profile));
-    ra.cfg.encoding = negicc::ENCODE_SRGB;
+    ra.cfg = pc;
     ra.out_type = 1;
     ra.out = out_u8;
     negicc::cpu_render(ra);
@@ -487,9 +637,40 @@ static void evaluate_dynamic_knee(const SolverConfig& cfg, const float* merged_n
   out.dynamic_knee.delta_J = (float)delta_J;
   out.dynamic_knee.guard_triggered = guard;
 
-  printf("Dynamic knee: q995=%.3f, s=%.3f, k_fit=%.3f, k_dyn=%.3f, delta_J=%+.2f%% -> knee=%.3f%s\n",
+  if (cfg.verbose) printf("Dynamic knee: q995=%.3f, s=%.3f, k_fit=%.3f, k_dyn=%.3f, delta_J=%+.2f%% -> knee=%.3f%s\n",
          q, s, k_fit, k_dyn, delta_J * 100.0, k_final,
          guard ? " (reverted to base knee: guard triggered)" : "");
+}
+
+// Records the frozen shoulder and the guard: the final parameters re-scored with x_hi and with the shoulder off
+// against the selected intent field. The shoulder is kept either way; guard flags a loss more than 2% worse.
+static void evaluate_shoulder(const SolverConfig& cfg, float x_hi, float q995, const float* merged_norm,
+                              const uint16_t* grid_rgb16, int n_cells, const GainsD& best_params,
+                              DinoSolveResult& out) {
+  ShoulderResult& r = out.shoulder;
+  r.x_hi = x_hi;
+  r.measured = cfg.shoulder_auto;
+  r.q995 = cfg.shoulder_auto ? q995 : 0.0f;
+  r.active = x_hi > negicc::kShoulderOff;
+  if (!r.active) return;
+  negicc::PipelineConfig pc{};
+  negicc::set_shoulder(pc, x_hi);
+  r.knee = pc.shoulder_x_k;
+  if (out.best_mu.empty()) return;
+  // The L* loss alone: the shoulder removes lightness, so 2% on the mean of L*, a*, b* would be about 6% on L*.
+  auto mean_loss = [&](float shoulder) {
+    SolverConfig c = cfg;
+    c.shoulder = shoulder;
+    const IntentLoss l = eval_one(c, merged_norm, grid_rgb16, n_cells, best_params.e, best_params.g, best_params.b,
+                                  out.best_mu.data(), out.best_sigma.data());
+    return (double)l.L;
+  };
+  const double with = mean_loss(x_hi), without = mean_loss(1.0f);
+  r.loss_with = (float)with;
+  r.loss_without = (float)without;
+  r.guard = with > 1.02 * without;
+  if (cfg.verbose) printf("Shoulder: q995=%.3f, x_hi=%.3f, knee=%.3f, L* loss %.3f vs %.3f without%s\n", q995, x_hi, r.knee, with,
+         without, r.guard ? " (guard: the intent loss prefers no shoulder)" : "");
 }
 
 bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
@@ -539,12 +720,14 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
       const double lo0 = -4.0, hi0 = 4.0;
       double log2_lo = lo0, log2_hi = hi0;
     std::vector<float> l_vals(n_cells);
+    // The anchor is the median L* of the unshouldered render: the shoulder never touches the grey axis it meters.
+    const negicc::PipelineConfig anchor_pc = make_pipeline_config(*cfg.prof, cfg.knee, 1.0f);
     for (int iter = 0; iter < 16; ++iter) {
       const double mid = 0.5 * (log2_lo + log2_hi);
       float m[9];
       candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
       for (int i = 0; i < n_cells; ++i) {
-        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, cfg.knee, *cfg.prof);
+        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, anchor_pc);
         l_vals[i] = srgb_to_lab(v).L;
       }
       std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
@@ -589,7 +772,14 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     const double t0_r = omp_get_wtime();
     std::vector<uint64_t> curr_hist;
     if (cfg.knee_auto) curr_hist.assign(4096, 0);
-    render_crop_preview(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, preview_u8.data(),
+    SolverConfig pin_cfg = cfg;
+    float pin_q995 = 0.0f;
+    if (cfg.shoulder_auto) {
+      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass is render time
+      pin_cfg.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, &pin_q995);
+      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
+    }
+    render_crop_preview(pin_cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, preview_u8.data(),
                         cfg.knee_auto ? &curr_hist : nullptr);
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
@@ -606,27 +796,31 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     out.best_hist = std::move(curr_hist);
 
     const GainsD pinned_params{1.0, 1.0, 1.0};
-    evaluate_dynamic_knee(cfg, merged_norm, grid_rgb16.data(), n_cells, pinned_params, 0.0, w, h, out);
+    evaluate_dynamic_knee(pin_cfg, merged_norm, grid_rgb16.data(), n_cells, pinned_params, 0.0, w, h, out);
+    evaluate_shoulder(cfg, pin_cfg.shoulder, pin_q995, merged_norm, grid_rgb16.data(), n_cells, pinned_params, out);
     out.timing_total_ms = (omp_get_wtime() - t0_total) * 1000.0;
     return true;
   }
 
   // 2. Bootstrap: render at (1, boot_g, boot_b), infer, search with initial = null.
   const GainsD boot{1.0, boot_g, boot_b};
+  // The bootstrap runs with the shoulder off when it is measured (there are no parameters to measure it at yet).
+  SolverConfig boot_cfg = cfg;
+  if (cfg.shoulder_auto) boot_cfg.shoulder = 1.0f;
   const double t0_r_boot = omp_get_wtime();
-  render_crop_preview(cfg, merged_norm, view, (float)boot.e, (float)boot.g, (float)boot.b, preview_u8.data(), nullptr);
+  render_crop_preview(boot_cfg, merged_norm, view, (float)boot.e, (float)boot.g, (float)boot.b, preview_u8.data(), nullptr);
   out.timing_render_ms += (omp_get_wtime() - t0_r_boot) * 1000.0;
   if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
   const double anchor_center = (pin_mask & PIN_E) ? 0.0 : 1.0;  // pinned E drops P_anchor
   out.iterations.push_back(make_log('b', -1, boot, -1.0f,
-                                    eval_one(cfg, merged_norm, grid_rgb16.data(), n_cells, boot.e, boot.g, boot.b,
+                                    eval_one(boot_cfg, merged_norm, grid_rgb16.data(), n_cells, boot.e, boot.g, boot.b,
                                              inf.mu.data(), inf.sigma.data()),
                                     anchor_center));
 
   const double t0_search_boot = omp_get_wtime();
   GainsD curr;
-  optimize_impl(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
+  optimize_impl(boot_cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
                 nullptr, e_bounds, pin_mask, curr);
   out.timing_search_ms += (omp_get_wtime() - t0_search_boot) * 1000.0;
 
@@ -637,6 +831,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   DinoV3InferenceResult best_inf;
   std::vector<uint64_t> best_hist;
   int best_it = -1;
+  float best_x_hi = cfg.shoulder, best_q995 = 0.0f;
   std::string status = "MAX_ITERS";
   const int loop_limit = std::max(1, max_iters);
 
@@ -644,7 +839,15 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     const double t0_r = omp_get_wtime();
     std::vector<uint64_t> curr_hist;
     if (cfg.knee_auto) curr_hist.assign(4096, 0);
-    render_crop_preview(cfg, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b,
+    // x_hi from the render at this iteration's incoming parameters, held through the (E, g, b) sweeps below.
+    SolverConfig itc = cfg;
+    float it_q995 = 0.0f;
+    if (cfg.shoulder_auto) {
+      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass per iteration is render time
+      itc.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b, &it_q995);
+      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
+    }
+    render_crop_preview(itc, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b,
                         preview_u8.data(), cfg.knee_auto ? &curr_hist : nullptr);
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
@@ -654,7 +857,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
                                                  inf.mu.data(), inf.sigma.data());
     out.timing_residual_ms += (omp_get_wtime() - t0_resid) * 1000.0;
 
-    const IntentLoss it_loss = eval_one(cfg, merged_norm, grid_rgb16.data(), n_cells, curr.e, curr.g, curr.b,
+    const IntentLoss it_loss = eval_one(itc, merged_norm, grid_rgb16.data(), n_cells, curr.e, curr.g, curr.b,
                                         inf.mu.data(), inf.sigma.data());
     DinoIterationLog it_log = make_log((char)('0' + it % 10), it, curr, (float)err, it_loss, anchor_center);
 
@@ -663,6 +866,8 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
       best_params = curr;
       best_inf = inf;
       best_it = it;
+      best_x_hi = itc.shoulder;
+      best_q995 = it_q995;
       best_hist = std::move(curr_hist);
     }
 
@@ -675,7 +880,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
 
     const double t0_s = omp_get_wtime();
     GainsD next;
-    optimize_impl(cfg, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
+    optimize_impl(itc, merged_norm, grid_rgb16.data(), grid_w, grid_h, inf.mu.data(), inf.sigma.data(),
                   &curr, e_bounds, pin_mask, next);
     out.timing_search_ms += (omp_get_wtime() - t0_s) * 1000.0;
 
@@ -710,7 +915,10 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
   out.tone_mass = std::move(best_inf.tone_mass);
   out.best_hist = std::move(best_hist);
 
-  evaluate_dynamic_knee(cfg, merged_norm, grid_rgb16.data(), n_cells, best_params, anchor_center, w, h, out);
+  SolverConfig best_cfg = cfg;
+  best_cfg.shoulder = best_x_hi;
+  evaluate_dynamic_knee(best_cfg, merged_norm, grid_rgb16.data(), n_cells, best_params, anchor_center, w, h, out);
+  evaluate_shoulder(cfg, best_x_hi, best_q995, merged_norm, grid_rgb16.data(), n_cells, best_params, out);
   out.timing_total_ms = (omp_get_wtime() - t0_total) * 1000.0;
   return true;
 }

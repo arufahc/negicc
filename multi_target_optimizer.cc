@@ -245,6 +245,7 @@ class GreyPoint {
     static const float kIdentity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     float m[9];
     candidate_matrix(kIdentity, s, 1.0f, 1.0f, m);
+    const negicc::PipelineConfig pc = make_pipeline_config(prof_, AUTO_KNEE, 1.0f);
     for (int i = 0; i < n; ++i) {
       uint16_t px[3];
       for (int c = 0; c < 3; ++c) {
@@ -252,7 +253,7 @@ class GreyPoint {
         const float vv = std::isfinite(v) ? v : 0.0f;
         px[c] = std::lround(std::fmin(1.0f, std::fmax(0.0f, vv)) * 65535.0f);
       }
-      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, AUTO_KNEE, prof_));
+      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, pc));
       out[i][0] = lab.L;
       out[i][1] = lab.a;
       out[i][2] = lab.b;
@@ -575,7 +576,8 @@ struct ClipStats {
 // py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
 std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const InnerCrop& crop_in,
                                               const std::vector<float>& matrices, float knee,
-                                              const ProfileData& prof, const float ceil_rgb[3]) {
+                                              const ProfileData& prof, const float ceil_rgb[3],
+                                              float shoulder = 1.0f, uint64_t* max_hist = nullptr) {
   const size_t n = matrices.size() / 9;
   std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
@@ -589,8 +591,8 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
   ha.crop = {crop.x0, crop.y0, crop.w, crop.h};
   ha.matrices = matrices.data();
   ha.n = (int)n;
-  ha.cfg.knee = knee;
-  std::memcpy(&ha.cfg.profile, &prof, sizeof(ha.cfg.profile));
+  ha.cfg = make_pipeline_config(prof, knee, shoulder);
+  ha.max_hist = max_hist;
   for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = srgb_decode(ceil_rgb[c] / 255.0f);
   ha.out = hc_out.data();
   negicc::cpu_highlight_clip(ha);
@@ -634,6 +636,14 @@ class SearchFrame {
     }
   }
 
+  // The shoulder: a fixed x_hi for every render, or (auto) the one each ConversionParams carries, which
+  // fixed_point() measures. The screening passes carry 1.
+  void set_shoulder(float x_hi, bool automatic) {
+    shoulder_fixed_ = x_hi;
+    shoulder_auto_ = automatic;
+  }
+  float shoulder_of(const ConversionParams& p) const { return shoulder_auto_ ? p.shoulder : shoulder_fixed_; }
+
   const InnerCrop& inner_crop() const { return crop_; }
   const FrameStats& stats() const { return stats_; }
   const float* frame_matrix() const { return frame_matrix_; }
@@ -654,9 +664,7 @@ class SearchFrame {
     ra.width = crop_.w;
     ra.height = crop_.h;
     ra.matrix = m;
-    ra.cfg.knee = AUTO_KNEE;
-    std::memcpy(&ra.cfg.profile, &prof, sizeof(ra.cfg.profile));
-    ra.cfg.encoding = negicc::ENCODE_SRGB;
+    ra.cfg = make_pipeline_config(prof, AUTO_KNEE, shoulder_of(params));
     ra.out_type = 1;
     ra.out = out.data();
     negicc::cpu_render(ra);
@@ -701,17 +709,27 @@ class SearchFrame {
   // (ScreeningResult::intent_loss).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
-                const ConversionParams* initial, const float e_bounds[3], ConversionParams& out) {
+                const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
+                bool rescue_mode = false) {
     const Clock::time_point t0 = Clock::now();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
+    cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
+    if (rescue_mode) {
+      Enclosure enc;
+      if (bracket_enclosure(bundle_.targets[target_idx], target_idx, std::max(1.0f, stats_.g_lo),
+                            std::max(std::max(1.0f, stats_.g_lo) + 1.0f, stats_.g_hi), enc)) {
+        cfg.enc_e_min = enc.e_min;
+        cfg.enc_e_max = enc.e_max;
+      }
+    }
     IntentGains init, res;
     if (initial) init = {initial->e, initial->g, initial->b};
     const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
                                                   stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
                                                   e_bounds, 0, res);
-    out = {res.e, res.g, res.b};
+    out = {res.e, res.g, res.b, cfg.shoulder};
     search_time_ += Clock::now() - t0;
     return loss;
   }
@@ -719,13 +737,17 @@ class SearchFrame {
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
   // kept within the trust region e_bounds = {lo, hi, centre}; the centre is where the search's penalty pulls E.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
-  bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp) {
+  bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
+                   bool rescue_mode = false) {
     if (e_bounds[0] > e_bounds[1]) {
       std::swap(e_bounds[0], e_bounds[1]);
       e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
     }
     ConversionParams curr = start, best;
+    curr.shoulder = shoulder_of(start);
     float prev_err = std::numeric_limits<float>::infinity();
+    float cur_q995 = 0.0f, best_q995 = 0.0f;
+    std::vector<float> best_mu, best_sigma;
     FixedPointStatus status = FixedPointStatus::kMaxIters;
     int steps = 0;
     bool have_best = false;
@@ -733,6 +755,8 @@ class SearchFrame {
     std::vector<uint8_t> preview;
     std::vector<float> mu, sigma;
     for (int it = 0; it < max_steps_; ++it) {
+      // x_hi from the pre-shoulder render at the incoming parameters; held through this iteration's search.
+      if (shoulder_auto_) curr.shoulder = measure_shoulder(target_idx, curr, &cur_q995);
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
       const float err = residual(preview, mu, sigma);
@@ -740,6 +764,11 @@ class SearchFrame {
         have_best = true;
         best_err = err;
         best = curr;
+        best_q995 = cur_q995;
+        if (best.shoulder > negicc::kShoulderOff) {
+          best_mu = mu;
+          best_sigma = sigma;
+        }
       }
       if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
         status = FixedPointStatus::kDiverged;
@@ -747,15 +776,20 @@ class SearchFrame {
         break;
       }
       ConversionParams next;
-      search(target_idx, mu, sigma, &curr, e_bounds, next);
+      search(target_idx, mu, sigma, &curr, e_bounds, next, rescue_mode);
       const float dp = std::fabs(next.e - curr.e) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
       const float rel = it > 0 ? std::fabs(err - prev_err) / std::max(1e-4f, prev_err) : 1.0f;
       steps++;
       if (verbose_) {
         std::cout << "    T" << target_idx + 1 << " step " << it << ": E " << fixed(curr.e, 4) << " g "
-                  << fixed(curr.g, 4) << " b " << fixed(curr.b, 4) << " resid " << fixed(err, 4) << "\n";
+                  << fixed(curr.g, 4) << " b " << fixed(curr.b, 4) << " resid " << fixed(err, 4);
+        if (shoulder_auto_ || curr.shoulder > negicc::kShoulderOff) {
+          std::cout << " x_hi " << fixed(curr.shoulder, 3) << " (q995 " << fixed(cur_q995, 3)
+                    << ", enclosure log2(E/e_max) " << fixed(enclosure_log2(target_idx, curr.e), 2, true) << ")";
+        }
+        std::cout << "\n";
       }
-      if (it > 0 && (dp <= TOL_PARAM || rel <= TOL_REL_ERR)) {
+      if (it > 0 && (dp <= TOL_PARAM || ((!rescue_mode || err <= prev_err) && rel <= TOL_REL_ERR))) {
         status = FixedPointStatus::kConverged;
         break;
       }
@@ -764,10 +798,46 @@ class SearchFrame {
     }
     fp.target_idx = target_idx;
     fp.params = best;
+    fp.shoulder_q995 = best_q995;
+    fp.shoulder_knee = 1.0f;
+    fp.shoulder_guard = false;
+    if (best.shoulder > negicc::kShoulderOff) shoulder_guard(target_idx, best, best_mu, best_sigma, fp);
     fp.residual = best_err;
     fp.status = status;
     fp.steps = steps;
     return true;
+  }
+
+  // Re-scores the best step with its x_hi and with the shoulder off against the field DINOv3 predicted from it. The
+  // guard compares the L* loss alone: the shoulder removes lightness, so a 2% worse mean of L*, a*, b* would be about
+  // 6% on L* (the a* and b* terms barely move). The penalties do not depend on the shoulder. The shoulder is kept either
+  // way: the guard is only recorded when the loss is more than 2% worse, so the evaluation sees how often it disagrees.
+  void shoulder_guard(int target_idx, const ConversionParams& p, const std::vector<float>& mu,
+                      const std::vector<float>& sigma, FixedPointResult& fp) {
+    negicc::PipelineConfig pc{};
+    negicc::set_shoulder(pc, p.shoulder);
+    fp.shoulder_knee = pc.shoulder_x_k;
+    if (mu.empty()) return;
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    const IntentGains cand{p.e, p.g, p.b};
+    auto mean_loss = [&](float shoulder) {
+      cfg.shoulder = shoulder;
+      IntentLoss l;
+      intent_loss(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w * stats_.grid_h, &cand, 1, mu.data(),
+                  sigma.data(), &l);
+      return (double)l.L;
+    };
+    const double with = mean_loss(p.shoulder), without = mean_loss(1.0f);
+    fp.shoulder_guard = with > 1.02 * without;
+    if (verbose_) {
+      std::cout << "    T" << target_idx + 1 << " Shoulder: q995=" << fixed(fp.shoulder_q995, 3)
+                << ", x_hi=" << fixed(p.shoulder, 3) << ", knee=" << fixed(fp.shoulder_knee, 3)
+                << ", enclosure log2(E/e_max)=" << fixed(enclosure_log2(target_idx, p.e), 2, true) << ", L* loss "
+                << fixed((float)with, 3) << " vs " << fixed((float)without, 3) << " without"
+                << (fp.shoulder_guard ? " (guard)" : "") << "\n";
+    }
   }
 
   // The highlight clipping of the frame's inner crop through bracket target_idx, per candidate (E, g, b).
@@ -778,8 +848,38 @@ class SearchFrame {
       const ConversionParams& p = candidates[i];
       candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
     }
+    // The candidates share one shoulder (they differ in E, g, b around one render): the first one's. The clip
+    // counts read the pre-shoulder value; only the median L* is post-shoulder.
     return measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
-                                  ceil);
+                                  ceil, candidates.empty() ? shoulder_fixed_ : shoulder_of(candidates[0]));
+  }
+
+  // log2(E / e_max) of bracket target_idx's enclosure at E: the same quantity as the shoulder's q995 for green (the
+  // cross-check printed next to x_hi, never used for its value); NaN when the bracket has no enclosure.
+  float enclosure_log2(int target_idx, float e) const {
+    Enclosure enc;
+    const float g_lo = std::max(1.0f, stats_.g_lo);
+    if (!(e > 0.0f) ||
+        !bracket_enclosure(bundle_.targets[target_idx], target_idx, g_lo, std::max(g_lo + 1.0f, stats_.g_hi), enc) ||
+        !(enc.e_max > 0.0f))
+      return std::numeric_limits<float>::quiet_NaN();
+    return std::log2(e / enc.e_max);
+  }
+
+  // The shoulder's x_hi at p: the 99.5% point of the max channel of the pre-shoulder render of the inner crop,
+  // clamped to [1, kShoulderXHiMax]; q995 gets the point before clamping.
+  float measure_shoulder(int target_idx, const ConversionParams& p, float* q995) {
+    const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
+    static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
+    float m[9];
+    candidate_matrix(input_matrix_, p.e, p.g, p.b, m);
+    std::vector<float> matrices(m, m + 9);
+    std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+    measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data, kCeil,
+                           1.0f, hist.data());
+    const float x_hi = shoulder_x_hi_from_hist(hist.data(), q995);
+    render_time_ += Clock::now() - t0;
+    return x_hi;
   }
 
   // Writes the time spent per measurement into the result.
@@ -804,6 +904,8 @@ class SearchFrame {
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
+  float shoulder_fixed_ = 1.0f;
+  bool shoulder_auto_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
 };
 
@@ -822,7 +924,7 @@ Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionPar
                             float e_max, const float ceil[3]) {
   constexpr float tail = SCENE_TAIL, tol_ev = 0.01f;
   const float e = params.e;
-  auto at_ev = [&](float ev) { return ConversionParams{e * std::pow(2.0f, ev), params.g, params.b}; };
+  auto at_ev = [&](float ev) { return ConversionParams{e * std::pow(2.0f, ev), params.g, params.b, params.shoulder}; };
   Headroom h;
   const bool cap_known = has_e_max && e_max > 0 && e > 0;
   const float capacity_ev = cap_known ? std::log2(e_max / e) : 0.0f;
@@ -925,6 +1027,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
+  fr.set_shoulder(opts.shoulder_auto ? 1.0f : opts.shoulder, opts.shoulder_auto);
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
@@ -1110,7 +1213,19 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     adaptive.push_back(fp);
     out.tournament.push_back(fp);
   }
-  // The lowest residual wins, among the converged brackets when any converged.
+  // The winner is the lowest plain residual among the converged brackets (when any converged), below. tourney_score,
+  // the enclosure-regularized residual, only ranks the candidates of Part 1B's rescue.
+  auto tourney_score = [&](const FixedPointResult& a) {
+    for (const auto& c : enclosure) {
+      if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
+        const float d_hi = std::max(0.0f, std::log2(c.e_min / a.params.e));
+        const float d_sh = std::max(0.0f, std::log2(a.params.e / c.e_max));
+        const float neg_slack = std::max(0.0f, -c.slack_ev);
+        return a.residual + 4.5f * d_hi * d_hi + 1.2f * d_sh * d_sh + 0.8f * neg_slack * neg_slack;
+      }
+    }
+    return a.residual;
+  };
   bool any_converged = false;
   for (const auto& a : adaptive) any_converged |= (a.status == FixedPointStatus::kConverged);
   const FixedPointResult* win = nullptr;
@@ -1209,10 +1324,160 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
   }
 
+  // Part 1B: Enclosure-Guided Highlight Rescue when the chosen bracket is highlight-constrained and exhibits
+  // significant pre-shoulder highlight excess without being a dark/backlit silhouette.
+  if (opts.enclosure_rescue && out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
+    const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
+    const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
+    const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
+    const ClipStats hc_235 = fr.highlight_clip(chosen.target_idx, {params}, ceil_235)[0];
+    const float exc_242 = max_excess(hc_242);
+    const float exc_235 = max_excess(hc_235);
+    Enclosure enc_chosen{};
+    const bool has_enc_chosen = bounds_of(chosen.target_idx, enc_chosen);
+    const bool tier1_hi = (hc_242.median_L >= 58.0f) && (exc_242 >= 0.022f);
+    const bool tier2_hi =
+        (hc_242.median_L >= 48.0f) && (exc_242 >= 0.075f || (chosen.target_idx >= 3 && exc_235 >= 0.110f));
+    if (has_enc_chosen && enc_chosen.feasible && params.e < enc_chosen.e_min && (tier1_hi || tier2_hi)) {
+      const float e_pull = std::min(enc_chosen.e_max, std::min(enc_chosen.e_min, params.e * std::pow(2.0f, 0.15f)));
+      if (e_pull > params.e) {
+        params.e = e_pull;
+        out.rescue = RescueOutcome::kTaken;
+      }
+    } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
+      std::vector<Depth> depths_res;
+      for (const auto& c : pool) {
+        float e_met = 0.0f;
+        bool found_met = false;
+        for (const auto& d : depths) {
+          if (d.cand.target_idx == c.target_idx) {
+            e_met = d.e_met;
+            found_met = true;
+            break;
+          }
+        }
+        if (!found_met) continue;
+        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
+        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
+        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
+        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
+        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
+        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
+        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
+        const float lo = base_lo;
+        const float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        const float depth_r = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
+                              SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
+        depths_res.push_back({c, e_met, depth_r, lo, hi});
+      }
+      std::vector<float> mu_res = mu1, sig_res = sig1;
+      if (!depths_res.empty()) {
+        std::stable_sort(depths_res.begin(), depths_res.end(),
+                         [](const Depth& a, const Depth& b) { return a.depth > b.depth; });
+        const Enclosure cand_res = depths_res[0].cand;
+        const float e_res_init = std::clamp(depths_res[0].e_met, depths_res[0].lo, depths_res[0].hi);
+        if (cand_res.target_idx != cand1.target_idx || std::fabs(e_res_init - e1_init) > 1e-4f) {
+          std::vector<uint8_t> preview_res;
+          fr.render_preview(cand_res.target_idx, {e_res_init, 1.10f, 1.15f}, preview_res);
+          if (!fr.predict(preview_res, mu_res, sig_res)) return false;
+        }
+      }
+      std::vector<Screened> res_screening;
+      auto screen_res = [&](const Enclosure& c, float lo, float hi, float e_met) {
+        Screened s;
+        s.enclosure = c;
+        s.result.target_idx = c.target_idx;
+        s.result.e_lo = lo;
+        s.result.e_hi = hi;
+        s.result.e_metered = e_met;
+        const float eb[3] = {lo, hi, c.e_center};
+        s.result.intent_loss =
+            fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*rescue_mode=*/true);
+        res_screening.push_back(s);
+      };
+      if (!depths_res.empty()) {
+        for (const auto& d : depths_res) screen_res(d.cand, d.lo, d.hi, d.e_met);
+      } else {
+        for (const auto& c : pool) screen_res(c, c.search_lo, c.search_hi, c.e_center);
+      }
+      if (!res_screening.empty()) {
+        std::stable_sort(res_screening.begin(), res_screening.end(), [](const Screened& a, const Screened& b) {
+          return a.result.intent_loss < b.result.intent_loss;
+        });
+        std::vector<Screened> res_shortlist;
+        for (const auto& s : res_screening) {
+          if (s.result.intent_loss <= res_screening[0].result.intent_loss + 2.0f && res_shortlist.size() < 2) {
+            res_shortlist.push_back(s);
+          }
+        }
+        if (res_shortlist.size() < 2 && res_screening.size() >= 2) {
+          res_shortlist.assign(res_screening.begin(), res_screening.begin() + 2);
+        }
+        std::vector<FixedPointResult> res_adaptive;
+        for (const auto& c : res_shortlist) {
+          float eb[3];
+          trust_bounds(c, eb);
+          FixedPointResult fp;
+          if (!fr.fixed_point(c.result.target_idx, c.result.params, eb, fp, /*rescue_mode=*/true)) return false;
+          res_adaptive.push_back(fp);
+        }
+        bool res_any_conv = false;
+        for (const auto& a : res_adaptive) res_any_conv |= (a.status == FixedPointStatus::kConverged);
+        const FixedPointResult* win_res = nullptr;
+        for (const auto& a : res_adaptive) {
+          if (res_any_conv && a.status != FixedPointStatus::kConverged) continue;
+          if (!win_res || tourney_score(a) < tourney_score(*win_res)) win_res = &a;
+        }
+        if (win_res) {
+          FixedPointResult fp_res = *win_res;
+          ConversionParams p_res = fp_res.params;
+          Headroom h_res = apply_headroom(fp_res.target_idx, p_res);
+          ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
+          const float dl_min = (hc_242.median_L >= 58.0f) ? -7.5f : -4.5f;
+          float dl = hc_res_242.median_L - hc_242.median_L;
+          if (dl < dl_min) {
+            p_res.e *= std::pow(2.0f, (dl - dl_min) * 0.038f);
+            hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
+            dl = hc_res_242.median_L - hc_242.median_L;
+          }
+          const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
+          const float exc_res_242 = max_excess(hc_res_242);
+          if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
+              (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
+            chosen = fp_res;
+            params = p_res;
+            headroom = h_res;
+            out.rescue = RescueOutcome::kTaken;
+          }
+        }
+      }
+    }
+  }
+
+  // The headroom and the rescue move E after the loop froze x_hi; measure it once more at the final parameters
+  // (the same pre-shoulder pass on the inner crop) so the written image's shoulder matches its highlights. The
+  // guard stays that of the converged iteration.
+  if (opts.shoulder_auto) {
+    float q995 = 0.0f;
+    params.shoulder = fr.measure_shoulder(chosen.target_idx, params, &q995);
+    chosen.shoulder_q995 = q995;
+    negicc::PipelineConfig pc{};
+    negicc::set_shoulder(pc, params.shoulder);
+    chosen.shoulder_knee = pc.shoulder_x_k;
+    if (verbose) {
+      std::cout << "Auto: Shoulder: q995=" << fixed(q995, 3) << ", x_hi=" << fixed(params.shoulder, 3)
+                << ", knee=" << fixed(chosen.shoulder_knee, 3) << ", enclosure log2(E/e_max)="
+                << fixed(fr.enclosure_log2(chosen.target_idx, params.e), 2, true) << " (final parameters)\n";
+    }
+  }
+
   out.target_idx = chosen.target_idx;
   out.target_name = name_of(chosen.target_idx);
-  out.params = {params.e / e_norm, params.g, params.b};
+  out.params = {params.e / e_norm, params.g, params.b, params.shoulder};
   out.residual = chosen.residual;
+  out.shoulder_q995 = chosen.shoulder_q995;
+  out.shoulder_knee = chosen.shoulder_knee;
+  out.shoulder_guard = chosen.shoulder_guard;
   out.status = chosen.status;
   out.headroom = headroom.outcome;
   out.headroom_ev = headroom.delta_ev;

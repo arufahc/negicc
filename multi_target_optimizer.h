@@ -67,6 +67,9 @@ struct RgbImage {
 // normalisation, ahead of the film profile, and g and b are the green and blue gains relative to red.
 struct ConversionParams {
   float e = 1.0f, g = 1.0f, b = 1.0f;
+  // The highlight shoulder x_hi (color_pipeline.h) the render, the intent field and the loss use: per frame, frozen
+  // by the fixed-point loop; 1 is off.
+  float shoulder = 1.0f;
 };
 
 // How the fixed-point loop of a bracket stopped.
@@ -111,6 +114,12 @@ struct ParamSearchOptions {
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
   bool film_base_from_scan = false;
   bool verbose = true;
+  // The highlight shoulder (color_pipeline.h): a fixed x_hi (1 is off), or measured by the fixed-point loop from the
+  // pre-shoulder render at each iteration's incoming parameters when shoulder_auto.
+  float shoulder = 1.0f;
+  bool shoulder_auto = false;
+  // Part 1B, the enclosure-guided bracket rescue after Step 5 (multi_target_optimizer.cc). Off by default.
+  bool enclosure_rescue = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
@@ -137,6 +146,10 @@ struct FixedPointResult {
   float residual = 0;
   FixedPointStatus status = FixedPointStatus::kMaxIters;
   int steps = 0;  // render -> DINOv3 -> search steps run, one inference each
+  // The frozen shoulder of the best step (params.shoulder) and how it was found.
+  float shoulder_q995 = 0.0f;   // the measured 99.5% point before clamping (auto only)
+  float shoulder_knee = 1.0f;   // the linear knee x_k (1 when off)
+  bool shoulder_guard = false;  // the intent loss with the shoulder is more than 2% worse than without
 };
 
 struct ParamSearchResult {
@@ -144,6 +157,10 @@ struct ParamSearchResult {
   std::string target_name;  // its name in the bundle ("Target 3")
   ConversionParams params;  // the chosen (E, g, b), E in this frame's units: diag(E, E g, E b) * M_frame
   float residual = 0.0f;    // the chosen bracket's FixedPointResult::residual
+  // The chosen bracket's shoulder (params.shoulder is x_hi): measured q995, linear knee, and the guard.
+  float shoulder_q995 = 0.0f;
+  float shoulder_knee = 1.0f;
+  bool shoulder_guard = false;
   FixedPointStatus status = FixedPointStatus::kMaxIters;  // and its FixedPointResult::status
 
   // The bracket's input matrix and the frame's exposure. With X the bundle's crosstalk matrix, f the film base
