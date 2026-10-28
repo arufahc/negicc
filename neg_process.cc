@@ -1098,6 +1098,19 @@ static std::string json_num(double val, const char* fmt = "%.6g") {
 // full visible sensor frame (geometry.roi_source = "auto_fallback").
 static constexpr float kLowFrameConfidence = 0.5f;
 
+// The highlight shoulder as the sidecar records it (tone.shoulder*).
+struct ShoulderInfo {
+  float x_hi = 1.0f;                 // the frozen parameter; 1 is off
+  std::string source = "off";        // off | cli | auto
+  bool has_q995 = false;
+  float q995 = 0.0f;                 // measured before clamping (auto)
+  bool has_knee = false;
+  float knee = 1.0f;                 // the linear knee x_k
+  bool has_guard = false;
+  bool guard = false;
+  bool active() const { return x_hi > negicc::kShoulderOff; }
+};
+
 static bool write_json_sidecar(
     const std::string& output_path,
     int ac, char* av[],
@@ -1121,6 +1134,7 @@ static bool write_json_sidecar(
     float exposure_comp, float gain_g, float gain_b,
     unsigned pin_mask,
     float knee, const std::string& knee_source,
+    const ShoulderInfo& shoulder,
     bool has_dino, const DinoSolveResult& dino_res,
     const std::string& dino_model_path,
     const std::string& dino_backend,
@@ -1309,6 +1323,9 @@ static bool write_json_sidecar(
           json_num(gain_g, "%.9g").c_str(),
           json_num(gain_b, "%.9g").c_str(),
           json_num(knee, "%.9g").c_str());
+  if (shoulder.active()) {
+    fprintf(fp, ", \"--shoulder\", \"%s\"", json_num(shoulder.x_hi, "%.9g").c_str());
+  }
   if (has_roi) {
     fprintf(fp, ", \"--roi\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\"",
             roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
@@ -1431,12 +1448,18 @@ static bool write_json_sidecar(
   fprintf(fp, "  \"tone\": {\"knee\": %s, \"knee_source\": \"%s\", ",
           json_num(knee, "%.9g").c_str(), json_escape(knee_source).c_str());
   if (has_dino && dino_res.dynamic_knee.active) {
-    fprintf(fp, "\"q995\": %s, \"knee_fit\": %s},\n",
+    fprintf(fp, "\"q995\": %s, \"knee_fit\": %s,\n",
             json_num(dino_res.dynamic_knee.q995).c_str(),
             json_num(dino_res.dynamic_knee.knee_fit).c_str());
   } else {
-    fprintf(fp, "\"q995\": null, \"knee_fit\": null},\n");
+    fprintf(fp, "\"q995\": null, \"knee_fit\": null,\n");
   }
+  fprintf(fp, "           \"shoulder\": %s, \"shoulder_source\": \"%s\", \"shoulder_q995\": %s, "
+              "\"shoulder_knee\": %s, \"shoulder_guard\": %s},\n",
+          json_num(shoulder.x_hi, "%.9g").c_str(), json_escape(shoulder.source).c_str(),
+          shoulder.has_q995 ? json_num(shoulder.q995).c_str() : "null",
+          shoulder.has_knee ? json_num(shoulder.knee).c_str() : "null",
+          shoulder.has_guard ? (shoulder.guard ? "true" : "false") : "null");
 
   // output
   fprintf(fp, "  \"output\": {\"path\": \"%s\", \"colorspace\": \"%s\", \"bits\": 16},\n",
@@ -1554,6 +1577,12 @@ int main(int ac, char *av[]) {
     .help("Soft knee highlight compression threshold in [0, 1], or 'auto' (the parameter search on an ICC profile or a "
           "--target bracket). Defaults to 0.95 (>=1.0 disables).")
     .default_value(std::string("0.95"));
+  parser.add_argument("--shoulder")
+    .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
+          "export applies it), or x_hi in [1, 1.5], the render's 99.5% point above the chart white (1 is off). It "
+          "only applies to the sRGB output; srgb-g10 (scene-referred) and ICC outputs never apply it. Defaults to "
+          "off.")
+    .default_value(std::string("off"));
   parser.add_argument("--no-metadata")
     .help("Disable automatic JSON metadata sidecar generation.")
     .default_value(false)
@@ -1713,6 +1742,23 @@ int main(int ac, char *av[]) {
       return 1;
     }
     knee = val;
+  }
+  const std::string shoulder_str = parser.get<std::string>("--shoulder");
+  const bool is_shoulder_auto = (shoulder_str == "auto");
+  ShoulderInfo shoulder_info;
+  if (is_shoulder_auto) {
+    shoulder_info.source = "auto";
+  } else if (shoulder_str != "off") {
+    char* end = nullptr;
+    const float val = strtof(shoulder_str.c_str(), &end);
+    if (!end || *end != '\0' || end == shoulder_str.c_str() || !std::isfinite(val) || val < 1.0f ||
+        val > negicc::kShoulderXHiMax) {
+      fprintf(stderr, "ERROR! Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
+              shoulder_str.c_str(), (double)negicc::kShoulderXHiMax);
+      return 1;
+    }
+    shoulder_info.x_hi = val;
+    shoulder_info.source = val > negicc::kShoulderOff ? "cli" : "off";
   }
   float gain_g = parser.get<float>("--gain_g");
   float gain_b = parser.get<float>("--gain_b");
@@ -1941,6 +1987,11 @@ int main(int ac, char *av[]) {
     fprintf(stderr, "ERROR! --knee auto requires the parameter search on an ICC profile or a --target bracket\n");
     return 1;
   }
+  if (is_shoulder_auto && !use_dino) {
+    fprintf(stderr, "ERROR! --shoulder auto requires the parameter search (it measures the shoulder from the render "
+                    "at the searched parameters); give an x_hi instead\n");
+    return 1;
+  }
   // TODO: `--film_base_rgb` (including `--film_base_rgb auto`) is rejected here when `bundle_search` is true, which
   // makes the `if (rebate_applied) ... else if (film_base_cli_used) ...` branch in Step 4 (`use_cfa_pipeline`) dead
   // code. If custom/rebate film-base overrides are enabled for `bundle_search`:
@@ -2100,6 +2151,8 @@ int main(int ac, char *av[]) {
       negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
       ParamSearchOptions opts;
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
+      opts.shoulder = shoulder_info.x_hi;
+      opts.shoulder_auto = is_shoulder_auto;
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
         return false;
@@ -2473,6 +2526,8 @@ int main(int ac, char *av[]) {
       get_scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
+      opts.shoulder = shoulder_info.x_hi;
+      opts.shoulder_auto = is_shoulder_auto;
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
         delete proc;
@@ -2757,6 +2812,17 @@ int main(int ac, char *av[]) {
     gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.params.b);
     adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
                              unit_fb, unit_fb, merged_matrix);
+    shoulder_info.x_hi = auto_res.params.shoulder;
+    if (is_shoulder_auto) {
+      shoulder_info.has_q995 = true;
+      shoulder_info.q995 = auto_res.shoulder_q995;
+    }
+    if (shoulder_info.active()) {
+      shoulder_info.has_knee = true;
+      shoulder_info.knee = auto_res.shoulder_knee;
+      shoulder_info.has_guard = true;
+      shoulder_info.guard = auto_res.shoulder_guard;
+    }
     printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
@@ -2779,6 +2845,8 @@ int main(int ac, char *av[]) {
     SolverConfig cfg;
     cfg.knee = knee;
     cfg.knee_auto = is_knee_auto;
+    cfg.shoulder = shoulder_info.x_hi;
+    cfg.shoulder_auto = is_shoulder_auto;
 
     const int max_iters = parser.get<int>("--dino_iters");
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
@@ -2816,6 +2884,17 @@ int main(int ac, char *av[]) {
 
     if (is_knee_auto && dino_res.dynamic_knee.active) {
       knee = dino_res.dynamic_knee.knee;
+    }
+    shoulder_info.x_hi = dino_res.shoulder.x_hi;
+    if (is_shoulder_auto) {
+      shoulder_info.has_q995 = true;
+      shoulder_info.q995 = dino_res.shoulder.q995;
+    }
+    if (dino_res.shoulder.active) {
+      shoulder_info.has_knee = true;
+      shoulder_info.knee = dino_res.shoulder.knee;
+      shoulder_info.has_guard = true;
+      shoulder_info.guard = dino_res.shoulder.guard;
     }
 
     std::string pins_str = "none";
@@ -2963,6 +3042,9 @@ int main(int ac, char *av[]) {
   const int height = proc->imgdata.sizes.iheight;
   const double t_start = omp_get_wtime();
 
+  // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
+  // encoding applies it.
+  const negicc::PipelineConfig export_pc = make_pipeline_config(film_prof.data, knee, shoulder_info.x_hi, encoding);
   if (!cfa_export_rgb.empty()) {
     uint16_t* rgb3 = cfa_export_rgb.data();
     if (encoding == ENCODE_SRGB || encoding == ENCODE_SRGB_LINEAR) {
@@ -2970,10 +3052,7 @@ int main(int ac, char *av[]) {
       for (int j = 0; j < height; ++j) {
         for (int i = 0; i < width; ++i) {
           uint16_t* px = &rgb3[((size_t)j * width + i) * 3];
-          Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-          v = pcs_to_linear_srgb_unclamped(v);
-          v = apply_fit3_highlight_shoulder_rgb(v);
-          v = encode_output(v, encoding);
+          const negicc::Rgb v = negicc::convert_pixel(export_pc, merged_matrix, px);
           px[0] = quantize_u16(v.r);
           px[1] = quantize_u16(v.g);
           px[2] = quantize_u16(v.b);
@@ -3020,10 +3099,7 @@ int main(int ac, char *av[]) {
     for (int j = 0; j < height; ++j) {
       for (int i = 0; i < width; ++i) {
         ushort* px = proc->imgdata.image[j * width + i];
-        Rgb v = process_pixel(px, merged_matrix, knee, film_prof.data);
-        v = pcs_to_linear_srgb_unclamped(v);
-        v = apply_fit3_highlight_shoulder_rgb(v);
-        v = encode_output(v, encoding);
+        const negicc::Rgb v = negicc::convert_pixel(export_pc, merged_matrix, px);
         px[0] = quantize_u16(v.r);
         px[1] = quantize_u16(v.g);
         px[2] = quantize_u16(v.b);
@@ -3114,7 +3190,7 @@ int main(int ac, char *av[]) {
                        merged_matrix,
                        global_exposure_comp, gain_g, gain_b,
                        pin_mask,
-                       knee, knee_source,
+                       knee, knee_source, shoulder_info,
                        use_dino && !has_auto_res, dino_res,
                        dino_path, use_dino ? std::string(engine.backend_used()) : dino_backend,
                        cs_name,

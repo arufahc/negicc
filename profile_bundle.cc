@@ -30,66 +30,6 @@
 
 #include <nlohmann/json.hpp>
 
-static double srgb_enc_d(double l) {
-  return (l <= 0.0031308) ? (l * 12.92) : (1.055 * std::pow(l, 1.0 / 2.4) - 0.055);
-}
-
-static double srgb_dec_d(double s) {
-  return (s <= 0.04045) ? (s / 12.92) : std::pow((s + 0.055) / 1.055, 2.4);
-}
-
-static float apply_fit3_hl_shoulder_u(float u_in) {
-  constexpr double kWhiteU = 0.75;
-  constexpr double kRolloff = 0.5;
-  constexpr double kKneeU = 0.42;
-  constexpr double kExp = 8.0;
-  constexpr double kCeilS = 0.988;  // ~251.9 in 8-bit sRGB (matches FIT3 highlight asymptote <= 252)
-  const double u = (double)u_in;
-  if (u <= kKneeU) return u_in;
-  double H;
-  if (u <= kWhiteU) {
-    H = u / kWhiteU;
-  } else if (u <= 0.90) {
-    const double k = (1.0 - kWhiteU) / (kWhiteU * kRolloff);
-    const double t = (u - kWhiteU) / (1.0 - kWhiteU);
-    H = 1.0 + k * t / (1.0 - t);
-  } else {
-    // C1-continuous tangent continuation above u = 0.90 (t = 0.60, H = 2.0, dH/du = 50/3)
-    const double du = u - 0.90;
-    H = 2.0 + (50.0 / 3.0) * du + 25.0 * du * du;
-  }
-  const double H0 = kKneeU / kWhiteU;
-  const double ev = std::log2(H / H0);
-  if (ev <= 0.0) return u_in;
-  const double s0 = srgb_enc_d(kKneeU);
-  const double ds_du = (1.055 / 2.4) * std::pow(kKneeU, 1.0 / 2.4 - 1.0);
-  const double slope_ev = ds_du * std::log(2.0) * kKneeU;
-  const double rem = kCeilS - s0;
-  const double span_ev = (rem * kExp) / slope_ev;
-  if (ev >= span_ev) return (float)srgb_dec_d(kCeilS);
-  const double s_sh = kCeilS - rem * std::pow((span_ev - ev) / span_ev, kExp);
-  const double u_sh = srgb_dec_d(s_sh);
-  return (float)std::min(u, u_sh);
-}
-
-Rgb apply_fit3_highlight_shoulder_rgb(Rgb lin) {
-  constexpr float kMaxU = 1.50f;
-  constexpr float kInvMaxU = 1.0f / kMaxU;
-  static const std::vector<float> kLut = []() {
-    constexpr int kN = 6144;
-    std::vector<float> lut(kN);
-    for (int i = 0; i < kN; ++i) {
-      lut[i] = apply_fit3_hl_shoulder_u(((float)i / (float)(kN - 1)) * kMaxU);
-    }
-    return lut;
-  }();
-  return {
-      negicc::apply_trc(negicc::clamp01(lin.r * kInvMaxU), kLut.data(), (int)kLut.size()),
-      negicc::apply_trc(negicc::clamp01(lin.g * kInvMaxU), kLut.data(), (int)kLut.size()),
-      negicc::apply_trc(negicc::clamp01(lin.b * kInvMaxU), kLut.data(), (int)kLut.size()),
-  };
-}
-
 static void read_curve_set_local(_cmsStageToneCurvesData* data,
                                  std::vector<float> (&out)[3],
                                  int (&out_sizes)[3],

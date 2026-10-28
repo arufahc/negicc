@@ -343,6 +343,69 @@ def test_roi_auto_picture_only_fallback_and_cli_equivalent_parity():
                 assert fa.read() == fb.read(), f"TIFF mismatch on {tag} path"
 
 
+def test_shoulder_option_sidecar_and_replay():
+    """--shoulder: validation, sidecar tone.shoulder*, cli_equivalent replay, off by default, sRGB only."""
+    import hashlib
+    with tempfile.TemporaryDirectory() as tmp:
+        dng = os.path.join(tmp, "scan.dng")
+        write_synthetic_dng(dng, 160, 120, make_picture_only_cfa(160, 120))
+        base = [NEG_PROCESS, "--film_stock", "portra400", "--light_source", "tri", "--target", "2",
+                "--gain_g", "1.0", "--gain_b", "1.0", "-E", "0.02"]
+
+        def run(*extra, out="out.tif"):
+            out_tif = os.path.join(tmp, out)
+            res = subprocess.run([*base, *extra, "-o", out_tif, dng], capture_output=True, text=True)
+            return res, out_tif
+
+        # Invalid values and 'auto' without the parameter search are errors.
+        for bad in ("2.0", "0.5", "nan", "x"):
+            res, _ = run("--shoulder", bad)
+            assert res.returncode != 0 and "Invalid --shoulder" in res.stderr, (bad, res.stderr)
+        res, _ = run("--shoulder", "auto")
+        assert res.returncode != 0 and "--shoulder auto requires the parameter search" in res.stderr, res.stderr
+
+        def sha(path):
+            with open(path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+
+        # Off by default: no --shoulder in cli_equivalent, tone.shoulder == 1, and "off" is the default render.
+        res, tif_default = run("-P", "srgb", out="default.tif")
+        assert res.returncode == 0, res.stderr
+        res, tif_off = run("-P", "srgb", "--shoulder", "off", out="off.tif")
+        assert res.returncode == 0, res.stderr
+        res, tif_one = run("-P", "srgb", "--shoulder", "1", out="one.tif")
+        assert res.returncode == 0, res.stderr
+        assert sha(tif_default) == sha(tif_off) == sha(tif_one)
+        with open(tif_default + ".json") as f:
+            meta = json.load(f)
+        assert "--shoulder" not in meta["cli_equivalent"]
+        assert meta["tone"]["shoulder"] == 1 and meta["tone"]["shoulder_source"] == "off"
+        assert meta["tone"]["shoulder_q995"] is None and meta["tone"]["shoulder_knee"] is None
+        assert meta["tone"]["shoulder_guard"] is None
+
+        # A fixed x_hi: recorded, replayed by cli_equivalent bit for bit, and visible in the sRGB render only.
+        res, tif_on = run("-P", "srgb", "--shoulder", "1.3", out="on.tif")
+        assert res.returncode == 0, res.stderr
+        with open(tif_on + ".json") as f:
+            meta = json.load(f)
+        assert abs(meta["tone"]["shoulder"] - 1.3) < 1e-6 and meta["tone"]["shoulder_source"] == "cli"
+        i = meta["cli_equivalent"].index("--shoulder")
+        assert abs(float(meta["cli_equivalent"][i + 1]) - 1.3) < 1e-6
+        replay = os.path.join(tmp, "replay.tif")
+        res = subprocess.run([NEG_PROCESS, "--film_stock", "portra400", "--light_source", "tri", "-P", "srgb",
+                              *meta["cli_equivalent"], "-o", replay, dng],
+                             capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        assert sha(replay) == sha(tif_on)
+
+        # A scene-referred (linear) export never applies it.
+        res, g10_off = run("-P", "srgb-g10", out="g10_off.tif")
+        assert res.returncode == 0, res.stderr
+        res, g10_on = run("-P", "srgb-g10", "--shoulder", "1.3", out="g10_on.tif")
+        assert res.returncode == 0, res.stderr
+        assert sha(g10_off) == sha(g10_on)
+
+
 def test_makefile_header_staleness():
     """Tests 5.7: touching flat_field.h triggers rebuild of profile_bundle.o, multi_target_optimizer.o, dinov3_auto_solver.o."""
     for hdr in ("flat_field.h", "flat_sample.h", "film_frame_detector.h"):
@@ -358,6 +421,7 @@ def main():
     test_pixel_shift_rejection()
     test_manual_target_and_gains_uses_bracket_e_center()
     test_roi_auto_picture_only_fallback_and_cli_equivalent_parity()
+    test_shoulder_option_sidecar_and_replay()
     test_makefile_header_staleness()
     print("neg_process_cli_test: all assertions passed.")
 

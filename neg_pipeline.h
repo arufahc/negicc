@@ -18,8 +18,11 @@
 
 #include <stdint.h>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <vector>
+
+#include "color_pipeline.h"
 
 struct Rgb {
   float r, g, b;
@@ -179,17 +182,6 @@ static inline Rgb pcs_to_linear_srgb(Rgb v) {
            clamp01(xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
 }
 
-static inline Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
-  // Bradford D50 -> D65
-  const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
-  const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
-  const float xb = v.r * 0.0122982f + v.g * -0.0204830f + v.b * 1.3299098f;
-  // XYZ -> linear sRGB (clamped only at 0 so >1 out-of-gamut highlight excursions roll off smoothly)
-  return { fmaxf(0.0f, xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
-           fmaxf(0.0f, xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
-           fmaxf(0.0f, xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
-}
-
 static inline float srgb_encode(float l) {
   return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
 }
@@ -219,10 +211,24 @@ static inline Rgb process_pixel(const uint16_t* in_px, const float* matrix, floa
   return v;
 }
 
-static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, float knee, const ProfileData& prof) {
-  Rgb v = process_pixel(in_px, matrix, knee, prof);
-  v = pcs_to_linear_srgb(v);
-  return encode_output(v, ENCODE_SRGB);
+// The shared pipeline's configuration (color_pipeline.h) for a profile, knee and shoulder, built once per search
+// iteration, never per pixel (set_shoulder() solves the shoulder knee).
+static_assert(sizeof(ProfileData) == sizeof(negicc::ProfileData), "ProfileData layouts must match");
+static inline negicc::PipelineConfig make_pipeline_config(const ProfileData& prof, float knee,
+                                                          float shoulder_x_hi = 1.0f,
+                                                          int encoding = ENCODE_SRGB) {
+  negicc::PipelineConfig cfg{};
+  std::memcpy(&cfg.profile, &prof, sizeof(cfg.profile));
+  cfg.knee = knee;
+  cfg.encoding = encoding;
+  negicc::set_shoulder(cfg, shoulder_x_hi);
+  return cfg;
+}
+
+// One implementation of the pixel pipeline: color_pipeline.h. Encoded sRGB after the shoulder.
+static inline Rgb convert_pixel_srgb(const uint16_t* in_px, const float* matrix, const negicc::PipelineConfig& cfg) {
+  const negicc::Rgb v = negicc::convert_pixel(cfg, matrix, in_px);
+  return { v.r, v.g, v.b };
 }
 
 static inline float srgb_decode(float c) {
