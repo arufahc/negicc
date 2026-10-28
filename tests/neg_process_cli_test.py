@@ -343,6 +343,29 @@ def test_roi_auto_picture_only_fallback_and_cli_equivalent_parity():
                 assert fa.read() == fb.read(), f"TIFF mismatch on {tag} path"
 
 
+def test_roi_auto_detection_failure_falls_back_to_full_frame():
+    """A lens-cap frame (black everywhere) and a blank strip (one uniform value) fall back like any low confidence."""
+    w, h = 240, 160
+    scenes = {
+        "lens_cap": [512 + 2 + (x * 7 + y * 3) % 3 for y in range(h) for x in range(w)],
+        "blank_strip": [9000] * (w * h),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, pixels in scenes.items():
+            dng = os.path.join(tmp, name + ".dng")
+            tif = os.path.join(tmp, name + ".tif")
+            write_synthetic_dng(dng, w, h, pixels)
+            res = subprocess.run([NEG_PROCESS, "-P", "srgb", "--roi", "auto", "-o", tif, dng],
+                                 capture_output=True, text=True)
+            assert res.returncode == 0, f"{name}: {res.stderr}"
+            with open(tif + ".json") as f:
+                meta = json.load(f)
+            assert meta["geometry"]["roi_source"] == "auto_fallback", name
+            assert meta["geometry"]["roi"] == [0, 0, w, h], name
+            assert meta["frame_detection"]["low_confidence"] is True, name
+            assert "falling back" in res.stdout + res.stderr, name
+
+
 def test_makefile_header_staleness():
     """Tests 5.7: touching flat_field.h triggers rebuild of profile_bundle.o, multi_target_optimizer.o, dinov3_auto_solver.o."""
     for hdr in ("flat_field.h", "flat_sample.h", "film_frame_detector.h"):
@@ -358,6 +381,7 @@ def main():
     test_pixel_shift_rejection()
     test_manual_target_and_gains_uses_bracket_e_center()
     test_roi_auto_picture_only_fallback_and_cli_equivalent_parity()
+    test_roi_auto_detection_failure_falls_back_to_full_frame()
     test_makefile_header_staleness()
     print("neg_process_cli_test: all assertions passed.")
 

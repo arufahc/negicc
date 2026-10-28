@@ -323,6 +323,85 @@ void test_low_ppm_35mm_sprockets_vs_6x9() {
   CHECK(out.format == FILM_35MM, "low-ppm 35mm: expected 35mm, got %s", film_format_name(out.format));
 }
 
+void test_bare_light_strips() {
+  // The common setup: a strip on bare, clipped backlight (35mm with sprocket holes, 6x6) is found with its two gaps
+  // at their real width, and light_clipped is set.
+  const float ppm = 10.0f;
+  {
+    SceneRGB sc = make_strip_scene(1500, 800, ppm, 36.0f, 24.0f, 35.0f, 2.0f, 3, 0.0f, 0.0f,
+                                   /*has_holder=*/false, /*has_bare_light=*/true, /*sprockets=*/true,
+                                   /*vertical_strip=*/false, /*noise_sigma=*/0.003f, 501);
+    FrameDetectionParams P;
+    FrameDetection out;
+    CHECK(detect_film_frame(sc.image(), P, out) && out.ok, "bare-light 35mm: failed");
+    CHECK(out.light_clipped, "bare-light 35mm: light_clipped must be true");
+    CHECK(out.format == FILM_35MM, "bare-light 35mm: got %s", film_format_name(out.format));
+    CHECK(out.conf >= 0.5f, "bare-light 35mm: conf %.2f", out.conf);
+    CHECK(!out.sprockets.empty(), "bare-light 35mm: no sprockets found");
+    CHECK(out.n_gaps == 2, "bare-light 35mm: %d gaps", out.n_gaps);
+    for (int g = 0; g < 2; ++g)
+      CHECK(out.gaps[g][1] - out.gaps[g][0] >= (int)(0.6f * 2.0f * ppm), "bare-light 35mm: gap %d is %d px", g,
+            out.gaps[g][1] - out.gaps[g][0]);
+  }
+  {
+    SceneRGB sc = make_strip_scene(1800, 750, ppm, 56.0f, 56.0f, 61.5f, 6.0f, 3, 0.0f, 0.0f,
+                                   /*has_holder=*/false, /*has_bare_light=*/true, /*sprockets=*/false,
+                                   /*vertical_strip=*/false, /*noise_sigma=*/0.003f, 502);
+    FrameDetectionParams P;
+    FrameDetection out;
+    CHECK(detect_film_frame(sc.image(), P, out) && out.ok, "bare-light 6x6: failed");
+    CHECK(out.light_clipped, "bare-light 6x6: light_clipped must be true");
+    CHECK(out.format == FILM_6X6, "bare-light 6x6: got %s", film_format_name(out.format));
+    CHECK(std::fabs(out.primary.rect.w - 560.0f) < 35.0f, "bare-light 6x6: width %.1f", out.primary.rect.w);
+  }
+}
+
+void test_cfa_mosaic_matches_rgb() {
+  // The same bare-light scene as an RGGB mosaic (step 2) finds the same frame as the RGB image, to the CFA period.
+  const int W = 1500, H = 800;
+  SceneRGB sc = make_strip_scene(W, H, 10.0f, 36.0f, 24.0f, 35.0f, 2.0f, 3, 0.0f, 0.0f,
+                                 /*has_holder=*/false, /*has_bare_light=*/true, /*sprockets=*/true,
+                                 /*vertical_strip=*/false, /*noise_sigma=*/0.003f, 503);
+  std::vector<uint16_t> mosaic((size_t)W * H);
+  auto color = [](int row, int col) { return (row & 1) == 0 ? ((col & 1) == 0 ? 0 : 1) : ((col & 1) == 0 ? 1 : 2); };
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) {
+      const int c = color(y, x);
+      mosaic[(size_t)y * W + x] = sc.data[((size_t)y * W + x) * 3 + c];
+    }
+  const float black[4] = {0, 0, 0, 0};
+  FilmImage cfa;
+  CHECK(film_image_from_cfa(mosaic.data(), W, H, W, 2, color, black, 65535.0f, cfa), "cfa image failed");
+  FrameDetectionParams P;
+  FrameDetection a, b;
+  CHECK(detect_film_frame(sc.image(), P, a) && a.ok, "rgb scene failed");
+  P.crop_align = 2;
+  CHECK(detect_film_frame(cfa, P, b) && b.ok, "mosaic scene failed");
+  CHECK(a.format == b.format && b.format == FILM_35MM, "formats %s / %s", film_format_name(a.format),
+        film_format_name(b.format));
+  for (int i = 0; i < 4; ++i)
+    CHECK(std::abs(a.crop[i] - b.crop[i]) <= 6, "crop[%d] %d (rgb) vs %d (mosaic)", i, a.crop[i], b.crop[i]);
+  CHECK(b.crop[0] % 2 == 0 && b.crop[1] % 2 == 0 && (b.crop[0] + b.crop[2]) % 2 == 0, "mosaic crop not period aligned");
+}
+
+void test_work_size_is_clamped() {
+  // 3.15: work_size 24 and 64 gave a bogus film base; they now behave as 256.
+  SceneRGB sc = make_strip_scene(1200, 850, 10.0f, 56.0f, 56.0f, 61.5f, 6.0f, 3, 0.0f, 0.0f,
+                                 /*has_holder=*/false, /*has_bare_light=*/true, /*sprockets=*/false,
+                                 /*vertical_strip=*/false, /*noise_sigma=*/0.003f, 504);
+  FrameDetectionParams P;
+  P.work_size = 256;
+  FrameDetection ref;
+  CHECK(detect_film_frame(sc.image(), P, ref) && ref.ok, "work_size 256 failed");
+  for (int ws : {24, 64, -5}) {
+    P.work_size = ws;
+    FrameDetection out;
+    CHECK(detect_film_frame(sc.image(), P, out) && out.ok, "work_size %d failed", ws);
+    for (int i = 0; i < 4; ++i) CHECK(out.crop[i] == ref.crop[i], "work_size %d: crop[%d] differs", ws, i);
+    CHECK(out.base_rgb[0] == ref.base_rgb[0] && out.format == ref.format, "work_size %d differs from 256", ws);
+  }
+}
+
 void test_degenerate_inputs_and_crop_too_small() {
   // 3.15 & 5.3: Degenerate inputs and crop-size early return must set out.ok == false.
   FrameDetectionParams P;
@@ -373,6 +452,9 @@ int main() {
   test_picture_fills_image_low_confidence();
   test_three_frame_6x6_strip_and_transposed();
   test_low_ppm_35mm_sprockets_vs_6x9();
+  test_bare_light_strips();
+  test_cfa_mosaic_matches_rgb();
+  test_work_size_is_clamped();
   test_degenerate_inputs_and_crop_too_small();
   test_omp_determinism();
   std::printf("detector_test: all assertions passed.\n");
