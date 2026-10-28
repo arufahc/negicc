@@ -336,20 +336,6 @@ void RgbView::materialize(uint16_t* dst_rgb) const {
     }
 }
 
-size_t count_clipped_view(const RgbView& view, uint16_t clip_level) {
-    if (!view.valid()) return 0;
-    size_t n = 0;
-    #pragma omp parallel for reduction(+:n) schedule(static) if ((size_t)view.width * view.height > 8192)
-    for (int y = 0; y < view.height; ++y) {
-        for (int x = 0; x < view.width; ++x) {
-            uint16_t px[3];
-            view.sample(x, y, px);
-            if (px[0] >= clip_level || px[1] >= clip_level || px[2] >= clip_level) ++n;
-        }
-    }
-    return n;
-}
-
 // ---- compute_raw_stats -------------------------------------------------------------------------------------
 
 void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int patch_size,

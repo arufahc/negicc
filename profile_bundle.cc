@@ -200,6 +200,9 @@ double shutter_to_seconds_d(const std::string& shutter) {
   if (s.empty()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
   auto to_double = [&](const std::string& t) {
     if (t.empty()) throw std::invalid_argument("bad shutter speed '" + shutter + "'");
+    // Decimals only (an optional exponent): std::stod also reads hex floats, "inf" and "nan".
+    if (t.find_first_not_of("0123456789+-.eE") != std::string::npos)
+      throw std::invalid_argument("bad shutter speed '" + shutter + "'");
     size_t used = 0;
     const double v = std::stod(t, &used);
     if (used != t.size() || !std::isfinite(v)) throw std::invalid_argument("bad shutter speed '" + shutter + "'");

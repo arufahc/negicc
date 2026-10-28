@@ -50,6 +50,7 @@
 #include "dinov3_auto_solver.h"
 #include "embedded_data.h"
 #include "film_frame_detector.h"
+#include "pixel_shift_group.h"
 #include "multi_target_optimizer.h"
 #include "profile_bundle.h"
 
@@ -1111,6 +1112,20 @@ struct ShoulderInfo {
   bool active() const { return x_hi > negicc::kShoulderOff; }
 };
 
+// detect_film_frame, but a failure (a lens-cap or blank frame, an image too small to analyse) is a low-confidence
+// result: ok false with a reason, conf 0, so --roi auto takes the full visible frame like any other low confidence.
+static void detect_frame_or_fallback(const FilmImage& mosaic, const FrameDetectionParams& params,
+                                     FrameDetection& det) {
+  if (detect_film_frame(mosaic, params, det)) return;
+  const std::string why = det.reason;
+  det = FrameDetection();
+  det.ok = false;
+  det.conf = 0.0f;
+  det.reason = why.empty() ? "no film frame found" : why;
+  fprintf(stderr, "Warning: film frame detection failed (%s); falling back to the full visible frame\n",
+          det.reason.c_str());
+}
+
 static bool write_json_sidecar(
     const std::string& output_path,
     int ac, char* av[],
@@ -1228,8 +1243,8 @@ static bool write_json_sidecar(
     }
     fprintf(fp, "  \"frame_detection\": {\n");
     const bool has_axis = frame_det->axis == 'h' || frame_det->axis == 'v';
-    fprintf(fp, "    \"axis\": %s, \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
-            has_axis ? (frame_det->axis == 'h' ? "\"h\"" : "\"v\"") : "null", json_num(frame_det->conf, "%.2f").c_str(),
+    fprintf(fp, "    \"ok\": %s, \"axis\": %s, \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
+            frame_det->ok ? "true" : "false", has_axis ? (frame_det->axis == 'h' ? "\"h\"" : "\"v\"") : "null", json_num(frame_det->conf, "%.2f").c_str(),
             frame_det->conf < kLowFrameConfidence ? "true" : "false", json_escape(frame_det->reason).c_str());
     fprintf(fp, "    \"gaps\": [");
     int g_cnt = 0;
@@ -1619,7 +1634,9 @@ int main(int ac, char *av[]) {
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
   parser.add_argument("--roi")
-    .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'.")
+    .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
+          "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
+          "visible frame (geometry.roi_source auto_fallback).")
     .nargs(1, 7);
   parser.add_argument("--film_format")
     .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, 6x9, or auto (each in turn; less accurate).")
@@ -1701,12 +1718,28 @@ int main(int ac, char *av[]) {
         }
       }
     }
-    // The file counters must increase from frame to frame, modulo the counter's wrap (DCF numbers files 0001-9999, so
-    // a Sony DSC09999 is followed by DSC00001): each step forward, by less than half the counter's range.
+    // The camera's group tags decide when the files carry them: one group of four, in shot order. Without tags the
+    // file counters must increase from frame to frame, modulo the counter's wrap (DCF numbers files 0001-9999, so a
+    // Sony DSC09999 is followed by DSC00001): each step forward, by less than half the counter's range.
+    PixelShiftTags group_tags[4];
+    for (size_t i = 0; i < 4; ++i) {
+      LibRaw probe;
+      if (probe.open_file(files[i].c_str()) != LIBRAW_SUCCESS) continue;  // the load reports it
+      const auto& sony = probe.imgdata.makernotes.sony;
+      group_tags[i].group_id = sony.PixelShiftGroupID;
+      group_tags[i].shots_in_group = sony.nShotsInPixelShiftGroup;
+      group_tags[i].num_in_group = sony.numInPixelShiftGroup;
+    }
+    std::string group_err;
+    const PixelShiftGroupCheck group = check_pixel_shift_group(group_tags, group_err);
+    if (group == PixelShiftGroupCheck::kBad) {
+      fprintf(stderr, "ERROR! %s\n", group_err.c_str());
+      return 1;
+    }
     int trailing_idx[4] = {-1, -1, -1, -1};
     int idx_mod = 1;
-    bool all_have_idx = true;
-    for (size_t i = 0; i < 4; ++i) {
+    bool all_have_idx = group == PixelShiftGroupCheck::kNoTags;
+    for (size_t i = 0; all_have_idx && i < 4; ++i) {
       const std::string stem = std::filesystem::path(files[i]).stem().string();
       size_t p = stem.size();
       while (p > 0 && std::isdigit((unsigned char)stem[p - 1])) --p;
@@ -2186,10 +2219,7 @@ int main(int ac, char *av[]) {
         return false;
       }
       det_params.crop_align = mosaic.step;
-      if (!detect_film_frame(mosaic, det_params, frame_det)) {
-        fprintf(stderr, "ERROR! Film frame detection failed\n");
-        return false;
-      }
+      detect_frame_or_fallback(mosaic, det_params, frame_det);
       t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
       if (frame_det.conf < kLowFrameConfidence) {
         roi_coords[0] = 0;
@@ -2293,11 +2323,7 @@ int main(int ac, char *av[]) {
         return 1;
       }
       det_params.crop_align = mosaic.step;
-      if (!detect_film_frame(mosaic, det_params, frame_det)) {
-        fprintf(stderr, "ERROR! Film frame detection failed\n");
-        delete proc;
-        return 1;
-      }
+      detect_frame_or_fallback(mosaic, det_params, frame_det);
       t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
     }
 

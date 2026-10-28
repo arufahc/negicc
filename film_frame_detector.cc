@@ -1986,7 +1986,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         break;
       }
     }
-    if (run < 2) continue;
+    // A gap is at least 0.5 mm along the strip (and 2 work pixels): a thinner run is noise at a tight holder's edge.
+    if (run < std::max(2, (int)std::lround(0.5f * ppm))) continue;
     Rect g;
     g.x0 = (float)std::min(beg, far);
     g.x1 = (float)std::max(beg, far) + 1;
@@ -2204,8 +2205,11 @@ bool film_sample_patch(const FilmImage& im, const FilmRect& patch, float rgb[3],
   return true;
 }
 
-bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& P, FrameDetection& out) {
+bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, FrameDetection& out) {
   out = FrameDetection();
+  // Below ~256 px the work image is too coarse for the statistics (24 and 64 gave a bogus film base).
+  FrameDetectionParams P = params;
+  P.work_size = std::max(256, P.work_size);
   if (im.samples_x() < 16 || im.samples_y() < 16 || im.white <= 0.0f) return false;
   for (const FilmChannel& c : im.ch)
     if (!c.data) return false;
