@@ -118,8 +118,8 @@ struct ParamSearchOptions {
   // pre-shoulder render at each iteration's incoming parameters when shoulder_auto.
   float shoulder = 1.0f;
   bool shoulder_auto = false;
-  // Part 1B, the enclosure-guided bracket rescue after Step 5 (multi_target_optimizer.cc). Off by default.
-  bool enclosure_rescue = false;
+  // Part 1B, the enclosure-guided bracket rescue after Step 5 (multi_target_optimizer.cc); part of Auto.
+  bool enclosure_rescue = true;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.

@@ -1671,11 +1671,6 @@ int main(int ac, char *av[]) {
           "search (defaults to 8), else the solver's iterations (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
-  parser.add_argument("--enclosure_rescue")
-    .help("Enable Part 1B of the parameter search, the enclosure-guided bracket rescue that re-screens the bracket "
-          "pool when the chosen bracket still clips highlights (off by default).")
-    .default_value(false)
-    .implicit_value(true);
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
@@ -2192,7 +2187,6 @@ int main(int ac, char *av[]) {
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       opts.shoulder = shoulder_info.x_hi;
       opts.shoulder_auto = is_shoulder_auto;
-      opts.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
         return false;
@@ -2561,7 +2555,6 @@ int main(int ac, char *av[]) {
       if (parser.is_used("--dino_iters")) opts.max_steps = parser.get<int>("--dino_iters");
       opts.shoulder = shoulder_info.x_hi;
       opts.shoulder_auto = is_shoulder_auto;
-      opts.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         fprintf(stderr, "ERROR! The conversion parameter search failed\n");
         delete proc;
