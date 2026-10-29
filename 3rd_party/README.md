@@ -10,6 +10,15 @@
   `lcms2/COPYING`), built into `bin_out/liblcms2.a` (`make deps`, and as part of `make lib` and `make neg_process`).
 - `zlib/`: [zlib](https://github.com/madler/zlib), a git submodule pinned to release 1.3 (zlib licence, see
   `zlib/LICENSE`), built into `bin_out/libz.a` like Little-CMS; LibRaw is compiled against it.
+- `libtiff/`: [libtiff](https://gitlab.com/libtiff/libtiff), a git submodule pinned to release 4.7.2 (libtiff
+  licence, see `libtiff/LICENSE.md`), built into `bin_out/libtiff.a` with Deflate (the pinned zlib), LZW, PackBits,
+  JPEG (libjpeg-turbo) and the other built-in codecs; neg_process reads TIFF input with it (`rgb_input.cc`).
+- `libjpeg-turbo/`: [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo), a git submodule pinned to
+  release 3.2.1 (IJG and BSD licences, see `libjpeg-turbo/LICENSE.md`), built into `bin_out/libjpeg.a` without SIMD;
+  neg_process reads JPEG input with it, and libtiff JPEG-compressed TIFFs.
+- `config/`: the headers the two libraries' CMake builds would generate (`jconfig.h`, `jconfigint.h`, `jversion.h`,
+  `tiffconf.h`, `tif_config.h`, `tiffvers.h`), written out for 64-bit little-endian Linux, so the Makefile builds
+  them without CMake. Moving either library to another release means checking these against its templates.
 - `json/`: [nlohmann/json](https://github.com/nlohmann/json), a shallow git submodule pinned to release 3.11.3 (MIT,
   see `json/LICENSE.MIT`), header-only, included as `"nlohmann/json.hpp"` with `-I3rd_party/json/single_include`.
 - `argparse/`: [argparse](https://github.com/p-ranav/argparse), a git submodule pinned to commit 69dabd8 (v3.0 with
