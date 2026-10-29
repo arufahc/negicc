@@ -1953,6 +1953,10 @@ int main(int ac, char *av[]) {
                                : files.size() == 1 && (negicc::is_jpeg_file(files[0]) || !libraw_opens(files[0]))
                                    ? InputMode::kRgbFile
                                    : InputMode::kRaw;
+  if (input_mode != InputMode::kRaw && parser.is_used("--flat")) {
+    fprintf(stderr, "ERROR! --flat applies to a single RAW or a pixel shift capture\n");
+    return 1;
+  }
   if (files.size() == 4) {
     for (size_t i = 0; i < 4; ++i) {
       for (size_t j = i + 1; j < 4; ++j) {
@@ -2354,10 +2358,6 @@ int main(int ac, char *av[]) {
   if (input_mode == InputMode::kRgbFile && has_crosstalk) {
     fprintf(stderr, "ERROR! %s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
                     "profile bundle, not one with a crosstalk correction\n", files[0].c_str());
-    return 1;
-  }
-  if (input_mode != InputMode::kRaw && parser.is_used("--flat")) {
-    fprintf(stderr, "ERROR! --flat applies to a single RAW or a pixel shift capture\n");
     return 1;
   }
   const RawDecode raw_decode = white_light ? RawDecode::kWhiteLight
