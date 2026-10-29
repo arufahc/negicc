@@ -192,3 +192,9 @@ imported again for further editting.
 Please see the code in build_prof.py and neg_process.{cc, py} for details of the algorithm.
 
 > **TODO:** `build_prof.py` and `neg_process.py` are removed; point to `neg_process.cc`, `multi_target_optimizer.cc` (the conversion parameter search) and negicc-station.
+
+# Licences
+
+negicc is GPL-3.0 (COPYING). The DINOv3 backbone in `models/dinov3-small/backbone.onnx`, which `neg_process` packs
+into its binary, is Meta's DINOv3 and is under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it,
+or a `neg_process` built with it, only under that licence and with a copy of it.
