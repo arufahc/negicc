@@ -612,7 +612,7 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
                  const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
-                 const negicc::FlatField* flat = nullptr, FrameDetection* frame_det_for_base = nullptr,
+                 const negicc::FlatField* flat = nullptr,
                  LibRaw* unpacked_proc = nullptr) {
   const bool white_light = debayer && decode == RawDecode::kWhiteLight;
   int ret;
@@ -765,47 +765,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     const int pad = a * 2;
     const int sensor_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
     const int sensor_h = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
-
-    if (frame_det_for_base && frame_det_for_base->has_base) {
-      const int* b = frame_det_for_base->base_box;
-      const int bx0 = std::max(0, ((b[0] - pad) / a) * a);
-      const int by0 = std::max(0, ((b[1] - pad) / a) * a);
-      const int bx1 = std::min(sensor_w, ((b[0] + b[2] + pad + a - 1) / a) * a);
-      const int by1 = std::min(sensor_h, ((b[1] + b[3] + pad + a - 1) / a) * a);
-      if (bx1 > bx0 && by1 > by0) {
-        proc->imgdata.params.cropbox[0] = bx0;
-        proc->imgdata.params.cropbox[1] = by0;
-        proc->imgdata.params.cropbox[2] = bx1 - bx0;
-        proc->imgdata.params.cropbox[3] = by1 - by0;
-        const bool base_ok = white_light ? decode_white_light(proc, false, effective_qual)
-                                         : (proc->dcraw_process() == LIBRAW_SUCCESS);
-        if (base_ok && proc->imgdata.image) {
-          FilmRect patch = frame_det_for_base->base_patch;
-          patch.cx -= (float)bx0;
-          patch.cy -= (float)by0;
-          const FilmImage decoded = film_image_from_interleaved(&proc->imgdata.image[0][0], proc->imgdata.sizes.iwidth,
-                                                                proc->imgdata.sizes.iheight, 4);
-          float rgb[3], std_d;
-          if (film_sample_patch(decoded, patch, rgb, &std_d)) {
-            for (int c = 0; c < 3; ++c) frame_det_for_base->base_rgb[c] = rgb[c];
-            frame_det_for_base->base_std_d = std_d;
-          } else {
-            frame_det_for_base->has_base = false;
-          }
-        } else {
-          frame_det_for_base->has_base = false;
-        }
-        proc->free_image();
-        proc->raw2image_start();
-        if (white_light || flat) {
-          proc->imgdata.color.black = 0;
-          std::memset(proc->imgdata.color.cblack, 0, sizeof(proc->imgdata.color.cblack));
-        }
-        for (int q = 0; q < 4; ++q) proc->imgdata.params.cropbox[q] = ~0u;
-      } else {
-        frame_det_for_base->has_base = false;
-      }
-    }
 
     int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
     if (roi) {
@@ -1381,12 +1340,6 @@ static bool write_json_sidecar(
             roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
             rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
   }
-  if (film_base_applied) {
-    fprintf(fp, ", \"--film_base_rgb\", \"%d\", \"%d\", \"%d\"",
-            film_base_rgb[0], film_base_rgb[1], film_base_rgb[2]);
-    fprintf(fp, ", \"--profile_film_base_rgb\", \"%d\", \"%d\", \"%d\"",
-            profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
-  }
   if (is_bundle && bundle_target_idx >= 0) {
     fprintf(fp, ", \"--target\", \"%d\"", bundle_target_idx);
   }
@@ -1793,8 +1746,7 @@ static LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode m
 // --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in
 // a strip holder or in a frame holder, tilted up to 5 degrees, partial neighbour frames beside it. --film_format gives
 // the format (more accurate than trying each); h or v gives the strip direction. The detection reads the RAW's CFA
-// mosaic in place before anything is decoded, and only the frame (and the film base patch beside it, for
-// --film_base_rgb auto) is decoded, e.g.
+// mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char *av[]) {
   for (int i = 1; i < ac; ++i) {
@@ -1871,9 +1823,8 @@ int main(int ac, char *av[]) {
     .nargs(3)
     .default_value(std::vector<int>{1, 1, 1})
     .scan<'i', int>();
-  parser.add_argument("--film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from captured image, in the same space as --profile_film_base_rgb, or 'auto'.")
-    .nargs(1, 3);
+  // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does), in
+  // place of the profile's; --film_base_rgb, which took it as numbers or from the rebate (--roi auto), is removed.
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
           "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
@@ -1942,6 +1893,8 @@ int main(int ac, char *av[]) {
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
   // TODO: Expand --flat to accept a flat-field capture image directly in addition to a precomputed .npz file.
+  // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
+  // flat field .npz measured from one.
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
   parser.add_argument("--station_egb")
@@ -2169,34 +2122,6 @@ int main(int ac, char *av[]) {
     return 1;
   }
 
-  bool is_film_base_auto = false;
-  bool film_base_cli_used = false;
-  std::vector<int> user_film_base_rgb = {1, 1, 1};
-  double user_film_base_rgb_d[3] = {1.0, 1.0, 1.0};
-
-  if (parser.is_used("--film_base_rgb")) {
-    const auto fb_tokens = parser.get<std::vector<std::string>>("--film_base_rgb");
-    if (fb_tokens.size() == 1 && fb_tokens[0] == "auto") {
-      is_film_base_auto = true;
-    } else if (fb_tokens.size() == 3) {
-      try {
-        for (int c = 0; c < 3; ++c) {
-          size_t pos = 0;
-          const double val = std::stod(fb_tokens[c], &pos);
-          if (pos != fb_tokens[c].size() || !std::isfinite(val)) throw std::invalid_argument("bad float");
-          user_film_base_rgb_d[c] = val;
-          user_film_base_rgb[c] = (int)std::lround(val);
-        }
-        film_base_cli_used = true;
-      } catch (const std::exception& e) {
-        fprintf(stderr, "ERROR! Invalid integer argument for --film_base_rgb\n");
-        return 1;
-      }
-    } else {
-      fprintf(stderr, "ERROR! --film_base_rgb requires 3 integers or 'auto'\n");
-      return 1;
-    }
-  }
 
   // TODO: Expand --flat to take a flat-field capture image directly and compute the flat field on the fly.
   negicc::FlatFieldPtr flat_field;
@@ -2330,24 +2255,11 @@ int main(int ac, char *av[]) {
                     "at the searched parameters); give an x_hi instead\n");
     return 1;
   }
-  // TODO: `--film_base_rgb` (including `--film_base_rgb auto`) is rejected here when `bundle_search` is true, which
-  // makes the `if (rebate_applied) ... else if (film_base_cli_used) ...` branch in Step 4 (`use_cfa_pipeline`) dead
-  // code. If custom/rebate film-base overrides are enabled for `bundle_search`:
-  //   1. Remove `--film_base_rgb` from `conflicting` below (or allow `--film_base_rgb auto`).
-  //   2. On the `!use_cfa_pipeline` path (`analyse`), sample the rebate before `search_conversion_params` and pass
-  //      `opts.film_base_rgb_d` / `opts.film_base_from_scan`.
-  //   3. Preserve `sidecar_film_base_rgb` and `film_base_source` ("rebate" / "cli") instead of overwriting them with
-  //      "bundle" when `rebate_applied || film_base_cli_used`.
-  //   4. Do not re-apply `effective_profile_film_base_rgb / effective_film_base_rgb` in `adjust_correction_matrix`
-  //      when `has_auto_res` is true, because `auto_res.row_scale` already folds `normalization_target / fb[r]` in.
   if (bundle_search) {
-    const char* conflicting[] = {"--film_base_rgb", "--profile_film_base_rgb"};
-    for (const char* opt : conflicting) {
-      if (parser.is_used(opt)) {
-        fprintf(stderr, "ERROR! %s cannot be used with the bracket search (the bundle gives the film base); pick a "
-                        "bracket with --target to use it\n", opt);
-        return 1;
-      }
+    if (parser.is_used("--profile_film_base_rgb")) {
+      fprintf(stderr, "ERROR! --profile_film_base_rgb cannot be used with the bracket search (the bundle gives the "
+                      "film base); pick a bracket with --target to use it\n");
+      return 1;
     }
   }
 
@@ -2465,15 +2377,6 @@ int main(int ac, char *av[]) {
            engine.adapter_name().c_str(), (double)engine.memory_bytes() / (1024.0 * 1024.0));
   }
 
-  if (is_film_base_auto && !is_roi_auto) {
-    fprintf(stderr, "ERROR! --film_base_rgb auto requires --roi auto\n");
-    return 1;
-  }
-  if (is_film_base_auto && !parser.is_used("--profile_film_base_rgb") && !(is_bundle && bundle.has_film_base)) {
-    fprintf(stderr, "ERROR! --film_base_rgb auto requires --profile_film_base_rgb\n");
-    return 1;
-  }
-
   double exif_shutter_d = 0.0, exif_iso_d = 0.0;
   const bool has_exif_exp = read_exif_exposure_d(files[0], exif_shutter_d, exif_iso_d);
   bool warned_default_exposure = false;
@@ -2541,7 +2444,6 @@ int main(int ac, char *av[]) {
   det_params.format = film_format;
   det_params.axis_hint = roi_axis_hint;
   double t_frame_det_ms = 0.0;
-  bool rebate_applied = false;
   RawRegionFinder find_frame;
   if (is_roi_auto && files.size() != 4) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
@@ -2744,99 +2646,6 @@ int main(int ac, char *av[]) {
       has_roi = true;
       print_frame_detection();
 
-      if (frame_det.has_base) {
-        const int* b = frame_det.base_box;
-        // Sample the base patch in the full-size decoded units (grain-aware or 4-shot pixel-shift merge, with
-        // flat_full), debayering only the small base_box bounding box.
-        const int bx0 = std::max(0, (b[0] / 2) * 2 - 2);
-        const int by0 = std::max(0, (b[1] / 2) * 2 - 2);
-        const int bx1 = std::min(src_w, ((b[0] + b[2] + 1) / 2) * 2 + 2);
-        const int by1 = std::min(src_h, ((b[1] + b[3] + 1) / 2) * 2 + 2);
-        const int bw = std::max(2, bx1 - bx0);
-        const int bh = std::max(2, by1 - by0);
-        std::vector<uint16_t> base_rgb_buf((size_t)bw * bh * 3);
-        if (files.size() == 1) {
-          negicc::GrainAwareDebayerArgs bga{};
-          bga.cfa_bayer = cfa_origin;
-          bga.src_w = src_w;
-          bga.src_h = src_h;
-          bga.rx = bx0;
-          bga.ry = by0;
-          bga.rw = bw;
-          bga.rh = bh;
-          bga.rot_cw = 0;
-          bga.hflip = false;
-          bga.vflip = false;
-          bga.dst_w = bw;
-          bga.dst_h = bh;
-          bga.filters = filters;
-          bga.white_level = cfa_white_level;
-          bga.eps = 4096.0f;
-          bga.rgb_out = base_rgb_buf.data();
-          bga.flat = flat_full;
-          bga.flat_x0 = bx0;
-          bga.flat_y0 = by0;
-          bga.cfa_pitch = cfa_pitch;
-          negicc::cpu_grain_aware_debayer(bga);
-        } else {
-          const uint16_t* fcfa[3] = {nullptr, nullptr, nullptr};
-          for (int i = 0; i < 3; ++i) {
-            LibRaw* fp = ps_extra_procs[i].get();
-            const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
-            fcfa[i] = fp->imgdata.rawdata.raw_image +
-                      (size_t)fp->imgdata.sizes.top_margin * fpitch +
-                      fp->imgdata.sizes.left_margin;
-          }
-          negicc::PixelShiftMergeArgs bpm{};
-          bpm.bayer_f0 = cfa_origin;
-          bpm.bayer_f1 = fcfa[0];
-          bpm.bayer_f2 = fcfa[1];
-          bpm.bayer_f3 = fcfa[2];
-          bpm.src_w = src_w;
-          bpm.src_h = src_h;
-          bpm.rx = bx0;
-          bpm.ry = by0;
-          bpm.rw = bw;
-          bpm.rh = bh;
-          bpm.rot_cw = 0;
-          bpm.hflip = false;
-          bpm.vflip = false;
-          bpm.dst_w = bw;
-          bpm.dst_h = bh;
-          bpm.filters = filters;
-          bpm.white_level = cfa_white_level;
-          bpm.rgb_out = base_rgb_buf.data();
-          bpm.flat = flat_full;
-          bpm.flat_x0 = bx0;
-          bpm.flat_y0 = by0;
-          bpm.cfa_pitch = cfa_pitch;
-          negicc::cpu_pixel_shift_merge(bpm);
-        }
-
-        FilmRect patch = frame_det.base_patch;
-        patch.cx -= (float)bx0;
-        patch.cy -= (float)by0;
-        const FilmImage decoded = film_image_from_interleaved(base_rgb_buf.data(), bw, bh, 3);
-        float rgb[3], std_d;
-        if (film_sample_patch(decoded, patch, rgb, &std_d)) {
-          for (int c = 0; c < 3; ++c) frame_det.base_rgb[c] = rgb[c];
-          frame_det.base_std_d = std_d;
-        } else {
-          frame_det.has_base = false;
-        }
-      }
-      if (frame_det.has_base) {
-        if (is_film_base_auto) {
-          rebate_applied = true;
-          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
-                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
-        } else {
-          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
-                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
-        }
-      } else if (is_film_base_auto) {
-        printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
-      }
       if (frame_det.conf < kLowFrameConfidence) {
         printf("Warning: low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
                frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
@@ -2918,7 +2727,6 @@ int main(int ac, char *av[]) {
                       raw_decode,
                       (!is_roi_auto && has_roi) ? roi_coords : nullptr,
                       analyse, find_frame, flat_field.get(),
-                      is_roi_auto ? &frame_det : nullptr,
                       unpacked_probe);
     }
     unpacked_probe = nullptr;
@@ -2928,18 +2736,6 @@ int main(int ac, char *av[]) {
     }
     if (is_roi_auto) {
       print_frame_detection();
-      if (frame_det.has_base) {
-        if (is_film_base_auto) {
-          rebate_applied = true;
-          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) applied\n",
-                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
-        } else {
-          printf("  Rebate base: R=%.0f G=%.0f B=%.0f (std %.3f D) sampled, unused\n",
-                 frame_det.base_rgb[0], frame_det.base_rgb[1], frame_det.base_rgb[2], frame_det.base_std_d);
-        }
-      } else if (is_film_base_auto) {
-        printf("Warning: --film_base_rgb auto requested but no validated rebate found\n");
-      }
       if (frame_det.conf < kLowFrameConfidence) {
         printf("Warning: low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
                frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
@@ -2975,43 +2771,15 @@ int main(int ac, char *av[]) {
   const std::vector<int> sidecar_profile_film_base_rgb = effective_profile_film_base_rgb;
   std::vector<int> effective_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
-  bool film_base_applied = false;
+  const bool film_base_applied = false;  // no film base of the capture (see the TODO at --profile_film_base_rgb)
   std::string film_base_source = "none";
 
-  if (rebate_applied) {
-    effective_film_base_rgb = {(int)std::lround(frame_det.base_rgb[0]), (int)std::lround(frame_det.base_rgb[1]),
-                               (int)std::lround(frame_det.base_rgb[2])};
-    sidecar_film_base_rgb = effective_film_base_rgb;
-    film_base_applied = true;
-    film_base_source = "rebate";
-  } else if (film_base_cli_used) {
-    sidecar_film_base_rgb = user_film_base_rgb;
-    film_base_source = "cli";
-    if (parser.is_used("--profile_film_base_rgb") || (is_bundle && bundle.has_film_base)) {
-      effective_film_base_rgb = user_film_base_rgb;
-      film_base_applied = true;
-    } else {
-      effective_profile_film_base_rgb = {1, 1, 1};
-      effective_film_base_rgb = {1, 1, 1};
-      film_base_applied = false;
-    }
-  } else {
-    if (frame_det.has_base) {
-      sidecar_film_base_rgb = {(int)std::lround(frame_det.base_rgb[0]), (int)std::lround(frame_det.base_rgb[1]),
-                             (int)std::lround(frame_det.base_rgb[2])};
-    } else {
-      sidecar_film_base_rgb = {1, 1, 1};
-    }
-    effective_profile_film_base_rgb = {1, 1, 1};
-    effective_film_base_rgb = {1, 1, 1};
-    film_base_applied = false;
-    film_base_source = "none";
-  }
+  // No film base of the capture is given (TODO above: read it from an image), so none is applied: the film base scale
+  // of the input matrix is 1.
+  effective_profile_film_base_rgb = {1, 1, 1};
 
   if (bundle_search) {
     // The bundle's film base is folded into the solved exposure and gains (not applied as a film base scale).
-    // TODO: If `bundle_search` is enabled with `rebate_applied` or `film_base_cli_used`, preserve `"rebate"` / `"cli"`
-    // and the custom `sidecar_film_base_rgb` instead of unconditionally overwriting with `"bundle"`.
     sidecar_film_base_rgb = sidecar_profile_film_base_rgb;
     film_base_source = "bundle";
   }
@@ -3342,21 +3110,9 @@ int main(int ac, char *av[]) {
     if (station_egb_given) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       get_scan_exposure(*proc, scan_shutter_s, scan_iso);
-      double fb_override_d[3] = {user_film_base_rgb_d[0], user_film_base_rgb_d[1], user_film_base_rgb_d[2]};
-      const double* fb_ptr = nullptr;
-      bool fb_from_scan = false;
-      if (rebate_applied) {
-        fb_override_d[0] = (double)frame_det.base_rgb[0];
-        fb_override_d[1] = (double)frame_det.base_rgb[1];
-        fb_override_d[2] = (double)frame_det.base_rgb[2];
-        fb_ptr = fb_override_d;
-        fb_from_scan = true;
-      } else if (film_base_cli_used) {
-        fb_ptr = fb_override_d;
-      }
       float base_matrix[9];
       double row_scale[3];
-      compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, fb_ptr, fb_from_scan,
+      compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false,
                                     base_matrix, nullptr, row_scale);
       negicc::candidate_matrix(base_matrix, station_egb[0], station_egb[1], station_egb[2], merged_matrix);
       global_exposure_comp = (float)(row_scale[0] * (double)station_egb[0]);
