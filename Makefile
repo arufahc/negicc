@@ -50,7 +50,11 @@ bin_out/.libraw_jpeg_$(LIBRAW_JPEG):
 $(LIBRAW_LIB): $(LIBRAW_OBJS)
 	rm -f $@
 	ar rcs $@ $(LIBRAW_OBJS)
-	echo "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs
+
+# The libraries consumers link after libraw.a, rewritten whenever they change (LIBRAW_JPEG), not only when LibRaw is
+# rebuilt, so a build tree from before the pinned zlib does not keep linking the system's.
+$(shell mkdir -p bin_out; printf '%s\n' "$(LIBRAW_LDLIBS)" | cmp -s - bin_out/libraw.ldlibs || \
+        printf '%s\n' "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs)
 
 libraw: $(LIBRAW_LIB)
 
