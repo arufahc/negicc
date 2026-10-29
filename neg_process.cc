@@ -1551,15 +1551,23 @@ static bool write_json_sidecar(
 
 // The inputs neg_process reads besides one RAW (or the four of a pixel shift).
 enum class InputMode {
-  kRaw,        // a RAW or DNG LibRaw opens (load_raw; a linear DNG has no CFA but decodes the same way)
-  kRgbFile,    // an RGB TIFF or JPEG, converted to linear Rec.2020 (rgb_input.h)
-  kThreeShot,  // three captures, one under each of the red, green and blue lights: RAWs, DNGs or TIFFs
+  kRaw,        // a CFA RAW or DNG (load_raw)
+  kLinearDng,  // a linear (demosaiced) DNG, e.g. a film scanner's: load_raw too, white light (d65) only
+  kRgbFile,    // an RGB TIFF or JPEG (rgb_input.h): linear Rec.2020 (d65), or a TIFF of linear camera RGB (tri)
+  kThreeShot,  // three captures, one under each of the red, green and blue lights: RAWs, DNGs or TIFFs (tri)
 };
 
 // True when LibRaw opens the file (a RAW or a DNG; the header only).
 static bool libraw_opens(const std::string& path) {
   LibRaw probe;
   return probe.open_file(path.c_str()) == LIBRAW_SUCCESS;
+}
+
+// True when the file is a DNG with no CFA (its pixels already demosaiced; the header only).
+static bool is_linear_dng(const std::string& path) {
+  LibRaw probe;
+  return probe.open_file(path.c_str()) == LIBRAW_SUCCESS && probe.imgdata.idata.dng_version &&
+         !probe.imgdata.idata.filters;
 }
 
 // A LibRaw holding a w x h image the caller fills (imgdata.image, 4 samples a pixel), set up as load_raw leaves a
@@ -1589,13 +1597,13 @@ static LibRaw* new_image_proc(int w, int h) {
 }
 
 // The non-RAW inputs (InputMode): an RGB TIFF or JPEG through its ICC profile to linear Rec.2020 (rgb_input.h), or
-// three captures, each giving the channel of its light: R of the first, G of the second, B of the third, in camera
+// with |camera_rgb| a TIFF's values as the linear camera RGB a tri bundle converts, or three captures, each giving the channel of its light: R of the first, G of the second, B of the third, in camera
 // units (a RAW or DNG decoded to camera RGB as load_raw decodes it, a TIFF's samples as they are; a grey TIFF gives
 // its one channel), each scaled to the first capture's exposure when all three record theirs. Returns a LibRaw holding
 // the image as load_raw returns a decoded RAW, after cropping it to |roi| or, with |frame_det|, to the frame the
 // detector finds on the image (as --roi auto), and running |analyse| on its half-size copy, as load_raw does.
-static LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, int qual, bool crop,
-                              const int* roi,
+static LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bool camera_rgb, int qual,
+                              bool crop, const int* roi,
                               const HalfSizeAnalysis& analyse, FrameDetection* frame_det,
                               const FrameDetectionParams& det_params, std::string& source) {
   int w = 0, h = 0;
@@ -1615,14 +1623,15 @@ static LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode m
               files[0].c_str());
       return nullptr;
     }
-    std::string how;
-    if (!negicc::to_linear_rec2020(img, how, err)) {
+    std::string how = "camera";
+    if (!camera_rgb && !negicc::to_linear_rec2020(img, how, err)) {
       fprintf(stderr, "ERROR! %s: %s\n", files[0].c_str(), err.c_str());
       return nullptr;
     }
     source = std::string(jpeg ? "jpeg" : "tiff") + ":" + how;
     printf("Image size: %dx%d, %d-bit, taken as %s\n", img.width, img.height, img.bits,
-           how == "icc" ? "its ICC profile" : how == "srgb" ? "sRGB" : "linear Rec.2020");
+           how == "icc" ? "its ICC profile" : how == "srgb" ? "sRGB" : how == "camera" ? "linear camera RGB"
+                                                                                       : "linear Rec.2020");
     w = img.width;
     h = img.height;
     if (!(proc = new_image_proc(w, h))) {
@@ -1871,7 +1880,15 @@ int main(int ac, char *av[]) {
           "back to the portra400 intent adapter.");
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
-          "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020).");
+          "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020). Required for a RAW; "
+          "otherwise it follows the input: d65 for a linear DNG, a JPEG or a TIFF, tri for a TIFF with --input_rgb "
+          "camera and for three captures.");
+  parser.add_argument("--input_rgb")
+    .help("What a TIFF's values are: rec2020 (converted through its ICC profile, else sRGB for 8 bits or taken as "
+          "linear Rec.2020 for 16 bits; a d65 bundle) or camera (the scanning camera's linear RGB under the "
+          "TriLED light, black subtracted, no white balance or colour matrix; a tri bundle and its crosstalk "
+          "correction).")
+    .default_value(std::string("rec2020"));
   parser.add_argument("-p", "--film_profile")
     .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
           "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
@@ -1952,9 +1969,26 @@ int main(int ac, char *av[]) {
   const InputMode input_mode = files.size() == 3 ? InputMode::kThreeShot
                                : files.size() == 1 && (negicc::is_jpeg_file(files[0]) || !libraw_opens(files[0]))
                                    ? InputMode::kRgbFile
-                                   : InputMode::kRaw;
+                               : files.size() == 1 && is_linear_dng(files[0]) ? InputMode::kLinearDng
+                                                                              : InputMode::kRaw;
+  const std::string input_rgb = parser.get<std::string>("--input_rgb");
+  if (input_rgb != "rec2020" && input_rgb != "camera") {
+    fprintf(stderr, "ERROR! --input_rgb is rec2020 or camera, not '%s'\n", input_rgb.c_str());
+    return 1;
+  }
+  const bool camera_rgb_input = input_rgb == "camera";
+  if (camera_rgb_input && (input_mode != InputMode::kRgbFile || negicc::is_jpeg_file(files[0]))) {
+    fprintf(stderr, "ERROR! --input_rgb camera applies to a single TIFF (a JPEG's 8-bit sRGB is not linear camera "
+                    "RGB)\n");
+    return 1;
+  }
+  // The scanning light the input implies, for the built-in bundle when --light_source is not given: a linear DNG,
+  // a JPEG or a TIFF (as Rec.2020) is white light, a TIFF of camera RGB or three captures one per light is TriLED.
+  const char* implied_light = input_mode == InputMode::kRaw ? nullptr
+                              : input_mode == InputMode::kThreeShot || camera_rgb_input ? "tri"
+                                                                                        : "d65";
   if (input_mode != InputMode::kRaw && parser.is_used("--flat")) {
-    fprintf(stderr, "ERROR! --flat applies to a single RAW or a pixel shift capture\n");
+    fprintf(stderr, "ERROR! --flat applies to a single CFA RAW or a pixel shift capture\n");
     return 1;
   }
   if (files.size() == 4) {
@@ -2180,6 +2214,16 @@ int main(int ac, char *av[]) {
   ProfileBundle bundle;
   std::string film_prof_arg;
   const std::string film_stock = parser.is_used("--film_stock") ? parser.get<std::string>("--film_stock") : "";
+  if (parser.is_used("--light_source") && implied_light && parser.get<std::string>("--light_source") != implied_light) {
+    fprintf(stderr, "ERROR! --light_source %s does not fit %s, which takes %s\n",
+            parser.get<std::string>("--light_source").c_str(),
+            input_mode == InputMode::kLinearDng ? "a linear DNG"
+            : input_mode == InputMode::kThreeShot ? "three captures, one per light"
+            : camera_rgb_input ? "a TIFF of linear camera RGB (--input_rgb camera)"
+                               : "an RGB TIFF or JPEG converted to linear Rec.2020",
+            implied_light);
+    return 1;
+  }
   if (parser.is_used("--light_source") && film_stock.empty()) {
     fprintf(stderr, "ERROR! --light_source requires --film_stock\n");
     return 1;
@@ -2197,12 +2241,15 @@ int main(int ac, char *av[]) {
       return 1;
     }
   } else if (!film_stock.empty()) {
-    if (!parser.is_used("--light_source")) {
+    if (!parser.is_used("--light_source") && !implied_light) {
       fprintf(stderr, "ERROR! --film_stock requires --light_source (tri or d65)\n");
       return 1;
     }
+    const std::string light = parser.is_used("--light_source") ? parser.get<std::string>("--light_source")
+                                                                : std::string(implied_light);
+    if (!parser.is_used("--light_source")) printf("Light source: %s, from the input\n", light.c_str());
     std::string error;
-    const std::string key = embedded_bundle_key(film_stock, parser.get<std::string>("--light_source"), error);
+    const std::string key = embedded_bundle_key(film_stock, light, error);
     if (key.empty()) {
       fprintf(stderr, "ERROR! %s (--list_profiles lists them)\n", error.c_str());
       return 1;
@@ -2355,9 +2402,19 @@ int main(int ac, char *av[]) {
   const bool has_crosstalk = row_given[0] || row_given[1] || row_given[2] || (is_bundle && bundle.has_crosstalk);
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
-  if (input_mode == InputMode::kRgbFile && has_crosstalk) {
+  if (input_mode == InputMode::kRgbFile && !camera_rgb_input && has_crosstalk) {
     fprintf(stderr, "ERROR! %s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
-                    "profile bundle, not one with a crosstalk correction\n", files[0].c_str());
+                    "profile bundle, not one with a crosstalk correction (or --input_rgb camera for a TIFF of linear "
+                    "camera RGB)\n", files[0].c_str());
+    return 1;
+  }
+  if (input_mode == InputMode::kRgbFile && camera_rgb_input && white_light) {
+    fprintf(stderr, "ERROR! A TIFF of linear camera RGB (--input_rgb camera) takes a camera_raw_rgb (tri) bundle\n");
+    return 1;
+  }
+  if (input_mode == InputMode::kLinearDng && is_bundle && !white_light) {
+    fprintf(stderr, "ERROR! A linear DNG is converted to linear Rec.2020 with its own colour data: give a "
+                    "rec2020_linear (d65) profile bundle\n");
     return 1;
   }
   const RawDecode raw_decode = white_light ? RawDecode::kWhiteLight
@@ -2554,7 +2611,8 @@ int main(int ac, char *av[]) {
   std::shared_ptr<const negicc::FlatTables> flat_full_tables;
   negicc::FlatSampleArgs flat_full{};
 
-  if (input_mode == InputMode::kRaw && (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
+  if ((input_mode == InputMode::kRaw || input_mode == InputMode::kLinearDng) &&
+      (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
     LibRaw* probe = new LibRaw();
     printf("Loading RAW file %s\n", files[0].c_str());
     int ret = probe->open_file(files[0].c_str());
@@ -2849,8 +2907,8 @@ int main(int ac, char *av[]) {
     }
     t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
   } else {
-    if (input_mode != InputMode::kRaw) {
-      proc = load_rgb_input(files, input_mode, qual_flag, !no_crop_flag && !has_roi && !is_roi_auto,
+    if (input_mode == InputMode::kRgbFile || input_mode == InputMode::kThreeShot) {
+      proc = load_rgb_input(files, input_mode, camera_rgb_input, qual_flag, !no_crop_flag && !has_roi && !is_roi_auto,
                             (!is_roi_auto && has_roi) ? roi_coords : nullptr, analyse,
                             is_roi_auto ? &frame_det : nullptr, det_params, input_source);
     } else {
