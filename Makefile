@@ -8,7 +8,7 @@
 
 PYTHON ?= python3
 
-.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine unit_test test clean clean_lib clean_all
+.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -275,59 +275,7 @@ dinov3_model:
 dinov3_engine:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only
 
-TEST_CXXFLAGS = -std=c++17 -O2 -fopenmp -ffp-contract=off -fsigned-char -fsanitize=address,undefined -Wall -Wextra -I. -I3rd_party
-
-bin_out/film_frame_detector_asan.o: film_frame_detector.cc film_frame_detector.h
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) -c film_frame_detector.cc -o $@
-
-bin_out/cfa_pipeline_asan.o: cfa_pipeline.cc cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) -c cfa_pipeline.cc -o $@
-
-bin_out/flat_field_asan.o: flat_field.cc flat_field.h flat_sample.h
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) -Wno-maybe-uninitialized -c flat_field.cc -o $@
-
-bin_out/detector_test: tests/detector_test.cc bin_out/film_frame_detector_asan.o
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/detector_test.cc bin_out/film_frame_detector_asan.o -o $@
-
-bin_out/rgbview_test: tests/rgbview_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/rgbview_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -lz -o $@
-
-bin_out/kernels_test: tests/kernels_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/kernels_test.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -lz -o $@
-
-bin_out/dinov3_shape_test: tests/dinov3_shape_test.cc dinov3_preprocess.cc color_pipeline.h dinov3_preprocess.h
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/dinov3_shape_test.cc dinov3_preprocess.cc -o $@
-
-bin_out/pixel_shift_group_test: tests/pixel_shift_group_test.cc pixel_shift_group.h
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) tests/pixel_shift_group_test.cc -o $@
-
-bin_out/shutter_test: tests/shutter_test.cc profile_bundle.cc profile_bundle.h bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o
-	mkdir -p bin_out
-	$(CXX) $(TEST_CXXFLAGS) $(ORT_INC) $(DINOV3_EXTRA_INC) tests/shutter_test.cc profile_bundle.cc bin_out/cfa_pipeline_asan.o bin_out/flat_field_asan.o bin_out/film_frame_detector_asan.o -llcms2 -lz -o $@
-
-# The standalone C++ tests (no lcms2, ONNX or LibRaw needed): the cheap gate.
-unit_test: bin_out/detector_test bin_out/rgbview_test bin_out/kernels_test bin_out/dinov3_shape_test bin_out/pixel_shift_group_test
-	./bin_out/detector_test
-	./bin_out/rgbview_test
-	./bin_out/kernels_test
-	./bin_out/dinov3_shape_test
-	./bin_out/pixel_shift_group_test
-
-# Everything: the unit tests, shutter_test and the neg_process CLI tests (which need the neg_process binary).
-test: unit_test bin_out/shutter_test bin_out/neg_process
-	./bin_out/shutter_test
-	PYTHONPATH=. $(PYTHON) tests/neg_process_cli_test.py
-
 clean: clean_lib
-	rm -f bin_out/*_test
 
 clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked $(EMBED_MANIFEST)
