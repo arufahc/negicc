@@ -1,3 +1,16 @@
 [submodule "3rd_party/libraw"]
 	path = 3rd_party/libraw
 	url = https://github.com/LibRaw/LibRaw.git
+[submodule "3rd_party/lcms2"]
+	path = 3rd_party/lcms2
+	url = https://github.com/mm2/Little-CMS.git
+[submodule "3rd_party/zlib"]
+	path = 3rd_party/zlib
+	url = https://github.com/madler/zlib.git
+[submodule "3rd_party/argparse"]
+	path = 3rd_party/argparse
+	url = https://github.com/p-ranav/argparse.git
+[submodule "3rd_party/json"]
+	path = 3rd_party/json
+	url = https://github.com/nlohmann/json.git
+	shallow = true

@@ -5,10 +5,11 @@
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
 #   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
+#   make deps               # bin_out/liblcms2.a and bin_out/libz.a, from the 3rd_party/lcms2 and zlib submodules
 
 PYTHON ?= python3
 
-.PHONY: all lib libraw neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -31,10 +32,11 @@ vpath %.cpp $(sort $(dir $(LIBRAW_SRCS)))
 # way; build with LIBRAW_JPEG=1 to enable it.
 LIBRAW_JPEG ?= 0
 LIBRAW_DEFS = -DUSE_ZLIB $(if $(filter 1,$(LIBRAW_JPEG)),-DUSE_JPEG -DUSE_JPEG8)
-LIBRAW_LDLIBS = -lz $(if $(filter 1,$(LIBRAW_JPEG)),-ljpeg)
+# Libraries linked after libraw.a beyond the pinned zlib ($(ZLIB_LIB)): the system's libjpeg with LIBRAW_JPEG=1.
+LIBRAW_LDLIBS = $(if $(filter 1,$(LIBRAW_JPEG)),-ljpeg)
 # Thread-safe build (no LIBRAW_NOTHREADS), with OpenMP as distribution packages build it. -ffp-contract=off as the
 # rest of negicc, so aarch64 (where GCC fuses multiply-adds by default) decodes as x86 does.
-LIBRAW_CXXFLAGS = -O3 -w -fPIC -fopenmp -ffp-contract=off $(LIBRAW_INC) $(LIBRAW_DEFS)
+LIBRAW_CXXFLAGS = -O3 -w -fPIC -fopenmp -ffp-contract=off $(LIBRAW_INC) $(ZLIB_INC) $(LIBRAW_DEFS)
 
 bin_out/libraw/%.o: %.cpp bin_out/.libraw_jpeg_$(LIBRAW_JPEG)
 	@mkdir -p bin_out/libraw
@@ -52,9 +54,56 @@ $(LIBRAW_LIB): $(LIBRAW_OBJS)
 
 libraw: $(LIBRAW_LIB)
 
-raw_info: raw_info.cc $(LIBRAW_LIB)
+raw_info: raw_info.cc $(LIBRAW_LIB) $(ZLIB_LIB)
 	mkdir -p bin_out
-	$(CXX) -o bin_out/raw_info raw_info.cc -I3rd_party $(LIBRAW_INC) $(LIBRAW_LIB) $(LIBRAW_LDLIBS) -fopenmp
+	$(CXX) -o bin_out/raw_info raw_info.cc -I3rd_party $(LIBRAW_INC) $(LIBRAW_LIB) $(ZLIB_LIB) $(LIBRAW_LDLIBS) -fopenmp
+
+# ----------------------------------------------------------------------
+# Little-CMS 2 and zlib, pinned by the 3rd_party/lcms2 (2.14) and 3rd_party/zlib (1.3) submodules and built here as
+# static libraries like LibRaw, so neg_process and negicc-station transform colours and read and write compressed
+# data with the same code on every machine instead of the system's liblcms2-dev and zlib1g-dev. Consumers include
+# <lcms2.h> with $(LCMS2_INC) and <zlib.h> with $(ZLIB_INC) and link bin_out/liblcms2.a and bin_out/libz.a. Built
+# at -O2 as distributions build them, with -ffp-contract=off as the rest of negicc.
+# ----------------------------------------------------------------------
+LCMS2_DIR = 3rd_party/lcms2
+LCMS2_INC = -I$(LCMS2_DIR)/include
+LCMS2_LIB = bin_out/liblcms2.a
+ZLIB_DIR = 3rd_party/zlib
+ZLIB_INC = -I$(ZLIB_DIR)
+ZLIB_LIB = bin_out/libz.a
+ifeq ($(wildcard $(LCMS2_DIR)/include/lcms2.h),)
+    $(error Little-CMS submodule missing at $(LCMS2_DIR): run git submodule update --init --recursive)
+endif
+ifeq ($(wildcard $(ZLIB_DIR)/zlib.h),)
+    $(error zlib submodule missing at $(ZLIB_DIR): run git submodule update --init --recursive)
+endif
+LCMS2_OBJS = $(patsubst $(LCMS2_DIR)/src/%.c,bin_out/lcms2/%.o,$(wildcard $(LCMS2_DIR)/src/*.c))
+ZLIB_OBJS = $(addprefix bin_out/zlib/,adler32.o compress.o crc32.o deflate.o gzclose.o gzlib.o gzread.o gzwrite.o \
+                                     infback.o inffast.o inflate.o inftrees.o trees.o uncompr.o zutil.o)
+DEP_CFLAGS = -O2 -fPIC -ffp-contract=off -w
+
+bin_out/lcms2/%.o: $(LCMS2_DIR)/src/%.c
+	@mkdir -p bin_out/lcms2
+	$(CC) $(DEP_CFLAGS) $(LCMS2_INC) -c $< -o $@
+
+bin_out/zlib/%.o: $(ZLIB_DIR)/%.c
+	@mkdir -p bin_out/zlib
+	$(CC) $(DEP_CFLAGS) -D_LARGEFILE64_SOURCE=1 -DHAVE_HIDDEN $(ZLIB_INC) -c $< -o $@
+
+$(LCMS2_LIB): $(LCMS2_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+$(ZLIB_LIB): $(ZLIB_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+deps: $(LCMS2_LIB) $(ZLIB_LIB)
+
+# Header-only libraries: nlohmann/json 3.11.3 and argparse, pinned by the 3rd_party/json and 3rd_party/argparse
+# submodules and included as "nlohmann/json.hpp" and "argparse/argparse.hpp".
+JSON_INC = -I3rd_party/json/single_include
+ARGPARSE_INC = -I3rd_party/argparse/include
 
 # ----------------------------------------------------------------------
 # DINOv3 C++ Inference Engine & Library
@@ -121,7 +170,8 @@ $(BUILD_STAMP):
 	rm -f bin_out/.use_cuda_*
 	touch $@
 
-DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(ORT_INC) $(DINOV3_EXTRA_INC)
+DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(LCMS2_INC) $(ZLIB_INC) \
+                  $(JSON_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
@@ -174,7 +224,7 @@ bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	rm -f $@
 	ar rcs $@ $(DINOV3_OBJS)
 
-lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB)
+lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB)
 
 GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo "master")
 
@@ -261,9 +311,9 @@ NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) -I. -I3rd_party $(LIBRAW_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -lz -O3 -llcms2 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
 # The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
 # transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
@@ -281,5 +331,5 @@ clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked $(EMBED_MANIFEST)
 
 clean_all: clean_lib
-	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_*
+	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_* bin_out/lcms2 bin_out/zlib
 	rm -f bin_out/raw_info bin_out/neg_process
