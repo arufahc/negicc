@@ -50,7 +50,11 @@ bin_out/.libraw_jpeg_$(LIBRAW_JPEG):
 $(LIBRAW_LIB): $(LIBRAW_OBJS)
 	rm -f $@
 	ar rcs $@ $(LIBRAW_OBJS)
-	echo "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs
+
+# The libraries consumers link after libraw.a, rewritten whenever they change (LIBRAW_JPEG), not only when LibRaw is
+# rebuilt, so a build tree from before the pinned zlib does not keep linking the system's.
+$(shell mkdir -p bin_out; printf '%s\n' "$(LIBRAW_LDLIBS)" | cmp -s - bin_out/libraw.ldlibs || \
+        printf '%s\n' "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs)
 
 libraw: $(LIBRAW_LIB)
 
@@ -98,7 +102,48 @@ $(ZLIB_LIB): $(ZLIB_OBJS)
 	rm -f $@
 	ar rcs $@ $^
 
-deps: $(LCMS2_LIB) $(ZLIB_LIB)
+# libjpeg-turbo 3.2.1 and libtiff 4.7.2, pinned by the 3rd_party/libjpeg-turbo and 3rd_party/libtiff submodules and
+# built here without their CMake builds: the headers those generate are written out in 3rd_party/config/ (Linux,
+# 64-bit little-endian; libjpeg-turbo without SIMD). neg_process reads RGB TIFF and JPEG input with them.
+JPEG_DIR = 3rd_party/libjpeg-turbo
+JPEG_INC = -I3rd_party/config/libjpeg-turbo -I$(JPEG_DIR)/src
+JPEG_LIB = bin_out/libjpeg.a
+TIFF_DIR = 3rd_party/libtiff/libtiff
+TIFF_INC = -I3rd_party/config/libtiff -I$(TIFF_DIR)
+TIFF_LIB = bin_out/libtiff.a
+ifeq ($(wildcard $(JPEG_DIR)/src/jpeglib.h),)
+    $(error libjpeg-turbo submodule missing at $(JPEG_DIR): run git submodule update --init --recursive)
+endif
+ifeq ($(wildcard $(TIFF_DIR)/tiffio.h),)
+    $(error libtiff submodule missing at $(TIFF_DIR): run git submodule update --init --recursive)
+endif
+# The library's sources as its CMakeLists.txt lists them (JPEG_SOURCES, with arithmetic coding), the 8-, 12- and
+# 16-bit wrappers included.
+JPEG_SRCS = $(addprefix $(JPEG_DIR)/src/,jcapimin.c jchuff.c jcicc.c jcinit.c jclhuff.c jcmarker.c jcmaster.c \
+              jcomapi.c jcparam.c jcphuff.c jctrans.c jdapimin.c jdatadst.c jdatasrc.c jdhuff.c jdicc.c jdinput.c \
+              jdlhuff.c jdmarker.c jdmaster.c jdphuff.c jdtrans.c jerror.c jfdctflt.c jmemmgr.c jmemnobs.c \
+              jpeg_nbits.c jaricom.c jcarith.c jdarith.c) \
+            $(filter-out %/template.c %/rdcolmap-% %/rdpng-% %/rdppm-% %/wrgif-% %/wrpng-% %/wrppm-%,$(wildcard $(JPEG_DIR)/src/wrapper/*.c))
+JPEG_OBJS = $(patsubst $(JPEG_DIR)/src/%.c,bin_out/libjpeg/%.o,$(JPEG_SRCS))
+TIFF_OBJS = $(patsubst $(TIFF_DIR)/%.c,bin_out/libtiff/%.o,$(filter-out %/tif_win32.c,$(wildcard $(TIFF_DIR)/tif_*.c)))
+
+bin_out/libjpeg/%.o: $(JPEG_DIR)/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(DEP_CFLAGS) $(JPEG_INC) -c $< -o $@
+
+bin_out/libtiff/%.o: $(TIFF_DIR)/%.c
+	@mkdir -p bin_out/libtiff
+	$(CC) $(DEP_CFLAGS) -DALLOW_TIFF_NON_EXT_ALLOC_FUNCTIONS $(TIFF_INC) $(JPEG_INC) $(ZLIB_INC) -c $< -o $@
+
+$(JPEG_LIB): $(JPEG_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+$(TIFF_LIB): $(TIFF_OBJS)
+	rm -f $@
+	ar rcs $@ $^
+
+deps: $(LCMS2_LIB) $(ZLIB_LIB) $(JPEG_LIB) $(TIFF_LIB)
 
 # Header-only libraries: nlohmann/json 3.11.3 and argparse, pinned by the 3rd_party/json and 3rd_party/argparse
 # submodules and included as "nlohmann/json.hpp" and "argparse/argparse.hpp".
@@ -177,7 +222,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
               bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o \
-              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
+              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o bin_out/rgb_input.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -219,12 +264,16 @@ bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimiz
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
+bin_out/rgb_input.o: rgb_input.cc rgb_input.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) $(TIFF_INC) $(JPEG_INC) -c rgb_input.cc -o $@
+
 bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	rm -f $@
 	ar rcs $@ $(DINOV3_OBJS)
 
-lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB)
+lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(TIFF_LIB) $(JPEG_LIB)
 
 GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo "master")
 
@@ -311,9 +360,9 @@ NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
 # The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
 # transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
@@ -331,5 +380,6 @@ clean_lib:
 	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked $(EMBED_MANIFEST)
 
 clean_all: clean_lib
-	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_* bin_out/lcms2 bin_out/zlib
+	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_* bin_out/lcms2 bin_out/zlib \
+	       bin_out/libjpeg bin_out/libtiff
 	rm -f bin_out/raw_info bin_out/neg_process
