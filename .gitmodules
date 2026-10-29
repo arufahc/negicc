@@ -14,3 +14,9 @@
 	path = 3rd_party/json
 	url = https://github.com/nlohmann/json.git
 	shallow = true
+[submodule "3rd_party/libtiff"]
+	path = 3rd_party/libtiff
+	url = https://gitlab.com/libtiff/libtiff.git
+[submodule "3rd_party/libjpeg-turbo"]
+	path = 3rd_party/libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git

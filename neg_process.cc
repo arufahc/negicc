@@ -51,6 +51,7 @@
 #include "embedded_data.h"
 #include "film_frame_detector.h"
 #include "pixel_shift_group.h"
+#include "rgb_input.h"
 #include "multi_target_optimizer.h"
 #include "profile_bundle.h"
 
@@ -398,12 +399,22 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   auto& S = proc->imgdata.sizes;
   auto& C = proc->imgdata.color;
   uint16_t* raw = proc->imgdata.rawdata.raw_image;
-  if (!raw || !proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3) {
-    fprintf(stderr, "ERROR! The white-light decode needs a 3-colour CFA RAW file\n");
+  // A linear (demosaiced) DNG has its three colours per pixel instead of a CFA mosaic: the same black subtraction and
+  // daylight white balance apply to each colour.
+  const int ncomp = proc->imgdata.rawdata.color3_image ? 3 : proc->imgdata.rawdata.color4_image ? 4 : 0;
+  const bool linear = !raw && ncomp && proc->imgdata.idata.colors == 3;
+  if (linear) {
+    raw = ncomp == 3 ? &proc->imgdata.rawdata.color3_image[0][0] : &proc->imgdata.rawdata.color4_image[0][0];
+    if (flat) {
+      fprintf(stderr, "ERROR! --flat applies to a CFA RAW, not a linear DNG\n");
+      return false;
+    }
+  } else if (!raw || !proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3) {
+    fprintf(stderr, "ERROR! The white-light decode needs a 3-colour CFA RAW file or a linear DNG\n");
     return false;
   }
   const int w = S.width, h = S.height, top = S.top_margin, left = S.left_margin;
-  const size_t pitch = S.raw_pitch / 2;
+  const size_t pitch = S.raw_pitch / 2 / (linear ? ncomp : 1);  // pixels per row of the raw buffer
   if (w <= 0 || h <= 0 || top + h > S.raw_height || left + w > (int)pitch) {
     fprintf(stderr, "ERROR! RAW margins exceed the raw buffer\n");
     return false;
@@ -431,8 +442,23 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   const unsigned clip_level = white - white / 200;
 
   size_t clipped = 0;
+  if (linear) {
+    #pragma omp parallel for reduction(+ : clipped) schedule(static)
+    for (int y = 0; y < h; ++y) {
+      uint16_t* p = raw + ((size_t)(y + top) * pitch + left) * ncomp;
+      for (int x = 0; x < w; ++x, p += ncomp) {
+        bool clip = false;
+        for (int c = 0; c < 3; ++c) {
+          clip |= p[c] >= clip_level;
+          const float v = std::max(0, (int)p[c] - (int)C.black - (int)C.cblack[c]) * wb[c];
+          p[c] = (uint16_t)std::min(std::nearbyint(v), 65535.0f);
+        }
+        clipped += clip ? 1 : 0;
+      }
+    }
+  }
   #pragma omp parallel for reduction(+ : clipped) schedule(static)
-  for (int y = 0; y < h; ++y) {
+  for (int y = 0; y < (linear ? 0 : h); ++y) {
     uint16_t* p = raw + (size_t)(y + top) * pitch + left;
     for (int x = 0; x < w; ++x) {
       const int k = col4[(y % 6) * 6 + x % 6];
@@ -607,7 +633,16 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       return NULL;
     }
   }
-  if (!(proc->imgdata.idata.filters || proc->imgdata.idata.colors == 1)) {
+  // A linear (demosaiced) DNG: three samples a pixel, or four of which the first three are RGB (e.g. a film
+  // scanner's RGB and infrared); the fourth is left out.
+  const bool linear_dng = !proc->imgdata.idata.filters &&
+                          (proc->imgdata.rawdata.color3_image || proc->imgdata.rawdata.color4_image) &&
+                          (proc->imgdata.idata.colors == 3 || proc->imgdata.idata.colors == 4);
+  if (linear_dng && proc->imgdata.idata.colors == 4) {
+    printf("Linear DNG with 4 samples a pixel: the first three taken as RGB, the fourth (e.g. infrared) left out\n");
+    proc->imgdata.idata.colors = 3;
+  }
+  if (!(proc->imgdata.idata.filters || proc->imgdata.idata.colors == 1 || linear_dng)) {
     printf("Only Bayer-pattern RAW files supported, sorry....\n");
     delete proc;
     return NULL;
@@ -1514,6 +1549,212 @@ static bool write_json_sidecar(
   return true;
 }
 
+// The inputs neg_process reads besides one RAW (or the four of a pixel shift).
+enum class InputMode {
+  kRaw,        // a RAW or DNG LibRaw opens (load_raw; a linear DNG has no CFA but decodes the same way)
+  kRgbFile,    // an RGB TIFF or JPEG, converted to linear Rec.2020 (rgb_input.h)
+  kThreeShot,  // three captures, one under each of the red, green and blue lights: RAWs, DNGs or TIFFs
+};
+
+// True when LibRaw opens the file (a RAW or a DNG; the header only).
+static bool libraw_opens(const std::string& path) {
+  LibRaw probe;
+  return probe.open_file(path.c_str()) == LIBRAW_SUCCESS;
+}
+
+// A LibRaw holding a w x h image the caller fills (imgdata.image, 4 samples a pixel), set up as load_raw leaves a
+// decoded RAW: 16-bit linear output, no gamma, no flip.
+static LibRaw* new_image_proc(int w, int h) {
+  LibRaw* proc = new LibRaw();
+  proc->imgdata.image = (ushort(*)[4])calloc((size_t)w * h, sizeof(*proc->imgdata.image));
+  if (!proc->imgdata.image) {
+    delete proc;
+    return nullptr;
+  }
+  auto& S = proc->imgdata.sizes;
+  S.raw_width = S.width = S.iwidth = (ushort)w;
+  S.raw_height = S.height = S.iheight = (ushort)h;
+  if (S.width != w || S.height != h) {  // LibRaw's sizes are 16-bit
+    delete proc;
+    return nullptr;
+  }
+  proc->imgdata.idata.colors = 3;
+  proc->imgdata.idata.filters = 0;
+  proc->imgdata.params.output_bps = 16;
+  proc->imgdata.params.user_flip = 0;
+  proc->imgdata.params.gamm[0] = 1;
+  proc->imgdata.params.gamm[1] = 1;
+  proc->imgdata.params.output_tiff = 1;
+  return proc;
+}
+
+// The non-RAW inputs (InputMode): an RGB TIFF or JPEG through its ICC profile to linear Rec.2020 (rgb_input.h), or
+// three captures, each giving the channel of its light: R of the first, G of the second, B of the third, in camera
+// units (a RAW or DNG decoded to camera RGB as load_raw decodes it, a TIFF's samples as they are; a grey TIFF gives
+// its one channel), each scaled to the first capture's exposure when all three record theirs. Returns a LibRaw holding
+// the image as load_raw returns a decoded RAW, after cropping it to |roi| or, with |frame_det|, to the frame the
+// detector finds on the image (as --roi auto), and running |analyse| on its half-size copy, as load_raw does.
+static LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, int qual, bool crop,
+                              const int* roi,
+                              const HalfSizeAnalysis& analyse, FrameDetection* frame_det,
+                              const FrameDetectionParams& det_params, std::string& source) {
+  int w = 0, h = 0;
+  float white = 65535.0f;     // the image's clipping level, for the frame detector
+  LibRaw* proc = nullptr;
+  std::string err;
+  if (mode == InputMode::kRgbFile) {
+    negicc::RgbImage img;
+    const bool jpeg = negicc::is_jpeg_file(files[0]);
+    printf("Loading %s file %s\n", jpeg ? "JPEG" : "TIFF", files[0].c_str());
+    if (!(jpeg ? negicc::read_jpeg(files[0], img, err) : negicc::read_tiff(files[0], img, err))) {
+      fprintf(stderr, "ERROR! %s\n", err.c_str());
+      return nullptr;
+    }
+    if (img.channels != 3) {
+      fprintf(stderr, "ERROR! %s is a grey image; one file must be RGB (three files give one channel each)\n",
+              files[0].c_str());
+      return nullptr;
+    }
+    std::string how;
+    if (!negicc::to_linear_rec2020(img, how, err)) {
+      fprintf(stderr, "ERROR! %s: %s\n", files[0].c_str(), err.c_str());
+      return nullptr;
+    }
+    source = std::string(jpeg ? "jpeg" : "tiff") + ":" + how;
+    printf("Image size: %dx%d, %d-bit, taken as %s\n", img.width, img.height, img.bits,
+           how == "icc" ? "its ICC profile" : how == "srgb" ? "sRGB" : "linear Rec.2020");
+    w = img.width;
+    h = img.height;
+    if (!(proc = new_image_proc(w, h))) {
+      fprintf(stderr, "ERROR! %s: cannot hold a %dx%d image\n", files[0].c_str(), w, h);
+      return nullptr;
+    }
+    for (size_t i = 0; i < (size_t)w * h; ++i)
+      for (int c = 0; c < 3; ++c) proc->imgdata.image[i][c] = img.pixels[i * 3 + c];
+  } else {
+    double exposure[3] = {0.0, 0.0, 0.0};  // shutter x ISO of each capture, 0 when it does not record them
+    std::string kinds;  // "raw" or "tiff" per capture, comma-separated
+    for (int k = 0; k < 3; ++k) {
+      std::vector<uint16_t> channel;
+      int cw = 0, ch = 0;
+      if (libraw_opens(files[k])) {
+        LibRaw* raw = load_raw(files[k], true, qual, crop, RawDecode::kCameraRgb);
+        if (!raw) return delete proc, nullptr;
+        cw = raw->imgdata.sizes.iwidth;
+        ch = raw->imgdata.sizes.iheight;
+        channel.resize((size_t)cw * ch);
+        for (size_t i = 0; i < channel.size(); ++i) channel[i] = raw->imgdata.image[i][k];
+        if (raw->imgdata.other.shutter > 0 && raw->imgdata.other.iso_speed > 0)
+          exposure[k] = (double)raw->imgdata.other.shutter * raw->imgdata.other.iso_speed;
+        white = std::min(white, std::max(1.0f, (float)raw->imgdata.color.maximum - (float)raw->imgdata.color.black));
+        if (k == 0) {  // the first capture's metadata (camera, exposure) describes the result
+          if (!(proc = new_image_proc(cw, ch))) {
+            fprintf(stderr, "ERROR! %s: cannot hold a %dx%d image\n", files[k].c_str(), cw, ch);
+            delete raw;
+            return nullptr;
+          }
+          // Plain fields only: idata also owns the RAW's XMP buffer.
+          std::memcpy(proc->imgdata.idata.make, raw->imgdata.idata.make, sizeof(proc->imgdata.idata.make));
+          std::memcpy(proc->imgdata.idata.model, raw->imgdata.idata.model, sizeof(proc->imgdata.idata.model));
+          proc->imgdata.other.shutter = raw->imgdata.other.shutter;
+          proc->imgdata.other.iso_speed = raw->imgdata.other.iso_speed;
+          proc->imgdata.other.aperture = raw->imgdata.other.aperture;
+          proc->imgdata.other.timestamp = raw->imgdata.other.timestamp;
+        }
+        raw->free_image();
+        delete raw;
+        kinds += k ? ",raw" : "raw";
+      } else {
+        negicc::RgbImage img;
+        printf("Loading TIFF file %s\n", files[k].c_str());
+        if (negicc::is_jpeg_file(files[k]) || !negicc::read_tiff(files[k], img, err)) {
+          fprintf(stderr, "ERROR! %s: %s\n", files[k].c_str(),
+                  err.empty() ? "three captures must be RAWs, DNGs or TIFFs" : err.c_str());
+          return delete proc, nullptr;
+        }
+        cw = img.width;
+        ch = img.height;
+        const int src = img.channels == 3 ? k : 0;
+        channel.resize((size_t)cw * ch);
+        for (size_t i = 0; i < channel.size(); ++i) channel[i] = img.pixels[i * img.channels + src];
+        if (k == 0 && !(proc = new_image_proc(cw, ch))) {
+          fprintf(stderr, "ERROR! %s: cannot hold a %dx%d image\n", files[k].c_str(), cw, ch);
+          return nullptr;
+        }
+        kinds += k ? ",tiff" : "tiff";
+      }
+      if (k == 0) {
+        w = cw;
+        h = ch;
+      } else if (cw != w || ch != h) {
+        fprintf(stderr, "ERROR! The three captures differ in size: %s is %dx%d, %s is %dx%d\n", files[0].c_str(), w,
+                h, files[k].c_str(), cw, ch);
+        return delete proc, nullptr;
+      }
+      for (size_t i = 0; i < channel.size(); ++i) proc->imgdata.image[i][k] = channel[i];
+    }
+    if (exposure[0] > 0 && exposure[1] > 0 && exposure[2] > 0) {
+      for (int k = 1; k < 3; ++k) {
+        const double scale = exposure[0] / exposure[k];
+        if (scale == 1.0) continue;
+        printf("Channel %c scaled by %.4g to the first capture's exposure\n", "RGB"[k], scale);
+        for (size_t i = 0; i < (size_t)w * h; ++i)
+          proc->imgdata.image[i][k] = (ushort)std::min(65535.0, std::round(proc->imgdata.image[i][k] * scale));
+      }
+    }
+    source = "three:" + kinds;
+  }
+
+  int region[4] = {0, 0, w, h};
+  if (frame_det) {
+    FilmImage fi = film_image_from_interleaved(&proc->imgdata.image[0][0], w, h, 4, 0, white);
+    FrameDetectionParams params = det_params;
+    detect_frame_or_fallback(fi, params, *frame_det);
+    if (frame_det->conf >= kLowFrameConfidence) std::copy(frame_det->crop, frame_det->crop + 4, region);
+  } else if (roi) {
+    std::copy(roi, roi + 4, region);
+  }
+  // As load_raw: --roi auto decodes (here: keeps) only the frame before the analysis; a given --roi is applied by the
+  // analysis to its half-size image and cut from the full image after it.
+  if (frame_det && (region[0] || region[1] || region[2] != w || region[3] != h)) {
+    if (!extract_roi_and_transform(proc, region[0], region[1], region[2], region[3], 0, false, false)) {
+      proc->free_image();
+      delete proc;
+      return nullptr;
+    }
+    w = proc->imgdata.sizes.iwidth;
+    h = proc->imgdata.sizes.iheight;
+  }
+  if (analyse) {
+    const int hw = w / 2, hh = h / 2;
+    std::unique_ptr<LibRaw> half(new_image_proc(hw, hh));
+    if (!half) return delete proc, nullptr;
+    half->imgdata.other.shutter = proc->imgdata.other.shutter;
+    half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+#pragma omp parallel for schedule(static)
+    for (int y = 0; y < hh; ++y) {
+      for (int x = 0; x < hw; ++x) {
+        const ushort* a = proc->imgdata.image[(size_t)(2 * y) * w + 2 * x];
+        const ushort* b = proc->imgdata.image[(size_t)(2 * y) * w + 2 * x + 1];
+        const ushort* c = proc->imgdata.image[(size_t)(2 * y + 1) * w + 2 * x];
+        const ushort* d = proc->imgdata.image[(size_t)(2 * y + 1) * w + 2 * x + 1];
+        for (int k = 0; k < 3; ++k)
+          half->imgdata.image[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) / 4);
+      }
+    }
+    if (!analyse(*half)) return delete proc, nullptr;
+  }
+  if (!frame_det && roi && (region[0] || region[1] || region[2] != w || region[3] != h)) {
+    if (!extract_roi_and_transform(proc, region[0], region[1], region[2], region[3], 0, false, false)) {
+      proc->free_image();
+      delete proc;
+      return nullptr;
+    }
+  }
+  printf("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+  return proc;
+}
+
 // How neg_process is meant to be used, by capture (to move to the docs later):
 //
 // - A single RAW captured under the narrowband RGB LED (tri) or white (d65) light, e.g.
@@ -1524,12 +1765,16 @@ static bool write_json_sidecar(
 //   correction, as negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station bundle JSON
 //   (e.g. to test parity with negicc-station) or a single ICC profile (for research).
 // - Four RAW files of a Sony A7R IV 4-shot pixel shift capture, merged into one image, the same way.
-// - TODO: a capture whose R, G and B are already separated, like a film scanner's linear DNG or TIFF, with no
-//   crosstalk to correct (-r 1 0 0 -g 0 1 0 -b 0 0 1). The decoders take only Bayer RAW files for now.
-// - TODO: three images, each captured under one of the red, green and blue lights:
+// - A linear (demosaiced) DNG, e.g. a film scanner's, decoded by LibRaw as a RAW is: camera RGB and the bundle's
+//   crosstalk correction for a tri bundle, the DNG's colour data to linear Rec.2020 for a d65 bundle. A fourth
+//   sample per pixel (a scanner's infrared) is left out.
+// - An RGB TIFF (8 or 16 bits) or JPEG, with a d65 bundle: converted to linear Rec.2020 through its embedded ICC
+//   profile (rgb_input.h); without one, 8-bit data is taken as sRGB and 16-bit data as linear Rec.2020.
+// - Three images, each captured under one of the red, green and blue lights (RAWs, DNGs or TIFFs, the same size):
 //     neg_process --film_stock portra400 --light_source tri -o out.tif red.ARW green.ARW blue.ARW
-//   Each image gives one channel, so there is no crosstalk to correct (as -r 1 0 0 -g 0 1 0 -b 0 0 1). Not
-//   supported yet.
+//   R comes from the first, G from the second and B from the third (a grey TIFF gives its one channel), each scaled
+//   to the first capture's exposure when all three record theirs. There is no crosstalk between the lights to
+//   correct, so the correction is the identity (-r, -g and -b give another). --flat applies to RAWs only.
 //
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
 // whenever a profile is given, unless --gain_g or --gain_b is; then the conversion takes the values as given. -E
@@ -1699,12 +1944,15 @@ int main(int ac, char *av[]) {
   }
 
   const auto files = parser.get<std::vector<std::string>>("raw_files");
-  if (files.size() == 2 || files.size() == 3) {
-    // TODO: three images, one per light (see the capture notes above main).
-    fprintf(stderr, "ERROR! Give one RAW file, or four of a pixel shift capture (one image per light is not "
-                    "supported yet)\n");
+  if (files.size() == 2 || files.size() > 4) {
+    fprintf(stderr, "ERROR! Give one RAW, DNG, TIFF or JPEG file, three captures (one per light: red, green, blue) "
+                    "or the four RAW files of a pixel shift capture\n");
     return 1;
   }
+  const InputMode input_mode = files.size() == 3 ? InputMode::kThreeShot
+                               : files.size() == 1 && (negicc::is_jpeg_file(files[0]) || !libraw_opens(files[0]))
+                                   ? InputMode::kRgbFile
+                                   : InputMode::kRaw;
   if (files.size() == 4) {
     for (size_t i = 0; i < 4; ++i) {
       for (size_t j = i + 1; j < 4; ++j) {
@@ -2070,6 +2318,23 @@ int main(int ac, char *av[]) {
                       "shift\n", bundle.key.c_str());
       return 1;
     }
+    if (input_mode == InputMode::kThreeShot) {
+      fprintf(stderr, "ERROR! The rec2020_linear profile bundle %s is for white light; three captures, one per "
+                      "light, take a camera_raw_rgb (tri) bundle\n", bundle.key.c_str());
+      return 1;
+    }
+  }
+  // Three captures, one per light, have no crosstalk between the lights to correct: each channel comes from the
+  // capture under its own light, so the correction is the identity unless -r, -g or -b give one.
+  if (input_mode == InputMode::kThreeShot && is_bundle) {
+    for (int r = 0; r < 3; ++r) {
+      if (row_given[r]) continue;
+      for (int c = 0; c < 3; ++c) {
+        bundle.crosstalk_matrix[r * 3 + c] = r == c ? 1.0f : 0.0f;
+        bundle.crosstalk_matrix_d[r * 3 + c] = r == c ? 1.0 : 0.0;
+      }
+    }
+    bundle.has_crosstalk = true;
   }
   if (is_bundle) {
     for (int r = 0; r < 3; ++r) {
@@ -2084,6 +2349,17 @@ int main(int ac, char *av[]) {
     }
   }
   const bool has_crosstalk = row_given[0] || row_given[1] || row_given[2] || (is_bundle && bundle.has_crosstalk);
+  // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
+  // correction (a camera_raw_rgb bundle) needs.
+  if (input_mode == InputMode::kRgbFile && has_crosstalk) {
+    fprintf(stderr, "ERROR! %s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
+                    "profile bundle, not one with a crosstalk correction\n", files[0].c_str());
+    return 1;
+  }
+  if (input_mode != InputMode::kRaw && parser.is_used("--flat")) {
+    fprintf(stderr, "ERROR! --flat applies to a single RAW or a pixel shift capture\n");
+    return 1;
+  }
   const RawDecode raw_decode = white_light ? RawDecode::kWhiteLight
                                : has_crosstalk ? RawDecode::kCameraRgb
                                                : RawDecode::kRec2020;
@@ -2268,6 +2544,7 @@ int main(int ac, char *av[]) {
   const double t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
   LibRaw *unpacked_probe = nullptr;
+  std::string input_source = "raw";  // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
   std::unique_ptr<LibRaw> ps_extra_procs[3];
   float cfa_white_level = 65535.0f;
   int cfa_rx = 0, cfa_ry = 0, cfa_rw = 0, cfa_rh = 0;
@@ -2277,7 +2554,7 @@ int main(int ac, char *av[]) {
   std::shared_ptr<const negicc::FlatTables> flat_full_tables;
   negicc::FlatSampleArgs flat_full{};
 
-  if (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0)) {
+  if (input_mode == InputMode::kRaw && (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
     LibRaw* probe = new LibRaw();
     printf("Loading RAW file %s\n", files[0].c_str());
     int ret = probe->open_file(files[0].c_str());
@@ -2572,14 +2849,20 @@ int main(int ac, char *av[]) {
     }
     t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
   } else {
-    proc = load_raw(files[0], true,
-                    qual_flag,
-                    !no_crop_flag && !has_roi && !is_roi_auto,
-                    raw_decode,
-                    (!is_roi_auto && has_roi) ? roi_coords : nullptr,
-                    analyse, find_frame, flat_field.get(),
-                    is_roi_auto ? &frame_det : nullptr,
-                    unpacked_probe);
+    if (input_mode != InputMode::kRaw) {
+      proc = load_rgb_input(files, input_mode, qual_flag, !no_crop_flag && !has_roi && !is_roi_auto,
+                            (!is_roi_auto && has_roi) ? roi_coords : nullptr, analyse,
+                            is_roi_auto ? &frame_det : nullptr, det_params, input_source);
+    } else {
+      proc = load_raw(files[0], true,
+                      qual_flag,
+                      !no_crop_flag && !has_roi && !is_roi_auto,
+                      raw_decode,
+                      (!is_roi_auto && has_roi) ? roi_coords : nullptr,
+                      analyse, find_frame, flat_field.get(),
+                      is_roi_auto ? &frame_det : nullptr,
+                      unpacked_probe);
+    }
     unpacked_probe = nullptr;
     if (!proc) {
       fprintf(stderr, "Cannot open %s\n", files[0].c_str());
