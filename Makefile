@@ -222,7 +222,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
               bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o \
-              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o bin_out/rgb_input.o $(DINOV3_RUNNER_OBJ)
+              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -264,9 +264,6 @@ bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimiz
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
-bin_out/rgb_input.o: rgb_input.cc rgb_input.h $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) $(TIFF_INC) $(JPEG_INC) -c rgb_input.cc -o $@
 
 bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -356,11 +353,33 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -DEMBED_TABLE=$(EMBED_TABLE) -DEMBED_COUNT=$(EMBED_COUNT) \
 	    -c embedded_data.cc -o $@
 
-NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o
+# neg_process's own sources (np_*.cc, rgb_input.cc): not in the library negicc-station links. Compiled as
+# neg_process.cc is, so moving code between them leaves its arithmetic as it was.
+NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
+              $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
+NP_SRCS = np_profile.cc np_raw.cc np_geometry.cc np_conversion.cc np_output.cc np_input.cc rgb_input.cc
+NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
+NP_HDRS = $(wildcard np_*.h) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h \
+          dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h \
+          embedded_data.h 3rd_party/tiff_head.h
+
+bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -c $< -o $@
+
+bin_out/rgb_input.o: rgb_input.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) $(TIFF_INC) $(JPEG_INC) -c $< -o $@
+
+bin_out/np_%.o: np_%.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
+
+NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o $(NP_OBJS)
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
