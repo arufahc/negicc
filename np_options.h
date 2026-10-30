@@ -50,8 +50,6 @@ struct Options {
   bool exposure_given = false;                 // -E (the search keeps it)
   float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search)
   bool gain_g_given = false, gain_b_given = false;
-  bool station_egb_given = false;              // --station_egb
-  float station_egb[3] = {1.0f, 1.0f, 1.0f};
   ShoulderInfo shoulder;                       // --shoulder (x_hi and source)
   bool shoulder_auto = false;
 

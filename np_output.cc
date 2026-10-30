@@ -324,8 +324,12 @@ bool write_json_sidecar(const Sidecar& sc) {
                  {"pins", {{"e", (sc.pin_mask & PIN_E) != 0}, {"g", (sc.pin_mask & PIN_G) != 0},
                            {"b", (sc.pin_mask & PIN_B) != 0}}}};
 
-  std::vector<std::string> cli = {"-E", num_str(sc.exposure_comp, "%.9g"), "--gain_g", num_str(sc.gain_g, "%.9g"),
-                                  "--gain_b", num_str(sc.gain_b, "%.9g")};
+  // The values -E, --gain_g and --gain_b take: the station's with a bundle, else the absolute ones.
+  const float* egb = sc.station_params;
+  const float abs_egb[3] = {sc.exposure_comp, sc.gain_g, sc.gain_b};
+  if (!egb) egb = abs_egb;
+  std::vector<std::string> cli = {"-E", num_str(egb[0], "%.9g"), "--gain_g", num_str(egb[1], "%.9g"), "--gain_b",
+                                  num_str(egb[2], "%.9g")};
   if (sc.shoulder.active()) cli.insert(cli.end(), {"--shoulder", num_str(sc.shoulder.x_hi, "%.9g")});
   if (sc.has_roi) {
     cli.push_back("--roi");
