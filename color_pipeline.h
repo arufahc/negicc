@@ -82,7 +82,7 @@ constexpr float kShoulderRamp = 0.10f;
 constexpr float kShoulderExponent = 2.0f;
 // Auto's highlight roll-off (shoulder_x_hi_anchored) maps the frame's own 99.5% point to sRGB kShoulderAnchorCode, so
 // the frame's highlights, not the chart white, set where it starts: x_hi up to kShoulderXHiLimit (the largest x_hi
-// set_shoulder accepts). 242 is the code above which Part 1B's gate counts a highlight as blown.
+// set_shoulder accepts). 242 is the code above which the highlight pullback's gate counts a highlight as blown.
 constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 

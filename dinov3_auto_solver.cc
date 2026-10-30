@@ -228,13 +228,14 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   }
 
   // 2. Chromatic gains: g sweep, then b sweep
-  const bool rescue_mode = (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f);
+  // The highlight pullback's re-search sets the enclosure bounds and sweeps wider g and b grids.
+  const bool pullback_search = (cfg.enc_e_min > 0.0f && cfg.enc_e_max > 0.0f);
   std::vector<double> g_cands_d, b_cands_d;
   if (pin_mask & PIN_G) {
     g_cands_d = {curr_g};
   } else if (initial) {
     for (double d : {-0.04, -0.02, 0.0, 0.02, 0.04}) g_cands_d.push_back(initial->g + d);
-  } else if (rescue_mode) {
+  } else if (pullback_search) {
     g_cands_d = {0.74, 0.80, 0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   } else {
     g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
@@ -243,7 +244,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     b_cands_d = {curr_b};
   } else if (initial) {
     for (double d : {-0.06, -0.03, 0.0, 0.03, 0.06}) b_cands_d.push_back(initial->b + d);
-  } else if (rescue_mode) {
+  } else if (pullback_search) {
     b_cands_d = {0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   } else {
     b_cands_d = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
@@ -285,8 +286,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     }
   }
 
-  // If rescue screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on (e, g, b).
-  if (rescue_mode && !initial) {
+  // If the pullback's screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on (e, g, b).
+  if (pullback_search && !initial) {
     if (!(pin_mask & PIN_E)) {
       cands.resize(e_cands_d.size());
       losses.resize(e_cands_d.size());
@@ -351,7 +352,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   }
 
   // Re-align E at the final (best_g, best_b) so L* matches mu_L after chromatic gain updates.
-  if (rescue_mode && !(pin_mask & PIN_E) && (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
+  if (pullback_search && !(pin_mask & PIN_E) && (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
     cands.resize(e_cands_d.size());
     losses.resize(e_cands_d.size());
     for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};

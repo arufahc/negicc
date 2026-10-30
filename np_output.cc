@@ -198,8 +198,12 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["scene_ev"] = num(a.scene_ev, "%.4g");
   j["headroom"] = {{"applied", headroom_applied(a.headroom)}, {"ev", num(a.headroom_ev, "%.4g")},
                    {"reason", to_string(a.headroom)}};
-  j["rescue"] = {{"branch", a.rescue == RescueOutcome::kNotNeeded ? "N" : "R"},
-                 {"white_clip", num(a.rescue_white_clip, "%.6g")}, {"changed", a.rescue == RescueOutcome::kTaken}};
+  // The record keeps its historical keys and values: branch R is the clip fallback being tried or the highlight
+  // pullback moving the result (the pullback used to report through the clip fallback's outcome), and changed is
+  // either one moving the result.
+  j["rescue"] = {{"branch", a.clip_fallback == ClipFallbackOutcome::kNotNeeded && !a.highlight_pullback ? "N" : "R"},
+                 {"white_clip", num(a.clip_fallback_white_clip, "%.6g")},
+                 {"changed", a.clip_fallback == ClipFallbackOutcome::kTaken || a.highlight_pullback}};
   ordered_json screening = ordered_json::array();
   for (const auto& r : a.screening)
     screening.push_back({{"target_idx", r.target_idx}, {"e", num(r.params.e)}, {"g", num(r.params.g)},

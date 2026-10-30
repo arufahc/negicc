@@ -43,10 +43,11 @@ struct RgbImage {
 //      one intent field.
 //   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
 //      the converged ones, when any converged).
-//   5. Highlight headroom and rescue: raise E until the highlights are inside the bracket's calibrated range, and
-//      move to the next bracket when the chosen one clips clearly more.
-//   6. Part 1B, the enclosure-guided rescue: when a bright frame still has many highlights near white (sRGB 242 and
-//      235), pull E into the bracket's calibrated range or move to a darker bracket whose range holds the frame.
+//   5. Highlight headroom and the clip fallback: raise E until the highlights are inside the bracket's calibrated
+//      range, and move to the next bracket when the chosen one clips clearly more (ClipFallbackOutcome).
+//   6. The highlight pullback (formerly Part 1B, the enclosure-guided rescue): when a bright frame still has many
+//      highlights near white (sRGB 242 and 235), pull E into the bracket's calibrated range or move to a darker
+//      bracket whose range holds the frame.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
 // measures its x_hi at each iteration's incoming parameters, and once more at the final ones.
@@ -97,9 +98,10 @@ inline bool headroom_applied(HeadroomOutcome outcome) {
   return outcome == HeadroomOutcome::kCapacityLimited || outcome == HeadroomOutcome::kPulledInside;
 }
 
-// What the highlight rescue did. It is tried when the chosen bracket white-clips more than 0.03 % of the inner
-// crop, on the next bracket of the bundle (target_idx + 1), and taken when that one passes every check.
-enum class RescueOutcome {
+// What the clip fallback (formerly the highlight rescue, Branch R) did. It is tried when the chosen bracket
+// white-clips more than 0.03 % of the inner crop, on the next bracket of the bundle (target_idx + 1), and taken when
+// that one passes every check.
+enum class ClipFallbackOutcome {
   kNotNeeded,        // the chosen bracket does not clip
   kNotScreened,      // the next bracket was not screened
   kNotAdmissible,    // the next bracket's calibrated range is too narrow for the scene
@@ -108,7 +110,7 @@ enum class RescueOutcome {
   kWorseResidual,    // the next bracket's residual is more than 10 % above the chosen one's
   kTaken,            // the next bracket replaces the chosen one
 };
-const char* to_string(RescueOutcome outcome);
+const char* to_string(ClipFallbackOutcome outcome);
 
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
@@ -183,8 +185,9 @@ struct ParamSearchResult {
 
   HeadroomOutcome headroom = HeadroomOutcome::kWithinRange;
   float headroom_ev = 0.0f;  // the stops E was raised by
-  RescueOutcome rescue = RescueOutcome::kNotNeeded;
-  float rescue_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
+  ClipFallbackOutcome clip_fallback = ClipFallbackOutcome::kNotNeeded;
+  float clip_fallback_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
+  bool highlight_pullback = false;        // the highlight pullback moved E or the bracket
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
