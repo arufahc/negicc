@@ -199,11 +199,12 @@ struct ParamSearchResult {
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
 // orientation, converted through bracket target_idx at the search's E, g and b (ParamSearchResult::params, the
 // station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's
-// last step measures the same on its half-size frame; neg_process measures every bundle conversion's on the
-// full-resolution frame, so given values reproduce it. q995 gets the point.
+// last step measures the same on its half-size frame; neg_process measures every bundle conversion's there too, so
+// given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detect.h),
+// as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995 = nullptr);
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
 
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso

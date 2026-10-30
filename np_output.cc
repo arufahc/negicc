@@ -299,13 +299,30 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json fb;
   fb["source"] = sc.film_base_source;
   fb["applied"] = sc.film_base_applied;
+  const negicc::FilmBaseDetection* d = sc.film_base_detection;
+  auto num3 = [](const double* v) { return ordered_json{num(v[0], "%.10g"), num(v[1], "%.10g"), num(v[2], "%.10g")}; };
   if (sc.film_base_source == "none") {
     fb["film_base_rgb"] = nullptr;
-    fb["std_density"] = nullptr;
+  } else if (d && d->found) {
+    fb["film_base_rgb"] = num3(d->rgb);
   } else {
     fb["film_base_rgb"] = sc.film_base_rgb;
-    fb["std_density"] = sc.film_base_source == "rebate" && sc.has_std_density ? num(sc.std_density, "%.6g")
-                                                                               : ordered_json(nullptr);
+  }
+  // Read from the scan (film_base_detect.h): the base in the half-size decode's units, the rebate patch sampled and
+  // the frame detector's record.
+  const bool rebate = d && d->found && d->source == "rebate";
+  fb["decode_rgb"] = d && d->found ? num3(d->decode_rgb) : ordered_json(nullptr);
+  fb["box"] = rebate ? ordered_json{d->box[0], d->box[1], d->box[2], d->box[3]} : ordered_json(nullptr);
+  fb["std_density"] = rebate ? num(d->std_d, "%.6g") : ordered_json(nullptr);
+  if (d && d->has_detector) {
+    ordered_json det;
+    det["reason"] = d->reason;
+    det["frame_conf"] = num(d->frame_conf, "%.3f");
+    det["light_clipped"] = d->light_clipped;
+    det["thinnest_over_patch_stops"] = d->has_outshone ? num(d->thinnest_over_patch_stops, "%.4f") : ordered_json(nullptr);
+    fb["detector"] = det;
+  } else {
+    fb["detector"] = nullptr;
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   j["film_base"] = fb;

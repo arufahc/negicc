@@ -44,6 +44,7 @@
 
 #include "dinov3_auto_solver.h"
 #include "dinov3_engine.h"
+#include "film_base_detect.h"
 #include "flat_field.h"
 #include "flat_sample.h"
 #include "libraw/libraw.h"
@@ -149,6 +150,11 @@ struct Scan {
   int rot_cw = 0;
   bool hflip = false, vflip = false;
 
+  // The film base read from the scan (film_base_detect.h) for a bundle conversion, as negicc-station's Auto reads it
+  // when no film base is given; not found: the bundle's.
+  negicc::FilmBaseDetection film_base;
+  const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
+
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
@@ -187,7 +193,8 @@ struct Conversion {
   DinoSolveResult dino_res;              // the single-profile search
   // With a bundle: E, g and b on the station's scale (what -E, --gain_g and --gain_b take), for cli_equivalent.
   std::optional<std::array<float, 3>> station_params;
-  // The film base the sidecar records (none is applied: see the TODO at --film_stock).
+  // The film base the sidecar records. A bundle conversion takes the base read from the scan (Scan::film_base), else
+  // the bundle's, through the station's merged matrix; the film base scale of the input matrix stays 1.
   std::vector<int> profile_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_profile_film_base_rgb;
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};

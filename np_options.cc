@@ -201,8 +201,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
-  // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does), in
-  // place of the profile's; --film_base_rgb, which took it as numbers or from the rebate (--roi auto), is removed.
+  // A bundle conversion reads the film base from the scan (film_base_detect.h: the rebate, else the thinnest film), as
+  // negicc-station's Auto does; --film_base_rgb, which took it as numbers or from the rebate, is gone.
+  // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does).
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
           "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
