@@ -153,6 +153,11 @@ struct Scan {
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
 
+  // The highlight roll-off of Auto's result or of given values, measured on the half-size frame as the bracket search
+  // measures it, while that frame exists (render frees the mosaic; LibRaw's half-size decode is analysed and gone).
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
