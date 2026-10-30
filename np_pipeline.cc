@@ -1314,6 +1314,12 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.pin_mask = pin_mask;
     sc.knee = knee;
     sc.shoulder = shoulder_info;
+    if (c.out.encoding != ENCODE_SRGB && sc.shoulder.active()) {
+      // Only the sRGB output applies the roll-off: record it as off (keeping the measured 99.5% point).
+      sc.shoulder.x_hi = 1.0f;
+      sc.shoulder.source = "off";
+      sc.shoulder.has_knee = false;
+    }
     sc.dino = use_dino && !has_auto_res ? &dino_res : nullptr;
     sc.dino_model = dino_path;
     sc.dino_backend = use_dino ? std::string(engine.backend_used()) : dino_backend;
