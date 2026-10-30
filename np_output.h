@@ -33,43 +33,46 @@
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
                const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
 
+// What the sidecar records.
+struct Sidecar {
+  std::string output_path;               // the TIFF; the sidecar is <output_path>.json
+  int argc = 0;
+  char** argv = nullptr;
+  const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
+  std::vector<std::string> files;
+  int orig_w = 0, orig_h = 0;
+  bool half_size = false;
+  bool has_roi = false;
+  const int* roi = nullptr;              // x, y, w, h when has_roi
+  std::string roi_source;
+  const FrameDetection* frame_det = nullptr;  // --roi auto's detection
+  int rot_cw = 0;
+  bool hflip = false, vflip = false;
+  int out_w = 0, out_h = 0;
+  bool film_base_applied = false;
+  std::vector<int> film_base_rgb, profile_film_base_rgb;
+  std::string film_base_source;
+  float std_density = 0.0f;
+  bool has_std_density = false;
+  std::string profile_path;              // empty: no profile
+  bool is_bundle = false;
+  std::string bundle_target_name;
+  int bundle_target_idx = -1;
+  InputSpace input_space = InputSpace::kCameraRawRgb;
+  const float* merged_matrix = nullptr;
+  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
+  unsigned pin_mask = 0;
+  float knee = 0.95f;
+  std::string knee_source;
+  ShoulderInfo shoulder;
+  const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
+  std::string dino_model, dino_backend;
+  const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
+  const int* auto_frame_half = nullptr;
+  std::string colorspace;
+  double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
+  double t_auto_ms = 0.0;
+};
+
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).
-bool write_json_sidecar(
-    const std::string& output_path,
-    int ac, char* av[],
-    const LibRaw* proc,
-    const std::vector<std::string>& files,
-    int orig_w, int orig_h,
-    bool half_size,
-    bool has_roi, const int* roi_coords,
-    const std::string& roi_source,
-    const FrameDetection* frame_det,
-    int rot_cw, bool hflip, bool vflip,
-    int out_w, int out_h,
-    bool film_base_applied,
-    const std::vector<int>& film_base_rgb,
-    const std::vector<int>& profile_film_base_rgb,
-    const std::string& film_base_source,
-    float std_density,
-    bool has_std_density,
-    const std::string& film_profile_path,
-    const float* merged_matrix,
-    float exposure_comp, float gain_g, float gain_b,
-    unsigned pin_mask,
-    float knee, const std::string& knee_source,
-    const ShoulderInfo& shoulder,
-    bool has_dino, const DinoSolveResult& dino_res,
-    const std::string& dino_model_path,
-    const std::string& dino_backend,
-    const std::string& colorspace_name,
-    double t_raw_decode_ms,
-    double t_frame_det_ms,
-    double t_full_conversion_ms,
-    double t_tiff_write_ms,
-    bool is_bundle = false,
-    const std::string& bundle_target_name = "",
-    int bundle_target_idx = -1,
-    const ParamSearchResult* auto_res = nullptr,
-    const int* auto_frame_half = nullptr,
-    double t_auto_ms = 0.0,
-    InputSpace input_space = InputSpace::kCameraRawRgb);
+bool write_json_sidecar(const Sidecar& sc);

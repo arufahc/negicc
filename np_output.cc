@@ -22,7 +22,9 @@
 #include <netinet/in.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 
 #include "dcraw/gamma_curve.h"
@@ -30,6 +32,7 @@
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "np_geometry.h"
 #include "np_profile.h"
+#include "nlohmann/json.hpp"
 #include "tiff_head.h"
 
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
@@ -99,413 +102,285 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 #define NEGICC_GIT_VERSION "master"
 #endif
 
-static std::string json_escape(const std::string& s) {
-  std::string out;
-  out.reserve(s.size() + 8);
-  for (unsigned char c : s) {
-    switch (c) {
-      case '"':  out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\b': out += "\\b";  break;
-      case '\f': out += "\\f";  break;
-      case '\n': out += "\\n";  break;
-      case '\r': out += "\\r";  break;
-      case '\t': out += "\\t";  break;
-      default:
-        if (c < 0x20) {
-          char buf[8];
-          snprintf(buf, sizeof(buf), "\\u%04x", (unsigned int)c);
-          out += buf;
-        } else {
-          out += (char)c;
-        }
-        break;
-    }
-  }
-  return out;
+using ordered_json = nlohmann::ordered_json;
+
+// A number as the sidecar has always written it: printed with fmt, then read back (an integer when it prints as one),
+// so the values do not change with the writer; null when it is not finite.
+static ordered_json num(double val, const char* fmt = "%.6g") {
+  if (!std::isfinite(val)) return nullptr;
+  char buf[64];
+  snprintf(buf, sizeof(buf), fmt, val);
+  if (!strpbrk(buf, ".eE")) return strtoll(buf, nullptr, 10);
+  return strtod(buf, nullptr);
 }
 
-static std::string json_num(double val, const char* fmt = "%.6g") {
-  if (!std::isfinite(val)) return "null";
+// A number as text, printed with fmt (the cli_equivalent's arguments).
+static std::string num_str(double val, const char* fmt) {
   char buf[64];
   snprintf(buf, sizeof(buf), fmt, val);
   return buf;
 }
 
-bool write_json_sidecar(
-    const std::string& output_path,
-    int ac, char* av[],
-    const LibRaw* proc,
-    const std::vector<std::string>& files,
-    int orig_w, int orig_h,
-    bool half_size,
-    bool has_roi, const int* roi_coords,
-    const std::string& roi_source,
-    const FrameDetection* frame_det,
-    int rot_cw, bool hflip, bool vflip,
-    int out_w, int out_h,
-    bool film_base_applied,
-    const std::vector<int>& film_base_rgb,
-    const std::vector<int>& profile_film_base_rgb,
-    const std::string& film_base_source,
-    float std_density,
-    bool has_std_density,
-    const std::string& film_profile_path,
-    const float* merged_matrix,
-    float exposure_comp, float gain_g, float gain_b,
-    unsigned pin_mask,
-    float knee, const std::string& knee_source,
-    const ShoulderInfo& shoulder,
-    bool has_dino, const DinoSolveResult& dino_res,
-    const std::string& dino_model_path,
-    const std::string& dino_backend,
-    const std::string& colorspace_name,
-    double t_raw_decode_ms,
-    double t_frame_det_ms,
-    double t_full_conversion_ms,
-    double t_tiff_write_ms,
-    bool is_bundle,
-    const std::string& bundle_target_name,
-    int bundle_target_idx,
-    const ParamSearchResult* auto_res,
-    const int* auto_frame_half,
-    double t_auto_ms,
-    InputSpace input_space) {
-  const std::string json_path = output_path + ".json";
+static ordered_json rect_json(const FilmRect& r) {
+  return {{"cx", num(r.cx, "%.1f")}, {"cy", num(r.cy, "%.1f")}, {"w", num(r.w, "%.1f")}, {"h", num(r.h, "%.1f")},
+          {"angle_deg", num(r.angle_deg, "%.3f")}};
+}
+
+static ordered_json frame_detection_json(const FrameDetection& fd) {
+  // Sensor pixel coordinates throughout (the detector ran on the RAW before the decode). aspect and format describe
+  // the frame as the previous detector did ("3:2", ...); film_format is the format the detection used. axis is "h" or
+  // "v", or null when the detector left it undecided (a single square frame with nothing to orient it).
+  const FilmRect& pr = fd.primary.rect;
+  const float aspect = std::max(pr.w, pr.h) / std::max(1.0f, std::min(pr.w, pr.h));
+  const char* ratio = "-";
+  switch (fd.format) {
+    case FILM_35MM: ratio = "3:2"; break;
+    case FILM_645: ratio = "4:3"; break;
+    case FILM_6X6: ratio = "1:1"; break;
+    case FILM_6X7: ratio = "7:6"; break;
+    case FILM_6X9: ratio = "3:2"; break;
+    default: break;
+  }
+  ordered_json j;
+  j["ok"] = fd.ok;
+  j["axis"] = fd.axis == 'h' ? ordered_json("h") : fd.axis == 'v' ? ordered_json("v") : ordered_json(nullptr);
+  j["confidence"] = num(fd.conf, "%.2f");
+  j["low_confidence"] = fd.conf < kLowFrameConfidence;
+  j["reason"] = fd.reason;
+  ordered_json gaps = ordered_json::array();
+  for (int g = 0; g < 2; ++g)
+    if (fd.gaps[g][0] >= 0) gaps.push_back({fd.gaps[g][0], fd.gaps[g][1]});
+  j["gaps"] = gaps;
+  // segments: the frames on the strip, in strip order (secondaries are sorted by index, negative before the primary);
+  // selected: the primary's position among them.
+  int selected = 0;
+  for (const FilmFrame& f : fd.secondaries) selected += f.index < 0 ? 1 : 0;
+  j["segments"] = 1 + (int)fd.secondaries.size();
+  j["n_gaps"] = fd.n_gaps;
+  j["selected"] = selected;
+  j["aspect"] = num(aspect, "%.4g");
+  j["format"] = ratio;
+  j["film_format"] = film_format_name(fd.format);
+  j["orientation"] = fd.orientation;
+  j["rotation_deg"] = num(fd.rotation_deg, "%.3f");
+  j["px_per_mm"] = num(fd.px_per_mm, "%.2f");
+  j["light_clipped"] = fd.light_clipped;
+  j["crop"] = {fd.crop[0], fd.crop[1], fd.crop[2], fd.crop[3]};
+  j["primary"] = rect_json(pr);
+  ordered_json sec = ordered_json::array();
+  for (const FilmFrame& f : fd.secondaries)
+    sec.push_back({{"index", f.index}, {"rect", rect_json(f.rect)},
+                   {"visible", {f.visible[0], f.visible[1], f.visible[2], f.visible[3]}},
+                   {"visible_fraction", num(f.visible_fraction, "%.3f")}});
+  j["secondaries"] = sec;
+  j["film_base"] = fd.has_film_base ? rect_json(fd.film_base) : ordered_json(nullptr);
+  j["base_patch"] = fd.has_base ? rect_json(fd.base_patch) : ordered_json(nullptr);
+  j["sprockets"] = (int)fd.sprockets.size();
+  return j;
+}
+
+static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half, const Sidecar& sc) {
+  ordered_json j;
+  j["target"] = a.target_name;
+  j["target_idx"] = a.target_idx;
+  j["e"] = num(a.params.e, "%.9g");
+  j["g"] = num(a.params.g, "%.9g");
+  j["b"] = num(a.params.b, "%.9g");
+  j["residual"] = num(a.residual, "%.6g");
+  j["status"] = to_string(a.status);
+  j["e_norm"] = num(a.e_norm, "%.9g");
+  ordered_json m = ordered_json::array();
+  for (int i = 0; i < 9; ++i) m.push_back(num(a.input_matrix[i], "%.9g"));
+  j["input_matrix"] = m;
+  j["frame_half"] = {frame_half[0], frame_half[1], frame_half[2], frame_half[3]};
+  j["g_lo"] = num(a.g_lo, "%.6g");
+  j["g_hi"] = num(a.g_hi, "%.6g");
+  j["scene_ev"] = num(a.scene_ev, "%.4g");
+  j["headroom"] = {{"applied", headroom_applied(a.headroom)}, {"ev", num(a.headroom_ev, "%.4g")},
+                   {"reason", to_string(a.headroom)}};
+  j["rescue"] = {{"branch", a.rescue == RescueOutcome::kNotNeeded ? "N" : "R"},
+                 {"white_clip", num(a.rescue_white_clip, "%.6g")}, {"changed", a.rescue == RescueOutcome::kTaken}};
+  ordered_json screening = ordered_json::array();
+  for (const auto& r : a.screening)
+    screening.push_back({{"target_idx", r.target_idx}, {"e", num(r.params.e)}, {"g", num(r.params.g)},
+                         {"b", num(r.params.b)}, {"intent_loss", num(r.intent_loss)}});
+  j["screening"] = screening;
+  ordered_json tournament = ordered_json::array();
+  for (const auto& r : a.tournament)
+    tournament.push_back({{"target_idx", r.target_idx}, {"e", num(r.params.e)}, {"g", num(r.params.g)},
+                          {"b", num(r.params.b)}, {"residual", num(r.residual)}, {"status", to_string(r.status)},
+                          {"iters", r.steps}});
+  j["tournament"] = tournament;
+  j["model"] = sc.dino_model;
+  j["backend"] = sc.dino_backend;
+  j["inferences"] = a.inferences;
+  j["time_ms"] = num(sc.t_auto_ms, "%.1f");
+  return j;
+}
+
+// One step of the single-profile search: its parameters, losses and penalties.
+template <typename It>
+static ordered_json dino_step_json(const It& it, bool with_residual) {
+  ordered_json j = {{"e", num(it.e)}, {"g", num(it.g)}, {"b", num(it.b)}};
+  if (with_residual) j["residual"] = num(it.residual);
+  j["loss_L"] = num(it.loss_L);
+  j["loss_a"] = num(it.loss_a);
+  j["loss_b"] = num(it.loss_b);
+  j["clip_pct"] = num(it.clip_pct);
+  j["penalty_clip"] = num(it.penalty_clip);
+  j["penalty_anchor"] = num(it.penalty_anchor);
+  j["objective"] = num(it.objective);
+  return j;
+}
+
+static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
+  ordered_json j;
+  j["model"] = sc.dino_model;
+  j["backend"] = sc.dino_backend;
+  j["grid"] = {d.grid_w, d.grid_h};
+  j["target"] = {d.target_w, d.target_h};
+  j["e_center"] = num(d.e_center);
+  j["e_bounds"] = {num(d.bounds_lo), num(d.bounds_hi)};
+  j["status"] = d.status;
+  j["best_iteration"] = d.best_iteration;
+  j["inferences"] = d.total_inferences;
+  j["solved_relative"] = {{"e", num(d.solved_relative.e)}, {"g", num(d.solved_relative.g)},
+                          {"b", num(d.solved_relative.b)}};
+  const bool has_bootstrap = !d.iterations.empty() && d.iterations[0].tag == 'b';
+  j["bootstrap"] = has_bootstrap ? dino_step_json(d.iterations[0], false) : ordered_json(nullptr);
+  ordered_json its = ordered_json::array();
+  for (const auto& it : d.iterations)
+    if (it.tag != 'b') its.push_back(dino_step_json(it, true));
+  j["iterations"] = its;
+  ordered_json tone = ordered_json::array();
+  for (const auto& t : d.tone_mass) tone.push_back(num(t));
+  j["tone_mass"] = tone;
+  return j;
+}
+
+bool write_json_sidecar(const Sidecar& sc) {
+  ordered_json j;
+  j["schema"] = "negicc.neg_process.sidecar/1";
+  j["tool"] = {{"name", "neg_process"}, {"version", NEGICC_GIT_VERSION}};
+  ordered_json argv = ordered_json::array();
+  for (int i = 0; i < sc.argc; ++i) argv.push_back(sc.argv[i]);
+  j["argv"] = argv;
+
+  std::string camera = "Unknown";
+  if (sc.proc) {
+    const std::string make = sc.proc->imgdata.idata.make;
+    const std::string model = sc.proc->imgdata.idata.model;
+    if (!make.empty() && !model.empty()) camera = model.find(make) == 0 ? model : make + " " + model;
+    else if (!model.empty()) camera = model;
+    else if (!make.empty()) camera = make;
+  }
+  j["inputs"] = {{"raw_files", sc.files},
+                 {"camera", camera},
+                 {"iso", sc.proc ? num(sc.proc->imgdata.other.iso_speed) : ordered_json(0)},
+                 {"shutter", sc.proc ? num(sc.proc->imgdata.other.shutter) : ordered_json(0)}};
+
+  ordered_json geom;
+  geom["sensor_size"] = {sc.orig_w, sc.orig_h};
+  geom["half_size"] = sc.half_size;
+  geom["roi_source"] = sc.roi_source;
+  geom["roi"] = sc.has_roi ? ordered_json({sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3]}) : ordered_json(nullptr);
+  geom["rot_cw"] = sc.rot_cw;
+  geom["hflip"] = sc.hflip;
+  geom["vflip"] = sc.vflip;
+  geom["output_size"] = {sc.out_w, sc.out_h};
+  j["geometry"] = geom;
+
+  j["frame_detection"] = sc.frame_det ? frame_detection_json(*sc.frame_det) : ordered_json(nullptr);
+
+  ordered_json fb;
+  fb["source"] = sc.film_base_source;
+  fb["applied"] = sc.film_base_applied;
+  if (sc.film_base_source == "none") {
+    fb["film_base_rgb"] = nullptr;
+    fb["std_density"] = nullptr;
+  } else {
+    fb["film_base_rgb"] = sc.film_base_rgb;
+    fb["std_density"] = sc.film_base_source == "rebate" && sc.has_std_density ? num(sc.std_density, "%.6g")
+                                                                               : ordered_json(nullptr);
+  }
+  fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
+  j["film_base"] = fb;
+
+  if (sc.profile_path.empty()) {
+    j["profile"] = nullptr;
+  } else if (sc.is_bundle) {
+    j["profile"] = {{"path", sc.profile_path}, {"type", "bundle"}, {"bundle_target", sc.bundle_target_name},
+                    {"input_space", to_string(sc.input_space)}};
+  } else {
+    j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
+  }
+
+  ordered_json merged = ordered_json::array();
+  for (int i = 0; i < 9; ++i) merged.push_back(num(sc.merged_matrix[i], "%.9g"));
+  j["matrix"] = {{"merged", merged},
+                 {"exposure_comp", num(sc.exposure_comp, "%.9g")},
+                 {"gain_g", num(sc.gain_g, "%.9g")},
+                 {"gain_b", num(sc.gain_b, "%.9g")},
+                 {"pins", {{"e", (sc.pin_mask & PIN_E) != 0}, {"g", (sc.pin_mask & PIN_G) != 0},
+                           {"b", (sc.pin_mask & PIN_B) != 0}}}};
+
+  std::vector<std::string> cli = {"-E", num_str(sc.exposure_comp, "%.9g"), "--gain_g", num_str(sc.gain_g, "%.9g"),
+                                  "--gain_b", num_str(sc.gain_b, "%.9g"), "--knee", num_str(sc.knee, "%.9g")};
+  if (sc.shoulder.active()) cli.insert(cli.end(), {"--shoulder", num_str(sc.shoulder.x_hi, "%.9g")});
+  if (sc.has_roi) {
+    cli.push_back("--roi");
+    for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
+      cli.push_back(std::to_string(v));
+  }
+  if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  j["cli_equivalent"] = cli;
+
+  // auto: the conversion parameter search (multi_target_optimizer.h)
+  j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
+  j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
+
+  const bool dyn_knee = sc.dino && sc.dino->dynamic_knee.active;
+  const ShoulderInfo& sh = sc.shoulder;
+  j["tone"] = {{"knee", num(sc.knee, "%.9g")},
+               {"knee_source", sc.knee_source},
+               {"q995", dyn_knee ? num(sc.dino->dynamic_knee.q995) : ordered_json(nullptr)},
+               {"knee_fit", dyn_knee ? num(sc.dino->dynamic_knee.knee_fit) : ordered_json(nullptr)},
+               {"shoulder", num(sh.x_hi, "%.9g")},
+               {"shoulder_source", sh.source},
+               {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
+               {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)},
+               {"shoulder_guard", sh.has_guard ? ordered_json(sh.guard) : ordered_json(nullptr)}};
+
+  j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
+
+  ordered_json t;
+  t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
+  t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
+  t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f") : ordered_json(nullptr);
+  t["dino_render"] = sc.dino ? num(sc.dino->timing_render_ms, "%.1f") : ordered_json(nullptr);
+  t["dino_inference"] = sc.dino ? num(sc.dino->timing_infer_ms, "%.1f") : ordered_json(nullptr);
+  t["dino_search"] = sc.dino ? num(sc.dino->timing_search_ms, "%.1f") : ordered_json(nullptr);
+  t["full_conversion"] = num(sc.t_full_conversion_ms, "%.1f");
+  t["tiff_write"] = num(sc.t_tiff_write_ms, "%.1f");
+  j["timings_ms"] = t;
+
+  // Written to a temporary file and renamed, so a reader never sees a partial sidecar.
+  const std::string json_path = sc.output_path + ".json";
   const std::string tmp_path = json_path + ".tmp";
   FILE* fp = fopen(tmp_path.c_str(), "w");
   if (!fp) {
     log_warn("Cannot open sidecar file %s for writing\n", tmp_path.c_str());
     return false;
   }
-
-  fprintf(fp, "{\n");
-  fprintf(fp, "  \"schema\": \"negicc.neg_process.sidecar/1\",\n");
-  fprintf(fp, "  \"tool\": {\"name\": \"neg_process\", \"version\": \"%s\"},\n", json_escape(NEGICC_GIT_VERSION).c_str());
-
-  // argv
-  fprintf(fp, "  \"argv\": [");
-  for (int i = 0; i < ac; ++i) {
-    fprintf(fp, "%s\"%s\"", (i > 0 ? ", " : ""), json_escape(av[i]).c_str());
-  }
-  fprintf(fp, "],\n");
-
-  // inputs
-  std::string camera = "Unknown";
-  if (proc) {
-    std::string make = proc->imgdata.idata.make;
-    std::string model = proc->imgdata.idata.model;
-    if (!make.empty() && !model.empty()) {
-      if (model.find(make) == 0) camera = model;
-      else camera = make + " " + model;
-    } else if (!model.empty()) camera = model;
-    else if (!make.empty()) camera = make;
-  }
-  fprintf(fp, "  \"inputs\": {\"raw_files\": [");
-  for (size_t i = 0; i < files.size(); ++i) {
-    fprintf(fp, "%s\"%s\"", (i > 0 ? ", " : ""), json_escape(files[i]).c_str());
-  }
-  fprintf(fp, "], \"camera\": \"%s\", \"iso\": %s, \"shutter\": %s},\n",
-          json_escape(camera).c_str(),
-          proc ? json_num(proc->imgdata.other.iso_speed).c_str() : "0",
-          proc ? json_num(proc->imgdata.other.shutter).c_str() : "0");
-
-  // geometry
-  fprintf(fp, "  \"geometry\": {\n");
-  fprintf(fp, "    \"sensor_size\": [%d, %d], \"half_size\": %s,\n",
-          orig_w, orig_h, half_size ? "true" : "false");
-  fprintf(fp, "    \"roi_source\": \"%s\", ", json_escape(roi_source).c_str());
-  if (has_roi) {
-    fprintf(fp, "\"roi\": [%d, %d, %d, %d],\n", roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3]);
-  } else {
-    fprintf(fp, "\"roi\": null,\n");
-  }
-  fprintf(fp, "    \"rot_cw\": %d, \"hflip\": %s, \"vflip\": %s,\n",
-          rot_cw, hflip ? "true" : "false", vflip ? "true" : "false");
-  fprintf(fp, "    \"output_size\": [%d, %d]\n", out_w, out_h);
-  fprintf(fp, "  },\n");
-
-  // frame_detection
-  if (frame_det) {
-    // Sensor pixel coordinates throughout (the detector ran on the RAW before the decode). aspect and format describe
-    // the frame as the previous detector did ("3:2", ...); film_format is the format the detection used. axis is
-    // "h" or "v", or null when the detector left it undecided (a single square frame with nothing to orient it).
-    auto rect_json = [](const FilmRect& r) {
-      char b[160];
-      snprintf(b, sizeof(b), "{\"cx\": %.1f, \"cy\": %.1f, \"w\": %.1f, \"h\": %.1f, \"angle_deg\": %.3f}",
-               r.cx, r.cy, r.w, r.h, r.angle_deg);
-      return std::string(b);
-    };
-    const FilmRect& pr = frame_det->primary.rect;
-    const float aspect = std::max(pr.w, pr.h) / std::max(1.0f, std::min(pr.w, pr.h));
-    const char* ratio = "-";
-    switch (frame_det->format) {
-      case FILM_35MM: ratio = "3:2"; break;
-      case FILM_645: ratio = "4:3"; break;
-      case FILM_6X6: ratio = "1:1"; break;
-      case FILM_6X7: ratio = "7:6"; break;
-      case FILM_6X9: ratio = "3:2"; break;
-      default: break;
-    }
-    fprintf(fp, "  \"frame_detection\": {\n");
-    const bool has_axis = frame_det->axis == 'h' || frame_det->axis == 'v';
-    fprintf(fp, "    \"ok\": %s, \"axis\": %s, \"confidence\": %s, \"low_confidence\": %s, \"reason\": \"%s\",\n",
-            frame_det->ok ? "true" : "false", has_axis ? (frame_det->axis == 'h' ? "\"h\"" : "\"v\"") : "null", json_num(frame_det->conf, "%.2f").c_str(),
-            frame_det->conf < kLowFrameConfidence ? "true" : "false", json_escape(frame_det->reason).c_str());
-    fprintf(fp, "    \"gaps\": [");
-    int g_cnt = 0;
-    for (int g = 0; g < 2; ++g) {
-      if (frame_det->gaps[g][0] >= 0) {
-        if (g_cnt > 0) fprintf(fp, ", ");
-        fprintf(fp, "[%d, %d]", frame_det->gaps[g][0], frame_det->gaps[g][1]);
-        g_cnt++;
-      }
-    }
-    // segments: the frames on the strip, in strip order (secondaries are sorted by index, negative before the
-    // primary); selected: the primary's position among them.
-    int selected = 0;
-    for (const FilmFrame& f : frame_det->secondaries) selected += f.index < 0 ? 1 : 0;
-    fprintf(fp, "], \"segments\": %d, \"n_gaps\": %d, \"selected\": %d,\n",
-            1 + (int)frame_det->secondaries.size(), frame_det->n_gaps, selected);
-    fprintf(fp, "    \"aspect\": %s, \"format\": \"%s\", \"film_format\": \"%s\", \"orientation\": \"%s\",\n",
-            json_num(aspect, "%.4g").c_str(), ratio, film_format_name(frame_det->format),
-            json_escape(frame_det->orientation).c_str());
-    fprintf(fp, "    \"rotation_deg\": %s, \"px_per_mm\": %s, \"light_clipped\": %s,\n",
-            json_num(frame_det->rotation_deg, "%.3f").c_str(), json_num(frame_det->px_per_mm, "%.2f").c_str(),
-            frame_det->light_clipped ? "true" : "false");
-    fprintf(fp, "    \"crop\": [%d, %d, %d, %d], \"primary\": %s,\n", frame_det->crop[0], frame_det->crop[1],
-            frame_det->crop[2], frame_det->crop[3], rect_json(pr).c_str());
-    fprintf(fp, "    \"secondaries\": [");
-    for (size_t i = 0; i < frame_det->secondaries.size(); ++i) {
-      const FilmFrame& f = frame_det->secondaries[i];
-      fprintf(fp, "%s{\"index\": %d, \"rect\": %s, \"visible\": [%d, %d, %d, %d], \"visible_fraction\": %s}",
-              i ? ", " : "", f.index, rect_json(f.rect).c_str(), f.visible[0], f.visible[1], f.visible[2],
-              f.visible[3], json_num(f.visible_fraction, "%.3f").c_str());
-    }
-    fprintf(fp, "],\n");
-    fprintf(fp, "    \"film_base\": %s, \"base_patch\": %s, \"sprockets\": %d\n",
-            frame_det->has_film_base ? rect_json(frame_det->film_base).c_str() : "null",
-            frame_det->has_base ? rect_json(frame_det->base_patch).c_str() : "null",
-            (int)frame_det->sprockets.size());
-    fprintf(fp, "  },\n");
-  } else {
-    fprintf(fp, "  \"frame_detection\": null,\n");
-  }
-
-  // film_base
-  fprintf(fp, "  \"film_base\": {\n");
-  fprintf(fp, "    \"source\": \"%s\", \"applied\": %s,\n",
-          json_escape(film_base_source).c_str(),
-          film_base_applied ? "true" : "false");
-  if (film_base_source == "none") {
-    fprintf(fp, "    \"film_base_rgb\": null, \"std_density\": null,\n");
-  } else {
-    fprintf(fp, "    \"film_base_rgb\": [%d, %d, %d], \"std_density\": %s,\n",
-            film_base_rgb[0], film_base_rgb[1], film_base_rgb[2],
-            (film_base_source == "rebate" && has_std_density) ? json_num(std_density, "%.6g").c_str() : "null");
-  }
-  fprintf(fp, "    \"profile_film_base_rgb\": [%d, %d, %d]\n",
-          profile_film_base_rgb[0], profile_film_base_rgb[1], profile_film_base_rgb[2]);
-  fprintf(fp, "  },\n");
-
-  // profile
-  if (!film_profile_path.empty()) {
-    if (is_bundle) {
-      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"bundle\", \"bundle_target\": \"%s\", "
-              "\"input_space\": \"%s\"},\n",
-              json_escape(film_profile_path).c_str(), json_escape(bundle_target_name).c_str(),
-              to_string(input_space));
-    } else {
-      fprintf(fp, "  \"profile\": {\"path\": \"%s\", \"type\": \"icc\", \"bundle_target\": null},\n",
-              json_escape(film_profile_path).c_str());
-    }
-  } else {
-    fprintf(fp, "  \"profile\": null,\n");
-  }
-
-  // matrix
-  fprintf(fp, "  \"matrix\": {\"merged\": [");
-  for (int i = 0; i < 9; ++i) {
-    fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(merged_matrix[i], "%.9g").c_str());
-  }
-  fprintf(fp, "],\n");
-  fprintf(fp, "             \"exposure_comp\": %s, \"gain_g\": %s, \"gain_b\": %s,\n",
-          json_num(exposure_comp, "%.9g").c_str(),
-          json_num(gain_g, "%.9g").c_str(),
-          json_num(gain_b, "%.9g").c_str());
-  fprintf(fp, "             \"pins\": {\"e\": %s, \"g\": %s, \"b\": %s}},\n",
-          (pin_mask & PIN_E) ? "true" : "false",
-          (pin_mask & PIN_G) ? "true" : "false",
-          (pin_mask & PIN_B) ? "true" : "false");
-
-  // cli_equivalent
-  fprintf(fp, "  \"cli_equivalent\": [\"-E\", \"%s\", \"--gain_g\", \"%s\", \"--gain_b\", \"%s\", \"--knee\", \"%s\"",
-          json_num(exposure_comp, "%.9g").c_str(),
-          json_num(gain_g, "%.9g").c_str(),
-          json_num(gain_b, "%.9g").c_str(),
-          json_num(knee, "%.9g").c_str());
-  if (shoulder.active()) {
-    fprintf(fp, ", \"--shoulder\", \"%s\"", json_num(shoulder.x_hi, "%.9g").c_str());
-  }
-  if (has_roi) {
-    fprintf(fp, ", \"--roi\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\", \"%d\"",
-            roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3],
-            rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
-  }
-  if (is_bundle && bundle_target_idx >= 0) {
-    fprintf(fp, ", \"--target\", \"%d\"", bundle_target_idx);
-  }
-  fprintf(fp, "],\n");
-
-  // auto: the conversion parameter search (multi_target_optimizer.h)
-  if (auto_res) {
-    const ParamSearchResult& a = *auto_res;
-    fprintf(fp, "  \"auto\": {\n");
-    fprintf(fp, "    \"target\": \"%s\", \"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s,\n",
-            json_escape(a.target_name).c_str(), a.target_idx, json_num(a.params.e, "%.9g").c_str(),
-            json_num(a.params.g, "%.9g").c_str(), json_num(a.params.b, "%.9g").c_str());
-    fprintf(fp, "    \"residual\": %s, \"status\": \"%s\", \"e_norm\": %s, \"input_matrix\": [",
-            json_num(a.residual, "%.6g").c_str(), to_string(a.status), json_num(a.e_norm, "%.9g").c_str());
-    for (int i = 0; i < 9; ++i) fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(a.input_matrix[i], "%.9g").c_str());
-    fprintf(fp, "],\n");
-    fprintf(fp, "    \"frame_half\": [%d, %d, %d, %d], \"g_lo\": %s, \"g_hi\": %s, \"scene_ev\": %s,\n",
-            auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
-            json_num(a.g_lo, "%.6g").c_str(), json_num(a.g_hi, "%.6g").c_str(), json_num(a.scene_ev, "%.4g").c_str());
-    fprintf(fp, "    \"headroom\": {\"applied\": %s, \"ev\": %s, \"reason\": \"%s\"},\n",
-            headroom_applied(a.headroom) ? "true" : "false", json_num(a.headroom_ev, "%.4g").c_str(),
-            to_string(a.headroom));
-    fprintf(fp, "    \"rescue\": {\"branch\": \"%s\", \"white_clip\": %s, \"changed\": %s},\n",
-            a.rescue == RescueOutcome::kNotNeeded ? "N" : "R", json_num(a.rescue_white_clip, "%.6g").c_str(),
-            a.rescue == RescueOutcome::kTaken ? "true" : "false");
-    fprintf(fp, "    \"screening\": [");
-    for (size_t i = 0; i < a.screening.size(); ++i) {
-      const auto& r = a.screening[i];
-      fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"intent_loss\": %s}", (i > 0 ? ", " : ""),
-              r.target_idx, json_num(r.params.e, "%.6g").c_str(), json_num(r.params.g, "%.6g").c_str(),
-              json_num(r.params.b, "%.6g").c_str(),
-              json_num(r.intent_loss, "%.6g").c_str());
-    }
-    fprintf(fp, "],\n    \"tournament\": [");
-    for (size_t i = 0; i < a.tournament.size(); ++i) {
-      const auto& r = a.tournament[i];
-      fprintf(fp, "%s{\"target_idx\": %d, \"e\": %s, \"g\": %s, \"b\": %s, \"residual\": %s, \"status\": \"%s\", "
-              "\"iters\": %d}", (i > 0 ? ", " : ""), r.target_idx, json_num(r.params.e, "%.6g").c_str(),
-              json_num(r.params.g, "%.6g").c_str(), json_num(r.params.b, "%.6g").c_str(),
-              json_num(r.residual, "%.6g").c_str(), to_string(r.status), r.steps);
-    }
-    fprintf(fp, "],\n");
-    fprintf(fp, "    \"model\": \"%s\", \"backend\": \"%s\", \"inferences\": %d, \"time_ms\": %s\n",
-            json_escape(dino_model_path).c_str(), json_escape(dino_backend).c_str(), a.inferences,
-            json_num(t_auto_ms, "%.1f").c_str());
-    fprintf(fp, "  },\n");
-  } else {
-    fprintf(fp, "  \"auto\": null,\n");
-  }
-
-  // dino
-  if (has_dino) {
-    fprintf(fp, "  \"dino\": {\n");
-    fprintf(fp, "    \"model\": \"%s\", \"backend\": \"%s\", \"grid\": [%d, %d], \"target\": [%d, %d],\n",
-            json_escape(dino_model_path).c_str(), json_escape(dino_backend).c_str(),
-            dino_res.grid_w, dino_res.grid_h, dino_res.target_w, dino_res.target_h);
-    fprintf(fp, "    \"e_center\": %s, \"e_bounds\": [%s, %s], \"status\": \"%s\", \"best_iteration\": %d, \"inferences\": %d,\n",
-            json_num(dino_res.e_center).c_str(),
-            json_num(dino_res.bounds_lo).c_str(),
-            json_num(dino_res.bounds_hi).c_str(),
-            json_escape(dino_res.status).c_str(), dino_res.best_iteration, dino_res.total_inferences);
-    fprintf(fp, "    \"solved_relative\": {\"e\": %s, \"g\": %s, \"b\": %s},\n",
-            json_num(dino_res.solved_relative.e).c_str(),
-            json_num(dino_res.solved_relative.g).c_str(),
-            json_num(dino_res.solved_relative.b).c_str());
-
-    if (!dino_res.iterations.empty() && dino_res.iterations[0].tag == 'b') {
-      const auto& b = dino_res.iterations[0];
-      fprintf(fp, "    \"bootstrap\": {\"e\": %s, \"g\": %s, \"b\": %s, \"loss_L\": %s, \"loss_a\": %s, \"loss_b\": %s, "
-                  "\"clip_pct\": %s, \"penalty_clip\": %s, \"penalty_anchor\": %s, \"objective\": %s},\n",
-              json_num(b.e).c_str(), json_num(b.g).c_str(), json_num(b.b).c_str(),
-              json_num(b.loss_L).c_str(), json_num(b.loss_a).c_str(), json_num(b.loss_b).c_str(),
-              json_num(b.clip_pct).c_str(), json_num(b.penalty_clip).c_str(),
-              json_num(b.penalty_anchor).c_str(), json_num(b.objective).c_str());
-    } else {
-      fprintf(fp, "    \"bootstrap\": null,\n");
-    }
-
-    fprintf(fp, "    \"iterations\": [");
-    bool first_it = true;
-    for (size_t i = 0; i < dino_res.iterations.size(); ++i) {
-      if (dino_res.iterations[i].tag == 'b') continue;
-      const auto& it = dino_res.iterations[i];
-      if (!first_it) fprintf(fp, ",\n      ");
-      else fprintf(fp, "\n      ");
-      first_it = false;
-      fprintf(fp, "{\"e\": %s, \"g\": %s, \"b\": %s, \"residual\": %s, \"loss_L\": %s, \"loss_a\": %s, \"loss_b\": %s, "
-                  "\"clip_pct\": %s, \"penalty_clip\": %s, \"penalty_anchor\": %s, \"objective\": %s}",
-              json_num(it.e).c_str(), json_num(it.g).c_str(), json_num(it.b).c_str(),
-              json_num(it.residual).c_str(), json_num(it.loss_L).c_str(), json_num(it.loss_a).c_str(),
-              json_num(it.loss_b).c_str(), json_num(it.clip_pct).c_str(),
-              json_num(it.penalty_clip).c_str(), json_num(it.penalty_anchor).c_str(),
-              json_num(it.objective).c_str());
-    }
-    if (!first_it) fprintf(fp, "\n    ");
-    fprintf(fp, "],\n");
-
-    fprintf(fp, "    \"tone_mass\": [");
-    for (size_t i = 0; i < dino_res.tone_mass.size(); ++i) {
-      fprintf(fp, "%s%s", (i > 0 ? ", " : ""), json_num(dino_res.tone_mass[i]).c_str());
-    }
-    fprintf(fp, "]\n");
-    fprintf(fp, "  },\n");
-  } else {
-    fprintf(fp, "  \"dino\": null,\n");
-  }
-
-  // tone
-  fprintf(fp, "  \"tone\": {\"knee\": %s, \"knee_source\": \"%s\", ",
-          json_num(knee, "%.9g").c_str(), json_escape(knee_source).c_str());
-  if (has_dino && dino_res.dynamic_knee.active) {
-    fprintf(fp, "\"q995\": %s, \"knee_fit\": %s,\n",
-            json_num(dino_res.dynamic_knee.q995).c_str(),
-            json_num(dino_res.dynamic_knee.knee_fit).c_str());
-  } else {
-    fprintf(fp, "\"q995\": null, \"knee_fit\": null,\n");
-  }
-  fprintf(fp, "           \"shoulder\": %s, \"shoulder_source\": \"%s\", \"shoulder_q995\": %s, "
-              "\"shoulder_knee\": %s, \"shoulder_guard\": %s},\n",
-          json_num(shoulder.x_hi, "%.9g").c_str(), json_escape(shoulder.source).c_str(),
-          shoulder.has_q995 ? json_num(shoulder.q995).c_str() : "null",
-          shoulder.has_knee ? json_num(shoulder.knee).c_str() : "null",
-          shoulder.has_guard ? (shoulder.guard ? "true" : "false") : "null");
-
-  // output
-  fprintf(fp, "  \"output\": {\"path\": \"%s\", \"colorspace\": \"%s\", \"bits\": 16},\n",
-          json_escape(output_path).c_str(), json_escape(colorspace_name).c_str());
-
-  // timings_ms
-  fprintf(fp, "  \"timings_ms\": {\"raw_decode\": %s, \"frame_detection\": %s, ",
-          json_num(t_raw_decode_ms, "%.1f").c_str(),
-          frame_det ? json_num(t_frame_det_ms, "%.1f").c_str() : "null");
-  if (has_dino) {
-    fprintf(fp, "\"dino_views\": %s, \"dino_render\": %s, \"dino_inference\": %s, \"dino_search\": %s, ",
-            json_num(dino_res.timing_views_ms, "%.1f").c_str(),
-            json_num(dino_res.timing_render_ms, "%.1f").c_str(),
-            json_num(dino_res.timing_infer_ms, "%.1f").c_str(),
-            json_num(dino_res.timing_search_ms, "%.1f").c_str());
-  } else {
-    fprintf(fp, "\"dino_views\": null, \"dino_render\": null, \"dino_inference\": null, \"dino_search\": null, ");
-  }
-  fprintf(fp, "\"full_conversion\": %s, \"tiff_write\": %s}\n",
-          json_num(t_full_conversion_ms, "%.1f").c_str(),
-          json_num(t_tiff_write_ms, "%.1f").c_str());
-
-  fprintf(fp, "}\n");
-  const bool write_ok = (ferror(fp) == 0);
-  const bool close_ok = (fclose(fp) == 0);
+  // Paths and arguments need not be UTF-8; invalid bytes are written as U+FFFD rather than failing.
+  const std::string text = j.dump(2, ' ', false, ordered_json::error_handler_t::replace) + "\n";
+  const bool write_ok = fwrite(text.data(), 1, text.size(), fp) == text.size();
+  const bool close_ok = fclose(fp) == 0;
   if (!write_ok || !close_ok) {
     log_warn("Failed to flush/close sidecar %s\n", tmp_path.c_str());
     unlink(tmp_path.c_str());
     return false;
   }
-
   if (rename(tmp_path.c_str(), json_path.c_str()) != 0) {
     log_warn("Failed to rename sidecar from %s to %s\n", tmp_path.c_str(), json_path.c_str());
     unlink(tmp_path.c_str());
