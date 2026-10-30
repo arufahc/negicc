@@ -52,8 +52,6 @@ struct Options {
   bool gain_g_given = false, gain_b_given = false;
   bool station_egb_given = false;              // --station_egb
   float station_egb[3] = {1.0f, 1.0f, 1.0f};
-  float knee = 0.95f;                          // --knee; knee_auto: 'auto'
-  bool knee_auto = false, knee_given = false;
   ShoulderInfo shoulder;                       // --shoulder (x_hi and source)
   bool shoulder_auto = false;
 

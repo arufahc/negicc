@@ -45,8 +45,7 @@ struct IntentLoss {
 struct SolverConfig {
   const ProfileData* prof = nullptr;
   float knee = 0.95f;
-  bool knee_auto = false;
-  bool verbose = true;  // the solver's diagnostic lines (dynamic knee, shoulder), as the multi-target search's verbose
+  bool verbose = true;  // the solver's diagnostic lines (shoulder), as the multi-target search's verbose
   // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
   // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
   float shoulder = 1.0f;
@@ -56,16 +55,6 @@ struct SolverConfig {
   float custom_e_center = 0.0f;
   float enc_e_min = 0.0f;
   float enc_e_max = 0.0f;
-};
-
-struct DynamicKneeResult {
-  bool active = false;
-  float knee = 0.95f;
-  float q995 = 0.0f;
-  float knee_fit = 0.95f;
-  float s = 0.0f;
-  float delta_J = 0.0f;
-  bool guard_triggered = false;
 };
 
 struct ShoulderResult {
@@ -111,9 +100,7 @@ struct DinoSolveResult {
   std::vector<float> best_mu;
   std::vector<float> best_sigma;
   std::vector<float> tone_mass;
-  DynamicKneeResult dynamic_knee;
   ShoulderResult shoulder;
-  std::vector<uint64_t> best_hist;
   int grid_w = 0;
   int grid_h = 0;
   int target_w = 0;

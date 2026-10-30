@@ -325,7 +325,7 @@ bool write_json_sidecar(const Sidecar& sc) {
                            {"b", (sc.pin_mask & PIN_B) != 0}}}};
 
   std::vector<std::string> cli = {"-E", num_str(sc.exposure_comp, "%.9g"), "--gain_g", num_str(sc.gain_g, "%.9g"),
-                                  "--gain_b", num_str(sc.gain_b, "%.9g"), "--knee", num_str(sc.knee, "%.9g")};
+                                  "--gain_b", num_str(sc.gain_b, "%.9g")};
   if (sc.shoulder.active()) cli.insert(cli.end(), {"--shoulder", num_str(sc.shoulder.x_hi, "%.9g")});
   if (sc.has_roi) {
     cli.push_back("--roi");
@@ -339,12 +339,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
   j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
 
-  const bool dyn_knee = sc.dino && sc.dino->dynamic_knee.active;
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},
-               {"knee_source", sc.knee_source},
-               {"q995", dyn_knee ? num(sc.dino->dynamic_knee.q995) : ordered_json(nullptr)},
-               {"knee_fit", dyn_knee ? num(sc.dino->dynamic_knee.knee_fit) : ordered_json(nullptr)},
                {"shoulder", num(sh.x_hi, "%.9g")},
                {"shoulder_source", sh.source},
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},

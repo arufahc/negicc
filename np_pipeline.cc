@@ -284,10 +284,6 @@ int prepare(const Options& o, Setup& s) {
                     "--film_profile) without --gain_g or --gain_b\n");
     return 1;
   }
-  if (o.knee_auto && (!s.use_dino || s.bundle_search)) {
-    log_error("--knee auto requires the parameter search on an ICC profile or a --target bracket\n");
-    return 1;
-  }
   if (o.shoulder_auto && !s.use_dino) {
     log_error("--shoulder auto requires the parameter search (it measures the shoulder from the render "
                     "at the searched parameters); give an x_hi instead\n");
@@ -836,7 +832,7 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
   global_exposure_comp = o.exposure_comp;
   gain_g = o.gain_g;
   gain_b = o.gain_b;
-  c.knee = o.knee;
+  c.knee = kKnee;
   c.shoulder = o.shoulder;
   const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
 
@@ -924,7 +920,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   float &global_exposure_comp = c.exposure_comp, &gain_g = c.gain_g, &gain_b = c.gain_b;
   float& knee = c.knee;
   ShoulderInfo& shoulder_info = c.shoulder;
-  const bool is_knee_auto = o.knee_auto, is_shoulder_auto = o.shoulder_auto;
+  const bool is_shoulder_auto = o.shoulder_auto;
   ParsedFilmProfile& film_prof = c.film_prof;
   std::vector<uint8_t>& embedded_icc = c.embedded_icc;
   std::string& bundle_target_name = c.bundle_target_name;
@@ -1007,7 +1003,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     SolverConfig cfg;
     cfg.knee = knee;
-    cfg.knee_auto = is_knee_auto;
     cfg.shoulder = shoulder_info.x_hi;
     cfg.shoulder_auto = is_shoulder_auto;
 
@@ -1043,9 +1038,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       return 1;
     }
 
-    if (is_knee_auto && dino_res.dynamic_knee.active) {
-      knee = dino_res.dynamic_knee.knee;
-    }
     shoulder_info.x_hi = dino_res.shoulder.x_hi;
     if (is_shoulder_auto) {
       shoulder_info.has_q995 = true;
@@ -1247,7 +1239,6 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   if (ret != 0 || o.no_metadata) {
     unlink((output + ".json").c_str());
   } else {
-    const std::string knee_source = o.knee_auto ? "auto" : (o.knee_given ? "cli" : "default");
     std::string cs_name = "camera-linear";
     if (encoding == ENCODE_SRGB) {
       cs_name = "srgb";
@@ -1300,7 +1291,6 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.gain_b = gain_b;
     sc.pin_mask = pin_mask;
     sc.knee = knee;
-    sc.knee_source = knee_source;
     sc.shoulder = shoulder_info;
     sc.dino = use_dino && !has_auto_res ? &dino_res : nullptr;
     sc.dino_model = dino_path;

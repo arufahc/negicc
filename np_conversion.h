@@ -23,6 +23,9 @@
 
 #include "color_pipeline.h"
 
+// The soft knee of the highlight compression: fixed, as the station's Auto (multi_target_optimizer.cc AUTO_KNEE).
+constexpr float kKnee = 0.95f;
+
 // The highlight shoulder as the sidecar records it (tone.shoulder*).
 struct ShoulderInfo {
   float x_hi = 1.0f;                 // the frozen parameter; 1 is off
