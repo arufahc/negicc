@@ -185,10 +185,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "--target picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("--knee")
-    .help("Soft knee highlight compression threshold in [0, 1], or 'auto' (the parameter search on an ICC profile or a "
-          "--target bracket). Defaults to 0.95 (>=1.0 disables).")
-    .default_value(std::string("0.95"));
   parser.add_argument("--shoulder")
     .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
           "export applies it), or x_hi in [1, 1.5]: the 99.5% point of the render's max channel in linear sRGB, "
@@ -333,18 +329,6 @@ int parse_options(int ac, char* av[], Options& o) {
   o.row_given[2] = parser.is_used("--b_coeff");
   o.exposure_comp = parser.get<float>("--exposure_comp");
   o.exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
-  const std::string knee_str = parser.get<std::string>("--knee");
-  o.knee_auto = (knee_str == "auto");
-  o.knee_given = parser.is_used("--knee");
-  if (!o.knee_auto) {
-    char* end = nullptr;
-    const float val = strtof(knee_str.c_str(), &end);
-    if (!end || *end != '\0' || end == knee_str.c_str() || !std::isfinite(val) || val <= 0.0f) {
-      log_error("Invalid --knee argument '%s'\n", knee_str.c_str());
-      return 1;
-    }
-    o.knee = val;
-  }
   const std::string shoulder_str = parser.get<std::string>("--shoulder");
   o.shoulder_auto = (shoulder_str == "auto");
   if (o.shoulder_auto) {

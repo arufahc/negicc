@@ -63,7 +63,6 @@ struct Sidecar {
   float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
   unsigned pin_mask = 0;
   float knee = 0.95f;
-  std::string knee_source;
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
   std::string dino_model, dino_backend;
