@@ -867,7 +867,7 @@ class SearchFrame {
   }
 
   // The shoulder's x_hi at p: the 99.5% point of the max channel of the pre-shoulder render of the inner crop,
-  // clamped to [1, kShoulderXHiMax]; q995 gets the point before clamping.
+  // mapped to sRGB 242 (shoulder_x_hi_anchored); q995 gets the point.
   float measure_shoulder(int target_idx, const ConversionParams& p, float* q995) {
     const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
     static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
@@ -1005,6 +1005,51 @@ struct Screened {
 
 // ---- Public API ----------------------------------------------------------------------------------------------
 
+// The merged input matrix of a scan (M_frame, ParamSearchResult) and its exposure normalisation e_norm.
+struct FrameScale {
+  float fb[3];
+  float ratio_frame;
+  float frame_matrix[9];
+  float e_norm;
+};
+static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso,
+                              const ParamSearchOptions& opts) {
+  FrameScale s;
+  const float* fb = opts.film_base_rgb;
+  if (!fb && opts.film_base_rgb_d) {
+    for (int i = 0; i < 3; ++i) s.fb[i] = (float)opts.film_base_rgb_d[i];
+    fb = s.fb;
+  }
+  if (!fb) fb = bundle.film_base_avg;
+  if (fb != s.fb) std::copy(fb, fb + 3, s.fb);
+  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
+  const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
+  // A measured base comes from this capture: no exposure ratio.
+  const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
+  s.ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
+  const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
+  float ref_matrix[9];
+  merged_matrix(bundle, s.fb, s.ratio_frame, s.frame_matrix);
+  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
+  s.e_norm = (ref_matrix[4] != 0.0f) ? s.frame_matrix[4] / ref_matrix[4] : 1.0f;
+  return s;
+}
+
+float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995) {
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, ParamSearchOptions{});
+  // As SearchFrame::measure_shoulder: the matrix in reference units (M_frame / e_norm) at the search's internal E.
+  float input_matrix[9], m[9];
+  for (int i = 0; i < 9; ++i) input_matrix[i] = scale.frame_matrix[i] / scale.e_norm;
+  candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
+  static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
+  std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+  measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
+                         AUTO_KNEE, bundle.targets[target_idx].film_prof.data, kCeil, 1.0f, hist.data());
+  return shoulder_x_hi_from_hist(hist.data(), q995);
+}
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
@@ -1027,7 +1072,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
-  fr.set_shoulder(opts.shoulder_auto ? 1.0f : opts.shoulder, opts.shoulder_auto);
+  fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
@@ -1049,28 +1094,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
 
   // The input matrix in reference units (ParamSearchResult).
-  float custom_fb_buf[3];
-  const float* fb = opts.film_base_rgb;
-  if (!fb && opts.film_base_rgb_d) {
-    for (int i = 0; i < 3; ++i) custom_fb_buf[i] = (float)opts.film_base_rgb_d[i];
-    fb = custom_fb_buf;
-  }
-  if (!fb) fb = bundle.film_base_avg;
-  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
-  const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
-  // A measured base comes from this capture: no exposure ratio.
-  const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
-  const float ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
-  const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
-  float frame_matrix[9], ref_matrix[9];
-  merged_matrix(bundle, fb, ratio_frame, frame_matrix);
-  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
-  fr.set_frame_matrix(frame_matrix, (ref_matrix[4] != 0.0f) ? frame_matrix[4] / ref_matrix[4] : 1.0f);
+  const FrameScale scale = frame_scale(bundle, scan_shutter_s, scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
   const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
   std::copy(fr.input_matrix(), fr.input_matrix() + 9, out.input_matrix);
   for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (fb[r] > 0 ? (bundle.normalization_target / fb[r]) * ratio_frame : 1.0f) / e_norm;
+    out.row_scale[r] = (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) /
+                       e_norm;
   }
 
   if (verbose) {
@@ -1326,7 +1357,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Part 1B: Enclosure-Guided Highlight Rescue when the chosen bracket is highlight-constrained and exhibits
   // significant pre-shoulder highlight excess without being a dark/backlit silhouette.
-  if (opts.enclosure_rescue && out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
+  if (out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
     const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
     const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
@@ -1457,7 +1488,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // The headroom and the rescue move E after the loop froze x_hi; measure it once more at the final parameters
   // (the same pre-shoulder pass on the inner crop) so the written image's shoulder matches its highlights. The
   // guard stays that of the converged iteration.
-  if (opts.shoulder_auto) {
+  {
     float q995 = 0.0f;
     params.shoulder = fr.measure_shoulder(chosen.target_idx, params, &q995);
     chosen.shoulder_q995 = q995;

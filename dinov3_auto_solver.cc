@@ -426,7 +426,7 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
 float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out) {
   const float q = (float)negicc::max_hist_quantile(hist, 0.995);
   if (q995_out) *q995_out = q;
-  return std::min(std::max(q, 1.0f), negicc::kShoulderXHiMax);
+  return negicc::shoulder_x_hi_anchored(q);
 }
 
 // The 99.5% point of the max channel of the pre-shoulder render of the whole view at (e, g, b), clamped: the

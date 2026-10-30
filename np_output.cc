@@ -330,7 +330,6 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!egb) egb = abs_egb;
   std::vector<std::string> cli = {"-E", num_str(egb[0], "%.9g"), "--gain_g", num_str(egb[1], "%.9g"), "--gain_b",
                                   num_str(egb[2], "%.9g")};
-  if (sc.shoulder.active()) cli.insert(cli.end(), {"--shoulder", num_str(sc.shoulder.x_hi, "%.9g")});
   if (sc.has_roi) {
     cli.push_back("--roi");
     for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
@@ -348,8 +347,7 @@ bool write_json_sidecar(const Sidecar& sc) {
                {"shoulder", num(sh.x_hi, "%.9g")},
                {"shoulder_source", sh.source},
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
-               {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)},
-               {"shoulder_guard", sh.has_guard ? ordered_json(sh.guard) : ordered_json(nullptr)}};
+               {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
 
   j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
 

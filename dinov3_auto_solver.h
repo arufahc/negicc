@@ -123,7 +123,8 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out);
 
 // The shoulder x_hi (color_pipeline.h) of a max-channel histogram of the pre-shoulder render (max_hist_bin layout):
-// its 99.5% point clamped to [1, kShoulderXHiMax]; q995_out gets the point before clamping.
+// the x_hi that maps its 99.5% point to sRGB kShoulderAnchorCode (shoulder_x_hi_anchored, the roll-off); q995_out
+// gets the point.
 float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr);
 
 // Coordinate descent parameter search against a frozen intent field (mu, sigma)
