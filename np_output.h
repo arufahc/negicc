@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "dinov3_auto_solver.h"
+#include "film_base_detect.h"
 #include "film_frame_detector.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
@@ -49,21 +50,22 @@ struct Sidecar {
   int rot_cw = 0;
   bool hflip = false, vflip = false;
   int out_w = 0, out_h = 0;
+  // The film base: source "rebate" or "statistics" (read from the scan: film_base_detection), "bundle" or "none".
   bool film_base_applied = false;
-  std::vector<int> film_base_rgb, profile_film_base_rgb;
+  std::vector<double> film_base_rgb;
+  std::vector<int> profile_film_base_rgb;
   std::string film_base_source;
-  float std_density = 0.0f;
-  bool has_std_density = false;
+  const negicc::FilmBaseDetection* film_base_detection = nullptr;
   std::string profile_path;              // empty: no profile
   bool is_bundle = false;
   std::string bundle_target_name;
   int bundle_target_idx = -1;
   InputSpace input_space = InputSpace::kCameraRawRgb;
   const float* merged_matrix = nullptr;
-  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
+  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;  // absolute, on the crosstalk (matrix.*)
+  const float* station_params = nullptr;  // with a bundle: E, g, b as -E, --gain_g, --gain_b take them
   unsigned pin_mask = 0;
   float knee = 0.95f;
-  std::string knee_source;
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
   std::string dino_model, dino_backend;

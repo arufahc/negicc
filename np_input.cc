@@ -72,6 +72,8 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
                               const FrameDetectionParams& det_params, std::string& source) {
   int w = 0, h = 0;
   float white = 65535.0f;     // the image's clipping level, for the frame detector
+  std::vector<uint16_t> half_planes[3];  // three captures: each channel's half-size image, for the analysis
+  int half_w[3] = {0, 0, 0}, half_h[3] = {0, 0, 0};
   LibRaw* proc = nullptr;
   std::string err;
   if (mode == InputMode::kRgbFile) {
@@ -85,6 +87,13 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     if (img.channels != 3) {
       log_error("%s is a grey image; one file must be RGB (three files give one channel each)\n",
               files[0].c_str());
+      return nullptr;
+    }
+    // Camera RGB (a tri bundle) is linear and unmanaged: a TIFF with an ICC profile or 8-bit samples is
+    // colour-managed RGB, converted to linear Rec.2020 (a d65 bundle).
+    if (camera_rgb && (!img.icc.empty() || img.bits != 16)) {
+      log_error("%s is colour-managed RGB (%s), not the linear camera RGB a tri bundle converts: give "
+                "--light_source d65\n", files[0].c_str(), !img.icc.empty() ? "it has an ICC profile" : "8 bits");
       return nullptr;
     }
     std::string how = "camera";
@@ -111,7 +120,19 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
       std::vector<uint16_t> channel;
       int cw = 0, ch = 0;
       if (libraw_opens(files[k])) {
-        LibRaw* raw = load_raw(files[k], true, qual, crop, RawDecode::kCameraRgb);
+        // The analysis reads a RAW's own half-size readout, as it does for one RAW (load_raw), so the RAW given three
+        // times is analysed (the search, the film base) as the RAW given once.
+        HalfSizeAnalysis take_half;
+        if (analyse) {
+          take_half = [&half_planes, &half_w, &half_h, k](const LibRaw& r) {
+            half_w[k] = r.imgdata.sizes.iwidth;
+            half_h[k] = r.imgdata.sizes.iheight;
+            half_planes[k].resize((size_t)half_w[k] * half_h[k]);
+            for (size_t i = 0; i < half_planes[k].size(); ++i) half_planes[k][i] = r.imgdata.image[i][k];
+            return true;
+          };
+        }
+        LibRaw* raw = load_raw(files[k], true, qual, crop, RawDecode::kCameraRgb, nullptr, take_half);
         if (!raw) return delete proc, nullptr;
         cw = raw->imgdata.sizes.iwidth;
         ch = raw->imgdata.sizes.iheight;
@@ -150,6 +171,17 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
         const int src = img.channels == 3 ? k : 0;
         channel.resize((size_t)cw * ch);
         for (size_t i = 0; i < channel.size(); ++i) channel[i] = img.pixels[i * img.channels + src];
+        if (analyse) {  // a TIFF's half-size image: the mean of each 2x2 block
+          half_w[k] = cw / 2;
+          half_h[k] = ch / 2;
+          half_planes[k].resize((size_t)half_w[k] * half_h[k]);
+          for (int y = 0; y < half_h[k]; ++y)
+            for (int x = 0; x < half_w[k]; ++x) {
+              const size_t i = (size_t)(2 * y) * cw + 2 * x;
+              half_planes[k][(size_t)y * half_w[k] + x] =
+                  (uint16_t)((channel[i] + channel[i + 1] + channel[i + cw] + channel[i + cw + 1] + 2) / 4);
+            }
+        }
         if (k == 0 && !(proc = new_image_proc(cw, ch))) {
           log_error("%s: cannot hold a %dx%d image\n", files[k].c_str(), cw, ch);
           return nullptr;
@@ -173,6 +205,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
         log_info("Channel %c scaled by %.4g to the first capture's exposure\n", "RGB"[k], scale);
         for (size_t i = 0; i < (size_t)w * h; ++i)
           proc->imgdata.image[i][k] = (ushort)std::min(65535.0, std::round(proc->imgdata.image[i][k] * scale));
+        for (uint16_t& v : half_planes[k]) v = (uint16_t)std::min(65535.0, std::round(v * scale));
       }
     }
     source = "three:" + kinds;
@@ -204,8 +237,15 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     if (!half) return delete proc, nullptr;
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+    // Three captures of the whole image: each channel's own half-size image (above), when all three have the size.
+    bool planes = mode == InputMode::kThreeShot && region[0] == 0 && region[1] == 0 && region[2] == w && region[3] == h;
+    for (int k = 0; k < 3 && planes; ++k) planes = half_w[k] == hw && half_h[k] == hh && !half_planes[k].empty();
+    if (planes) {
+      for (size_t i = 0; i < (size_t)hw * hh; ++i)
+        for (int k = 0; k < 3; ++k) half->imgdata.image[i][k] = half_planes[k][i];
+    }
 #pragma omp parallel for schedule(static)
-    for (int y = 0; y < hh; ++y) {
+    for (int y = 0; y < (planes ? 0 : hh); ++y) {
       for (int x = 0; x < hw; ++x) {
         const ushort* a = proc->imgdata.image[(size_t)(2 * y) * w + 2 * x];
         const ushort* b = proc->imgdata.image[(size_t)(2 * y) * w + 2 * x + 1];

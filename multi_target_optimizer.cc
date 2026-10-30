@@ -50,15 +50,15 @@ const char* to_string(HeadroomOutcome outcome) {
   return "";
 }
 
-const char* to_string(RescueOutcome outcome) {
+const char* to_string(ClipFallbackOutcome outcome) {
   switch (outcome) {
-    case RescueOutcome::kNotNeeded: return "not needed";
-    case RescueOutcome::kNotScreened: return "next bracket not screened";
-    case RescueOutcome::kNotAdmissible: return "next bracket not admissible";
-    case RescueOutcome::kClipsTooMuch: return "clip ratio";
-    case RescueOutcome::kShiftsLightness: return "L* shift";
-    case RescueOutcome::kWorseResidual: return "residual";
-    case RescueOutcome::kTaken: return "taken";
+    case ClipFallbackOutcome::kNotNeeded: return "not needed";
+    case ClipFallbackOutcome::kNotScreened: return "next bracket not screened";
+    case ClipFallbackOutcome::kNotAdmissible: return "next bracket not admissible";
+    case ClipFallbackOutcome::kClipsTooMuch: return "clip ratio";
+    case ClipFallbackOutcome::kShiftsLightness: return "L* shift";
+    case ClipFallbackOutcome::kWorseResidual: return "residual";
+    case ClipFallbackOutcome::kTaken: return "taken";
   }
   return "";
 }
@@ -73,11 +73,11 @@ constexpr float SCENE_TAIL = 0.005f;
 constexpr float SLACK_PENALTY_SCALE = 0.5f;
 // The previews, the screening and the final render use a fixed soft knee.
 constexpr float AUTO_KNEE = 0.95f;
-// Highlight rescue thresholds (see RescueOutcome).
-constexpr float RESCUE_CLIP_TAU = 3e-4f;
-constexpr float RESCUE_CLIP_RATIO = 0.5f;
-constexpr float RESCUE_DL_MIN = -4.5f, RESCUE_DL_MAX = 0.5f;
-constexpr float RESCUE_RESID_TOL = 0.10f;
+// Clip fallback thresholds (see ClipFallbackOutcome).
+constexpr float CLIP_FALLBACK_CLIP_TAU = 3e-4f;
+constexpr float CLIP_FALLBACK_CLIP_RATIO = 0.5f;
+constexpr float CLIP_FALLBACK_DL_MIN = -4.5f, CLIP_FALLBACK_DL_MAX = 0.5f;
+constexpr float CLIP_FALLBACK_RESID_TOL = 0.10f;
 // The search runs as if the frame were scanned at 1/8 s, ISO 100 with the profile's film base.
 constexpr float REFERENCE_SHUTTER_S = 0.125f;
 constexpr float REFERENCE_ISO = 100.0f;
@@ -710,13 +710,13 @@ class SearchFrame {
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
-                bool rescue_mode = false) {
+                bool pullback_search = false) {
     const Clock::time_point t0 = Clock::now();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
-    if (rescue_mode) {
+    if (pullback_search) {
       Enclosure enc;
       if (bracket_enclosure(bundle_.targets[target_idx], target_idx, std::max(1.0f, stats_.g_lo),
                             std::max(std::max(1.0f, stats_.g_lo) + 1.0f, stats_.g_hi), enc)) {
@@ -738,7 +738,7 @@ class SearchFrame {
   // kept within the trust region e_bounds = {lo, hi, centre}; the centre is where the search's penalty pulls E.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
-                   bool rescue_mode = false) {
+                   bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) {
       std::swap(e_bounds[0], e_bounds[1]);
       e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
@@ -776,7 +776,7 @@ class SearchFrame {
         break;
       }
       ConversionParams next;
-      search(target_idx, mu, sigma, &curr, e_bounds, next, rescue_mode);
+      search(target_idx, mu, sigma, &curr, e_bounds, next, pullback_search);
       const float dp = std::fabs(next.e - curr.e) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
       const float rel = it > 0 ? std::fabs(err - prev_err) / std::max(1e-4f, prev_err) : 1.0f;
       steps++;
@@ -789,7 +789,7 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      if (it > 0 && (dp <= TOL_PARAM || ((!rescue_mode || err <= prev_err) && rel <= TOL_REL_ERR))) {
+      if (it > 0 && (dp <= TOL_PARAM || ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR))) {
         status = FixedPointStatus::kConverged;
         break;
       }
@@ -867,7 +867,7 @@ class SearchFrame {
   }
 
   // The shoulder's x_hi at p: the 99.5% point of the max channel of the pre-shoulder render of the inner crop,
-  // clamped to [1, kShoulderXHiMax]; q995 gets the point before clamping.
+  // mapped to sRGB 242 (shoulder_x_hi_anchored); q995 gets the point.
   float measure_shoulder(int target_idx, const ConversionParams& p, float* q995) {
     const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
     static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
@@ -1005,6 +1005,54 @@ struct Screened {
 
 // ---- Public API ----------------------------------------------------------------------------------------------
 
+// The merged input matrix of a scan (M_frame, ParamSearchResult) and its exposure normalisation e_norm.
+struct FrameScale {
+  float fb[3];
+  float ratio_frame;
+  float frame_matrix[9];
+  float e_norm;
+};
+static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso,
+                              const ParamSearchOptions& opts) {
+  FrameScale s;
+  const float* fb = opts.film_base_rgb;
+  if (!fb && opts.film_base_rgb_d) {
+    for (int i = 0; i < 3; ++i) s.fb[i] = (float)opts.film_base_rgb_d[i];
+    fb = s.fb;
+  }
+  if (!fb) fb = bundle.film_base_avg;
+  if (fb != s.fb) std::copy(fb, fb + 3, s.fb);
+  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
+  const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
+  // A measured base comes from this capture: no exposure ratio.
+  const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
+  s.ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
+  const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
+  float ref_matrix[9];
+  merged_matrix(bundle, s.fb, s.ratio_frame, s.frame_matrix);
+  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
+  s.e_norm = (ref_matrix[4] != 0.0f) ? s.frame_matrix[4] / ref_matrix[4] : 1.0f;
+  return s;
+}
+
+float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995, const double* film_base_rgb) {
+  ParamSearchOptions base_opts;
+  base_opts.film_base_rgb_d = film_base_rgb;
+  base_opts.film_base_from_scan = film_base_rgb != nullptr;
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, base_opts);
+  // As SearchFrame::measure_shoulder: the matrix in reference units (M_frame / e_norm) at the search's internal E.
+  float input_matrix[9], m[9];
+  for (int i = 0; i < 9; ++i) input_matrix[i] = scale.frame_matrix[i] / scale.e_norm;
+  candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
+  static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
+  std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+  measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
+                         AUTO_KNEE, bundle.targets[target_idx].film_prof.data, kCeil, 1.0f, hist.data());
+  return shoulder_x_hi_from_hist(hist.data(), q995);
+}
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
@@ -1027,7 +1075,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
-  fr.set_shoulder(opts.shoulder_auto ? 1.0f : opts.shoulder, opts.shoulder_auto);
+  fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
@@ -1049,28 +1097,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
 
   // The input matrix in reference units (ParamSearchResult).
-  float custom_fb_buf[3];
-  const float* fb = opts.film_base_rgb;
-  if (!fb && opts.film_base_rgb_d) {
-    for (int i = 0; i < 3; ++i) custom_fb_buf[i] = (float)opts.film_base_rgb_d[i];
-    fb = custom_fb_buf;
-  }
-  if (!fb) fb = bundle.film_base_avg;
-  const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
-  const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
-  // A measured base comes from this capture: no exposure ratio.
-  const bool has_custom_fb = (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
-  const float ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
-  const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
-  float frame_matrix[9], ref_matrix[9];
-  merged_matrix(bundle, fb, ratio_frame, frame_matrix);
-  merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
-  fr.set_frame_matrix(frame_matrix, (ref_matrix[4] != 0.0f) ? frame_matrix[4] / ref_matrix[4] : 1.0f);
+  const FrameScale scale = frame_scale(bundle, scan_shutter_s, scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
   const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
   std::copy(fr.input_matrix(), fr.input_matrix() + 9, out.input_matrix);
   for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (fb[r] > 0 ? (bundle.normalization_target / fb[r]) * ratio_frame : 1.0f) / e_norm;
+    out.row_scale[r] = (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) /
+                       e_norm;
   }
 
   if (verbose) {
@@ -1214,7 +1248,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     out.tournament.push_back(fp);
   }
   // The winner is the lowest plain residual among the converged brackets (when any converged), below. tourney_score,
-  // the enclosure-regularized residual, only ranks the candidates of Part 1B's rescue.
+  // the enclosure-regularized residual, only ranks the candidates of the highlight pullback.
   auto tourney_score = [&](const FixedPointResult& a) {
     for (const auto& c : enclosure) {
       if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
@@ -1270,21 +1304,21 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
               << to_string(headroom.outcome) << ")\n";
   }
 
-  // Step 5: the highlight rescue (RescueOutcome).
+  // Step 5: the clip fallback (ClipFallbackOutcome): move to the next bracket when the chosen one white-clips.
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (measure_rescue_candidates, select_highlight_rescue)
   const ClipStats hc0 = fr.highlight_clip(chosen.target_idx, {params}, ceiling_of(chosen.target_idx))[0];
   const float clip_0 = hc0.white_clip / 100.0f;
-  out.rescue_white_clip = clip_0;
-  out.rescue = RescueOutcome::kNotNeeded;
-  if (clip_0 > RESCUE_CLIP_TAU) {
+  out.clip_fallback_white_clip = clip_0;
+  out.clip_fallback = ClipFallbackOutcome::kNotNeeded;
+  if (clip_0 > CLIP_FALLBACK_CLIP_TAU) {
     const int t_adj = chosen.target_idx + 1;
     const Screened* s_adj = nullptr;
     for (const auto& s : screening)
       if (s.result.target_idx == t_adj) s_adj = &s;
     if (!s_adj) {
-      out.rescue = RescueOutcome::kNotScreened;
+      out.clip_fallback = ClipFallbackOutcome::kNotScreened;
     } else if (!s_adj->enclosure.admissible) {
-      out.rescue = RescueOutcome::kNotAdmissible;
+      out.clip_fallback = ClipFallbackOutcome::kNotAdmissible;
     } else {
       const FixedPointResult* run = nullptr;
       for (const auto& a : adaptive)
@@ -1295,7 +1329,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       } else {
         float eb[3];
         trust_bounds(*s_adj, eb);
-        if (verbose) std::cout << "Auto: fixed point on " << name_of(t_adj) << " (highlight rescue)\n";
+        if (verbose) std::cout << "Auto: fixed point on " << name_of(t_adj) << " (clip fallback)\n";
         if (!fr.fixed_point(t_adj, s_adj->result.params, eb, fp_adj)) return false;
       }
       ConversionParams p_adj = fp_adj.params;
@@ -1303,30 +1337,32 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       const ClipStats hc_adj = fr.highlight_clip(t_adj, {p_adj}, ceiling_of(t_adj))[0];
       const float clip_adj = hc_adj.white_clip / 100.0f;
       const float dl = hc_adj.median_L - hc0.median_L;
-      if (clip_adj > RESCUE_CLIP_RATIO * clip_0) out.rescue = RescueOutcome::kClipsTooMuch;
-      else if (!(RESCUE_DL_MIN <= dl && dl <= RESCUE_DL_MAX)) out.rescue = RescueOutcome::kShiftsLightness;
-      else if (fp_adj.residual > (1.0f + RESCUE_RESID_TOL) * chosen.residual)
-        out.rescue = RescueOutcome::kWorseResidual;
-      else out.rescue = RescueOutcome::kTaken;
+      if (clip_adj > CLIP_FALLBACK_CLIP_RATIO * clip_0) out.clip_fallback = ClipFallbackOutcome::kClipsTooMuch;
+      else if (!(CLIP_FALLBACK_DL_MIN <= dl && dl <= CLIP_FALLBACK_DL_MAX)) out.clip_fallback = ClipFallbackOutcome::kShiftsLightness;
+      else if (fp_adj.residual > (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen.residual)
+        out.clip_fallback = ClipFallbackOutcome::kWorseResidual;
+      else out.clip_fallback = ClipFallbackOutcome::kTaken;
       if (verbose) {
-        std::cout << "Auto: highlight rescue: " << name_of(t_adj) << " clips " << fixed(clip_adj * 100.0f, 4)
+        std::cout << "Auto: clip fallback: " << name_of(t_adj) << " clips " << fixed(clip_adj * 100.0f, 4)
                   << "% vs " << fixed(clip_0 * 100.0f, 4) << "%, dL* " << fixed(dl, 2, true) << ", resid "
-                  << fixed(fp_adj.residual, 4) << ": " << to_string(out.rescue) << "\n";
+                  << fixed(fp_adj.residual, 4) << ": " << to_string(out.clip_fallback) << "\n";
       }
-      if (out.rescue == RescueOutcome::kTaken) {
+      if (out.clip_fallback == ClipFallbackOutcome::kTaken) {
         chosen = fp_adj;
         params = p_adj;
         headroom = h_adj;
       }
     }
-    if (verbose && (out.rescue == RescueOutcome::kNotScreened || out.rescue == RescueOutcome::kNotAdmissible)) {
-      std::cout << "Auto: highlight rescue: " << to_string(out.rescue) << "\n";
+    if (verbose && (out.clip_fallback == ClipFallbackOutcome::kNotScreened || out.clip_fallback == ClipFallbackOutcome::kNotAdmissible)) {
+      std::cout << "Auto: clip fallback: " << to_string(out.clip_fallback) << "\n";
     }
   }
 
-  // Part 1B: Enclosure-Guided Highlight Rescue when the chosen bracket is highlight-constrained and exhibits
-  // significant pre-shoulder highlight excess without being a dark/backlit silhouette.
-  if (opts.enclosure_rescue && out.rescue != RescueOutcome::kTaken && bundle.targets.size() > 1) {
+  // Step 6: the highlight pullback (formerly Part 1B, the enclosure-guided rescue), when the chosen bracket is
+  // highlight-constrained (much of the pre-shoulder render above sRGB 242 or 235) without being a dark or backlit
+  // silhouette: pull E up into the bracket's calibrated range, or re-search the brackets for one whose range holds
+  // the frame.
+  if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
     const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
     const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
@@ -1342,7 +1378,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       const float e_pull = std::min(enc_chosen.e_max, std::min(enc_chosen.e_min, params.e * std::pow(2.0f, 0.15f)));
       if (e_pull > params.e) {
         params.e = e_pull;
-        out.rescue = RescueOutcome::kTaken;
+        out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
       std::vector<Depth> depths_res;
@@ -1392,7 +1428,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         s.result.e_metered = e_met;
         const float eb[3] = {lo, hi, c.e_center};
         s.result.intent_loss =
-            fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*rescue_mode=*/true);
+            fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*pullback_search=*/true);
         res_screening.push_back(s);
       };
       if (!depths_res.empty()) {
@@ -1418,7 +1454,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           float eb[3];
           trust_bounds(c, eb);
           FixedPointResult fp;
-          if (!fr.fixed_point(c.result.target_idx, c.result.params, eb, fp, /*rescue_mode=*/true)) return false;
+          if (!fr.fixed_point(c.result.target_idx, c.result.params, eb, fp, /*pullback_search=*/true)) return false;
           res_adaptive.push_back(fp);
         }
         bool res_any_conv = false;
@@ -1447,17 +1483,17 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
             chosen = fp_res;
             params = p_res;
             headroom = h_res;
-            out.rescue = RescueOutcome::kTaken;
+            out.highlight_pullback = true;
           }
         }
       }
     }
   }
 
-  // The headroom and the rescue move E after the loop froze x_hi; measure it once more at the final parameters
+  // The headroom, the clip fallback and the pullback move E after the loop froze x_hi; measure it once more at the final parameters
   // (the same pre-shoulder pass on the inner crop) so the written image's shoulder matches its highlights. The
   // guard stays that of the converged iteration.
-  if (opts.shoulder_auto) {
+  {
     float q995 = 0.0f;
     params.shoulder = fr.measure_shoulder(chosen.target_idx, params, &q995);
     chosen.shoulder_q995 = q995;
