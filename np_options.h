@@ -50,8 +50,6 @@ struct Options {
   bool exposure_given = false;                 // -E (the search keeps it)
   float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search)
   bool gain_g_given = false, gain_b_given = false;
-  ShoulderInfo shoulder;                       // --shoulder (x_hi and source)
-  bool shoulder_auto = false;
 
   // Geometry
   int roi[4] = {0, 0, 0, 0};                   // --roi x y w h (sensor pixels)
@@ -66,7 +64,6 @@ struct Options {
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;
-  bool enclosure_rescue = false;
 
   // Output
   std::string output;                          // -o

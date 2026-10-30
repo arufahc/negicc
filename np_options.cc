@@ -187,13 +187,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("--shoulder")
-    .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
-          "export applies it), or x_hi in [1, 1.5]: the 99.5% point of the render's max channel in linear sRGB, "
-          "where the chart white is 1 (a linear value, not stops: 1.3 is +0.38 stop). 1 is off. The shoulder rolls "
-          "the range above its knee into the ceiling at x_hi. It only applies to the sRGB output; srgb-g10 "
-          "(scene-referred) and ICC outputs never apply it. Defaults to off.")
-    .default_value(std::string("off"));
   parser.add_argument("--no-metadata")
     .help("Disable automatic JSON metadata sidecar generation.")
     .default_value(false)
@@ -265,11 +258,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "search (defaults to 8), else the solver's iterations (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
-  parser.add_argument("--enclosure_rescue")
-    .help("Enable Part 1B of the parameter search, the enclosure-guided bracket rescue that re-screens the bracket "
-          "pool when the chosen bracket still clips highlights (off by default).")
-    .default_value(false)
-    .implicit_value(true);
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
@@ -327,22 +315,6 @@ int parse_options(int ac, char* av[], Options& o) {
   o.row_given[2] = parser.is_used("--b_coeff");
   o.exposure_comp = parser.get<float>("--exposure_comp");
   o.exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
-  const std::string shoulder_str = parser.get<std::string>("--shoulder");
-  o.shoulder_auto = (shoulder_str == "auto");
-  if (o.shoulder_auto) {
-    o.shoulder.source = "auto";
-  } else if (shoulder_str != "off") {
-    char* end = nullptr;
-    const float val = strtof(shoulder_str.c_str(), &end);
-    if (!end || *end != '\0' || end == shoulder_str.c_str() || !std::isfinite(val) || val < 1.0f ||
-        val > negicc::kShoulderXHiMax) {
-      log_error("Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
-              shoulder_str.c_str(), (double)negicc::kShoulderXHiMax);
-      return 1;
-    }
-    o.shoulder.x_hi = val;
-    o.shoulder.source = val > negicc::kShoulderOff ? "cli" : "off";
-  }
   o.gain_g = parser.get<float>("--gain_g");
   o.gain_b = parser.get<float>("--gain_b");
   o.gain_g_given = parser.is_used("--gain_g");
@@ -381,7 +353,6 @@ int parse_options(int ac, char* av[], Options& o) {
   if (o.target_given) o.target = parser.get<std::string>("--target");
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
-  o.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

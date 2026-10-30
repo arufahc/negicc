@@ -279,11 +279,6 @@ int prepare(const Options& o, Setup& s) {
                     "--film_profile) without --gain_g or --gain_b\n");
     return 1;
   }
-  if (o.shoulder_auto && !s.use_dino) {
-    log_error("--shoulder auto requires the parameter search (it measures the shoulder from the render "
-                    "at the searched parameters); give an x_hi instead\n");
-    return 1;
-  }
 
   // The crosstalk correction: the bundle's, with the rows -r, -g and -b give in its place (for the search too).
   s.r_coeff = o.r_coeff;
@@ -409,8 +404,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   const bool camera_rgb_input = s.camera_rgb_input;
   const RawDecode raw_decode = s.raw_decode;
   const negicc::FlatFieldPtr& flat_field = s.flat_field;
-  const ShoulderInfo& shoulder_info = o.shoulder;
-  const bool is_shoulder_auto = o.shoulder_auto;
   int* roi_coords = scan.roi;
   bool& has_roi = scan.has_roi;
   int& rot_cw = scan.rot_cw;
@@ -462,9 +455,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
       ParamSearchOptions opts;
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
-      opts.shoulder = shoulder_info.x_hi;
-      opts.shoulder_auto = is_shoulder_auto;
-      opts.enclosure_rescue = o.enclosure_rescue;
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
         log_error("The conversion parameter search failed\n");
         return false;
@@ -733,9 +723,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       get_scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
-      opts.shoulder = shoulder_info.x_hi;
-      opts.shoulder_auto = is_shoulder_auto;
-      opts.enclosure_rescue = o.enclosure_rescue;
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
@@ -828,7 +815,6 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
   gain_g = o.gain_g;
   gain_b = o.gain_b;
   c.knee = kKnee;
-  c.shoulder = o.shoulder;
   const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
 
   // The sidecar records the bundle's film base. No film base of the capture is given (TODO at --film_stock: read it
@@ -913,7 +899,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   float &global_exposure_comp = c.exposure_comp, &gain_g = c.gain_g, &gain_b = c.gain_b;
   float& knee = c.knee;
   ShoulderInfo& shoulder_info = c.shoulder;
-  const bool is_shoulder_auto = o.shoulder_auto;
   ParsedFilmProfile& film_prof = c.film_prof;
   std::vector<uint8_t>& embedded_icc = c.embedded_icc;
   std::string& bundle_target_name = c.bundle_target_name;
@@ -974,17 +959,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     film_prof.rebind_pointers();
     // The search's E, g and b, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
     apply_station(auto_res.params.e, auto_res.params.g, auto_res.params.b);
-    shoulder_info.x_hi = auto_res.params.shoulder;
-    if (is_shoulder_auto) {
-      shoulder_info.has_q995 = true;
-      shoulder_info.q995 = auto_res.shoulder_q995;
-    }
-    if (shoulder_info.active()) {
-      shoulder_info.has_knee = true;
-      shoulder_info.knee = auto_res.shoulder_knee;
-      shoulder_info.has_guard = true;
-      shoulder_info.guard = auto_res.shoulder_guard;
-    }
     log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
@@ -1004,8 +978,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     SolverConfig cfg;
     cfg.knee = knee;
-    cfg.shoulder = shoulder_info.x_hi;
-    cfg.shoulder_auto = is_shoulder_auto;
+    cfg.shoulder_auto = is_bundle;  // the roll-off, as the bracket search renders it
 
     const int max_iters = o.dino_iters;
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
@@ -1046,17 +1019,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       return 1;
     }
 
-    shoulder_info.x_hi = dino_res.shoulder.x_hi;
-    if (is_shoulder_auto) {
-      shoulder_info.has_q995 = true;
-      shoulder_info.q995 = dino_res.shoulder.q995;
-    }
-    if (dino_res.shoulder.active) {
-      shoulder_info.has_knee = true;
-      shoulder_info.knee = dino_res.shoulder.knee;
-      shoulder_info.has_guard = true;
-      shoulder_info.guard = dino_res.shoulder.guard;
-    }
 
     std::string pins_str = "none";
     if (pin_mask != 0) {
@@ -1141,6 +1103,29 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
   if (is_bundle && bundle_target_idx >= 0) {
     embedded_icc = bundle.targets[bundle_target_idx].icc_bytes;
+  }
+  if (is_bundle && bundle_target_idx >= 0 && c.station_params) {
+    // The highlight roll-off of the conversion, measured on the full-resolution frame at its E, g and b, so given
+    // values (cli_equivalent) reproduce it.
+    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+    const RgbInput img = scan.image();
+    const negicc::RgbView view = negicc::RgbView::from_interleaved_rgb(img.pixels, img.width, img.height, img.channels,
+                                                                       (ptrdiff_t)img.width * img.channels);
+    const auto& p = *c.station_params;
+    float q995 = 0.0f;
+    shoulder_info.x_hi = measure_rolloff_x_hi(bundle, bundle_target_idx, view, scan_shutter_s, scan_iso, p[0], p[1],
+                                              p[2], ParamSearchOptions{}.crop_ratio, &q995);
+    shoulder_info.has_q995 = true;
+    shoulder_info.q995 = q995;
+    if (shoulder_info.active()) {
+      shoulder_info.source = "rolloff";
+      negicc::PipelineConfig pc{};
+      negicc::set_shoulder(pc, shoulder_info.x_hi);
+      shoulder_info.has_knee = true;
+      shoulder_info.knee = pc.shoulder_x_k;
+    }
+    log_info("Roll-off: q995 %.3f, x_hi %.3f (sRGB output only)\n", q995, shoulder_info.x_hi);
   }
   return 0;
 }
