@@ -87,6 +87,13 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
               files[0].c_str());
       return nullptr;
     }
+    // Camera RGB (a tri bundle) is linear and unmanaged: a TIFF with an ICC profile or 8-bit samples is
+    // colour-managed RGB, converted to linear Rec.2020 (a d65 bundle).
+    if (camera_rgb && (!img.icc.empty() || img.bits != 16)) {
+      log_error("%s is colour-managed RGB (%s), not the linear camera RGB a tri bundle converts: give "
+                "--light_source d65\n", files[0].c_str(), !img.icc.empty() ? "it has an ICC profile" : "8 bits");
+      return nullptr;
+    }
     std::string how = "camera";
     if (!camera_rgb && !negicc::to_linear_rec2020(img, how, err)) {
       log_error("%s: %s\n", files[0].c_str(), err.c_str());

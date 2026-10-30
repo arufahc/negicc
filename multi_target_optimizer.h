@@ -43,8 +43,14 @@ struct RgbImage {
 //      one intent field.
 //   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
 //      the converged ones, when any converged).
-//   5. Highlight headroom and rescue: raise E until the highlights are inside the bracket's calibrated range, and
-//      move to the next bracket when the chosen one clips clearly more.
+//   5. Highlight headroom and the clip fallback: raise E until the highlights are inside the bracket's calibrated
+//      range, and move to the next bracket when the chosen one clips clearly more (ClipFallbackOutcome).
+//   6. The highlight pullback (formerly Part 1B, the enclosure-guided rescue): when a bright frame still has many
+//      highlights near white (sRGB 242 and 235), pull E into the bracket's calibrated range or move to a darker
+//      bracket whose range holds the frame.
+//
+// Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
+// measures its x_hi at each iteration's incoming parameters, and once more at the final ones.
 //
 // The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
 // should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
@@ -92,9 +98,10 @@ inline bool headroom_applied(HeadroomOutcome outcome) {
   return outcome == HeadroomOutcome::kCapacityLimited || outcome == HeadroomOutcome::kPulledInside;
 }
 
-// What the highlight rescue did. It is tried when the chosen bracket white-clips more than 0.03 % of the inner
-// crop, on the next bracket of the bundle (target_idx + 1), and taken when that one passes every check.
-enum class RescueOutcome {
+// What the clip fallback (formerly the highlight rescue, Branch R) did. It is tried when the chosen bracket
+// white-clips more than 0.03 % of the inner crop, on the next bracket of the bundle (target_idx + 1), and taken when
+// that one passes every check.
+enum class ClipFallbackOutcome {
   kNotNeeded,        // the chosen bracket does not clip
   kNotScreened,      // the next bracket was not screened
   kNotAdmissible,    // the next bracket's calibrated range is too narrow for the scene
@@ -103,7 +110,7 @@ enum class RescueOutcome {
   kWorseResidual,    // the next bracket's residual is more than 10 % above the chosen one's
   kTaken,            // the next bracket replaces the chosen one
 };
-const char* to_string(RescueOutcome outcome);
+const char* to_string(ClipFallbackOutcome outcome);
 
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
@@ -114,12 +121,6 @@ struct ParamSearchOptions {
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
   bool film_base_from_scan = false;
   bool verbose = true;
-  // The highlight shoulder (color_pipeline.h): a fixed x_hi (1 is off), or measured by the fixed-point loop from the
-  // pre-shoulder render at each iteration's incoming parameters when shoulder_auto.
-  float shoulder = 1.0f;
-  bool shoulder_auto = false;
-  // Part 1B, the enclosure-guided bracket rescue after Step 5 (multi_target_optimizer.cc). Off by default.
-  bool enclosure_rescue = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
@@ -184,8 +185,9 @@ struct ParamSearchResult {
 
   HeadroomOutcome headroom = HeadroomOutcome::kWithinRange;
   float headroom_ev = 0.0f;  // the stops E was raised by
-  RescueOutcome rescue = RescueOutcome::kNotNeeded;
-  float rescue_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
+  ClipFallbackOutcome clip_fallback = ClipFallbackOutcome::kNotNeeded;
+  float clip_fallback_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
+  bool highlight_pullback = false;        // the highlight pullback moved E or the bracket
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
@@ -193,6 +195,15 @@ struct ParamSearchResult {
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
+
+// The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
+// orientation, converted through bracket target_idx at the search's E, g and b (ParamSearchResult::params, the
+// station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's
+// last step measures the same on its half-size frame; neg_process measures every bundle conversion's on the
+// full-resolution frame, so given values reproduce it. q995 gets the point.
+float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995 = nullptr);
 
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso

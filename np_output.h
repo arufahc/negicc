@@ -60,10 +60,10 @@ struct Sidecar {
   int bundle_target_idx = -1;
   InputSpace input_space = InputSpace::kCameraRawRgb;
   const float* merged_matrix = nullptr;
-  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
+  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;  // absolute, on the crosstalk (matrix.*)
+  const float* station_params = nullptr;  // with a bundle: E, g, b as -E, --gain_g, --gain_b take them
   unsigned pin_mask = 0;
   float knee = 0.95f;
-  std::string knee_source;
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
   std::string dino_model, dino_backend;
