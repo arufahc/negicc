@@ -15,11 +15,11 @@ all: neg_process
 # ----------------------------------------------------------------------
 # LibRaw, pinned by the 3rd_party/libraw submodule (see 3rd_party/README.md) and built here as a static library, so
 # neg_process and negicc-station decode with the same LibRaw on every machine instead of the system's libraw-dev.
-# Consumers include "libraw/libraw.h" with -I$(LIBRAW_DIR) and link bin_out/libraw.a followed by the libraries in
+# Consumers include "libraw/libraw.h" with $(LIBRAW_INC) (-isystem, so its headers do not warn) and link bin_out/libraw.a followed by the libraries in
 # bin_out/libraw.ldlibs.
 # ----------------------------------------------------------------------
 LIBRAW_DIR = 3rd_party/libraw
-LIBRAW_INC = -I$(LIBRAW_DIR)
+LIBRAW_INC = -isystem $(LIBRAW_DIR)
 LIBRAW_LIB = bin_out/libraw.a
 ifeq ($(wildcard $(LIBRAW_DIR)/libraw/libraw.h),)
     $(error LibRaw submodule missing at $(LIBRAW_DIR): run git submodule update --init --recursive)
@@ -70,10 +70,10 @@ raw_info: raw_info.cc $(LIBRAW_LIB) $(ZLIB_LIB)
 # at -O2 as distributions build them, with -ffp-contract=off as the rest of negicc.
 # ----------------------------------------------------------------------
 LCMS2_DIR = 3rd_party/lcms2
-LCMS2_INC = -I$(LCMS2_DIR)/include
+LCMS2_INC = -isystem $(LCMS2_DIR)/include
 LCMS2_LIB = bin_out/liblcms2.a
 ZLIB_DIR = 3rd_party/zlib
-ZLIB_INC = -I$(ZLIB_DIR)
+ZLIB_INC = -isystem $(ZLIB_DIR)
 ZLIB_LIB = bin_out/libz.a
 ifeq ($(wildcard $(LCMS2_DIR)/include/lcms2.h),)
     $(error Little-CMS submodule missing at $(LCMS2_DIR): run git submodule update --init --recursive)
@@ -147,8 +147,8 @@ deps: $(LCMS2_LIB) $(ZLIB_LIB) $(JPEG_LIB) $(TIFF_LIB)
 
 # Header-only libraries: nlohmann/json 3.11.3 and argparse, pinned by the 3rd_party/json and 3rd_party/argparse
 # submodules and included as "nlohmann/json.hpp" and "argparse/argparse.hpp".
-JSON_INC = -I3rd_party/json/single_include
-ARGPARSE_INC = -I3rd_party/argparse/include
+JSON_INC = -isystem 3rd_party/json/single_include
+ARGPARSE_INC = -isystem 3rd_party/argparse/include
 
 # ----------------------------------------------------------------------
 # DINOv3 C++ Inference Engine & Library
@@ -163,7 +163,7 @@ ifneq ($(strip $(ORT_CANDIDATES)),)
 else
     ORT_DIR ?= 3rd_party/onnxruntime
 endif
-ORT_INC = -I$(ORT_DIR)/include
+ORT_INC = -isystem $(ORT_DIR)/include
 ifeq ($(ARCH),aarch64)
     ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
 else
@@ -355,7 +355,7 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 
 # neg_process's own sources (np_*.cc, rgb_input.cc): not in the library negicc-station links. Compiled as
 # neg_process.cc is, so moving code between them leaves its arithmetic as it was.
-NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
+NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
               $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_raw.cc np_geometry.cc np_conversion.cc np_output.cc np_input.cc \
           rgb_input.cc
