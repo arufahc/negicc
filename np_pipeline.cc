@@ -267,17 +267,12 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
-  if (o.station_egb_given && !s.is_bundle) {
-    log_error("--station_egb requires a JSON profile bundle\n");
-    return 1;
-  }
-
-  // The parameter search runs with a profile unless --gain_g, --gain_b or --station_egb is given. On a bundle it is
+  // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is
   // negicc-station's conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure
   // and the gains; with --target or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E
   // gives it, on one profile.
-  s.exposure_given = o.exposure_given || o.station_egb_given;
-  s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given && !o.station_egb_given;
+  s.exposure_given = o.exposure_given;
+  s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given;
   s.bundle_search = s.use_dino && s.is_bundle && s.manual_target_idx < 0 && !s.exposure_given;
   if (!o.dino_adapter.empty() && !s.use_dino) {
     log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
@@ -409,7 +404,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   ProfileBundle& bundle = s.bundle;
   DinoV3Engine& engine = s.engine;
   const bool use_dino = s.use_dino, bundle_search = s.bundle_search;
-  const bool is_roi_auto = o.roi_auto, station_egb_given = o.station_egb_given;
+  const bool is_roi_auto = o.roi_auto;
   const InputMode input_mode = o.input_mode;
   const bool camera_rgb_input = s.camera_rgb_input;
   const RawDecode raw_decode = s.raw_decode;
@@ -706,7 +701,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       cfa_ry = roi_coords[1];
       cfa_rw = std::min(roi_coords[2], src_w - cfa_rx);
       cfa_rh = std::min(roi_coords[3], src_h - cfa_ry);
-    } else if (!no_crop_flag && !station_egb_given && files.size() == 1) {
+    } else if (!no_crop_flag && files.size() == 1) {
       const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
                                   crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
@@ -908,8 +903,6 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   DinoV3Engine& engine = s.engine;
   const std::string& film_prof_arg = s.film_prof_arg;
   const int manual_target_idx = s.manual_target_idx;
-  const bool station_egb_given = o.station_egb_given;
-  const float* station_egb = o.station_egb;
   const bool use_cfa_pipeline = scan.cfa;
   std::vector<uint16_t>& cfa_export_rgb = scan.rgb3;
   LibRaw* proc = scan.proc.get();
@@ -929,12 +922,28 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
   const std::vector<int>& effective_profile_film_base_rgb = c.profile_film_base_rgb;
   const std::vector<int> effective_film_base_rgb = {1, 1, 1};
-  auto get_scan_exposure = [&](const LibRaw& r, double& shutter_out, double& iso_out) {
-    scan.scan_exposure(r, shutter_out, iso_out);
+  // With a bundle, E, g and b are the station's (the search's, and what -E, --gain_g and --gain_b take): the
+  // conversion is the station's, the bundle's merged matrix (crosstalk, film base and the scan's exposure ratio)
+  // scaled per row by E, E*g and E*b, so neg_process renders what negicc-station renders. row_scale turns them into
+  // the absolute exposure and gains on the crosstalk (the sidecar's matrix.*) and back.
+  float station_base[9];
+  double row_scale[3] = {1.0, 1.0, 1.0};
+  if (is_bundle) {
+    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+    compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false, station_base, nullptr, row_scale);
+  }
+  auto apply_station = [&](float e, float g, float b) {
+    c.station_params = std::array<float, 3>{e, g, b};
+    negicc::candidate_matrix(station_base, e, g, b, merged_matrix);
+    global_exposure_comp = (float)(row_scale[0] * (double)e);
+    gain_g = (float)(row_scale[1] / row_scale[0] * (double)g);
+    gain_b = (float)(row_scale[2] / row_scale[0] * (double)b);
   };
+  const std::vector<int> unit_fb = {1, 1, 1};
 
   if (is_bundle && !bundle_search) {
-    if (use_dino || manual_target_idx < 0 || (!station_egb_given && !(pin_mask & PIN_E))) {
+    if (use_dino || manual_target_idx < 0 || !(pin_mask & PIN_E)) {
       float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
       int num_feasible = 0;
       if (use_cfa_pipeline) {
@@ -963,16 +972,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     bundle_target_name = auto_res.target_name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
-    // The solved conversion written as the bundle's crosstalk with an exposure and gains (the film base and
-    // exposure ratio folded in), so the sidecar's cli_equivalent reproduces it with --target.
-    // Note: `auto_res.row_scale` already folds `normalization_target / fb[r]` into `global_exposure_comp`, `gain_g`,
-    // and `gain_b`, so pass `{1, 1, 1}` for the film-base arguments of `adjust_correction_matrix`.
-    const std::vector<int> unit_fb = {1, 1, 1};
-    global_exposure_comp = (float)(auto_res.row_scale[0] * auto_res.params.e * auto_res.e_norm);
-    gain_g = (float)(auto_res.row_scale[1] / auto_res.row_scale[0] * auto_res.params.g);
-    gain_b = (float)(auto_res.row_scale[2] / auto_res.row_scale[0] * auto_res.params.b);
-    adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
-                             unit_fb, unit_fb, merged_matrix);
+    // The search's E, g and b, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
+    apply_station(auto_res.params.e, auto_res.params.g, auto_res.params.b);
     shoulder_info.x_hi = auto_res.params.shoulder;
     if (is_shoulder_auto) {
       shoulder_info.has_q995 = true;
@@ -993,8 +994,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
            ms(auto_res.render_time), ms(auto_res.infer_time), ms(auto_res.residual_time), ms(auto_res.search_time),
            ms(auto_res.total_time));
-    log_info("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
-           gain_b, bundle_target_idx);
+    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", auto_res.params.e, auto_res.params.g,
+           auto_res.params.b, bundle_target_idx);
   } else if (use_dino) {
     if (!is_bundle && !film_prof.data.has_profile) {
       log_error("The parameter search requires a film profile to evaluate intent losses.\n");
@@ -1008,6 +1009,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     const int max_iters = o.dino_iters;
     IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
+    if (is_bundle && (pin_mask & PIN_E)) {
+      // A pinned -E is the station's: the search starts from it (and the station's g = b = 1) in absolute units.
+      apply_station(global_exposure_comp, 1.0f, 1.0f);
+      user_gains = {global_exposure_comp, gain_g, gain_b};
+      adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b, unit_fb, unit_fb,
+                               merged_matrix);
+    }
 
     if (is_bundle) {
       // -E without --target: the bracket the bundle picks without the search.
@@ -1081,8 +1089,18 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
            dino_res.status.c_str(), dino_res.total_inferences, dino_res.best_iteration, dino_res.best_residual);
     log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
            dino_res.solved_relative.e, dino_res.solved_relative.g, dino_res.solved_relative.b);
-    log_info("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g\n",
-           dino_res.solved_absolute.e, dino_res.solved_absolute.g, dino_res.solved_absolute.b);
+    if (is_bundle) {
+      // The station's values, which -E, --gain_g and --gain_b take with a bundle.
+      // The station's values of the solved absolute ones.
+      c.station_params = std::array<float, 3>{(float)(dino_res.solved_absolute.e / row_scale[0]),
+                                              (float)(dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
+                                              (float)(dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
+      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n", (*c.station_params)[0],
+               (*c.station_params)[1], (*c.station_params)[2], bundle_target_idx);
+    } else {
+      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g\n", dino_res.solved_absolute.e,
+               dino_res.solved_absolute.g, dino_res.solved_absolute.b);
+    }
     if (dino_res.solved_relative.g < 0.5f || dino_res.solved_relative.g > 2.0f ||
         dino_res.solved_relative.b < 0.5f || dino_res.solved_relative.b > 2.0f) {
       log_warn("GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
@@ -1097,16 +1115,16 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
            dino_res.timing_views_ms, dino_res.timing_render_ms, dino_res.timing_infer_ms,
            dino_res.timing_residual_ms, dino_res.timing_search_ms);
 
-    global_exposure_comp = dino_res.solved_absolute.e;
-    gain_g = dino_res.solved_absolute.g;
-    gain_b = dino_res.solved_absolute.b;
-
-    adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
-                             global_exposure_comp,
-                             gain_g, gain_b,
-                             effective_profile_film_base_rgb,
-                             effective_film_base_rgb,
-                             merged_matrix);
+    if (is_bundle) {
+      // Rendered as the station renders those values, so the sidecar's cli_equivalent reproduces it.
+      apply_station((*c.station_params)[0], (*c.station_params)[1], (*c.station_params)[2]);
+    } else {
+      global_exposure_comp = dino_res.solved_absolute.e;
+      gain_g = dino_res.solved_absolute.g;
+      gain_b = dino_res.solved_absolute.b;
+      adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
+                               effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
+    }
   } else if (is_bundle) {
     if (manual_target_idx >= 0) {
       bundle_target_idx = manual_target_idx;
@@ -1117,26 +1135,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     bundle_target_name = bundle.targets[bundle_target_idx].name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
-    if (station_egb_given) {
-      double scan_shutter_s = 0.125, scan_iso = 100.0;
-      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
-      float base_matrix[9];
-      double row_scale[3];
-      compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false,
-                                    base_matrix, nullptr, row_scale);
-      negicc::candidate_matrix(base_matrix, station_egb[0], station_egb[1], station_egb[2], merged_matrix);
-      global_exposure_comp = (float)(row_scale[0] * (double)station_egb[0]);
-      gain_g = (float)(row_scale[1] / row_scale[0] * (double)station_egb[1]);
-      gain_b = (float)(row_scale[2] / row_scale[0] * (double)station_egb[2]);
-    } else if (!(pin_mask & PIN_E) && bundle.targets[bundle_target_idx].e_center > 0.0f) {
-      global_exposure_comp = bundle.targets[bundle_target_idx].e_center;
-      adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
-                               global_exposure_comp,
-                               gain_g, gain_b,
-                               effective_profile_film_base_rgb,
-                               effective_film_base_rgb,
-                               merged_matrix);
-    }
+    // The given values are the station's (E defaults to 1, g and b to 1), converted as the search's result is.
+    apply_station(global_exposure_comp, gain_g, gain_b);
   }
 
   if (is_bundle && bundle_target_idx >= 0) {
@@ -1289,6 +1289,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.exposure_comp = global_exposure_comp;
     sc.gain_g = gain_g;
     sc.gain_b = gain_b;
+    sc.station_params = c.station_params ? c.station_params->data() : nullptr;
     sc.pin_mask = pin_mask;
     sc.knee = knee;
     sc.shoulder = shoulder_info;

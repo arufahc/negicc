@@ -28,7 +28,7 @@
 //   render    the full-resolution image of the frame: the backend debayers or merges a mosaic; an RGB image is one
 //             already
 //   solve     the conversion parameters without the bundle search: the bracket, E, g and b (the single-profile
-//             search, a --target bracket, --station_egb or given values), the knee and the shoulder
+//             search, a --target bracket or given values), the knee and the shoulder
 //   convert   the backend converts the image in place to the output encoding
 //   write     the TIFF and the sidecar
 
@@ -36,7 +36,9 @@
 
 #include <lcms2.h>
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,7 +60,7 @@ struct Setup {
   std::string film_prof_arg;             // -p naming an ICC profile (not a bundle)
   bool has_profile = false;
   int manual_target_idx = -1;            // --target, -1 when not given
-  bool exposure_given = false;           // -E or --station_egb: the exposure is not searched
+  bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
   bool white_light = false;              // a rec2020_linear (d65) bundle
@@ -178,6 +180,8 @@ struct Conversion {
   std::string bundle_target_name;
   int bundle_target_idx = -1;
   DinoSolveResult dino_res;              // the single-profile search
+  // With a bundle: E, g and b on the station's scale (what -E, --gain_g and --gain_b take), for cli_equivalent.
+  std::optional<std::array<float, 3>> station_params;
   // The film base the sidecar records (none is applied: see the TODO at --film_stock).
   std::vector<int> profile_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_profile_film_base_rgb;

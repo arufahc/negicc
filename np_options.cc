@@ -181,8 +181,10 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
   parser.add_argument("-E", "--exposure_comp")
-    .help("Multiplier for RGB values. Given, the parameter search keeps it and solves only the gains, on the bracket "
-          "--target picks (or the bundle's default).")
+    .help("Exposure. With a bundle, E as negicc-station and the parameter search give it (the sidecar's auto.e): "
+          "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
+          "corrected RGB. Given, the parameter search keeps it and solves only the gains, on the bracket --target "
+          "picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--shoulder")
@@ -197,11 +199,13 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--gain_g")
-    .help("Additional gain multiplier for the G channel. Defaults to 1.0. Given, it turns the parameter search off.")
+    .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
+          "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
-    .help("Additional gain multiplier for the B channel. Defaults to 1.0. Given, it turns the parameter search off.")
+    .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
+          "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
   // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does), in
@@ -273,12 +277,6 @@ int parse_options(int ac, char* av[], Options& o) {
   // flat field .npz measured from one.
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
-  parser.add_argument("--station_egb")
-    .help("Conversion parameters E, g and b as negicc-station applies them (multi_target_optimizer.h): the bundle's "
-          "merged matrix (crosstalk, film base and exposure ratio) scaled per row by E, E*g and E*b. Turns the "
-          "parameter search off.")
-    .nargs(3)
-    .scan<'g', float>();
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -381,11 +379,6 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
-  o.station_egb_given = parser.is_used("--station_egb");
-  if (o.station_egb_given) {
-    const auto v = parser.get<std::vector<float>>("--station_egb");
-    for (int i = 0; i < 3; ++i) o.station_egb[i] = v[i];
-  }
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
   o.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
