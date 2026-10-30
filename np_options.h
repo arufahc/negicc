@@ -32,7 +32,7 @@ struct Options {
   // Input
   std::vector<std::string> files;              // one RAW, DNG, TIFF or JPEG, three captures, or a pixel shift's four
   InputMode input_mode = InputMode::kRaw;
-  bool camera_rgb_input = false;               // --input_rgb camera
+  bool tiff_input = false;                     // one TIFF: camera RGB with a tri bundle, else Rec.2020
   const char* implied_light = nullptr;         // the light the input implies ("tri", "d65"), nullptr for a RAW
   int quality = -1;                            // --quality
   bool no_crop = false;                        // --no_crop
@@ -42,8 +42,6 @@ struct Options {
   std::string film_stock, light_source, film_profile;  // --film_stock, --light_source, -p (empty when not given)
   std::string target;                          // --target, empty when not given
   bool target_given = false;
-  std::vector<int> profile_film_base_rgb;      // --profile_film_base_rgb
-  bool profile_film_base_given = false;
 
   // Conversion parameters
   std::vector<float> r_coeff, g_coeff, b_coeff;  // -r, -g, -b

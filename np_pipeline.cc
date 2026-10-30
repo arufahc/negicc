@@ -191,12 +191,11 @@ int prepare(const Options& o, Setup& s) {
 
   // The profile: -p, else the built-in bundle of --film_stock and --light_source (or the light the input implies).
   ProfileBundle& bundle = s.bundle;
-  if (!o.light_source.empty() && o.implied_light && o.light_source != o.implied_light) {
+  if (!o.light_source.empty() && o.implied_light && o.light_source != o.implied_light && !o.tiff_input) {
     log_error("--light_source %s does not fit %s, which takes %s\n", o.light_source.c_str(),
             o.input_mode == InputMode::kLinearDng ? "a linear DNG"
             : o.input_mode == InputMode::kThreeShot ? "three captures, one per light"
-            : o.camera_rgb_input ? "a TIFF of linear camera RGB (--input_rgb camera)"
-                                 : "an RGB TIFF or JPEG converted to linear Rec.2020",
+                                                    : "a JPEG, converted from sRGB to linear Rec.2020",
             o.implied_light);
     return 1;
   }
@@ -294,11 +293,6 @@ int prepare(const Options& o, Setup& s) {
                     "at the searched parameters); give an x_hi instead\n");
     return 1;
   }
-  if (s.bundle_search && o.profile_film_base_given) {
-    log_error("--profile_film_base_rgb cannot be used with the bracket search (the bundle gives the "
-                    "film base); pick a bracket with --target to use it\n");
-    return 1;
-  }
 
   // The crosstalk correction: the bundle's, with the rows -r, -g and -b give in its place (for the search too).
   s.r_coeff = o.r_coeff;
@@ -310,6 +304,7 @@ int prepare(const Options& o, Setup& s) {
   // negicc-station, decodes single-shot captures only.
   // py-ref: negicc_station/src/pipeline_api.py @ 813166c (prepare_image)
   s.white_light = s.is_bundle && bundle.input_space == InputSpace::kRec2020Linear;
+  s.camera_rgb_input = o.tiff_input && s.is_bundle && !s.white_light;
   if (s.white_light) {
     if (row_given[0] || row_given[1] || row_given[2]) {
       log_error("-r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
@@ -354,14 +349,10 @@ int prepare(const Options& o, Setup& s) {
   s.has_crosstalk = row_given[0] || row_given[1] || row_given[2] || (s.is_bundle && bundle.has_crosstalk);
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
-  if (o.input_mode == InputMode::kRgbFile && !o.camera_rgb_input && s.has_crosstalk) {
+  if (o.input_mode == InputMode::kRgbFile && !s.camera_rgb_input && s.has_crosstalk) {
     log_error("%s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
-                    "profile bundle, not one with a crosstalk correction (or --input_rgb camera for a TIFF of linear "
-                    "camera RGB)\n", o.files[0].c_str());
-    return 1;
-  }
-  if (o.input_mode == InputMode::kRgbFile && o.camera_rgb_input && s.white_light) {
-    log_error("A TIFF of linear camera RGB (--input_rgb camera) takes a camera_raw_rgb (tri) bundle\n");
+                    "profile bundle, not one with a crosstalk correction (a TIFF of linear camera RGB takes "
+                    "--light_source tri)\n", o.files[0].c_str());
     return 1;
   }
   if (o.input_mode == InputMode::kLinearDng && s.is_bundle && !s.white_light) {
@@ -424,7 +415,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   const bool use_dino = s.use_dino, bundle_search = s.bundle_search;
   const bool is_roi_auto = o.roi_auto, station_egb_given = o.station_egb_given;
   const InputMode input_mode = o.input_mode;
-  const bool camera_rgb_input = o.camera_rgb_input;
+  const bool camera_rgb_input = s.camera_rgb_input;
   const RawDecode raw_decode = s.raw_decode;
   const negicc::FlatFieldPtr& flat_field = s.flat_field;
   const ShoulderInfo& shoulder_info = o.shoulder;
@@ -849,14 +840,13 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
   c.shoulder = o.shoulder;
   const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
 
-  effective_profile_film_base_rgb = o.profile_film_base_rgb;
-  if (is_bundle && bundle.has_film_base && !o.profile_film_base_given) {
-    effective_profile_film_base_rgb = {bundle.profile_film_base_rgb[0], bundle.profile_film_base_rgb[1], bundle.profile_film_base_rgb[2]};
+  // The sidecar records the bundle's film base. No film base of the capture is given (TODO at --film_stock: read it
+  // from an image), so none is applied: the film base scale of the input matrix is 1.
+  c.sidecar_profile_film_base_rgb = {1, 1, 1};
+  if (is_bundle && bundle.has_film_base) {
+    c.sidecar_profile_film_base_rgb = {bundle.profile_film_base_rgb[0], bundle.profile_film_base_rgb[1],
+                                       bundle.profile_film_base_rgb[2]};
   }
-  c.sidecar_profile_film_base_rgb = effective_profile_film_base_rgb;
-
-  // No film base of the capture is given (TODO above: read it from an image), so none is applied: the film base scale
-  // of the input matrix is 1.
   effective_profile_film_base_rgb = {1, 1, 1};
 
   if (bundle_search) {
@@ -1227,7 +1217,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   const int rot_cw = scan.rot_cw;
   const bool hflip = scan.hflip, vflip = scan.vflip;
   const int width = proc->imgdata.sizes.iwidth, height = proc->imgdata.sizes.iheight;
-  const bool film_base_applied = false;  // no film base of the capture (see the TODO at --profile_film_base_rgb)
+  const bool film_base_applied = false;  // no film base of the capture (see the TODO at --film_stock)
   const std::vector<int>& sidecar_film_base_rgb = c.sidecar_film_base_rgb;
   const std::vector<int>& sidecar_profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   const std::string& film_base_source = c.film_base_source;

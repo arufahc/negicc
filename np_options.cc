@@ -208,12 +208,6 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Additional gain multiplier for the B channel. Defaults to 1.0. Given, it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("--profile_film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from profile, in the space the RAW is decoded to (sensor "
-          "RGB, or linear Rec.2020 for a rec2020_linear bundle).")
-    .nargs(3)
-    .default_value(std::vector<int>{1, 1, 1})
-    .scan<'i', int>();
   // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does), in
   // place of the profile's; --film_base_rgb, which took it as numbers or from the rebate (--roi auto), is removed.
   parser.add_argument("--film_stock")
@@ -223,14 +217,10 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020). Required for a RAW; "
-          "otherwise it follows the input: d65 for a linear DNG, a JPEG or a TIFF, tri for a TIFF with --input_rgb "
-          "camera and for three captures.");
-  parser.add_argument("--input_rgb")
-    .help("What a TIFF's values are: rec2020 (converted through its ICC profile, else sRGB for 8 bits or taken as "
-          "linear Rec.2020 for 16 bits; a d65 bundle) or camera (the scanning camera's linear RGB under the "
-          "TriLED light, black subtracted, no white balance or colour matrix; a tri bundle and its crosstalk "
-          "correction).")
-    .default_value(std::string("rec2020"));
+          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes either: "
+          "with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are sRGB and "
+          "16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light (black "
+          "subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
   parser.add_argument("-p", "--film_profile")
     .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
           "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
@@ -318,22 +308,12 @@ int parse_options(int ac, char* av[], Options& o) {
                      ? InputMode::kRgbFile
                  : files.size() == 1 && is_linear_dng(files[0]) ? InputMode::kLinearDng
                                                                 : InputMode::kRaw;
-  const std::string input_rgb = parser.get<std::string>("--input_rgb");
-  if (input_rgb != "rec2020" && input_rgb != "camera") {
-    log_error("--input_rgb is rec2020 or camera, not '%s'\n", input_rgb.c_str());
-    return 1;
-  }
-  o.camera_rgb_input = input_rgb == "camera";
-  if (o.camera_rgb_input && (o.input_mode != InputMode::kRgbFile || negicc::is_jpeg_file(files[0]))) {
-    log_error("--input_rgb camera applies to a single TIFF (a JPEG's 8-bit sRGB is not linear camera "
-                    "RGB)\n");
-    return 1;
-  }
-  // The scanning light the input implies, for the built-in bundle when --light_source is not given: a linear DNG,
-  // a JPEG or a TIFF (as Rec.2020) is white light, a TIFF of camera RGB or three captures one per light is TriLED.
+  o.tiff_input = o.input_mode == InputMode::kRgbFile && !negicc::is_jpeg_file(files[0]);
+  // The scanning light the input implies, for the built-in bundle when --light_source is not given: a linear DNG, a
+  // JPEG or a TIFF is white light, three captures one per light are TriLED. A TIFF also takes tri (camera RGB).
   o.implied_light = o.input_mode == InputMode::kRaw ? nullptr
-                    : o.input_mode == InputMode::kThreeShot || o.camera_rgb_input ? "tri"
-                                                                                  : "d65";
+                    : o.input_mode == InputMode::kThreeShot ? "tri"
+                                                            : "d65";
   if (o.input_mode != InputMode::kRaw && parser.is_used("--flat")) {
     log_error("--flat applies to a single CFA RAW or a pixel shift capture\n");
     return 1;
@@ -417,8 +397,6 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
-  o.profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
-  o.profile_film_base_given = parser.is_used("--profile_film_base_rgb");
   o.station_egb_given = parser.is_used("--station_egb");
   if (o.station_egb_given) {
     const auto v = parser.get<std::vector<float>>("--station_egb");
