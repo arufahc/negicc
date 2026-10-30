@@ -23,16 +23,19 @@
 
 #include "color_pipeline.h"
 
-// The highlight shoulder as the sidecar records it (tone.shoulder*).
+// The soft knee of the highlight compression: fixed, as the station's Auto (multi_target_optimizer.cc AUTO_KNEE).
+constexpr float kKnee = 0.95f;
+
+// The highlight roll-off (color_pipeline.h's shoulder) as the sidecar records it (tone.shoulder*): measured for every
+// bundle conversion (multi_target_optimizer.h measure_rolloff_x_hi), off with an ICC profile. Only the sRGB output
+// applies it.
 struct ShoulderInfo {
-  float x_hi = 1.0f;                 // the frozen parameter; 1 is off
-  std::string source = "off";        // off | cli | auto
+  float x_hi = 1.0f;                 // 1 is off
+  std::string source = "off";        // off | rolloff
   bool has_q995 = false;
-  float q995 = 0.0f;                 // measured before clamping (auto)
+  float q995 = 0.0f;                 // the frame's 99.5% point of the pre-shoulder max channel
   bool has_knee = false;
   float knee = 1.0f;                 // the linear knee x_k
-  bool has_guard = false;
-  bool guard = false;
   bool active() const { return x_hi > negicc::kShoulderOff; }
 };
 

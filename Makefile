@@ -221,7 +221,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_ort_runner.o bin_out/dinov3_auto_solver.o \
-              bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o \
+              bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o bin_out/film_base_detect.o \
               bin_out/profile_bundle.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
@@ -277,6 +277,10 @@ GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo 
 bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
+
+bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.h flat_field.h flat_sample.h film_frame_detector.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_base_detect.cc -o $@
 
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
@@ -361,8 +365,8 @@ NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_raw.cc np_geometry.cc np
           rgb_input.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h \
-          dinov3_auto_solver.h film_frame_detector.h pixel_shift_group.h profile_bundle.h multi_target_optimizer.h \
-          embedded_data.h 3rd_party/tiff_head.h
+          dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
+          multi_target_optimizer.h embedded_data.h 3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
