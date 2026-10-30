@@ -63,6 +63,7 @@ struct Setup {
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool has_crosstalk = false;
+  bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
   std::vector<float> r_coeff, g_coeff, b_coeff;  // the crosstalk correction's rows
   negicc::FlatFieldPtr flat_field;
@@ -177,7 +178,7 @@ struct Conversion {
   std::string bundle_target_name;
   int bundle_target_idx = -1;
   DinoSolveResult dino_res;              // the single-profile search
-  // The film base the sidecar records (none is applied: see the TODO at --profile_film_base_rgb).
+  // The film base the sidecar records (none is applied: see the TODO at --film_stock).
   std::vector<int> profile_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_profile_film_base_rgb;
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
