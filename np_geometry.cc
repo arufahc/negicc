@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_geometry.h"
 
 #include <stdio.h>
@@ -61,7 +62,7 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
 
   ushort (*new_image)[4] = (ushort (*)[4]) malloc((size_t)dst_w * dst_h * sizeof(*new_image));
   if (!new_image) {
-    fprintf(stderr, "ERROR! Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
+    log_error("Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
     return false;
   }
 
@@ -114,6 +115,6 @@ void detect_frame_or_fallback(const FilmImage& mosaic, const FrameDetectionParam
   det.ok = false;
   det.conf = 0.0f;
   det.reason = why.empty() ? "no film frame found" : why;
-  fprintf(stderr, "Warning: film frame detection failed (%s); falling back to the full visible frame\n",
+  log_warn("film frame detection failed (%s); falling back to the full visible frame\n",
           det.reason.c_str());
 }

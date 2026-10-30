@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_output.h"
 
 #include <lcms2.h>
@@ -40,7 +41,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
   if (!attach_profile.empty()) {
     // If the profile to attach is not the psuedo "srgb" profile, the profile will be attached to the TIFF.
     // This is a hack to force LibRaw write the ICC profile in the TIFF without conversion.
-    printf("Attaching profile: %s\n", attach_profile.c_str());
+    log_info("Attaching profile: %s\n", attach_profile.c_str());
     if (attach_profile == "srgb") {
       output_profile = reinterpret_cast<unsigned int*>(sRGB_elle_V2_srgbtrc_icc);
       profile_size = sRGB_elle_V2_srgbtrc_icc_len;
@@ -54,7 +55,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
       dynamically_allocated = true;
     }
   } else if (!embedded_icc.empty()) {
-    printf("Attaching profile: [bundle embedded ICC] (%u bytes)\n", (unsigned)embedded_icc.size());
+    log_info("Attaching profile: [bundle embedded ICC] (%u bytes)\n", (unsigned)embedded_icc.size());
     output_profile = reinterpret_cast<unsigned int*>(const_cast<uint8_t*>(embedded_icc.data()));
     profile_size = (unsigned)embedded_icc.size();
   }
@@ -65,7 +66,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
   tiff_head(proc, &header, profile_size);
   auto* fp = fopen(output.c_str(), "wb+");
   if (!fp) {
-    fprintf(stderr, "ERROR! Cannot open %s for writing\n", output.c_str());
+    log_error("Cannot open %s for writing\n", output.c_str());
     if (dynamically_allocated && output_profile) free(output_profile);
     return -1;
   }
@@ -174,7 +175,7 @@ bool write_json_sidecar(
   const std::string tmp_path = json_path + ".tmp";
   FILE* fp = fopen(tmp_path.c_str(), "w");
   if (!fp) {
-    fprintf(stderr, "Warning: Cannot open sidecar file %s for writing\n", tmp_path.c_str());
+    log_warn("Cannot open sidecar file %s for writing\n", tmp_path.c_str());
     return false;
   }
 
@@ -500,13 +501,13 @@ bool write_json_sidecar(
   const bool write_ok = (ferror(fp) == 0);
   const bool close_ok = (fclose(fp) == 0);
   if (!write_ok || !close_ok) {
-    fprintf(stderr, "Warning: Failed to flush/close sidecar %s\n", tmp_path.c_str());
+    log_warn("Failed to flush/close sidecar %s\n", tmp_path.c_str());
     unlink(tmp_path.c_str());
     return false;
   }
 
   if (rename(tmp_path.c_str(), json_path.c_str()) != 0) {
-    fprintf(stderr, "Warning: Failed to rename sidecar from %s to %s\n", tmp_path.c_str(), json_path.c_str());
+    log_warn("Failed to rename sidecar from %s to %s\n", tmp_path.c_str(), json_path.c_str());
     unlink(tmp_path.c_str());
     return false;
   }

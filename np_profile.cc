@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_profile.h"
 
 #include <stdio.h>
@@ -67,16 +68,16 @@ bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof) {
   std::string resolved_path = resolve_profile_path(raw_path);
   cmsHPROFILE hprof = cmsOpenProfileFromFile(resolved_path.c_str(), "r");
   if (!hprof) {
-    fprintf(stderr, "ERROR! Cannot open film ICC profile: %s\n", raw_path.c_str());
+    log_error("Cannot open film ICC profile: %s\n", raw_path.c_str());
     return false;
   }
   if (!parse_film_profile_pipeline(hprof, prof)) {
-    fprintf(stderr, "ERROR! Film ICC profile %s has no AToB0 tag\n", resolved_path.c_str());
+    log_error("Film ICC profile %s has no AToB0 tag\n", resolved_path.c_str());
     cmsCloseProfile(hprof);
     return false;
   }
   cmsCloseProfile(hprof);
-  printf("Reading input ICC profile: %s\n", resolved_path.c_str());
+  log_info("Reading input ICC profile: %s\n", resolved_path.c_str());
   return true;
 }
 
@@ -120,6 +121,6 @@ int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *si
     if (*prof_out) free(*prof_out);
     fclose(fp);
   }
-  fprintf(stderr, "ERROR! Cannot read ICC profile: %s\n", prof_name.c_str());
+  log_error("Cannot read ICC profile: %s\n", prof_name.c_str());
   return -1;
 }

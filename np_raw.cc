@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_raw.h"
 
 #include <omp.h>
@@ -153,7 +154,7 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   const unsigned filters = proc->imgdata.idata.filters;
   const bool xtrans = filters == 9;
   if (!proc->imgdata.rawdata.raw_image || (filters <= 1000 && !xtrans) || proc->imgdata.idata.colors != 3) {
-    fprintf(stderr, "ERROR! The parameter search supports only 3-colour Bayer and X-Trans RAW files\n");
+    log_error("The parameter search supports only 3-colour Bayer and X-Trans RAW files\n");
     return false;
   }
   const int half_size = proc->imgdata.params.half_size;
@@ -161,7 +162,7 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   const int ret = proc->raw2image_ex(1);
   proc->imgdata.params.half_size = half_size;
   if (ret != LIBRAW_SUCCESS || (xtrans && !shrink_xtrans(proc))) {
-    fprintf(stderr, "ERROR! Cannot read the half-size RAW: %s\n",
+    log_error("Cannot read the half-size RAW: %s\n",
             ret != LIBRAW_SUCCESS ? libraw_strerror(ret) : "out of memory");
     proc->free_image();
     proc->raw2image_start();
@@ -200,17 +201,17 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   if (linear) {
     raw = ncomp == 3 ? &proc->imgdata.rawdata.color3_image[0][0] : &proc->imgdata.rawdata.color4_image[0][0];
     if (flat) {
-      fprintf(stderr, "ERROR! --flat applies to a CFA RAW, not a linear DNG\n");
+      log_error("--flat applies to a CFA RAW, not a linear DNG\n");
       return false;
     }
   } else if (!raw || !proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3) {
-    fprintf(stderr, "ERROR! The white-light decode needs a 3-colour CFA RAW file or a linear DNG\n");
+    log_error("The white-light decode needs a 3-colour CFA RAW file or a linear DNG\n");
     return false;
   }
   const int w = S.width, h = S.height, top = S.top_margin, left = S.left_margin;
   const size_t pitch = S.raw_pitch / 2 / (linear ? ncomp : 1);  // pixels per row of the raw buffer
   if (w <= 0 || h <= 0 || top + h > S.raw_height || left + w > (int)pitch) {
-    fprintf(stderr, "ERROR! RAW margins exceed the raw buffer\n");
+    log_error("RAW margins exceed the raw buffer\n");
     return false;
   }
   // Colour of each photosite in a 6x6 tile (Bayer repeats every 2): 0..3 for the black level, 0..2 for the gains.
@@ -225,7 +226,7 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   for (int i = 0; i < 4; ++i) pre[i] = C.pre_mul[i];
   if (pre[3] <= 0) pre[3] = pre[1];
   if (!(pre[0] > 0 && pre[1] > 0 && pre[2] > 0)) {
-    fprintf(stderr, "ERROR! No daylight white balance (pre_mul) for this camera; the white-light decode needs one\n");
+    log_error("No daylight white balance (pre_mul) for this camera; the white-light decode needs one\n");
     return false;
   }
   float wb[4];
@@ -268,7 +269,7 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
     try {
       flat->apply_cfa(raw + (size_t)top * pitch + left, pitch, w, h, col3);
     } catch (const std::exception& e) {
-      fprintf(stderr, "ERROR! %s\n", e.what());
+      log_error("%s\n", e.what());
       return false;
     }
   }
@@ -308,7 +309,7 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   const int ret = proc->dcraw_process();
   if (xtrans) omp_set_num_threads(prev_threads);
   if (ret != LIBRAW_SUCCESS) {
-    fprintf(stderr, "ERROR! Cannot process the white-light decode: %s\n", libraw_strerror(ret));
+    log_error("Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
   }
   return true;
@@ -384,16 +385,16 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   LibRaw* proc = unpacked_proc;
   if (!proc) {
     proc = new LibRaw();
-    printf("Loading RAW file %s\n", fn.c_str());
+    log_info("Loading RAW file %s\n", fn.c_str());
     if ((ret = proc->open_file(fn.c_str())) != LIBRAW_SUCCESS) {
-      fprintf(stderr, "Cannot open %s: %s\n", fn.c_str(), libraw_strerror(ret));
+      log_error("Cannot open %s: %s\n", fn.c_str(), libraw_strerror(ret));
       delete proc;
       return NULL;
     }
-    printf("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+    log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
 
     if ((ret = proc->unpack()) != LIBRAW_SUCCESS) {
-      fprintf(stderr, "Cannot unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
+      log_error("Cannot unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
       delete proc;
       return NULL;
     }
@@ -404,11 +405,11 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                           (proc->imgdata.rawdata.color3_image || proc->imgdata.rawdata.color4_image) &&
                           (proc->imgdata.idata.colors == 3 || proc->imgdata.idata.colors == 4);
   if (linear_dng && proc->imgdata.idata.colors == 4) {
-    printf("Linear DNG with 4 samples a pixel: the first three taken as RGB, the fourth (e.g. infrared) left out\n");
+    log_info("Linear DNG with 4 samples a pixel: the first three taken as RGB, the fourth (e.g. infrared) left out\n");
     proc->imgdata.idata.colors = 3;
   }
   if (!(proc->imgdata.idata.filters || proc->imgdata.idata.colors == 1 || linear_dng)) {
-    printf("Only Bayer-pattern RAW files supported, sorry....\n");
+    log_info("Only Bayer-pattern RAW files supported, sorry....\n");
     delete proc;
     return NULL;
   }
@@ -426,7 +427,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   if (roi) {
     const int w = proc->imgdata.sizes.width, h = proc->imgdata.sizes.height;
     if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
-      fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+      log_error("ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
               roi[0], roi[1], roi[2], roi[3], w, h);
       delete proc;
       return NULL;
@@ -443,7 +444,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       delete proc;
       return NULL;
     }
-    printf("White-light decode (linear Rec.2020): %.4f%% of photosites clipped\n", clip_fraction * 100.0);
+    log_info("White-light decode (linear Rec.2020): %.4f%% of photosites clipped\n", clip_fraction * 100.0);
     if (analyse) {
       if (!decode_white_light(proc, true, 0)) {
         delete proc;
@@ -464,7 +465,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       float dummy_white = 0.0f;
       if (!proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3 ||
           !subtract_cfa_black_in_place(proc, dummy_white)) {
-        fprintf(stderr, "ERROR! --flat requires a 3-colour CFA RAW file with valid sensor margins\n");
+        log_error("--flat requires a 3-colour CFA RAW file with valid sensor margins\n");
         delete proc;
         return NULL;
       }
@@ -481,7 +482,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
         flat->apply_cfa(proc->imgdata.rawdata.raw_image + (size_t)S.top_margin * pitch + S.left_margin,
                         pitch, S.width, S.height, col3);
       } catch (const std::exception& e) {
-        fprintf(stderr, "ERROR! %s\n", e.what());
+        log_error("%s\n", e.what());
         delete proc;
         return NULL;
       }
@@ -516,7 +517,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     if (!white_light) proc->imgdata.params.output_color = camera_rgb ? 0 : 8;
 
     int effective_qual = (qual < 0) ? 0 : qual;
-    printf("Debayer quality: %d\n", effective_qual);
+    log_info("Debayer quality: %d\n", effective_qual);
     proc->imgdata.params.half_size = 0;
     proc->imgdata.params.user_qual = effective_qual;
     proc->imgdata.params.use_auto_wb = 0;
@@ -580,6 +581,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       }
     }
   }
-  printf("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+  log_info("Processed image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   return proc;
 }

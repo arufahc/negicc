@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_pipeline.h"
 
 #include <omp.h>
@@ -55,7 +56,7 @@ void Scan::scan_exposure(const LibRaw& r, double& shutter_out, double& iso_out) 
                 : (r.imgdata.other.iso_speed > 0 ? std::round((double)r.imgdata.other.iso_speed) : 100.0);
   if ((!have_shutter || !have_iso) && !warned_default_exposure) {
     warned_default_exposure = true;
-    fprintf(stderr, "Warning: Missing EXIF exposure metadata in %s; falling back to %.4g s, ISO %.0f\n",
+    log_warn("Missing EXIF exposure metadata in %s; falling back to %.4g s, ISO %.0f\n",
             exposure_file.c_str(), shutter_out, iso_out);
   }
 }
@@ -183,7 +184,7 @@ int prepare(const Options& o, Setup& s) {
     try {
       s.flat_field = negicc::load_flat_field_file(o.flat);
     } catch (const std::exception& e) {
-      fprintf(stderr, "ERROR! %s\n", e.what());
+      log_error("%s\n", e.what());
       return 1;
     }
   }
@@ -191,7 +192,7 @@ int prepare(const Options& o, Setup& s) {
   // The profile: -p, else the built-in bundle of --film_stock and --light_source (or the light the input implies).
   ProfileBundle& bundle = s.bundle;
   if (!o.light_source.empty() && o.implied_light && o.light_source != o.implied_light) {
-    fprintf(stderr, "ERROR! --light_source %s does not fit %s, which takes %s\n", o.light_source.c_str(),
+    log_error("--light_source %s does not fit %s, which takes %s\n", o.light_source.c_str(),
             o.input_mode == InputMode::kLinearDng ? "a linear DNG"
             : o.input_mode == InputMode::kThreeShot ? "three captures, one per light"
             : o.camera_rgb_input ? "a TIFF of linear camera RGB (--input_rgb camera)"
@@ -200,7 +201,7 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
   if (!o.light_source.empty() && o.film_stock.empty()) {
-    fprintf(stderr, "ERROR! --light_source requires --film_stock\n");
+    log_error("--light_source requires --film_stock\n");
     return 1;
   }
   if (!o.film_profile.empty()) {
@@ -208,45 +209,45 @@ int prepare(const Options& o, Setup& s) {
     try {
       s.is_bundle = load_bundle_arg(s.film_prof_arg, bundle);
     } catch (const std::exception& e) {
-      fprintf(stderr, "ERROR! %s\n", e.what());
+      log_error("%s\n", e.what());
       return 1;
     }
     if (!s.is_bundle && !is_regular_file(resolve_profile_path(s.film_prof_arg))) {
-      fprintf(stderr, "ERROR! No profile bundle JSON or ICC profile '%s'\n", s.film_prof_arg.c_str());
+      log_error("No profile bundle JSON or ICC profile '%s'\n", s.film_prof_arg.c_str());
       return 1;
     }
   } else if (!o.film_stock.empty()) {
     if (o.light_source.empty() && !o.implied_light) {
-      fprintf(stderr, "ERROR! --film_stock requires --light_source (tri or d65)\n");
+      log_error("--film_stock requires --light_source (tri or d65)\n");
       return 1;
     }
     const std::string light = !o.light_source.empty() ? o.light_source : std::string(o.implied_light);
-    if (o.light_source.empty()) printf("Light source: %s, from the input\n", light.c_str());
+    if (o.light_source.empty()) log_info("Light source: %s, from the input\n", light.c_str());
     std::string error;
     const std::string key = embedded_bundle_key(o.film_stock, light, error);
     if (key.empty()) {
-      fprintf(stderr, "ERROR! %s (--list_profiles lists them)\n", error.c_str());
+      log_error("%s (--list_profiles lists them)\n", error.c_str());
       return 1;
     }
     try {
       if (!load_embedded_bundle(key, bundle)) {
-        fprintf(stderr, "ERROR! Cannot load built-in profile bundle %s\n", key.c_str());
+        log_error("Cannot load built-in profile bundle %s\n", key.c_str());
         return 1;
       }
     } catch (const std::exception& e) {
-      fprintf(stderr, "ERROR! %s\n", e.what());
+      log_error("%s\n", e.what());
       return 1;
     }
     s.is_bundle = true;
   }
   if (s.is_bundle) {
-    printf("Profile bundle: %s (%s, %zu brackets)\n", bundle.key.c_str(), bundle.path.c_str(), bundle.targets.size());
+    log_info("Profile bundle: %s (%s, %zu brackets)\n", bundle.key.c_str(), bundle.path.c_str(), bundle.targets.size());
   }
   s.has_profile = s.is_bundle || !s.film_prof_arg.empty();
 
   if (o.target_given) {
     if (!s.is_bundle) {
-      fprintf(stderr, "ERROR! --target requires a JSON profile bundle\n");
+      log_error("--target requires a JSON profile bundle\n");
       return 1;
     }
     const std::string& tgt_str = o.target;
@@ -263,12 +264,12 @@ int prepare(const Options& o, Setup& s) {
       }
     }
     if (s.manual_target_idx < 0) {
-      fprintf(stderr, "ERROR! Target '%s' not found in bundle\n", tgt_str.c_str());
+      log_error("Target '%s' not found in bundle\n", tgt_str.c_str());
       return 1;
     }
   }
   if (o.station_egb_given && !s.is_bundle) {
-    fprintf(stderr, "ERROR! --station_egb requires a JSON profile bundle\n");
+    log_error("--station_egb requires a JSON profile bundle\n");
     return 1;
   }
 
@@ -280,21 +281,21 @@ int prepare(const Options& o, Setup& s) {
   s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given && !o.station_egb_given;
   s.bundle_search = s.use_dino && s.is_bundle && s.manual_target_idx < 0 && !s.exposure_given;
   if (!o.dino_adapter.empty() && !s.use_dino) {
-    fprintf(stderr, "ERROR! --dino requires the parameter search: a profile (--film_stock and --light_source, or "
+    log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
                     "--film_profile) without --gain_g or --gain_b\n");
     return 1;
   }
   if (o.knee_auto && (!s.use_dino || s.bundle_search)) {
-    fprintf(stderr, "ERROR! --knee auto requires the parameter search on an ICC profile or a --target bracket\n");
+    log_error("--knee auto requires the parameter search on an ICC profile or a --target bracket\n");
     return 1;
   }
   if (o.shoulder_auto && !s.use_dino) {
-    fprintf(stderr, "ERROR! --shoulder auto requires the parameter search (it measures the shoulder from the render "
+    log_error("--shoulder auto requires the parameter search (it measures the shoulder from the render "
                     "at the searched parameters); give an x_hi instead\n");
     return 1;
   }
   if (s.bundle_search && o.profile_film_base_given) {
-    fprintf(stderr, "ERROR! --profile_film_base_rgb cannot be used with the bracket search (the bundle gives the "
+    log_error("--profile_film_base_rgb cannot be used with the bracket search (the bundle gives the "
                     "film base); pick a bracket with --target to use it\n");
     return 1;
   }
@@ -311,17 +312,17 @@ int prepare(const Options& o, Setup& s) {
   s.white_light = s.is_bundle && bundle.input_space == InputSpace::kRec2020Linear;
   if (s.white_light) {
     if (row_given[0] || row_given[1] || row_given[2]) {
-      fprintf(stderr, "ERROR! -r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
+      log_error("-r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
                       "decode has no crosstalk to correct\n", bundle.key.c_str());
       return 1;
     }
     if (o.files.size() == 4) {
-      fprintf(stderr, "ERROR! The rec2020_linear profile bundle %s converts single-shot captures only, not pixel "
+      log_error("The rec2020_linear profile bundle %s converts single-shot captures only, not pixel "
                       "shift\n", bundle.key.c_str());
       return 1;
     }
     if (o.input_mode == InputMode::kThreeShot) {
-      fprintf(stderr, "ERROR! The rec2020_linear profile bundle %s is for white light; three captures, one per "
+      log_error("The rec2020_linear profile bundle %s is for white light; three captures, one per "
                       "light, take a camera_raw_rgb (tri) bundle\n", bundle.key.c_str());
       return 1;
     }
@@ -354,17 +355,17 @@ int prepare(const Options& o, Setup& s) {
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
   if (o.input_mode == InputMode::kRgbFile && !o.camera_rgb_input && s.has_crosstalk) {
-    fprintf(stderr, "ERROR! %s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
+    log_error("%s is an RGB TIFF or JPEG, converted to linear Rec.2020: give a rec2020_linear (d65) "
                     "profile bundle, not one with a crosstalk correction (or --input_rgb camera for a TIFF of linear "
                     "camera RGB)\n", o.files[0].c_str());
     return 1;
   }
   if (o.input_mode == InputMode::kRgbFile && o.camera_rgb_input && s.white_light) {
-    fprintf(stderr, "ERROR! A TIFF of linear camera RGB (--input_rgb camera) takes a camera_raw_rgb (tri) bundle\n");
+    log_error("A TIFF of linear camera RGB (--input_rgb camera) takes a camera_raw_rgb (tri) bundle\n");
     return 1;
   }
   if (o.input_mode == InputMode::kLinearDng && s.is_bundle && !s.white_light) {
-    fprintf(stderr, "ERROR! A linear DNG is converted to linear Rec.2020 with its own colour data: give a "
+    log_error("A linear DNG is converted to linear Rec.2020 with its own colour data: give a "
                     "rec2020_linear (d65) profile bundle\n");
     return 1;
   }
@@ -377,13 +378,13 @@ int prepare(const Options& o, Setup& s) {
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
-      fprintf(stderr, "ERROR! This neg_process was built without the DINOv3 backbone of the parameter search (make "
+      log_error("This neg_process was built without the DINOv3 backbone of the parameter search (make "
                       "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild); give --gain_g or --gain_b "
                       "to convert without it\n");
       return 1;
     }
     s.dino_path = std::string("[built-in] ") + backbone->name;
-    printf("Loading DINOv3 backbone %s (backend: %s)...\n", s.dino_path.c_str(), o.dino_backend.c_str());
+    log_info("Loading DINOv3 backbone %s (backend: %s)...\n", s.dino_path.c_str(), o.dino_backend.c_str());
     try {
       s.engine.load_memory(trt ? trt->data : nullptr, trt ? trt->size : 0, onnx ? onnx->data : nullptr,
                            onnx ? onnx->size : 0, o.dino_backend);
@@ -401,16 +402,16 @@ int prepare(const Options& o, Setup& s) {
                                          : s.is_bundle ? bundle.key : s.film_prof_arg;
         const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir);
         if (!a) {
-          fprintf(stderr, "ERROR! No intent adapter for profile '%s'\n", profile_name.c_str());
+          log_error("No intent adapter for profile '%s'\n", profile_name.c_str());
           return 1;
         }
         s.engine.set_adapter(a->data, a->size, adapter_dir);
       }
     } catch (const std::exception& e) {
-      fprintf(stderr, "ERROR! %s\n", e.what());
+      log_error("%s\n", e.what());
       return 1;
     }
-    printf("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", s.engine.backend_name(),
+    log_info("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", s.engine.backend_name(),
            s.engine.adapter_name().c_str(), (double)s.engine.memory_bytes() / (1024.0 * 1024.0));
   }
   return 0;
@@ -483,7 +484,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.shoulder_auto = is_shoulder_auto;
       opts.enclosure_rescue = o.enclosure_rescue;
       if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
-        fprintf(stderr, "ERROR! The conversion parameter search failed\n");
+        log_error("The conversion parameter search failed\n");
         return false;
       }
       has_auto_res = true;
@@ -501,7 +502,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const double t_det_0 = omp_get_wtime();
       FilmImage mosaic;
       if (!film_image_from_raw(raw, mosaic)) {
-        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
+        log_error("--roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
         return false;
       }
       det_params.crop_align = mosaic.step;
@@ -526,21 +527,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
   auto print_frame_detection = [&]() {
     const char* axis_name = frame_det.axis == 'h' ? "h" : (frame_det.axis == 'v' ? "v" : "undecided");
-    printf("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
+    log_info("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
            axis_name, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
            frame_det.n_gaps, 1 + (int)frame_det.secondaries.size(), frame_det.conf,
            frame_det.reason.empty() ? "" : " reason: ", frame_det.reason.c_str());
     if (frame_det.n_gaps > 0) {
-      printf("  Gaps (sensor px):");
+      log_info("  Gaps (sensor px):");
       for (int g = 0; g < 2; ++g)
-        if (frame_det.gaps[g][0] >= 0) printf(" [%d, %d]", frame_det.gaps[g][0], frame_det.gaps[g][1]);
-      printf("\n");
+        if (frame_det.gaps[g][0] >= 0) log_info(" [%d, %d]", frame_det.gaps[g][0], frame_det.gaps[g][1]);
+      log_info("\n");
     }
-    printf("  Frame (sensor px): x=%d y=%d w=%d h=%d (frame centre %.1f, %.1f, size %.1f x %.1f, %.1f px/mm)\n",
+    log_info("  Frame (sensor px): x=%d y=%d w=%d h=%d (frame centre %.1f, %.1f, size %.1f x %.1f, %.1f px/mm)\n",
            roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], frame_det.primary.rect.cx,
            frame_det.primary.rect.cy, frame_det.primary.rect.w, frame_det.primary.rect.h, frame_det.px_per_mm);
     for (const FilmFrame& f : frame_det.secondaries)
-      printf("  Frame %+d (sensor px): visible x=%d y=%d w=%d h=%d (%.0f%% of a frame)\n", f.index, f.visible[0],
+      log_info("  Frame %+d (sensor px): visible x=%d y=%d w=%d h=%d (%.0f%% of a frame)\n", f.index, f.visible[0],
              f.visible[1], f.visible[2], f.visible[3], 100.0f * f.visible_fraction);
   };
 
@@ -564,22 +565,22 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   if ((input_mode == InputMode::kRaw || input_mode == InputMode::kLinearDng) &&
       (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
     LibRaw* probe = new LibRaw();
-    printf("Loading RAW file %s\n", files[0].c_str());
+    log_info("Loading RAW file %s\n", files[0].c_str());
     int ret = probe->open_file(files[0].c_str());
     if (ret != LIBRAW_SUCCESS) {
-      fprintf(stderr, "Cannot open %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      log_error("Cannot open %s: %s\n", files[0].c_str(), libraw_strerror(ret));
       delete probe;
       return 1;
     }
-    printf("Image size: %dx%d\n", probe->imgdata.sizes.iwidth, probe->imgdata.sizes.iheight);
+    log_info("Image size: %dx%d\n", probe->imgdata.sizes.iwidth, probe->imgdata.sizes.iheight);
     if ((ret = probe->unpack()) != LIBRAW_SUCCESS) {
-      fprintf(stderr, "Cannot unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      log_error("Cannot unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
       delete probe;
       return 1;
     }
     if (files.size() == 4) {
       if (!is_sony_a7rm4(probe)) {
-        fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
+        log_error("4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
                 probe->imgdata.idata.make, probe->imgdata.idata.model);
         delete probe;
         return 1;
@@ -602,7 +603,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const double t_det_0 = omp_get_wtime();
       FilmImage mosaic;
       if (!film_image_from_raw(*proc, mosaic)) {
-        fprintf(stderr, "ERROR! --roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
+        log_error("--roi auto needs a CFA RAW whose margins lie inside the raw buffer\n");
         delete proc;
         return 1;
       }
@@ -613,7 +614,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
     // Step 1: Per-channel black subtraction in-place on the unpacked CFA mosaic.
     if (!subtract_cfa_black_in_place(proc, cfa_white_level)) {
-      fprintf(stderr, "ERROR! Invalid CFA mosaic geometry in %s\n", files[0].c_str());
+      log_error("Invalid CFA mosaic geometry in %s\n", files[0].c_str());
       delete proc;
       return 1;
     }
@@ -630,10 +631,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       for (int mi = 1; mi < 4; ++mi) {
         ps_extra_procs[mi - 1].reset(new LibRaw());
         LibRaw* fp = ps_extra_procs[mi - 1].get();
-        printf("Loading RAW file %s\n", files[mi].c_str());
+        log_info("Loading RAW file %s\n", files[mi].c_str());
         int fret = fp->open_file(files[mi].c_str());
         if (fret != LIBRAW_SUCCESS || (fret = fp->unpack()) != LIBRAW_SUCCESS) {
-          fprintf(stderr, "Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
+          log_error("Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
           delete proc;
           return 1;
         }
@@ -644,13 +645,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
             fp->imgdata.sizes.left_margin != proc->imgdata.sizes.left_margin ||
             std::fabs(fp->imgdata.other.iso_speed - proc->imgdata.other.iso_speed) > 1e-3f ||
             std::fabs(fp->imgdata.other.shutter - proc->imgdata.other.shutter) > 1e-6f) {
-          fprintf(stderr, "ERROR: 4-shot pixel shift merge is only available with matching Sony A7RM4 frames\n");
+          log_error("4-shot pixel shift merge is only available with matching Sony A7RM4 frames\n");
           delete proc;
           return 1;
         }
         float fw_white = 0.0f;
         if (!subtract_cfa_black_in_place(fp, fw_white)) {
-          fprintf(stderr, "ERROR! Invalid CFA mosaic geometry in %s\n", files[mi].c_str());
+          log_error("Invalid CFA mosaic geometry in %s\n", files[mi].c_str());
           delete proc;
           return 1;
         }
@@ -669,7 +670,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         flat_full_tables = flat_field->tables(src_w, src_h, false);
         flat_full = flat_full_tables->host();
       } catch (const std::exception& e) {
-        fprintf(stderr, "ERROR! %s\n", e.what());
+        log_error("%s\n", e.what());
         delete proc;
         return 1;
       }
@@ -694,11 +695,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       print_frame_detection();
 
       if (frame_det.conf < kLowFrameConfidence) {
-        printf("Warning: low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
+        log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
                frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
       }
       if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
-        printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+        log_warn("axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
       }
     }
 
@@ -709,7 +710,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     if (has_roi) {
       if (roi_coords[0] < 0 || roi_coords[1] < 0 || roi_coords[0] >= src_w || roi_coords[1] >= src_h ||
           roi_coords[2] <= 0 || roi_coords[3] <= 0) {
-        fprintf(stderr, "ERROR! ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+        log_error("ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
                 roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], src_w, src_h);
         delete proc;
         return 1;
@@ -754,7 +755,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.shoulder_auto = is_shoulder_auto;
       opts.enclosure_rescue = o.enclosure_rescue;
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
-        fprintf(stderr, "ERROR! The conversion parameter search failed\n");
+        log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
       }
@@ -795,17 +796,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     unpacked_probe = nullptr;
     if (!proc) {
-      fprintf(stderr, "Cannot open %s\n", files[0].c_str());
+      log_error("Cannot open %s\n", files[0].c_str());
       return 1;
     }
     if (is_roi_auto) {
       print_frame_detection();
       if (frame_det.conf < kLowFrameConfidence) {
-        printf("Warning: low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
+        log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
                frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
       }
       if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
-        printf("Warning: axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+        log_warn("axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
       }
     }
     if (rot_cw != 0 || hflip || vflip) {
@@ -815,7 +816,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         delete proc;
         return 1;
       }
-      printf("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
+      log_info("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
     }
     t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
@@ -828,8 +829,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   scan.cfa = use_cfa_pipeline;
   scan.orig_w = orig_w;
   scan.orig_h = orig_h;
-  printf("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
-  printf("Shutter Speed: %f\n", proc->imgdata.other.shutter);
+  log_info("ISO Speed: %f\n", proc->imgdata.other.iso_speed);
+  log_info("Shutter Speed: %f\n", proc->imgdata.other.shutter);
   return 0;
 }
 
@@ -891,7 +892,7 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
   const int dst_w = swap_dims ? r.h : r.w;
   const int dst_h = swap_dims ? r.w : r.h;
   scan.rgb3.resize((size_t)dst_w * dst_h * 3);
-  printf(scan.mosaic.n_frames == 1 ? "Debayer quality: grain-aware\n" : "Merging 4 images...\n");
+  log_info(scan.mosaic.n_frames == 1 ? "Debayer quality: grain-aware\n" : "Merging 4 images...\n");
   backend.render(scan.mosaic, r, dst_w, dst_h, scan.rgb3.data());
 
   // The mosaics are not needed any more: LibRaw's raw buffer is freed (proc keeps its metadata), and a pixel shift's
@@ -910,7 +911,7 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
   proc->imgdata.sizes.iheight = dst_h;
   proc->imgdata.idata.colors = 3;
   proc->imgdata.params.output_bps = 16;
-  printf("Processed image size: %dx%d\n", dst_w, dst_h);
+  log_info("Processed image size: %dx%d\n", dst_w, dst_h);
   scan.t_raw_decode_ms += (omp_get_wtime() - t_step5_debayer_0) * 1000.0;
   return 0;
 }
@@ -967,7 +968,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     }
   } else if (!is_bundle) {
     if (!film_prof_arg.empty() && !load_film_profile(film_prof_arg, film_prof)) {
-      fprintf(stderr, "ERROR! Cannot load film profile %s\n", film_prof_arg.c_str());
+      log_error("Cannot load film profile %s\n", film_prof_arg.c_str());
     }
   }
 
@@ -997,20 +998,20 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       shoulder_info.has_guard = true;
       shoulder_info.guard = auto_res.shoulder_guard;
     }
-    printf("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
+    log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
            auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
            auto_res.inferences);
     auto ms = [](std::chrono::steady_clock::duration d) {
       return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
     };
-    printf("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
+    log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
            ms(auto_res.render_time), ms(auto_res.infer_time), ms(auto_res.residual_time), ms(auto_res.search_time),
            ms(auto_res.total_time));
-    printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
+    log_info("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", global_exposure_comp, gain_g,
            gain_b, bundle_target_idx);
   } else if (use_dino) {
     if (!is_bundle && !film_prof.data.has_profile) {
-      fprintf(stderr, "ERROR! The parameter search requires a film profile to evaluate intent losses.\n");
+      log_error("The parameter search requires a film profile to evaluate intent losses.\n");
       return 1;
     }
 
@@ -1027,7 +1028,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       // -E without --target: the bracket the bundle picks without the search.
       bundle_target_idx = manual_target_idx >= 0 ? manual_target_idx
                                                  : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-      printf("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
+      log_info("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
       const auto& tgt = bundle.targets[bundle_target_idx];
       bundle_target_name = tgt.name;
       film_prof = tgt.film_prof;
@@ -1048,7 +1049,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
                               user_gains, pin_mask, max_iters, dino_res);
     if (!solve_ok) {
-      fprintf(stderr, "ERROR! DINOv3 intent solver failed.\n");
+      log_error("DINOv3 intent solver failed.\n");
       return 1;
     }
 
@@ -1075,42 +1076,42 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       if (pin_mask & PIN_B) pins_str += "b";
       if (!pins_str.empty() && pins_str.back() == ' ') pins_str.pop_back();
     }
-    printf("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
+    log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
            dino_res.grid_w, dino_res.grid_h, dino_res.target_w, dino_res.target_h,
            engine.backend_name(), dino_res.e_center, dino_res.bounds_lo, dino_res.bounds_hi,
            max_iters, pins_str.c_str());
     if (dino_res.anchor_clamped) {
-      printf("Warning: ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
+      log_warn("ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
     }
-    printf(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
+    log_info(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
     for (const auto& it : dino_res.iterations) {
       if (it.residual < 0.0f) {
-        printf("  %c  %5.3f  %5.3f  %5.3f       -  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
+        log_info("  %c  %5.3f  %5.3f  %5.3f       -  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
                it.tag, it.e, it.g, it.b, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
                it.penalty_clip, it.penalty_anchor, it.objective);
       } else {
-        printf("  %c  %5.3f  %5.3f  %5.3f  %6.3f  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
+        log_info("  %c  %5.3f  %5.3f  %5.3f  %6.3f  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
                it.tag, it.e, it.g, it.b, it.residual, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
                it.penalty_clip, it.penalty_anchor, it.objective);
       }
     }
-    printf("Status: %s after %d inferences (best it %d, resid %.3f)\n",
+    log_info("Status: %s after %d inferences (best it %d, resid %.3f)\n",
            dino_res.status.c_str(), dino_res.total_inferences, dino_res.best_iteration, dino_res.best_residual);
-    printf("Solved (relative): E %.3f g %.3f b %.3f\n",
+    log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
            dino_res.solved_relative.e, dino_res.solved_relative.g, dino_res.solved_relative.b);
-    printf("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g\n",
+    log_info("Solved (absolute): -E %.9g --gain_g %.9g --gain_b %.9g\n",
            dino_res.solved_absolute.e, dino_res.solved_absolute.g, dino_res.solved_absolute.b);
     if (dino_res.solved_relative.g < 0.5f || dino_res.solved_relative.g > 2.0f ||
         dino_res.solved_relative.b < 0.5f || dino_res.solved_relative.b > 2.0f) {
-      printf("Warning: GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
+      log_warn("GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
     }
     if (dino_res.best_iteration >= 0 && (size_t)dino_res.best_iteration + 1 < dino_res.iterations.size()) {
       const auto& bit = dino_res.iterations[dino_res.best_iteration + 1];
       float log2_ratio = (bit.e > 0.0f) ? std::log2(bit.e) : 0.0f;
-      printf("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
+      log_info("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
              bit.penalty_clip, bit.clip_pct, bit.clip_pct <= 2.5f ? "<=" : ">", bit.penalty_anchor, log2_ratio);
     }
-    printf("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
+    log_info("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
            dino_res.timing_views_ms, dino_res.timing_render_ms, dino_res.timing_infer_ms,
            dino_res.timing_residual_ms, dino_res.timing_search_ms);
 
@@ -1130,7 +1131,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     } else {
       bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
     }
-    printf("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
+    log_info("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
     bundle_target_name = bundle.targets[bundle_target_idx].name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
@@ -1169,22 +1170,22 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     if (colorspace_str == "srgb") {
       out.encoding = ENCODE_SRGB;
       out.attach_profile = "srgb";
-      printf("Using elle sRGB TRC as output profile\n");
+      log_info("Using elle sRGB TRC as output profile\n");
     } else if (colorspace_str == "srgb-g10" || colorspace_str == "srgb-linear") {
       out.encoding = ENCODE_SRGB_LINEAR;
       out.attach_profile = "srgb-g10";
-      printf("Using elle sRGB Linear (Gamma = 1.0) as output profile\n");
+      log_info("Using elle sRGB Linear (Gamma = 1.0) as output profile\n");
     } else {
       std::string resolved_custom = resolve_profile_path(colorspace_str);
       out.custom = cmsOpenProfileFromFile(resolved_custom.c_str(), "r");
       if (!out.custom) {
-        fprintf(stderr, "ERROR! Cannot read output ICC profile: %s\n", colorspace_str.c_str());
+        log_error("Cannot read output ICC profile: %s\n", colorspace_str.c_str());
         return 1;
       }
       out.xyz = cmsCreateXYZProfile();
       out.encoding = ENCODE_CUSTOM;
       out.attach_profile = resolved_custom;
-      printf("Reading output ICC profile: %s\n", resolved_custom.c_str());
+      log_info("Reading output ICC profile: %s\n", resolved_custom.c_str());
     }
   } else if (s.has_profile) {
     out.encoding = ENCODE_NONE;
@@ -1203,7 +1204,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   }
   const double t_end = omp_get_wtime();
   scan.t_full_conversion_ms = (t_end - t_start) * 1000.0;
-  printf("Processing time: %f\n", t_end - t_start);
+  log_info("Processing time: %f\n", t_end - t_start);
   return 0;
 }
 
@@ -1246,7 +1247,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   const int* auto_frame_half = scan.auto_frame_half;
 
   const std::string& output = o.output;
-  printf("Writing TIFF '%s'\n", output.c_str());
+  log_info("Writing TIFF '%s'\n", output.c_str());
   const double t_tiff_0 = omp_get_wtime();
   int ret = write_tiff(proc, attach_profile, output,
                        is_bundle ? embedded_icc : std::vector<uint8_t>{},

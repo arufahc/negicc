@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_options.h"
 
 #include <stdio.h>
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 #include "argparse/argparse.hpp"
@@ -39,7 +41,7 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
       if (files[i] == files[j] ||
           (std::filesystem::exists(files[i], ec) && std::filesystem::exists(files[j], ec) &&
            std::filesystem::equivalent(files[i], files[j], ec))) {
-        fprintf(stderr, "ERROR! 4-shot pixel shift requires 4 distinct RAW files (duplicate: %s)\n",
+        log_error("4-shot pixel shift requires 4 distinct RAW files (duplicate: %s)\n",
                 files[i].c_str());
         return false;
       }
@@ -60,7 +62,7 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
   std::string group_err;
   const PixelShiftGroupCheck group = check_pixel_shift_group(group_tags, group_err);
   if (group == PixelShiftGroupCheck::kBad) {
-    fprintf(stderr, "ERROR! %s\n", group_err.c_str());
+    log_error("%s\n", group_err.c_str());
     return false;
   }
   int trailing_idx[4] = {-1, -1, -1, -1};
@@ -85,7 +87,7 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
     if (step == 0 || 2 * step >= idx_mod) in_order = false;
   }
   if (all_have_idx && !in_order) {
-    fprintf(stderr, "ERROR! 4-shot pixel shift files are out of frame order\n");
+    log_error("4-shot pixel shift files are out of frame order\n");
     return false;
   }
   return true;
@@ -94,7 +96,7 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
 // --roi: 'auto [h|v]', or x y w h [rot_cw [hflip [vflip]]]. False with the error reported.
 static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
   if (roi_tokens.empty()) {
-    fprintf(stderr, "ERROR! --roi requires arguments\n");
+    log_error("--roi requires arguments\n");
     return false;
   }
   if (roi_tokens[0] == "auto") {
@@ -105,18 +107,18 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
       } else if (roi_tokens[1] == "v" || roi_tokens[1] == "V") {
         o.roi_axis_hint = 'v';
       } else {
-        fprintf(stderr, "ERROR! Invalid --roi auto axis hint '%s' (must be 'h' or 'v')\n", roi_tokens[1].c_str());
+        log_error("Invalid --roi auto axis hint '%s' (must be 'h' or 'v')\n", roi_tokens[1].c_str());
         return false;
       }
     }
     if (roi_tokens.size() > 2) {
-      fprintf(stderr, "ERROR! Too many arguments for --roi auto\n");
+      log_error("Too many arguments for --roi auto\n");
       return false;
     }
     return true;
   }
   if (roi_tokens.size() < 4) {
-    fprintf(stderr, "ERROR! --roi requires at least 4 arguments: x y w h [rot_cw [hflip [vflip]]]\n");
+    log_error("--roi requires at least 4 arguments: x y w h [rot_cw [hflip [vflip]]]\n");
     return false;
   }
   try {
@@ -126,11 +128,11 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
     if (roi_tokens.size() >= 7) o.vflip = (std::stoi(roi_tokens[6]) != 0);
     o.has_roi = true;
   } catch (const std::exception& e) {
-    fprintf(stderr, "ERROR! Invalid integer argument for --roi\n");
+    log_error("Invalid integer argument for --roi\n");
     return false;
   }
   if (o.roi[0] < 0 || o.roi[1] < 0 || o.roi[2] <= 0 || o.roi[3] <= 0) {
-    fprintf(stderr, "ERROR! Invalid --roi [%d, %d, %d, %d]: x and y must be >= 0 and w and h must be > 0\n",
+    log_error("Invalid --roi [%d, %d, %d, %d]: x and y must be >= 0 and w and h must be > 0\n",
             o.roi[0], o.roi[1], o.roi[2], o.roi[3]);
     return false;
   }
@@ -145,7 +147,7 @@ int parse_options(int ac, char* av[], Options& o) {
         std::string stock = key.substr(0, key.find('-'));
         for (char& ch : stock) ch = (char)std::tolower((unsigned char)ch);
         const std::string light = key.substr(key.find_last_of('-') + 1);
-        printf("--film_stock %s --light_source %s  (%s)\n", stock.c_str(),
+        log_info("--film_stock %s --light_source %s  (%s)\n", stock.c_str(),
                light == "TriLED" ? "tri" : light == "D65" ? "d65" : light.c_str(), key.c_str());
       }
       return -1;
@@ -296,8 +298,9 @@ int parse_options(int ac, char* av[], Options& o) {
   try {
     parser.parse_args(ac, av);
   } catch (const std::exception& err) {
-    std::cerr << err.what() << std::endl;
-    std::cerr << parser;
+    std::ostringstream help;
+    help << parser;
+    log_error("%s\n%s", err.what(), help.str().c_str());
     return 1;
   }
   o.argc = ac;
@@ -306,7 +309,7 @@ int parse_options(int ac, char* av[], Options& o) {
   o.files = parser.get<std::vector<std::string>>("raw_files");
   const auto& files = o.files;
   if (files.size() == 2 || files.size() > 4) {
-    fprintf(stderr, "ERROR! Give one RAW, DNG, TIFF or JPEG file, three captures (one per light: red, green, blue) "
+    log_error("Give one RAW, DNG, TIFF or JPEG file, three captures (one per light: red, green, blue) "
                     "or the four RAW files of a pixel shift capture\n");
     return 1;
   }
@@ -317,12 +320,12 @@ int parse_options(int ac, char* av[], Options& o) {
                                                                 : InputMode::kRaw;
   const std::string input_rgb = parser.get<std::string>("--input_rgb");
   if (input_rgb != "rec2020" && input_rgb != "camera") {
-    fprintf(stderr, "ERROR! --input_rgb is rec2020 or camera, not '%s'\n", input_rgb.c_str());
+    log_error("--input_rgb is rec2020 or camera, not '%s'\n", input_rgb.c_str());
     return 1;
   }
   o.camera_rgb_input = input_rgb == "camera";
   if (o.camera_rgb_input && (o.input_mode != InputMode::kRgbFile || negicc::is_jpeg_file(files[0]))) {
-    fprintf(stderr, "ERROR! --input_rgb camera applies to a single TIFF (a JPEG's 8-bit sRGB is not linear camera "
+    log_error("--input_rgb camera applies to a single TIFF (a JPEG's 8-bit sRGB is not linear camera "
                     "RGB)\n");
     return 1;
   }
@@ -332,14 +335,14 @@ int parse_options(int ac, char* av[], Options& o) {
                     : o.input_mode == InputMode::kThreeShot || o.camera_rgb_input ? "tri"
                                                                                   : "d65";
   if (o.input_mode != InputMode::kRaw && parser.is_used("--flat")) {
-    fprintf(stderr, "ERROR! --flat applies to a single CFA RAW or a pixel shift capture\n");
+    log_error("--flat applies to a single CFA RAW or a pixel shift capture\n");
     return 1;
   }
   if (files.size() == 4 && !check_pixel_shift_files(files)) return 1;
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   if (o.dino_iters <= 0) {
-    fprintf(stderr, "ERROR! --dino_iters must be positive (got %d)\n", o.dino_iters);
+    log_error("--dino_iters must be positive (got %d)\n", o.dino_iters);
     return 1;
   }
   o.r_coeff = parser.get<std::vector<float>>("--r_coeff");
@@ -357,7 +360,7 @@ int parse_options(int ac, char* av[], Options& o) {
     char* end = nullptr;
     const float val = strtof(knee_str.c_str(), &end);
     if (!end || *end != '\0' || end == knee_str.c_str() || !std::isfinite(val) || val <= 0.0f) {
-      fprintf(stderr, "ERROR! Invalid --knee argument '%s'\n", knee_str.c_str());
+      log_error("Invalid --knee argument '%s'\n", knee_str.c_str());
       return 1;
     }
     o.knee = val;
@@ -371,7 +374,7 @@ int parse_options(int ac, char* av[], Options& o) {
     const float val = strtof(shoulder_str.c_str(), &end);
     if (!end || *end != '\0' || end == shoulder_str.c_str() || !std::isfinite(val) || val < 1.0f ||
         val > negicc::kShoulderXHiMax) {
-      fprintf(stderr, "ERROR! Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
+      log_error("Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
               shoulder_str.c_str(), (double)negicc::kShoulderXHiMax);
       return 1;
     }
@@ -392,19 +395,19 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.get<bool>("--hflip")) o.hflip = true;
   if (parser.get<bool>("--vflip")) o.vflip = true;
   if (o.rot_cw % 90 != 0) {
-    fprintf(stderr, "ERROR! Rotation must be a multiple of 90 degrees (got %d)\n", o.rot_cw);
+    log_error("Rotation must be a multiple of 90 degrees (got %d)\n", o.rot_cw);
     return 1;
   }
 
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
   if (o.film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
-    fprintf(stderr, "ERROR! Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9 or auto)\n",
+    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9 or auto)\n",
             film_format_arg.c_str());
     return 1;
   }
   if (parser.is_used("--film_format") && !o.roi_auto) {
-    fprintf(stderr, "ERROR! --film_format requires --roi auto\n");
+    log_error("--film_format requires --roi auto\n");
     return 1;
   }
 
