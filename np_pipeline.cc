@@ -397,11 +397,12 @@ int prepare(const Options& o, Setup& s) {
 // The station's E of given values: -E, else the exposure of bracket target_idx's e_center (absolute, as when no
 // exposure is given) on the station's scale.
 static float given_station_e(const Options& o, const ProfileBundle& bundle, int target_idx, double scan_shutter_s,
-                             double scan_iso) {
+                             double scan_iso, const double* film_base_rgb) {
   if (o.exposure_given || bundle.targets[target_idx].e_center <= 0.0f) return o.exposure_comp;
   float base[9];
   double row_scale[3];
-  compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false, base, nullptr, row_scale);
+  compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, film_base_rgb, film_base_rgb != nullptr, base, nullptr,
+                                row_scale);
   return (float)((double)bundle.targets[target_idx].e_center / row_scale[0]);
 }
 
@@ -447,12 +448,30 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   auto measure_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = has_auto_res ? auto_res.target_idx : given_target_idx;
     const float e = has_auto_res ? auto_res.params.e
-                                 : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso);
+                                 : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
+                                                   scan.film_base_rgb());
     const float g = has_auto_res ? auto_res.params.g : o.gain_g;
     const float b = has_auto_res ? auto_res.params.b : o.gain_b;
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
-                                             ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995);
+                                             ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
     scan.has_rolloff = true;
+  };
+
+  // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
+  // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
+  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; LibRaw's decode and RGB files have no
+  // mosaic for the detector, so the base comes from the statistics.
+  // TODO: with --roi auto, load_raw decodes only the frame, so the statistics there see the frame, not the whole scan.
+  // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
+  auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
+    if (!s.is_bundle) return;
+    const double* xt = (s.bundle.has_crosstalk && !s.white_light) ? s.bundle.crosstalk_matrix_d : nullptr;
+    if (negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, scan.film_base)) {
+      log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", scan.film_base.source.c_str(), scan.film_base.rgb[0],
+               scan.film_base.rgb[1], scan.film_base.rgb[2]);
+    } else {
+      log_info("Film base: none read from the scan; the bundle's\n");
+    }
   };
 
   HalfSizeAnalysis analyse;
@@ -478,10 +497,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // Step 3 & Step 4: zero-copy RgbView over the half-size image, cropped and oriented in place.
       negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
           &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
+      // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
+      detect_base(half_view, nullptr, 0, 0);
       negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
       if (bundle_search) {
         ParamSearchOptions opts;
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
+        opts.film_base_rgb_d = scan.film_base_rgb();
+        opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
         if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
           log_error("The conversion parameter search failed\n");
           return false;
@@ -678,6 +701,20 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     full_half_view = negicc::RgbView::from_cfa_half(
         cfa_origin, cfa_pitch, src_w, src_h, filters, nullptr, flat_half, flat_half_tables);
+    if (s.is_bundle) {
+      // The frame detector on the black-subtracted mosaic of the first frame, with its default parameters, as
+      // negicc-station runs it for the film base (CapturedImage::film_frame_detection).
+      FrameDetection base_det;
+      FilmImage mosaic;
+      const float no_black[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      const bool has_det =
+          filters > 1000 &&
+          film_image_from_cfa(cfa_origin, src_w, src_h, (ptrdiff_t)cfa_pitch, 2,
+                              [filters](int row, int col) { return (int)(filters >> ((((row << 1) & 14) | (col & 1)) << 1) & 3); },
+                              no_black, cfa_white_level, mosaic);
+      if (has_det) detect_film_frame(mosaic, FrameDetectionParams(), base_det);
+      detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
+    }
 
     // Step 3: Crop, rotate, flip & inline ROI search on the zero-copy view.
     if (is_roi_auto) {
@@ -752,6 +789,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       get_scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
+      opts.film_base_rgb_d = scan.film_base_rgb();
+      opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
       if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
@@ -838,7 +877,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 }
 
 int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
-  const bool is_bundle = s.is_bundle, bundle_search = s.bundle_search;
+  const bool is_bundle = s.is_bundle;
   const ProfileBundle& bundle = s.bundle;
   std::vector<int>& effective_profile_film_base_rgb = c.profile_film_base_rgb;
   const std::vector<int> effective_film_base_rgb = {1, 1, 1};
@@ -851,8 +890,8 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
   c.knee = kKnee;
   const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
 
-  // The sidecar records the bundle's film base. No film base of the capture is given (TODO at --film_stock: read it
-  // from an image), so none is applied: the film base scale of the input matrix is 1.
+  // The sidecar records the bundle's film base. The film base scale of the input matrix is 1: a bundle conversion's
+  // film base (the scan's, else the bundle's) is in the station's merged matrix (solve).
   c.sidecar_profile_film_base_rgb = {1, 1, 1};
   if (is_bundle && bundle.has_film_base) {
     c.sidecar_profile_film_base_rgb = {bundle.profile_film_base_rgb[0], bundle.profile_film_base_rgb[1],
@@ -860,8 +899,9 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
   }
   effective_profile_film_base_rgb = {1, 1, 1};
 
-  if (bundle_search) {
-    // The bundle's film base is folded into the solved exposure and gains (not applied as a film base scale).
+  if (is_bundle) {
+    // The bundle's film base (when none is read from the scan) is in the station's merged matrix, so in E, g and b,
+    // not applied as a film base scale.
     c.sidecar_film_base_rgb = c.sidecar_profile_film_base_rgb;
     c.film_base_source = "bundle";
   }
@@ -950,7 +990,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (is_bundle) {
     double scan_shutter_s = 0.125, scan_iso = 100.0;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-    compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false, station_base, nullptr, row_scale);
+    compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(), scan.film_base_rgb() != nullptr,
+                                  station_base, nullptr, row_scale);
   }
   auto apply_station = [&](float e, float g, float b) {
     c.station_params = std::array<float, 3>{e, g, b};
@@ -1134,7 +1175,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
     double scan_shutter_s = 0.125, scan_iso = 100.0;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-    apply_station(given_station_e(o, bundle, bundle_target_idx, scan_shutter_s, scan_iso), gain_g, gain_b);
+    apply_station(given_station_e(o, bundle, bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()), gain_g,
+                  gain_b);
   }
 
   if (is_bundle && bundle_target_idx >= 0) {
@@ -1230,10 +1272,11 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   const int rot_cw = scan.rot_cw;
   const bool hflip = scan.hflip, vflip = scan.vflip;
   const int width = proc->imgdata.sizes.iwidth, height = proc->imgdata.sizes.iheight;
-  const bool film_base_applied = false;  // no film base of the capture (see the TODO at --film_stock)
+  // A bundle conversion takes the film base read from the scan (Scan::film_base), else the bundle's.
+  const bool film_base_applied = is_bundle && scan.film_base.found;
   const std::vector<int>& sidecar_film_base_rgb = c.sidecar_film_base_rgb;
   const std::vector<int>& sidecar_profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
-  const std::string& film_base_source = c.film_base_source;
+  const std::string film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
   const float* merged_matrix = c.merged_matrix;
   const float global_exposure_comp = c.exposure_comp, gain_g = c.gain_g, gain_b = c.gain_b;
   const unsigned pin_mask = c.pin_mask;
@@ -1296,11 +1339,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.out_w = width;
     sc.out_h = height;
     sc.film_base_applied = film_base_applied;
-    sc.film_base_rgb = sidecar_film_base_rgb;
+    sc.film_base_rgb.assign(sidecar_film_base_rgb.begin(), sidecar_film_base_rgb.end());
     sc.profile_film_base_rgb = sidecar_profile_film_base_rgb;
     sc.film_base_source = film_base_source;
-    sc.std_density = frame_det.base_std_d;
-    sc.has_std_density = frame_det.has_base;
+    sc.film_base_detection = is_bundle ? &scan.film_base : nullptr;
     sc.profile_path = is_bundle ? bundle.path : film_prof_arg;
     sc.is_bundle = is_bundle;
     sc.bundle_target_name = bundle_target_name;

@@ -41,6 +41,10 @@
 //   to the first capture's exposure when all three record theirs. There is no crosstalk between the lights to
 //   correct, so the correction is the identity (-r, -g and -b give another). --flat applies to RAWs only.
 //
+// With a bundle, the film base is read from the scan itself, as negicc-station's Auto reads it (film_base_detect.h):
+// the unexposed film beside the frame (the rebate or a gap between frames) when the frame detector finds it, else the
+// thinnest film on the scan; the bundle's when neither gives one. The sidecar's film_base records which.
+//
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
 // whenever a profile is given, unless --gain_g or --gain_b is; then the conversion takes the values as given. -E
 // keeps the exposure as given and solves only the gains, on the bracket --target picks (or the bundle's default).

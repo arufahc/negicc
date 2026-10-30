@@ -1037,8 +1037,11 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
 
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995) {
-  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, ParamSearchOptions{});
+                           float* q995, const double* film_base_rgb) {
+  ParamSearchOptions base_opts;
+  base_opts.film_base_rgb_d = film_base_rgb;
+  base_opts.film_base_from_scan = film_base_rgb != nullptr;
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, base_opts);
   // As SearchFrame::measure_shoulder: the matrix in reference units (M_frame / e_norm) at the search's internal E.
   float input_matrix[9], m[9];
   for (int i = 0; i < 9; ++i) input_matrix[i] = scale.frame_matrix[i] / scale.e_norm;
