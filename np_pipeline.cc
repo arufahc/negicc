@@ -394,6 +394,17 @@ int prepare(const Options& o, Setup& s) {
   return 0;
 }
 
+// The station's E of given values: -E, else the exposure of bracket target_idx's e_center (absolute, as when no
+// exposure is given) on the station's scale.
+static float given_station_e(const Options& o, const ProfileBundle& bundle, int target_idx, double scan_shutter_s,
+                             double scan_iso) {
+  if (o.exposure_given || bundle.targets[target_idx].e_center <= 0.0f) return o.exposure_comp;
+  float base[9];
+  double row_scale[3];
+  compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, nullptr, false, base, nullptr, row_scale);
+  return (float)((double)bundle.targets[target_idx].e_center / row_scale[0]);
+}
+
 int decode(const Options& o, Setup& s, Scan& scan) {
   const std::vector<std::string>& files = o.files;
   ProfileBundle& bundle = s.bundle;
@@ -435,7 +446,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                                                           : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
   auto measure_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = has_auto_res ? auto_res.target_idx : given_target_idx;
-    const float e = has_auto_res ? auto_res.params.e : o.exposure_comp;
+    const float e = has_auto_res ? auto_res.params.e
+                                 : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso);
     const float g = has_auto_res ? auto_res.params.g : o.gain_g;
     const float b = has_auto_res ? auto_res.params.b : o.gain_b;
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
@@ -1119,8 +1131,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     bundle_target_name = bundle.targets[bundle_target_idx].name;
     film_prof = bundle.targets[bundle_target_idx].film_prof;
     film_prof.rebind_pointers();
-    // The given values are the station's (E defaults to 1, g and b to 1), converted as the search's result is.
-    apply_station(global_exposure_comp, gain_g, gain_b);
+    // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
+    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+    apply_station(given_station_e(o, bundle, bundle_target_idx, scan_shutter_s, scan_iso), gain_g, gain_b);
   }
 
   if (is_bundle && bundle_target_idx >= 0) {
