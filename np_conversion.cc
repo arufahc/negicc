@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "np_log.h"
 #include "np_conversion.h"
 
 #include <stdio.h>
@@ -43,8 +44,8 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
   float cc_profile_r = dot_product(r_coef, profile_film_base_rgb);
   float cc_profile_g = dot_product(g_coef, profile_film_base_rgb);
   float cc_profile_b = dot_product(b_coef, profile_film_base_rgb);
-  printf("Film base RGB (corrected): %f %f %f\n", cc_average_r, cc_average_g, cc_average_b);
-  printf("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
+  log_info("Film base RGB (corrected): %f %f %f\n", cc_average_r, cc_average_g, cc_average_b);
+  log_info("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
 
   // The ICC profiles map the transmittance values after the correction matrix is
   // applied to XYZ. Transmittance is relative the profile film base. For example
@@ -82,7 +83,7 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
     g_scale = (cc_profile_g / cc_profile_r) / (cc_average_g / cc_average_r);
     b_scale = (cc_profile_b / cc_profile_r) / (cc_average_b / cc_average_r);
   }
-  printf("Scale channels to match film base: %f %f %f\n", 1.0, g_scale, b_scale);
+  log_info("Scale channels to match film base: %f %f %f\n", 1.0, g_scale, b_scale);
 
   const float sr = global_exposure_comp;
   const float sg = g_scale * global_exposure_comp * gain_g;
@@ -93,7 +94,7 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
     merged_matrix[3 + i] = g_coef[i] * sg;
     merged_matrix[6 + i] = b_coef[i] * sb;
   }
-  printf("R coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[0], merged_matrix[1], merged_matrix[2]);
-  printf("G coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[3], merged_matrix[4], merged_matrix[5]);
-  printf("B coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
+  log_info("R coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[0], merged_matrix[1], merged_matrix[2]);
+  log_info("G coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[3], merged_matrix[4], merged_matrix[5]);
+  log_info("B coefficients: %1.5f %1.5f %1.5f\n", merged_matrix[6], merged_matrix[7], merged_matrix[8]);
 }
