@@ -181,39 +181,26 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
   parser.add_argument("-E", "--exposure_comp")
-    .help("Multiplier for RGB values. Given, the parameter search keeps it and solves only the gains, on the bracket "
-          "--target picks (or the bundle's default).")
+    .help("Exposure. With a bundle, E as negicc-station and the parameter search give it (the sidecar's auto.e): "
+          "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
+          "corrected RGB. Given, the parameter search keeps it and solves only the gains, on the bracket --target "
+          "picks (or the bundle's default).")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("--knee")
-    .help("Soft knee highlight compression threshold in [0, 1], or 'auto' (the parameter search on an ICC profile or a "
-          "--target bracket). Defaults to 0.95 (>=1.0 disables).")
-    .default_value(std::string("0.95"));
-  parser.add_argument("--shoulder")
-    .help("Highlight shoulder: 'off', 'auto' (the parameter search measures it from the pre-shoulder render and the "
-          "export applies it), or x_hi in [1, 1.5]: the 99.5% point of the render's max channel in linear sRGB, "
-          "where the chart white is 1 (a linear value, not stops: 1.3 is +0.38 stop). 1 is off. The shoulder rolls "
-          "the range above its knee into the ceiling at x_hi. It only applies to the sRGB output; srgb-g10 "
-          "(scene-referred) and ICC outputs never apply it. Defaults to off.")
-    .default_value(std::string("off"));
   parser.add_argument("--no-metadata")
     .help("Disable automatic JSON metadata sidecar generation.")
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--gain_g")
-    .help("Additional gain multiplier for the G channel. Defaults to 1.0. Given, it turns the parameter search off.")
+    .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
+          "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
-    .help("Additional gain multiplier for the B channel. Defaults to 1.0. Given, it turns the parameter search off.")
+    .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
+          "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
-  parser.add_argument("--profile_film_base_rgb")
-    .help("Linear (uncorrected) R G B values of the film base from profile, in the space the RAW is decoded to (sensor "
-          "RGB, or linear Rec.2020 for a rec2020_linear bundle).")
-    .nargs(3)
-    .default_value(std::vector<int>{1, 1, 1})
-    .scan<'i', int>();
   // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does), in
   // place of the profile's; --film_base_rgb, which took it as numbers or from the rebate (--roi auto), is removed.
   parser.add_argument("--film_stock")
@@ -223,14 +210,10 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020). Required for a RAW; "
-          "otherwise it follows the input: d65 for a linear DNG, a JPEG or a TIFF, tri for a TIFF with --input_rgb "
-          "camera and for three captures.");
-  parser.add_argument("--input_rgb")
-    .help("What a TIFF's values are: rec2020 (converted through its ICC profile, else sRGB for 8 bits or taken as "
-          "linear Rec.2020 for 16 bits; a d65 bundle) or camera (the scanning camera's linear RGB under the "
-          "TriLED light, black subtracted, no white balance or colour matrix; a tri bundle and its crosstalk "
-          "correction).")
-    .default_value(std::string("rec2020"));
+          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes either: "
+          "with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are sRGB and "
+          "16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light (black "
+          "subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
   parser.add_argument("-p", "--film_profile")
     .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
           "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
@@ -275,11 +258,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "search (defaults to 8), else the solver's iterations (defaults to 4).")
     .scan<'i', int>()
     .default_value(4);
-  parser.add_argument("--enclosure_rescue")
-    .help("Enable Part 1B of the parameter search, the enclosure-guided bracket rescue that re-screens the bracket "
-          "pool when the chosen bracket still clips highlights (off by default).")
-    .default_value(false)
-    .implicit_value(true);
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
@@ -287,12 +265,6 @@ int parse_options(int ac, char* av[], Options& o) {
   // flat field .npz measured from one.
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
-  parser.add_argument("--station_egb")
-    .help("Conversion parameters E, g and b as negicc-station applies them (multi_target_optimizer.h): the bundle's "
-          "merged matrix (crosstalk, film base and exposure ratio) scaled per row by E, E*g and E*b. Turns the "
-          "parameter search off.")
-    .nargs(3)
-    .scan<'g', float>();
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -318,22 +290,12 @@ int parse_options(int ac, char* av[], Options& o) {
                      ? InputMode::kRgbFile
                  : files.size() == 1 && is_linear_dng(files[0]) ? InputMode::kLinearDng
                                                                 : InputMode::kRaw;
-  const std::string input_rgb = parser.get<std::string>("--input_rgb");
-  if (input_rgb != "rec2020" && input_rgb != "camera") {
-    log_error("--input_rgb is rec2020 or camera, not '%s'\n", input_rgb.c_str());
-    return 1;
-  }
-  o.camera_rgb_input = input_rgb == "camera";
-  if (o.camera_rgb_input && (o.input_mode != InputMode::kRgbFile || negicc::is_jpeg_file(files[0]))) {
-    log_error("--input_rgb camera applies to a single TIFF (a JPEG's 8-bit sRGB is not linear camera "
-                    "RGB)\n");
-    return 1;
-  }
-  // The scanning light the input implies, for the built-in bundle when --light_source is not given: a linear DNG,
-  // a JPEG or a TIFF (as Rec.2020) is white light, a TIFF of camera RGB or three captures one per light is TriLED.
+  o.tiff_input = o.input_mode == InputMode::kRgbFile && !negicc::is_jpeg_file(files[0]);
+  // The scanning light the input implies, for the built-in bundle when --light_source is not given: a linear DNG, a
+  // JPEG or a TIFF is white light, three captures one per light are TriLED. A TIFF also takes tri (camera RGB).
   o.implied_light = o.input_mode == InputMode::kRaw ? nullptr
-                    : o.input_mode == InputMode::kThreeShot || o.camera_rgb_input ? "tri"
-                                                                                  : "d65";
+                    : o.input_mode == InputMode::kThreeShot ? "tri"
+                                                            : "d65";
   if (o.input_mode != InputMode::kRaw && parser.is_used("--flat")) {
     log_error("--flat applies to a single CFA RAW or a pixel shift capture\n");
     return 1;
@@ -353,34 +315,6 @@ int parse_options(int ac, char* av[], Options& o) {
   o.row_given[2] = parser.is_used("--b_coeff");
   o.exposure_comp = parser.get<float>("--exposure_comp");
   o.exposure_given = parser.is_used("-E") || parser.is_used("--exposure_comp");
-  const std::string knee_str = parser.get<std::string>("--knee");
-  o.knee_auto = (knee_str == "auto");
-  o.knee_given = parser.is_used("--knee");
-  if (!o.knee_auto) {
-    char* end = nullptr;
-    const float val = strtof(knee_str.c_str(), &end);
-    if (!end || *end != '\0' || end == knee_str.c_str() || !std::isfinite(val) || val <= 0.0f) {
-      log_error("Invalid --knee argument '%s'\n", knee_str.c_str());
-      return 1;
-    }
-    o.knee = val;
-  }
-  const std::string shoulder_str = parser.get<std::string>("--shoulder");
-  o.shoulder_auto = (shoulder_str == "auto");
-  if (o.shoulder_auto) {
-    o.shoulder.source = "auto";
-  } else if (shoulder_str != "off") {
-    char* end = nullptr;
-    const float val = strtof(shoulder_str.c_str(), &end);
-    if (!end || *end != '\0' || end == shoulder_str.c_str() || !std::isfinite(val) || val < 1.0f ||
-        val > negicc::kShoulderXHiMax) {
-      log_error("Invalid --shoulder argument '%s' (off, auto or x_hi in [1, %g])\n",
-              shoulder_str.c_str(), (double)negicc::kShoulderXHiMax);
-      return 1;
-    }
-    o.shoulder.x_hi = val;
-    o.shoulder.source = val > negicc::kShoulderOff ? "cli" : "off";
-  }
   o.gain_g = parser.get<float>("--gain_g");
   o.gain_b = parser.get<float>("--gain_b");
   o.gain_g_given = parser.is_used("--gain_g");
@@ -417,16 +351,8 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
-  o.profile_film_base_rgb = parser.get<std::vector<int>>("--profile_film_base_rgb");
-  o.profile_film_base_given = parser.is_used("--profile_film_base_rgb");
-  o.station_egb_given = parser.is_used("--station_egb");
-  if (o.station_egb_given) {
-    const auto v = parser.get<std::vector<float>>("--station_egb");
-    for (int i = 0; i < 3; ++i) o.station_egb[i] = v[i];
-  }
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
-  o.enclosure_rescue = parser.get<bool>("--enclosure_rescue");
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

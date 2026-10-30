@@ -198,8 +198,12 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["scene_ev"] = num(a.scene_ev, "%.4g");
   j["headroom"] = {{"applied", headroom_applied(a.headroom)}, {"ev", num(a.headroom_ev, "%.4g")},
                    {"reason", to_string(a.headroom)}};
-  j["rescue"] = {{"branch", a.rescue == RescueOutcome::kNotNeeded ? "N" : "R"},
-                 {"white_clip", num(a.rescue_white_clip, "%.6g")}, {"changed", a.rescue == RescueOutcome::kTaken}};
+  // The record keeps its historical keys and values: branch R is the clip fallback being tried or the highlight
+  // pullback moving the result (the pullback used to report through the clip fallback's outcome), and changed is
+  // either one moving the result.
+  j["rescue"] = {{"branch", a.clip_fallback == ClipFallbackOutcome::kNotNeeded && !a.highlight_pullback ? "N" : "R"},
+                 {"white_clip", num(a.clip_fallback_white_clip, "%.6g")},
+                 {"changed", a.clip_fallback == ClipFallbackOutcome::kTaken || a.highlight_pullback}};
   ordered_json screening = ordered_json::array();
   for (const auto& r : a.screening)
     screening.push_back({{"target_idx", r.target_idx}, {"e", num(r.params.e)}, {"g", num(r.params.g)},
@@ -324,9 +328,12 @@ bool write_json_sidecar(const Sidecar& sc) {
                  {"pins", {{"e", (sc.pin_mask & PIN_E) != 0}, {"g", (sc.pin_mask & PIN_G) != 0},
                            {"b", (sc.pin_mask & PIN_B) != 0}}}};
 
-  std::vector<std::string> cli = {"-E", num_str(sc.exposure_comp, "%.9g"), "--gain_g", num_str(sc.gain_g, "%.9g"),
-                                  "--gain_b", num_str(sc.gain_b, "%.9g"), "--knee", num_str(sc.knee, "%.9g")};
-  if (sc.shoulder.active()) cli.insert(cli.end(), {"--shoulder", num_str(sc.shoulder.x_hi, "%.9g")});
+  // The values -E, --gain_g and --gain_b take: the station's with a bundle, else the absolute ones.
+  const float* egb = sc.station_params;
+  const float abs_egb[3] = {sc.exposure_comp, sc.gain_g, sc.gain_b};
+  if (!egb) egb = abs_egb;
+  std::vector<std::string> cli = {"-E", num_str(egb[0], "%.9g"), "--gain_g", num_str(egb[1], "%.9g"), "--gain_b",
+                                  num_str(egb[2], "%.9g")};
   if (sc.has_roi) {
     cli.push_back("--roi");
     for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
@@ -339,17 +346,12 @@ bool write_json_sidecar(const Sidecar& sc) {
   j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
   j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
 
-  const bool dyn_knee = sc.dino && sc.dino->dynamic_knee.active;
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},
-               {"knee_source", sc.knee_source},
-               {"q995", dyn_knee ? num(sc.dino->dynamic_knee.q995) : ordered_json(nullptr)},
-               {"knee_fit", dyn_knee ? num(sc.dino->dynamic_knee.knee_fit) : ordered_json(nullptr)},
                {"shoulder", num(sh.x_hi, "%.9g")},
                {"shoulder_source", sh.source},
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
-               {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)},
-               {"shoulder_guard", sh.has_guard ? ordered_json(sh.guard) : ordered_json(nullptr)}};
+               {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
 
   j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
 

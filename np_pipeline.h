@@ -28,7 +28,7 @@
 //   render    the full-resolution image of the frame: the backend debayers or merges a mosaic; an RGB image is one
 //             already
 //   solve     the conversion parameters without the bundle search: the bracket, E, g and b (the single-profile
-//             search, a --target bracket, --station_egb or given values), the knee and the shoulder
+//             search, a --target bracket or given values), the knee and the shoulder
 //   convert   the backend converts the image in place to the output encoding
 //   write     the TIFF and the sidecar
 
@@ -36,7 +36,9 @@
 
 #include <lcms2.h>
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,11 +60,12 @@ struct Setup {
   std::string film_prof_arg;             // -p naming an ICC profile (not a bundle)
   bool has_profile = false;
   int manual_target_idx = -1;            // --target, -1 when not given
-  bool exposure_given = false;           // -E or --station_egb: the exposure is not searched
+  bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool has_crosstalk = false;
+  bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
   std::vector<float> r_coeff, g_coeff, b_coeff;  // the crosstalk correction's rows
   negicc::FlatFieldPtr flat_field;
@@ -150,6 +153,11 @@ struct Scan {
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
 
+  // The highlight roll-off of Auto's result or of given values, measured on the half-size frame as the bracket search
+  // measures it, while that frame exists (render frees the mosaic; LibRaw's half-size decode is analysed and gone).
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
@@ -177,7 +185,9 @@ struct Conversion {
   std::string bundle_target_name;
   int bundle_target_idx = -1;
   DinoSolveResult dino_res;              // the single-profile search
-  // The film base the sidecar records (none is applied: see the TODO at --profile_film_base_rgb).
+  // With a bundle: E, g and b on the station's scale (what -E, --gain_g and --gain_b take), for cli_equivalent.
+  std::optional<std::array<float, 3>> station_params;
+  // The film base the sidecar records (none is applied: see the TODO at --film_stock).
   std::vector<int> profile_film_base_rgb = {1, 1, 1};
   std::vector<int> sidecar_profile_film_base_rgb;
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
