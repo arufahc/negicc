@@ -1276,27 +1276,54 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       roi_source = "cli";
     }
 
-    write_json_sidecar(output, o.argc, o.argv, proc, o.files,
-                       orig_w, orig_h,
-                       false,
-                       has_roi, roi_coords, roi_source,
-                       is_roi_auto ? &frame_det : nullptr,
-                       rot_cw, hflip, vflip,
-                       width, height,
-                       film_base_applied, sidecar_film_base_rgb, sidecar_profile_film_base_rgb,
-                       film_base_source,
-                       frame_det.base_std_d, frame_det.has_base,
-                       is_bundle ? bundle.path : film_prof_arg,
-                       merged_matrix,
-                       global_exposure_comp, gain_g, gain_b,
-                       pin_mask,
-                       knee, knee_source, shoulder_info,
-                       use_dino && !has_auto_res, dino_res,
-                       dino_path, use_dino ? std::string(engine.backend_used()) : dino_backend,
-                       cs_name,
-                       t_raw_decode_ms, t_frame_det_ms, t_full_conversion_ms, t_tiff_write_ms,
-                       is_bundle, bundle_target_name, bundle_target_idx,
-                       has_auto_res ? &auto_res : nullptr, auto_frame_half, t_auto_ms, bundle.input_space);
+    Sidecar sc;
+    sc.output_path = output;
+    sc.argc = o.argc;
+    sc.argv = o.argv;
+    sc.proc = proc;
+    sc.files = o.files;
+    sc.orig_w = orig_w;
+    sc.orig_h = orig_h;
+    sc.has_roi = has_roi;
+    sc.roi = roi_coords;
+    sc.roi_source = roi_source;
+    sc.frame_det = is_roi_auto ? &frame_det : nullptr;
+    sc.rot_cw = rot_cw;
+    sc.hflip = hflip;
+    sc.vflip = vflip;
+    sc.out_w = width;
+    sc.out_h = height;
+    sc.film_base_applied = film_base_applied;
+    sc.film_base_rgb = sidecar_film_base_rgb;
+    sc.profile_film_base_rgb = sidecar_profile_film_base_rgb;
+    sc.film_base_source = film_base_source;
+    sc.std_density = frame_det.base_std_d;
+    sc.has_std_density = frame_det.has_base;
+    sc.profile_path = is_bundle ? bundle.path : film_prof_arg;
+    sc.is_bundle = is_bundle;
+    sc.bundle_target_name = bundle_target_name;
+    sc.bundle_target_idx = bundle_target_idx;
+    sc.input_space = bundle.input_space;
+    sc.merged_matrix = merged_matrix;
+    sc.exposure_comp = global_exposure_comp;
+    sc.gain_g = gain_g;
+    sc.gain_b = gain_b;
+    sc.pin_mask = pin_mask;
+    sc.knee = knee;
+    sc.knee_source = knee_source;
+    sc.shoulder = shoulder_info;
+    sc.dino = use_dino && !has_auto_res ? &dino_res : nullptr;
+    sc.dino_model = dino_path;
+    sc.dino_backend = use_dino ? std::string(engine.backend_used()) : dino_backend;
+    sc.auto_res = has_auto_res ? &auto_res : nullptr;
+    sc.auto_frame_half = auto_frame_half;
+    sc.colorspace = cs_name;
+    sc.t_raw_decode_ms = t_raw_decode_ms;
+    sc.t_frame_det_ms = t_frame_det_ms;
+    sc.t_full_conversion_ms = t_full_conversion_ms;
+    sc.t_tiff_write_ms = t_tiff_write_ms;
+    sc.t_auto_ms = t_auto_ms;
+    write_json_sidecar(sc);
   }
 
   return ret;
