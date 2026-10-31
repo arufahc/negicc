@@ -33,7 +33,7 @@ Capturing negatives is much simpler now and supports camera RAWs, DNGs, and 16-b
 
 ### 7-Bracket Tone Curves (TRC) & Highlight Roll-Off
 
-A single IT8 target only calibrates tones across its own **7.22-stop** range up to the chart's white patch (`gs0` at 0.75). Fitting all **7 brackets** (`Target_1`..`Target_7`, spanning **4.6 to 5.4 stops** from under- to over-exposed) together measures each bracket's exact exposure offset and traces the film's true highlight shoulder—giving **11.9 to 12.7 stops of total scene dynamic range** and **+2.6 to +4.0 stops of calibrated highlight headroom** above normal white:
+A single IT8 target only calibrates tones across its own **7.22-stop** range up to the chart's white patch (`gs0` at 0.75). Each film stock is photographed across **7 exposure brackets from `-3 EV` to `+3 EV`** in 1-stop steps (`Target_1`..`Target_7`, centered on `Target_4` at `0 EV`, spanning **4.6 to 5.4 stops** of fitted film density across the 7 brackets). Fitting all 7 brackets together measures each bracket's exact exposure offset and traces the film's true highlight shoulder—giving **~12 to 13 stops of total scene dynamic range** and **up to +3 stops of calibrated highlight headroom** above normal white:
 
 ![TRC Curves](samples/trc_curves.png)
 
@@ -43,23 +43,23 @@ The final step converts linearized RGB values into CIE XYZ / $L^*a^*b^*$ using a
 
 # ICC Profile Description & Expanded Highlight Gamut
 
-While early versions generated Curve+Matrix and V4 MPET profiles, the built-in bundles provide **7 brackets of 16-bit Curve + $45^3$ cLUT ICC profiles** (`profiles/<Key>/Target_1.icc`..`Target_7.icc`). Standard single-target cLUT profiles lose saturation or clip in bright highlights because a single chart has no patches above its white patch ($L^* \approx 89.4$). By injecting the brighter patches from the denser, more over-exposed brackets (`Target 4`–`Target 7`, adding +567 highlight color samples on `Target_3.icc`) into the cLUT, the calibrated 3D CIELAB gamut volume and highlight chroma extend smoothly all the way to pure white ($L^* = 100$) without amplifying film grain:
+While early versions generated Curve+Matrix and V4 MPET profiles, the built-in bundles provide **7 brackets of 16-bit Curve + $45^3$ cLUT ICC profiles** (`profiles/<Key>/Target_1.icc`..`Target_7.icc`, covering `-3 EV` to `+3 EV`). Standard single-target cLUT profiles lose saturation or clip in bright highlights because a single chart has no patches above its white patch ($L^* \approx 89.4$). By injecting the brighter patches from the denser, more over-exposed brackets (`Target 4`–`Target 7`, `0 EV` to `+3 EV`, adding +567 highlight color samples on `Target_3.icc`) into the cLUT, the calibrated 3D CIELAB gamut volume and highlight chroma extend smoothly all the way to pure white ($L^* = 100$) without amplifying film grain:
 
 ![Gamut Volume](samples/gamut_volume.png)
 
 ### Why Dedicated Per-Stock Profiles? (Own-Sample vs. Held-Out Color Accuracy)
 
-Generic negative inversion tools apply a single curve or $3\times 3$ matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. By calibrating a dedicated 7-bracket $45^3$ 3D-cLUT per film stock, the profiles achieve **sub-`0.6 ΔE₀₀` mean (`~0.4 ΔE₀₀` median) own-sample accuracy** at nominal exposure and **`1.4–2.3 ΔE₀₀` median error on unseen held-out color patches** (2-fold cross-validation holding out half of the 264 color patches at a time, where `< 2.0 ΔE₀₀` is barely perceptible to the human eye):
+Generic negative inversion tools apply a single curve or $3\times 3$ matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. By calibrating a dedicated 7-bracket $45^3$ 3D-cLUT per film stock, the profiles achieve **sub-`0.6 ΔE₀₀` mean (`~0.4 ΔE₀₀` median) own-sample accuracy** and **`1.4–2.3 ΔE₀₀` median error on unseen held-out color patches** (2-fold cross-validation holding out half of the 264 color patches at a time, where `< 2.0 ΔE₀₀` is barely perceptible to the human eye):
 
-| Bracket Target (Exposure Window) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out avg (med) |
+| Bracket Target (Exposure) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out avg (med) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`Target 1`** (`-1.4` to `-1.6 EV`) | `0.79` (`0.50`) | `2.70` (`1.91`) | `1.09` (`0.47`) | `2.35` (`1.61`) | `1.11` (`0.49`) | `3.05` (`1.87`) |
-| **`Target 2`** (`-0.6` to `-0.8 EV`) | `0.56` (`0.41`) | `2.04` (`1.38`) | `0.82` (`0.42`) | `2.09` (`1.55`) | `0.61` (`0.39`) | `2.68` (`1.52`) |
-| **`Target 3`** (`+0.0 EV` nominal) | **`0.53` (`0.40`)** | **`2.38` (`1.40`)** | **`0.59` (`0.39`)** | **`1.96` (`1.40`)** | **`0.51` (`0.36`)** | **`2.79` (`1.55`)** |
-| **`Target 4`** (`+1.0` to `+1.3 EV`) | `0.55` (`0.42`) | `2.62` (`1.48`) | `0.56` (`0.44`) | `2.30` (`1.37`) | `0.62` (`0.49`) | `3.25` (`1.84`) |
-| **`Target 5`** (`+1.7` to `+2.1 EV`) | `0.54` (`0.40`) | `2.75` (`1.46`) | `0.62` (`0.43`) | `2.65` (`1.58`) | `0.63` (`0.49`) | `3.52` (`1.75`) |
-| **`Target 6`** (`+2.5` to `+3.2 EV`) | `0.59` (`0.43`) | `2.92` (`1.58`) | `0.67` (`0.49`) | `2.67` (`1.62`) | `0.72` (`0.59`) | `4.01` (`2.15`) |
-| **`Target 7`** (`+3.4` to `+4.0 EV`) | `0.69` (`0.54`) | `3.08` (`1.77`) | `0.70` (`0.53`) | `2.82` (`1.78`) | `0.83` (`0.65`) | `3.72` (`2.26`) |
+| **`Target 1`** (`-3 EV`) | `0.79` (`0.50`) | `2.70` (`1.91`) | `1.09` (`0.47`) | `2.35` (`1.61`) | `1.11` (`0.49`) | `3.05` (`1.87`) |
+| **`Target 2`** (`-2 EV`) | `0.56` (`0.41`) | `2.04` (`1.38`) | `0.82` (`0.42`) | `2.09` (`1.55`) | `0.61` (`0.39`) | `2.68` (`1.52`) |
+| **`Target 3`** (`-1 EV`) | `0.53` (`0.40`) | `2.38` (`1.40`) | `0.59` (`0.39`) | `1.96` (`1.40`) | `0.51` (`0.36`) | `2.79` (`1.55`) |
+| **`Target 4`** (`0 EV` center) | **`0.55` (`0.42`)** | **`2.62` (`1.48`)** | **`0.56` (`0.44`)** | **`2.30` (`1.37`)** | **`0.62` (`0.49`)** | **`3.25` (`1.84`)** |
+| **`Target 5`** (`+1 EV`) | `0.54` (`0.40`) | `2.75` (`1.46`) | `0.62` (`0.43`) | `2.65` (`1.58`) | `0.63` (`0.49`) | `3.52` (`1.75`) |
+| **`Target 6`** (`+2 EV`) | `0.59` (`0.43`) | `2.92` (`1.58`) | `0.67` (`0.49`) | `2.67` (`1.62`) | `0.72` (`0.59`) | `4.01` (`2.15`) |
+| **`Target 7`** (`+3 EV`) | `0.69` (`0.54`) | `3.08` (`1.77`) | `0.70` (`0.53`) | `2.82` (`1.78`) | `0.83` (`0.65`) | `3.72` (`2.26`) |
 
 ### DINOv3 Automatic Color Grader & Iterative Convergence
 
