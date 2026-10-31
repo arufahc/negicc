@@ -31,4 +31,4 @@
   bit-identical (negicc-station's `tools/triled_parity.py`).
 - `tiff_head.h`: LibRaw's TIFF header writer (`src/write/file_write.cpp`), which is not public API, copied here.
 - `tiff.h`: TIFF tag definitions used by `tiff_head.h`.
-- `dcraw/`, `elle_icc_profiles/`, `onnxruntime/`: see each directory.
+- `elle_icc_profiles/`, `onnxruntime/`: see each directory.
