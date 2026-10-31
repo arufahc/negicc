@@ -76,7 +76,7 @@ To convert a frame automatically:
 # Requirements & Hardware
 
 `neg_process` builds LibRaw (`3rd_party/libraw` submodule; `make LIBRAW_JPEG=1` adds lossy DNG support), Little-CMS 2 (`3rd_party/lcms2`), and zlib from source, and uses ONNX Runtime (`3rd_party/onnxruntime`) with the DINOv3 model (`make dinov3_model`).
-* **Hardware:** Sony A7RM4 (`ILCE-7RM4`, single-shot or 4-shot pixel shift) + Rayfact QVM05041MF; narrowband RGB LED light ([Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) or Olafus RGB flood light with diffuser—**no optical filters needed**) or D65 white LED panel; IT8.7/2 target (`R190808` from coloraid.de, 7 bracketed exposures per stock).
+* **Hardware & Profile Calibration:** The built-in profiles were created with a Sony A7RM4 (`ILCE-7RM4`), [Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) RGB LED light, and an IT8.7/2 target (`R190808` from coloraid.de, 7 bracketed exposures per film stock). They can also be used with color negatives captured under D65 white light (`--light_source d65`; *TODO: add samples from web images*).
 
 ```bash
 sudo apt-get install clang make autoconf automake libtool pkg-config libtiff-dev libjpeg-dev curl python3
