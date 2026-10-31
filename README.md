@@ -47,6 +47,20 @@ While early versions generated Curve+Matrix and V4 MPET profiles, the built-in b
 
 ![Gamut Volume](samples/gamut_volume.png)
 
+### Why Dedicated Per-Stock Profiles? (Own-Sample vs. Held-Out Color Accuracy)
+
+Generic negative inversion tools apply a single curve or $3\times 3$ matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. By calibrating a dedicated 7-bracket $45^3$ 3D-cLUT per film stock, the profiles achieve **sub-`0.6 ΔE₀₀` mean (`~0.4 ΔE₀₀` median) own-sample accuracy** at nominal exposure and **`1.4–2.3 ΔE₀₀` median error on unseen held-out color patches** (2-fold cross-validation holding out half of the 264 color patches at a time, where `< 2.0 ΔE₀₀` is barely perceptible to the human eye):
+
+| Bracket Target (Exposure Window) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out avg (med) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`Target 1`** (`-1.4` to `-1.6 EV`) | `0.79` (`0.50`) | `2.70` (`1.91`) | `1.09` (`0.47`) | `2.35` (`1.61`) | `1.11` (`0.49`) | `3.05` (`1.87`) |
+| **`Target 2`** (`-0.6` to `-0.8 EV`) | `0.56` (`0.41`) | `2.04` (`1.38`) | `0.82` (`0.42`) | `2.09` (`1.55`) | `0.61` (`0.39`) | `2.68` (`1.52`) |
+| **`Target 3`** (`+0.0 EV` nominal) | **`0.53` (`0.40`)** | **`2.38` (`1.40`)** | **`0.59` (`0.39`)** | **`1.96` (`1.40`)** | **`0.51` (`0.36`)** | **`2.79` (`1.55`)** |
+| **`Target 4`** (`+1.0` to `+1.3 EV`) | `0.55` (`0.42`) | `2.62` (`1.48`) | `0.56` (`0.44`) | `2.30` (`1.37`) | `0.62` (`0.49`) | `3.25` (`1.84`) |
+| **`Target 5`** (`+1.7` to `+2.1 EV`) | `0.54` (`0.40`) | `2.75` (`1.46`) | `0.62` (`0.43`) | `2.65` (`1.58`) | `0.63` (`0.49`) | `3.52` (`1.75`) |
+| **`Target 6`** (`+2.5` to `+3.2 EV`) | `0.59` (`0.43`) | `2.92` (`1.58`) | `0.67` (`0.49`) | `2.67` (`1.62`) | `0.72` (`0.59`) | `4.01` (`2.15`) |
+| **`Target 7`** (`+3.4` to `+4.0 EV`) | `0.69` (`0.54`) | `3.08` (`1.77`) | `0.70` (`0.53`) | `2.82` (`1.78`) | `0.83` (`0.65`) | `3.72` (`2.26`) |
+
 ### DINOv3 Automatic Color Grader & Iterative Convergence
 
 Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **DINOv3** vision model as an **automatic color grader** trained on real **Fujifilm Frontier and Noritsu lab scans** collected from Flickr and Photohito (`models/dinov3-small_<stock>/`). Because DINOv3 understands scene semantics, it recognizes objects in context (sky, foliage, skin tones, stone, shadows) and predicts the **target Lab color** ($\mu_i$) and **tolerance** ($\sigma_i$) that each $16\times 16$ patch of the photo should have based on learned lab-scan examples:
@@ -55,7 +69,9 @@ Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **
 
 To convert a frame automatically:
 1. **Auto Film-Base & Frame Detection:** Automatically samples the unexposed orange film base from the scan border (rebate or thinnest film; *TODO: add support for reading the film base from a separate unexposed film capture*) and crops the film frame (`--roi auto --film_format 35mm|645|6x6|6x7|6x9`).
-2. **Bracket Screening & Iterative Error Minimization:** Screens the 7 brackets against the predicted target Lab patch field, then iteratively adjusts exposure (`E`) and green/blue color balance (`g`, `b`) on the top brackets—re-evaluating the DINOv3 target Lab field at each step—until the patch Lab error converges to a minimum (with automatic highlight pullback and bracket step-up if highlights clip).
+2. **Bracket Screening & Iterative Error Minimization:** Screens the 7 brackets against the predicted target Lab patch field, then iteratively adjusts exposure (`E`) and green/blue color balance (`g`, `b`) on the top brackets—re-evaluating the DINOv3 target Lab field at each step—until the patch Lab residual error converges to a minimum (with automatic highlight pullback and bracket step-up if highlights clip). As shown below on a second scene (Lake Ashi & Mt. Fuji), an unbalanced initial render with a heavy cyan/green cast produces large patch Lab residuals across the sky and water (`21.6 ΔE` median patch error, score `6.30`); DINOv3 drives the residual error down by **72%** (`8.7 ΔE` median, score `1.79`) to recover natural daylight balance:
+
+![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
 # Requirements & Hardware
 
