@@ -1,200 +1,96 @@
 # Objective
 
-> [!WARNING]
-> **This repository is no longer maintained.**
-> This project was created for research purposes. The active, fully integrated capture and conversion station software—including automated USB tethering, GTK3 desktop UIs, CUDA hardware acceleration, and optimized multi-exposure profiling—is now maintained in the **[negicc-station](https://github.com/arufahc/negicc-station)** repository. Please check the new [negicc-station README](https://github.com/arufahc/negicc-station/blob/main/README.md) for setup and instructions.
-
-> **TODO:** update this notice: this repository is now negicc-station's conversion engine (`neg_process` with the automatic conversion and the built-in profiles).
-
-NegICC is a project for creating ICC profiles for color negatives. The main
-objective of the tool is to have consistent colors for images of negative
-film taken with a digital camera.
-
-The ICC profiles created should have the following properties:
-* Allow color balance adjustments
-* Produces netural color which allows further asdjustments
-* Can be used with commonly available photo editting tools
-
-> **TODO:** the profiles are now built in negicc-station and exported here as profile bundles (`profiles/<Key>/`, one ICC profile per calibration bracket).
+NegICC creates ICC profiles and converts color negatives captured with a digital camera into consistent, color-accurate positive images. The ICC profiles and conversion tool (`neg_process`) have the following properties:
+* Allow color balance and exposure adjustments while preserving film dye characteristics
+* Produce neutral, accurate color ready for display or further editing in standard photo editors
+* Include **3 manually profiled film stocks** (**Kodak Portra 400**, **Portra 160**, and **Ektar 100**), each photographed and calibrated across **7 exposure brackets** under **2 light sources** (**42 ICC profiles total** in `profiles/<Key>/`, `Target_1.icc`..`Target_7.icc` under narrowband `TriLED` and white `D65` light)
 
 ![sample conversion](samples/sample.png)
 
 # Introduction
 
-Typical color negative conversion software operates in sRGB colorspace.
-However color negative is a medium for recording color information in terms
-of dye density. The density of the dyes is designed to be extracted with
-[Status M](https://law.resource.org/pub/us/cfr/ibr/001/aimm.it2.18.1996.pdf) densitometry and is not under D50 or 5000K light.
+Typical color negative conversion software operates in sRGB colorspace. However, color negative film records color information as dye density designed to be extracted with [Status M](https://law.resource.org/pub/us/cfr/ibr/001/aimm.it2.18.1996.pdf) densitometry rather than D50 or 5000K light.
 
-The first step of scanning film with a digital camera is to produce response
-that resembles Status M densitometry with good sepearation between the channels.
-I created a [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing) with detailed steps.
+The first step of scanning film with a digital camera is to produce a response that resembles Status M densitometry with good separation between the channels (see the original [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing)).
 
 # How does it work?
 
-With a triband filter (or narrowband LED light) and crosstalk
-correction, the RGB response is still not linear to density. From this diagram
-B and G response of the profiled film are closest resemblance, but R response
-has a different slope.
+With narrowband RGB LED light (or a triband filter) and crosstalk correction, the RGB response is still not linear to density. From this diagram, the B and G responses of the profiled film closely resemble each other, while the R response has a different slope:
 
 ![Characteristic Curves](samples/characteristic_curves.png)
 
-A IT8 reflective target recored on film is used to correct the different
-responses and to invert into linear RGB that corresponds to the original
-luminance values.
+An IT8.7/2 reflective target (`R190808` from coloraid.de) photographed onto each film stock across **7 exposure brackets** is used to correct the different channel responses and invert them into linear RGB corresponding to original scene luminance:
 
 ![IT8 used for profiling](samples/it8.png)
 
-> **TODO:** describe the capture with trichromatic (narrowband RGB) LEDs: one shot with a crosstalk correction matrix (`--light_source tri`, the bundle's matrix or `-r -g -b`), and in future three shots, one per LED colour, needing no correction matrix.
+### Simple Trichromatic (`TriLED`) & White-Light (`D65`) Capture
 
-A capture under white (D65) light (`--light_source d65`) uses a bundle whose `input_space` is `rec2020_linear`: the
-scan goes through LibRaw's white-light decode (the camera's daylight white balance and colour matrix, to linear
-Rec.2020) and no crosstalk correction is applied, as in negicc-station. It takes single-shot captures only.
+Capturing negatives is much simpler now and supports camera RAWs, DNGs, and 16-bit linear TIFFs without optical filter wheels:
+* **Trichromatic narrowband RGB LED (`--light_source tri`):**
+  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses the bundle's $3\times 3$ sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
+  * *3-shot monochromatic RGB (`r.raw g.raw b.raw`) or pre-separated TIFF/DNG:* Capturing 3 separate frames under Red, Green, and Blue LEDs isolates the channels physically with zero sensor crosstalk—use the **identity color correction** (`-r "1 0 0" -g "0 1 0" -b "0 0 1"`).
+* **White D65 light (`--light_source d65`):** Single-shot capture under a standard D65 white LED panel. `neg_process` decodes the scan through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**.
 
-The tool provided in this repo will generate the following curves.
+### 7-Bracket Tone Curves (TRC) & Highlight Roll-Off
+
+A single IT8 target only calibrates tones across its own **7.22-stop** range up to the chart's white patch (`gs0` at 0.75). Fitting all **7 brackets** (`Target_1`..`Target_7`, spanning **4.6 to 5.4 stops** from under- to over-exposed) together measures each bracket's exact exposure offset and traces the film's true highlight shoulder—giving **11.9 to 12.7 stops of total scene dynamic range** and **+2.6 to +4.0 stops of calibrated highlight headroom** above normal white:
 
 ![TRC Curves](samples/trc_curves.png)
 
-Last step is to convert to the CIE XYZ colorspace using either a 3D-LUT or Matrix.
-These two steps can be encoded as a ICC profie.
-
-The profiles created by NegICC is not meant to be a colorspace and not
-suitable for general editing. They are used for correcting the curves of
-the color channels and to map to the CIE XYZ.
+The final step converts linearized RGB values into CIE XYZ / $L^*a^*b^*$ using a 16-bit Curve + **$45^3$ 3D-cLUT** encoded as an ICC profile:
 
 ![ICC profile](samples/icc.png)
 
-# ICC Profile Description
+# ICC Profile Description & Expanded Highlight Gamut
 
-There are three profiles generated by NegICC:
-* Curve + cLUT ICC V2 Profile
-* Curve + Matrix ICC V4 Profile
-* Matrix + Curve + cLUT V4 Profile
+While early versions generated Curve+Matrix and V4 MPET profiles, the built-in bundles provide **7 brackets of 16-bit Curve + $45^3$ cLUT ICC profiles** (`profiles/<Key>/Target_1.icc`..`Target_7.icc`). Standard single-target cLUT profiles lose saturation or clip in bright highlights because a single chart has no patches above its white patch ($L^* \approx 89.4$). By injecting the brighter patches from the denser, more over-exposed brackets (`Target 4`–`Target 7`, adding +567 highlight color samples on `Target_3.icc`) into the cLUT, the calibrated 3D CIELAB gamut volume and highlight chroma extend smoothly all the way to pure white ($L^* = 100$) without amplifying film grain:
 
-The cLUT or matrix is to map the resultant linerized RGB values into XYZ
-values. cLUT usually is more accurate but could cause clipping and hence
-not ideal for photo editting. Matrix is much less accurate but is more
-robust for editting.
+![Gamut Volume](samples/gamut_volume.png)
 
-> **TODO:** update for the profiles negicc-station builds (bundles of cLUT profiles, one per calibration bracket); the data files and profiling tools described below have moved to negicc-station.
+### DINOv3 Automatic Color Grader & Iterative Convergence
 
-The matrix in the third profile includes a crosstalk correction matrix to
-account for crosstalk between RGB channels of the digital sensor, the
-curves and the cLUT. The matrix is an invariant of CFA sensor and triband
-filter (optional with tricolor light source). However this V4 profile uses
-a MPET pipeline that is not compatible with many image editors and is there
-for completeness only.
+Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **DINOv3** vision model as an **automatic color grader** trained on real **Fujifilm Frontier and Noritsu lab scans** collected from Flickr and Photohito (`models/dinov3-small_<stock>/`). Because DINOv3 understands scene semantics, it recognizes objects in context (sky, foliage, skin tones, stone, shadows) and predicts the **target Lab color** ($\mu_i$) and **tolerance** ($\sigma_i$) that each $16\times 16$ patch of the photo should have based on learned lab-scan examples:
 
-Included in this repo is data files from films exposed with a
-IT8 target under 5400K sunlight and scanned using a Sony A7RM4 digital camera
-with a Edmund Optics #87-254 triband filter. The crosstalk correction matrix
-is estimated by additionally scanning with red, blue and green bandpass filters.
+![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
-The IT8 target is measured using a Konica Minolta CS100A spot colorimeter or
-downloaded from coloraid.de. The readings are also included in this repo.
+To convert a frame automatically:
+1. **Auto Film-Base & Frame Detection:** Automatically samples the unexposed orange film base from the scan border (rebate or thinnest film; *TODO: add support for reading the film base from a separate unexposed film capture*) and crops the film frame (`--roi auto --film_format 35mm|645|6x6|6x7|6x9`).
+2. **Bracket Screening & Iterative Error Minimization:** Screens the 7 brackets against the predicted target Lab patch field, then iteratively adjusts exposure (`E`) and green/blue color balance (`g`, `b`) on the top brackets—re-evaluating the DINOv3 target Lab field at each step—until the patch Lab error converges to a minimum (with automatic highlight pullback and bracket step-up if highlights clip).
 
-The RGB curves are estimated using a Pchip spline curve interpolation. And the
-resultant crosstalk corrected and 'positive' values are then fed into ArgyllCMS
-to compute the cLUT and color matrix. The avg error is about 0.87 and 7.2 (over
-100) respectively.
+# Requirements & Hardware
 
-# Requirements
+`neg_process` builds LibRaw (`3rd_party/libraw` submodule; `make LIBRAW_JPEG=1` adds lossy DNG support), Little-CMS 2 (`3rd_party/lcms2`), and zlib from source, and uses ONNX Runtime (`3rd_party/onnxruntime`) with the DINOv3 model (`make dinov3_model`).
+* **Hardware:** Sony A7RM4 (`ILCE-7RM4`, single-shot or 4-shot pixel shift) + Rayfact QVM05041MF; narrowband RGB LED light ([Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) or Olafus RGB flood light with diffuser—**no optical filters needed**) or D65 white LED panel; IT8.7/2 target (`R190808` from coloraid.de, 7 bracketed exposures per stock).
 
-* Python 3
-* PIP
-* ArgyllCMS
-* LibRaw: built from the `3rd_party/libraw` submodule (pinned to a LibRaw release), not the system's libraw-dev;
-  clone with `git clone --recursive` or run `git submodule update --init --recursive`. Lossy (JPEG-compressed)
-  DNG support is off, so every machine decodes alike; `make LIBRAW_JPEG=1` enables it and needs libjpeg-dev.
-* lcms2
-* Clang
-* Matplotlib
+```bash
+sudo apt-get install clang make autoconf automake libtool pkg-config libtiff-dev libjpeg-dev curl python3
+git clone --recursive https://github.com/arufahc/negicc.git && cd negicc
+make dinov3_model && make -j$(nproc) neg_process   # add USE_CUDA=1 for NVIDIA GPU acceleration
 ```
-sudo apt-get install python3 pip argyll liblcms2-dev libtiff-dev zlib1g-dev libjpeg-dev
-```
-* Python packages
-```
-pip install opencv-python matplotlib colour-science pandas scikit-learn scipy
-```
-
-> **TODO:** the profiling requirements (ArgyllCMS, the Python packages) moved to negicc-station. `neg_process` needs LibRaw (the `3rd_party/libraw` submodule, built by the Makefile), lcms2, zlib, ONNX Runtime (`3rd_party/onnxruntime`) and the DINOv3 backbone (`make dinov3_model`).
-
-# Hardware Used
-
-## Creating Profiles
-* IT8 target (R190808 from coloraid.de)
-* Edmund Optics #87-254
-* Bandpass filters: MidOpt BP470, BP525 and LP610
-
-## Capturing (previous setup)
-* Fiet 74204/CA led light panel
-* Edmund Optics #87-254
-* Nikon Z7
-* Rayfact QVM05041MF
-
-## Capturing (new setup with 4-shot pixel shift)
-* Olafus 25W RGB Flood Light
-* Edmund Optics #87-254
-* Sony A7RM4
-* Rayfact QVM05041MF
-
-> **TODO:** add the trichromatic LED setup; creating profiles is now done with negicc-station.
 
 # Usage Example
 
-Run the following commands to use RAW develop tools and ICC profiles.
+```bash
+bin_out/neg_process --list_profiles   # list built-in 7-bracket bundles (portra400, portra160, ektar100 for tri/d65)
 
-```
-# Make neg_process tool for RAW developing.
-make neg_process
+# 1. Single-shot Trichromatic LED scan (auto film-base, auto bracket & DINOv3 color grading -> 16-bit sRGB TIFF)
+bin_out/neg_process --film_stock portra400 --light_source tri -P srgb -o out.tif scan.ARW
 
-# Make profile for Sony A7RM4 with Portra 400
-make sony_a7rm4_portra400_0
+# 2. Single-shot D65 white-light scan with automatic 6x7 frame crop
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
 
-# Make profile for Sony A7RM4 with Portra 400 +2 stops exposure
-make sony_a7rm4_portra400+2
-```
+# 3. 4-shot Sony Pixel Shift mode (pass 4 RAW files; merges sub-pixel RGB without Bayer demosaicing)
+bin_out/neg_process --film_stock ektar100 --light_source tri -P srgb -o out.tif ps1.ARW ps2.ARW ps3.ARW ps4.ARW
 
-neg_process tool uses LibRAW to unpack raw files. It can run in two modes,
-4-shot pixel shift mode and single shot mode. The 4-shot pixel shift mode
-assumes taken with Sony camera with such capability and will not for other
-brands. In 4-shot pixel shift mode, the raw values are simply scaled by 4
-to convert from 14-bit raw to 16-bit image after subtracting the dark value.
-In single shot mode, libRAW processing is used and scales automatically but
-without auto brightness. Either mode will give consistent results as long
-as you don't switch between the two modes.
+# 4. 3-shot sequential R, G, B LED capture (use identity color correction — zero sensor crosstalk)
+bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1 0" -b "0 0 1" -P srgb -o out.tif r.ARW g.ARW b.ARW
 
-> **TODO:** the profile make targets above are removed. Update for `--film_stock` and `--light_source`, the parameter search that runs by default, and `--list_profiles` (see `bin_out/neg_process --help`).
-
-Usage like this:
-```
-# Single shot mode. The output format is PPM.
-bin_out/neg_process -o output_file.ppm input.raw
-
-# 4-shot pixel shfit mode. The output format is TIFF without a ICC profile.
-# If 4 input files are provided, it assumes 4-shot PS mode.
-bin_out/neg_process -o out.tif -p some_profile.icc input1.raw input2.raw input3.raw input4.raw
+# 5. Manual override: pick a bracket (0..6), exposure (-E), or green/blue gains (--gain_g, --gain_b)
+bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 ```
 
-Note that the profile is only good for the particular setup I used. You will
-need to develop your own IT8 target exposures, scan them with filters and run
-this again. The steps for generating the data files are in the Makefile.
-
-The cLUT applied TIFF image can be editted with Capture One. The suggested
-workflow is to adjust *only* the levels using the Levels tool. This mimic
-adjusting the color filtration in making darkroom prints assuming we already
-have good color separation. You can also do exposure adjustments as well.
-After the image is color balanced, it should be exported to AdobeRGB and
-imported again for further editting.
-
-# More details
-
-Please see the code in build_prof.py and neg_process.{cc, py} for details of the algorithm.
-
-> **TODO:** `build_prof.py` and `neg_process.py` are removed; point to `neg_process.cc`, `multi_target_optimizer.cc` (the conversion parameter search) and negicc-station.
+For manual darkroom-style grading in Capture One, omit `-P srgb` and adjust *only* the Levels tool before exporting to AdobeRGB/sRGB. See [`neg_process.cc`](neg_process.cc), [`multi_target_optimizer.cc`](multi_target_optimizer.cc), and [`dinov3_auto_solver.cc`](dinov3_auto_solver.cc) for implementation details.
 
 # Licences
 
-negicc is GPL-3.0 (COPYING). The DINOv3 backbone in `models/dinov3-small/backbone.onnx`, which `neg_process` packs
-into its binary, is Meta's DINOv3 and is under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it,
-or a `neg_process` built with it, only under that licence and with a copy of it.
+negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx`, which `neg_process` packs into its binary, is Meta's DINOv3 and is under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a `neg_process` built with it, only under that licence and with a copy of it.
