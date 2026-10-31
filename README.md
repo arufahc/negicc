@@ -75,13 +75,14 @@ To convert a frame automatically:
 
 # Requirements & Hardware
 
-`neg_process` builds LibRaw (`3rd_party/libraw` submodule; `make LIBRAW_JPEG=1` adds lossy DNG support), Little-CMS 2 (`3rd_party/lcms2`), and zlib from source, and uses ONNX Runtime (`3rd_party/onnxruntime`) with the DINOv3 model (`make dinov3_model`).
+`neg_process` builds LibRaw, Little-CMS 2, zlib, libtiff, and libjpeg-turbo directly from the pinned submodules in `3rd_party/` (see [`3rd_party/README.md`](3rd_party/README.md)), and uses ONNX Runtime (`3rd_party/onnxruntime`) with the DINOv3 model (`make dinov3_model`, which requires Python `torch`, `transformers`, and `onnx`).
 * **Hardware & Profile Calibration:** The built-in profiles were created with a Sony A7RM4 (`ILCE-7RM4`), [Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) RGB LED light, and an IT8.7/2 target (`R190808` from coloraid.de, 7 bracketed exposures per film stock). They can also be used with color negatives captured under D65 white light (`--light_source d65`; *TODO: add samples from web images*).
 
 ```bash
-sudo apt-get install clang make autoconf automake libtool pkg-config libtiff-dev libjpeg-dev curl python3
+sudo apt-get install build-essential git python3 python3-pip   # plus libjpeg-dev if building with LIBRAW_JPEG=1
+pip install torch transformers onnx
 git clone --recursive https://github.com/arufahc/negicc.git && cd negicc
-make dinov3_model && make -j$(nproc) neg_process   # add USE_CUDA=1 for NVIDIA GPU acceleration
+make dinov3_model && make -j$(nproc) neg_process               # add USE_CUDA=1 for NVIDIA GPU acceleration
 ```
 
 # Usage Example
