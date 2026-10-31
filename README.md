@@ -105,8 +105,6 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 ```
 
-For manual darkroom-style grading in Capture One, omit `-P srgb` and adjust *only* the Levels tool before exporting to AdobeRGB/sRGB. See [`neg_process.cc`](neg_process.cc), [`multi_target_optimizer.cc`](multi_target_optimizer.cc), and [`dinov3_auto_solver.cc`](dinov3_auto_solver.cc) for implementation details.
-
 # Licences
 
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx`, which `neg_process` packs into its binary, is Meta's DINOv3 and is under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a `neg_process` built with it, only under that licence and with a copy of it.
