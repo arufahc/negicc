@@ -27,7 +27,6 @@
 #include <cstring>
 #include <string>
 
-#include "dcraw/gamma_curve.h"
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
 #include "np_geometry.h"
