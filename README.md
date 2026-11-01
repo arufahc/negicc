@@ -27,9 +27,32 @@ An IT8.7/2 reflective target (`R190808` from coloraid.de) photographed onto each
 
 Capturing negatives is much simpler now and supports camera RAWs, DNGs, and 16-bit linear TIFFs without optical filter wheels:
 * **Trichromatic narrowband RGB LED (`--light_source tri`):**
-  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses the bundle's 3×3 sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
+  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses **Grain-Aware Color-Ratio Demosaicing** on single-shot Sony RGGB scans (or direct 4-frame sub-pixel merge on 4-shot Sony Pixel Shift captures) followed by the bundle's 3×3 sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
   * *3-shot monochromatic RGB (`r.raw g.raw b.raw`) or pre-separated TIFF/DNG:* Capturing 3 separate frames under Red, Green, and Blue LEDs isolates the channels physically with zero sensor crosstalk—use the **identity color correction** (`-r "1 0 0" -g "0 1 0" -b "0 0 1"`).
-* **White D65 light (`--light_source d65`):** Single-shot capture under a standard D65 white LED panel. `neg_process` decodes the scan through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**.
+* **White D65 light (`--light_source d65`) & Non-RGGB CFAs:** Single-shot capture under a standard D65 white LED panel decodes through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**. By default (`-q -1` / `-q 0`), LibRaw uses fast bilinear demosaicing (`~1.2 s` decode for a 61 MP RAW); pass **`-q 4` (LibRaw DCB, directional color-difference demosaicing)** for higher edge acutance and reduced color aliasing when using LibRaw interpolation.
+
+### Film-Grain-Aware Demosaicing, 4-Shot Pixel Shift & LibRaw DCB (`-q 4`)
+
+Color negative film presents two physical properties that break conventional photographic demosaicing algorithms:
+1. **3D Stochastic Dye Clouds (Film Grain):** Isotropic high-frequency grain fluctuations cause hard binary directional switches (`dh < dv` in **PPG / AHD**, `-q 2` / `-q 3`) to flip randomly between horizontal and vertical interpolation at every photosite, synthesizing artificial 2-pixel checkerboard "zippering" and maze textures across flat sky and skin regions (`1.88×` higher zippering energy than optical ground truth). Linear 5×5 filters (**Malvar-He-Cutler**) use negative outer lobes (`-1` and `-1.5`) that overshoot on grain peaks and amplify chroma noise after negative inversion (`2.58 ΔE₀₀`).
+2. **Steep Orange Mask Channel Ratios (`R : G : B ≈ 4 : 2 : 1`):** Because unexposed negative film transmits roughly `4×` more Red than Blue (`R ≈ 9200 DN`, `G ≈ 4300 DN`, `B ≈ 2400 DN`), additive color-difference assumptions ($R - G = \text{const}$) break across high-contrast edges where transmissivity scales multiplicatively by Beers' Law.
+
+To preserve authentic film grain and edge acutance without false-color fringes, NegICC provides dedicated demosaicing paths:
+* **4-Shot Sony Pixel Shift (`ps1.ARW ps2.ARW ps3.ARW ps4.ARW`):** Merges all four sub-pixel sensor shifts `(0,0), (-1,0), (-1,1), (0,1)` directly into true optical R, G, and B at every pixel with zero spatial interpolation.
+* **Single-Shot Sony RGGB (`--light_source tri`, default `-q -1`):** Runs **Grain-Aware Color-Ratio Demosaicing** (`cpu_grain_aware_debayer` / `gpu_grain_aware_debayer`, matching bit-for-bit on CPU and CUDA). Green is reconstructed via soft-weighted Hamilton-Adams directional gradients with a film-grain noise floor ($\epsilon = 4096\text{ DN}^2$) so grain stays isotropic while real scene edges lock onto the low-gradient axis; Red and Blue are interpolated in regularized multiplicative **color-ratio space** ($\frac{R + k}{G + k}$ and $\frac{B + k}{G + k}$, $k = 16\text{ DN}$) with a highlight-clip guard (`white_level - 64`).
+* **LibRaw Interpolation (`--light_source d65` / Rec.2020 & Non-RGGB CFAs):** Defaults to **`-q 0` (Bilinear)** for fast decoding (`~1.2 s` RAW decode on a 61 MP scan). When higher single-shot acutance is desired on white-light (`--light_source d65`) or non-RGGB Bayer scans, pass **`-q 4` (LibRaw DCB, Jacek Gozdz directional color-difference)**. On the 645 Kodak Portra 160 benchmark below, DCB (`79.60 LSB` MAE, `39.73 dB` PSNR) and Grain-Aware Color-Ratio (`80.81 LSB` MAE, `39.73 dB` PSNR, lowest positive color error `1.69 ΔE₀₀` and `56.5` `R-G` zippering energy) closely match 4-shot optical ground truth without the grain maze artifacts of hard binary switches (`PPG`/`AHD`, `-q 2`/`-q 3`) or the false-color aliasing of plain bilinear (`-q 0`, `89.15 LSB` MAE, `115.0` `R-G` zippering), at the cost of a longer single-threaded LibRaw decode (`~6.0 s` on a 61 MP RAW):
+
+| Demosaicing Algorithm | Linear Sensor MAE (14-bit LSB) | Linear PSNR (dB) | Inverted Positive `ΔE₀₀` (mean / p95) | Edge Acutance vs. 4-Shot Truth | `R-G` Zipper Energy (Lower = Smoother) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **1. True 4-Shot Pixel Shift** *(Optical Ground Truth)* | `0.00` | `∞` | `0.00` / `0.00` | `100.0%` | `142.4` *(True Optical)* |
+| **2. Grain-Aware Color-Ratio** *(Default: Sony RGGB `TriLED`)* | **`80.81`** | **`39.73 dB`** | **`1.69` / `6.86`** | **`102.0%`** | **`56.5`** |
+| **3. LibRaw DCB (`-q 4`)** *(Recommended High-Quality Option for `D65` / LibRaw)* | **`79.60`** | **`39.73 dB`** | **`1.76` / `7.21`** | **`95.8%`** | **`71.7`** |
+| **4. LibRaw VNG (`-q 1`, `5×5` 8-Compass Gradients)** | `80.19` | `39.72 dB` | `1.75` / `7.12` | `102.2%` | `58.6` |
+| **5. Hard Directional (`PPG / AHD`, `-q 2` / `-q 3`)** | `80.61` | `39.75 dB` | `1.73` / `6.97` | `100.5%` *(grain maze)* | `55.3` |
+| **6. Malvar-He-Cutler (`5×5` Linear)** | `86.68` | `39.07 dB` | `1.85` / `7.58` | `100.1%` *(ringing)* | `73.2` |
+| **7. Plain Bilinear (`-q 0`)** *(Default: Fast LibRaw Decode)* | `89.15` | `38.39 dB` | `1.90` / `7.87` | `107.3%` *(aliased)* | `115.0` *(false color)* |
+
+![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
 
 ### 7-Bracket Tone Curves (TRC) & Highlight Roll-Off
 
@@ -97,8 +120,9 @@ bin_out/neg_process --list_profiles   # list built-in 7-bracket bundles (portra4
 # 1. Single-shot Trichromatic LED scan (auto film-base, auto bracket & DINOv3 color grading -> 16-bit sRGB TIFF)
 bin_out/neg_process --film_stock portra400 --light_source tri -P srgb -o out.tif scan.ARW
 
-# 2. Single-shot D65 white-light scan with automatic 6x7 frame crop
+# 2. Single-shot D65 white-light scan with automatic 6x7 frame crop (add -q 4 for LibRaw DCB demosaicing)
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
+bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out_dcb.tif scan.ARW
 
 # 3. 4-shot Sony Pixel Shift mode (pass 4 RAW files; merges sub-pixel RGB without Bayer demosaicing)
 bin_out/neg_process --film_stock ektar100 --light_source tri -P srgb -o out.tif ps1.ARW ps2.ARW ps3.ARW ps4.ARW
