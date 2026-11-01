@@ -626,13 +626,15 @@ class SearchFrame {
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
   }
 
-  // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; the search runs on
-  // M_frame / e_norm.
+  // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; on TriLED the search runs on
+  // M_frame / e_norm for bit-exact station parity, while on white-light bundles (no crosstalk) it runs on M_frame
+  // with g_lo and g_hi scaled by e_norm in bracket_enclosure.
   void set_frame_matrix(const float frame_matrix[9], float e_norm) {
     e_norm_ = e_norm;
+    const float mat_div = bundle_.has_crosstalk ? e_norm : 1.0f;
     for (int i = 0; i < 9; ++i) {
       frame_matrix_[i] = frame_matrix[i];
-      input_matrix_[i] = frame_matrix[i] / e_norm;
+      input_matrix_[i] = frame_matrix[i] / mat_div;
     }
   }
 
@@ -718,8 +720,10 @@ class SearchFrame {
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
     if (pullback_search) {
       Enclosure enc;
-      if (bracket_enclosure(bundle_.targets[target_idx], target_idx, std::max(1.0f, stats_.g_lo),
-                            std::max(std::max(1.0f, stats_.g_lo) + 1.0f, stats_.g_hi), enc)) {
+      const float g_scale = bundle_.has_crosstalk ? 1.0f : e_norm_;
+      const float g_lo_ref = std::max(1.0f, stats_.g_lo) * g_scale;
+      const float g_hi_ref = std::max(std::max(1.0f, stats_.g_lo) + 1.0f, stats_.g_hi) * g_scale;
+      if (bracket_enclosure(bundle_.targets[target_idx], target_idx, g_lo_ref, g_hi_ref, enc)) {
         cfg.enc_e_min = enc.e_min;
         cfg.enc_e_max = enc.e_max;
       }
@@ -859,8 +863,10 @@ class SearchFrame {
   float enclosure_log2(int target_idx, float e) const {
     Enclosure enc;
     const float g_lo = std::max(1.0f, stats_.g_lo);
+    const float g_hi = std::max(g_lo + 1.0f, stats_.g_hi);
+    const float g_scale = bundle_.has_crosstalk ? 1.0f : e_norm_;
     if (!(e > 0.0f) ||
-        !bracket_enclosure(bundle_.targets[target_idx], target_idx, g_lo, std::max(g_lo + 1.0f, stats_.g_hi), enc) ||
+        !bracket_enclosure(bundle_.targets[target_idx], target_idx, g_lo * g_scale, g_hi * g_scale, enc) ||
         !(enc.e_max > 0.0f))
       return std::numeric_limits<float>::quiet_NaN();
     return std::log2(e / enc.e_max);
@@ -1079,32 +1085,40 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
-  // Step 1: the enclosure of each bracket.
+  const bool white_light = !bundle.has_crosstalk;
+  // The input matrix in reference units (ParamSearchResult).
+  const FrameScale scale = frame_scale(bundle, scan_shutter_s, scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+  const float e_norm = fr.e_norm();
+  out.e_norm = e_norm;
+  for (int i = 0; i < 9; ++i) out.input_matrix[i] = scale.frame_matrix[i] / e_norm;
+  for (int r = 0; r < 3; ++r) {
+    out.row_scale[r] = (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) /
+                       e_norm;
+  }
+
+  // Step 1: the enclosure of each bracket (on white-light bundles, g_lo and g_hi are scaled by e_norm into reference
+  // station ADU units; on TriLED, raw g_lo and g_hi are kept for bit-exact station parity).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_gamut_volume_enclosure)
   const float g_lo = std::max(1.0f, stats.g_lo);
   const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
+  const float g_scale = white_light ? e_norm : 1.0f;
+  const float g_lo_ref = g_lo * g_scale;
+  const float g_hi_ref = g_hi * g_scale;
   out.g_lo = g_lo;
   out.g_hi = g_hi;
   out.scene_ev = std::log2(g_hi / g_lo);
   std::vector<Enclosure> enclosure;
   for (int i : filter_admissible_targets(bundle)) {
     Enclosure r;
-    if (bracket_enclosure(bundle.targets[i], i, g_lo, g_hi, r)) enclosure.push_back(r);
+    if (bracket_enclosure(bundle.targets[i], i, g_lo_ref, g_hi_ref, r)) {
+      if (white_light && r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
+      enclosure.push_back(r);
+    }
   }
   if (enclosure.empty()) {
     std::cerr << "ERROR! No bracket of the bundle has patch readings" << std::endl;
     return false;
-  }
-
-  // The input matrix in reference units (ParamSearchResult).
-  const FrameScale scale = frame_scale(bundle, scan_shutter_s, scan_iso, opts);
-  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
-  const float e_norm = fr.e_norm();
-  out.e_norm = e_norm;
-  std::copy(fr.input_matrix(), fr.input_matrix() + 9, out.input_matrix);
-  for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) /
-                       e_norm;
   }
 
   if (verbose) {
@@ -1145,7 +1159,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   float p_scene[3];
   for (int r = 0; r < 3; ++r) {
     p_scene[r] = 0.0f;
-    for (int c = 0; c < 3; ++c) p_scene[r] += (fr.frame_matrix()[r * 3 + c] / e_norm) * stats.log_avg_rgb[c];
+    for (int c = 0; c < 3; ++c) p_scene[r] += fr.input_matrix()[r * 3 + c] * stats.log_avg_rgb[c];
   }
   struct Depth {
     Enclosure cand;
@@ -1163,8 +1177,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": metering did not converge\n";
       continue;
     }
-    const float lo = c.search_lo, hi = c.search_hi;
-    const float depth = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
+    const float lo = (white_light && e_met < c.search_lo) ? e_met * std::pow(2.0f, -0.25f) : c.search_lo;
+    const float hi = (white_light && e_met > c.search_hi) ? e_met * std::pow(2.0f, 0.25f) : c.search_hi;
+    const float depth = std::min(std::log2(e_met / std::max(1e-6f, c.search_lo)),
+                                 std::log2(std::max(1e-6f, c.search_hi) / e_met)) -
                          SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
     depths.push_back({c, e_met, depth, lo, hi});
   }
@@ -1202,7 +1218,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     s.result.e_lo = lo;
     s.result.e_hi = hi;
     s.result.e_metered = e_met;
-    const float eb[3] = {lo, hi, c.e_center};
+    const float e_anchor = (white_light && (e_met < c.search_lo || e_met > c.search_hi))
+                               ? std::clamp(c.e_center, e_met * std::pow(2.0f, -0.35f), e_met * std::pow(2.0f, 0.35f))
+                               : c.e_center;
+    const float eb[3] = {lo, hi, e_anchor};
     s.result.intent_loss = fr.search(c.target_idx, mu1, sig1, nullptr, eb, s.result.params);
     screening.push_back(s);
   };
@@ -1232,10 +1251,19 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 4: the fixed-point loop per shortlisted bracket, within a trust region of +/- 0.5 stop around its
   // screened E.
-  auto trust_bounds = [](const Screened& c, float eb[3]) {
+  auto trust_bounds = [&](const Screened& c, float eb[3]) {
     eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0f, -0.5f));
     eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0f, 0.5f));
-    eb[2] = c.enclosure.e_center;
+    if (white_light) {
+      const float e_anchor =
+          (c.result.e_metered < c.enclosure.search_lo || c.result.e_metered > c.enclosure.search_hi)
+              ? std::clamp(c.enclosure.e_center, c.result.e_metered * std::pow(2.0f, -0.35f),
+                           c.result.e_metered * std::pow(2.0f, 0.35f))
+              : c.enclosure.e_center;
+      eb[2] = std::clamp(e_anchor, eb[0], eb[1]);
+    } else {
+      eb[2] = c.enclosure.e_center;
+    }
   };
   std::vector<FixedPointResult> adaptive;
   for (const auto& c : shortlist) {
@@ -1277,7 +1305,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         r = c;
         return true;
       }
-    return bracket_enclosure(bundle.targets[target_idx], target_idx, g_lo, g_hi, r);
+    return bracket_enclosure(bundle.targets[target_idx], target_idx, g_lo_ref, g_hi_ref, r);
   };
   // Each bracket's ceiling, parsed the first time it is needed.
   std::vector<float> ceilings(bundle.targets.size() * 3);
@@ -1426,7 +1454,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         s.result.e_lo = lo;
         s.result.e_hi = hi;
         s.result.e_metered = e_met;
-        const float eb[3] = {lo, hi, c.e_center};
+        const float e_anchor = (white_light && (e_met < c.search_lo || e_met > c.search_hi))
+                               ? std::clamp(c.e_center, e_met * std::pow(2.0f, -0.35f), e_met * std::pow(2.0f, 0.35f))
+                               : c.e_center;
+    const float eb[3] = {lo, hi, e_anchor};
         s.result.intent_loss =
             fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*pullback_search=*/true);
         res_screening.push_back(s);
@@ -1509,7 +1540,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   out.target_idx = chosen.target_idx;
   out.target_name = name_of(chosen.target_idx);
-  out.params = {params.e / e_norm, params.g, params.b, params.shoulder};
+  out.params = {white_light ? params.e : params.e / e_norm, params.g, params.b, params.shoulder};
   out.residual = chosen.residual;
   out.shoulder_q995 = chosen.shoulder_q995;
   out.shoulder_knee = chosen.shoulder_knee;
