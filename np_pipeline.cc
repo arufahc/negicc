@@ -839,10 +839,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     if (is_roi_auto) {
       if (input_mode == InputMode::kRgbFile || input_mode == InputMode::kThreeShot) {
         if (frame_det.conf < kLowFrameConfidence) {
+          const auto& rs = proc->imgdata.rawdata.sizes;
+          const auto& is = proc->imgdata.sizes;
           roi_coords[0] = 0;
           roi_coords[1] = 0;
-          roi_coords[2] = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
-          roi_coords[3] = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
+          roi_coords[2] = rs.width ? rs.width : is.width;
+          roi_coords[3] = rs.height ? rs.height : is.height;
         } else {
           for (int i = 0; i < 4; ++i) roi_coords[i] = frame_det.crop[i];
         }

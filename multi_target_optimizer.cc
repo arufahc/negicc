@@ -793,11 +793,14 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
+      // On non-crosstalk (deglared white-light) bundles, stop once the residual has risen for two consecutive steps
+      // past best_err and keep best as a converged tournament candidate (matching negicc-station optimizer.py).
       const bool rel_conv = bundle_.has_crosstalk
                                 ? ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR)
                                 : (err <= prev_err && err <= best_err * (1.0f + TOL_REL_ERR) && rel <= TOL_REL_ERR);
       const bool past_min = !bundle_.has_crosstalk && it >= 2 && err >= prev_err && prev_err > best_err;
       if (it > 0 && (dp <= TOL_PARAM || rel_conv || past_min)) {
+        if (verbose_ && past_min) std::cout << "    T" << target_idx + 1 << ": residual passed minimum, keeping best\n";
         status = FixedPointStatus::kConverged;
         break;
       }

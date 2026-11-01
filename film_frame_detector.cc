@@ -1010,75 +1010,47 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         const float db = std::log2(std::max(cv.b.d[i], 1e-7f) / ci.base[2]);
         return std::max({dr, dg, db}) - std::min({dr, dg, db});
       };
-      std::vector<uint8_t> row_cand(H, 0), col_cand(W, 0);
-      std::vector<double> row_sp(H, 1.0), col_sp(W, 1.0);
-      for (int y = 0; y < H; ++y) {
-        int nf = 0, nb0 = 0, nb2 = 0;
-        double sp_sum = 0.0;
-        for (int x = 0; x < W; ++x) {
-          const size_t i = (size_t)y * W + x;
-          if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
-            nf++;
-            if (ci.cls[i] == CL_BASE) nb0++;
-            if (near_base(i)) {
-              nb2++;
-              sp_sum += chroma_spread(i);
-            }
-          }
-        }
-        if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
-          row_cand[y] = 1;
-          row_sp[y] = sp_sum / nb2;
-        }
-      }
-      for (int x = 0; x < W; ++x) {
-        int nf = 0, nb0 = 0, nb2 = 0;
-        double sp_sum = 0.0;
-        for (int y = 0; y < H; ++y) {
-          const size_t i = (size_t)y * W + x;
-          if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
-            nf++;
-            if (ci.cls[i] == CL_BASE) nb0++;
-            if (near_base(i)) {
-              nb2++;
-              sp_sum += chroma_spread(i);
-            }
-          }
-        }
-        if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
-          col_cand[x] = 1;
-          col_sp[x] = sp_sum / nb2;
-        }
-      }
       std::vector<uint8_t> promote(N, 0);
-      for (int y = 0; y < H;) {
-        if (!row_cand[y]) { ++y; continue; }
-        int y1 = y;
-        double sp_run = 0.0;
-        while (y1 < H && row_cand[y1]) { sp_run += row_sp[y1]; ++y1; }
-        if (ci.light_clipped || y <= 4 || y1 >= H - 4 || sp_run <= 0.08 * (y1 - y)) {
-          for (int yy = y; yy < y1; ++yy)
-            for (int x = 0; x < W; ++x) {
-              const size_t i = (size_t)yy * W + x;
-              if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
+      auto promote_lines = [&](bool rows) {
+        const int n = rows ? H : W, m = rows ? W : H;
+        std::vector<uint8_t> cand(n, 0);
+        std::vector<double> sp(n, 1.0);
+        for (int a = 0; a < n; ++a) {
+          int nf = 0, nb0 = 0, nb2 = 0;
+          double sp_sum = 0.0;
+          for (int b = 0; b < m; ++b) {
+            const size_t i = rows ? (size_t)a * W + b : (size_t)b * W + a;
+            if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
+              nf++;
+              if (ci.cls[i] == CL_BASE) nb0++;
+              if (near_base(i)) {
+                nb2++;
+                sp_sum += chroma_spread(i);
+              }
             }
+          }
+          if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
+            cand[a] = 1;
+            sp[a] = sp_sum / nb2;
+          }
         }
-        y = y1;
-      }
-      for (int x = 0; x < W;) {
-        if (!col_cand[x]) { ++x; continue; }
-        int x1 = x;
-        double sp_run = 0.0;
-        while (x1 < W && col_cand[x1]) { sp_run += col_sp[x1]; ++x1; }
-        if (ci.light_clipped || x <= 4 || x1 >= W - 4 || sp_run <= 0.08 * (x1 - x)) {
-          for (int xx = x; xx < x1; ++xx)
-            for (int y = 0; y < H; ++y) {
-              const size_t i = (size_t)y * W + xx;
-              if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
-            }
+        for (int a = 0; a < n;) {
+          if (!cand[a]) { ++a; continue; }
+          int a1 = a;
+          double sp_run = 0.0;
+          while (a1 < n && cand[a1]) { sp_run += sp[a1]; ++a1; }
+          if (ci.light_clipped || a <= 4 || a1 >= n - 4 || sp_run <= 0.08 * (a1 - a)) {
+            for (int aa = a; aa < a1; ++aa)
+              for (int b = 0; b < m; ++b) {
+                const size_t i = rows ? (size_t)aa * W + b : (size_t)b * W + aa;
+                if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
+              }
+          }
+          a = a1;
         }
-        x = x1;
-      }
+      };
+      promote_lines(true);
+      promote_lines(false);
       for (size_t i = 0; i < N; ++i)
         if (promote[i]) ci.cls[i] = CL_BASE;
     }
@@ -1633,13 +1605,10 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   else tr0 = !square && rv.score > rh.score;
   if (tr0 && !square && rv.h <= 0) tr0 = false;
   if (!tr0 && !square && rh.h <= 0) tr0 = true;
-  // The frame's w / h on the canvas swaps with the strip direction; a square frame is the same either way.
-  const SearchRes r0 = (tr0 && !square) ? rv : rh;
-  if (r0.h <= 0) return false;
-  res.score = r0.score / ((double)sw * sh);
 
   // ---- 5b. The strip model, in the view (strip along view x).
   auto eval_strip = [&](bool tr, FormatResult& res_out) -> bool {
+  // The frame's w / h on the canvas swaps with the strip direction; a square frame is the same either way.
   const SearchRes& r_init = (tr && !square) ? rv : rh;
   if (r_init.h <= 0) return false;
   res_out.score = r_init.score / ((double)sw * sh);
