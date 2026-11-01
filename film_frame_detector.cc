@@ -979,7 +979,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   if (pol == FILM_NEGATIVE && ci.base_valid) {
     // Holder-framed negatives with no visible rebate: the brightest mode of the film is a bright picture region
     // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture.
-    size_t nb = 0, ni = 0, nb_c = 0, n_c = 0;
+    size_t nb = 0, ni = 0, ndark = 0, nb_c = 0, n_c = 0;
     const int cx0 = W / 4, cx1 = W - W / 4, cy0 = H / 4, cy1 = H - H / 4;
     for (int y = 0; y < H; ++y) {
       const bool in_y = (y >= cy0 && y < cy1);
@@ -987,6 +987,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         const uint8_t c = ci.cls[(size_t)y * W + x];
         if (c == CL_BASE) nb++;
         else if (c == CL_IMAGE) ni++;
+        else if (c == CL_DARK) ndark++;
         if (in_y && x >= cx0 && x < cx1 && (c == CL_BASE || c == CL_IMAGE)) {
           n_c++;
           if (c == CL_BASE) nb_c++;
@@ -996,7 +997,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     if (nb + ni > 0 && nb > 0.30 * (nb + ni) && n_c > 0 && nb_c > 0.30 * n_c) {
       for (size_t i = 0; i < N; ++i)
         if (ci.cls[i] == CL_BASE) ci.cls[i] = CL_IMAGE;
-    } else {
+    } else if (nlight > 0 || ndark > 0) {
       // Vignetted light sources: an inter-frame gap or border rebate line whose ends reach ci.base (>= 15% CL_BASE)
       // can dip up to 0.60 stop below ci.base across its middle while keeping film-base chromaticity (mean spread
       // <= 0.35 stop, or <= 0.08 stop on unclipped interiors so low-density picture highlights are not promoted).
@@ -2125,7 +2126,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         if (beg < 0) beg = x;
         far = x;
         ++run;
-      } else if (beg < 0 && d < 2 && cps[x] < 0.5f) {
+      } else if (beg < 0 && d < 3 && cp[x] < 0.7f) {
         continue;
       } else {
         break;
