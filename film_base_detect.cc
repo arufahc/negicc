@@ -305,7 +305,7 @@ void corrected(const double v[3], const double* m, double out[3]) {
 
 }  // namespace
 
-void thinnest_film_base(const RgbView& half, float out[3]) {
+static void thinnest_film_base_impl(const RgbView& half, bool white_light, float out[3]) {
   int w = 0, h = 0;
   std::vector<float> v = downsample(half, w, h);
   const size_t n = (size_t)w * h;
@@ -319,11 +319,24 @@ void thinnest_film_base(const RgbView& half, float out[3]) {
   const double ref = (double)percentile_f32(tmp, 99.9);
   const float black_level = (float)(kBlackFraction * ref);
   std::vector<uint8_t> black(n), light(n);
-  const float clip = (float)kClipLevel;
+  float clip_c[3] = {(float)kClipLevel, (float)kClipLevel, (float)kClipLevel};
+  if (white_light) {
+    // A white-light decode is in 16-bit linear Rec.2020 (white-balanced by pre_mul, so orange film routinely exceeds
+    // the 14-bit kClipLevel in Red). As in detect_film_frame, a channel is clipped when its work-image maxima sit at a
+    // plateau (>= 0.05% of pixels within 0.5% of the channel maximum, at >= 20% of 65535).
+    for (int c = 0; c < 3; ++c) {
+      float mx = 0.0f;
+      for (size_t i = 0; i < n; ++i) mx = std::max(mx, v[i * 3 + c]);
+      size_t cnt = 0;
+      for (size_t i = 0; i < n; ++i) cnt += v[i * 3 + c] >= 0.995f * mx;
+      const bool plateau = cnt >= std::max<size_t>(4, n / 2000) && mx >= 13000.0f;
+      clip_c[c] = plateau ? 0.98f * mx : 65000.0f;
+    }
+  }
   bool any_light = false;
   for (size_t i = 0; i < n; ++i) {
     black[i] = lum[i] < black_level;
-    light[i] = v[i * 3] >= clip || v[i * 3 + 1] >= clip || v[i * 3 + 2] >= clip;
+    light[i] = v[i * 3] >= clip_c[0] || v[i * 3 + 1] >= clip_c[1] || v[i * 3 + 2] >= clip_c[2];
     any_light |= light[i] != 0;
   }
   if (any_light) light = light_parts(light, lum, ref, w, h);
@@ -381,6 +394,45 @@ void thinnest_film_base(const RgbView& half, float out[3]) {
       for (size_t i = 0; i < n; ++i) light[i] |= keep[labels[i]];
     }
   }
+  if (white_light && n_cand > 64) {
+    // A cropped white-light scan may still retain a thin sliver of unclipped neutral white light (< 1% of bright
+    // pixels, below Otsu's f_lo >= 0.01 floor) on its border or sprocket holes. When the main film is strongly orange,
+    // mask connected components of neutral bright pixels (reaching the border or hole-sized) whose blue channel
+    // exceeds the orange film's 99.5th percentile.
+    std::vector<float> q_cand;
+    q_cand.reserve(n_cand);
+    for (size_t i = 0; i < n; ++i)
+      if (!black[i] && !light[i]) q_cand.push_back(q[i]);
+    if (q_cand.size() > 64) {
+      const float q_med = median_f32(q_cand);
+      if (q_med >= 1.2f) {
+        const float q_cut = std::min(1.0f, q_med - (float)kLightChromaGap);
+        std::vector<float> b_orange, lum_orange;
+        for (size_t i = 0; i < n; ++i) {
+          if (!black[i] && !light[i] && q[i] >= q_cut) {
+            b_orange.push_back(v[i * 3 + 2]);
+            lum_orange.push_back(lum[i]);
+          }
+        }
+        if (b_orange.size() > 64) {
+          const float b_ref = percentile_f32(b_orange, kBasePercentile);
+          const double ref_orange = (double)percentile_f32(lum_orange, 99.9);
+          std::vector<uint8_t> neutral(n, 0);
+          bool any_neutral = false;
+          for (size_t i = 0; i < n; ++i) {
+            if (!black[i] && !light[i] && q[i] < q_cut && v[i * 3 + 2] > b_ref) {
+              neutral[i] = 1;
+              any_neutral = true;
+            }
+          }
+          if (any_neutral) {
+            const std::vector<uint8_t> parts = light_parts(neutral, lum, ref_orange, w, h);
+            for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
+          }
+        }
+      }
+    }
+  }
   // Pixels where light and film blend count as light: dilated by a 5x5 square.
   std::vector<uint8_t> grown(n, 0);
   for (int y = 0; y < h; ++y) {
@@ -411,6 +463,10 @@ void thinnest_film_base(const RgbView& half, float out[3]) {
       if (film[i]) tmp.push_back(v[i * 3 + c]);
     out[c] = tmp.empty() ? 0.0f : percentile_f32(tmp, kBasePercentile);
   }
+}
+
+void thinnest_film_base(const RgbView& half, float out[3]) {
+  thinnest_film_base_impl(half, false, out);
 }
 
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
@@ -450,7 +506,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
       }
     }
   }
-  thinnest_film_base(half, out.thinnest);
+  thinnest_film_base_impl(half, crosstalk == nullptr, out.thinnest);
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
   if (has_box) {
     std::vector<uint16_t> ch[3];
