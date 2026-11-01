@@ -51,6 +51,8 @@ static LibRaw* new_image_proc(int w, int h) {
   auto& S = proc->imgdata.sizes;
   S.raw_width = S.width = S.iwidth = (ushort)w;
   S.raw_height = S.height = S.iheight = (ushort)h;
+  proc->imgdata.rawdata.sizes.width = (ushort)w;
+  proc->imgdata.rawdata.sizes.height = (ushort)h;
   if (S.width != w || S.height != h) {  // LibRaw's sizes are 16-bit
     delete proc;
     return nullptr;
