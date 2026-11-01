@@ -3,7 +3,7 @@
 NegICC creates ICC profiles and converts color negatives captured with a digital camera into consistent, color-accurate positive images with **no manual editing required**, combining physical multi-bracket film profiling with a **Vision Transformer (DINOv3) as an automatic color grader**. The ICC profiles and conversion tool (`neg_process`) have the following properties:
 * **Zero-touch automatic color grading:** Uses a Vision Transformer (**DINOv3**) trained on Fujifilm Frontier and Noritsu lab scans to automatically select the exposure bracket, exposure gain, and color balance so converted negatives are ready for display out of the box without manual tweaking
 * **Preserves authentic film dye characteristics:** Allows automatic or manual color balance and exposure adjustments in linear scene-referred space before applying the film stock's calibrated tone curves and 3D color LUT
-* **Includes 3 manually profiled film stocks** (**Kodak Portra 400**, **Portra 160**, and **Ektar 100**), each photographed and calibrated across **7 exposure brackets** under **2 light sources** (**42 ICC profiles total** in `profiles/<Key>/`, `Target_1.icc`..`Target_7.icc` under narrowband `TriLED` and white `D65` light)
+* **Includes 3 manually profiled film stocks** (**Kodak Portra 400**, **Portra 160**, and **Ektar 100**), each photographed and calibrated across **7 exposure brackets** (`-3 EV` to `+3 EV`) under both narrowband RGB LED and white D65 light (**42 ICC profiles total**)
 
 ![sample conversion](samples/sample.png)
 
@@ -27,31 +27,33 @@ An IT8.7/2 reflective target (`R190808` from coloraid.de) photographed onto each
 
 Capturing negatives is much simpler now and supports camera RAWs, DNGs, and 16-bit linear TIFFs without optical filter wheels:
 * **Trichromatic narrowband RGB LED (`--light_source tri`):**
-  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses the bundle's $3\times 3$ sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
+  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses the bundle's 3×3 sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
   * *3-shot monochromatic RGB (`r.raw g.raw b.raw`) or pre-separated TIFF/DNG:* Capturing 3 separate frames under Red, Green, and Blue LEDs isolates the channels physically with zero sensor crosstalk—use the **identity color correction** (`-r "1 0 0" -g "0 1 0" -b "0 0 1"`).
 * **White D65 light (`--light_source d65`):** Single-shot capture under a standard D65 white LED panel. `neg_process` decodes the scan through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**.
 
 ### 7-Bracket Tone Curves (TRC) & Highlight Roll-Off
 
-A single IT8 target only calibrates tones across its own **7.22-stop** range up to the chart's white patch (`gs0` at 0.75). Each film stock is photographed across **7 exposure brackets from `-3 EV` to `+3 EV`** in 1-stop steps (`Target_1`..`Target_7`, centered on `Target_4` at `0 EV`, spanning **4.6 to 5.4 stops** of fitted film density across the 7 brackets). Fitting all 7 brackets together measures each bracket's exact exposure offset and traces the film's true highlight shoulder—giving **~12 to 13 stops of total scene dynamic range** and **up to +3 stops of calibrated highlight headroom** above normal white:
+A single IT8 target only calibrates tones across its own **7.2-stop** range up to the chart's white patch. To capture the full latitude of color negative film, each stock is photographed across **7 exposure brackets from `-3 EV` to `+3 EV`** in 1-stop steps. Fitting all 7 brackets together measures each bracket's exact exposure offset and traces the film's true highlight shoulder—giving **12 to 13 stops of total scene dynamic range** and **up to +3 stops of calibrated highlight headroom** above normal white:
 
 ![TRC Curves](samples/trc_curves.png)
 
-The final step converts linearized RGB values into CIE XYZ / $L^*a^*b^*$ using a 16-bit Curve + **$45^3$ 3D-cLUT** encoded as an ICC profile:
+The final step converts linearized RGB values into CIE XYZ / Lab using a 16-bit tone curve and a 45×45×45 3D color lookup table (cLUT) encoded as an ICC profile:
 
 ![ICC profile](samples/icc.png)
 
 # ICC Profile Description & Expanded Highlight Gamut
 
-What makes NegICC unique is **dedicated multi-bracket physical film profiling** with decoupled tone curves and color tables. Each film stock was photographed on an IT8.7/2 target across **7 exposure brackets (`-3 EV` to `+3 EV`) under 2 light sources** and calibrated into **7 separate 16-bit Curve + $45^3$ 3D-cLUT ICC profiles** (`profiles/<Key>/Target_1.icc`..`Target_7.icc`). Each bracket's 1D tone curves (TRC) first linearize the film's exact density response at that exposure level, and the $45^3$ cLUT then maps linearized RGB to CIE $L^*a^*b^*$. Because a single target has no patches above its white patch ($L^* \approx 89.4$), NegICC injects the brighter patches from the denser, over-exposed brackets (`Target 4`–`Target 7`, `0 EV` to `+3 EV`, adding +567 highlight color samples on `Target_3.icc`) into the cLUT so the calibrated 3D CIELAB gamut volume and highlight chroma extend smoothly all the way to pure white ($L^* = 100$) without amplifying film grain.
+NegICC is built around **multi-bracket physical film profiling** with separate tone curves and color lookup tables. Each film stock is photographed on an IT8.7/2 target across seven exposure brackets (`-3 EV` to `+3 EV`) under two light sources, producing seven ICC profiles per film and light source. Within each profile, 16-bit 1D tone curves first linearize the film's density response at that exposure level, and a 45×45×45 3D color lookup table (cLUT) then maps linearized RGB into CIE Lab.
 
-This makes NegICC far more adaptable than generic histogram stretching or the **Cineon workflow**, which maps negative scans to density and applies a single fixed 3D cLUT. Because a Cineon LUT bakes the tone curves and color mapping together at one fixed exposure, it is too rigid for real-world exposure variations—for example, when a frame is shot at **+2 stops overexposure**, shifting density into a single LUT pushes midtones and highlights into the wrong part of the film's shoulder and dye-coupling curves. With 7 bracketed profiles, `neg_process` instead matches a `+2 EV` frame to the `+2 EV` profile (`Target_6.icc`) where the film's actual highlight response was measured, and for exposures that do not fall squarely on a bracket, applies **gamut enclosure fitting** and searches for the fine **exposure gain and color balance** using the **DINOv3 vision model** (see [DINOv3 Automatic Color Grader & Iterative Convergence](#dinov3-automatic-color-grader--iterative-convergence) below):
+Because a single target capture contains no color patches brighter than its white patch (`L* ≈ 89`), standard ICC profiling leaves the upper highlight range uncalibrated. NegICC solves this by borrowing the brighter patches from the over-exposed brackets and blending them into the cLUT, extending the calibrated 3D color gamut and highlight saturation smoothly all the way to pure white (`L* = 100`) without amplifying film grain.
+
+This makes NegICC much more adaptable than generic histogram stretching or the **Cineon workflow**, which converts negative scans to density and applies a single fixed 3D LUT. Because a Cineon LUT bakes the tone curve and color mapping together at one fixed exposure, it does not adapt well when a frame is over- or under-exposed—for example, at **+2 stops overexposure**, shifting density into a single LUT pushes midtones and highlights into the wrong part of the film's shoulder and dye curves. With seven bracketed profiles, `neg_process` instead selects the profile calibrated near that exposure level, and for exposures between brackets it uses **gamut enclosure fitting** and the **DINOv3 vision model** to find the optimal exposure gain and color balance (see [DINOv3 Automatic Color Grader & Iterative Convergence](#dinov3-automatic-color-grader--iterative-convergence) below):
 
 ![Gamut Volume](samples/gamut_volume.png)
 
 ### Why Dedicated Per-Stock Profiles? (Own-Sample vs. Held-Out Color Accuracy)
 
-Generic negative inversion tools apply a single curve or $3\times 3$ matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. By calibrating a dedicated 7-bracket $45^3$ 3D-cLUT per film stock, the profiles achieve **sub-`0.6 ΔE₀₀` mean (`~0.4 ΔE₀₀` median) own-sample accuracy** and **`1.4–2.3 ΔE₀₀` median error on unseen held-out color patches** (2-fold cross-validation holding out half of the 264 color patches at a time, where `< 2.0 ΔE₀₀` is barely perceptible to the human eye):
+Generic negative inversion tools apply a single curve or 3×3 matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. By calibrating a dedicated 7-bracket 45×45×45 3D cLUT per film stock, the profiles achieve **sub-`0.6 ΔE₀₀` mean (`~0.4 ΔE₀₀` median) own-sample accuracy** and **`1.4–2.3 ΔE₀₀` median error on unseen held-out color patches** (2-fold cross-validation holding out half of the 264 color patches at a time, where `< 2.0 ΔE₀₀` is barely perceptible to the human eye):
 
 | Bracket Target (Exposure) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out avg (med) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -65,7 +67,7 @@ Generic negative inversion tools apply a single curve or $3\times 3$ matrix to e
 
 ### DINOv3 Automatic Color Grader & Iterative Convergence
 
-Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **DINOv3** vision model as an **automatic color grader** trained on real **Fujifilm Frontier and Noritsu lab scans** collected from Flickr and Photohito (`models/dinov3-small_<stock>/`). Because DINOv3 understands scene semantics, it recognizes objects in context (sky, foliage, skin tones, stone, shadows) and predicts the **target Lab color** ($\mu_i$) and **tolerance** ($\sigma_i$) that each $16\times 16$ patch of the photo should have based on learned lab-scan examples:
+Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **DINOv3** vision model as an **automatic color grader** trained on real **Fujifilm Frontier and Noritsu lab scans** collected from Flickr and Photohito. Because DINOv3 understands scene semantics, it recognizes objects in context (sky, foliage, skin tones, stone, shadows) and predicts the **target Lab color** and **confidence weight** that each 16×16 patch of the photo should have based on learned lab-scan examples:
 
 ![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
