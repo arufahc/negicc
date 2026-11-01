@@ -498,7 +498,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
           &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
       // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
-      detect_base(half_view, nullptr, 0, 0);
+      detect_base(half_view, (s.white_light && is_roi_auto) ? &frame_det : nullptr,
+                  s.white_light ? raw.imgdata.sizes.width : 0, s.white_light ? raw.imgdata.sizes.height : 0);
       negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
       if (bundle_search) {
         ParamSearchOptions opts;
@@ -590,15 +591,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
     LibRaw* probe = new LibRaw();
     log_info("Loading RAW file %s\n", files[0].c_str());
-    int ret = probe->open_file(files[0].c_str());
+    int ret = open_and_unpack_raw_file(probe, files[0]);
     if (ret != LIBRAW_SUCCESS) {
-      log_error("Cannot open %s: %s\n", files[0].c_str(), libraw_strerror(ret));
-      delete probe;
-      return 1;
-    }
-    log_info("Image size: %dx%d\n", probe->imgdata.sizes.iwidth, probe->imgdata.sizes.iheight);
-    if ((ret = probe->unpack()) != LIBRAW_SUCCESS) {
-      log_error("Cannot unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      log_error("Cannot open/unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
       delete probe;
       return 1;
     }

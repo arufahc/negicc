@@ -56,11 +56,136 @@ bool is_sony_cfa_geometry(LibRaw* proc) {
          proc->COLOR(1, 1) == 2;
 }
 
+namespace {
+
+// A DNG whose UniqueCameraModel starts with spaces (e.g. SilverFast's "  Multiple Frame Scanner FS") leaves
+// LibRaw::open_file with make[0] == '\0' (tiff.cpp splits UniqueCameraModel at the first space), so LibRaw rejects it
+// with LIBRAW_FILE_UNSUPPORTED. A stream wrapper that advances IFD0's UniqueCameraModel (0xc614) offset past any
+// leading spaces lets LibRaw open the file in place without copying the image data.
+class PatchedHeaderStream : public LibRaw_bigfile_datastream {
+ public:
+  explicit PatchedHeaderStream(const char* fname) : LibRaw_bigfile_datastream(fname) {
+    if (!valid()) return;
+    uint8_t hdr[8] = {0};
+    seek(0, SEEK_SET);
+    if (LibRaw_bigfile_datastream::read(hdr, 1, 8) != 8) return;
+    const bool le = hdr[0] == 'I' && hdr[1] == 'I';
+    const bool be = hdr[0] == 'M' && hdr[1] == 'M';
+    if (!le && !be) return;
+    auto u16 = [&](const uint8_t* p) -> uint16_t {
+      return le ? (uint16_t)(p[0] | (p[1] << 8)) : (uint16_t)((p[0] << 8) | p[1]);
+    };
+    auto u32 = [&](const uint8_t* p) -> uint32_t {
+      return le ? ((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24))
+                : (((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]);
+    };
+    const uint32_t ifd0 = u32(hdr + 4);
+    if (ifd0 + 2 > size()) return;
+    uint8_t nbuf[2] = {0};
+    seek(ifd0, SEEK_SET);
+    if (LibRaw_bigfile_datastream::read(nbuf, 1, 2) != 2) return;
+    const uint16_t ntags = u16(nbuf);
+    if (ifd0 + 2 + (INT64)ntags * 12 > size()) return;
+    std::vector<uint8_t> entries((size_t)ntags * 12);
+    if (LibRaw_bigfile_datastream::read(entries.data(), 1, entries.size()) != (int)entries.size()) return;
+    bool has_dng = false;
+    uint32_t ucm_cnt = 0, ucm_off = 0;
+    for (uint16_t i = 0; i < ntags; ++i) {
+      const uint8_t* e = entries.data() + (size_t)i * 12;
+      const uint16_t tag = u16(e);
+      if (tag == 0xc612) has_dng = true;
+      if (tag == 0xc614 && u16(e + 2) == 2) {
+        ucm_cnt = u32(e + 4);
+        ucm_off = u32(e + 8);
+      }
+    }
+    if (has_dng && ucm_cnt > 4 && ucm_cnt <= 256 && (INT64)ucm_off + ucm_cnt <= size()) {
+      patch_.resize(ucm_cnt);
+      seek(ucm_off, SEEK_SET);
+      if (LibRaw_bigfile_datastream::read(patch_.data(), 1, ucm_cnt) == (int)ucm_cnt && patch_[0] == ' ') {
+        for (size_t i = 0; i < patch_.size() && patch_[i] == ' '; ++i) patch_[i] = '_';
+        patch_off_ = ucm_off;
+        patched_ = true;
+      }
+    }
+    seek(0, SEEK_SET);
+  }
+  bool is_patched() const { return patched_; }
+  int read(void* ptr, size_t sz, size_t nmemb) override {
+    const INT64 pos = tell();
+    const int r = LibRaw_bigfile_datastream::read(ptr, sz, nmemb);
+    if (patched_ && r > 0) {
+      const INT64 end = pos + (INT64)r * (INT64)sz;
+      const INT64 p0 = patch_off_, p1 = patch_off_ + (INT64)patch_.size();
+      const INT64 lo = std::max(pos, p0), hi = std::min(end, p1);
+      if (lo < hi) {
+        std::memcpy(static_cast<uint8_t*>(ptr) + (lo - pos), patch_.data() + (lo - p0), (size_t)(hi - lo));
+      }
+    }
+    return r;
+  }
+
+ private:
+  INT64 patch_off_ = 0;
+  std::vector<uint8_t> patch_;
+  bool patched_ = false;
+};
+
+}  // namespace
+
+int open_raw_file(LibRaw* proc, const std::string& fn) {
+  int ret = proc->open_file(fn.c_str());
+  if (ret == LIBRAW_FILE_UNSUPPORTED) {
+    PatchedHeaderStream stream(fn.c_str());
+    if (stream.valid() && stream.is_patched()) {
+      ret = proc->open_datastream(&stream);
+      if (ret == LIBRAW_SUCCESS) return ret;
+    }
+  }
+  return ret;
+}
+
+int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
+  int ret = proc->open_file(fn.c_str());
+  if (ret == LIBRAW_FILE_UNSUPPORTED) {
+    PatchedHeaderStream stream(fn.c_str());
+    if (stream.valid() && stream.is_patched()) {
+      ret = proc->open_datastream(&stream);
+      if (ret != LIBRAW_SUCCESS) return ret;
+      log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+      return proc->unpack();
+    }
+  }
+  if (ret != LIBRAW_SUCCESS) return ret;
+  log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
+  return proc->unpack();
+}
+
 
 bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
-  const ushort* raw = proc.imgdata.rawdata.raw_image;
-  if (!raw) return false;
   const auto& sz = proc.imgdata.sizes;
+  const auto& C = proc.imgdata.color;
+  const float black = (float)C.black;
+  float cblack[4];
+  for (int c = 0; c < 4; ++c) cblack[c] = black + (float)C.cblack[c];
+  const float white = std::max(1.0f, (float)C.maximum - black);
+  const unsigned filters = proc.imgdata.idata.filters;
+  const ushort* raw = proc.imgdata.rawdata.raw_image;
+  if (!raw) {
+    const int ncomp = proc.imgdata.rawdata.color4_image ? 4 : proc.imgdata.rawdata.color3_image ? 3 : 0;
+    if (filters || !ncomp || (proc.imgdata.idata.colors != 3 && proc.imgdata.idata.colors != 4)) return false;
+    const ushort* linear =
+        ncomp == 4 ? &proc.imgdata.rawdata.color4_image[0][0] : &proc.imgdata.rawdata.color3_image[0][0];
+    const ptrdiff_t pitch = sz.raw_pitch / 2 / ncomp;
+    if (sz.width <= 0 || sz.height <= 0 || sz.top_margin + sz.height > sz.raw_height ||
+        sz.left_margin + sz.width > pitch) {
+      return false;
+    }
+    const ushort* origin = linear + ((size_t)sz.top_margin * pitch + sz.left_margin) * ncomp;
+    img = film_image_from_interleaved(origin, sz.width, sz.height, ncomp, pitch * ncomp, white);
+    for (int c = 0; c < 3; ++c) img.ch[c].black = cblack[c];
+    return true;
+  }
   const ptrdiff_t stride = sz.raw_pitch / 2;
   // The visible area must lie inside the raw buffer (prepare_white_light_mosaic refuses such a RAW the same way).
   if (sz.width <= 0 || sz.height <= 0 || sz.top_margin + sz.height > sz.raw_height ||
@@ -68,12 +193,6 @@ bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
     return false;
   }
   const ushort* origin = raw + (size_t)sz.top_margin * stride + sz.left_margin;
-  const auto& C = proc.imgdata.color;
-  const float black = (float)C.black;
-  float cblack[4];
-  for (int c = 0; c < 4; ++c) cblack[c] = black + (float)C.cblack[c];
-  const float white = std::max(1.0f, (float)C.maximum - black);
-  const unsigned filters = proc.imgdata.idata.filters;
   if (!filters) {
     img = film_image_from_planes(origin, origin, origin, sz.width, sz.height, stride, white);
     for (FilmChannel& ch : img.ch) ch.black = cblack[0];
@@ -196,10 +315,10 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   uint16_t* raw = proc->imgdata.rawdata.raw_image;
   // A linear (demosaiced) DNG has its three colours per pixel instead of a CFA mosaic: the same black subtraction and
   // daylight white balance apply to each colour.
-  const int ncomp = proc->imgdata.rawdata.color3_image ? 3 : proc->imgdata.rawdata.color4_image ? 4 : 0;
+  const int ncomp = proc->imgdata.rawdata.color4_image ? 4 : proc->imgdata.rawdata.color3_image ? 3 : 0;
   const bool linear = !raw && ncomp && proc->imgdata.idata.colors == 3;
   if (linear) {
-    raw = ncomp == 3 ? &proc->imgdata.rawdata.color3_image[0][0] : &proc->imgdata.rawdata.color4_image[0][0];
+    raw = ncomp == 4 ? &proc->imgdata.rawdata.color4_image[0][0] : &proc->imgdata.rawdata.color3_image[0][0];
     if (flat) {
       log_error("--flat applies to a CFA RAW, not a linear DNG\n");
       return false;
@@ -386,15 +505,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   if (!proc) {
     proc = new LibRaw();
     log_info("Loading RAW file %s\n", fn.c_str());
-    if ((ret = proc->open_file(fn.c_str())) != LIBRAW_SUCCESS) {
-      log_error("Cannot open %s: %s\n", fn.c_str(), libraw_strerror(ret));
-      delete proc;
-      return NULL;
-    }
-    log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
-
-    if ((ret = proc->unpack()) != LIBRAW_SUCCESS) {
-      log_error("Cannot unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
+    if ((ret = open_and_unpack_raw_file(proc, fn)) != LIBRAW_SUCCESS) {
+      log_error("Cannot open/unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
       delete proc;
       return NULL;
     }

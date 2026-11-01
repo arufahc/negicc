@@ -28,15 +28,14 @@
 #include "np_geometry.h"
 #include "rgb_input.h"
 
-
 bool libraw_opens(const std::string& path) {
   LibRaw probe;
-  return probe.open_file(path.c_str()) == LIBRAW_SUCCESS;
+  return open_raw_file(&probe, path) == LIBRAW_SUCCESS;
 }
 
 bool is_linear_dng(const std::string& path) {
   LibRaw probe;
-  return probe.open_file(path.c_str()) == LIBRAW_SUCCESS && probe.imgdata.idata.dng_version &&
+  return open_raw_file(&probe, path) == LIBRAW_SUCCESS && probe.imgdata.idata.dng_version &&
          !probe.imgdata.idata.filters;
 }
 
