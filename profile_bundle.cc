@@ -751,8 +751,9 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
       tgt.is_feasible = false;
       continue;
     }
-    tgt.e_min = tgt.tgt_min_g / g_lo;
-    tgt.e_max = tgt.tgt_max_g / g_hi;
+    const float k_t = (!bundle.has_crosstalk && tgt.exposure_s > 0.0f) ? (0.125f / tgt.exposure_s) : 1.0f;
+    tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
+    tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
     tgt.is_feasible = (tgt.e_max >= tgt.e_min);
     tgt.tgt_capacity_ev = (float)std::log2(tgt.tgt_max_g / tgt.tgt_min_g);
     tgt.e_center = (float)std::sqrt(tgt.e_min * tgt.e_max);
@@ -813,8 +814,9 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
       tgt.is_feasible = false;
       continue;
     }
-    tgt.e_min = tgt.tgt_min_g / g_lo;
-    tgt.e_max = tgt.tgt_max_g / g_hi;
+    const float k_t = (!bundle.has_crosstalk && tgt.exposure_s > 0.0f) ? (0.125f / tgt.exposure_s) : 1.0f;
+    tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
+    tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
     tgt.is_feasible = (tgt.e_max >= tgt.e_min);
     tgt.tgt_capacity_ev = (float)std::log2(tgt.tgt_max_g / tgt.tgt_min_g);
     tgt.e_center = (float)std::sqrt(tgt.e_min * tgt.e_max);

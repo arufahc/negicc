@@ -55,7 +55,7 @@ struct Options {
   int roi[4] = {0, 0, 0, 0};                   // --roi x y w h (sensor pixels)
   bool has_roi = false, roi_auto = false;      // --roi given as numbers / as 'auto'
   char roi_axis_hint = 0;                      // --roi auto h|v
-  FilmFormat film_format = FILM_FORMAT_AUTO;   // --film_format
+  FilmFormat film_format = FILM_35MM;          // --film_format
   int rot_cw = 0;                              // --rot_cw (or the --roi's fifth value)
   bool hflip = false, vflip = false;
 
