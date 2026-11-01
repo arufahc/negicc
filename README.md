@@ -1,9 +1,9 @@
 # Objective
 
-NegICC creates ICC profiles and converts color negatives captured with a digital camera into consistent, color-accurate positive images. The ICC profiles and conversion tool (`neg_process`) have the following properties:
-* Allow color balance and exposure adjustments while preserving film dye characteristics
-* Produce neutral, accurate color ready for display or further editing in standard photo editors
-* Include **3 manually profiled film stocks** (**Kodak Portra 400**, **Portra 160**, and **Ektar 100**), each photographed and calibrated across **7 exposure brackets** under **2 light sources** (**42 ICC profiles total** in `profiles/<Key>/`, `Target_1.icc`..`Target_7.icc` under narrowband `TriLED` and white `D65` light)
+NegICC creates ICC profiles and converts color negatives captured with a digital camera into consistent, color-accurate positive images with **no manual editing required**, combining physical multi-bracket film profiling with a **Vision Transformer (DINOv3) as an automatic color grader**. The ICC profiles and conversion tool (`neg_process`) have the following properties:
+* **Zero-touch automatic color grading:** Uses a Vision Transformer (**DINOv3**) trained on Fujifilm Frontier and Noritsu lab scans to automatically select the exposure bracket, exposure gain, and color balance so converted negatives are ready for display out of the box without manual tweaking
+* **Preserves authentic film dye characteristics:** Allows automatic or manual color balance and exposure adjustments in linear scene-referred space before applying the film stock's calibrated tone curves and 3D color LUT
+* **Includes 3 manually profiled film stocks** (**Kodak Portra 400**, **Portra 160**, and **Ektar 100**), each photographed and calibrated across **7 exposure brackets** under **2 light sources** (**42 ICC profiles total** in `profiles/<Key>/`, `Target_1.icc`..`Target_7.icc` under narrowband `TriLED` and white `D65` light)
 
 ![sample conversion](samples/sample.png)
 

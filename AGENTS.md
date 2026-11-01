@@ -6,14 +6,18 @@ This file contains mandatory rules for any agent working in this repository.
 
 ## Git Configuration Rules
 
-All agents committing to this repository must configure their Git author information as follows:
-- **Name**: `Agent for Alpha Lam`
+All commits to this repository must use the repository owner's Git author and committer identity:
+- **Name**: `Alpha Lam`
 - **Email**: `arufa.hc@gmail.com`
 
 **Command to run at startup:**
 ```bash
-git config user.name "Agent for Alpha Lam" && git config user.email "arufa.hc@gmail.com"
+git config user.name "Alpha Lam" && git config user.email "arufa.hc@gmail.com"
 ```
+
+### No Agent Signatures or Attribution Trailers
+
+Do **NOT** add any agent signatures, `Co-Authored-By` trailers (e.g., `Co-Authored-By: Claude ...`), `Claude-Session` links, `Generated with ...` footers, or agent names in commit authors, committers, commit messages, or pull request descriptions. Individual agents such as Claude must not take credit in commit history, as this project is driven by extensive human direction, domain engineering, and Antigravity collaboration.
 
 ### Commit Message Style Rules
 
