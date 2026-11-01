@@ -793,7 +793,11 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      if (it > 0 && (dp <= TOL_PARAM || ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR))) {
+      const bool rel_conv = bundle_.has_crosstalk
+                                ? ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR)
+                                : (err <= prev_err && err <= best_err * (1.0f + TOL_REL_ERR) && rel <= TOL_REL_ERR);
+      const bool past_min = !bundle_.has_crosstalk && it >= 2 && err >= prev_err && prev_err > best_err;
+      if (it > 0 && (dp <= TOL_PARAM || rel_conv || past_min)) {
         status = FixedPointStatus::kConverged;
         break;
       }
@@ -1177,10 +1181,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": metering did not converge\n";
       continue;
     }
-    const float lo = (white_light && e_met < c.search_lo) ? e_met * std::pow(2.0f, -0.25f) : c.search_lo;
-    const float hi = (white_light && e_met > c.search_hi) ? e_met * std::pow(2.0f, 0.25f) : c.search_hi;
-    const float depth = std::min(std::log2(e_met / std::max(1e-6f, c.search_lo)),
-                                 std::log2(std::max(1e-6f, c.search_hi) / e_met)) -
+    const float lo = c.search_lo, hi = c.search_hi;
+    const float depth = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
                          SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
     depths.push_back({c, e_met, depth, lo, hi});
   }
@@ -1218,10 +1220,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     s.result.e_lo = lo;
     s.result.e_hi = hi;
     s.result.e_metered = e_met;
-    const float e_anchor = (white_light && (e_met < c.search_lo || e_met > c.search_hi))
-                               ? std::clamp(c.e_center, e_met * std::pow(2.0f, -0.35f), e_met * std::pow(2.0f, 0.35f))
-                               : c.e_center;
-    const float eb[3] = {lo, hi, e_anchor};
+    const float eb[3] = {lo, hi, c.e_center};
     s.result.intent_loss = fr.search(c.target_idx, mu1, sig1, nullptr, eb, s.result.params);
     screening.push_back(s);
   };
@@ -1251,19 +1250,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 4: the fixed-point loop per shortlisted bracket, within a trust region of +/- 0.5 stop around its
   // screened E.
-  auto trust_bounds = [&](const Screened& c, float eb[3]) {
+  auto trust_bounds = [](const Screened& c, float eb[3]) {
     eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0f, -0.5f));
     eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0f, 0.5f));
-    if (white_light) {
-      const float e_anchor =
-          (c.result.e_metered < c.enclosure.search_lo || c.result.e_metered > c.enclosure.search_hi)
-              ? std::clamp(c.enclosure.e_center, c.result.e_metered * std::pow(2.0f, -0.35f),
-                           c.result.e_metered * std::pow(2.0f, 0.35f))
-              : c.enclosure.e_center;
-      eb[2] = std::clamp(e_anchor, eb[0], eb[1]);
-    } else {
-      eb[2] = c.enclosure.e_center;
-    }
+    eb[2] = c.enclosure.e_center;
   };
   std::vector<FixedPointResult> adaptive;
   for (const auto& c : shortlist) {
@@ -1454,10 +1444,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         s.result.e_lo = lo;
         s.result.e_hi = hi;
         s.result.e_metered = e_met;
-        const float e_anchor = (white_light && (e_met < c.search_lo || e_met > c.search_hi))
-                               ? std::clamp(c.e_center, e_met * std::pow(2.0f, -0.35f), e_met * std::pow(2.0f, 0.35f))
-                               : c.e_center;
-    const float eb[3] = {lo, hi, e_anchor};
+        const float eb[3] = {lo, hi, c.e_center};
         s.result.intent_loss =
             fr.search(c.target_idx, mu_res, sig_res, nullptr, eb, s.result.params, /*pullback_search=*/true);
         res_screening.push_back(s);

@@ -837,6 +837,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       return 1;
     }
     if (is_roi_auto) {
+      if (input_mode == InputMode::kRgbFile || input_mode == InputMode::kThreeShot) {
+        if (frame_det.conf < kLowFrameConfidence) {
+          roi_coords[0] = 0;
+          roi_coords[1] = 0;
+          roi_coords[2] = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
+          roi_coords[3] = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
+        } else {
+          for (int i = 0; i < 4; ++i) roi_coords[i] = frame_det.crop[i];
+        }
+        has_roi = true;
+      }
       print_frame_detection();
       if (frame_det.conf < kLowFrameConfidence) {
         log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",

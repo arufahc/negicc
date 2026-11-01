@@ -976,6 +976,113 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       ci.cls[i] = (dense || holder[i]) ? CL_DARK : CL_IMAGE;
     }
   }
+  if (pol == FILM_NEGATIVE && ci.base_valid) {
+    // Holder-framed negatives with no visible rebate: the brightest mode of the film is a bright picture region
+    // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture.
+    size_t nb = 0, ni = 0, nb_c = 0, n_c = 0;
+    const int cx0 = W / 4, cx1 = W - W / 4, cy0 = H / 4, cy1 = H - H / 4;
+    for (int y = 0; y < H; ++y) {
+      const bool in_y = (y >= cy0 && y < cy1);
+      for (int x = 0; x < W; ++x) {
+        const uint8_t c = ci.cls[(size_t)y * W + x];
+        if (c == CL_BASE) nb++;
+        else if (c == CL_IMAGE) ni++;
+        if (in_y && x >= cx0 && x < cx1 && (c == CL_BASE || c == CL_IMAGE)) {
+          n_c++;
+          if (c == CL_BASE) nb_c++;
+        }
+      }
+    }
+    if (nb + ni > 0 && nb > 0.30 * (nb + ni) && n_c > 0 && nb_c > 0.30 * n_c) {
+      for (size_t i = 0; i < N; ++i)
+        if (ci.cls[i] == CL_BASE) ci.cls[i] = CL_IMAGE;
+    } else {
+      // Vignetted light sources: an inter-frame gap or border rebate line whose ends reach ci.base (>= 15% CL_BASE)
+      // can dip up to 0.60 stop below ci.base across its middle while keeping film-base chromaticity (mean spread
+      // <= 0.35 stop, or <= 0.08 stop on unclipped interiors so low-density picture highlights are not promoted).
+      const float k2 = std::exp2(-0.60f);
+      auto near_base = [&](size_t i) {
+        return cv.r.d[i] >= ci.base[0] * k2 && cv.g.d[i] >= ci.base[1] * k2 && cv.b.d[i] >= ci.base[2] * k2;
+      };
+      auto chroma_spread = [&](size_t i) {
+        const float dr = std::log2(std::max(cv.r.d[i], 1e-7f) / ci.base[0]);
+        const float dg = std::log2(std::max(cv.g.d[i], 1e-7f) / ci.base[1]);
+        const float db = std::log2(std::max(cv.b.d[i], 1e-7f) / ci.base[2]);
+        return std::max({dr, dg, db}) - std::min({dr, dg, db});
+      };
+      std::vector<uint8_t> row_cand(H, 0), col_cand(W, 0);
+      std::vector<double> row_sp(H, 1.0), col_sp(W, 1.0);
+      for (int y = 0; y < H; ++y) {
+        int nf = 0, nb0 = 0, nb2 = 0;
+        double sp_sum = 0.0;
+        for (int x = 0; x < W; ++x) {
+          const size_t i = (size_t)y * W + x;
+          if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
+            nf++;
+            if (ci.cls[i] == CL_BASE) nb0++;
+            if (near_base(i)) {
+              nb2++;
+              sp_sum += chroma_spread(i);
+            }
+          }
+        }
+        if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
+          row_cand[y] = 1;
+          row_sp[y] = sp_sum / nb2;
+        }
+      }
+      for (int x = 0; x < W; ++x) {
+        int nf = 0, nb0 = 0, nb2 = 0;
+        double sp_sum = 0.0;
+        for (int y = 0; y < H; ++y) {
+          const size_t i = (size_t)y * W + x;
+          if (ci.cls[i] == CL_BASE || ci.cls[i] == CL_IMAGE) {
+            nf++;
+            if (ci.cls[i] == CL_BASE) nb0++;
+            if (near_base(i)) {
+              nb2++;
+              sp_sum += chroma_spread(i);
+            }
+          }
+        }
+        if (nf >= 16 && nb0 >= 0.15 * nf && nb2 >= 0.85 * nf && sp_sum <= 0.35 * nb2) {
+          col_cand[x] = 1;
+          col_sp[x] = sp_sum / nb2;
+        }
+      }
+      std::vector<uint8_t> promote(N, 0);
+      for (int y = 0; y < H;) {
+        if (!row_cand[y]) { ++y; continue; }
+        int y1 = y;
+        double sp_run = 0.0;
+        while (y1 < H && row_cand[y1]) { sp_run += row_sp[y1]; ++y1; }
+        if (ci.light_clipped || y <= 4 || y1 >= H - 4 || sp_run <= 0.08 * (y1 - y)) {
+          for (int yy = y; yy < y1; ++yy)
+            for (int x = 0; x < W; ++x) {
+              const size_t i = (size_t)yy * W + x;
+              if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
+            }
+        }
+        y = y1;
+      }
+      for (int x = 0; x < W;) {
+        if (!col_cand[x]) { ++x; continue; }
+        int x1 = x;
+        double sp_run = 0.0;
+        while (x1 < W && col_cand[x1]) { sp_run += col_sp[x1]; ++x1; }
+        if (ci.light_clipped || x <= 4 || x1 >= W - 4 || sp_run <= 0.08 * (x1 - x)) {
+          for (int xx = x; xx < x1; ++xx)
+            for (int y = 0; y < H; ++y) {
+              const size_t i = (size_t)y * W + xx;
+              if (ci.cls[i] == CL_IMAGE && near_base(i)) promote[i] = 1;
+            }
+        }
+        x = x1;
+      }
+      for (size_t i = 0; i < N; ++i)
+        if (promote[i]) ci.cls[i] = CL_BASE;
+    }
+  }
 }
 
 // ---- 5a. Rectangle search -------------------------------------------------------------------------------------
@@ -1175,10 +1282,11 @@ inline bool is_valid(uint8_t c) { return c != CL_INVALID; }
 inline bool is_hard(uint8_t c) { return c == CL_LIGHT || c == CL_DARK; }
 inline bool is_gap(uint8_t c) { return c == CL_BASE || c == CL_LIGHT || c == CL_DARK; }
 
-// Edge position near t0 in a profile p of picture fractions: the position within +-delta where the mean over k
-// samples inside (above t when rising) minus the mean outside is largest; beyond the profile counts as non-image.
-// strength: that difference (1: a clean edge).
-float refine_edge_profile(const std::vector<float>& p, float t0, int delta, int k, bool rising, float* strength) {
+// Edge position near t0 in a profile p of picture fractions: the position within +-delta (extended outward to
+// delta_ext when the edge has not yet reached < 2% non-image and is under 70% picture at t0) where in * (in - outside)
+// is largest; beyond the profile counts as non-image. strength: in - outside (1: a clean edge).
+float refine_edge_profile(const std::vector<float>& p, float t0, int delta, int k, bool rising, float* strength,
+                          int delta_ext = 0) {
   const int n = (int)p.size();
   std::vector<double> cs(n + 1, 0.0);
   for (int i = 0; i < n; ++i) cs[i + 1] = cs[i] + p[i];
@@ -1188,21 +1296,64 @@ float refine_edge_profile(const std::vector<float>& p, float t0, int delta, int 
     return b <= a ? -1.0 : (cs[b] - cs[a]) / (b - a);
   };
   const int c = (int)std::lround(t0);
-  double best = -1e9;
+  const int k_out = std::max(2, k / 3);
+  int t_min = std::max(0, c - delta), t_max = std::min(n, c + delta);
+  const bool clean_ext = rising ? (c >= k && mean(c - k, c) < 0.05)
+                                : (c + k <= n && mean(c, c + k) < 0.05);
+  bool ext_used = false;
+  if (rising) {
+    if (delta_ext > delta && t_min >= k && c + k <= n && mean(c, c + k) < 0.70) {
+      bool reached_zero = false;
+      for (int t = t_min; t <= c; ++t)
+        if (mean(t - k, t) < 0.02) { reached_zero = true; break; }
+      if (!reached_zero) { t_min = std::max(0, c - delta_ext); ext_used = true; }
+    }
+  } else {
+    if (delta_ext > delta && t_max + k <= n && c >= k && mean(c - k, c) < 0.70) {
+      bool reached_zero = false;
+      for (int t = c; t <= t_max; ++t)
+        if (mean(t, t + k) < 0.02) { reached_zero = true; break; }
+      if (!reached_zero) { t_max = std::min(n, c + delta_ext); ext_used = true; }
+    }
+  }
+  bool has_outer_edge = false;
+  if (clean_ext) {
+    if (rising) {
+      for (int t = t_min; t <= c - k; ++t)
+        if (mean(t, t + k) >= 0.70) { has_outer_edge = true; break; }
+    } else {
+      for (int t = c + k; t <= t_max; ++t)
+        if (mean(t - k, t) >= 0.70) { has_outer_edge = true; break; }
+    }
+  }
+  const int scale = std::max({1, c - t_min, t_max - c});
+  double best = -1e9, best_str = 0.0;
   int bi = c;
-  for (int t = c - delta; t <= c + delta; ++t) {
-    if (t < 0 || t > n) continue;
+  for (int t = t_min; t <= t_max; ++t) {
     const double in = rising ? mean(t, t + k) : mean(t - k, t);
-    double outside = rising ? mean(t - k, t) : mean(t, t + k);
+    double outside_raw = rising ? std::min(mean(t - k, t), mean(t - k_out, t))
+                                : std::min(mean(t, t + k), mean(t, t + k_out));
     if (in < 0) continue;
-    if (outside < 0) outside = 0.0;
-    const double J = in - outside - 0.002 * std::abs(t - t0) / std::max(1, delta);
+    if (outside_raw < 0) outside_raw = 0.0;
+    if (clean_ext && (rising ? (t > c) : (t < c)) && outside_raw >= 0.06 && (in < 0.70 || has_outer_edge)) continue;
+    double outside = outside_raw;
+    if (ext_used) {
+      const double out2 = rising ? (t >= 2 * k ? mean(t - 2 * k, t - k) : 0.0)
+                                 : (t + 2 * k <= n ? mean(t + k, t + 2 * k) : 0.0);
+      const double in2 = rising ? (t + 2 * k <= n ? mean(t + k, t + 2 * k) : 1.0)
+                                : (t >= 2 * k ? mean(t - 2 * k, t - k) : 1.0);
+      if (out2 > 0.80 && in2 > 0.50) outside = std::max(outside, 0.5 * out2);
+    }
+    const double pen = 0.002 * std::abs(t - t0) / scale;
+    const double diff = in - outside - pen;
+    const double J = in * diff;
     if (J > best) {
       best = J;
+      best_str = in - outside_raw - pen;
       bi = t;
     }
   }
-  if (strength) *strength = (float)best;
+  if (strength) *strength = (float)best_str;
   return (float)bi;
 }
 
@@ -1297,10 +1448,11 @@ void inscribed_half(const FilmRect& r, float& p, float& q) {
 
 // 5c. Sub-pixel refinement of one edge of r on the full-resolution image: 0 left, 1 right, 2 top, 3 bottom (in r's
 // own frame). 48 profiles across the edge, spread over its middle 70%, of log2 luminance sampled every image pixel
-// within +-range, are averaged; the edge moves to the steepest step (parabolic sub-sample) when that step stands
-// out (>= 0.04 stop per pixel and 3x the median slope). Returns the shift along the edge's normal, 0 for none.
+// within +-range, are averaged; the edge moves to the steepest valid step (parabolic sub-sample, >= 0.025 stop/px and
+// >= 0.25 stop over +-w). Returns the shift along the edge's normal, 0 for none.
 // Allocates: profiles of 2 * range + 1 floats.
-float refine_edge_full(const FilmImage& im, const FilmRect& r, int edge, float range) {
+float refine_edge_full(const FilmImage& im, const FilmRect& r, int edge, float range, bool positive,
+                       float max_inside_log2) {
   const float th = r.angle_deg * kPi / 180.0f, c = std::cos(th), s = std::sin(th);
   float nx, ny, ex, ey, len, off;
   if (edge < 2) {
@@ -1345,22 +1497,33 @@ float refine_edge_full(const FilmImage& im, const FilmRect& r, int edge, float r
   std::vector<float> pf(nprof);
   for (int j = 0; j < nprof; ++j) pf[j] = (float)(prof[j] / used);
   smooth1d(pf, std::max(0.7f, range / 12.0f));
-  std::vector<float> d(nprof, 0.0f), ad;
-  for (int j = 1; j < nprof - 1; ++j) {
-    d[j] = 0.5f * (pf[j + 1] - pf[j - 1]);
-    ad.push_back(std::fabs(d[j]));
-  }
+  std::vector<float> d(nprof, 0.0f);
+  for (int j = 1; j < nprof - 1; ++j) d[j] = 0.5f * (pf[j + 1] - pf[j - 1]);
+  const int w = std::max(3, nprof / 8);
+  const int mid = (nprof - 1) / 2;
+  const bool in_pos = (edge == 0 || edge == 2);
+  const float pf_inner = in_pos ? pf[nprof - 1] : pf[0];
   int bj = -1;
   float bv = 0.0f;
   for (int j = 1; j < nprof - 1; ++j) {
-    const float wgt = 1.0f - 0.3f * std::fabs((float)j - (nprof - 1) * 0.5f) / ((nprof - 1) * 0.5f);
+    const int j_in = in_pos ? std::min(nprof - 1, j + w) : std::max(0, j - w);
+    const bool outward = in_pos ? (j < mid) : (j > mid);
+    if (!positive) {
+      if (pf[j_in] > max_inside_log2 || pf[j_in] > pf_inner + 0.65f) continue;
+      if (outward && pf[j] > pf[mid] + 0.15f) continue;
+    } else {
+      if (pf[j_in] < pf_inner - 0.65f) continue;
+      if (outward && pf[j] < pf[mid] - 0.15f) continue;
+    }
+    const float wgt = 1.0f - 0.3f * std::fabs((float)j - mid) / std::max(1, mid);
     if (std::fabs(d[j]) * wgt > bv) {
       bv = std::fabs(d[j]) * wgt;
       bj = j;
     }
   }
-  const float med = percentile(ad, 0.5);
-  if (bj < 0 || std::fabs(d[bj]) < 0.04f || std::fabs(d[bj]) < 3.0f * med) return 0.0f;
+  if (bj < 0 || std::fabs(d[bj]) < 0.025f) return 0.0f;
+  const float step = pf[std::min(nprof - 1, bj + w)] - pf[std::max(0, bj - w)];
+  if (std::fabs(step) < 0.25f || step * d[bj] <= 0.0f) return 0.0f;
   const float y0 = std::fabs(d[bj - 1]), y1 = std::fabs(d[bj]), y2 = std::fabs(d[bj + 1]);
   const float den = y0 - 2 * y1 + y2;
   const float sub = den < 0 ? 0.5f * (y0 - y2) / den : 0.0f;
@@ -1477,6 +1640,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
 
   // ---- 5b. The strip model, in the view (strip along view x).
   auto eval_strip = [&](bool tr, FormatResult& res_out) -> bool {
+  const SearchRes& r_init = (tr && !square) ? rv : rh;
+  if (r_init.h <= 0) return false;
+  res_out.score = r_init.score / ((double)sw * sh);
   std::vector<std::string> reasons;
   FrameDetection& out = res_out.det;
   out = FrameDetection();
@@ -1484,8 +1650,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   const int VW = v.w(), VH = v.h();
   Rect fr;  // the frame estimate, view coordinates
   {
-    const float x0 = (float)(r0.x * f), y0 = (float)(r0.y * f), x1 = (float)((r0.x + r0.w) * f),
-                y1 = (float)((r0.y + r0.h) * f);
+    const float x0 = (float)(r_init.x * f), y0 = (float)(r_init.y * f), x1 = (float)((r_init.x + r_init.w) * f),
+                y1 = (float)((r_init.y + r_init.h) * f);
     if (tr) {
       fr.x0 = y0;
       fr.x1 = y1;
@@ -1503,17 +1669,18 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const int xa = (int)(r.x0 + 0.15f * r.w()), xb = (int)(r.x1 - 0.15f * r.w());
     std::vector<float> rp(VH);
     for (int y = 0; y < VH; ++y) rp[y] = row_frac(v, y, xa, xb, is_image);
-    const int delta = std::max(3, (int)(0.10f * r.h())), k = std::max(2, (int)(0.02f * r.h()));
+    const int delta = std::max(3, (int)(0.04f * r.h())), delta_ext = std::max(delta, (int)(0.10f * r.h())),
+              k = std::max(2, (int)(0.02f * r.h()));
     float st0, st1;
-    r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0);
-    r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1);
+    r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0, delta_ext);
+    r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
     return std::min(st0, st1);
   };
   auto refine_lr = [&](Rect& r, float* sl, float* sr) {
     const int ya = (int)(r.y0 + 0.12f * r.h()), yb = (int)(r.y1 - 0.12f * r.h());
     std::vector<float> cp(VW);
     for (int x = 0; x < VW; ++x) cp[x] = col_frac(v, x, ya, yb, is_image);
-    const int delta = std::max(3, (int)(0.10f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
+    const int delta = std::max(3, (int)(0.04f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
     r.x0 = refine_edge_profile(cp, r.x0, delta, k, true, sl);
     r.x1 = refine_edge_profile(cp, r.x1, delta, k, false, sr);
   };
@@ -1529,7 +1696,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         if (row_frac(v, y, xa, xb, is_image) >= 0.45f) {
           last = y;
           miss = 0;
-        } else if (++miss > max_miss) {
+        } else if (row_frac(v, y, xa, xb, is_gap) >= 0.65f || row_frac(v, y, xa, xb, is_hard) >= 0.40f ||
+                   ++miss > max_miss) {
           break;
         }
         y += dir;
@@ -1556,18 +1724,18 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   std::vector<float> cps = cp;
   smooth1d(cps, std::max(0.6f, 0.15f * ppm));
 
-  // Segments: runs of picture columns; a run ends at >= 0.6 mm of columns under 30% picture.
+  // Segments: runs of picture columns; a run ends at >= 0.35 mm of columns under 30% picture.
   struct Seg { int a, b; };
   std::vector<Seg> segs;
   {
-    const int gap_min_px = std::max(1, (int)std::lround(0.6f * ppm));
+    const int gap_min_px = std::max(1, (int)std::lround(0.35f * ppm));
     int x = 0;
     while (x < VW) {
       while (x < VW && cps[x] < 0.5f) ++x;
       if (x >= VW) break;
       int a = x, low = 0, b = x;
       while (x < VW) {
-        if (cps[x] < 0.3f) {
+        if (cp[x] < 0.3f || cps[x] < 0.3f) {
           if (++low >= gap_min_px) break;
         } else {
           low = 0;
@@ -1602,6 +1770,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         }
       }
       if (tot == 0 || non < 0.85f * tot) return false;
+      if (b - a > (int)std::ceil(fg.gap_max * ppm) && vals.size() >= 0.5f * tot) return false;
       if (vals.size() < 0.5f * tot) return true;
       return std::fabs(percentile(vals, 0.5) - base_ll) <= 0.25f &&
              percentile(vals, 0.9) - percentile(vals, 0.1) <= 0.3f;
@@ -1610,7 +1779,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     while (merged && segs.size() > 1) {
       merged = false;
       for (size_t i = 0; i + 1 < segs.size(); ++i) {
-        if (segs[i + 1].b - segs[i].a <= L_exp * (1.0f + fg.len_tol + 0.02f) && !real_gap(segs[i].b, segs[i + 1].a)) {
+        if (segs[i + 1].b - segs[i].a <= L_exp * (1.0f + 2.0f * fg.len_tol) && !real_gap(segs[i].b, segs[i + 1].a)) {
           segs[i].b = segs[i + 1].b;
           segs.erase(segs.begin() + i + 1);
           merged = true;
@@ -1634,6 +1803,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         if (col_frac(v, x, (int)fr.y0, (int)fr.y1, is_hard) >= 0.6f) hard++;
         else base++;
         if (run >= 3 && hard >= 2 && hard > base) return 2;
+      } else if (run == 0 && d < 3 && cp[x] < 0.7f) {
+        continue;
       } else if (cps[x] >= 0.5f) {
         return run >= 2 ? 1 : 0;
       }
@@ -1658,7 +1829,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const bool lg = lt > 0, rg = rt > 0;
     const float len = r.w();
     if (len > L_exp * (1 + tol) || len < L_exp * (1 - tol)) {
-      if (lg && rg && len > L_exp * (1 - 2 * tol) && len < L_exp * (1 + 2 * tol)) {
+      if (lg && rg && std::min(sl, sr) >= 0.5f * std::max(sl, sr) && len > L_exp * (1 - 2 * tol) &&
+          len < L_exp * (1 + 2 * tol)) {
         // camera-specific frame length: keep
       } else if (lg && rg && len < L_exp && (lt == 2 || rt == 2)) {
         // cut by the holder aperture or the strip end: keep the visible extent
@@ -1940,11 +2112,15 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   const Geometry G{&cv, &wi, tr};
   const float nominal_area = L_exp * across_px * wi.sx * wi.sy;
   FilmRect prim = G.to_image(pr);
-  // ---- 5c. Sub-pixel edges of the primary on the full-resolution image, within +-2.5 work pixels.
+  // ---- 5c. Sub-pixel edges of the primary on the full-resolution image, within +-3.5 work pixels.
   if (P.refine) {
-    const float range = std::max(3.0f, 2.5f * 0.5f * (wi.sx + wi.sy));
+    const float range = std::max(3.0f, 3.5f * 0.5f * (wi.sx + wi.sy));
+    const float max_in_log2 =
+        (!positive && ci.base_valid)
+            ? std::log2(std::max(1e-6f, (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f * std::exp2(-0.30f)))
+            : 1e9f;
     for (int e = 0; e < 4; ++e) {
-      const float s = refine_edge_full(im, prim, e, range);
+      const float s = refine_edge_full(im, prim, e, range, positive, max_in_log2);
       if (s != 0.0f) shift_edge(prim, e, s);
     }
   }
@@ -2033,12 +2209,12 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   return true;
   };
   if (!eval_strip(tr0, res)) return false;
-  if (square && !P.axis_hint && axis_ev == 0) {
+  if ((square || res.det.conf < 0.5f) && !P.axis_hint && axis_ev == 0) {
     FormatResult alt;
-    alt.score = res.score;
     if (eval_strip(!tr0, alt)) {
-      auto better_strip = [](const FormatResult& a, const FormatResult& b) {
+      auto better_strip = [square](const FormatResult& a, const FormatResult& b) {
         if (a.det.conf != b.det.conf) return a.det.conf > b.det.conf;
+        if (!square) return false;
         if (a.det.secondaries.size() != b.det.secondaries.size())
           return a.det.secondaries.size() > b.det.secondaries.size();
         if (a.det.n_gaps != b.det.n_gaps) return a.det.n_gaps > b.det.n_gaps;
