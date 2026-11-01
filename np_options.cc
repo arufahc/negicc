@@ -227,8 +227,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "visible frame (geometry.roi_source auto_fallback).")
     .nargs(1, 7);
   parser.add_argument("--film_format")
-    .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, 6x9, or auto (each in turn; less accurate).")
-    .default_value(std::string("auto"));
+    .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, or 6x9.")
+    .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
     .scan<'i', int>()
@@ -336,8 +336,8 @@ int parse_options(int ac, char* av[], Options& o) {
 
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
-  if (o.film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
-    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9 or auto)\n",
+  if (o.film_format == FILM_FORMAT_AUTO) {
+    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, or 6x9)\n",
             film_format_arg.c_str());
     return 1;
   }
