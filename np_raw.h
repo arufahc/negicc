@@ -30,6 +30,10 @@
 bool is_sony_a7rm4(LibRaw* proc);
 // Checks if the camera has Sony Bayer RGGB CFA geometry.
 bool is_sony_cfa_geometry(LibRaw* proc);
+// Opens a RAW or DNG file into proc, repairing leading spaces in UniqueCameraModel (e.g. SilverFast DNGs) if needed.
+int open_raw_file(LibRaw* proc, const std::string& fn);
+// Opens and unpacks a RAW or DNG file into proc, keeping any patched header stream alive across unpack().
+int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn);
 
 // Called with a LibRaw whose imgdata.image holds the half-size image of its RAW (read_half_size): iwidth x iheight
 // pixels, row-major, LibRaw's 4 channels each (R, G, B in the first three); a point (x, y) of the RAW is (x / 2, y / 2)
