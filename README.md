@@ -27,9 +27,38 @@ An IT8.7/2 reflective target (`R190808` from coloraid.de) photographed onto each
 
 Capturing negatives is much simpler now and supports camera RAWs, DNGs, and 16-bit linear TIFFs without optical filter wheels:
 * **Trichromatic narrowband RGB LED (`--light_source tri`):**
-  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Uses the bundle's 3×3 sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
+  * *Single-shot RAW/DNG or 4-shot Sony Pixel Shift:* Single-shot Sony RGGB scans use grain-aware color-ratio demosaicing; 4-shot Pixel Shift merges the frames directly (see [Demosaicing](#demosaicing)). Both are followed by the bundle's 3×3 sensor crosstalk correction matrix (or custom `-r`, `-g`, `-b` rows) to remove Bayer CFA channel overlap.
   * *3-shot monochromatic RGB (`r.raw g.raw b.raw`) or pre-separated TIFF/DNG:* Capturing 3 separate frames under Red, Green, and Blue LEDs isolates the channels physically with zero sensor crosstalk—use the **identity color correction** (`-r "1 0 0" -g "0 1 0" -b "0 0 1"`).
-* **White D65 light (`--light_source d65`):** Single-shot capture under a standard D65 white LED panel. `neg_process` decodes the scan through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**.
+* **White D65 light (`--light_source d65`) & Non-RGGB CFAs:** Single-shot capture under a standard D65 white LED panel decodes through LibRaw's daylight white balance and camera matrix into linear Rec.2020 with **no crosstalk matrix needed**. LibRaw defaults to bilinear (`-q 0`, ~1.2 s for a 61 MP RAW); pass `-q 4` (LibRaw DCB) for higher quality (see [Demosaicing](#demosaicing)).
+
+### Demosaicing
+
+How the sensor data is turned into RGB depends on the capture mode:
+
+* **4-shot Sony Pixel Shift** (`ps1.ARW ps2.ARW ps3.ARW ps4.ARW`): the four shifted frames are merged directly into full RGB at every pixel. No interpolation.
+* **Single-shot TriLED on Sony RGGB** (`--light_source tri`): grain-aware color-ratio demosaicing (`cpu_grain_aware_debayer`, CPU only).
+  * Green is interpolated along edges using soft directional weights instead of a hard horizontal/vertical switch. Hard switches (PPG/AHD) turn film grain into maze-like artifacts.
+  * Red and blue are interpolated as R/G and B/G ratios instead of R-G and B-G differences. This keeps errors uniform after the -log(T) film inversion.
+  * Result: +1.22 dB positive PSNR and half the R-G zippering of bilinear, and +0.53 dB over LibRaw DCB.
+* **White-light (D65) and other CFAs**: decoded by LibRaw.
+  * `-q 0` (bilinear, default): fastest, about 1.2 s for a 61 MP RAW.
+  * `-q 4` (LibRaw DCB, recommended for quality): +0.69 dB positive PSNR over bilinear, about 6.0 s single-threaded for a 61 MP RAW.
+
+Benchmark against the 4-shot Pixel Shift ground truth (PSNR and ΔE₀₀ are measured on the inverted positive):
+
+| Algorithm | Raw MAE ↓ | Raw PSNR (dB) ↑ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | Acutance | R-G Zipper ↓ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| 4-shot Pixel Shift (ground truth) | 0.00 | ∞ | ∞ | 0.00 / 0.00 | 100.0% | 142.4 |
+| **Grain-aware color-ratio** (TriLED default) | **80.81** | **39.73** | **40.38** (+1.22) | **1.69 / 6.86** | 102.0% | 56.5 |
+| LibRaw DCB (`-q 4`) | 79.60 | 39.73 | 39.85 (+0.69) | 1.76 / 7.21 | 95.8% | 71.7 |
+| LibRaw VNG (`-q 1`) | 80.19 | 39.72 | 39.96 (+0.80) | 1.75 / 7.12 | 102.2% | 58.6 |
+| PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 39.75 | 40.03 (+0.87) | 1.73 / 6.97 | 100.5% (grain maze) | 55.3 |
+| Malvar-He-Cutler | 86.68 | 39.07 | 38.89 (-0.27) | 1.85 / 7.58 | 100.1% (ringing) | 73.2 |
+| Bilinear (`-q 0`, baseline) | 89.15 | 38.39 | 39.16 | 1.90 / 7.87 | 107.3% (aliased) | 115.0 |
+
+Acutance is edge sharpness relative to the 4-shot result. Raw MAE is in 14-bit LSB.
+
+![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
 
 ### 7-Bracket Tone Curves (TRC) & Highlight Roll-Off
 
@@ -97,10 +126,11 @@ bin_out/neg_process --list_profiles   # list built-in 7-bracket bundles (portra4
 # 1. Single-shot Trichromatic LED scan (auto film-base, auto bracket & DINOv3 color grading -> 16-bit sRGB TIFF)
 bin_out/neg_process --film_stock portra400 --light_source tri -P srgb -o out.tif scan.ARW
 
-# 2. Single-shot D65 white-light scan with automatic 6x7 frame crop
+# 2. Single-shot D65 white-light scan with automatic 6x7 frame crop (add -q 4 for higher-quality LibRaw DCB demosaicing)
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
+bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out_dcb.tif scan.ARW
 
-# 3. 4-shot Sony Pixel Shift mode (pass 4 RAW files; merges sub-pixel RGB without Bayer demosaicing)
+# 3. 4-shot Sony Pixel Shift mode (pass 4 RAW files; merges the shifted frames directly, no demosaicing)
 bin_out/neg_process --film_stock ektar100 --light_source tri -P srgb -o out.tif ps1.ARW ps2.ARW ps3.ARW ps4.ARW
 
 # 4. 3-shot sequential R, G, B LED capture (use identity color correction — zero sensor crosstalk)
