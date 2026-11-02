@@ -159,7 +159,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("-q", "--quality")
-    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear; >=0 passes qual to LibRaw).")
+    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear 0; >=0 passes qual to LibRaw, e.g. 4 for DCB).")
     .scan<'i', int>()
     .default_value(-1);
   parser.add_argument("-r", "--r_coeff")
