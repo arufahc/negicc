@@ -690,19 +690,23 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     mall[i] = std::log2(std::max(m, 1e-6f));
   }
   // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel.
+  // Floor at black_frac * ref when computing gradients so zero-clipped sensor noise in black borders does not create
+  // multi-stop log2 spikes against adjacent near-black pixels.
   std::vector<float> grad(N, 0.0f);
   ci.logl.assign(N, -20.0f);
   {
     std::vector<float>& ll = ci.logl;
+    const float lf = std::log2(std::max(1e-6f, black_frac * ref));
     for (size_t i = 0; i < N; ++i) ll[i] = std::log2(std::max(lum.d[i], 1e-6f));
+    auto L = [&](size_t j) { return std::max(ll[j], lf); };
     #pragma omp parallel for schedule(static)
     for (int y = 1; y < H - 1; ++y) {
       for (int x = 1; x < W - 1; ++x) {
         const size_t i = (size_t)y * W + x;
-        const float gx = (ll[i - W + 1] + 2 * ll[i + 1] + ll[i + W + 1] - ll[i - W - 1] - 2 * ll[i - 1] -
-                          ll[i + W - 1]) * 0.125f;
-        const float gy = (ll[i + W - 1] + 2 * ll[i + W] + ll[i + W + 1] - ll[i - W - 1] - 2 * ll[i - W] -
-                          ll[i - W + 1]) * 0.125f;
+        const float gx = (L(i - W + 1) + 2 * L(i + 1) + L(i + W + 1) - L(i - W - 1) - 2 * L(i - 1) -
+                          L(i + W - 1)) * 0.125f;
+        const float gy = (L(i + W - 1) + 2 * L(i + W) + L(i + W + 1) - L(i - W - 1) - 2 * L(i - W) -
+                          L(i - W + 1)) * 0.125f;
         grad[i] = std::sqrt(gx * gx + gy * gy);
       }
     }
@@ -2179,15 +2183,21 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   return true;
   };
   if (!eval_strip(tr0, res)) return false;
-  if ((square || res.det.conf < 0.5f) && !P.axis_hint && axis_ev == 0) {
+  const bool weak = square || res.det.conf < 0.5f;
+  const bool try_alt = !P.axis_hint && (axis_ev == 0 ? weak : (weak || res.det.n_gaps == 0));
+  if (try_alt) {
     FormatResult alt;
     if (eval_strip(!tr0, alt)) {
-      auto better_strip = [square](const FormatResult& a, const FormatResult& b) {
-        if (a.det.conf != b.det.conf) return a.det.conf > b.det.conf;
+      auto better_strip = [square, axis_ev](const FormatResult& a, const FormatResult& b) {
+        if (a.det.conf != b.det.conf)
+          return axis_ev != 0 ? (a.det.conf > b.det.conf + 0.1f) : (a.det.conf > b.det.conf);
         if (!square) return false;
+        // On a square frame, confirmed neighbour frames or inter-frame gaps along the alternate axis
+        // override a border-touching axis_ev guess when confidence is tied.
         if (a.det.secondaries.size() != b.det.secondaries.size())
           return a.det.secondaries.size() > b.det.secondaries.size();
         if (a.det.n_gaps != b.det.n_gaps) return a.det.n_gaps > b.det.n_gaps;
+        if (axis_ev != 0) return false;
         if ((a.det.axis != '?') != (b.det.axis != '?')) return a.det.axis != '?';
         return a.base_patches.size() > b.base_patches.size();
       };
