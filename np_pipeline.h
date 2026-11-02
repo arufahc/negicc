@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -54,6 +54,20 @@
 #include "np_raw.h"
 #include "profile_bundle.h"
 
+// Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
+struct CachedSidecar {
+  bool is_auto = false;                  // true: cached from "auto"; false: cached from "dino"
+  int target_idx = -1;
+  std::string target_name;
+  float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
+  std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
+  std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
+  std::string dino_backend;
+  double t_auto_ms = 0.0;
+  double t_dino_views_ms = 0.0, t_dino_render_ms = 0.0;
+  double t_dino_infer_ms = 0.0, t_dino_search_ms = 0.0;
+};
+
 // What the profile and the options decide before the scan is read.
 struct Setup {
   bool is_bundle = false;
@@ -64,6 +78,8 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
+  bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
+  CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
@@ -158,6 +174,10 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
+
+  bool has_knob_res = false;             // --brightness, --tint or --warmth solved
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
 
   // The highlight roll-off of Auto's result or of given values, measured on the half-size frame as the bracket search
   // measures it, while that frame exists (render frees the mosaic; LibRaw's half-size decode is analysed and gone).

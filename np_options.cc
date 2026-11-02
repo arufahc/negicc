@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -201,6 +201,21 @@ int parse_options(int ac, char* av[], Options& o) {
           "it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
+  parser.add_argument("--brightness")
+    .help("Brightness offset after the parameter search, in stops of the reference grey's luminance (as in "
+          "negicc-station). Reuses <output>.json when it matches the capture, light, profile and target.")
+    .scan<'g', float>()
+    .default_value(0.0f);
+  parser.add_argument("--tint")
+    .help("Tint offset after the parameter search, in CIELAB a* units of the reference grey (negative: green, "
+          "positive: magenta, as in negicc-station). Reuses <output>.json when it matches.")
+    .scan<'g', float>()
+    .default_value(0.0f);
+  parser.add_argument("--warmth")
+    .help("Warmth offset after the parameter search, in CIELAB b* units of the reference grey (negative: blue, "
+          "positive: yellow, as in negicc-station). Reuses <output>.json when it matches.")
+    .scan<'g', float>()
+    .default_value(0.0f);
   // A bundle conversion reads the film base from the scan (film_base_detect.h: the rebate, else the thinnest film), as
   // negicc-station's Auto does; --film_base_rgb, which took it as numbers or from the rebate, is gone.
   // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does).
@@ -320,6 +335,14 @@ int parse_options(int ac, char* av[], Options& o) {
   o.gain_b = parser.get<float>("--gain_b");
   o.gain_g_given = parser.is_used("--gain_g");
   o.gain_b_given = parser.is_used("--gain_b");
+  o.brightness = parser.get<float>("--brightness");
+  o.tint = parser.get<float>("--tint");
+  o.warmth = parser.get<float>("--warmth");
+  o.knobs_given = parser.is_used("--brightness") || parser.is_used("--tint") || parser.is_used("--warmth");
+  if (!std::isfinite(o.brightness) || !std::isfinite(o.tint) || !std::isfinite(o.warmth)) {
+    log_error("--brightness, --tint and --warmth must be finite numbers\n");
+    return 1;
+  }
 
   if (parser.is_used("--roi") && !parse_roi(parser.get<std::vector<std::string>>("--roi"), o)) return 1;
   if (parser.is_used("--rot")) {

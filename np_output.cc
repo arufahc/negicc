@@ -359,8 +359,33 @@ bool write_json_sidecar(const Sidecar& sc) {
   j["cli_equivalent"] = cli;
 
   // auto: the conversion parameter search (multi_target_optimizer.h)
-  j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
-  j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
+  if (!sc.cached_auto_json_str.empty()) {
+    j["auto"] = ordered_json::parse(sc.cached_auto_json_str);
+  } else {
+    j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
+  }
+  if (!sc.cached_dino_json_str.empty()) {
+    j["dino"] = ordered_json::parse(sc.cached_dino_json_str);
+  } else {
+    j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
+  }
+  if (sc.has_knobs) {
+    j["knobs"] = {
+        {"brightness", num(sc.brightness, "%.6g")},
+        {"tint", num(sc.tint, "%.6g")},
+        {"warmth", num(sc.warmth, "%.6g")},
+        {"limited", sc.knob_res.limited},
+        {"base", {{"e", num(sc.knob_base[0], "%.9g")},
+                  {"g", num(sc.knob_base[1], "%.9g")},
+                  {"b", num(sc.knob_base[2], "%.9g")}}},
+        {"egb", {{"e", num(sc.knob_res.e, "%.9g")},
+                 {"g", num(sc.knob_res.g, "%.9g")},
+                 {"b", num(sc.knob_res.b, "%.9g")}}},
+        {"grey_point", {num(sc.knob_res.grey_lab[0], "%.4f"),
+                        num(sc.knob_res.grey_lab[1], "%.4f"),
+                        num(sc.knob_res.grey_lab[2], "%.4f")}},
+    };
+  }
 
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},
@@ -374,10 +399,15 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
   t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
-  t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f") : ordered_json(nullptr);
-  t["dino_render"] = sc.dino ? num(sc.dino->timing_render_ms, "%.1f") : ordered_json(nullptr);
-  t["dino_inference"] = sc.dino ? num(sc.dino->timing_infer_ms, "%.1f") : ordered_json(nullptr);
-  t["dino_search"] = sc.dino ? num(sc.dino->timing_search_ms, "%.1f") : ordered_json(nullptr);
+  const bool has_cached_dino = !sc.cached_dino_json_str.empty();
+  t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f")
+                            : (has_cached_dino ? num(sc.cached_dino_views_ms, "%.1f") : ordered_json(nullptr));
+  t["dino_render"] = sc.dino ? num(sc.dino->timing_render_ms, "%.1f")
+                             : (has_cached_dino ? num(sc.cached_dino_render_ms, "%.1f") : ordered_json(nullptr));
+  t["dino_inference"] = sc.dino ? num(sc.dino->timing_infer_ms, "%.1f")
+                                : (has_cached_dino ? num(sc.cached_dino_infer_ms, "%.1f") : ordered_json(nullptr));
+  t["dino_search"] = sc.dino ? num(sc.dino->timing_search_ms, "%.1f")
+                             : (has_cached_dino ? num(sc.cached_dino_search_ms, "%.1f") : ordered_json(nullptr));
   t["full_conversion"] = num(sc.t_full_conversion_ms, "%.1f");
   t["tiff_write"] = num(sc.t_tiff_write_ms, "%.1f");
   j["timings_ms"] = t;

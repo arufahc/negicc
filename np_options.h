@@ -1,4 +1,4 @@
-// Copyright 2024 Alpha Lam <arufa.hc@gmail.com>
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -50,6 +50,10 @@ struct Options {
   bool exposure_given = false;                 // -E (the search keeps it)
   float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search)
   bool gain_g_given = false, gain_b_given = false;
+  float brightness = 0.0f;                     // --brightness (stops of the grey's luminance)
+  float tint = 0.0f;                           // --tint (a* of the grey)
+  float warmth = 0.0f;                         // --warmth (b* of the grey)
+  bool knobs_given = false;                    // --brightness, --tint or --warmth given
 
   // Geometry
   int roi[4] = {0, 0, 0, 0};                   // --roi x y w h (sensor pixels)
