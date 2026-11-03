@@ -82,21 +82,21 @@ This makes NegICC much more adaptable than generic histogram stretching or the *
 
 ### Why Dedicated Per-Stock Profiles? (Own-Sample vs. Held-Out Color Accuracy)
 
-Generic negative inversion tools apply a single curve or 3×3 matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. A dedicated 7-bracket 45×45×45 3D cLUT per film stock fits its own IT8 patches to **`0.55–0.81 ΔE₀₀` mean (`0.36–0.65` median) from `-1 EV` to `+3 EV`**, and to `0.76–1.15` and `1.22–1.62` mean at the two under-exposed brackets (`-2 EV` and `-3 EV`). On unseen held-out color patches the error is **`1.4–2.3 ΔE₀₀` median** (`< 2.0 ΔE₀₀` is barely perceptible to the human eye).
+Generic negative inversion tools apply a single curve or 3×3 matrix to every film stock, which cannot untangle non-linear dye cross-coupling and typically leaves `5–10+ ΔE₀₀` color errors across saturated colors and highlights. A dedicated 7-bracket 45×45×45 3D cLUT per film stock fits its own IT8 patches to **`0.55–0.81 ΔE₀₀` mean (`0.36–0.65` median) from `-1 EV` to `+3 EV`**, and to `0.76–1.15` and `1.22–1.62` mean at the two under-exposed brackets (`-2 EV` and `-3 EV`). On unseen held-out color patches the error is **`1.5–2.2 ΔE₀₀` median** (`< 2.0 ΔE₀₀` is barely perceptible to the human eye).
 
-The profiles are built from de-glared patch values: veiling glare in the target exposures (about `0.27 %` of white) is estimated from Konica Minolta CS-100A readings of every patch of the IT8 target (`data/cs100a_measurements.txt`) and removed from the camera values before fitting. De-glaring raised the own-sample error of the `-3 EV` and `-2 EV` brackets (from `0.79–1.11` and `0.56–0.82` mean) and moved the other brackets by about `0.1` or less.
+The profiles are built from de-glared patch values. The IT8 target was photographed outdoors, and sky light reflected by the glossy chart plus taking-lens flare added a veiling luminance floor to what the film recorded: `0.27 %` of white as fitted (`0.51 %` measured at the darkest grey patch), estimated from Konica Minolta CS-100A spot readings of every patch taken from the camera position (`data/cs100a_measurements.txt`). It is removed from the camera values before fitting, while the glare-free lab reference stays the target, so converted shadows are not lifted by the chart's glare. De-glaring makes the two under-exposed brackets fit less well: own-sample mean error rose from `0.79–1.11` to `1.22–1.62` at `-3 EV` and from `0.56–0.82` to `0.76–1.15` at `-2 EV`, and held-out mean error rose by `0.19–0.53` at `-3 EV` and by up to `0.33` at `-2 EV`. At `+1 EV` to `+3 EV` held-out mean error fell by `0.05–0.22`; the other brackets moved by `0.15` or less.
 
-Own-sample errors are the profiles' fit on all 288 patches (ArgyllCMS `profcheck`, stored in each `bundle.json`), for the TriLED bundles. The D65 bundles are within `0.67–1.15` mean from `-1 EV` to `+3 EV` and `1.3–2.1` at the two under-exposed brackets. Held-out errors come from 2-fold cross-validation, holding out half of the 264 color patches at a time; they were measured on the profiles before de-glaring and have not been re-run since (marked †).
+Own-sample errors are the profiles' fit on all 288 patches (ArgyllCMS `profcheck`, stored in each `bundle.json`); held-out errors come from 2-fold cross-validation that rebuilds each profile with half of the 264 color patches held out at a time (the grey patches and the brighter brackets' highlight samples stay in), using negicc-station's profile build. Both are for the TriLED bundles. The D65 bundles are within `0.67–1.15` own-sample mean from `-1 EV` to `+3 EV` (`1.3–2.1` at the two under-exposed brackets) and `1.3–2.6` held-out median.
 
-| Bracket Target (Exposure) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out† avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out† avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out† avg (med) |
+| Bracket Target (Exposure) | Portra 400 Own `ΔE₀₀` avg (med) | Portra 400 Held-Out avg (med) | Portra 160 Own `ΔE₀₀` avg (med) | Portra 160 Held-Out avg (med) | Ektar 100 Own `ΔE₀₀` avg (med) | Ektar 100 Held-Out avg (med) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`Target 1`** (`-3 EV`) | `1.22` (`0.56`) | `2.70` (`1.91`) | `1.62` (`0.54`) | `2.35` (`1.61`) | `1.48` (`0.50`) | `3.05` (`1.87`) |
-| **`Target 2`** (`-2 EV`) | `0.79` (`0.44`) | `2.04` (`1.38`) | `1.15` (`0.44`) | `2.09` (`1.55`) | `0.76` (`0.40`) | `2.68` (`1.52`) |
-| **`Target 3`** (`-1 EV`) | `0.59` (`0.40`) | `2.38` (`1.40`) | `0.69` (`0.43`) | `1.96` (`1.40`) | `0.55` (`0.36`) | `2.79` (`1.55`) |
-| **`Target 4`** (`0 EV` center) | **`0.58` (`0.40`)** | **`2.62` (`1.48`)** | **`0.61` (`0.46`)** | **`2.30` (`1.37`)** | **`0.64` (`0.50`)** | **`3.25` (`1.84`)** |
-| **`Target 5`** (`+1 EV`) | `0.57` (`0.42`) | `2.75` (`1.46`) | `0.64` (`0.45`) | `2.65` (`1.58`) | `0.63` (`0.50`) | `3.52` (`1.75`) |
-| **`Target 6`** (`+2 EV`) | `0.60` (`0.43`) | `2.92` (`1.58`) | `0.69` (`0.50`) | `2.67` (`1.62`) | `0.71` (`0.59`) | `4.01` (`2.15`) |
-| **`Target 7`** (`+3 EV`) | `0.71` (`0.54`) | `3.08` (`1.77`) | `0.71` (`0.55`) | `2.82` (`1.78`) | `0.81` (`0.65`) | `3.72` (`2.26`) |
+| **`Target 1`** (`-3 EV`) | `1.22` (`0.56`) | `2.89` (`2.07`) | `1.62` (`0.54`) | `2.88` (`1.83`) | `1.48` (`0.50`) | `3.29` (`2.17`) |
+| **`Target 2`** (`-2 EV`) | `0.79` (`0.44`) | `2.26` (`1.59`) | `1.15` (`0.44`) | `2.42` (`1.57`) | `0.76` (`0.40`) | `2.59` (`1.68`) |
+| **`Target 3`** (`-1 EV`) | `0.59` (`0.40`) | `2.32` (`1.52`) | `0.69` (`0.43`) | `2.02` (`1.50`) | `0.55` (`0.36`) | `2.73` (`1.58`) |
+| **`Target 4`** (`0 EV` center) | **`0.58` (`0.40`)** | **`2.57` (`1.58`)** | **`0.61` (`0.46`)** | **`2.24` (`1.46`)** | **`0.64` (`0.50`)** | **`3.39` (`1.89`)** |
+| **`Target 5`** (`+1 EV`) | `0.57` (`0.42`) | `2.65` (`1.52`) | `0.64` (`0.45`) | `2.59` (`1.58`) | `0.63` (`0.50`) | `3.47` (`1.76`) |
+| **`Target 6`** (`+2 EV`) | `0.60` (`0.43`) | `2.83` (`1.53`) | `0.69` (`0.50`) | `2.57` (`1.52`) | `0.71` (`0.59`) | `3.84` (`2.06`) |
+| **`Target 7`** (`+3 EV`) | `0.71` (`0.54`) | `2.92` (`1.80`) | `0.71` (`0.55`) | `2.67` (`1.68`) | `0.81` (`0.65`) | `3.49` (`2.13`) |
 
 ### DINOv3 Automatic Color Grader & Iterative Convergence
 
