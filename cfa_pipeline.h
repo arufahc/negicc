@@ -26,12 +26,9 @@
 
 namespace negicc {
 
-// Step 1 input formats:
-//   1. CFA 2x2 Bayer or 3x3 (6x6) X-Trans
-//   2. 4x CFA for Sony multishot (pixel shift)
-//   3. TODO RGB
-//   4. TODO 3xCFA -> R, G, B
-//   5. TODO 3xmonochrome -> R, G, B
+// Inputs of the zero-copy CFA path: one CFA mosaic (2x2 Bayer or 6x6 X-Trans), or the four mosaics of a Sony
+// pixel shift. The TODO_ values are input kinds that still take LibRaw's decode: an RGB image, three CFA captures
+// (one per light) and three monochrome captures.
 enum class InputFormat : int {
     CFA_BAYER_OR_XTRANS = 1,
     SONY_PIXEL_SHIFT_4 = 2,
@@ -310,49 +307,30 @@ void cpu_highlight_clip(const HighlightClipArgs& a);
 void cpu_lab_stats(const LabStatsArgs& a);
 
 void cpu_preview_debayer(const PreviewDebayerArgs& a);
-// -----------------------------------------------------------------------------
-// Grain-Aware Debayering for Film Negative Digitization
+// -----------------------------------------------------------------------------------------------------------------
+// Grain-aware debayer (single-shot RGGB scans under a narrowband RGB light)
 //
-// Traditional demosaicing algorithms (AHD, PPG, VNG, Hamilton-Adams) are designed
-// for natural photographic scenes assuming strong spectral correlation across
-// color channels and continuous geometric edges. They estimate missing channel
-// samples by computing directional gradients across neighboring channels.
+// Edge-directed demosaicing (PPG, AHD, VNG) picks an interpolation direction per pixel from local gradients. On a
+// developed colour negative most high-frequency detail is dye-cloud grain, which is independent in the three
+// emulsion layers, so those gradients are mostly noise: the hard per-pixel direction switch turns grain into
+// maze-like artifacts, and the crosstalk matrix and the large mask-balance gains of the inversion amplify the
+// resulting chroma errors. Bilinear avoids the artifacts but blurs the grain and zippers along edges.
 //
-// When digitizing color film negatives, this assumption completely breaks down:
-// 1. Film grain consists of stochastic, physically disjoint silver halide and dye
-//    clouds in three separate emulsion layers (cyan, magenta, yellow). High-frequency
-//    spatial variation is dominated by independent dye grain fluctuations rather
-//    than scene edges.
-// 2. The orange film mask requires significant color balance correction (typically
-//    ~9.5x gain on the green channel relative to red/blue).
-// 3. Standard edge-directed demosaicing mistakes random dye grain clumps in the red
-//    channel for scene gradients and steers green/blue interpolation across them.
-//    Under the dye-crosstalk matrix and mask balance gains, this phase misalignment
-//    is heavily amplified, turning microscopic grain into test-pattern-like 2-4 px
-//    chromatic mottle (color blotches and labyrinth artifacts).
+// This debayer instead:
+//   1. Interpolates green from the vertical and horizontal Hamilton-Adams estimates, blended with soft weights
+//      1 / (eps + gradient^2). eps = 4096 (64 DN, squared) is large next to grain gradients, so grain barely steers the
+//      blend while real edges still do.
+//   2. Interpolates red and blue as colour ratios (R + k) / (G + k) and (B + k) / (G + k), k = 16 DN, rather than
+//      as colour differences. Transmission is multiplicative, so a ratio error stays a constant relative error,
+//      which the -log(T) inversion turns into a uniform offset instead of one that grows in the dense areas.
+//   3. Falls back to bilinear red and blue where the photosite or its green is within 64 DN of white_level, where
+//      a clipped channel makes the ratios meaningless.
 //
-// Bilinear demosaicing avoids chromatic mottle because channels are interpolated
-// independently, but it blurs high-frequency grain, making scans look soft.
+// Against the 4-shot pixel-shift ground truth (Portra 400, Sony A7RM4; see README.md, Demosaicing): +1.22 dB
+// positive PSNR over bilinear and +0.53 dB over LibRaw DCB, with half bilinear's R-G zippering.
 //
-// The grain-aware debayer solves this by:
-// 1. Reconstructing Green using a soft Laplacian gradient with an elevated epsilon
-//    (eps = 4096.0f, calibrated to sensor noise floor) so random grain fluctuations
-//    do not trigger directional steering, while retaining true scene edges.
-// 2. Reconstructing Red and Blue in color-ratio space (R/(G+k), B/(G+k)) with
-//    k = 16.0f. Because film transmission follows multiplicative dye absorption,
-//    interpolating local color ratios preserves organic grain clump boundaries as
-//    pure scalar intensity variations across all downstream matrix transforms,
-//    completely eliminating chromatic mottle while preserving full grain acutance.
-// 3. Falling back smoothly to bilinear interpolation near sensor highlight saturation
-//    (within 64 DN of maximum white level) where color ratios become singular.
-//
-// Results vs 4-shot ground truth (Portra 400, Sony A7RM4):
-// - Recovers 91.6%-92.3% edge acutance (+35-40% boost over plain bilinear).
-// - Cuts false-color zippering by 22.3% and sky chroma mottle by 19.7% (~47 dB PSNR).
-//
-// Caveat: This works best with narrowband light (e.g. RGB LED); on whitelight
-// the blue noise is too high to work well.
-// -----------------------------------------------------------------------------
+// Under white light the blue channel is too noisy for the ratios; those scans decode through LibRaw instead.
+// -----------------------------------------------------------------------------------------------------------------
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 

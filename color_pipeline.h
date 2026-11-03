@@ -4,13 +4,21 @@
 // stages below. They are written once, as inline functions compiled both by the host compiler (CPU backend,
 // OpenMP) and by nvcc (CUDA backend), so the two backends cannot drift apart.
 //
-// Stage order for one pixel (camera-linear RGB, 16-bit, from the demosaiced negative):
-//   load (u16 -> [0,1]) -> matrix (crosstalk x base scale x diag(E, E*g, E*b)) -> soft knee
-//   -> [profile: input TRCs -> matrix + offset, clamp -> tetrahedral cLUT -> output TRCs -> PCS scale]
-//   -> Bradford D50->D65 -> XYZ->linear sRGB, clamp at 0 only: the pre-shoulder value (clip statistics and the
-//      x_hi histogram read it)
-//   -> highlight shoulder (identity when cfg.shoulder_x_hi <= 1) -> clamp -> encode (sRGB curve or linear), clamp:
-//      the display value (render and Lab read it)
+// Stage order for one pixel (camera-linear RGB, 16-bit, from the demosaiced negative), with the function that
+// returns each intermediate value:
+//   load (u16 -> [0,1]) -> input matrix (diag(E, E*g, E*b) x film base scale x crosstalk) -> soft knee
+//      convert_pixel_corrected: the corrected RGB in [0, 1]
+//   -> film profile: input TRCs -> matrix + offset, clamp -> tetrahedral cLUT -> output TRCs -> PCS scale
+//      convert_pixel_pcs: ICC PCS XYZ (D50)
+//   -> Bradford D50->D65 -> XYZ->linear sRGB, clamped at 0 only
+//      convert_pixel_linear: the pre-shoulder value (the clip statistics and the x_hi histogram read it)
+//   -> highlight shoulder (identity when cfg.shoulder_x_hi <= kShoulderOff) -> clamp to [0, 1]
+//      convert_pixel_display: the display value (render and Lab read it)
+//   -> encode (sRGB curve or linear), clamp
+//      convert_pixel: the output code value in [0, 1]
+//
+// A backend that adds a stage writes it here as a NEGICC_HD function and calls it from these convert_pixel_*
+// functions; per-pixel kernels (CPU loops in cfa_pipeline.cc, CUDA kernels in negicc-station) only call them.
 #ifndef NEGICC_COLOR_PIPELINE_H
 #define NEGICC_COLOR_PIPELINE_H
 
@@ -24,7 +32,6 @@
 #include <math.h>
 #else
 #define NEGICC_HD inline
-#include <cmath>
 #endif
 
 namespace negicc {
@@ -77,8 +84,9 @@ constexpr float kShoulderCeiling = 0.988f;    // encoded sRGB ceiling C (about c
 // white) to kShoulderCeiling. Without it the step from off (white at 255) to the smallest x_hi (white at about 252)
 // would make neighbouring frames of a roll, one just above and one just below the boundary, differ by 3 codes.
 constexpr float kShoulderRamp = 0.10f;
-// Default n. OPEN: n = 2 (the FIT3 specification's quadratic highlight shoulder) against exp1's 8 is not decided;
-// the evaluation settles it. Never a per-frame parameter.
+// The shoulder's exponent n: 2, a quadratic roll-off. A steeper shoulder (n = 8, which holds the identity longer
+// and bends later) is still being evaluated against it. n is one constant for every frame, never a per-frame
+// parameter.
 constexpr float kShoulderExponent = 2.0f;
 // Auto's highlight roll-off (shoulder_x_hi_anchored) maps the frame's own 99.5% point to sRGB kShoulderAnchorCode, so
 // the frame's highlights, not the chart white, set where it starts: x_hi up to kShoulderXHiLimit (the largest x_hi
@@ -86,8 +94,6 @@ constexpr float kShoulderExponent = 2.0f;
 constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 
-// Bradford D50 -> D65 and XYZ -> linear sRGB constants are written inline in pcs_to_linear_srgb() so they are
-// usable from device code.
 // ICC PCS encoding scale applied after the output TRCs (1 + 32767/32768).
 constexpr float kPcsScale = 1.99996948f;
 
@@ -107,12 +113,12 @@ NEGICC_HD Rgb apply_matrix(const float* m, Rgb v) {
              v.r * m[6] + v.g * m[7] + v.b * m[8] };
 }
 
-// Builds the per-candidate input matrix from the merged crosstalk matrix (crosstalk x base scale):
-// rows are scaled by E, E*g and E*b. Same float operations as the original prepare_adjusted_crosstalk().
+// The input matrix of one candidate (E, g, b): the merged matrix (crosstalk x film base scale) with its rows
+// scaled by E, E*g and E*b.
 NEGICC_HD void candidate_matrix(const float* merged, float e, float g, float b, float* out) {
     const float sr = e;
-    const float sg = 1.0f * e * g;
-    const float sb = 1.0f * e * b;
+    const float sg = e * g;
+    const float sb = e * b;
     for (int i = 0; i < 3; ++i) {
         out[i] = merged[i] * sr;
         out[3 + i] = merged[3 + i] * sg;
@@ -121,6 +127,8 @@ NEGICC_HD void candidate_matrix(const float* merged, float e, float g, float b, 
 }
 
 // ---- Stage: soft knee --------------------------------------------------------------------------------------
+// The identity up to the knee, then a tanh roll-off towards 1 (capped at 0.9999), so values past the film
+// profile's input range compress instead of clipping. Negative values become 0. knee >= 1 only clamps to [0, 1].
 NEGICC_HD float knee_compress(float val, float knee) {
     if (val <= 0.0f) return 0.0f;
     if (knee >= 1.0f || val <= knee) return fminf(1.0f, val);
@@ -133,6 +141,7 @@ NEGICC_HD Rgb apply_knee(Rgb v, float knee) {
 }
 
 // ---- Stage: tone curves ------------------------------------------------------------------------------------
+// A 1D curve of size samples over [0, 1], linearly interpolated (and extrapolated from the end segments).
 NEGICC_HD float apply_trc(float val, const float* curve, int size) {
     if (size <= 0 || !curve) return val;
     const float scaled = val * (size - 1);
@@ -143,7 +152,9 @@ NEGICC_HD float apply_trc(float val, const float* curve, int size) {
 }
 
 // ---- Stage: tetrahedral cLUT -------------------------------------------------------------------------------
-// Weight form of tetrahedral interpolation.
+// Tetrahedral interpolation of a [dim_r][dim_g][dim_b][3] grid at (r, g, b) in [0, 1]: the unit cell is split into
+// six tetrahedra by the order of the fractional parts, and the value is the weighted sum of the four corners of
+// the one that contains the point.
 NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int dim_r, int dim_g, int dim_b) {
     const float sr = r * (dim_r - 1);
     const float sg = g * (dim_g - 1);
@@ -182,6 +193,8 @@ NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int
 }
 
 // ---- Stage: film profile (ICC AToB0) -----------------------------------------------------------------------
+// The lutAtoBType elements in their ICC order (A curves, matrix, cLUT, B curves); the result is PCS XYZ (D50).
+// Without a profile the value passes through.
 NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
     if (!p.has_profile) return v;
     v.r = apply_trc(v.r, p.in_trc[0], p.in_trc_size[0]);
@@ -203,26 +216,27 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 }
 
 // ---- Stage: PCS (XYZ D50) -> linear sRGB -------------------------------------------------------------------
-NEGICC_HD Rgb pcs_to_linear_srgb(Rgb v) {
-    // Bradford D50 -> D65
+// Bradford D50 -> D65, then XYZ -> linear sRGB, unclamped. The constants are inline so device code can use them.
+NEGICC_HD Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
     const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
     const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
     const float xb = v.r * 0.0122982f + v.g * -0.0204830f + v.b * 1.3299098f;
-    // XYZ -> linear sRGB
-    return { clamp01(xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
-             clamp01(xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
-             clamp01(xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
+    return { xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f,
+             xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f,
+             xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f };
 }
 
-// Same as pcs_to_linear_srgb() but clamped at 0 only, so values above the chart white (the profile's headroom,
-// up to about 1.33 on the grey axis) survive for the shoulder.
+// Linear sRGB clamped to [0, 1].
+NEGICC_HD Rgb pcs_to_linear_srgb(Rgb v) {
+    const Rgb l = pcs_to_linear_srgb_unclamped(v);
+    return { clamp01(l.r), clamp01(l.g), clamp01(l.b) };
+}
+
+// Linear sRGB clamped at 0 only, so values above the chart white (the profile's headroom, up to about 1.33 on the
+// grey axis) survive for the shoulder.
 NEGICC_HD Rgb pcs_to_linear_srgb_pre_shoulder(Rgb v) {
-    const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
-    const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
-    const float xb = v.r * 0.0122982f + v.g * -0.0204830f + v.b * 1.3299098f;
-    return { fmaxf(0.0f, xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f),
-             fmaxf(0.0f, xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f),
-             fmaxf(0.0f, xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f) };
+    const Rgb l = pcs_to_linear_srgb_unclamped(v);
+    return { fmaxf(0.0f, l.r), fmaxf(0.0f, l.g), fmaxf(0.0f, l.b) };
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
@@ -259,13 +273,19 @@ NEGICC_HD Rgb apply_shoulder(const PipelineConfig& cfg, Rgb v) {
 }
 
 // ---- Whole pipeline ----------------------------------------------------------------------------------------
+// Returns the corrected RGB in [0, 1]: the input matrix and the knee, before the film profile.
+NEGICC_HD Rgb convert_pixel_corrected(const PipelineConfig& cfg, const float* matrix, const uint16_t* px) {
+    return apply_knee(apply_matrix(matrix, load_u16(px)), cfg.knee);
+}
+
+// Returns the film profile's ICC PCS XYZ (D50); the corrected RGB when there is no profile.
+NEGICC_HD Rgb convert_pixel_pcs(const PipelineConfig& cfg, const float* matrix, const uint16_t* px) {
+    return apply_profile(cfg.profile, convert_pixel_corrected(cfg, matrix, px));
+}
+
 // Returns the pre-shoulder linear sRGB D65 value, clamped at 0 only (0 to about 1.33; chart white is 1).
 NEGICC_HD Rgb convert_pixel_linear(const PipelineConfig& cfg, const float* matrix, const uint16_t* px) {
-    Rgb v = load_u16(px);
-    v = apply_matrix(matrix, v);
-    v = apply_knee(v, cfg.knee);
-    v = apply_profile(cfg.profile, v);
-    return pcs_to_linear_srgb_pre_shoulder(v);
+    return pcs_to_linear_srgb_pre_shoulder(convert_pixel_pcs(cfg, matrix, px));
 }
 
 // Returns linear sRGB D65 in [0, 1] after the shoulder, before output gamma encoding: what is shown and scored.
@@ -284,6 +304,7 @@ NEGICC_HD Rgb convert_pixel(const PipelineConfig& cfg, const float* matrix, cons
 }
 
 // ---- Output quantisation -----------------------------------------------------------------------------------
+// v must already be in [0, 1] (convert_pixel's output is).
 NEGICC_HD uint8_t quantize_u8(float v) { return (uint8_t)roundf(v * 255.0f); }
 NEGICC_HD uint16_t quantize_u16(float v) { return (uint16_t)roundf(v * 65535.0f); }
 
@@ -318,12 +339,16 @@ NEGICC_HD Lab srgb_to_lab(Rgb c) {
 }
 
 // ---- Scoring: clipping rules (one definition for every consumer) -------------------------------------------
+// An encoded channel is white-clipped at 16-bit code 65400 and above, black-clipped at code 200 and below. The linear
+// forms are the same thresholds decoded through the sRGB curve: srgb_decode(65399.5 / 65535) and
+// srgb_decode(200.5 / 65535).
 NEGICC_HD bool channel_white_clipped(float v) { return v * 65535.0f >= 65399.5f; }
 NEGICC_HD bool channel_black_clipped(float v) { return v * 65535.0f < 200.5f; }
 
 NEGICC_HD bool linear_channel_white_clipped(float l) { return l >= 0.9953029f; }
 NEGICC_HD bool linear_channel_black_clipped(float l) { return l < 0.00023679829f; }
 
+// L* histograms: kLabBins bins over [0, 100].
 constexpr int kLabBins = 1000;
 NEGICC_HD int lab_bin(float L) {
     int k = (int)(L * (kLabBins / 100.0f));
@@ -331,6 +356,7 @@ NEGICC_HD int lab_bin(float L) {
 }
 
 // ---- Symmetric inner-crop & aspect-preserved DINOv3 geometry -----------------------------------------------
+// The centred crop_ratio fraction of a W x H frame (the statistics skip its border), at least one pixel.
 struct InnerCrop {
     int x0 = 0, y0 = 0, w = 0, h = 0;
 };
@@ -349,6 +375,8 @@ NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
     return {x0, y0, W - 2 * x0, H - 2 * y0};
 }
 
+// The DINOv3 input size of a w x h image: its longer side scaled to max_size, both sides rounded to whole
+// patch_size patches (grid_w x grid_h of them).
 struct AspectPreservedShape {
     int target_w = 16, target_h = 16;
     int grid_w = 1, grid_h = 1;

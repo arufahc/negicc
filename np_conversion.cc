@@ -48,9 +48,9 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
   log_info("Profile film base RGB (corrected): %f %f %f\n", cc_profile_r, cc_profile_g, cc_profile_b);
 
   // The ICC profiles map the transmittance values after the correction matrix is
-  // applied to XYZ. Transmittance is relative the profile film base. For example
+  // applied to XYZ. Transmittance is relative to the profile film base. For example
   // if the R value for profile film base is 10000, a R value of 5000 has
-  // transmittance of 5000 / 10000 = 0.5. But we don't convert the corrected RGB
+  // transmittance of 5000 / 10000 = 0.5. As the corrected RGB is not converted
   // into a floating point value first, the actual denominator is not important.
   // Suppose we record the transmittance as a 16-bit fixed point number, we will
   // lose precision for denser film. So the ICC profiles are generated with
@@ -64,15 +64,15 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
   // Suppose the mid-grey patch has R = 5000 and G = 10000. With film base
   // R = 10000 and film base G = 20000, the transmittance is 0.5 in both channels.
   //
-  // A different captured film has R = 5000 (film base R = 10000) will have
+  // A different captured film with R = 5000 (film base R = 10000) has a
   // transmittance of 0.5 in the R channel. Let's say the G layer is denser
-  // because of flutation in the film development. G = 8000 (film base G = 16000)
+  // because of fluctuation in the film development. G = 8000 (film base G = 16000)
   // will also have a transmittance of 0.5. However using the ICC profile which
   // assumes film base G is 20000 in the G channel, will treat the transmittance
   // as 8000 / 20000 = 0.4 and the color balance will be off.
   //
   // To compensate for this we will scale the G channel (with R as reference)
-  // by (20000 / 10000) / (16000 / (10000) = 1.25.
+  // by (20000 / 10000) / (16000 / 10000) = 1.25.
   //
   // Of course the density even for R is not the same in the target and the
   // captured film. After adjusting the color balance, all channels can be

@@ -52,6 +52,7 @@ inline bool is_rggb_pattern_cpu(unsigned int filters) {
             bayer_color_at(1, 1, filters) == 2);
 }
 
+// Photosite (r, c) of an h x w mosaic, mirrored about the edge photosites outside it.
 inline float get_px_refl_cpu(const uint16_t* bayer, int r, int c, int h, int w, size_t pitch) {
     int r_refl = (r < 0) ? -r : (r >= h ? 2 * (h - 1) - r : r);
     int c_refl = (c < 0) ? -c : (c >= w ? 2 * (w - 1) - c : c);
@@ -60,6 +61,10 @@ inline float get_px_refl_cpu(const uint16_t* bayer, int r, int c, int h, int w, 
     return (float)bayer[(size_t)r_refl * pitch + c_refl];
 }
 
+// Green at photosite (r, c) of an RGGB mosaic: the sample itself on a green site; elsewhere the vertical and the
+// horizontal Hamilton-Adams estimates (neighbour mean plus a quarter of the centre channel's Laplacian), blended
+// with weights 1 / (eps + gradient^2) instead of picking one. A large eps keeps grain-sized gradients from steering
+// the blend; only real edges do.
 inline float reconstruct_green_soft_cpu(const uint16_t* m, int r, int c, int h, int w, size_t pitch,
                                         float white, float eps) {
     if ((r + c) & 1) {

@@ -128,20 +128,24 @@ void CpuBackend::render(const MosaicInput& in, const Region& region, int dst_w, 
 }
 
 void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
-                         float knee, const ProfileData& prof, const RgbInput& img) {
+                         const RgbInput& img) {
   const int width = img.width, height = img.height, ch = img.channels;
   uint16_t* pixels = img.pixels;
-  if (out.encoding == ENCODE_SRGB || out.encoding == ENCODE_SRGB_LINEAR) {
+  // The sRGB encodings and ENCODE_NONE (the corrected RGB, already in [0, 1]) write 16-bit codes in place.
+  auto convert_in_place = [&](auto stage) {
     #pragma omp parallel for schedule(static)
     for (int j = 0; j < height; ++j) {
       for (int i = 0; i < width; ++i) {
         uint16_t* px = &pixels[((size_t)j * width + i) * ch];
-        const negicc::Rgb v = negicc::convert_pixel(pc, merged_matrix, px);
-        px[0] = quantize_u16(v.r);
-        px[1] = quantize_u16(v.g);
-        px[2] = quantize_u16(v.b);
+        const Rgb v = stage(px);
+        px[0] = negicc::quantize_u16(v.r);
+        px[1] = negicc::quantize_u16(v.g);
+        px[2] = negicc::quantize_u16(v.b);
       }
     }
+  };
+  if (out.encoding == ENCODE_SRGB || out.encoding == ENCODE_SRGB_LINEAR) {
+    convert_in_place([&](const uint16_t* px) { return negicc::convert_pixel(pc, merged_matrix, px); });
   } else if (out.encoding == ENCODE_CUSTOM) {
     // Through Little-CMS from XYZ, a row at a time, into the image's own layout (3 samples, or LibRaw's 4).
     #pragma omp parallel
@@ -154,7 +158,7 @@ void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc
       for (int j = 0; j < height; ++j) {
         for (int i = 0; i < width; ++i) {
           const uint16_t* px = &pixels[((size_t)j * width + i) * ch];
-          Rgb v = process_pixel(px, merged_matrix, knee, prof);
+          const Rgb v = negicc::convert_pixel_pcs(pc, merged_matrix, px);
           xyz_row[i * 3 + 0] = v.r;
           xyz_row[i * 3 + 1] = v.g;
           xyz_row[i * 3 + 2] = v.b;
@@ -164,18 +168,7 @@ void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc
       cmsDeleteTransform(thread_xform);
     }
   } else {
-    #pragma omp parallel for schedule(static)
-    for (int j = 0; j < height; ++j) {
-      for (int i = 0; i < width; ++i) {
-        uint16_t* px = &pixels[((size_t)j * width + i) * ch];
-        Rgb v = load_u16(px);
-        v = apply_matrix(merged_matrix, v);
-        v = apply_knee(v, knee);
-        px[0] = quantize_u16(v.r);
-        px[1] = quantize_u16(v.g);
-        px[2] = quantize_u16(v.b);
-      }
-    }
+    convert_in_place([&](const uint16_t* px) { return negicc::convert_pixel_corrected(pc, merged_matrix, px); });
   }
 }
 
@@ -280,7 +273,7 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
 
-  // The crosstalk correction: the bundle's, with the rows -r, -g and -b give in its place (for the search too).
+  // The crosstalk correction: the bundle's, with any rows -r, -g and -b give in place of its own (for the search too).
   s.r_coeff = o.r_coeff;
   s.g_coeff = o.g_coeff;
   s.b_coeff = o.b_coeff;
@@ -407,51 +400,27 @@ static float given_station_e(const Options& o, const ProfileBundle& bundle, int 
 }
 
 int decode(const Options& o, Setup& s, Scan& scan) {
-  const std::vector<std::string>& files = o.files;
   ProfileBundle& bundle = s.bundle;
-  DinoV3Engine& engine = s.engine;
-  const bool use_dino = s.use_dino, bundle_search = s.bundle_search;
-  const bool is_roi_auto = o.roi_auto;
-  const InputMode input_mode = o.input_mode;
-  const bool camera_rgb_input = s.camera_rgb_input;
-  const RawDecode raw_decode = s.raw_decode;
-  const negicc::FlatFieldPtr& flat_field = s.flat_field;
-  int* roi_coords = scan.roi;
-  bool& has_roi = scan.has_roi;
-  int& rot_cw = scan.rot_cw;
-  bool &hflip = scan.hflip, &vflip = scan.vflip;
-  FrameDetection& frame_det = scan.frame_det;
-  bool& has_auto_res = scan.has_auto_res;
-  ParamSearchResult& auto_res = scan.auto_res;
-  int* auto_frame_half = scan.auto_frame_half;
-  double &t_auto_ms = scan.t_auto_ms, &t_frame_det_ms = scan.t_frame_det_ms, &t_raw_decode_ms = scan.t_raw_decode_ms;
-  double& t_raw_0 = scan.t_raw_0;
-  LibRawPtr* ps_extra_procs = scan.ps_extra;
-  std::string& input_source = scan.input_source;
-  std::shared_ptr<const negicc::FlatTables>& flat_full_tables = scan.flat_full_tables;
-  std::copy(o.roi, o.roi + 4, roi_coords);
-  has_roi = o.has_roi;
-  rot_cw = o.rot_cw;
-  hflip = o.hflip;
-  vflip = o.vflip;
+  std::copy(o.roi, o.roi + 4, scan.roi);
+  scan.has_roi = o.has_roi;
+  scan.rot_cw = o.rot_cw;
+  scan.hflip = o.hflip;
+  scan.vflip = o.vflip;
 
-  scan.exposure_file = files[0];
-  scan.has_exif_exp = read_exif_exposure_d(files[0], scan.exif_shutter_d, scan.exif_iso_d);
-  auto get_scan_exposure = [&](const LibRaw& r, double& shutter_out, double& iso_out) {
-    scan.scan_exposure(r, shutter_out, iso_out);
-  };
+  scan.exposure_file = o.files[0];
+  scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
 
   // The bracket of given values (the search's is its own), for the roll-off measured on the half-size frame.
   const int given_target_idx = !s.is_bundle ? -1
                                : s.manual_target_idx >= 0 ? s.manual_target_idx
                                                           : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
   auto measure_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
-    const int target_idx = has_auto_res ? auto_res.target_idx : given_target_idx;
-    const float e = has_auto_res ? auto_res.params.e
+    const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx;
+    const float e = scan.has_auto_res ? scan.auto_res.params.e
                                  : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
                                                    scan.film_base_rgb());
-    const float g = has_auto_res ? auto_res.params.g : o.gain_g;
-    const float b = has_auto_res ? auto_res.params.b : o.gain_b;
+    const float g = scan.has_auto_res ? scan.auto_res.params.g : o.gain_g;
+    const float b = scan.has_auto_res ? scan.auto_res.params.b : o.gain_b;
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
                                              ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
     scan.has_rolloff = true;
@@ -475,54 +444,68 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   };
 
   HalfSizeAnalysis analyse;
-  if (bundle_search || (s.is_bundle && !use_dino)) {
+  if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
     analyse = [&](const LibRaw& raw) -> bool {
       const double t_auto_0 = omp_get_wtime();
       double scan_shutter_s = 0.125, scan_iso = 100.0;
-      get_scan_exposure(raw, scan_shutter_s, scan_iso);
+      scan.scan_exposure(raw, scan_shutter_s, scan_iso);
       // --roi halved, or the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
-      int* bbox = auto_frame_half;
+      int* bbox = scan.auto_frame_half;
       bbox[0] = 0;
       bbox[1] = 0;
       bbox[2] = half_w;
       bbox[3] = half_h;
-      if (has_roi) {
-        bbox[0] = roi_coords[0] / 2;
-        bbox[1] = roi_coords[1] / 2;
-        bbox[2] = std::max(1, (roi_coords[0] + roi_coords[2]) / 2 - bbox[0]);
-        bbox[3] = std::max(1, (roi_coords[1] + roi_coords[3]) / 2 - bbox[1]);
+      if (scan.has_roi) {
+        bbox[0] = scan.roi[0] / 2;
+        bbox[1] = scan.roi[1] / 2;
+        bbox[2] = std::max(1, (scan.roi[0] + scan.roi[2]) / 2 - bbox[0]);
+        bbox[3] = std::max(1, (scan.roi[1] + scan.roi[3]) / 2 - bbox[1]);
         clamp_rect(bbox, half_w, half_h);
       }
       // Step 3 & Step 4: zero-copy RgbView over the half-size image, cropped and oriented in place.
       negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
           &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
       // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
-      detect_base(half_view, (s.white_light && is_roi_auto) ? &frame_det : nullptr,
+      detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : nullptr,
                   s.white_light ? raw.imgdata.sizes.width : 0, s.white_light ? raw.imgdata.sizes.height : 0);
-      negicc::RgbView frame = half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], rot_cw, hflip, vflip);
-      if (bundle_search) {
+      negicc::RgbView frame =
+          half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
+      if (s.bundle_search) {
         ParamSearchOptions opts;
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
-        if (!search_conversion_params(bundle, engine, frame, scan_shutter_s, scan_iso, opts, auto_res)) {
+        if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
           log_error("The conversion parameter search failed\n");
           return false;
         }
-        has_auto_res = true;
+        scan.has_auto_res = true;
       }
       measure_rolloff(frame, scan_shutter_s, scan_iso);
-      t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+      scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       return true;
     };
   }
+
+  // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
+  auto take_detected_frame = [&](int full_w, int full_h) {
+    if (scan.frame_det.conf < kLowFrameConfidence) {
+      scan.roi[0] = 0;
+      scan.roi[1] = 0;
+      scan.roi[2] = full_w;
+      scan.roi[3] = full_h;
+    } else {
+      for (int i = 0; i < 4; ++i) scan.roi[i] = scan.frame_det.crop[i];
+    }
+    scan.has_roi = true;
+  };
 
   FrameDetectionParams det_params;
   det_params.format = o.film_format;
   det_params.axis_hint = o.roi_axis_hint;
   RawRegionFinder find_frame;
-  if (is_roi_auto && files.size() != 4) {
+  if (o.roi_auto && o.files.size() != 4) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       const double t_det_0 = omp_get_wtime();
       FilmImage mosaic;
@@ -531,53 +514,47 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         return false;
       }
       det_params.crop_align = mosaic.step;
-      detect_frame_or_fallback(mosaic, det_params, frame_det);
-      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
-      if (frame_det.conf < kLowFrameConfidence) {
-        roi_coords[0] = 0;
-        roi_coords[1] = 0;
-        roi_coords[2] = mosaic.width;
-        roi_coords[3] = mosaic.height;
-      } else {
-        roi_coords[0] = frame_det.crop[0];
-        roi_coords[1] = frame_det.crop[1];
-        roi_coords[2] = frame_det.crop[2];
-        roi_coords[3] = frame_det.crop[3];
-      }
-      has_roi = true;
-      for (int i = 0; i < 4; ++i) roi[i] = roi_coords[i];
+      detect_frame_or_fallback(mosaic, det_params, scan.frame_det);
+      scan.t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      take_detected_frame(mosaic.width, mosaic.height);
+      for (int i = 0; i < 4; ++i) roi[i] = scan.roi[i];
       return true;
     };
   }
 
+  // Logs --roi auto's detection, and warns when it fell back or the frame is vertical and not turned.
   auto print_frame_detection = [&]() {
-    const char* axis_name = frame_det.axis == 'h' ? "h" : (frame_det.axis == 'v' ? "v" : "undecided");
+    const FrameDetection& det = scan.frame_det;
+    const char* axis_name = det.axis == 'h' ? "h" : (det.axis == 'v' ? "v" : "undecided");
     log_info("Film frame: axis=%s format=%s orientation=%s rotation=%.2f deg gaps=%d frames=%d conf=%.2f%s%s\n",
-           axis_name, film_format_name(frame_det.format), frame_det.orientation.c_str(), frame_det.rotation_deg,
-           frame_det.n_gaps, 1 + (int)frame_det.secondaries.size(), frame_det.conf,
-           frame_det.reason.empty() ? "" : " reason: ", frame_det.reason.c_str());
-    if (frame_det.n_gaps > 0) {
+           axis_name, film_format_name(det.format), det.orientation.c_str(), det.rotation_deg,
+           det.n_gaps, 1 + (int)det.secondaries.size(), det.conf,
+           det.reason.empty() ? "" : " reason: ", det.reason.c_str());
+    if (det.n_gaps > 0) {
       log_info("  Gaps (sensor px):");
       for (int g = 0; g < 2; ++g)
-        if (frame_det.gaps[g][0] >= 0) log_info(" [%d, %d]", frame_det.gaps[g][0], frame_det.gaps[g][1]);
+        if (det.gaps[g][0] >= 0) log_info(" [%d, %d]", det.gaps[g][0], det.gaps[g][1]);
       log_info("\n");
     }
     log_info("  Frame (sensor px): x=%d y=%d w=%d h=%d (frame centre %.1f, %.1f, size %.1f x %.1f, %.1f px/mm)\n",
-           roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], frame_det.primary.rect.cx,
-           frame_det.primary.rect.cy, frame_det.primary.rect.w, frame_det.primary.rect.h, frame_det.px_per_mm);
-    for (const FilmFrame& f : frame_det.secondaries)
+           scan.roi[0], scan.roi[1], scan.roi[2], scan.roi[3], det.primary.rect.cx,
+           det.primary.rect.cy, det.primary.rect.w, det.primary.rect.h, det.px_per_mm);
+    for (const FilmFrame& f : det.secondaries)
       log_info("  Frame %+d (sensor px): visible x=%d y=%d w=%d h=%d (%.0f%% of a frame)\n", f.index, f.visible[0],
              f.visible[1], f.visible[2], f.visible[3], 100.0f * f.visible_fraction);
+    if (det.conf < kLowFrameConfidence) {
+      log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
+               det.conf, det.reason.empty() ? "" : ", reason: ", det.reason.c_str());
+    }
+    if (s.use_dino && det.axis == 'v' && scan.rot_cw == 0) {
+      log_warn("axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
+    }
   };
 
-  const int qual_flag = o.quality;
-  const bool no_crop_flag = o.no_crop;
 
   // Determine whether the 5-step zero-copy CFA pipeline applies (Step 1..5).
   bool use_cfa_pipeline = false;
-  negicc::InputFormat input_format = (files.size() == 4) ? negicc::InputFormat::SONY_PIXEL_SHIFT_4
-                                                         : negicc::InputFormat::CFA_BAYER_OR_XTRANS;
-  t_raw_0 = omp_get_wtime();
+  scan.t_raw_0 = omp_get_wtime();
   LibRaw *proc = nullptr;
   LibRaw *unpacked_probe = nullptr;
   float cfa_white_level = 65535.0f;
@@ -587,17 +564,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   negicc::RgbView search_half_view;
   negicc::FlatSampleArgs flat_full{};
 
-  if ((input_mode == InputMode::kRaw || input_mode == InputMode::kLinearDng) &&
-      (files.size() == 4 || (raw_decode == RawDecode::kCameraRgb && qual_flag < 0))) {
+  if ((o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng) &&
+      (o.files.size() == 4 || (s.raw_decode == RawDecode::kCameraRgb && o.quality < 0))) {
     LibRaw* probe = new LibRaw();
-    log_info("Loading RAW file %s\n", files[0].c_str());
-    int ret = open_and_unpack_raw_file(probe, files[0]);
+    log_info("Loading RAW file %s\n", o.files[0].c_str());
+    int ret = open_and_unpack_raw_file(probe, o.files[0]);
     if (ret != LIBRAW_SUCCESS) {
-      log_error("Cannot open/unpack %s: %s\n", files[0].c_str(), libraw_strerror(ret));
+      log_error("Cannot open/unpack %s: %s\n", o.files[0].c_str(), libraw_strerror(ret));
       delete probe;
       return 1;
     }
-    if (files.size() == 4) {
+    if (o.files.size() == 4) {
       if (!is_sony_a7rm4(probe)) {
         log_error("4-shot pixel shift merge is only available with Sony A7RM4 camera (got %s %s)\n",
                 probe->imgdata.idata.make, probe->imgdata.idata.model);
@@ -617,8 +594,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
 
   if (use_cfa_pipeline) {
-    (void)input_format;
-    if (is_roi_auto) {
+    if (o.roi_auto) {
       const double t_det_0 = omp_get_wtime();
       FilmImage mosaic;
       if (!film_image_from_raw(*proc, mosaic)) {
@@ -627,13 +603,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         return 1;
       }
       det_params.crop_align = mosaic.step;
-      detect_frame_or_fallback(mosaic, det_params, frame_det);
-      t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      detect_frame_or_fallback(mosaic, det_params, scan.frame_det);
+      scan.t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
     }
 
     // Step 1: Per-channel black subtraction in-place on the unpacked CFA mosaic.
     if (!subtract_cfa_black_in_place(proc, cfa_white_level)) {
-      log_error("Invalid CFA mosaic geometry in %s\n", files[0].c_str());
+      log_error("Invalid CFA mosaic geometry in %s\n", o.files[0].c_str());
       delete proc;
       return 1;
     }
@@ -646,14 +622,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                                  proc->imgdata.sizes.left_margin;
 
     // For 4x pixel shift, unpack and black-subtract frames 1..3 in Step 1 and keep all 4 CFA mosaics in memory.
-    if (files.size() == 4) {
+    if (o.files.size() == 4) {
       for (int mi = 1; mi < 4; ++mi) {
-        ps_extra_procs[mi - 1].reset(new LibRaw());
-        LibRaw* fp = ps_extra_procs[mi - 1].get();
-        log_info("Loading RAW file %s\n", files[mi].c_str());
-        int fret = fp->open_file(files[mi].c_str());
+        scan.ps_extra[mi - 1].reset(new LibRaw());
+        LibRaw* fp = scan.ps_extra[mi - 1].get();
+        log_info("Loading RAW file %s\n", o.files[mi].c_str());
+        int fret = fp->open_file(o.files[mi].c_str());
         if (fret != LIBRAW_SUCCESS || (fret = fp->unpack()) != LIBRAW_SUCCESS) {
-          log_error("Cannot open/unpack %s: %s\n", files[mi].c_str(), libraw_strerror(fret));
+          log_error("Cannot open/unpack %s: %s\n", o.files[mi].c_str(), libraw_strerror(fret));
           delete proc;
           return 1;
         }
@@ -670,7 +646,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         }
         float fw_white = 0.0f;
         if (!subtract_cfa_black_in_place(fp, fw_white)) {
-          log_error("Invalid CFA mosaic geometry in %s\n", files[mi].c_str());
+          log_error("Invalid CFA mosaic geometry in %s\n", o.files[mi].c_str());
           delete proc;
           return 1;
         }
@@ -682,12 +658,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const int half_h = src_h / 2;
     std::shared_ptr<const negicc::FlatTables> flat_half_tables;
     negicc::FlatSampleArgs flat_half{};
-    if (flat_field) {
+    if (s.flat_field) {
       try {
-        flat_half_tables = flat_field->tables(half_w, half_h, true);
+        flat_half_tables = s.flat_field->tables(half_w, half_h, true);
         flat_half = flat_half_tables->host();
-        flat_full_tables = flat_field->tables(src_w, src_h, false);
-        flat_full = flat_full_tables->host();
+        scan.flat_full_tables = s.flat_field->tables(src_w, src_h, false);
+        flat_full = scan.flat_full_tables->host();
       } catch (const std::exception& e) {
         log_error("%s\n", e.what());
         delete proc;
@@ -705,54 +681,35 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const bool has_det =
           filters > 1000 &&
           film_image_from_cfa(cfa_origin, src_w, src_h, (ptrdiff_t)cfa_pitch, 2,
-                              [filters](int row, int col) { return (int)(filters >> ((((row << 1) & 14) | (col & 1)) << 1) & 3); },
+                              [filters](int row, int col) { return negicc::bayer_color_at(row, col, filters); },
                               no_black, cfa_white_level, mosaic);
       if (has_det) detect_film_frame(mosaic, FrameDetectionParams(), base_det);
       detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
     }
 
     // Step 3: Crop, rotate, flip & inline ROI search on the zero-copy view.
-    if (is_roi_auto) {
-      if (frame_det.conf < kLowFrameConfidence) {
-        roi_coords[0] = 0;
-        roi_coords[1] = 0;
-        roi_coords[2] = src_w;
-        roi_coords[3] = src_h;
-      } else {
-        roi_coords[0] = frame_det.crop[0];
-        roi_coords[1] = frame_det.crop[1];
-        roi_coords[2] = frame_det.crop[2];
-        roi_coords[3] = frame_det.crop[3];
-      }
-      has_roi = true;
+    if (o.roi_auto) {
+      take_detected_frame(src_w, src_h);
       print_frame_detection();
-
-      if (frame_det.conf < kLowFrameConfidence) {
-        log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
-               frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
-      }
-      if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
-        log_warn("axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
-      }
     }
 
     cfa_rx = 0;
     cfa_ry = 0;
     cfa_rw = src_w;
     cfa_rh = src_h;
-    if (has_roi) {
-      if (roi_coords[0] < 0 || roi_coords[1] < 0 || roi_coords[0] >= src_w || roi_coords[1] >= src_h ||
-          roi_coords[2] <= 0 || roi_coords[3] <= 0) {
+    if (scan.has_roi) {
+      if (scan.roi[0] < 0 || scan.roi[1] < 0 || scan.roi[0] >= src_w || scan.roi[1] >= src_h ||
+          scan.roi[2] <= 0 || scan.roi[3] <= 0) {
         log_error("ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
-                roi_coords[0], roi_coords[1], roi_coords[2], roi_coords[3], src_w, src_h);
+                scan.roi[0], scan.roi[1], scan.roi[2], scan.roi[3], src_w, src_h);
         delete proc;
         return 1;
       }
-      cfa_rx = roi_coords[0];
-      cfa_ry = roi_coords[1];
-      cfa_rw = std::min(roi_coords[2], src_w - cfa_rx);
-      cfa_rh = std::min(roi_coords[3], src_h - cfa_ry);
-    } else if (!no_crop_flag && files.size() == 1) {
+      cfa_rx = scan.roi[0];
+      cfa_ry = scan.roi[1];
+      cfa_rw = std::min(scan.roi[2], src_w - cfa_rx);
+      cfa_rh = std::min(scan.roi[3], src_h - cfa_ry);
+    } else if (!o.no_crop && o.files.size() == 1) {
       const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
                                   crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
@@ -771,41 +728,42 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         std::max(1, (cfa_ry + cfa_rh) / 2 - cfa_ry / 2),
     };
     clamp_rect(out_half, half_w, half_h);
-    for (int i = 0; i < 4; ++i) auto_frame_half[i] = out_half[i];
+    for (int i = 0; i < 4; ++i) scan.auto_frame_half[i] = out_half[i];
     search_half_view = full_half_view.crop_and_orient(
-        auto_frame_half[0], auto_frame_half[1], auto_frame_half[2], auto_frame_half[3],
-        rot_cw, hflip, vflip);
+        scan.auto_frame_half[0], scan.auto_frame_half[1], scan.auto_frame_half[2], scan.auto_frame_half[3],
+        scan.rot_cw, scan.hflip, scan.vflip);
     oriented_half_view = search_half_view;
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
-    if (bundle_search) {
+    if (s.bundle_search) {
       const double t_auto_0 = omp_get_wtime();
       double scan_shutter_s = 0.125, scan_iso = 100.0;
-      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
+      scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
-      if (!search_conversion_params(bundle, engine, search_half_view, scan_shutter_s, scan_iso, opts, auto_res)) {
+      if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
+                                    scan.auto_res)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
       }
-      has_auto_res = true;
-      t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+      scan.has_auto_res = true;
+      scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
     }
-    if (bundle_search || (s.is_bundle && !use_dino)) {
+    if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
-      get_scan_exposure(*proc, scan_shutter_s, scan_iso);
+      scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       measure_rolloff(search_half_view, scan_shutter_s, scan_iso);
     }
-    t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
 
     // The mosaic and the frame, for render.
     scan.mosaic.frames[0] = cfa_origin;
-    scan.mosaic.n_frames = files.size() == 4 ? 4 : 1;
+    scan.mosaic.n_frames = o.files.size() == 4 ? 4 : 1;
     for (int i = 0; i + 1 < scan.mosaic.n_frames; ++i) {
-      LibRaw* fp = ps_extra_procs[i].get();
+      LibRaw* fp = scan.ps_extra[i].get();
       const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
       scan.mosaic.frames[i + 1] = fp->imgdata.rawdata.raw_image + (size_t)fp->imgdata.sizes.top_margin * fpitch +
                                   fp->imgdata.sizes.left_margin;
@@ -816,60 +774,47 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.mosaic.filters = filters;
     scan.mosaic.white_level = cfa_white_level;
     scan.mosaic.flat = flat_full;
-    scan.cfa_region = {cfa_rx, cfa_ry, cfa_rw, cfa_rh, rot_cw, hflip, vflip};
+    scan.cfa_region = {cfa_rx, cfa_ry, cfa_rw, cfa_rh, scan.rot_cw, scan.hflip, scan.vflip};
   } else {
-    if (input_mode == InputMode::kRgbFile || input_mode == InputMode::kThreeShot) {
-      proc = load_rgb_input(files, input_mode, camera_rgb_input, qual_flag, !no_crop_flag && !has_roi && !is_roi_auto,
-                            (!is_roi_auto && has_roi) ? roi_coords : nullptr, analyse,
-                            is_roi_auto ? &frame_det : nullptr, det_params, input_source);
+    if (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot) {
+      proc = load_rgb_input(o.files, o.input_mode, s.camera_rgb_input, o.quality,
+                            !o.no_crop && !scan.has_roi && !o.roi_auto,
+                            (!o.roi_auto && scan.has_roi) ? scan.roi : nullptr, analyse,
+                            o.roi_auto ? &scan.frame_det : nullptr, det_params, scan.input_source);
     } else {
-      proc = load_raw(files[0], true,
-                      qual_flag,
-                      !no_crop_flag && !has_roi && !is_roi_auto,
-                      raw_decode,
-                      (!is_roi_auto && has_roi) ? roi_coords : nullptr,
-                      analyse, find_frame, flat_field.get(),
+      proc = load_raw(o.files[0], true,
+                      o.quality,
+                      !o.no_crop && !scan.has_roi && !o.roi_auto,
+                      s.raw_decode,
+                      (!o.roi_auto && scan.has_roi) ? scan.roi : nullptr,
+                      analyse, find_frame, s.flat_field.get(),
                       unpacked_probe);
     }
     unpacked_probe = nullptr;
     if (!proc) {
-      log_error("Cannot open %s\n", files[0].c_str());
+      log_error("Cannot open %s\n", o.files[0].c_str());
       return 1;
     }
-    if (is_roi_auto) {
-      if (input_mode == InputMode::kRgbFile || input_mode == InputMode::kThreeShot) {
-        if (frame_det.conf < kLowFrameConfidence) {
-          const auto& rs = proc->imgdata.rawdata.sizes;
-          const auto& is = proc->imgdata.sizes;
-          roi_coords[0] = 0;
-          roi_coords[1] = 0;
-          roi_coords[2] = rs.width ? rs.width : is.width;
-          roi_coords[3] = rs.height ? rs.height : is.height;
-        } else {
-          for (int i = 0; i < 4; ++i) roi_coords[i] = frame_det.crop[i];
-        }
-        has_roi = true;
+    if (o.roi_auto) {
+      if (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot) {
+        const auto& rs = proc->imgdata.rawdata.sizes;
+        const auto& is = proc->imgdata.sizes;
+        take_detected_frame(rs.width ? rs.width : is.width, rs.height ? rs.height : is.height);
       }
       print_frame_detection();
-      if (frame_det.conf < kLowFrameConfidence) {
-        log_warn("low detection confidence (conf=%.2f%s%s); falling back to the full sensor frame\n",
-               frame_det.conf, frame_det.reason.empty() ? "" : ", reason: ", frame_det.reason.c_str());
-      }
-      if (use_dino && frame_det.axis == 'v' && rot_cw == 0) {
-        log_warn("axis=v, rot=0 (vertical frame without rotation may degrade DINOv3 intent accuracy)\n");
-      }
     }
-    if (rot_cw != 0 || hflip || vflip) {
+    if (scan.rot_cw != 0 || scan.hflip || scan.vflip) {
       if (!extract_roi_and_transform(proc, 0, 0, proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                                     rot_cw, hflip, vflip)) {
+                                     scan.rot_cw, scan.hflip, scan.vflip)) {
         proc->free_image();
         delete proc;
         return 1;
       }
       log_info("Transformed subrect: %dx%d (rot=%d, hflip=%d, vflip=%d)\n",
-             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, rot_cw, hflip ? 1 : 0, vflip ? 1 : 0);
+             proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, scan.rot_cw, scan.hflip ? 1 : 0,
+             scan.vflip ? 1 : 0);
     }
-    t_raw_decode_ms = (omp_get_wtime() - t_raw_0) * 1000.0 - t_auto_ms - t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
   }
 
   const int orig_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
@@ -885,45 +830,38 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 }
 
 int begin_conversion(const Options& o, const Setup& s, Conversion& c) {
-  const bool is_bundle = s.is_bundle;
-  const ProfileBundle& bundle = s.bundle;
-  std::vector<int>& effective_profile_film_base_rgb = c.profile_film_base_rgb;
-  const std::vector<int> effective_film_base_rgb = {1, 1, 1};
-  unsigned& pin_mask = c.pin_mask;
-  float* merged_matrix = c.merged_matrix;
-  float &global_exposure_comp = c.exposure_comp, &gain_g = c.gain_g, &gain_b = c.gain_b;
-  global_exposure_comp = o.exposure_comp;
-  gain_g = o.gain_g;
-  gain_b = o.gain_b;
+  const std::vector<int> unit_fb = {1, 1, 1};
+  c.exposure_comp = o.exposure_comp;
+  c.gain_g = o.gain_g;
+  c.gain_b = o.gain_b;
   c.knee = kKnee;
-  const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
 
   // The sidecar records the bundle's film base. The film base scale of the input matrix is 1: a bundle conversion's
   // film base (the scan's, else the bundle's) is in the station's merged matrix (solve).
   c.sidecar_profile_film_base_rgb = {1, 1, 1};
-  if (is_bundle && bundle.has_film_base) {
-    c.sidecar_profile_film_base_rgb = {bundle.profile_film_base_rgb[0], bundle.profile_film_base_rgb[1],
-                                       bundle.profile_film_base_rgb[2]};
+  if (s.is_bundle && s.bundle.has_film_base) {
+    c.sidecar_profile_film_base_rgb = {s.bundle.profile_film_base_rgb[0], s.bundle.profile_film_base_rgb[1],
+                                       s.bundle.profile_film_base_rgb[2]};
   }
-  effective_profile_film_base_rgb = {1, 1, 1};
+  c.profile_film_base_rgb = {1, 1, 1};
 
-  if (is_bundle) {
+  if (s.is_bundle) {
     // The bundle's film base (when none is read from the scan) is in the station's merged matrix, so in E, g and b,
     // not applied as a film base scale.
     c.sidecar_film_base_rgb = c.sidecar_profile_film_base_rgb;
     c.film_base_source = "bundle";
   }
 
-  if (o.exposure_given) pin_mask |= PIN_E;
-  if (o.gain_g_given) pin_mask |= PIN_G;
-  if (o.gain_b_given) pin_mask |= PIN_B;
+  if (o.exposure_given) c.pin_mask |= PIN_E;
+  if (o.gain_g_given) c.pin_mask |= PIN_G;
+  if (o.gain_b_given) c.pin_mask |= PIN_B;
 
-  adjust_correction_matrix(r_coeff, g_coeff, b_coeff,
-                           global_exposure_comp,
-                           gain_g, gain_b,
-                           effective_profile_film_base_rgb,
-                           effective_film_base_rgb,
-                           merged_matrix);
+  adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff,
+                           c.exposure_comp,
+                           c.gain_g, c.gain_b,
+                           c.profile_film_base_rgb,
+                           unit_fb,
+                           c.merged_matrix);
   return 0;
 }
 
@@ -966,36 +904,15 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
 }
 
 int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
-  const bool is_bundle = s.is_bundle, bundle_search = s.bundle_search, use_dino = s.use_dino;
   ProfileBundle& bundle = s.bundle;
-  DinoV3Engine& engine = s.engine;
-  const std::string& film_prof_arg = s.film_prof_arg;
-  const int manual_target_idx = s.manual_target_idx;
-  const bool use_cfa_pipeline = scan.cfa;
-  std::vector<uint16_t>& cfa_export_rgb = scan.rgb3;
   LibRaw* proc = scan.proc.get();
-  const bool has_auto_res = scan.has_auto_res;
-  const ParamSearchResult& auto_res = scan.auto_res;
-  unsigned& pin_mask = c.pin_mask;
-  float* merged_matrix = c.merged_matrix;
-  float &global_exposure_comp = c.exposure_comp, &gain_g = c.gain_g, &gain_b = c.gain_b;
-  float& knee = c.knee;
-  ShoulderInfo& shoulder_info = c.shoulder;
-  ParsedFilmProfile& film_prof = c.film_prof;
-  std::vector<uint8_t>& embedded_icc = c.embedded_icc;
-  std::string& bundle_target_name = c.bundle_target_name;
-  int& bundle_target_idx = c.bundle_target_idx;
-  DinoSolveResult& dino_res = c.dino_res;
-  const std::vector<float> &r_coeff = s.r_coeff, &g_coeff = s.g_coeff, &b_coeff = s.b_coeff;
-  const std::vector<int>& effective_profile_film_base_rgb = c.profile_film_base_rgb;
-  const std::vector<int> effective_film_base_rgb = {1, 1, 1};
   // With a bundle, E, g and b are the station's (the search's, and what -E, --gain_g and --gain_b take): the
   // conversion is the station's, the bundle's merged matrix (crosstalk, film base and the scan's exposure ratio)
   // scaled per row by E, E*g and E*b, so neg_process renders what negicc-station renders. row_scale turns them into
   // the absolute exposure and gains on the crosstalk (the sidecar's matrix.*) and back.
   float station_base[9];
   double row_scale[3] = {1.0, 1.0, 1.0};
-  if (is_bundle) {
+  if (s.is_bundle) {
     double scan_shutter_s = 0.125, scan_iso = 100.0;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
     compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(), scan.film_base_rgb() != nullptr,
@@ -1003,23 +920,25 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   }
   auto apply_station = [&](float e, float g, float b) {
     c.station_params = std::array<float, 3>{e, g, b};
-    negicc::candidate_matrix(station_base, e, g, b, merged_matrix);
-    global_exposure_comp = (float)(row_scale[0] * (double)e);
-    gain_g = (float)(row_scale[1] / row_scale[0] * (double)g);
-    gain_b = (float)(row_scale[2] / row_scale[0] * (double)b);
+    negicc::candidate_matrix(station_base, e, g, b, c.merged_matrix);
+    c.exposure_comp = (float)(row_scale[0] * (double)e);
+    c.gain_g = (float)(row_scale[1] / row_scale[0] * (double)g);
+    c.gain_b = (float)(row_scale[2] / row_scale[0] * (double)b);
   };
   const std::vector<int> unit_fb = {1, 1, 1};
 
-  if (is_bundle && !bundle_search) {
-    if (use_dino || manual_target_idx < 0 || !(pin_mask & PIN_E)) {
+  if (s.is_bundle && !s.bundle_search) {
+    if (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) {
+      // Sets each bracket's exposure range on the bundle (e_min, e_max, e_center, is_feasible), which the target
+      // selection, set_target_bounds and given_station_e read below. The scene statistics it returns are unused.
       float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
       int num_feasible = 0;
-      if (use_cfa_pipeline) {
+      if (scan.cfa) {
         // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
         // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
         compute_bundle_enclosures(bundle,
                                   negicc::RgbView::from_interleaved_rgb(
-                                      cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                                      scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
                                   g_lo, g_hi, scene_ev, num_feasible);
       } else {
         compute_bundle_enclosures(bundle,
@@ -1029,74 +948,75 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
                                   g_lo, g_hi, scene_ev, num_feasible);
       }
     }
-  } else if (!is_bundle) {
-    if (!film_prof_arg.empty() && !load_film_profile(film_prof_arg, film_prof)) {
-      log_error("Cannot load film profile %s\n", film_prof_arg.c_str());
+  } else if (!s.is_bundle) {
+    if (!s.film_prof_arg.empty() && !load_film_profile(s.film_prof_arg, c.film_prof)) {
+      log_error("Cannot load film profile %s\n", s.film_prof_arg.c_str());
     }
   }
 
-  if (has_auto_res) {
-    bundle_target_idx = auto_res.target_idx;
-    bundle_target_name = auto_res.target_name;
-    film_prof = bundle.targets[bundle_target_idx].film_prof;
-    film_prof.rebind_pointers();
+  if (scan.has_auto_res) {
+    const ParamSearchResult& res = scan.auto_res;
+    c.bundle_target_idx = res.target_idx;
+    c.bundle_target_name = res.target_name;
+    c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
+    c.film_prof.rebind_pointers();
     // The search's E, g and b, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
-    apply_station(auto_res.params.e, auto_res.params.g, auto_res.params.b);
-    log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", auto_res.target_name.c_str(),
-           auto_res.params.e, auto_res.params.g, auto_res.params.b, auto_res.residual, to_string(auto_res.status),
-           auto_res.inferences);
+    apply_station(res.params.e, res.params.g, res.params.b);
+    log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", res.target_name.c_str(),
+           res.params.e, res.params.g, res.params.b, res.residual, to_string(res.status),
+           res.inferences);
     auto ms = [](std::chrono::steady_clock::duration d) {
       return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
     };
     log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
-           ms(auto_res.render_time), ms(auto_res.infer_time), ms(auto_res.residual_time), ms(auto_res.search_time),
-           ms(auto_res.total_time));
-    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", auto_res.params.e, auto_res.params.g,
-           auto_res.params.b, bundle_target_idx);
-  } else if (use_dino) {
-    if (!is_bundle && !film_prof.data.has_profile) {
+           ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
+           ms(res.total_time));
+    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", res.params.e, res.params.g,
+           res.params.b, c.bundle_target_idx);
+  } else if (s.use_dino) {
+    if (!s.is_bundle && !c.film_prof.data.has_profile) {
       log_error("The parameter search requires a film profile to evaluate intent losses.\n");
       return 1;
     }
 
     SolverConfig cfg;
-    cfg.knee = knee;
-    cfg.shoulder_auto = is_bundle;  // the roll-off, as the bracket search renders it
+    cfg.knee = c.knee;
+    cfg.shoulder_auto = s.is_bundle;  // the roll-off, as the bracket search renders it
 
     const int max_iters = o.dino_iters;
-    IntentGains user_gains{global_exposure_comp, gain_g, gain_b};
-    if (is_bundle && (pin_mask & PIN_E)) {
+    IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
+    if (s.is_bundle && (c.pin_mask & PIN_E)) {
       // A pinned -E is the station's: the search starts from it (and the station's g = b = 1) in absolute units.
-      apply_station(global_exposure_comp, 1.0f, 1.0f);
-      user_gains = {global_exposure_comp, gain_g, gain_b};
-      adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b, unit_fb, unit_fb,
-                               merged_matrix);
+      apply_station(c.exposure_comp, 1.0f, 1.0f);
+      user_gains = {c.exposure_comp, c.gain_g, c.gain_b};
+      adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b, unit_fb, unit_fb,
+                               c.merged_matrix);
     }
 
-    if (is_bundle) {
+    if (s.is_bundle) {
       // -E without --target: the bracket the bundle picks without the search.
-      bundle_target_idx = manual_target_idx >= 0 ? manual_target_idx
+      c.bundle_target_idx = s.manual_target_idx >= 0 ? s.manual_target_idx
                                                  : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-      log_info("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
-      const auto& tgt = bundle.targets[bundle_target_idx];
-      bundle_target_name = tgt.name;
-      film_prof = tgt.film_prof;
-      film_prof.rebind_pointers();
+      log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
+      const auto& tgt = bundle.targets[c.bundle_target_idx];
+      c.bundle_target_name = tgt.name;
+      c.film_prof = tgt.film_prof;
+      c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
     } else {
-      cfg.prof = &film_prof.data;
+      cfg.prof = &c.film_prof.data;
     }
 
     // TODO: Run `solve_dinov3_intent` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
     // full-resolution `cfa_export_rgb` buffer once single-target solver baselines are updated.
-    const bool solve_ok = use_cfa_pipeline
-        ? solve_dinov3_intent(engine, cfg, merged_matrix,
+    const bool solve_ok = scan.cfa
+        ? solve_dinov3_intent(s.engine, cfg, c.merged_matrix,
                               negicc::RgbView::from_interleaved_rgb(
-                                  cfa_export_rgb.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                              user_gains, pin_mask, max_iters, dino_res)
-        : solve_dinov3_intent(engine, cfg, merged_matrix, (const uint16_t (*)[4])proc->imgdata.image,
+                                  scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                              user_gains, c.pin_mask, max_iters, c.dino_res)
+        : solve_dinov3_intent(s.engine, cfg, c.merged_matrix, (const uint16_t (*)[4])proc->imgdata.image,
                               proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                              user_gains, pin_mask, max_iters, dino_res);
+                              user_gains, c.pin_mask, max_iters, c.dino_res);
     if (!solve_ok) {
       log_error("DINOv3 intent solver failed.\n");
       return 1;
@@ -1104,22 +1024,22 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
 
     std::string pins_str = "none";
-    if (pin_mask != 0) {
+    if (c.pin_mask != 0) {
       pins_str = "";
-      if (pin_mask & PIN_E) pins_str += "E ";
-      if (pin_mask & PIN_G) pins_str += "g ";
-      if (pin_mask & PIN_B) pins_str += "b";
+      if (c.pin_mask & PIN_E) pins_str += "E ";
+      if (c.pin_mask & PIN_G) pins_str += "g ";
+      if (c.pin_mask & PIN_B) pins_str += "b";
       if (!pins_str.empty() && pins_str.back() == ' ') pins_str.pop_back();
     }
     log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
-           dino_res.grid_w, dino_res.grid_h, dino_res.target_w, dino_res.target_h,
-           engine.backend_name(), dino_res.e_center, dino_res.bounds_lo, dino_res.bounds_hi,
+           c.dino_res.grid_w, c.dino_res.grid_h, c.dino_res.target_w, c.dino_res.target_h,
+           s.engine.backend_name(), c.dino_res.e_center, c.dino_res.bounds_lo, c.dino_res.bounds_hi,
            max_iters, pins_str.c_str());
-    if (dino_res.anchor_clamped) {
+    if (c.dino_res.anchor_clamped) {
       log_warn("ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
     }
     log_info(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
-    for (const auto& it : dino_res.iterations) {
+    for (const auto& it : c.dino_res.iterations) {
       if (it.residual < 0.0f) {
         log_info("  %c  %5.3f  %5.3f  %5.3f       -  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
                it.tag, it.e, it.g, it.b, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
@@ -1131,87 +1051,87 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       }
     }
     log_info("Status: %s after %d inferences (best it %d, resid %.3f)\n",
-           dino_res.status.c_str(), dino_res.total_inferences, dino_res.best_iteration, dino_res.best_residual);
+           c.dino_res.status.c_str(), c.dino_res.total_inferences, c.dino_res.best_iteration, c.dino_res.best_residual);
     log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
-           dino_res.solved_relative.e, dino_res.solved_relative.g, dino_res.solved_relative.b);
-    if (is_bundle) {
+           c.dino_res.solved_relative.e, c.dino_res.solved_relative.g, c.dino_res.solved_relative.b);
+    if (s.is_bundle) {
       // The station's values, which -E, --gain_g and --gain_b take with a bundle.
       // The station's values of the solved absolute ones.
-      c.station_params = std::array<float, 3>{(float)(dino_res.solved_absolute.e / row_scale[0]),
-                                              (float)(dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
-                                              (float)(dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
+      c.station_params = std::array<float, 3>{(float)(c.dino_res.solved_absolute.e / row_scale[0]),
+                                              (float)(c.dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
+                                              (float)(c.dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
       log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n", (*c.station_params)[0],
-               (*c.station_params)[1], (*c.station_params)[2], bundle_target_idx);
+               (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
     } else {
-      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g\n", dino_res.solved_absolute.e,
-               dino_res.solved_absolute.g, dino_res.solved_absolute.b);
+      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g\n", c.dino_res.solved_absolute.e,
+               c.dino_res.solved_absolute.g, c.dino_res.solved_absolute.b);
     }
-    if (dino_res.solved_relative.g < 0.5f || dino_res.solved_relative.g > 2.0f ||
-        dino_res.solved_relative.b < 0.5f || dino_res.solved_relative.b > 2.0f) {
+    if (c.dino_res.solved_relative.g < 0.5f || c.dino_res.solved_relative.g > 2.0f ||
+        c.dino_res.solved_relative.b < 0.5f || c.dino_res.solved_relative.b > 2.0f) {
       log_warn("GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
     }
-    if (dino_res.best_iteration >= 0 && (size_t)dino_res.best_iteration + 1 < dino_res.iterations.size()) {
-      const auto& bit = dino_res.iterations[dino_res.best_iteration + 1];
+    if (c.dino_res.best_iteration >= 0 && (size_t)c.dino_res.best_iteration + 1 < c.dino_res.iterations.size()) {
+      const auto& bit = c.dino_res.iterations[c.dino_res.best_iteration + 1];
       float log2_ratio = (bit.e > 0.0f) ? std::log2(bit.e) : 0.0f;
       log_info("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
              bit.penalty_clip, bit.clip_pct, bit.clip_pct <= 2.5f ? "<=" : ">", bit.penalty_anchor, log2_ratio);
     }
     log_info("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
-           dino_res.timing_views_ms, dino_res.timing_render_ms, dino_res.timing_infer_ms,
-           dino_res.timing_residual_ms, dino_res.timing_search_ms);
+           c.dino_res.timing_views_ms, c.dino_res.timing_render_ms, c.dino_res.timing_infer_ms,
+           c.dino_res.timing_residual_ms, c.dino_res.timing_search_ms);
 
-    if (is_bundle) {
+    if (s.is_bundle) {
       // Rendered as the station renders those values, so the sidecar's cli_equivalent reproduces it.
       apply_station((*c.station_params)[0], (*c.station_params)[1], (*c.station_params)[2]);
     } else {
-      global_exposure_comp = dino_res.solved_absolute.e;
-      gain_g = dino_res.solved_absolute.g;
-      gain_b = dino_res.solved_absolute.b;
-      adjust_correction_matrix(r_coeff, g_coeff, b_coeff, global_exposure_comp, gain_g, gain_b,
-                               effective_profile_film_base_rgb, effective_film_base_rgb, merged_matrix);
+      c.exposure_comp = c.dino_res.solved_absolute.e;
+      c.gain_g = c.dino_res.solved_absolute.g;
+      c.gain_b = c.dino_res.solved_absolute.b;
+      adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b,
+                               c.profile_film_base_rgb, unit_fb, c.merged_matrix);
     }
-  } else if (is_bundle) {
-    if (manual_target_idx >= 0) {
-      bundle_target_idx = manual_target_idx;
+  } else if (s.is_bundle) {
+    if (s.manual_target_idx >= 0) {
+      c.bundle_target_idx = s.manual_target_idx;
     } else {
-      bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+      c.bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
     }
-    log_info("Selected target: %s\n", bundle.targets[bundle_target_idx].display_name.c_str());
-    bundle_target_name = bundle.targets[bundle_target_idx].name;
-    film_prof = bundle.targets[bundle_target_idx].film_prof;
-    film_prof.rebind_pointers();
+    log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
+    c.bundle_target_name = bundle.targets[c.bundle_target_idx].name;
+    c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
+    c.film_prof.rebind_pointers();
     // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
     double scan_shutter_s = 0.125, scan_iso = 100.0;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-    apply_station(given_station_e(o, bundle, bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()), gain_g,
-                  gain_b);
+    apply_station(given_station_e(o, bundle, c.bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()),
+                  c.gain_g, c.gain_b);
   }
 
-  if (is_bundle && bundle_target_idx >= 0) {
-    embedded_icc = bundle.targets[bundle_target_idx].icc_bytes;
+  if (s.is_bundle && c.bundle_target_idx >= 0) {
+    c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  if (is_bundle && bundle_target_idx >= 0 && c.station_params) {
+  if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params) {
     // The highlight roll-off of the conversion, as the bracket search measures it at its final parameters (on the
     // half-size frame), so given values (cli_equivalent) reproduce it: Auto's result and given values were measured
     // in decode; a pinned -E or --target search keeps its solver's own x_hi.
     float q995 = 0.0f;
     if (scan.has_rolloff) {
-      shoulder_info.x_hi = scan.rolloff_x_hi;
+      c.shoulder.x_hi = scan.rolloff_x_hi;
       q995 = scan.rolloff_q995;
     } else {
-      shoulder_info.x_hi = dino_res.shoulder.x_hi;
-      q995 = dino_res.shoulder.q995;
+      c.shoulder.x_hi = c.dino_res.shoulder.x_hi;
+      q995 = c.dino_res.shoulder.q995;
     }
-    shoulder_info.has_q995 = true;
-    shoulder_info.q995 = q995;
-    if (shoulder_info.active()) {
-      shoulder_info.source = "rolloff";
+    c.shoulder.has_q995 = true;
+    c.shoulder.q995 = q995;
+    if (c.shoulder.active()) {
+      c.shoulder.source = "rolloff";
       negicc::PipelineConfig pc{};
-      negicc::set_shoulder(pc, shoulder_info.x_hi);
-      shoulder_info.has_knee = true;
-      shoulder_info.knee = pc.shoulder_x_k;
+      negicc::set_shoulder(pc, c.shoulder.x_hi);
+      c.shoulder.has_knee = true;
+      c.shoulder.knee = pc.shoulder_x_k;
     }
-    log_info("Roll-off: q995 %.3f, x_hi %.3f (sRGB output only)\n", q995, shoulder_info.x_hi);
+    log_info("Roll-off: q995 %.3f, x_hi %.3f (sRGB output only)\n", q995, c.shoulder.x_hi);
   }
   return 0;
 }
@@ -1249,7 +1169,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
-  backend.convert(out, export_pc, c.merged_matrix, c.knee, c.film_prof.data, scan.image());
+  backend.convert(out, export_pc, c.merged_matrix, scan.image());
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);
     cmsCloseProfile(out.custom);
@@ -1263,126 +1183,94 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
 
 int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   LibRaw* proc = scan.proc.get();
-  const bool is_bundle = s.is_bundle, use_dino = s.use_dino, is_roi_auto = o.roi_auto;
-  const ProfileBundle& bundle = s.bundle;
-  const DinoV3Engine& engine = s.engine;
-  const std::string& film_prof_arg = s.film_prof_arg;
-  const std::string& dino_path = s.dino_path;
-  const std::string& dino_backend = o.dino_backend;
   const std::string& attach_profile = c.out.attach_profile;
   const OutputEncoding encoding = c.out.encoding;
-  const std::vector<uint16_t>& cfa_export_rgb = scan.rgb3;
-  const std::vector<uint8_t>& embedded_icc = c.embedded_icc;
-  const int orig_w = scan.orig_w, orig_h = scan.orig_h;
-  const bool has_roi = scan.has_roi;
-  const int* roi_coords = scan.roi;
-  const FrameDetection& frame_det = scan.frame_det;
-  const int rot_cw = scan.rot_cw;
-  const bool hflip = scan.hflip, vflip = scan.vflip;
-  const int width = proc->imgdata.sizes.iwidth, height = proc->imgdata.sizes.iheight;
-  // A bundle conversion takes the film base read from the scan (Scan::film_base), else the bundle's.
-  const bool film_base_applied = is_bundle && scan.film_base.found;
-  const std::vector<int>& sidecar_film_base_rgb = c.sidecar_film_base_rgb;
-  const std::vector<int>& sidecar_profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
-  const std::string film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
-  const float* merged_matrix = c.merged_matrix;
-  const float global_exposure_comp = c.exposure_comp, gain_g = c.gain_g, gain_b = c.gain_b;
-  const unsigned pin_mask = c.pin_mask;
-  const float knee = c.knee;
-  const ShoulderInfo& shoulder_info = c.shoulder;
-  const bool has_auto_res = scan.has_auto_res;
-  const DinoSolveResult& dino_res = c.dino_res;
-  const double t_raw_decode_ms = scan.t_raw_decode_ms, t_frame_det_ms = scan.t_frame_det_ms;
-  const double t_full_conversion_ms = scan.t_full_conversion_ms, t_auto_ms = scan.t_auto_ms;
-  double& t_tiff_write_ms = scan.t_tiff_write_ms;
-  const std::string& bundle_target_name = c.bundle_target_name;
-  const int bundle_target_idx = c.bundle_target_idx;
-  const ParamSearchResult& auto_res = scan.auto_res;
-  const int* auto_frame_half = scan.auto_frame_half;
+  const int out_w = proc->imgdata.sizes.iwidth, out_h = proc->imgdata.sizes.iheight;
 
-  const std::string& output = o.output;
-  log_info("Writing TIFF '%s'\n", output.c_str());
+  log_info("Writing TIFF '%s'\n", o.output.c_str());
   const double t_tiff_0 = omp_get_wtime();
-  int ret = write_tiff(proc, attach_profile, output,
-                       is_bundle ? embedded_icc : std::vector<uint8_t>{},
-                       cfa_export_rgb.empty() ? nullptr : cfa_export_rgb.data());
-  t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
+  int ret = write_tiff(proc, attach_profile, o.output, s.is_bundle ? c.embedded_icc : std::vector<uint8_t>{},
+                       scan.rgb3.empty() ? nullptr : scan.rgb3.data());
+  scan.t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
 
   if (ret != 0 || o.no_metadata) {
-    unlink((output + ".json").c_str());
-  } else {
-    std::string cs_name = "camera-linear";
-    if (encoding == ENCODE_SRGB) {
-      cs_name = "srgb";
-    } else if (encoding == ENCODE_SRGB_LINEAR) {
-      cs_name = "srgb-linear";
-    } else if (encoding == ENCODE_CUSTOM) {
-      cs_name = attach_profile;
-    } else if (encoding == ENCODE_NONE) {
-      cs_name = attach_profile.empty() ? "camera-linear" : attach_profile;
-    }
-
-    std::string roi_source = "none";
-    if (is_roi_auto) {
-      roi_source = (frame_det.conf < kLowFrameConfidence) ? "auto_fallback" : "auto";
-    } else if (has_roi) {
-      roi_source = "cli";
-    }
-
-    Sidecar sc;
-    sc.output_path = output;
-    sc.argc = o.argc;
-    sc.argv = o.argv;
-    sc.proc = proc;
-    sc.files = o.files;
-    sc.orig_w = orig_w;
-    sc.orig_h = orig_h;
-    sc.has_roi = has_roi;
-    sc.roi = roi_coords;
-    sc.roi_source = roi_source;
-    sc.frame_det = is_roi_auto ? &frame_det : nullptr;
-    sc.rot_cw = rot_cw;
-    sc.hflip = hflip;
-    sc.vflip = vflip;
-    sc.out_w = width;
-    sc.out_h = height;
-    sc.film_base_applied = film_base_applied;
-    sc.film_base_rgb.assign(sidecar_film_base_rgb.begin(), sidecar_film_base_rgb.end());
-    sc.profile_film_base_rgb = sidecar_profile_film_base_rgb;
-    sc.film_base_source = film_base_source;
-    sc.film_base_detection = is_bundle ? &scan.film_base : nullptr;
-    sc.profile_path = is_bundle ? bundle.path : film_prof_arg;
-    sc.is_bundle = is_bundle;
-    sc.bundle_target_name = bundle_target_name;
-    sc.bundle_target_idx = bundle_target_idx;
-    sc.input_space = bundle.input_space;
-    sc.merged_matrix = merged_matrix;
-    sc.exposure_comp = global_exposure_comp;
-    sc.gain_g = gain_g;
-    sc.gain_b = gain_b;
-    sc.station_params = c.station_params ? c.station_params->data() : nullptr;
-    sc.pin_mask = pin_mask;
-    sc.knee = knee;
-    sc.shoulder = shoulder_info;
-    if (c.out.encoding != ENCODE_SRGB && sc.shoulder.active()) {
-      // Only the sRGB output applies the roll-off: record it as off (keeping the measured 99.5% point).
-      sc.shoulder.x_hi = 1.0f;
-      sc.shoulder.source = "off";
-      sc.shoulder.has_knee = false;
-    }
-    sc.dino = use_dino && !has_auto_res ? &dino_res : nullptr;
-    sc.dino_model = dino_path;
-    sc.dino_backend = use_dino ? std::string(engine.backend_used()) : dino_backend;
-    sc.auto_res = has_auto_res ? &auto_res : nullptr;
-    sc.auto_frame_half = auto_frame_half;
-    sc.colorspace = cs_name;
-    sc.t_raw_decode_ms = t_raw_decode_ms;
-    sc.t_frame_det_ms = t_frame_det_ms;
-    sc.t_full_conversion_ms = t_full_conversion_ms;
-    sc.t_tiff_write_ms = t_tiff_write_ms;
-    sc.t_auto_ms = t_auto_ms;
-    write_json_sidecar(sc);
+    unlink((o.output + ".json").c_str());
+    return ret;
   }
 
-  return ret;
+  std::string cs_name = "camera-linear";
+  if (encoding == ENCODE_SRGB) {
+    cs_name = "srgb";
+  } else if (encoding == ENCODE_SRGB_LINEAR) {
+    cs_name = "srgb-linear";
+  } else if (encoding == ENCODE_CUSTOM) {
+    cs_name = attach_profile;
+  } else if (encoding == ENCODE_NONE) {
+    cs_name = attach_profile.empty() ? "camera-linear" : attach_profile;
+  }
+
+  std::string roi_source = "none";
+  if (o.roi_auto) {
+    roi_source = (scan.frame_det.conf < kLowFrameConfidence) ? "auto_fallback" : "auto";
+  } else if (scan.has_roi) {
+    roi_source = "cli";
+  }
+
+  // A bundle conversion takes the film base read from the scan (Scan::film_base), else the bundle's.
+  const bool film_base_applied = s.is_bundle && scan.film_base.found;
+
+  Sidecar sc;
+  sc.output_path = o.output;
+  sc.argc = o.argc;
+  sc.argv = o.argv;
+  sc.proc = proc;
+  sc.files = o.files;
+  sc.orig_w = scan.orig_w;
+  sc.orig_h = scan.orig_h;
+  sc.has_roi = scan.has_roi;
+  sc.roi = scan.roi;
+  sc.roi_source = roi_source;
+  sc.frame_det = o.roi_auto ? &scan.frame_det : nullptr;
+  sc.rot_cw = scan.rot_cw;
+  sc.hflip = scan.hflip;
+  sc.vflip = scan.vflip;
+  sc.out_w = out_w;
+  sc.out_h = out_h;
+  sc.film_base_applied = film_base_applied;
+  sc.film_base_rgb.assign(c.sidecar_film_base_rgb.begin(), c.sidecar_film_base_rgb.end());
+  sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
+  sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
+  sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
+  sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
+  sc.is_bundle = s.is_bundle;
+  sc.bundle_target_name = c.bundle_target_name;
+  sc.bundle_target_idx = c.bundle_target_idx;
+  sc.input_space = s.bundle.input_space;
+  sc.merged_matrix = c.merged_matrix;
+  sc.exposure_comp = c.exposure_comp;
+  sc.gain_g = c.gain_g;
+  sc.gain_b = c.gain_b;
+  sc.station_params = c.station_params ? c.station_params->data() : nullptr;
+  sc.pin_mask = c.pin_mask;
+  sc.knee = c.knee;
+  sc.shoulder = c.shoulder;
+  if (encoding != ENCODE_SRGB && sc.shoulder.active()) {
+    // Only the sRGB output applies the roll-off: record it as off (keeping the measured 99.5% point).
+    sc.shoulder.x_hi = 1.0f;
+    sc.shoulder.source = "off";
+    sc.shoulder.has_knee = false;
+  }
+  sc.dino = s.use_dino && !scan.has_auto_res ? &c.dino_res : nullptr;
+  sc.dino_model = s.dino_path;
+  sc.dino_backend = s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend;
+  sc.auto_res = scan.has_auto_res ? &scan.auto_res : nullptr;
+  sc.auto_frame_half = scan.auto_frame_half;
+  sc.colorspace = cs_name;
+  sc.t_raw_decode_ms = scan.t_raw_decode_ms;
+  sc.t_frame_det_ms = scan.t_frame_det_ms;
+  sc.t_full_conversion_ms = scan.t_full_conversion_ms;
+  sc.t_tiff_write_ms = scan.t_tiff_write_ms;
+  sc.t_auto_ms = scan.t_auto_ms;
+  write_json_sidecar(sc);
+  return 0;
 }

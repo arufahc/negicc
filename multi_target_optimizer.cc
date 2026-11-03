@@ -27,7 +27,6 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "colorspace_conversion.h"
 #include "dinov3_auto_solver.h"
 #include "neg_pipeline.h"
 
@@ -244,7 +243,7 @@ class GreyPoint {
     const float s = tmax / 0.9f;
     static const float kIdentity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     float m[9];
-    candidate_matrix(kIdentity, s, 1.0f, 1.0f, m);
+    negicc::candidate_matrix(kIdentity, s, 1.0f, 1.0f, m);
     const negicc::PipelineConfig pc = make_pipeline_config(prof_, AUTO_KNEE, 1.0f);
     for (int i = 0; i < n; ++i) {
       uint16_t px[3];
@@ -253,7 +252,7 @@ class GreyPoint {
         const float vv = std::isfinite(v) ? v : 0.0f;
         px[c] = std::lround(std::fmin(1.0f, std::fmax(0.0f, vv)) * 65535.0f);
       }
-      const Lab lab = srgb_to_lab(convert_pixel_srgb(px, m, pc));
+      const Lab lab = negicc::srgb_to_lab(negicc::convert_pixel(pc, m, px));
       out[i][0] = lab.L;
       out[i][1] = lab.a;
       out[i][2] = lab.b;
@@ -537,6 +536,32 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
 
 // ---- Highlight ceiling and clipping ------------------------------------------------------------------------
 
+// ICC PCS L*a*b* (D50) to 8-bit sRGB code values in [0, 255], through Bradford D50 -> D65.
+// py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb)
+void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
+  static const float kD50[3] = {0.9642f, 1.0f, 0.8249f};
+  static const float kBradford[3][3] = {{0.9555766f, -0.0230393f, 0.0631636f},
+                                        {-0.0282895f, 1.0099416f, 0.0210077f},
+                                        {0.0122982f, -0.0204830f, 1.3299098f}};
+  static const float kXyzToSrgb[3][3] = {{3.2406255f, -1.5372080f, -0.4986286f},
+                                         {-0.9689307f, 1.8757561f, 0.0415175f},
+                                         {0.0557101f, -0.2040211f, 1.0569959f}};
+  const float fy = (lab[0] + 16.0f) / 116.0f;
+  const float f[3] = {fy + lab[1] / 500.0f, fy, fy - lab[2] / 200.0f};
+  float xyz[3], d65[3];
+  for (int c = 0; c < 3; ++c) {
+    const float f3 = f[c] * f[c] * f[c];
+    xyz[c] = (f3 > 0.008856f ? f3 : (f[c] - 16.0f / 116.0f) / 7.787f) * kD50[c];
+  }
+  for (int r = 0; r < 3; ++r) d65[r] = kBradford[r][0] * xyz[0] + kBradford[r][1] * xyz[1] + kBradford[r][2] * xyz[2];
+  for (int r = 0; r < 3; ++r) {
+    const float lin = std::clamp(kXyzToSrgb[r][0] * d65[0] + kXyzToSrgb[r][1] * d65[1] + kXyzToSrgb[r][2] * d65[2],
+                                 0.0f, 1.0f);
+    const float enc = (lin <= 0.0031308f) ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f;
+    out[r] = std::clamp(enc, 0.0f, 1.0f) * 255.0f;
+  }
+}
+
 // Per-channel 8-bit sRGB ceiling of a bracket: the brightest value any of its calibration patches renders to
 // through its profile, read from the profcheck report the bundle stores; 255 without a report. Highlights above
 // it are outside what the bracket was calibrated on.
@@ -593,7 +618,7 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
   ha.n = (int)n;
   ha.cfg = make_pipeline_config(prof, knee, shoulder);
   ha.max_hist = max_hist;
-  for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = srgb_decode(ceil_rgb[c] / 255.0f);
+  for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = negicc::srgb_decode(ceil_rgb[c] / 255.0f);
   ha.out = hc_out.data();
   negicc::cpu_highlight_clip(ha);
   for (size_t c = 0; c < n; ++c) {
@@ -657,7 +682,7 @@ class SearchFrame {
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
-    candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
+    negicc::candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
     const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
     out.resize((size_t)crop_.w * crop_.h * 3);
     negicc::RgbView crop_view = frame_.crop_and_orient(crop_.x0, crop_.y0, crop_.w, crop_.h, 0, false, false);
@@ -793,7 +818,7 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      // On non-crosstalk (deglared white-light) bundles, stop once the residual has risen for two consecutive steps
+      // On non-crosstalk (white-light) bundles, stop once the residual has risen for two consecutive steps
       // past best_err and keep best as a converged tournament candidate (matching negicc-station optimizer.py).
       const bool rel_conv = bundle_.has_crosstalk
                                 ? ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR)
@@ -857,7 +882,7 @@ class SearchFrame {
     std::vector<float> matrices(candidates.size() * 9);
     for (size_t i = 0; i < candidates.size(); ++i) {
       const ConversionParams& p = candidates[i];
-      candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
+      negicc::candidate_matrix(input_matrix_, p.e, p.g, p.b, &matrices[i * 9]);
     }
     // The candidates share one shoulder (they differ in E, g, b around one render): the first one's. The clip
     // counts read the pre-shoulder value; only the median L* is post-shoulder.
@@ -885,7 +910,7 @@ class SearchFrame {
     const Clock::time_point t0 = Clock::now();  // the extra pre-shoulder pass per iteration is render time
     static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
     float m[9];
-    candidate_matrix(input_matrix_, p.e, p.g, p.b, m);
+    negicc::candidate_matrix(input_matrix_, p.e, p.g, p.b, m);
     std::vector<float> matrices(m, m + 9);
     std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
     measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data, kCeil,
@@ -1058,7 +1083,7 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
   // As SearchFrame::measure_shoulder: the matrix in reference units (M_frame / e_norm) at the search's internal E.
   float input_matrix[9], m[9];
   for (int i = 0; i < 9; ++i) input_matrix[i] = scale.frame_matrix[i] / scale.e_norm;
-  candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
+  negicc::candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
   measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
