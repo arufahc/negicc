@@ -818,7 +818,7 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      // On non-crosstalk (deglared white-light) bundles, stop once the residual has risen for two consecutive steps
+      // On non-crosstalk (white-light) bundles, stop once the residual has risen for two consecutive steps
       // past best_err and keep best as a converged tournament candidate (matching negicc-station optimizer.py).
       const bool rel_conv = bundle_.has_crosstalk
                                 ? ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR)
