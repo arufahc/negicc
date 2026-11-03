@@ -430,7 +430,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
   // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; LibRaw's decode and RGB files have no
   // mosaic for the detector, so the base comes from the statistics.
-  // TODO: with --roi auto, load_raw decodes only the frame, so the statistics there see the frame, not the whole scan.
+  // load_raw runs the half-size analysis before it crops to the frame, so with --roi auto too the statistics see
+  // the whole scan.
   // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
