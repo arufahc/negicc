@@ -498,7 +498,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode, const int* roi,
                  const HalfSizeAnalysis& analyse, const RawRegionFinder& find_region,
                  const negicc::FlatField* flat,
-                 LibRaw* unpacked_proc) {
+                 LibRaw* unpacked_proc, std::optional<RawFrameDetection>* base_det) {
   const bool white_light = debayer && decode == RawDecode::kWhiteLight;
   int ret;
   LibRaw* proc = unpacked_proc;
@@ -524,6 +524,16 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     log_info("Only Bayer-pattern RAW files supported, sorry....\n");
     delete proc;
     return NULL;
+  }
+  if (base_det) {
+    base_det->reset();
+    FilmImage mosaic;
+    if (film_image_from_raw(*proc, mosaic)) {
+      RawFrameDetection& d = base_det->emplace();
+      d.sensor_w = mosaic.width;
+      d.sensor_h = mosaic.height;
+      detect_film_frame(mosaic, FrameDetectionParams(), d.det);
+    }
   }
   int found_roi[4];
   if (find_region) {

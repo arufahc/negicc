@@ -428,8 +428,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
   // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
   // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
-  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading. LibRaw's decode and RGB files take the
-  // base from the statistics, plus --roi auto's frame detection on a white-light (D65) scan.
+  // zero-copy CFA path (Sony RAWs, pixel shift) and on a RAW through LibRaw (white light, -q, other cameras) the frame
+  // detector runs on the mosaic for every bundle conversion, with or without --roi auto, so the rebate is found when
+  // the scan shows one, as negicc-station reads it. RGB files take the base from the statistics (with a white-light
+  // bundle also from --roi auto's detection).
   // load_raw runs the half-size analysis before it crops to the frame, so with --roi auto too the statistics see
   // the whole scan.
   // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
@@ -444,6 +446,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
   };
 
+  // A RAW through LibRaw: the frame detector with its default parameters on the unpacked mosaic (load_raw's
+  // base_det), for the film base's rebate, as on the CFA path below and in negicc-station.
+  std::optional<RawFrameDetection> raw_base_det;
   HalfSizeAnalysis analyse;
   if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
     analyse = [&](const LibRaw& raw) -> bool {
@@ -467,9 +472,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // Step 3 & Step 4: zero-copy RgbView over the half-size image, cropped and oriented in place.
       negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
           &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
-      // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
-      detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : nullptr,
-                  s.white_light ? raw.imgdata.sizes.width : 0, s.white_light ? raw.imgdata.sizes.height : 0);
+      // The film base from the whole half-size image, with the rebate of the frame detection on a RAW's mosaic
+      // (raw_base_det); for an RGB file with a white-light bundle, --roi auto's detection.
+      if (raw_base_det) {
+        detect_base(half_view, &raw_base_det->det, raw_base_det->sensor_w, raw_base_det->sensor_h);
+      } else {
+        detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : nullptr,
+                    s.white_light ? raw.imgdata.sizes.width : 0, s.white_light ? raw.imgdata.sizes.height : 0);
+      }
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
       if (s.bundle_search) {
@@ -789,7 +799,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                       s.raw_decode,
                       (!o.roi_auto && scan.has_roi) ? scan.roi : nullptr,
                       analyse, find_frame, s.flat_field.get(),
-                      unpacked_probe);
+                      unpacked_probe, s.is_bundle ? &raw_base_det : nullptr);
     }
     unpacked_probe = nullptr;
     if (!proc) {

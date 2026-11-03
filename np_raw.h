@@ -20,6 +20,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "film_frame_detector.h"
@@ -93,9 +94,19 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level);
 // output.
 //
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
-// (--roi auto: the detected frame), so that the analysis and the decode see only that region.
+// (--roi auto: the detected frame), so that the decode sees only that region (the analysis still sees the whole
+// half-size image and crops it).
+//
+// |base_det|, when set, receives the frame detector's result with its default parameters on the unpacked mosaic and
+// the mosaic's size (no value when the RAW has no mosaic the detector reads), before anything rewrites the mosaic in
+// place: the record the film base's rebate is read from, as negicc-station reads it (CapturedImage::
+// film_frame_detection, and load_raw_white_light for a white-light decode).
+struct RawFrameDetection {
+  FrameDetection det;
+  int sensor_w = 0, sensor_h = 0;  // the mosaic the detector read, in photosites
+};
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
                  const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
                  const negicc::FlatField* flat = nullptr,
-                 LibRaw* unpacked_proc = nullptr);
+                 LibRaw* unpacked_proc = nullptr, std::optional<RawFrameDetection>* base_det = nullptr);
