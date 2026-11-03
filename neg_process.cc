@@ -48,7 +48,7 @@
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
 // whenever a profile is given, unless --gain_g or --gain_b is; then the conversion takes the values as given. -E
 // keeps the exposure as given and solves only the gains, on the bracket --target picks (or the bundle's default).
-// TODO: the bracket search on the frame --roi auto finds; for now it needs the frame given with --roi.
+// The search sees the frame --roi gives or --roi auto finds, on the half-size image.
 //
 // --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in
 // a strip holder or in a frame holder, tilted up to 5 degrees, partial neighbour frames beside it. --film_format gives

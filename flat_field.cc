@@ -326,6 +326,7 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
     const size_t ibytes = it_info->second.size() - ihdr.data_offset;
     std::string info_str;
     if (ihdr.descr.find('U') != std::string::npos) {
+        // A numpy unicode string: UTF-32 code points, written out as UTF-8 for the JSON parser.
         for (size_t k = 0; k + 4 <= ibytes; k += 4) {
             const uint32_t cp = rd_u32(ip + k);
             if (cp == 0) break;
@@ -334,8 +335,13 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
             } else if (cp < 0x800) {
                 info_str.push_back((char)(0xC0 | (cp >> 6)));
                 info_str.push_back((char)(0x80 | (cp & 0x3F)));
-            } else {
+            } else if (cp < 0x10000) {
                 info_str.push_back((char)(0xE0 | (cp >> 12)));
+                info_str.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                info_str.push_back((char)(0x80 | (cp & 0x3F)));
+            } else {
+                info_str.push_back((char)(0xF0 | (cp >> 18)));
+                info_str.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
                 info_str.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
                 info_str.push_back((char)(0x80 | (cp & 0x3F)));
             }

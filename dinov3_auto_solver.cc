@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "dinov3_preprocess.h"
-#include "colorspace_conversion.h"
+#include "neg_pipeline.h"
 
 static constexpr double TOL_PARAM = 0.02;
 static constexpr double TOL_REL_ERR = 0.015;
@@ -84,7 +84,7 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
   #pragma omp parallel for schedule(dynamic)
   for (int c = 0; c < n_cand; ++c) {
     float m[9];
-    candidate_matrix(merged, cand[c].e, cand[c].g, cand[c].b, m);
+    negicc::candidate_matrix(merged, cand[c].e, cand[c].g, cand[c].b, m);
     double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
     for (int i = 0; i < n_px; ++i) {
       const uint16_t* px = grid_rgb16 + i * 3;
@@ -415,7 +415,7 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
     const Rgb c = { resized[i * 3 + 0] / 255.0f,
                     resized[i * 3 + 1] / 255.0f,
                     resized[i * 3 + 2] / 255.0f };
-    const Lab lab = srgb_to_lab(c);
+    const Lab lab = negicc::srgb_to_lab(c);
     const float dL = (lab.L - mu[i * 3 + 0]) / sigma[i * 3 + 0];
     const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
     const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
@@ -436,7 +436,7 @@ float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out) {
 static float measure_shoulder_x_hi(const SolverConfig& cfg, const float* merged_norm, const negicc::RgbView& view,
                                    float e, float g, float b, float* q995_out) {
   float m[9];
-  candidate_matrix(merged_norm, e, g, b, m);
+  negicc::candidate_matrix(merged_norm, e, g, b, m);
   const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, 1.0f);
   const int w = view.width, h = view.height;
   const int num_threads = omp_get_max_threads();
@@ -464,7 +464,7 @@ static void render_crop_preview(const SolverConfig& cfg, const float* merged_nor
                                 const negicc::RgbView& view,
                                 float e, float g, float b, uint8_t* out_u8) {
   float m[9];
-  candidate_matrix(merged_norm, e, g, b, m);
+  negicc::candidate_matrix(merged_norm, e, g, b, m);
   negicc::RenderArgs ra{};
   ra.in_view = &view;
   ra.width = view.width;
@@ -607,10 +607,10 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     for (int iter = 0; iter < 16; ++iter) {
       const double mid = 0.5 * (log2_lo + log2_hi);
       float m[9];
-      candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
+      negicc::candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
       for (int i = 0; i < n_cells; ++i) {
-        const Rgb v = convert_pixel_srgb(grid_rgb16.data() + (size_t)i * 3, m, anchor_pc);
-        l_vals[i] = srgb_to_lab(v).L;
+        const Rgb v = negicc::convert_pixel(anchor_pc, m, grid_rgb16.data() + (size_t)i * 3);
+        l_vals[i] = negicc::srgb_to_lab(v).L;
       }
       std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
       // Negative: more transmittance (larger E) renders a darker positive, so median L* falls with E.

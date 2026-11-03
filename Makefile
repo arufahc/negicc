@@ -236,7 +236,7 @@ bin_out/dinov3_ort_runner.o: dinov3_ort_runner.cc dinov3_ort_runner.h dinov3_run
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_ort_runner.cc -o $@
 
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h neg_pipeline.h colorspace_conversion.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h neg_pipeline.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
@@ -260,7 +260,7 @@ bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h colo
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h colorspace_conversion.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 

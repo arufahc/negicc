@@ -114,17 +114,18 @@ class Backend {
   // dst_w x dst_h: w x h, or h x w when turned by 90 or 270 degrees): the grain-aware debayer of one frame, or the
   // merge of a pixel shift's four, with the flat field.
   virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out) = 0;
-  // Converts img in place to the output encoding: the input matrix, the film profile (cLUT and tone curves), the knee
-  // and, for sRGB, the shoulder of pc.
+  // Converts img in place to the output encoding through the shared pixel pipeline (color_pipeline.h) of pc: the
+  // input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the shoulder. ENCODE_NONE stops
+  // after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
   virtual void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
-                       float knee, const ProfileData& prof, const RgbInput& img) = 0;
+                       const RgbInput& img) = 0;
 };
 
 class CpuBackend : public Backend {
  public:
   void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out) override;
-  void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9], float knee,
-               const ProfileData& prof, const RgbInput& img) override;
+  void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+               const RgbInput& img) override;
 };
 
 struct LibRawDeleter {
