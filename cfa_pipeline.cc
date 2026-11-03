@@ -93,57 +93,6 @@ inline float reconstruct_green_soft_cpu(const uint16_t* m, int r, int c, int h, 
     return std::max(0.0f, std::min(white, g_est));
 }
 
-// One CFA mosaic as the grain-aware debayer reads it.
-struct MosaicReader {
-    const uint16_t* m;
-    int h, w;
-    size_t pitch;
-    float white, eps;
-    float at(int r, int c) const { return get_px_refl_cpu(m, r, c, h, w, pitch); }
-    float green(int r, int c) const { return reconstruct_green_soft_cpu(m, r, c, h, w, pitch, white, eps); }
-};
-
-// The same-colour neighbours (dr, dc) a missing red or blue is interpolated from on an RGGB mosaic.
-constexpr int kHorizontalPair[2][2] = {{0, -1}, {0, 1}};
-constexpr int kVerticalPair[2][2] = {{-1, 0}, {1, 0}};
-constexpr int kDiagonals[4][2] = {{-1, -1}, {-1, 1}, {1, -1}, {1, 1}};
-
-// The red or blue at (r, c) from the neighbours nb, which carry it. kRatio: interpolated as the colour ratio
-// (s + k) / (G + k) and multiplied back by this site's green G; otherwise the plain mean (bilinear).
-template <bool kRatio, int N>
-inline float interpolate_missing(const MosaicReader& mo, int r, int c, float G, const int (&nb)[N][2], float k) {
-    auto term = [&](int i) {
-        const int nr = r + nb[i][0], nc = c + nb[i][1];
-        return kRatio ? (mo.at(nr, nc) + k) / (mo.green(nr, nc) + k) : mo.at(nr, nc);
-    };
-    float sum = term(0);
-    for (int i = 1; i < N; ++i) sum += term(i);
-    const float mean = ((N == 2) ? 0.5f : 0.25f) * sum;
-    return kRatio ? (G + k) * mean - k : mean;
-}
-
-// Red and blue at (r, c) of an RGGB mosaic, where G is the green and centre the photosite's own sample.
-template <bool kRatio>
-inline void interpolate_red_blue(const MosaicReader& mo, int r, int c, float G, float centre, float k, float& R,
-                                 float& B) {
-    // Red sites on even rows and even columns, blue on odd rows and odd columns.
-    const bool red_row = (r & 1) == 0;
-    const bool red_col = (c & 1) == 0;
-    if (red_row && red_col) {  // red site
-        R = centre;
-        B = interpolate_missing<kRatio>(mo, r, c, G, kDiagonals, k);
-    } else if (!red_row && !red_col) {  // blue site
-        R = interpolate_missing<kRatio>(mo, r, c, G, kDiagonals, k);
-        B = centre;
-    } else if (red_row) {  // green in a red row
-        R = interpolate_missing<kRatio>(mo, r, c, G, kHorizontalPair, k);
-        B = interpolate_missing<kRatio>(mo, r, c, G, kVerticalPair, k);
-    } else {  // green in a blue row
-        R = interpolate_missing<kRatio>(mo, r, c, G, kVerticalPair, k);
-        B = interpolate_missing<kRatio>(mo, r, c, G, kHorizontalPair, k);
-    }
-}
-
 struct RawStatTables {
     double log_lut[65536];
     uint8_t ev_bin[65536];
@@ -184,52 +133,6 @@ double u16_percentile_linear(const uint64_t hist[65536], uint64_t total, double 
     if (v_lo < 0) v_lo = 65535;
     if (v_hi < 0) v_hi = 65535;
     return (1.0 - frac) * (double)v_lo + frac * (double)v_hi;
-}
-
-// Pixel (x, y) of a view: a pointer into it when it is contiguous RGB (the fast path), else sampled into buf.
-inline const uint16_t* view_pixel(const RgbView& v, bool contig, int x, int y, uint16_t buf[3]) {
-    if (contig) return v.r_ptr + (ptrdiff_t)y * v.stride + (ptrdiff_t)x * 3;
-    v.sample(x, y, buf);
-    return buf;
-}
-
-// Box downsample by (scale_x, scale_y) >= 1 of the w x h region at (ox, oy) of v: the area-weighted mean of the
-// source pixels that destination pixel (dx, dy) covers.
-inline void box_mean(const RgbView& v, bool contig, int ox, int oy, int w, int h, double scale_x, double scale_y,
-                     int dx, int dy, double out[3]) {
-    const double y0 = dy * scale_y;
-    const double y1 = (dy + 1) * scale_y;
-    const int sy_start = (int)std::floor(y0);
-    const int sy_end = std::min(h, (int)std::ceil(y1));
-    const double x0 = dx * scale_x;
-    const double x1 = (dx + 1) * scale_x;
-    const int sx_start = (int)std::floor(x0);
-    const int sx_end = std::min(w, (int)std::ceil(x1));
-
-    double r_acc = 0.0, g_acc = 0.0, b_acc = 0.0, w_acc = 0.0;
-    for (int sy = sy_start; sy < sy_end; ++sy) {
-        const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
-        if (wy <= 0.0) continue;
-        for (int sx = sx_start; sx < sx_end; ++sx) {
-            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
-            if (wx <= 0.0) continue;
-            const double wt = wx * wy;
-            uint16_t buf[3];
-            const uint16_t* px = view_pixel(v, contig, ox + sx, oy + sy, buf);
-            r_acc += px[0] * wt;
-            g_acc += px[1] * wt;
-            b_acc += px[2] * wt;
-            w_acc += wt;
-        }
-    }
-    const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
-    out[0] = r_acc * inv_w;
-    out[1] = g_acc * inv_w;
-    out[2] = b_acc * inv_w;
-}
-
-inline uint16_t round_u16(double v) {
-    return (uint16_t)std::clamp(std::round(v), 0.0, 65535.0);
 }
 
 double percentile_from_hist_L(const uint32_t* hist, double tot, double q) {
@@ -475,17 +378,31 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
         for (int ry = 0; ry < crop.h; ++ry) {
             const int sy = crop.y0 + ry;
             double lr = 0.0, lg = 0.0, lb = 0.0;
-            for (int rx = 0; rx < crop.w; ++rx) {
-                uint16_t buf[3];
-                const uint16_t* px = view_pixel(view, is_contig, crop.x0 + rx, sy, buf);
-                const uint16_t r = px[0], g = px[1], b = px[2];
-                loc_g[g]++;
-                lr += tbl.log_lut[r];
-                lg += tbl.log_lut[g];
-                lb += tbl.log_lut[b];
-                loc_raw[0][tbl.ev_bin[r]]++;
-                loc_raw[1][tbl.ev_bin[g]]++;
-                loc_raw[2][tbl.ev_bin[b]]++;
+            if (is_contig) {
+                const uint16_t* row = view.r_ptr + (ptrdiff_t)sy * view.stride + (ptrdiff_t)crop.x0 * 3;
+                for (int rx = 0; rx < crop.w; ++rx, row += 3) {
+                    const uint16_t r = row[0], g = row[1], b = row[2];
+                    loc_g[g]++;
+                    lr += tbl.log_lut[r];
+                    lg += tbl.log_lut[g];
+                    lb += tbl.log_lut[b];
+                    loc_raw[0][tbl.ev_bin[r]]++;
+                    loc_raw[1][tbl.ev_bin[g]]++;
+                    loc_raw[2][tbl.ev_bin[b]]++;
+                }
+            } else {
+                for (int rx = 0; rx < crop.w; ++rx) {
+                    uint16_t px[3];
+                    view.sample(crop.x0 + rx, sy, px);
+                    const uint16_t r = px[0], g = px[1], b = px[2];
+                    loc_g[g]++;
+                    lr += tbl.log_lut[r];
+                    lg += tbl.log_lut[g];
+                    lb += tbl.log_lut[b];
+                    loc_raw[0][tbl.ev_bin[r]]++;
+                    loc_raw[1][tbl.ev_bin[g]]++;
+                    loc_raw[2][tbl.ev_bin[b]]++;
+                }
             }
             row_logs[ry] = {lr, lg, lb};
         }
@@ -524,11 +441,57 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
     if (scale_x >= 1.0 && scale_y >= 1.0) {
         #pragma omp parallel for schedule(static) if ((size_t)dino_w * dino_h > 4096)
         for (int dy = 0; dy < dino_h; ++dy) {
+            const double y0 = dy * scale_y;
+            const double y1 = (dy + 1) * scale_y;
+            const int sy_start = (int)std::floor(y0);
+            const int sy_end = std::min(crop.h, (int)std::ceil(y1));
+
             for (int dx = 0; dx < dino_w; ++dx) {
+                const double x0 = dx * scale_x;
+                const double x1 = (dx + 1) * scale_x;
+                const int sx_start = (int)std::floor(x0);
+                const int sx_end = std::min(crop.w, (int)std::ceil(x1));
+
+                double r_acc = 0.0, g_acc = 0.0, b_acc = 0.0, w_acc = 0.0;
+                for (int sy = sy_start; sy < sy_end; ++sy) {
+                    const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
+                    if (wy <= 0.0) continue;
+                    if (is_contig) {
+                        const uint16_t* row = view.r_ptr + (ptrdiff_t)(crop.y0 + sy) * view.stride +
+                                              (ptrdiff_t)(crop.x0 + sx_start) * 3;
+                        for (int sx = sx_start; sx < sx_end; ++sx, row += 3) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            r_acc += row[0] * w;
+                            g_acc += row[1] * w;
+                            b_acc += row[2] * w;
+                            w_acc += w;
+                        }
+                    } else {
+                        for (int sx = sx_start; sx < sx_end; ++sx) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            uint16_t px[3];
+                            view.sample(crop.x0 + sx, crop.y0 + sy, px);
+                            r_acc += px[0] * w;
+                            g_acc += px[1] * w;
+                            b_acc += px[2] * w;
+                            w_acc += w;
+                        }
+                    }
+                }
+                const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
+                const double rm = r_acc * inv_w, gm = g_acc * inv_w, bm = b_acc * inv_w;
                 const size_t didx = ((size_t)dy * dino_w + dx) * 3;
-                box_mean(view, is_contig, crop.x0, crop.y0, crop.w, crop.h, scale_x, scale_y, dx, dy, &dino_f64[didx]);
+                dino_f64[didx]     = rm;
+                dino_f64[didx + 1] = gm;
+                dino_f64[didx + 2] = bm;
                 if (dino_dst) {
-                    for (int c = 0; c < 3; ++c) dino_dst[didx + c] = round_u16(dino_f64[didx + c]);
+                    dino_dst[didx]     = (uint16_t)std::clamp(std::round(rm), 0.0, 65535.0);
+                    dino_dst[didx + 1] = (uint16_t)std::clamp(std::round(gm), 0.0, 65535.0);
+                    dino_dst[didx + 2] = (uint16_t)std::clamp(std::round(bm), 0.0, 65535.0);
                 }
             }
         }
@@ -558,7 +521,9 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
                     const double bot = p10[c] * wx0 + p11[c] * wx1;
                     const double val = top * wy0 + bot * wy1;
                     dino_f64[didx + c] = val;
-                    if (dino_dst) dino_dst[didx + c] = round_u16(val);
+                    if (dino_dst) {
+                        dino_dst[didx + c] = (uint16_t)std::clamp(std::round(val), 0.0, 65535.0);
+                    }
                 }
             }
         }
@@ -578,9 +543,9 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
                     }
                 }
                 const size_t gidx = ((size_t)gy * grid_w + gx) * 3;
-                grid_dst[gidx]     = round_u16(pr * inv_patch);
-                grid_dst[gidx + 1] = round_u16(pg * inv_patch);
-                grid_dst[gidx + 2] = round_u16(pb * inv_patch);
+                grid_dst[gidx]     = (uint16_t)std::clamp(std::round(pr * inv_patch), 0.0, 65535.0);
+                grid_dst[gidx + 1] = (uint16_t)std::clamp(std::round(pg * inv_patch), 0.0, 65535.0);
+                grid_dst[gidx + 2] = (uint16_t)std::clamp(std::round(pb * inv_patch), 0.0, 65535.0);
             }
         }
     }
@@ -608,11 +573,51 @@ void resample_view_rgb16(const RgbView& src, uint16_t* dst, int dst_w, int dst_h
     if (scale_x >= 1.0 && scale_y >= 1.0) {
         #pragma omp parallel for schedule(static) if ((size_t)dst_w * dst_h > 8192)
         for (int dy = 0; dy < dst_h; ++dy) {
+            const double y0 = dy * scale_y;
+            const double y1 = (dy + 1) * scale_y;
+            const int sy_start = (int)std::floor(y0);
+            const int sy_end = std::min(src_h, (int)std::ceil(y1));
+
             for (int dx = 0; dx < dst_w; ++dx) {
-                double mean[3];
-                box_mean(src, is_contig, 0, 0, src_w, src_h, scale_x, scale_y, dx, dy, mean);
+                const double x0 = dx * scale_x;
+                const double x1 = (dx + 1) * scale_x;
+                const int sx_start = (int)std::floor(x0);
+                const int sx_end = std::min(src_w, (int)std::ceil(x1));
+
+                double r_acc = 0.0, g_acc = 0.0, b_acc = 0.0, w_acc = 0.0;
+                for (int sy = sy_start; sy < sy_end; ++sy) {
+                    const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
+                    if (wy <= 0.0) continue;
+                    if (is_contig) {
+                        const uint16_t* row = src.r_ptr + (ptrdiff_t)sy * src.stride + (ptrdiff_t)sx_start * 3;
+                        for (int sx = sx_start; sx < sx_end; ++sx, row += 3) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            r_acc += row[0] * w;
+                            g_acc += row[1] * w;
+                            b_acc += row[2] * w;
+                            w_acc += w;
+                        }
+                    } else {
+                        for (int sx = sx_start; sx < sx_end; ++sx) {
+                            const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
+                            if (wx <= 0.0) continue;
+                            const double w = wx * wy;
+                            uint16_t px[3];
+                            src.sample(sx, sy, px);
+                            r_acc += px[0] * w;
+                            g_acc += px[1] * w;
+                            b_acc += px[2] * w;
+                            w_acc += w;
+                        }
+                    }
+                }
+                const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
                 const size_t dst_idx = ((size_t)dy * dst_w + dx) * 3;
-                for (int c = 0; c < 3; ++c) dst[dst_idx + c] = round_u16(mean[c]);
+                dst[dst_idx]     = (uint16_t)std::clamp(std::round(r_acc * inv_w), 0.0, 65535.0);
+                dst[dst_idx + 1] = (uint16_t)std::clamp(std::round(g_acc * inv_w), 0.0, 65535.0);
+                dst[dst_idx + 2] = (uint16_t)std::clamp(std::round(b_acc * inv_w), 0.0, 65535.0);
             }
         }
         return;
@@ -676,48 +681,50 @@ void resample_linear_rgb16(
 
 // ---- CPU Render & Scoring Kernels --------------------------------------------------------------------------
 
-namespace {
-
-// Writes the encoded value v of pixel i to a render's output buffer in its out_type.
-inline void store_render_output(const RenderArgs& a, long long i, Rgb v) {
-    if (a.out_type == 1) {
-        uint8_t* o = static_cast<uint8_t*>(a.out) + i * 3;
-        o[0] = quantize_u8(v.r); o[1] = quantize_u8(v.g); o[2] = quantize_u8(v.b);
-    } else if (a.out_type == 0) {
-        uint16_t* o = static_cast<uint16_t*>(a.out) + i * 3;
-        o[0] = quantize_u16(v.r); o[1] = quantize_u16(v.g); o[2] = quantize_u16(v.b);
-    } else {
-        float* o = static_cast<float*>(a.out) + i * 3;
-        o[0] = v.r; o[1] = v.g; o[2] = v.b;
-    }
-}
-
-// Input pixel (x, y) of a kernel that reads either a view or a contiguous buffer of `width` pixels a row.
-inline const uint16_t* input_pixel(const RgbView* view, const uint16_t* in, int width, int x, int y,
-                                   uint16_t buf[3]) {
-    if (!view) return in + ((long long)y * width + x) * 3;
-    view->sample(x, y, buf);
-    return buf;
-}
-
-}  // namespace
-
 void cpu_render(const RenderArgs& a) {
     const long long n = (long long)a.width * a.height;
-    const RgbView* view = (a.in_view != nullptr && a.in_view->valid()) ? a.in_view : nullptr;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     if (!a.stats) {
-        #pragma omp parallel for schedule(static) if (n > 8192)
-        for (int y = 0; y < a.height; ++y) {
-            for (int x = 0; x < a.width; ++x) {
-                uint16_t buf[3];
-                const uint16_t* px = input_pixel(view, a.in, a.width, x, y, buf);
-                store_render_output(a, (long long)y * a.width + x, convert_pixel(a.cfg, a.matrix, px));
+        if (!use_view) {
+            #pragma omp parallel for schedule(static) if (n > 8192)
+            for (long long i = 0; i < n; ++i) {
+                const Rgb v = convert_pixel(a.cfg, a.matrix, a.in + i * 3);
+                if (a.out_type == 1) {
+                    uint8_t* o = static_cast<uint8_t*>(a.out) + i * 3;
+                    o[0] = quantize_u8(v.r); o[1] = quantize_u8(v.g); o[2] = quantize_u8(v.b);
+                } else if (a.out_type == 0) {
+                    uint16_t* o = static_cast<uint16_t*>(a.out) + i * 3;
+                    o[0] = quantize_u16(v.r); o[1] = quantize_u16(v.g); o[2] = quantize_u16(v.b);
+                } else {
+                    float* o = static_cast<float*>(a.out) + i * 3;
+                    o[0] = v.r; o[1] = v.g; o[2] = v.b;
+                }
+            }
+        } else {
+            #pragma omp parallel for schedule(static) if (n > 8192)
+            for (int y = 0; y < a.height; ++y) {
+                for (int x = 0; x < a.width; ++x) {
+                    uint16_t px[3];
+                    a.in_view->sample(x, y, px);
+                    const Rgb v = convert_pixel(a.cfg, a.matrix, px);
+                    const long long i = (long long)y * a.width + x;
+                    if (a.out_type == 1) {
+                        uint8_t* o = static_cast<uint8_t*>(a.out) + i * 3;
+                        o[0] = quantize_u8(v.r); o[1] = quantize_u8(v.g); o[2] = quantize_u8(v.b);
+                    } else if (a.out_type == 0) {
+                        uint16_t* o = static_cast<uint16_t*>(a.out) + i * 3;
+                        o[0] = quantize_u16(v.r); o[1] = quantize_u16(v.g); o[2] = quantize_u16(v.b);
+                    } else {
+                        float* o = static_cast<float*>(a.out) + i * 3;
+                        o[0] = v.r; o[1] = v.g; o[2] = v.b;
+                    }
+                }
             }
         }
         return;
     }
 
-    *a.stats = PositiveStats{};
+    if (a.stats) *a.stats = PositiveStats{};
     const InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0)
                                ? a.stats_crop
                                : InnerCrop{0, 0, a.width, a.height};
@@ -748,17 +755,35 @@ void cpu_render(const RenderArgs& a) {
             const bool in_y = (y >= y0 && y < y1);
             RowSums rsum{};
             for (int x = 0; x < a.width; ++x) {
-                uint16_t buf[3];
-                const uint16_t* px = input_pixel(view, a.in, a.width, x, y, buf);
+                const long long i = (long long)y * a.width + x;
+                uint16_t px_buf[3];
+                const uint16_t* px = px_buf;
+                if (use_view) {
+                    a.in_view->sample(x, y, px_buf);
+                } else {
+                    px = a.in + i * 3;
+                }
                 const Rgb lin = convert_pixel_linear(a.cfg, a.matrix, px);  // pre-shoulder: clip rules
                 const Rgb disp = to_display(a.cfg, lin);                    // post-shoulder: render and Lab
                 const Rgb v = encode_output(disp, a.cfg.encoding);
-                store_render_output(a, (long long)y * a.width + x, v);
+                const uint8_t r8 = quantize_u8(v.r);
+                const uint8_t g8 = quantize_u8(v.g);
+                const uint8_t b8 = quantize_u8(v.b);
+                if (a.out_type == 1) {
+                    uint8_t* o = static_cast<uint8_t*>(a.out) + i * 3;
+                    o[0] = r8; o[1] = g8; o[2] = b8;
+                } else if (a.out_type == 0) {
+                    uint16_t* o = static_cast<uint16_t*>(a.out) + i * 3;
+                    o[0] = quantize_u16(v.r); o[1] = quantize_u16(v.g); o[2] = quantize_u16(v.b);
+                } else {
+                    float* o = static_cast<float*>(a.out) + i * 3;
+                    o[0] = v.r; o[1] = v.g; o[2] = v.b;
+                }
 
                 if (in_y && x >= x0 && x < x1) {
-                    loc_hist_rgb[0][quantize_u8(v.r)]++;
-                    loc_hist_rgb[1][quantize_u8(v.g)]++;
-                    loc_hist_rgb[2][quantize_u8(v.b)]++;
+                    loc_hist_rgb[0][r8]++;
+                    loc_hist_rgb[1][g8]++;
+                    loc_hist_rgb[2][b8]++;
                     if (linear_channel_white_clipped(lin.r) ||
                         linear_channel_white_clipped(lin.g) ||
                         linear_channel_white_clipped(lin.b)) {
@@ -816,14 +841,18 @@ void cpu_render(const RenderArgs& a) {
 
 void cpu_intent_loss(const IntentLossArgs& a) {
     const long long npx = (long long)a.width * a.height;
-    const RgbView* view = (a.in_view != nullptr && a.in_view->valid()) ? a.in_view : nullptr;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     #pragma omp parallel for schedule(dynamic)
     for (int c = 0; c < a.n; ++c) {
         const float* m = a.matrices + (size_t)c * 9;
         double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
         for (long long i = 0; i < npx; ++i) {
-            uint16_t buf[3];
-            const uint16_t* px = input_pixel(view, a.in, a.width, (int)(i % a.width), (int)(i / a.width), buf);
+            uint16_t px_buf[3];
+            const uint16_t* px = a.in ? (a.in + i * 3) : nullptr;
+            if (use_view) {
+                a.in_view->sample((int)(i % a.width), (int)(i / a.width), px_buf);
+                px = px_buf;
+            }
             const Rgb lin = convert_pixel_linear(a.cfg, m, px);
             clip += linear_channel_white_clipped(lin.r) +
                     linear_channel_white_clipped(lin.g) +
@@ -844,7 +873,7 @@ void cpu_intent_loss(const IntentLossArgs& a) {
 
 void cpu_highlight_clip(const HighlightClipArgs& a) {
     if (a.n <= 0) return;
-    const RgbView* view = (a.in_view != nullptr && a.in_view->valid()) ? a.in_view : nullptr;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     const InnerCrop crop = (a.crop.w > 0 && a.crop.h > 0)
                                ? a.crop
                                : InnerCrop{0, 0, a.width, a.height};
@@ -878,22 +907,44 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
             for (int y = y0; y < y1; ++y) {
                 const float* m = a.matrices + (size_t)c * 9;
                 CandAccum& acc = local[c];
-                for (int x = x0; x < x1; ++x) {
-                    uint16_t buf[3];
-                    const Rgb lin = convert_pixel_linear(a.cfg, m, input_pixel(view, a.in, a.width, x, y, buf));
-                    if (lin.r >= cr) acc.exc_r++;
-                    if (lin.g >= cg) acc.exc_g++;
-                    if (lin.b >= cb) acc.exc_b++;
-                    if (linear_channel_white_clipped(lin.r) ||
-                        linear_channel_white_clipped(lin.g) ||
-                        linear_channel_white_clipped(lin.b)) {
-                        acc.wc++;
+                if (!use_view) {
+                    const uint16_t* row = a.in + ((long long)y * a.width + x0) * 3;
+                    for (int x = x0; x < x1; ++x, row += 3) {
+                        const Rgb lin = convert_pixel_linear(a.cfg, m, row);
+                        if (lin.r >= cr) acc.exc_r++;
+                        if (lin.g >= cg) acc.exc_g++;
+                        if (lin.b >= cb) acc.exc_b++;
+                        if (linear_channel_white_clipped(lin.r) ||
+                            linear_channel_white_clipped(lin.g) ||
+                            linear_channel_white_clipped(lin.b)) {
+                            acc.wc++;
+                        }
+                        const float L = linear_srgb_to_L(to_display(a.cfg, lin));
+                        acc.hist_L[lab_bin(L)]++;
+                        if (a.max_hist) {
+                            const float mc = std::max(lin.r, std::max(lin.g, lin.b));
+                            local_max_hist[(size_t)c * kMaxHistBins + max_hist_bin(mc)]++;
+                        }
                     }
-                    const float L = linear_srgb_to_L(to_display(a.cfg, lin));
-                    acc.hist_L[lab_bin(L)]++;
-                    if (a.max_hist) {
-                        const float mc = std::max(lin.r, std::max(lin.g, lin.b));
-                        local_max_hist[(size_t)c * kMaxHistBins + max_hist_bin(mc)]++;
+                } else {
+                    for (int x = x0; x < x1; ++x) {
+                        uint16_t px[3];
+                        a.in_view->sample(x, y, px);
+                        const Rgb lin = convert_pixel_linear(a.cfg, m, px);
+                        if (lin.r >= cr) acc.exc_r++;
+                        if (lin.g >= cg) acc.exc_g++;
+                        if (lin.b >= cb) acc.exc_b++;
+                        if (linear_channel_white_clipped(lin.r) ||
+                            linear_channel_white_clipped(lin.g) ||
+                            linear_channel_white_clipped(lin.b)) {
+                            acc.wc++;
+                        }
+                        const float L = linear_srgb_to_L(to_display(a.cfg, lin));
+                        acc.hist_L[lab_bin(L)]++;
+                        if (a.max_hist) {
+                            const float mc = std::max(lin.r, std::max(lin.g, lin.b));
+                            local_max_hist[(size_t)c * kMaxHistBins + max_hist_bin(mc)]++;
+                        }
                     }
                 }
             }
@@ -923,7 +974,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
 
 void cpu_lab_stats(const LabStatsArgs& a) {
     const long long npx = (long long)a.width * a.height;
-    const RgbView* view = (a.in_view != nullptr && a.in_view->valid()) ? a.in_view : nullptr;
+    const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     #pragma omp parallel for schedule(dynamic)
     for (int c = 0; c < a.n; ++c) {
         const float* m = a.matrices + (size_t)c * 9;
@@ -931,8 +982,12 @@ void cpu_lab_stats(const LabStatsArgs& a) {
         std::memset(&row, 0, sizeof(row));
         std::vector<long long> hist(kLabBins, 0);
         for (long long i = 0; i < npx; ++i) {
-            uint16_t buf[3];
-            const uint16_t* px = input_pixel(view, a.in, a.width, (int)(i % a.width), (int)(i / a.width), buf);
+            uint16_t px_buf[3];
+            const uint16_t* px = a.in ? (a.in + i * 3) : nullptr;
+            if (use_view) {
+                a.in_view->sample((int)(i % a.width), (int)(i / a.width), px_buf);
+                px = px_buf;
+            }
             const Rgb lin = convert_pixel_linear(a.cfg, m, px);
             if (linear_channel_white_clipped(lin.r) ||
                 linear_channel_white_clipped(lin.g) ||
@@ -1010,29 +1065,104 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     if (!is_rggb_pattern_cpu(a.filters)) {
         throw std::invalid_argument("cpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
     }
-    // k keeps the colour ratios finite in the shadows; within kClipMargin of white the ratios are meaningless
-    // (a clipped channel), so those pixels fall back to bilinear.
     const float k = 16.0f;
-    const float kClipMargin = 64.0f;
     const float eps = (a.eps > 0.0f) ? a.eps : 4096.0f;
-    const MosaicReader mo{a.cfa_bayer, a.src_h, a.src_w, a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w,
-                          a.white_level, eps};
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
 
     #pragma omp parallel for schedule(static)
     for (int y2 = 0; y2 < a.dst_h; ++y2) {
         for (int x2 = 0; x2 < a.dst_w; ++x2) {
             int x_rel = 0, y_rel = 0;
             map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
             const int c = a.rx + x_rel;
             const int r = a.ry + y_rel;
 
-            const float G = mo.green(r, c);
-            const float centre = mo.at(r, c);
-            float R, B;
-            if (centre >= a.white_level - kClipMargin || G >= a.white_level - kClipMargin) {
-                interpolate_red_blue<false>(mo, r, c, G, centre, k, R, B);
+            const float G = reconstruct_green_soft_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+
+            const bool r_even = ((r & 1) == 0);
+            const bool c_even = ((c & 1) == 0);
+
+            float R = 0.0f;
+            float B = 0.0f;
+
+            const float c_center = get_px_refl_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+            const bool near_clip = (c_center >= (a.white_level - 64.0f)) || (G >= (a.white_level - 64.0f));
+
+            if (near_clip) {
+                if (r_even && c_even) {
+                    R = c_center;
+                    const float b00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+                    const float b01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+                    const float b10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+                    const float b11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+                    B = 0.25f * (b00 + b01 + b10 + b11);
+                } else if (!r_even && !c_even) {
+                    B = c_center;
+                    const float r00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+                    const float r01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+                    const float r10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+                    const float r11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+                    R = 0.25f * (r00 + r01 + r10 + r11);
+                } else if (r_even && !c_even) {
+                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+                } else {
+                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+                }
             } else {
-                interpolate_red_blue<true>(mo, r, c, G, centre, k, R, B);
+                if (r_even && c_even) {
+                    R = c_center;
+                } else if (r_even && !c_even) {
+                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float rl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+                    const float rr = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+                    R = (G + k) * (0.5f * (rl + rr)) - k;
+                } else if (!r_even && c_even) {
+                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float ru = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+                    const float rd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+                    R = (G + k) * (0.5f * (ru + rd)) - k;
+                } else {
+                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float r00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
+                    const float r01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
+                    const float r10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
+                    const float r11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+                    R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
+                }
+
+                if (!r_even && !c_even) {
+                    B = c_center;
+                } else if (!r_even && c_even) {
+                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float bl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+                    const float br = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+                    B = (G + k) * (0.5f * (bl + br)) - k;
+                } else if (r_even && !c_even) {
+                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float bu = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+                    const float bd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+                    B = (G + k) * (0.5f * (bu + bd)) - k;
+                } else {
+                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float b00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
+                    const float b01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
+                    const float b10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
+                    const float b11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+                    B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
+                }
             }
 
             uint16_t px[3] = {(uint16_t)std::round(std::max(0.0f, std::min(65535.0f, R))),
