@@ -9,9 +9,10 @@
 // ref is the film base at that point and u_med the median over the intent grid's cells of min(u, 0), both at the E, g
 // and b the conversion renders with (anchor_curves): the fit anchors each candidate at its own g and b, and the
 // re-meter each E it tries, so the recorded curves pivot on the film base of the export's parameters. A replay (and the
-// knobs, which move E, g and b afterwards) keeps the recorded ref and u_med. The combined profile is the bracket profile with its G and B input tables
-// replaced by in(curve(v)) sampled on the table's own entries; red, the matrix, the cLUT and the output curves are
-// unchanged. White light only: with a crosstalk matrix the film base does not mark the dark end of every channel.
+// knobs, which move E, g and b afterwards) keeps the recorded ref and u_med. The combined profile is the bracket
+// profile with its G and B input tables replaced by in(curve(v)) sampled on the table's own entries; red, the matrix,
+// the cLUT and the output curves are unchanged. White light only: with a crosstalk matrix the film base does not mark
+// the dark end of every channel.
 //
 // Header-only: neg_process and negicc-station compile the same code, so both front ends fit the same curves.
 
@@ -192,7 +193,8 @@ struct CurveFitResult {
 // as a kernel that composes the input tables and scores the cells on the device, using the profile's existing device
 // copy, so the fit never copies the grid render back to the host per evaluation.
 inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, float e, float g0, float b0,
-                                       const float* mu, const float* sigma, const CurveFitOptions& o = CurveFitOptions()) {
+                                       const float* mu, const float* sigma,
+                                       const CurveFitOptions& o = CurveFitOptions()) {
   const ProfileData base = cfg.profile;
   CombinedProfile comb;
   auto curves_of = [&](const float* p) {
