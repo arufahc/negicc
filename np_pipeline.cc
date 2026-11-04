@@ -273,7 +273,8 @@ static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, c
 static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
   if (j.value("schema", "") != "negicc.neg_process.sidecar/1") return why = "it has another schema", false;
   // The same build: another neg_process may convert the same arguments differently.
-  if (!j.contains("tool") || !j["tool"].is_object() || j["tool"].value("version", "") != std::string(neg_process_version())) {
+  if (!j.contains("tool") || !j["tool"].is_object() ||
+      j["tool"].value("version", "") != std::string(neg_process_version())) {
     return why = std::string("it was written by another neg_process build (this one is ") + neg_process_version() + ")",
            false;
   }
@@ -293,7 +294,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
   // The same files, not only the same names: a capture saved again under the same name has another size or CRC-32.
   // (Not the modification time: a file copied or downloaded again, as negicc-web stages its inputs, keeps its content.)
   const auto& stats = j["inputs"].value("raw_file_stats", nlohmann::ordered_json());
-  if (!stats.is_array() || stats.size() != o.files.size()) return why = "it records no input file sizes and CRCs", false;
+  if (!stats.is_array() || stats.size() != o.files.size()) {
+    return why = "it records no input file sizes and CRCs", false;
+  }
   for (size_t i = 0; i < o.files.size(); ++i) {
     uintmax_t size = 0;
     uint32_t crc = 0;
@@ -429,7 +432,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
         if (s.bundle.targets[t].name == recorded) expected_idx = (int)t;
       }
       if (expected_idx < 0) return why = "its bracket is not in this bundle", false;
-      if (s.manual_target_idx >= 0 && s.manual_target_idx != expected_idx) return why = "it converted another bracket", false;
+      if (s.manual_target_idx >= 0 && s.manual_target_idx != expected_idx) {
+        return why = "it converted another bracket", false;
+      }
     }
     float base_e = 0.0f, base_g = 0.0f, base_b = 0.0f;
     if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") &&
@@ -485,7 +490,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
 }
 
 // Checks whether <output>.json exists and was written by this build for the same inputs and arguments (apart from the
-// output and the knobs), so --brightness, --tint and --warmth move its Auto or DINOv3 result instead of searching again.
+// output and the knobs), so --brightness, --tint and --warmth move its Auto or DINOv3 result instead of searching
+// again.
 // Anything unreadable or different refuses the reuse, says why, and leaves s as it was.
 static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   const std::string sidecar_path = o.output + ".json";
@@ -817,7 +823,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // the search, the single-bracket search's bounds and the exposure of given values read. Measured here, on the
   // half-size frame every bundle conversion analyses, before anything picks a bracket: before, solve measured it
   // after decode had already picked one (from the defaults, always the first admissible bracket) and measured the
-  // roll-off and solved the knobs there. The bundle search measures its own; a previous run's sidecar names its bracket.
+  // roll-off and solved the knobs there. The bundle search measures its own; a previous run's sidecar names its
+  // bracket.
   const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
                                 (s.use_dino || s.manual_target_idx < 0 || !s.exposure_given);
   auto measure_enclosures = [&](const negicc::RgbView& frame) {
@@ -951,9 +958,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           // white-light bundle search.
           negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25, 1 stop from the base TRC
           // The fit and the re-meter render the grid as the export will: -P's encoding (curves need -P).
+          const bool linear = o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
           const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB
-                                      : (o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear") ? ENCODE_SRGB_LINEAR
-                                                                                                       : ENCODE_CUSTOM;
+                                      : linear               ? ENCODE_SRGB_LINEAR
+                                                             : ENCODE_CUSTOM;
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
                                              fit_opts, export_encoding, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");

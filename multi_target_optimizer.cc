@@ -1035,7 +1035,8 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
                               b, crop_ratio, q995, film_base_rgb);
 }
 
-float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof_in, const negicc::RgbView& frame,
+float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof_in,
+                           const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb) {
   ProfileData prof;
@@ -1685,8 +1686,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
   // measures every conversion's), which only the sRGB encoding applies. Before, the fit and the re-meter rendered
-  // sRGB with the search's own roll-off, whatever the export's encoding, and the export then re-measured the roll-off at
-  // the re-metered E on the combined profile, so the median L* it rendered was not the one the re-meter matched.
+  // sRGB with the search's own roll-off, whatever the export's encoding, and the export then re-measured the roll-off
+  // at the re-metered E on the combined profile, so the median L* it rendered was not the one the re-meter matched.
   out.encoding = encoding;
   auto rolloff_at = [&](const negicc::ProfileData& p, float e, float g, float b) {
     if (encoding != ENCODE_SRGB) return 1.0f;
@@ -1745,8 +1746,9 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // scaled down by the largest factor that keeps the shape at the export's anchor, and E is re-metered again.
   auto shape_ok_at = [&](const negicc::InputCurves& shape, float e) {
     const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
-    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], fit_opts.max_dev_stops) &&
-           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], fit_opts.max_dev_stops);
+    const float dev = fit_opts.max_dev_stops;
+    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], dev) &&
+           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], dev);
   };
   auto scaled = [](negicc::InputCurves c, float t) {
     for (int ch = 0; ch < 2; ++ch) {
