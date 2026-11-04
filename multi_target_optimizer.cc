@@ -1697,7 +1697,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const FrameStats& stats = fr.stats();
   const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
   fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
-  const float e_norm = fr.e_norm();
   const size_t n = stats.grid.size() / 3;
   if (res.intent_grid_w != stats.grid_w || res.intent_grid_h != stats.grid_h || res.intent_mu.size() != n * 3 ||
       res.intent_sigma.size() != n * 3 || n == 0) {
