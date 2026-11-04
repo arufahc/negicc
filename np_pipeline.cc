@@ -735,15 +735,31 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
 
-  // The bracket of given values (the search's is its own), for the roll-off measured on the half-size frame.
-  const int given_target_idx = !s.is_bundle ? -1
-                               : s.manual_target_idx >= 0 ? s.manual_target_idx
-                                                          : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked without
+  // the search, the single-bracket search's bounds and the exposure of given values read. Measured here, on the
+  // half-size frame every bundle conversion analyses, before anything picks a bracket: before, solve measured it
+  // after decode had already picked one (from the defaults, always the first admissible bracket) and measured the
+  // roll-off and solved the knobs there. The bundle search measures its own; a previous run's sidecar names its bracket.
+  const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
+                                (s.use_dino || s.manual_target_idx < 0 || !s.exposure_given);
+  auto measure_enclosures = [&](const negicc::RgbView& frame) {
+    if (!needs_enclosures) return;
+    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+    int num_feasible = 0;
+    compute_bundle_enclosures(bundle, frame, g_lo, g_hi, scene_ev, num_feasible);
+    scan.has_enclosures = true;
+  };
+  // The bracket of given values (the search's is its own), once the enclosures are measured.
+  auto given_target_idx = [&]() {
+    return !s.is_bundle ? -1
+           : s.manual_target_idx >= 0 ? s.manual_target_idx
+                                      : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+  };
   // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
   // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
   // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
-    const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx;
+    const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
                                            : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
                                                              scan.film_base_rgb());
@@ -801,8 +817,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   bool has_base_det = false;
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
   int det_sensor_w = 0, det_sensor_h = 0;
+  // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
+  // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
+  // Before, only the bundle search and given gains built it, so -E and --target there converted with the bundle's film
+  // base instead of the scan's, unlike the same scan on the CFA path or with the search.
   HalfSizeAnalysis analyse;
-  if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
+  if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
       const double t_auto_0 = omp_get_wtime();
       double scan_shutter_s = 0.125, scan_iso = 100.0;
@@ -858,8 +878,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           scan.has_curve_params = true;
           scan.curve_params = s.curve_fit.params;
         }
+      } else {
+        measure_enclosures(frame);
       }
-      if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
+      // The single-bracket search (-E or --target without given gains) solves in solve, on the full image, and
+      // measures its own roll-off there.
+      if (s.bundle_search || !s.use_dino) {
+        if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
+      }
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       return true;
     };
@@ -1149,6 +1175,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       }
       scan.has_auto_res = true;
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+    } else {
+      measure_enclosures(search_half_view);
     }
     if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
@@ -1329,25 +1357,12 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    if (!s.has_cached_sidecar && (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E))) {
-      // Sets each bracket's exposure range on the bundle (e_min, e_max, e_center, is_feasible), which the target
-      // selection, set_target_bounds and given_station_e read below. The scene statistics it returns are unused.
-      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-      int num_feasible = 0;
-      if (scan.cfa) {
-        // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
-        // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
-        compute_bundle_enclosures(bundle,
-                                  negicc::RgbView::from_interleaved_rgb(
-                                      scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                                  g_lo, g_hi, scene_ev, num_feasible);
-      } else {
-        compute_bundle_enclosures(bundle,
-                                  (const uint16_t (*)[4])proc->imgdata.image,
-                                  proc->imgdata.sizes.iwidth,
-                                  proc->imgdata.sizes.iheight,
-                                  g_lo, g_hi, scene_ev, num_feasible);
-      }
+    // Each bracket's exposure range, which the target selection, set_target_bounds and given_station_e read below,
+    // was measured in decode on the half-size frame (measure_enclosures), before decode picked a bracket.
+    if (!s.has_cached_sidecar && (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) &&
+        !scan.has_enclosures) {
+      log_error("Internal error: the brackets' exposure ranges were not measured on the scan\n");
+      return 1;
     }
   } else if (!s.is_bundle) {
     if (!s.film_prof_arg.empty() && !load_film_profile(s.film_prof_arg, c.film_prof)) {

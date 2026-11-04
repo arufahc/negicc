@@ -185,6 +185,8 @@ struct Scan {
   negicc::FilmBaseDetection film_base;
   const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
 
+  // Each bracket's exposure range (compute_bundle_enclosures) was measured on the half-size frame, in decode.
+  bool has_enclosures = false;
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
