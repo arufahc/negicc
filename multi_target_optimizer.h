@@ -224,10 +224,9 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
 struct CurveRefitResult {
   negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the fit with E fixed, its losses
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
-  ConversionParams params;        // after the fixed point on the combined profile (E in this frame's units)
-  float residual = 0.0f;          // the fixed point's residual and status
-  FixedPointStatus status = FixedPointStatus::kMaxIters;
-  int steps = 0;
+  ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
+  float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target)
+  float median_L = 0.0f;          // the grid median L* at params on the combined profile
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
@@ -237,9 +236,8 @@ struct CurveRefitResult {
 //      frame's grid (negicc::fit_input_curves, the same code as the station's Converter.fit_input_curves);
 //   2. the bracket's G and B input tables composed with the curves in place (apply_input_curves on
 //      bundle.targets[res.target_idx]);
-//   3. E, g, b solved on the combined profile as the station's PerTargetConverter.fit_bracket does with Auto's field:
-//      E metered to L* 50 within the bracket's exposure range, a search from (that E, the fitted g, b), then the
-//      fixed-point loop.
+//   3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's (the
+//      station's Iteration 230 F6L; no DINOv3 pass).
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,

@@ -28,6 +28,9 @@ struct InputCurves {
   float k[2] = {0.0f, 0.0f};
   float ref[2] = {1.0f, 1.0f};
   float u_med[2] = {0.0f, 0.0f};
+  // The densest grid cell's u (<= 0): the low end of the frame's density range, over which the fit keeps each curve
+  // monotonic and within CurveFitOptions::max_dev_stops of the base TRC. Fitting only; replay does not need it.
+  float u_lo[2] = {0.0f, 0.0f};
   bool active() const { return a[0] != 0.0f || k[0] != 0.0f || a[1] != 0.0f || k[1] != 0.0f; }
 };
 
@@ -97,8 +100,26 @@ inline void input_curve_reference(const float* merged, float e, float g, float b
     return 0.5f * (lo + hi);
   };
   for (int ch = 0; ch < 2; ++ch) c.ref[ch] = refs[ch];
+  c.u_lo[0] = ug.empty() ? 0.0f : *std::min_element(ug.begin(), ug.end());
+  c.u_lo[1] = ub.empty() ? 0.0f : *std::min_element(ub.begin(), ub.end());
   c.u_med[0] = median(ug);
   c.u_med[1] = median(ub);
+}
+
+// One channel's curve over the frame's density range [u_lo, 0] (u in stops below the film base): monotonic (denser
+// film never renders lighter in this channel) and within max_dev stops of the base TRC (|u s(u) - u|), checked on
+// samples+1 evenly spaced points. The identity (a = k = 0) always passes.
+inline bool curve_shape_ok(float a, float k, float u_med, float u_lo, float max_dev, int samples = 64) {
+  if (a == 0.0f && k == 0.0f) return true;
+  if (!(u_lo < 0.0f)) return true;
+  float prev = -INFINITY;
+  for (int i = 0; i <= samples; ++i) {
+    const float u = u_lo * (1.0f - static_cast<float>(i) / samples);  // u_lo up to 0
+    const float f = u * (1.0f + a + k * std::tanh(u - u_med));
+    if (!(f > prev) || std::fabs(f - u) > max_dev) return false;
+    prev = f;
+  }
+  return true;
 }
 
 // The intent loss of the grid through cfg (its profile possibly combined) at (e, g, b): mean over cells of
@@ -121,6 +142,7 @@ inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, f
 
 struct CurveFitOptions {
   float curve_bound = 0.25f;  // |a|, |k| <= this
+  float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the frame (curve_shape_ok)
   float g_bound = 0.5f;       // |g - g0| <= this
   float b_bound = 0.6f;       // |b - b0| <= this
   float lambda = 0.0f;        // penalty on a^2 + k^2 (Iterations 227 and 228: 0)
@@ -155,9 +177,13 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
     t.k[0] = p[3];
     t.a[1] = p[4];
     t.k[1] = p[5];
+    ++evals;
+    // Monotonic and bounded over the frame's density range, or not a candidate.
+    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.u_lo[0], o.max_dev_stops) ||
+        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.u_lo[1], o.max_dev_stops))
+      return static_cast<double>(INFINITY);
     comb.build(base, t);
     cfg.profile = comb.data;
-    ++evals;
     const double pen = o.lambda * (static_cast<double>(p[2]) * p[2] + static_cast<double>(p[3]) * p[3] +
                                    static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
     return grid_intent_loss(cfg, merged, e, p[0], p[1], grid, n, mu, sigma) + pen;
@@ -211,6 +237,32 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
   }(), merged, e, r.g, r.b, grid, n, mu, sigma);
   r.evaluations = evals;
   return r;
+}
+
+// The grid's median L* through cfg at (e, g, b) (nearest rank over the cells).
+inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
+                           const uint16_t* grid, int n) {
+  if (n <= 0) return 0.0f;
+  float m[9];
+  candidate_matrix(merged, e, g, b, m);
+  std::vector<float> L(n);
+  for (int i = 0; i < n; ++i) L[i] = linear_srgb_to_lab(to_display(cfg, convert_pixel_linear(cfg, m, grid + 3 * i))).L;
+  std::nth_element(L.begin(), L.begin() + n / 2, L.end());
+  return L[n / 2];
+}
+
+// E re-metered so the grid's median L* through cfg (the combined profile) at the fitted g, b equals target_L (Auto's):
+// a bisection in log E over [e0 / 4, e0 * 4] (a larger E renders darker). negicc-station Iteration 230's F6L, which
+// replaces the E/g/b fixed point after the curve fit (the fixed point followed its own darker render).
+inline float remeter_e_median(const PipelineConfig& cfg, const float* merged, float e0, float g, float b,
+                              const uint16_t* grid, int n, float target_L, int iters = 40) {
+  float lo = e0 * 0.25f, hi = e0 * 4.0f;
+  for (int i = 0; i < iters; ++i) {
+    const float mid = std::sqrt(lo * hi);
+    if (grid_median_L(cfg, merged, mid, g, b, grid, n) < target_L) hi = mid;
+    else lo = mid;
+  }
+  return std::sqrt(lo * hi);
 }
 
 }  // namespace negicc

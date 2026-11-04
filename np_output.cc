@@ -297,7 +297,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   ordered_json ch;
   const char* names[2] = {"G", "B"};
   for (int i = 0; i < 2; ++i)
-    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
+    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])},
+                    {"u_lo", n9(c.u_lo[i])}};
   j["channels"] = ch;
   if (const CurveRefitResult* f = sc.curve_fit) {
     const negicc::CurveFitOptions defaults;
@@ -307,14 +308,16 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
-    j["fixed_point"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
-                        {"residual", n9(f->residual)}, {"status", to_string(f->status)}};
+    j["max_dev_stops"] = n9(defaults.max_dev_stops);
+    j["remeter"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
+                    {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)}};
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
     j["fit"] = nullptr;
     j["params_before"] = nullptr;
-    j["fixed_point"] = nullptr;
+    j["max_dev_stops"] = nullptr;
+    j["remeter"] = nullptr;
   }
   return j;
 }
