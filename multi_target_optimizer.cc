@@ -1769,18 +1769,56 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   negicc::CombinedProfile comb;
   float x = out.x_hi_fit, e_new = e_int;
   constexpr int kMaxPasses = 6;
-  for (out.remeter_passes = 1; out.remeter_passes <= kMaxPasses; ++out.remeter_passes) {
-    e_new = negicc::remeter_e_median(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves, e_int,
-                                     out.fit.g, out.fit.b, target_L);
-    comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
-    const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b);
-    if (x_new == x) {
-      out.remeter_converged = true;
-      break;
+  auto remeter = [&]() {
+    out.remeter_converged = false;
+    for (out.remeter_passes = 1; out.remeter_passes <= kMaxPasses; ++out.remeter_passes) {
+      e_new = negicc::remeter_e_median(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
+                                       e_int, out.fit.g, out.fit.b, target_L);
+      comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
+      const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b);
+      if (x_new == x) {
+        out.remeter_converged = true;
+        break;
+      }
+      x = x_new;
     }
-    x = x_new;
+    out.remeter_passes = std::min(out.remeter_passes, kMaxPasses);
+  };
+  remeter();
+
+  // The shape (monotonic, within max_dev_stops of the base TRC over the whole table) was checked where the fit anchored
+  // the curves, at Auto's E; anchored at the re-metered E, ref moves and the table reaches further below it, so the
+  // curves can step just past the limit (on the 41 white-LED frames up to 0.002 stops, on 4 frames). There a and k are
+  // scaled down by the largest factor that keeps the shape at the export's anchor, and E is re-metered again.
+  auto shape_ok_at = [&](const negicc::InputCurves& shape, float e) {
+    const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
+    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], fit_opts.max_dev_stops) &&
+           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], fit_opts.max_dev_stops);
+  };
+  auto scaled = [](negicc::InputCurves c, float t) {
+    for (int ch = 0; ch < 2; ++ch) {
+      c.a[ch] *= t;
+      c.k[ch] *= t;
+    }
+    return c;
+  };
+  out.shape_scale = 1.0f;
+  for (int round = 0; round < 3 && !shape_ok_at(out.fit.curves, e_new); ++round) {
+    float lo = 0.0f, hi = 1.0f;  // the identity (t = 0) always passes
+    for (int it = 0; it < 24; ++it) {
+      const float mid = 0.5f * (lo + hi);
+      if (shape_ok_at(scaled(out.fit.curves, mid), e_new)) lo = mid;
+      else hi = mid;
+    }
+    out.fit.curves = scaled(out.fit.curves, lo);
+    out.shape_scale *= lo;
+    remeter();
   }
-  out.remeter_passes = std::min(out.remeter_passes, kMaxPasses);
+  if (!shape_ok_at(out.fit.curves, e_new)) {  // still past the limit after three rounds: no curves
+    out.fit.curves = scaled(out.fit.curves, 0.0f);
+    out.shape_scale = 0.0f;
+    remeter();
+  }
 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
   //    combined profile built from them in place: every later use of the bracket renders through it.
