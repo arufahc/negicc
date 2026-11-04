@@ -262,7 +262,7 @@ class GreyPoint {
   // The start point: inputs k * (1.4, 1.0, 0.88), the green-normalised neutral input of the Portra brackets (a
   // colour like the orange mask, only a starting direction), for k = 2^-10 .. 2^3 in half stops; the k whose L* is
   // nearest 50 wins. newton() then moves all three channels freely from there to hit (50, 0, 0) exactly.
-  bool reference_grey() const {
+  bool reference_grey(float log_t0[3] = nullptr) const {
     const float dir[3] = {1.4f, 1.0f, 0.88f};
     float best_k = 0.0f, best_d = std::numeric_limits<float>::infinity();
     for (int i = 0; i < 27; ++i) {
@@ -277,7 +277,38 @@ class GreyPoint {
     float log_t[3];
     for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
     const float target[3] = {50.0f, 0.0f, 0.0f};
-    return newton(target, log_t, 20) <= 0.25f;
+    const bool ok = newton(target, log_t, 20) <= 0.25f;
+    if (log_t0) {
+      for (int c = 0; c < 3; ++c) log_t0[c] = log_t[c];
+    }
+    return ok;
+  }
+
+  // Solves the gains (E, g, b) that move the grey that base renders as neutral L* 50 (at log_t0) to target = (L*, a*, b*).
+  // Returns the residual dE76 of the Newton solve.
+  float gains(const float log_t0[3], const float base[3], const float target[3], float egb_out[3]) const {
+    float log_t[3] = {log_t0[0], log_t0[1], log_t0[2]};
+    const float err = newton(target, log_t, 16);
+    const float log_base[3] = {std::log(base[0]), std::log(base[0] * base[1]), std::log(base[0] * base[2])};
+    const float G[3] = {
+        std::exp(log_base[0] + log_t[0] - log_t0[0]),
+        std::exp(log_base[1] + log_t[1] - log_t0[1]),
+        std::exp(log_base[2] + log_t[2] - log_t0[2]),
+    };
+    egb_out[0] = G[0];
+    egb_out[1] = G[1] / G[0];
+    egb_out[2] = G[2] / G[0];
+    return err;
+  }
+
+  // Evaluates the (L*, a*, b*) of the grey that base renders as neutral L* 50, when rendered with gains egb.
+  void grey(const float log_t0[3], const float base[3], const float egb[3], float lab_out[3]) const {
+    const float log_base[3] = {std::log(base[0]), std::log(base[0] * base[1]), std::log(base[0] * base[2])};
+    const float log_egb[3] = {std::log(egb[0]), std::log(egb[0] * egb[1]), std::log(egb[0] * egb[2])};
+    float t[1][3], l[1][3];
+    for (int c = 0; c < 3; ++c) t[0][c] = std::exp(log_t0[c] + log_egb[c] - log_base[c]);
+    lab(t, 1, l);
+    for (int c = 0; c < 3; ++c) lab_out[c] = l[0][c];
   }
 
  private:
@@ -1013,6 +1044,99 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
   measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
                          AUTO_KNEE, bundle.targets[target_idx].film_prof.data, kCeil, 1.0f, hist.data());
   return shoulder_x_hi_from_hist(hist.data(), q995);
+}
+
+// L* of a grey whose luminance is multiplied by 2 ** stops (CIE L* <-> relative luminance Y).
+// py-ref: negicc_station/src/grey_point.py (lstar_after_stops)
+static float lstar_after_stops(float L, float stops) {
+  double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / 903.3;
+  Y *= std::pow(2.0, (double)stops);
+  return (float)(Y > 0.008856 ? 116.0 * std::cbrt(Y) - 16.0 : 903.3 * Y);
+}
+
+// py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
+bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
+                      float tint_a, float warmth_b, KnobSolveResult& out) {
+  out.e = base_e;
+  out.g = base_g;
+  out.b = base_b;
+  out.limited = false;
+  out.grey_lab[0] = 50.0f;
+  out.grey_lab[1] = 0.0f;
+  out.grey_lab[2] = 0.0f;
+  if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+
+  const GreyPoint gp(prof);
+  float log_t0[3];
+  if (!gp.reference_grey(log_t0)) return false;
+  const float base[3] = {base_e, base_g, base_b};
+
+  if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {
+    gp.grey(log_t0, base, base, out.grey_lab);
+    return true;
+  }
+
+  constexpr float REACHABLE = 0.25f;
+  const float anchor[3] = {50.0f, 0.0f, 0.0f};
+  const float full[3] = {lstar_after_stops(50.0f, brightness_stops), tint_a, warmth_b};
+  float egb[3];
+  if (gp.gains(log_t0, base, full, egb) <= REACHABLE) {
+    out.e = egb[0];
+    out.g = egb[1];
+    out.b = egb[2];
+    out.limited = false;
+    gp.grey(log_t0, base, egb, out.grey_lab);
+    return true;
+  }
+
+  auto largest = [&](auto make_target, float best_out[3]) -> bool {
+    float lo = 0.0f, hi = 1.0f;
+    bool found = false;
+    for (int i = 0; i < 7; ++i) {
+      const float f = 0.5f * (lo + hi);
+      float tgt[3], r[3];
+      make_target(f, tgt);
+      if (gp.gains(log_t0, base, tgt, r) <= REACHABLE) {
+        lo = f;
+        best_out[0] = r[0];
+        best_out[1] = r[1];
+        best_out[2] = r[2];
+        found = true;
+      } else {
+        hi = f;
+      }
+    }
+    return found;
+  };
+
+  const float colour_only[3] = {50.0f, tint_a, warmth_b};
+  float colour_egb[3];
+  float best[3] = {base_e, base_g, base_b};
+  if (gp.gains(log_t0, base, colour_only, colour_egb) <= REACHABLE) {
+    if (!largest(
+            [&](float f, float tgt[3]) {
+              tgt[0] = 50.0f + f * (full[0] - 50.0f);
+              tgt[1] = tint_a;
+              tgt[2] = warmth_b;
+            },
+            best)) {
+      best[0] = colour_egb[0];
+      best[1] = colour_egb[1];
+      best[2] = colour_egb[2];
+    }
+  } else {
+    largest(
+        [&](float f, float tgt[3]) {
+          for (int c = 0; c < 3; ++c) tgt[c] = anchor[c] + f * (full[c] - anchor[c]);
+        },
+        best);
+  }
+  out.e = best[0];
+  out.g = best[1];
+  out.b = best[2];
+  out.limited = true;
+  gp.grey(log_t0, base, best, out.grey_lab);
+  return true;
 }
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,

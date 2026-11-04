@@ -71,6 +71,16 @@ struct Sidecar {
   std::string dino_model, dino_backend;
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
   const int* auto_frame_half = nullptr;
+  std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar
+  std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
+  std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
+  std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar
+  double cached_dino_views_ms = 0.0, cached_dino_render_ms = 0.0;
+  double cached_dino_infer_ms = 0.0, cached_dino_search_ms = 0.0;
+  bool has_knobs = false;
+  float brightness = 0.0f, tint = 0.0f, warmth = 0.0f;
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
   std::string colorspace;
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
   double t_auto_ms = 0.0;
