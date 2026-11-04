@@ -195,8 +195,6 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["g_lo"] = num(a.g_lo, "%.6g");
   j["g_hi"] = num(a.g_hi, "%.6g");
   j["scene_ev"] = num(a.scene_ev, "%.4g");
-  j["headroom"] = {{"applied", headroom_applied(a.headroom)}, {"ev", num(a.headroom_ev, "%.4g")},
-                   {"reason", to_string(a.headroom)}};
   // The record keeps its historical keys and values: branch R is the clip fallback being tried or the highlight
   // pullback moving the result (the pullback used to report through the clip fallback's outcome), and changed is
   // either one moving the result.

@@ -44,8 +44,8 @@ struct RgbImage {
 //      one intent field.
 //   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
 //      the converged ones, when any converged).
-//   5. Highlight headroom and the clip fallback: raise E until the highlights are inside the bracket's calibrated
-//      range, and move to the next bracket when the chosen one clips clearly more (ClipFallbackOutcome).
+//   5. The clip fallback: move to the next bracket when the chosen one clips clearly more (ClipFallbackOutcome).
+//      (The highlight headroom that raised E first was removed, as negicc-station's deaf9cc removed it.)
 //   6. The highlight pullback (formerly Part 1B, the enclosure-guided rescue): when a bright frame still has many
 //      highlights near white (sRGB 242 and 235), pull E into the bracket's calibrated range or move to a darker
 //      bracket whose range holds the frame.
@@ -86,18 +86,6 @@ enum class FixedPointStatus {
   kMaxIters,   // neither within ParamSearchOptions::max_steps steps
 };
 const char* to_string(FixedPointStatus status);
-
-// What the highlight headroom did with the chosen E.
-enum class HeadroomOutcome {
-  kWithinRange,      // the highlights were already inside the bracket's calibrated range: E unchanged
-  kNoCapacity,       // E is already at the bracket's upper bound: E unchanged
-  kCapacityLimited,  // E raised to the bracket's upper bound, the highlights still exceed the range
-  kPulledInside,     // E raised just enough to bring the highlights inside the range
-};
-const char* to_string(HeadroomOutcome outcome);
-inline bool headroom_applied(HeadroomOutcome outcome) {
-  return outcome == HeadroomOutcome::kCapacityLimited || outcome == HeadroomOutcome::kPulledInside;
-}
 
 // What the clip fallback (formerly the highlight rescue, Branch R) did. It is tried when the chosen bracket
 // white-clips more than 0.03 % of the inner crop, on the next bracket of the bundle (target_idx + 1), and taken when
@@ -193,8 +181,6 @@ struct ParamSearchResult {
   // The scene's green range over the inner crop (its 0.5 % and 99.5 % points, 16-bit) and its span in stops.
   float g_lo = 0, g_hi = 0, scene_ev = 0;
 
-  HeadroomOutcome headroom = HeadroomOutcome::kWithinRange;
-  float headroom_ev = 0.0f;  // the stops E was raised by
   ClipFallbackOutcome clip_fallback = ClipFallbackOutcome::kNotNeeded;
   float clip_fallback_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
   bool highlight_pullback = false;        // the highlight pullback moved E or the bracket

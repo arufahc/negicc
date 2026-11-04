@@ -39,16 +39,6 @@ const char* to_string(FixedPointStatus status) {
   return "";
 }
 
-const char* to_string(HeadroomOutcome outcome) {
-  switch (outcome) {
-    case HeadroomOutcome::kWithinRange: return "within calibrated range";
-    case HeadroomOutcome::kNoCapacity: return "no exposure capacity (E at or beyond the bracket's e_max)";
-    case HeadroomOutcome::kCapacityLimited: return "capacity limited";
-    case HeadroomOutcome::kPulledInside: return "pulled inside calibrated range";
-  }
-  return "";
-}
-
 const char* to_string(ClipFallbackOutcome outcome) {
   switch (outcome) {
     case ClipFallbackOutcome::kNotNeeded: return "not needed";
@@ -618,7 +608,15 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
   ha.n = (int)n;
   ha.cfg = make_pipeline_config(prof, knee, shoulder);
   ha.max_hist = max_hist;
-  for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = negicc::srgb_decode(ceil_rgb[c] / 255.0f);
+  // A pixel is above the ceiling when its 8-bit sRGB code is above it (codes floor(ceil) + 1 and up), the threshold
+  // negicc-station's Converter::highlight_clip uses: counting from ceil / 255 itself also took pixels that encode to
+  // the ceiling's own code, so neg_process's excess read higher than the station's and its highlight pullback
+  // decided differently on white light. Ceilings at or below 1 are fractions of full scale.
+  for (int c = 0; c < 3; ++c) {
+    const float c_u8 = (ceil_rgb[c] > 1.0001f) ? ceil_rgb[c] : (ceil_rgb[c] * 255.0f);
+    const float thr_u8 = std::min(std::floor(c_u8) + 1.0f, 255.0f);
+    ha.ceil_lin[c] = negicc::srgb_decode(std::max(0.0f, (thr_u8 - 0.5f) / 255.0f));
+  }
   ha.out = hc_out.data();
   negicc::cpu_highlight_clip(ha);
   for (size_t c = 0; c < n; ++c) {
@@ -949,82 +947,6 @@ class SearchFrame {
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
 };
 
-// ---- Highlight headroom ------------------------------------------------------------------------------------
-
-struct Headroom {
-  HeadroomOutcome outcome = HeadroomOutcome::kWithinRange;
-  float delta_ev = 0.0f;  // the stops E is raised by
-};
-
-// The exposure increase (stops) that brings every output channel's (1 - SCENE_TAIL) point inside the bracket's
-// calibrated range, bounded by the bracket's exposure capacity log2(e_max / E); a two-stage batched dyadic
-// bisection over E at the fixed gains g and b.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_highlight_headroom_ev)
-Headroom highlight_headroom(SearchFrame& fr, int target_idx, const ConversionParams& params, bool has_e_max,
-                            float e_max, const float ceil[3]) {
-  constexpr float tail = SCENE_TAIL, tol_ev = 0.01f;
-  const float e = params.e;
-  auto at_ev = [&](float ev) { return ConversionParams{e * std::pow(2.0f, ev), params.g, params.b, params.shoulder}; };
-  Headroom h;
-  const bool cap_known = has_e_max && e_max > 0 && e > 0;
-  const float capacity_ev = cap_known ? std::log2(e_max / e) : 0.0f;
-  const bool has_cap = cap_known && capacity_ev > 0.0f;
-  std::vector<ConversionParams> init = {params};
-  if (has_cap) init.push_back(at_ev(capacity_ev));
-  const auto hc_init = fr.highlight_clip(target_idx, init, ceil);
-  if (max_excess(hc_init[0]) <= tail) {
-    h.outcome = HeadroomOutcome::kWithinRange;
-    return h;
-  }
-  if (!has_cap) {
-    h.outcome = HeadroomOutcome::kNoCapacity;
-    return h;
-  }
-  if (max_excess(hc_init[1]) > tail) {
-    h.outcome = HeadroomOutcome::kCapacityLimited;
-    h.delta_ev = capacity_ev;
-    return h;
-  }
-  // Stage 1 evaluates 2^s1 - 1 evenly spaced exposures in one batch and bisects over them; stage 2 does the same
-  // inside the bracketing interval until it is narrower than tol_ev.
-  const int total_steps = std::max(0, int(std::ceil(std::log2(std::max(capacity_ev / tol_ev, 1.0f)))));
-  const int stage1_steps = std::min(4, total_steps);
-  float lo = 0.0f, hi = capacity_ev;
-  if (stage1_steps > 0) {
-    const int n1 = 1 << stage1_steps;
-    std::vector<ConversionParams> cands;
-    for (int i = 1; i < n1; ++i) cands.push_back(at_ev(lo + (i / float(n1)) * (hi - lo)));
-    const auto hc1 = fr.highlight_clip(target_idx, cands, ceil);
-    int ilo = 0, ihi = n1;
-    for (int s = 0; s < stage1_steps; ++s) {
-      const int mid = (ilo + ihi) / 2;
-      if (max_excess(hc1[mid - 1]) <= tail) ihi = mid;
-      else ilo = mid;
-    }
-    lo = (ilo / float(n1)) * capacity_ev;
-    hi = (ihi / float(n1)) * capacity_ev;
-  }
-  const int rem_steps = total_steps - stage1_steps;
-  if (rem_steps > 0 && (hi - lo) > tol_ev) {
-    const int n2 = 1 << rem_steps;
-    std::vector<ConversionParams> cands;
-    for (int i = 1; i < n2; ++i) cands.push_back(at_ev(lo + (i / float(n2)) * (hi - lo)));
-    const auto hc2 = fr.highlight_clip(target_idx, cands, ceil);
-    const float span = hi - lo, base_lo = lo;
-    int ilo = 0, ihi = n2;
-    for (int s = 0; s < rem_steps; ++s) {
-      const int mid = (ilo + ihi) / 2;
-      if (max_excess(hc2[mid - 1]) <= tail) ihi = mid;
-      else ilo = mid;
-    }
-    lo = base_lo + (ilo / float(n2)) * span;
-    hi = base_lo + (ihi / float(n2)) * span;
-  }
-  h.outcome = HeadroomOutcome::kPulledInside;
-  h.delta_ev = hi;
-  return h;
-}
-
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
 // base and by the exposure ratio between the film base capture and the scan.
 // py-ref: negicc_station/src/film_profiling.py @ 93be1ec (compute_merged_crosstalk, compute_exposure_ratio)
@@ -1318,7 +1240,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   FixedPointResult chosen = *win;
   ConversionParams params = chosen.params;
 
-  // Step 5: the highlight headroom.
+  // Each bracket's enclosure (the screened one, else computed).
   auto bounds_of = [&](int target_idx, Enclosure& r) {
     for (const auto& c : enclosure)
       if (c.target_idx == target_idx) {
@@ -1338,18 +1260,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     return ceil;
   };
-  auto apply_headroom = [&](int target_idx, ConversionParams& p) {
-    Enclosure hb;
-    const bool has_hb = bounds_of(target_idx, hb);
-    const Headroom h = highlight_headroom(fr, target_idx, p, has_hb, has_hb ? hb.e_max : 0.0f, ceiling_of(target_idx));
-    if (h.delta_ev > 0.0f) p.e *= std::pow(2.0f, h.delta_ev);
-    return h;
-  };
-  Headroom headroom = apply_headroom(chosen.target_idx, params);
+  // (The highlight headroom that raised E here was removed with negicc-station deaf9cc, 2026-10-29: it changed none
+  // of the 55 TriLED development frames, and on white light it made neg_process's Auto differ from the station's.)
   if (verbose) {
     std::cout << "Auto: winner " << name_of(chosen.target_idx) << " (resid " << fixed(chosen.residual, 4) << ", "
-              << to_string(chosen.status) << "), highlight headroom " << fixed(headroom.delta_ev, 3, true) << " EV ("
-              << to_string(headroom.outcome) << ")\n";
+              << to_string(chosen.status) << ")\n";
   }
 
   // Step 5: the clip fallback (ClipFallbackOutcome): move to the next bracket when the chosen one white-clips.
@@ -1381,7 +1296,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         if (!fr.fixed_point(t_adj, s_adj->result.params, eb, fp_adj)) return false;
       }
       ConversionParams p_adj = fp_adj.params;
-      const Headroom h_adj = apply_headroom(t_adj, p_adj);
       const ClipStats hc_adj = fr.highlight_clip(t_adj, {p_adj}, ceiling_of(t_adj))[0];
       const float clip_adj = hc_adj.white_clip / 100.0f;
       const float dl = hc_adj.median_L - hc0.median_L;
@@ -1398,7 +1312,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (out.clip_fallback == ClipFallbackOutcome::kTaken) {
         chosen = fp_adj;
         params = p_adj;
-        headroom = h_adj;
       }
     }
     if (verbose && (out.clip_fallback == ClipFallbackOutcome::kNotScreened || out.clip_fallback == ClipFallbackOutcome::kNotAdmissible)) {
@@ -1515,7 +1428,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         if (win_res) {
           FixedPointResult fp_res = *win_res;
           ConversionParams p_res = fp_res.params;
-          Headroom h_res = apply_headroom(fp_res.target_idx, p_res);
           ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
           const float dl_min = (hc_242.median_L >= 58.0f) ? -7.5f : -4.5f;
           float dl = hc_res_242.median_L - hc_242.median_L;
@@ -1530,7 +1442,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
               (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
             chosen = fp_res;
             params = p_res;
-            headroom = h_res;
             out.highlight_pullback = true;
           }
         }
@@ -1538,7 +1449,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
   }
 
-  // The headroom, the clip fallback and the pullback move E after the loop froze x_hi; measure it once more at the final parameters
+  // The clip fallback and the pullback move E after the loop froze x_hi; measure it once more at the final parameters
   // (the same pre-shoulder pass on the inner crop) so the written image's shoulder matches its highlights. The
   // guard stays that of the converged iteration.
   {
@@ -1568,8 +1479,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.intent_grid_w = chosen.grid_w;
   out.intent_grid_h = chosen.grid_h;
   out.intent_params = chosen.params;
-  out.headroom = headroom.outcome;
-  out.headroom_ev = headroom.delta_ev;
   fr.write_timings();
   out.total_time = Clock::now() - t_start;
   return true;
