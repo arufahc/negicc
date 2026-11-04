@@ -1563,13 +1563,16 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
               << fixed((float)out.fit.loss_after, 3) << " (" << out.fit.evaluations << " evaluations)\n";
   }
 
+  // Auto's grid median L* on the bracket's own profile: the re-meter's target (step 3). Measured before step 2, which
+  // replaces the profile's tables (cfg points at them).
+  const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+
   // 2. The combined profile, in place: every later use of the bracket renders through it.
   apply_input_curves(prof, out.fit.curves);
 
   // 3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
   //    (negicc-station Iteration 230's F6L). The E/g/b fixed point it replaces re-predicted the intent field from the
   //    curved render and followed it darker; this keeps Auto's lightness and the fit's colour.
-  const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
   const float e_new = negicc::remeter_e_median(cfg_comb, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
                                                target_L);
