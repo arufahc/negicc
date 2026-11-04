@@ -265,14 +265,17 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
-    .help("off (default), on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB (one comma-separated value). on: after the "
+    .help("auto (default), off, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB (one comma-separated value). auto: with a "
+          "white-light (d65) bundle search and -P, try the curves when Auto leaves a colour cast (S_cast >= 7.17) and "
+          "keep them only if the cast falls and the tones and clipping hold (negicc-station "
+          "designs/plan_fit_curves_auto.md); otherwise nothing (TriLED, no -P, given parameters). on: after the "
           "bundle search, fit G and B input curves (with g and b, E fixed) to the search's intent field on the bracket "
           "it chose, then solve E, g and b again on that bracket's profile with its input tables composed with the "
           "curves (the combined profile), as negicc-station's Fit curves toggle does; needs the bundle search (no "
           "--target, -E, --gain_g or --gain_b). Eight numbers: convert through the --target bracket's combined "
           "profile with these recorded curves, without fitting (a sidecar's input_curves; its cli_equivalent writes "
-          "them). White-light (d65) bundles and -P only.")
-    .default_value(std::string("off"));
+          "them). on and the eight numbers: white-light (d65) bundles and -P only.")
+    .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--flat")
@@ -373,15 +376,17 @@ int parse_options(int ac, char* av[], Options& o) {
       if (p1 == std::string::npos) break;
       p0 = p1 + 1;
     }
-    if (fc.size() == 1 && (fc[0] == "on" || fc[0] == "off")) {
+    o.fit_curves_given = parser.is_used("--fit_curves");
+    if (fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on";
+      o.fit_curves_auto = fc[0] == "auto";
     } else if (fc.size() == 8) {
       float v[8];
       for (int i = 0; i < 8; ++i) {
         char* end = nullptr;
         v[i] = std::strtof(fc[i].c_str(), &end);
         if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
-          log_error("--fit_curves: '%s' is not a number (give off, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n",
+          log_error("--fit_curves: '%s' is not a number (give auto, off, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n",
                     fc[i].c_str());
           return 1;
         }
@@ -398,7 +403,7 @@ int parse_options(int ac, char* av[], Options& o) {
         }
       }
     } else {
-      log_error("--fit_curves takes off, on, or eight comma-separated numbers (aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n");
+      log_error("--fit_curves takes auto, off, on, or eight comma-separated numbers (aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n");
       return 1;
     }
   }

@@ -228,6 +228,12 @@ struct CurveRefitResult {
   float residual = 0.0f;          // the fixed point's residual and status
   FixedPointStatus status = FixedPointStatus::kMaxIters;
   int steps = 0;
+  // Auto mode (auto_opts given): the usefulness test; with applied false the bracket's profile is back to its own
+  // tables and the conversion keeps the search's parameters. "On" mode measures the same and always applies.
+  bool auto_mode = false;
+  bool applied = true;
+  negicc::GridToneCast before, after;  // Auto's result, and the fitted one at the fixed point (after: only if triggered)
+  negicc::FitCurvesAutoDecision decision;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
@@ -241,9 +247,13 @@ struct CurveRefitResult {
 //      E metered to L* 50 within the bracket's exposure range, a search from (that E, the fitted g, b), then the
 //      fixed-point loop.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
+// With auto_opts (fit curves auto, negicc-station designs/plan_fit_curves_auto.md): Auto's S_cast and tones are
+// measured first and nothing is fitted below auto_opts->tau_cast; above it the curves are fitted as in "on", the
+// result measured at the fixed point against its own intent field, and kept only if fit_curves_auto_decide passes
+// (else the bracket's tables are restored).
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out);
+                                   CurveRefitResult& out, const negicc::FitCurvesAutoOptions* auto_opts = nullptr);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

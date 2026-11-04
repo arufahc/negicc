@@ -68,6 +68,10 @@ struct Options {
 
   // Fitted G/B input curves (input_curves.h)
   bool fit_curves = false;                     // --fit_curves on
+  // --fit_curves auto (the default): after a white-light bundle search with -P, fit the curves only when Auto leaves a
+  // cast and keep them only when they help (negicc-station designs/plan_fit_curves_auto.md); otherwise nothing.
+  bool fit_curves_auto = false;
+  bool fit_curves_given = false;               // --fit_curves named on the command line
   bool input_curves_given = false;             // --input_curves (replayed, not fitted)
   negicc::InputCurves input_curves;
 

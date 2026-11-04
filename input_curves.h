@@ -213,6 +213,104 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
   return r;
 }
 
+// ---- Fit curves auto (negicc-station designs/plan_fit_curves_auto.md) ------------------------------------------
+// After Auto: try the curves only when Auto leaves a cast (S_cast at or above tau_cast), and keep them only when the
+// fitted result removes enough of it without moving the tones or clipping more. Both front ends call these, so they
+// decide the same.
+
+struct FitCurvesAutoOptions {
+  float tau_cast = 7.17f;  // S_cast that triggers the fit (Iteration 227's threshold, fixed before Iteration 229)
+  float r_cast = 0.7f;     // keep only if S_cast after <= r_cast x S_cast before
+  float d_l50 = 1.5f;      // |median L* change| of the grid's cells
+  float d_ltail = 2.5f;    // |2nd and 98th percentile L* change| of the grid's cells
+  float d_clip = 0.1f;     // white-clip rise, percentage points of the frame's pixels
+};
+
+// The grid's colour residual and tones at (e, g, b) through cfg (its profile possibly combined): S_cast, the mean
+// over cells of the a* and b* terms of the intent loss against mu, sigma; and the 2nd, 50th and 98th percentile of
+// the cells' L* (nearest rank on the sorted cells). white_clip (% of the frame's pixels) is the caller's: it needs
+// the frame, not the grid.
+struct GridToneCast {
+  double s_cast = 0.0;
+  float p2_L = 0.0f, median_L = 0.0f, p98_L = 0.0f;
+  float white_clip = 0.0f;
+};
+
+inline GridToneCast grid_tone_cast(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
+                                   const uint16_t* grid, int n, const float* mu, const float* sigma) {
+  GridToneCast t;
+  if (n <= 0) return t;
+  float m[9];
+  candidate_matrix(merged, e, g, b, m);
+  std::vector<float> L(n);
+  double s = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const Rgb lin = convert_pixel_linear(cfg, m, grid + 3 * i);
+    const Lab lab = linear_srgb_to_lab(to_display(cfg, lin));
+    const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
+    const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
+    s += static_cast<double>(da) * da + static_cast<double>(db) * db;
+    L[i] = lab.L;
+  }
+  t.s_cast = s / n;
+  std::sort(L.begin(), L.end());
+  auto rank = [&](float q) { return L[std::min(n - 1, std::max(0, (int)std::lround(q * (n - 1))))]; };
+  t.p2_L = rank(0.02f);
+  t.median_L = rank(0.5f);
+  t.p98_L = rank(0.98f);
+  return t;
+}
+
+struct FitCurvesAutoCheck {
+  const char* name;
+  double value;  // the measured quantity the limit applies to
+  double limit;
+  bool passed;
+};
+
+struct FitCurvesAutoDecision {
+  bool triggered = false;  // S_cast before >= tau_cast: the fit ran
+  bool applied = false;    // the curves are kept
+  const char* outcome = "not needed";  // "not needed", "applied" or the first failing check's name
+  double s_cast_before = 0.0, s_cast_after = 0.0;
+  std::vector<FitCurvesAutoCheck> checks;  // in order: cast, median L*, p2 L*, p98 L*, white clip, converged
+};
+
+inline bool fit_curves_auto_triggered(const GridToneCast& before, const FitCurvesAutoOptions& o) {
+  return before.s_cast >= o.tau_cast;
+}
+
+// The usefulness test of the fitted result (after, at the fixed point's E, g, b on the combined profile, against its
+// own fresh intent field) against Auto's (before).
+inline FitCurvesAutoDecision fit_curves_auto_decide(const GridToneCast& before, const GridToneCast& after,
+                                                    bool converged, const FitCurvesAutoOptions& o) {
+  FitCurvesAutoDecision d;
+  d.s_cast_before = before.s_cast;
+  d.s_cast_after = after.s_cast;
+  d.triggered = fit_curves_auto_triggered(before, o);
+  if (!d.triggered) return d;
+  const double ratio = before.s_cast > 0.0 ? after.s_cast / before.s_cast : 1.0;
+  d.checks = {
+      {"cast", ratio, o.r_cast, ratio <= o.r_cast},
+      {"median L*", std::fabs(after.median_L - before.median_L), o.d_l50,
+       std::fabs(after.median_L - before.median_L) <= o.d_l50},
+      {"p2 L*", std::fabs(after.p2_L - before.p2_L), o.d_ltail, std::fabs(after.p2_L - before.p2_L) <= o.d_ltail},
+      {"p98 L*", std::fabs(after.p98_L - before.p98_L), o.d_ltail, std::fabs(after.p98_L - before.p98_L) <= o.d_ltail},
+      {"white clip", after.white_clip - before.white_clip, o.d_clip, after.white_clip - before.white_clip <= o.d_clip},
+      {"converged", converged ? 1.0 : 0.0, 1.0, converged},
+  };
+  d.applied = true;
+  d.outcome = "applied";
+  for (const auto& c : d.checks) {
+    if (!c.passed) {
+      d.applied = false;
+      d.outcome = c.name;
+      break;
+    }
+  }
+  return d;
+}
+
 }  // namespace negicc
 
 #endif  // NEGICC_INPUT_CURVES_H

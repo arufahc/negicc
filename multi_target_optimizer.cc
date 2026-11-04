@@ -1505,7 +1505,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out) {
+                                   CurveRefitResult& out, const negicc::FitCurvesAutoOptions* auto_opts) {
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
@@ -1549,6 +1549,24 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   }
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
+
+  // Auto's cast and tones on the stock profile (fit curves auto's trigger and the test's reference).
+  const float no_ceiling[3] = {255.0f, 255.0f, 255.0f};
+  out.auto_mode = auto_opts != nullptr;
+  out.before = negicc::grid_tone_cast(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n,
+                                      res.intent_mu.data(), res.intent_sigma.data());
+  out.before.white_clip = fr.highlight_clip(idx, {res.params}, no_ceiling)[0].white_clip;
+  if (auto_opts && !negicc::fit_curves_auto_triggered(out.before, *auto_opts)) {
+    out.decision = negicc::fit_curves_auto_decide(out.before, out.before, false, *auto_opts);  // "not needed"
+    out.applied = false;
+    out.params = res.params;
+    if (opts.verbose)
+      std::cout << "Curves (auto): not needed, S_cast " << fixed((float)out.before.s_cast, 2) << " < "
+                << fixed(auto_opts->tau_cast, 2) << "\n";
+    return true;
+  }
+  // The bracket's own G and B input tables, restored if auto rejects the curves.
+  const std::vector<float> own_g = prof.in_trc[1], own_b = prof.in_trc[2];
   negicc::InputCurves curves;
   negicc::input_curve_reference(merged, e_int, res.params.g, res.params.b, AUTO_KNEE, fb, stats.grid.data(), (int)n,
                                 curves);
@@ -1599,6 +1617,34 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.residual = fp.residual;
   out.status = fp.status;
   out.steps = fp.steps;
+
+  // The fitted result at the fixed point, on the combined profile, against the fixed point's own intent field.
+  if (fp.mu.size() == n * 3 && fp.sigma.size() == n * 3) {
+    const negicc::PipelineConfig cfg2 = make_pipeline_config(prof.data, AUTO_KNEE, fp.params.shoulder, ENCODE_SRGB);
+    out.after = negicc::grid_tone_cast(cfg2, merged, fp.params.e, fp.params.g, fp.params.b, stats.grid.data(), (int)n,
+                                       fp.mu.data(), fp.sigma.data());
+    out.after.white_clip = fr.highlight_clip(idx, {fp.params}, no_ceiling)[0].white_clip;
+  } else {
+    out.after = out.before;
+    out.after.s_cast = out.before.s_cast;  // no field to judge the cast by: the cast check fails
+  }
+  if (auto_opts) {
+    out.decision = negicc::fit_curves_auto_decide(out.before, out.after, fp.status == FixedPointStatus::kConverged,
+                                                  *auto_opts);
+    out.applied = out.decision.applied;
+    if (!out.applied) {
+      prof.in_trc[1] = own_g;
+      prof.in_trc[2] = own_b;
+      prof.rebind_pointers();
+      out.params = res.params;
+    }
+    if (opts.verbose) {
+      std::cout << "Curves (auto): S_cast " << fixed((float)out.before.s_cast, 2) << " -> "
+                << fixed((float)out.after.s_cast, 2) << ", median L* " << fixed(out.before.median_L, 1) << " -> "
+                << fixed(out.after.median_L, 1) << ": " << (out.applied ? "applied" : "rejected (")
+                << (out.applied ? "" : out.decision.outcome) << (out.applied ? "" : ")") << "\n";
+    }
+  }
   if (opts.verbose) {
     std::cout << "Curves: E " << fixed(out.params.e, 4) << " g " << fixed(out.params.g, 4) << " b "
               << fixed(out.params.b, 4) << " (resid " << fixed(out.residual, 4) << ", " << to_string(out.status)

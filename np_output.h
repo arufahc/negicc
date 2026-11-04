@@ -79,6 +79,8 @@ struct Sidecar {
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;
+  // --fit_curves auto in effect: its trigger, test and outcome (fit_curves_auto in the sidecar); null otherwise.
+  const CurveRefitResult* fit_curves_auto = nullptr;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

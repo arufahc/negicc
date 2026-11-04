@@ -360,6 +360,13 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
+  // Fit curves auto (the default) acts only where "on" could: a white-light bundle search with -P. Elsewhere it is
+  // off, silently unless it was asked for by name.
+  s.fit_curves_auto_active = o.fit_curves_auto && s.is_bundle && s.white_light && !s.has_crosstalk &&
+                             !o.colorspace.empty() && s.bundle_search;
+  if (o.fit_curves_auto && o.fit_curves_given && !s.fit_curves_auto_active) {
+    log_info("--fit_curves auto: not used (it needs a white-light bundle search with -P)\n");
+  }
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
               "(--fit_curves with eight comma-separated numbers replays recorded curves)\n");
@@ -522,19 +529,29 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
-        if (o.fit_curves) {
+        if (o.fit_curves || s.fit_curves_auto_active) {
           // The curves on the bracket the search chose, then E, g and b again on its combined profile (the
-          // station's Fit curves toggle); the conversion takes those (Scan::params).
+          // station's Fit curves toggle); the conversion takes those (Scan::params). In auto, only when Auto left a
+          // cast, and kept only when they help (otherwise the search's result stands).
           negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25 (Iterations 227 and 228)
+          const negicc::FitCurvesAutoOptions auto_opts;
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
-                                             fit_opts, s.curve_fit)) {
+                                             fit_opts, s.curve_fit, o.fit_curves ? nullptr : &auto_opts)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
-          s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = "fit";
-          scan.has_curve_params = true;
-          scan.curve_params = s.curve_fit.params;
+          if (s.curve_fit.applied) {
+            s.input_curves = s.curve_fit.fit.curves;
+            s.input_curves_source = o.fit_curves ? "fit" : "auto";
+            scan.has_curve_params = true;
+            scan.curve_params = s.curve_fit.params;
+          }
+          if (s.fit_curves_auto_active) {
+            log_info("Fit curves (auto): %s (S_cast %.2f%s)\n",
+                     s.curve_fit.decision.applied ? "applied"
+                     : s.curve_fit.decision.triggered ? "rejected" : "not needed",
+                     s.curve_fit.before.s_cast, s.curve_fit.decision.triggered ? ", fitted and tested" : "");
+          }
         }
       }
       measure_rolloff(frame, scan_shutter_s, scan_iso);
@@ -1351,8 +1368,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
-    sc.curve_fit = s.input_curves_source == "fit" ? &s.curve_fit : nullptr;
+    sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") ? &s.curve_fit : nullptr;
   }
+  if (s.fit_curves_auto_active) sc.fit_curves_auto = &s.curve_fit;
   write_json_sidecar(sc);
   return 0;
 }

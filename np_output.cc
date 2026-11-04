@@ -319,6 +319,32 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   return j;
 }
 
+// Fit curves auto (negicc-station designs/plan_fit_curves_auto.md): the trigger, every check of the usefulness test
+// with its value and limit, and the outcome; the same block as the station's sidecar.
+static ordered_json fit_curves_auto_json(const CurveRefitResult& f) {
+  auto n6 = [](double v) { return num(v, "%.6g"); };
+  const negicc::FitCurvesAutoOptions o;
+  auto tones = [&](const negicc::GridToneCast& t) {
+    return ordered_json{{"s_cast", n6(t.s_cast)}, {"p2_L", n6(t.p2_L)}, {"median_L", n6(t.median_L)},
+                        {"p98_L", n6(t.p98_L)}, {"white_clip_pct", n6(t.white_clip)}};
+  };
+  ordered_json j;
+  j["version"] = 1;
+  j["options"] = {{"tau_cast", n6(o.tau_cast)}, {"r_cast", n6(o.r_cast)}, {"d_l50", n6(o.d_l50)},
+                  {"d_ltail", n6(o.d_ltail)}, {"d_clip", n6(o.d_clip)}};
+  j["triggered"] = f.decision.triggered;
+  j["applied"] = f.decision.applied;
+  j["outcome"] = f.decision.applied ? "applied" : f.decision.triggered ? std::string("rejected: ") + f.decision.outcome
+                                                                       : std::string("not needed");
+  j["before"] = tones(f.before);
+  j["after"] = f.decision.triggered ? tones(f.after) : ordered_json(nullptr);
+  ordered_json checks = ordered_json::array();
+  for (const auto& c : f.decision.checks)
+    checks.push_back({{"name", c.name}, {"value", n6(c.value)}, {"limit", n6(c.limit)}, {"passed", c.passed}});
+  j["checks"] = checks;
+  return j;
+}
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -439,6 +465,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     j["intent_field"] = nullptr;
 
   j["input_curves"] = sc.input_curves ? input_curves_json(sc) : ordered_json(nullptr);
+  j["fit_curves_auto"] = sc.fit_curves_auto ? fit_curves_auto_json(*sc.fit_curves_auto) : ordered_json(nullptr);
 
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},

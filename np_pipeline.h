@@ -75,6 +75,8 @@ struct Setup {
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
   // on: curve_fit has the fit), "cli" (--input_curves) or empty (none).
   std::string input_curves_source;
+  // --fit_curves auto in effect (a white-light bundle search with -P): curve_fit.decision says what it did.
+  bool fit_curves_auto_active = false;
   negicc::InputCurves input_curves;
   CurveRefitResult curve_fit;
 };
