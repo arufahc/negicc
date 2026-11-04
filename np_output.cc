@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
+#include <filesystem>
 #include <string>
 
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
@@ -331,6 +333,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   return j;
 }
 
+const char* neg_process_version() { return NEGICC_GIT_VERSION; }
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -347,7 +351,20 @@ bool write_json_sidecar(const Sidecar& sc) {
     else if (!model.empty()) camera = model;
     else if (!make.empty()) camera = make;
   }
+  // Each input's size and modification time, so a later run reusing this sidecar (the knobs) can tell the same file
+  // from another saved under the same name.
+  ordered_json stats = ordered_json::array();
+  for (const std::string& f : sc.files) {
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(f, ec);
+    const auto t = std::filesystem::last_write_time(f, ec);
+    stats.push_back(ec ? ordered_json(nullptr)
+                       : ordered_json({{"size", size},
+                                       {"mtime_ns", (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                        t.time_since_epoch()).count()}}));
+  }
   j["inputs"] = {{"raw_files", sc.files},
+                 {"raw_file_stats", stats},
                  {"camera", camera},
                  {"iso", sc.proc ? num(sc.proc->imgdata.other.iso_speed) : ordered_json(0)},
                  {"shutter", sc.proc ? num(sc.proc->imgdata.other.shutter) : ordered_json(0)}};
