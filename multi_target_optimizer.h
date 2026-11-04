@@ -273,6 +273,10 @@ struct CurveRefitResult {
   bool remeter_converged = false; // the roll-off of the last pass equals the one its re-meter ran with
   double loss_export = 0.0;       // the intent loss at params on the combined profile, on the export's render
   float shape_scale = 1.0f;       // a and k scaled by this to keep the shape at the export's anchor (1: not needed)
+  // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, and the
+  // fit's result at Auto's E, and the result on the combined profile; and the time the fit, re-meter and checks took.
+  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the fit, at Auto's E
+  double time_ms = 0.0;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
