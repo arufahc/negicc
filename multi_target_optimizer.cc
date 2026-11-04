@@ -1653,6 +1653,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
     return false;
   }
+  const Clock::time_point t_fit0 = Clock::now();
   ParamSearchResult scratch;  // the inferences and timings of the frame below; not reported
   SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
   fr.set_shoulder(1.0f, true);
@@ -1713,8 +1714,20 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
               << " (" << out.fit.evaluations << " evaluations)\n";
   }
 
+  {  // the loss's parts right after the fit, at Auto's E (before the re-meter moves it)
+    negicc::CombinedProfile c0;
+    c0.build(prof.data, out.fit.curves);
+    negicc::PipelineConfig c0cfg = cfg;
+    c0cfg.profile = c0.data;
+    out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(),
+                                                   (int)n, res.intent_mu.data(), res.intent_sigma.data());
+  }
+
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the re-meter's target.
   const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+  // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
+  out.parts_auto = negicc::grid_intent_loss_parts(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(),
+                                                  (int)n, res.intent_mu.data(), res.intent_sigma.data());
 
   // 2. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
   //    (negicc-station Iteration 230's F6L), the curves anchored at each E it tries; alternated with the roll-off the
@@ -1784,8 +1797,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = target_L;
   out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
-  out.loss_export = negicc::grid_intent_loss(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
-                                             res.intent_mu.data(), res.intent_sigma.data());
+  out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(),
+                                                    (int)n, res.intent_mu.data(), res.intent_sigma.data());
+  out.loss_export = out.parts_export.total();
+  out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)

@@ -149,20 +149,36 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
 
 // The intent loss of the grid through cfg (its profile possibly combined) at (e, g, b): mean over cells of
 // |(Lab - mu) / sigma|^2, the sum of cpu_intent_loss's three terms.
-inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
-                               const uint16_t* grid, int n, const float* mu, const float* sigma) {
+// The loss's lightness and colour parts: mean over cells of ((L - mu_L) / sigma_L)^2, and of the a* and b* terms.
+struct LossParts {
+  double L = 0.0, ab = 0.0;
+  double total() const { return L + ab; }
+};
+
+inline LossParts grid_intent_loss_parts(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
+                                        const uint16_t* grid, int n, const float* mu, const float* sigma) {
   float m[9];
   candidate_matrix(merged, e, g, b, m);
-  double s = 0.0;
+  LossParts s;
   for (int i = 0; i < n; ++i) {
     const Rgb lin = convert_pixel_linear(cfg, m, grid + 3 * i);
     const Lab lab = linear_srgb_to_lab(to_display(cfg, lin));
     const float dL = (lab.L - mu[i * 3]) / sigma[i * 3];
     const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
     const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
-    s += static_cast<double>(dL) * dL + static_cast<double>(da) * da + static_cast<double>(db) * db;
+    s.L += static_cast<double>(dL) * dL;
+    s.ab += static_cast<double>(da) * da + static_cast<double>(db) * db;
   }
-  return n > 0 ? s / n : 0.0;
+  if (n > 0) {
+    s.L /= n;
+    s.ab /= n;
+  }
+  return s;
+}
+
+inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
+                               const uint16_t* grid, int n, const float* mu, const float* sigma) {
+  return grid_intent_loss_parts(cfg, merged, e, g, b, grid, n, mu, sigma).total();
 }
 
 struct CurveFitOptions {
