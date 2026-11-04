@@ -329,7 +329,11 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
   if (o.roi_auto) {
     if (roi_source != "auto" && roi_source != "auto_fallback") return false;
     if (j.contains("frame_detection") && j["frame_detection"].is_object()) {
-      if (j["frame_detection"].value("film_format", "") != std::string(film_format_name(o.film_format))) return false;
+      // The format the detector found (with --film_format auto it records what it found, not "auto").
+      if (o.film_format != FILM_FORMAT_AUTO &&
+          j["frame_detection"].value("film_format", "") != std::string(film_format_name(o.film_format))) {
+        return false;
+      }
     }
   } else if (o.has_roi) {
     if (roi_source != "cli" || !geom.contains("roi") || !geom["roi"].is_array() || geom["roi"].size() != 4) {
@@ -988,13 +992,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   RawRegionFinder find_frame;
   // The film base's frame detection when the frame is given (--roi x y w h, or none): negicc-station's white-light
   // decode runs the detector on every scan's mosaic as unpacked, with the default parameters
-  // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, so
-  // both read the same base. With --roi auto the detection that found the frame serves (base_det: above).
+  // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, with
+  // --film_format when given (every format by default, as the station), so both read the same base. With --roi auto
+  // the detection that found the frame serves (base_det: above).
   if (!o.roi_auto && s.white_light && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       FilmImage mosaic;
       if (film_image_from_raw(raw, mosaic)) {
-        detect_film_frame(mosaic, FrameDetectionParams(), base_det);
+        FrameDetectionParams base_params;
+        base_params.format = o.film_format;  // --film_format, else every format
+        detect_film_frame(mosaic, base_params, base_det);
         has_base_det = true;
         det_sensor_w = mosaic.width;
         det_sensor_h = mosaic.height;
@@ -1183,7 +1190,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           film_image_from_cfa(cfa_origin, src_w, src_h, (ptrdiff_t)cfa_pitch, 2,
                               [filters](int row, int col) { return negicc::bayer_color_at(row, col, filters); },
                               no_black, cfa_white_level, mosaic);
-      if (has_det) detect_film_frame(mosaic, FrameDetectionParams(), base_det);
+      FrameDetectionParams base_params;
+      base_params.format = o.film_format;  // --film_format, else every format
+      if (has_det) detect_film_frame(mosaic, base_params, base_det);
       detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
     }
 
