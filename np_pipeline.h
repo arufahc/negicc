@@ -72,6 +72,11 @@ struct Setup {
   negicc::FlatFieldPtr flat_field;
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
+  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
+  // on: curve_fit has the fit), "cli" (--input_curves) or empty (none).
+  std::string input_curves_source;
+  negicc::InputCurves input_curves;
+  CurveRefitResult curve_fit;
 };
 
 // The scan as data for a backend: a CFA mosaic (one, or the four frames of a pixel shift), black subtracted, in place.
@@ -159,6 +164,11 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
+  // With --fit_curves on: E, g and b of the curve fit's fixed point on the combined profile, which the conversion
+  // takes in place of the search's (auto_res keeps the search's own).
+  bool has_curve_params = false;
+  ConversionParams curve_params;
+  const ConversionParams& params() const { return has_curve_params ? curve_params : auto_res.params; }
 
   // The highlight roll-off of Auto's result or of given values, measured on the half-size frame as the bracket search
   // measures it, while that frame exists (render frees the mosaic; LibRaw's half-size decode is analysed and gone).

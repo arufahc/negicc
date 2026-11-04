@@ -262,6 +262,21 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
+  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
+  parser.add_argument("--fit_curves")
+    .help("on: after the bundle search, fit G and B input curves (with g and b, E fixed) to the search's intent field "
+          "on the bracket it chose, then solve E, g and b again on that bracket's profile with its input tables "
+          "composed with the curves (the combined profile), as negicc-station's Fit curves toggle does. White-light "
+          "(d65) bundles only; needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P. The sidecar's "
+          "input_curves records the curves and its cli_equivalent replays them (--input_curves). Default off.")
+    .default_value(std::string("off"))
+    .choices("on", "off");
+  parser.add_argument("--input_curves")
+    .help("aG kG aB kB refG refB u_medG u_medB: convert through the --target bracket's profile with its G and B input "
+          "tables composed with these curves (a sidecar's input_curves, without fitting). White-light (d65) bundles "
+          "only; needs --target and -P.")
+    .nargs(8)
+    .scan<'g', float>();
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--flat")
@@ -352,6 +367,28 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
+  o.fit_curves = parser.get<std::string>("--fit_curves") == "on";
+  if (parser.is_used("--input_curves")) {
+    const std::vector<float> v = parser.get<std::vector<float>>("--input_curves");
+    o.input_curves_given = true;
+    for (int i = 0; i < 2; ++i) {
+      o.input_curves.a[i] = v[i * 2];
+      o.input_curves.k[i] = v[i * 2 + 1];
+      o.input_curves.ref[i] = v[4 + i];
+      o.input_curves.u_med[i] = v[6 + i];
+    }
+    for (int i = 0; i < 2; ++i) {
+      if (!(o.input_curves.ref[i] > 0.0f) || !std::isfinite(o.input_curves.u_med[i]) ||
+          !std::isfinite(o.input_curves.a[i]) || !std::isfinite(o.input_curves.k[i])) {
+        log_error("--input_curves: ref must be positive and every value finite\n");
+        return 1;
+      }
+    }
+  }
+  if (o.fit_curves && o.input_curves_given) {
+    log_error("--fit_curves on fits the curves; --input_curves replays recorded ones: give one of them\n");
+    return 1;
+  }
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
   o.quality = parser.get<int>("--quality");

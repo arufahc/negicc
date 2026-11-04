@@ -343,6 +343,39 @@ int prepare(const Options& o, Setup& s) {
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
 
+  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md): white light only, since with
+  // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
+  // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
+  // carry the curves.
+  if (o.fit_curves || o.input_curves_given) {
+    const char* opt = o.fit_curves ? "--fit_curves on" : "--input_curves";
+    if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
+      log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: with a crosstalk matrix the film base "
+                "does not mark the dark end of every channel\n", opt);
+      return 1;
+    }
+    if (o.colorspace.empty()) {
+      log_error("%s needs -P (e.g. -P srgb): without it the output is the corrected camera RGB with the bracket's ICC "
+                "profile, which does not carry the curves\n", opt);
+      return 1;
+    }
+  }
+  if (o.fit_curves && !s.bundle_search) {
+    log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
+              "(--input_curves replays recorded curves)\n");
+    return 1;
+  }
+  if (o.input_curves_given) {
+    if (s.manual_target_idx < 0) {
+      log_error("--input_curves needs --target: the curves belong to one bracket's profile\n");
+      return 1;
+    }
+    // The --target bracket's profile becomes the combined profile before anything renders through it.
+    apply_input_curves(bundle.targets[s.manual_target_idx].film_prof, o.input_curves);
+    s.input_curves = o.input_curves;
+    s.input_curves_source = "cli";
+  }
+
   if (s.use_dino) {
     const EmbeddedFile* trt = find_embedded_backbone(true);
     const EmbeddedFile* onnx = find_embedded_backbone(false);
@@ -416,11 +449,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                                                           : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
   auto measure_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx;
-    const float e = scan.has_auto_res ? scan.auto_res.params.e
+    const float e = scan.has_auto_res ? scan.params().e
                                  : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
                                                    scan.film_base_rgb());
-    const float g = scan.has_auto_res ? scan.auto_res.params.g : o.gain_g;
-    const float b = scan.has_auto_res ? scan.auto_res.params.b : o.gain_b;
+    const float g = scan.has_auto_res ? scan.params().g : o.gain_g;
+    const float b = scan.has_auto_res ? scan.params().b : o.gain_b;
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
                                              ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
     scan.has_rolloff = true;
@@ -481,6 +514,20 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
+        if (o.fit_curves) {
+          // The curves on the bracket the search chose, then E, g and b again on its combined profile (the
+          // station's Fit curves toggle); the conversion takes those (Scan::params).
+          negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25 (Iterations 227 and 228)
+          if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
+                                             fit_opts, s.curve_fit)) {
+            log_error("Fitting the input curves failed\n");
+            return false;
+          }
+          s.input_curves = s.curve_fit.fit.curves;
+          s.input_curves_source = "fit";
+          scan.has_curve_params = true;
+          scan.curve_params = s.curve_fit.params;
+        }
       }
       measure_rolloff(frame, scan_shutter_s, scan_iso);
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
@@ -960,8 +1007,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.bundle_target_name = res.target_name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The search's E, g and b, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
-    apply_station(res.params.e, res.params.g, res.params.b);
+    // The search's E, g and b (after the curve fit's fixed point with --fit_curves on), converted as the station
+    // converts them (the sidecar's cli_equivalent reproduces it).
+    const ConversionParams& p = scan.params();
+    apply_station(p.e, p.g, p.b);
     log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", res.target_name.c_str(),
            res.params.e, res.params.g, res.params.b, res.residual, to_string(res.status),
            res.inferences);
@@ -971,8 +1020,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
            ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
            ms(res.total_time));
-    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", res.params.e, res.params.g,
-           res.params.b, c.bundle_target_idx);
+    if (scan.has_curve_params)
+      log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
+    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", p.e, p.g, p.b, c.bundle_target_idx);
   } else if (s.use_dino) {
     if (!s.is_bundle && !c.film_prof.data.has_profile) {
       log_error("The parameter search requires a film profile to evaluate intent losses.\n");
@@ -1271,6 +1321,11 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_full_conversion_ms = scan.t_full_conversion_ms;
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
+  if (!s.input_curves_source.empty()) {
+    sc.input_curves_source = s.input_curves_source;
+    sc.input_curves = &s.input_curves;
+    sc.curve_fit = s.input_curves_source == "fit" ? &s.curve_fit : nullptr;
+  }
   write_json_sidecar(sc);
   return 0;
 }
