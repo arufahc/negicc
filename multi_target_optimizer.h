@@ -220,6 +220,10 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
 // last step measures the same on its half-size frame; neg_process measures every bundle conversion's there too, so
 // given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detect.h),
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
+// The same through a given profile (the bracket's, or a combined profile built from it).
+float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995 = nullptr, const double* film_base_rgb = nullptr);
@@ -259,8 +263,15 @@ struct CurveRefitResult {
   negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the fit with E fixed, its losses
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
   ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
-  float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target)
-  float median_L = 0.0f;          // the grid median L* at params on the combined profile
+  float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target), on the export's render at Auto's
+  float median_L = 0.0f;          // the grid median L* at params on the combined profile, on the export's render
+  // The export's render: its encoding and roll-off (only the sRGB encoding applies one; 1 otherwise).
+  int encoding = negicc::ENCODE_SRGB;  // OutputEncoding
+  float x_hi_fit = 1.0f;          // the roll-off the fit ran with: the export's at Auto's parameters
+  float x_hi = 1.0f;              // the roll-off at params on the combined profile, which the export measures again
+  int remeter_passes = 0;         // re-meter and roll-off alternations until the roll-off held still
+  bool remeter_converged = false; // the roll-off of the last pass equals the one its re-meter ran with
+  double loss_export = 0.0;       // the intent loss at params on the combined profile, on the export's render
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
@@ -272,10 +283,13 @@ struct CurveRefitResult {
 //      bundle.targets[res.target_idx]);
 //   3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's (the
 //      station's Iteration 230 F6L; no DINOv3 pass).
+// Every step renders the grid as the export renders it (encoding: the export's OutputEncoding): its roll-off, measured
+// as the export measures it, at Auto's parameters for the fit and the target, and alternated with the re-meter until
+// it holds still at the result.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out);
+                                   int encoding, CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H
