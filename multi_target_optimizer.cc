@@ -1566,43 +1566,20 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // 2. The combined profile, in place: every later use of the bracket renders through it.
   apply_input_curves(prof, out.fit.curves);
 
-  // 3. The fixed point on the combined profile, as fit_bracket solves a bracket from Auto's field.
-  const bool white_light = true;
-  const float g_lo = std::max(1.0f, stats.g_lo);
-  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
-  const float g_scale = white_light ? e_norm : 1.0f;
-  Enclosure enc;
-  if (!bracket_enclosure(bundle.targets[idx], idx, g_lo * g_scale, g_hi * g_scale, enc)) {
-    std::cerr << "ERROR! " << bundle.targets[idx].name << " has no patch readings" << std::endl;
-    return false;
-  }
-  float eb[3] = {std::min(enc.e_min, enc.e_max), std::max(enc.e_min, enc.e_max), enc.e_center};
-  float e0 = enc.e_center;
-  {
-    float p_scene[3];
-    for (int r = 0; r < 3; ++r) {
-      p_scene[r] = 0.0f;
-      for (int c = 0; c < 3; ++c) p_scene[r] += merged[r * 3 + c] * stats.log_avg_rgb[c];
-    }
-    const GreyPoint gp(prof.data);
-    float e_met = 0.0f;
-    if (gp.reference_grey() && exposure_for_lightness(gp, p_scene, 1.10f, 1.15f, e_met))
-      e0 = std::clamp(e_met, eb[0], eb[1]);
-  }
-  const ConversionParams initial{e0, out.fit.g, out.fit.b, 1.0f};
-  ConversionParams start;
-  fr.search(idx, res.intent_mu, res.intent_sigma, &initial, eb, start);
-  if (opts.verbose) std::cout << "Curves: fixed point on " << bundle.targets[idx].name << " (combined profile)\n";
-  FixedPointResult fp;
-  if (!fr.fixed_point(idx, start, eb, fp)) return false;
-  out.params = fp.params;
-  out.residual = fp.residual;
-  out.status = fp.status;
-  out.steps = fp.steps;
+  // 3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
+  //    (negicc-station Iteration 230's F6L). The E/g/b fixed point it replaces re-predicted the intent field from the
+  //    curved render and followed it darker; this keeps Auto's lightness and the fit's colour.
+  const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+  const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
+  const float e_new = negicc::remeter_e_median(cfg_comb, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
+                                               target_L);
+  out.params = {e_new, out.fit.g, out.fit.b, res.params.shoulder};
+  out.target_median_L = target_L;
+  out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
   if (opts.verbose) {
-    std::cout << "Curves: E " << fixed(out.params.e, 4) << " g " << fixed(out.params.g, 4) << " b "
-              << fixed(out.params.b, 4) << " (resid " << fixed(out.residual, 4) << ", " << to_string(out.status)
-              << ")\n";
+    std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
+              << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
+              << " b " << fixed(out.params.b, 4) << "\n";
   }
   return true;
 }
