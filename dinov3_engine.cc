@@ -48,20 +48,64 @@ bool DinoV3Engine::is_loaded() const { return runner_ != nullptr; }
 
 bool DinoV3Engine::needs_adapter() const { return runner_ && runner_->has_tokens(); }
 
-void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads) {
-    adapter_ = make_ort_adapter(onnx_data, onnx_size, num_threads);
+void DinoV3AdapterRunner::run_device(const void*, int, float*, float*) {
+    throw std::runtime_error("this intent adapter runs on the CPU and takes host tokens");
+}
+
+void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads,
+                               const void* engine_data, size_t engine_size) {
+    if (runner_ && !runner_->has_tokens()) {  // a fused model carries its own adapter
+        adapter_.reset();
+        adapter_name_ = name;
+        return;
+    }
+    const bool gpu = runner_ && std::strncmp(runner_->name(), "gpu", 3) == 0;
+    std::unique_ptr<DinoV3AdapterRunner> a;
+    if (gpu) {
+        if (!engine_data || engine_size == 0) {
+            throw std::runtime_error("DinoV3Engine: the backbone runs on TensorRT but intent adapter " + name +
+                                     " has no TensorRT engine (run `make dinov3_engine` on this device); the adapter "
+                                     "does not run on the CPU behind a GPU backbone");
+        }
+        a = make_trt_adapter(engine_data, engine_size);
+    } else {
+        if (!onnx_data || onnx_size == 0) {
+            throw std::runtime_error("DinoV3Engine: intent adapter " + name + " has no adapter.onnx for the CPU backbone");
+        }
+        a = make_ort_adapter(onnx_data, onnx_size, num_threads);
+    }
+    adapter_ = std::move(a);
     adapter_name_ = name;
 }
 
-void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
+namespace {
+
+std::vector<uint8_t> read_file(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
     std::vector<uint8_t> bytes((size_t)f.tellg());
     f.seekg(0);
     f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
-    // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session.
-    adapter_file_ = std::move(bytes);
-    set_adapter(adapter_file_.data(), adapter_file_.size(), path, num_threads);
+    return bytes;
+}
+
+}  // namespace
+
+void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
+    std::filesystem::path p(path);
+    if (dir_exists(path)) p /= "adapter.onnx";
+    std::filesystem::path onnx_p = p, engine_p = p;
+    if (p.extension() == ".engine") onnx_p.replace_extension(".onnx");
+    else engine_p.replace_extension(".engine");
+    std::vector<uint8_t> onnx, engine;
+    if (file_exists(onnx_p.string())) onnx = read_file(onnx_p.string());
+    if (file_exists(engine_p.string())) engine = read_file(engine_p.string());
+    if (onnx.empty() && engine.empty()) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
+    // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session;
+    // TensorRT copies the engine while deserialising it.
+    adapter_file_ = std::move(onnx);
+    set_adapter(adapter_file_.empty() ? nullptr : adapter_file_.data(), adapter_file_.size(), path, num_threads,
+                engine.empty() ? nullptr : engine.data(), engine.size());
 }
 
 const char* DinoV3Engine::backend_name() const { return runner_ ? runner_->name() : "none"; }
@@ -80,6 +124,8 @@ size_t DinoV3Engine::memory_bytes() const {
 void DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
                         int max_size, int patch_size) {
     runner_.reset();
+    adapter_.reset();
+    adapter_name_.clear();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
@@ -133,6 +179,8 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
 void DinoV3Engine::load_memory(const void* engine_data, size_t engine_size, const void* onnx_data, size_t onnx_size,
                                const std::string& backend, int num_threads, int max_size, int patch_size) {
     runner_.reset();
+    adapter_.reset();
+    adapter_name_.clear();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
@@ -218,10 +266,14 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     DinoV3RunnerOutputs outs;
     std::vector<float> tokens;
+    const bool device_adapter = runner_->has_tokens() && adapter_ && adapter_->on_device();
     if (runner_->has_tokens()) {
         if (!adapter_) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
-        tokens.resize((size_t)res.num_patches * 768);
-        outs.tokens = tokens.data();
+        // A TensorRT backbone with a TensorRT adapter: the tokens stay on the device.
+        if (!device_adapter) {
+            tokens.resize((size_t)res.num_patches * 768);
+            outs.tokens = tokens.data();
+        }
     } else {
         outs.mu = res.mu.data();
         outs.sigma = res.sigma.data();
@@ -243,7 +295,11 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     runner_->run(pixel_values.data(), res.target_h, res.target_w, pool_weights.data(), res.num_patches, outs);
     // py-ref: negicc_station/src/export_intent_engine.py @ 93be1ec (FusedIntentNetwork: adapter(cat(h_photo, h_sem)))
-    if (!tokens.empty()) adapter_->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
+    if (device_adapter) {
+        adapter_->run_device(runner_->device_tokens(), res.num_patches, res.mu.data(), res.sigma.data());
+    } else if (!tokens.empty()) {
+        adapter_->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
+    }
 
     if (res.has_pooled_tone) {
         // py-ref: negicc_station/src/tensorrt_intent_model.py:268 @ 2f7ee4a (tone_mass = tone_weights.mean(axis=0))

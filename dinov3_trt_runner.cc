@@ -1,5 +1,7 @@
-// TensorRT runner for the fused DINOv3 intent model (USE_CUDA=1 builds only). Runs model.engine, the
-// strict-FP32 engine `make engine` builds on the device; the same engine the Python 'gpu' intent backend runs.
+// TensorRT runners (USE_CUDA=1 builds only): the DINOv3 backbone (backbone.engine) or a fused intent model
+// (model.engine), and the per-stock adapter (adapter.engine), all strict-FP32 engines `make dinov3_engine` builds on
+// the device. A backbone keeps its tokens on the device; the adapter binds that buffer as its input, so only the
+// intent field and the ranker features come back to the host.
 //
 // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (TensorRTPhotographicIntentModel)
 #include "dinov3_runner.h"
@@ -90,6 +92,8 @@ public:
     bool has_tokens() const override { return has_tokens_; }
     bool has_pooled() const override { return has_pooled_; }
     bool has_pooled_tone() const override { return has_pooled_tone_; }
+    const void* device_tokens() const override { return has_tokens_ ? tok_.ptr : nullptr; }
+    int token_downloads() const override { return token_downloads_; }
 
     // py-ref: negicc_station/src/tensorrt_intent_model.py:153-169 @ 2f7ee4a (memory_bytes)
     size_t memory_bytes() const override {
@@ -127,8 +131,10 @@ public:
         if (!context_->enqueueV3(stream_)) throw std::runtime_error("TensorRT enqueueV3 failed");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:252-266 @ 2f7ee4a (D2H output copy on stream)
-        if (outputs.tokens && has_tokens_)
+        if (outputs.tokens && has_tokens_) {
             check_cuda(cudaMemcpyAsync(outputs.tokens, tok_.ptr, tok_bytes, cudaMemcpyDeviceToHost, stream_), "D2H tokens");
+            ++token_downloads_;
+        }
         if (outputs.mu && !has_tokens_)
             check_cuda(cudaMemcpyAsync(outputs.mu, mu_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H mu");
         if (outputs.sigma && !has_tokens_)
@@ -149,7 +155,80 @@ private:
     cudaStream_t stream_ = nullptr;
     size_t engine_bytes_ = 0;
     bool has_pool_weights_ = false, has_tokens_ = false, has_pooled_ = false, has_pooled_tone_ = false;
+    int token_downloads_ = 0;
     DeviceBuffer pv_, pw_, tok_, mu_, sigma_, pooled_, pooled_tone_;
+};
+
+// The per-stock adapter engine: input "tokens" [1, N, 768], outputs "mu", "sigma" (and "log_var", bound but not
+// copied back) [1, N, 3]. run_device reads the tokens from the backbone's device buffer; run copies host tokens in
+// first (tests, and backbones whose tokens are on the host).
+class TrtAdapterRunner : public DinoV3AdapterRunner {
+public:
+    TrtAdapterRunner(const void* engine_data, size_t engine_size) : engine_bytes_(engine_size) {
+        runtime_.reset(nvinfer1::createInferRuntime(g_logger));
+        if (!runtime_) throw std::runtime_error("createInferRuntime failed");
+        engine_.reset(runtime_->deserializeCudaEngine(engine_data, engine_size));
+        if (!engine_) throw std::runtime_error("cannot deserialise the TensorRT adapter engine");
+        context_.reset(engine_->createExecutionContext());
+        if (!context_) throw std::runtime_error("createExecutionContext failed");
+        bool tokens = false, mu = false, sigma = false;
+        for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
+            const char* name = engine_->getIOTensorName(i);
+            if (std::strcmp(name, "tokens") == 0) tokens = true;
+            else if (std::strcmp(name, "mu") == 0) mu = true;
+            else if (std::strcmp(name, "sigma") == 0) sigma = true;
+            else if (engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT) extra_outputs_.push_back(name);
+        }
+        if (!tokens || !mu || !sigma)
+            throw std::runtime_error("TensorRT adapter engine lacks tokens, mu or sigma (not an adapter.engine)");
+        extra_.resize(extra_outputs_.size());
+        check_cuda(cudaStreamCreate(&stream_), "cudaStreamCreate");
+    }
+
+    ~TrtAdapterRunner() override {
+        if (stream_) cudaStreamDestroy(stream_);
+    }
+
+    bool on_device() const override { return true; }
+
+    size_t memory_bytes() const override {
+        size_t n = engine_bytes_ + tok_in_.bytes + mu_.bytes + sigma_.bytes;
+        for (const DeviceBuffer& b : extra_) n += b.bytes;
+        return n;
+    }
+
+    void run(const float* tokens, int patches, float* mu, float* sigma) override {
+        const size_t tok_bytes = (size_t)patches * 768 * sizeof(float);
+        check_cuda(cudaMemcpyAsync(tok_in_.reserve(tok_bytes), tokens, tok_bytes, cudaMemcpyHostToDevice, stream_),
+                   "H2D tokens");
+        run_device(tok_in_.ptr, patches, mu, sigma);
+    }
+
+    void run_device(const void* device_tokens, int patches, float* mu, float* sigma) override {
+        if (!device_tokens) throw std::runtime_error("TensorRT adapter: null device tokens");
+        const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
+        if (!context_->setInputShape("tokens", nvinfer1::Dims3{1, patches, 768}))
+            throw std::runtime_error("TensorRT adapter engine rejects the token shape (profile range)");
+        context_->setTensorAddress("tokens", const_cast<void*>(device_tokens));
+        context_->setTensorAddress("mu", mu_.reserve(field_bytes));
+        context_->setTensorAddress("sigma", sigma_.reserve(field_bytes));
+        for (size_t i = 0; i < extra_outputs_.size(); ++i)
+            context_->setTensorAddress(extra_outputs_[i].c_str(), extra_[i].reserve(field_bytes));
+        if (!context_->enqueueV3(stream_)) throw std::runtime_error("TensorRT adapter enqueueV3 failed");
+        check_cuda(cudaMemcpyAsync(mu, mu_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H mu");
+        check_cuda(cudaMemcpyAsync(sigma, sigma_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H sigma");
+        check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
+    }
+
+private:
+    std::unique_ptr<nvinfer1::IRuntime> runtime_;
+    std::unique_ptr<nvinfer1::ICudaEngine> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext> context_;
+    cudaStream_t stream_ = nullptr;
+    size_t engine_bytes_ = 0;
+    std::vector<std::string> extra_outputs_;
+    std::vector<DeviceBuffer> extra_;
+    DeviceBuffer tok_in_, mu_, sigma_;
 };
 
 }  // namespace
@@ -160,6 +239,10 @@ std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path) {
 
 std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size) {
     return std::make_unique<TrtRunner>(engine_data, engine_size);
+}
+
+std::unique_ptr<DinoV3AdapterRunner> make_trt_adapter(const void* engine_data, size_t engine_size) {
+    return std::make_unique<TrtAdapterRunner>(engine_data, engine_size);
 }
 
 bool cuda_device_available() {

@@ -408,7 +408,9 @@ int prepare(const Options& o, Setup& s) {
           log_error("No intent adapter for profile '%s'\n", profile_name.c_str());
           return 1;
         }
-        s.engine.set_adapter(a->data, a->size, adapter_dir);
+        // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
+        const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
+        s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
       }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());

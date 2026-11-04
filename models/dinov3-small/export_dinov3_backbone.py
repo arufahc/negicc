@@ -41,7 +41,11 @@ import subprocess
 import sys
 import types
 
-import torch
+try:
+    import torch
+except Exception as e:  # --engine-only needs trtexec alone (no torch on the device's build environment is fine)
+    torch = None
+    _TORCH_ERROR = e
 
 DEFAULT_SOURCE = "Tooony133/dinov3-vits16-pretrain-lvd1689m"
 DEFAULT_OUT = os.path.dirname(os.path.abspath(__file__))
@@ -50,47 +54,48 @@ PATCH_SIZE = 16
 TONE_MASS_GATE = 0.03  # mass fraction at which a tone bin's pooled features reach full weight
 
 
-def _rope_forward_for_export(self, pixel_values):
-    """DINOv3ViTRopePositionEmbedding.forward (eval mode) with angles.tile(2) written as a concatenation: the ONNX
-    exporter emits tile with a rank-check If node that TensorRT 10.3 cannot parse."""
-    from transformers.models.dinov3_vit.modeling_dinov3_vit import get_patches_center_coordinates
-    _, _, height, width = pixel_values.shape
-    coords = get_patches_center_coordinates(height // self.config.patch_size, width // self.config.patch_size,
-                                            dtype=torch.float32, device=pixel_values.device)
-    angles = 2 * math.pi * coords[:, :, None] * self.inv_freq[None, None, :]
-    angles = angles.flatten(1, 2)
-    angles = torch.cat([angles, angles], dim=-1)
-    return torch.cos(angles).to(pixel_values.dtype), torch.sin(angles).to(pixel_values.dtype)
+if torch is not None:
+    def _rope_forward_for_export(self, pixel_values):
+        """DINOv3ViTRopePositionEmbedding.forward (eval mode) with angles.tile(2) written as a concatenation: the ONNX
+        exporter emits tile with a rank-check If node that TensorRT 10.3 cannot parse."""
+        from transformers.models.dinov3_vit.modeling_dinov3_vit import get_patches_center_coordinates
+        _, _, height, width = pixel_values.shape
+        coords = get_patches_center_coordinates(height // self.config.patch_size, width // self.config.patch_size,
+                                                dtype=torch.float32, device=pixel_values.device)
+        angles = 2 * math.pi * coords[:, :, None] * self.inv_freq[None, None, :]
+        angles = angles.flatten(1, 2)
+        angles = torch.cat([angles, angles], dim=-1)
+        return torch.cos(angles).to(pixel_values.dtype), torch.sin(angles).to(pixel_values.dtype)
 
 
-class Backbone(torch.nn.Module):
-    """pixel_values, pool_weights -> (tokens, pooled, pooled_tone)."""
+    class Backbone(torch.nn.Module):
+        """pixel_values, pool_weights -> (tokens, pooled, pooled_tone)."""
 
-    def __init__(self, dino):
-        super().__init__()
-        self.dino = dino
-        rope = getattr(dino, "rope_embeddings", None)
-        if rope is not None:
-            rope.forward = types.MethodType(_rope_forward_for_export, rope)
-        num_layers = dino.config.num_hidden_layers
-        self.l_photo = int(round(num_layers * 0.75))
-        self.l_sem = num_layers
-        self.k_start = 1 + getattr(dino.config, "num_register_tokens", 0)
+        def __init__(self, dino):
+            super().__init__()
+            self.dino = dino
+            rope = getattr(dino, "rope_embeddings", None)
+            if rope is not None:
+                rope.forward = types.MethodType(_rope_forward_for_export, rope)
+            num_layers = dino.config.num_hidden_layers
+            self.l_photo = int(round(num_layers * 0.75))
+            self.l_sem = num_layers
+            self.k_start = 1 + getattr(dino.config, "num_register_tokens", 0)
 
-    def forward(self, pixel_values, pool_weights):
-        out = self.dino(pixel_values=pixel_values, output_hidden_states=True)
-        hp, hs = out.hidden_states[self.l_photo], out.hidden_states[self.l_sem]
-        h_photo, h_sem = hp[:, self.k_start:, :], hs[:, self.k_start:, :]
-        tokens = torch.cat([h_photo, h_sem], dim=-1)
-        # Exposure ranker features: CLS of the last layer, mean patch tokens of both layers.
-        pooled = torch.cat([hs[:, 0, :], h_photo.mean(dim=1), h_sem.mean(dim=1)], dim=-1)
-        # Tone-stratified means, each faded in by its mass fraction.
-        unnormalized = torch.bmm(pool_weights.transpose(1, 2), tokens)
-        mass = pool_weights.sum(dim=1, keepdim=True).transpose(1, 2)
-        mass_frac = pool_weights.mean(dim=1, keepdim=True).transpose(1, 2)
-        gate = torch.clamp(mass_frac / TONE_MASS_GATE, 0.0, 1.0)
-        pooled_tone = unnormalized / torch.clamp(mass, min=1e-6) * gate
-        return tokens, pooled, pooled_tone
+        def forward(self, pixel_values, pool_weights):
+            out = self.dino(pixel_values=pixel_values, output_hidden_states=True)
+            hp, hs = out.hidden_states[self.l_photo], out.hidden_states[self.l_sem]
+            h_photo, h_sem = hp[:, self.k_start:, :], hs[:, self.k_start:, :]
+            tokens = torch.cat([h_photo, h_sem], dim=-1)
+            # Exposure ranker features: CLS of the last layer, mean patch tokens of both layers.
+            pooled = torch.cat([hs[:, 0, :], h_photo.mean(dim=1), h_sem.mean(dim=1)], dim=-1)
+            # Tone-stratified means, each faded in by its mass fraction.
+            unnormalized = torch.bmm(pool_weights.transpose(1, 2), tokens)
+            mass = pool_weights.sum(dim=1, keepdim=True).transpose(1, 2)
+            mass_frac = pool_weights.mean(dim=1, keepdim=True).transpose(1, 2)
+            gate = torch.clamp(mass_frac / TONE_MASS_GATE, 0.0, 1.0)
+            pooled_tone = unnormalized / torch.clamp(mass, min=1e-6) * gate
+            return tokens, pooled, pooled_tone
 
 
 def sha256_file(path):
@@ -128,6 +133,28 @@ def build_engine(onnx_path, engine_path, workspace_mb, fp16):
     print(f"Built {engine_path}")
 
 
+def build_adapter_engine(onnx_path, workspace_mb, fp16):
+    """adapter.engine beside an intent adapter's adapter.onnx: input tokens [1, N, 768] over the backbone's patch range."""
+    trtexec = find_trtexec()
+    if not trtexec:
+        sys.exit("trtexec not found (install TensorRT, e.g. JetPack's nvidia-tensorrt)")
+    lo = 8 * PATCH_SIZE
+    opt_h = IMAGE_SIZE - 2 * PATCH_SIZE
+    n = lambda h, w: (h // PATCH_SIZE) * (w // PATCH_SIZE)
+    engine_path = os.path.join(os.path.dirname(onnx_path), "adapter.engine")
+    cmd = [
+        trtexec, f"--onnx={onnx_path}", f"--saveEngine={engine_path}",
+        f"--minShapes=tokens:1x{n(lo, lo)}x768",
+        f"--optShapes=tokens:1x{n(opt_h, IMAGE_SIZE)}x768",
+        f"--maxShapes=tokens:1x{n(IMAGE_SIZE, IMAGE_SIZE)}x768",
+        f"--memPoolSize=workspace:{workspace_mb}M",
+        "--fp16" if fp16 else "--noTF32",
+    ]
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    print(f"Built {engine_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", default=DEFAULT_SOURCE, help="Hugging Face model id or local model directory")
@@ -137,14 +164,20 @@ def main():
     ap.add_argument("--engine-only", action="store_true", help="build the engine from an existing backbone.onnx")
     ap.add_argument("--fp16", action="store_true", help="build an FP16 engine instead of strict FP32")
     ap.add_argument("--workspace-mb", type=int, default=512, help="TensorRT builder workspace limit (MiB)")
+    ap.add_argument("--adapters", nargs="*", default=[],
+                    help="intent adapters (adapter.onnx) to build an adapter.engine for, beside each")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     onnx_path = os.path.join(args.out, "backbone.onnx")
     if args.engine_only:
         build_engine(onnx_path, os.path.join(args.out, "backbone.engine"), args.workspace_mb, args.fp16)
+        for a in args.adapters:
+            build_adapter_engine(a, args.workspace_mb, args.fp16)
         return
 
+    if torch is None:
+        sys.exit(f"exporting the backbone needs torch ({_TORCH_ERROR})")
     from transformers import AutoModel
     if os.path.isdir(args.source):
         src_dir = args.source
