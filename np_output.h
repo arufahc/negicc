@@ -92,4 +92,7 @@ struct Sidecar {
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).
+// The build's version (git describe), as the sidecar's tool.version records it.
+const char* neg_process_version();
+
 bool write_json_sidecar(const Sidecar& sc);

@@ -210,62 +210,107 @@ static bool extract_cli_egb(const nlohmann::ordered_json& cli, float& e_out, flo
   return got_e && got_g && got_b;
 }
 
-static bool argv_input_modifiers_match(const nlohmann::ordered_json& argv_json, const Options& o) {
-  if (!argv_json.is_array()) return true;
-  std::string prev_flat;
-  bool prev_row_given[3] = {false, false, false};
-  float prev_rows[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-  for (size_t i = 1; i < argv_json.size(); ++i) {
-    if (!argv_json[i].is_string()) continue;
-    const std::string arg = argv_json[i].get<std::string>();
-    if (arg == "--flat" && i + 1 < argv_json.size() && argv_json[i + 1].is_string()) {
-      prev_flat = argv_json[i + 1].get<std::string>();
-      ++i;
-    } else if ((arg == "-r" || arg == "--r_coeff" || arg == "-g" || arg == "--g_coeff" || arg == "-b" ||
-                arg == "--b_coeff") &&
-               i + 3 < argv_json.size()) {
-      const int r = (arg == "-r" || arg == "--r_coeff") ? 0 : (arg == "-g" || arg == "--g_coeff") ? 1 : 2;
-      prev_row_given[r] = true;
-      for (int c = 0; c < 3; ++c) {
-        if (!argv_json[i + 1 + c].is_string()) return false;
-        prev_rows[r][c] = std::strtof(argv_json[i + 1 + c].get<std::string>().c_str(), nullptr);
+// The arguments of a run that decide its result: argv without the program name, the output (-o, --output) and the
+// knobs (--brightness, --tint, --warmth), each with its value, in "--flag value" or "--flag=value" form.
+static std::vector<std::string> result_args(const std::vector<std::string>& argv) {
+  static const char* const kSkip[] = {"-o", "--output", "--brightness", "--tint", "--warmth"};
+  std::vector<std::string> out;
+  for (size_t i = 1; i < argv.size(); ++i) {
+    const std::string& a = argv[i];
+    bool skip = false;
+    for (const char* f : kSkip) {
+      const size_t n = std::strlen(f);
+      if (a == f) {
+        skip = true;
+        ++i;  // and its value
+        break;
       }
-      i += 3;
+      if (a.size() > n && a.compare(0, n, f) == 0 && a[n] == '=') {
+        skip = true;
+        break;
+      }
     }
+    if (!skip) out.push_back(a);
   }
-  if (prev_flat.empty() != o.flat.empty() || (!o.flat.empty() && !paths_match(prev_flat, o.flat))) return false;
-  const std::vector<float>* cur_rows[3] = {&o.r_coeff, &o.g_coeff, &o.b_coeff};
-  for (int r = 0; r < 3; ++r) {
-    if (prev_row_given[r] != o.row_given[r]) return false;
-    if (o.row_given[r]) {
-      for (int c = 0; c < 3; ++c) {
-        if (std::fabs(prev_rows[r][c] - (*cur_rows[r])[c]) > 1e-6f) return false;
-      }
+  return out;
+}
+
+// Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and
+// the knobs: the same tokens in the same order, a path token also matching when both name the same existing file. Any
+// option that changes the result (the profile, the flat field, -r/-g/-b, -E, --target, the gains, --roi,
+// --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must therefore be the same. Before, only
+// --flat and -r/-g/-b were compared, and a sidecar without an argv array matched anything.
+static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, const Options& o, std::string& why) {
+  if (!argv_json.is_array()) {
+    why = "it records no argv";
+    return false;
+  }
+  std::vector<std::string> prev, cur;
+  for (const auto& a : argv_json) {
+    if (!a.is_string()) {
+      why = "its argv is not a list of strings";
+      return false;
+    }
+    prev.push_back(a.get<std::string>());
+  }
+  for (int i = 0; i < o.argc; ++i) cur.push_back(o.argv[i]);
+  const std::vector<std::string> pa = result_args(prev), ca = result_args(cur);
+  if (pa.size() != ca.size()) {
+    why = "it was given other arguments";
+    return false;
+  }
+  for (size_t i = 0; i < pa.size(); ++i) {
+    if (pa[i] != ca[i] && !(is_regular_file(pa[i]) && is_regular_file(ca[i]) && paths_match(pa[i], ca[i]))) {
+      why = "it was given " + pa[i] + " where this run has " + ca[i];
+      return false;
     }
   }
   return true;
 }
 
-// Checks whether <output>.json exists and matches the current capture, light source, bundle/profile, target and
-// geometry so --brightness, --tint and --warmth can solve for (E, g, b) from the cached Auto/DINOv3 base parameters.
-static bool try_load_cached_sidecar(const Options& o, Setup& s) {
-  const std::string sidecar_path = o.output + ".json";
-  if (!is_regular_file(sidecar_path)) return false;
-  std::ifstream ifs(sidecar_path);
-  if (!ifs.is_open()) return false;
-  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
-  if (!j.is_object()) return false;
-  if (j.value("schema", "") != "negicc.neg_process.sidecar/1") return false;
-  if (j.contains("argv") && !argv_input_modifiers_match(j["argv"], o)) return false;
+// The size and modification time of a file, as the sidecar records each input (inputs.raw_file_stats).
+static bool file_stat(const std::string& path, uintmax_t& size, long long& mtime_ns) {
+  std::error_code ec;
+  size = std::filesystem::file_size(path, ec);
+  if (ec) return false;
+  const auto t = std::filesystem::last_write_time(path, ec);
+  if (ec) return false;
+  mtime_ns = (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+  return true;
+}
+
+// The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
+// serve this conversion.
+static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
+  if (j.value("schema", "") != "negicc.neg_process.sidecar/1") return why = "it has another schema", false;
+  // The same build: another neg_process may convert the same arguments differently.
+  if (!j.contains("tool") || !j["tool"].is_object() || j["tool"].value("version", "") != std::string(neg_process_version())) {
+    return why = std::string("it was written by another neg_process build (this one is ") + neg_process_version() + ")",
+           false;
+  }
+  if (!argv_matches_except_knobs(j.value("argv", nlohmann::ordered_json()), o, why)) return false;
 
   if (!j.contains("inputs") || !j["inputs"].is_object() || !j["inputs"].contains("raw_files") ||
       !j["inputs"]["raw_files"].is_array()) {
-    return false;
+    return why = "it records no inputs", false;
   }
   const auto& raw_files = j["inputs"]["raw_files"];
-  if (raw_files.size() != o.files.size()) return false;
+  if (raw_files.size() != o.files.size()) return why = "it converted another number of files", false;
   for (size_t i = 0; i < o.files.size(); ++i) {
-    if (!raw_files[i].is_string() || !paths_match(raw_files[i].get<std::string>(), o.files[i])) return false;
+    if (!raw_files[i].is_string() || !paths_match(raw_files[i].get<std::string>(), o.files[i])) {
+      return why = "it converted other files", false;
+    }
+  }
+  // The same files, not only the same names: a capture saved again under the same name has another size or time.
+  const auto& stats = j["inputs"].value("raw_file_stats", nlohmann::ordered_json());
+  if (!stats.is_array() || stats.size() != o.files.size()) return why = "it records no input file sizes and times", false;
+  for (size_t i = 0; i < o.files.size(); ++i) {
+    uintmax_t size = 0;
+    long long mtime_ns = 0;
+    if (!file_stat(o.files[i], size, mtime_ns) || !stats[i].is_object() ||
+        stats[i].value("size", (uintmax_t)0) != size || stats[i].value("mtime_ns", (long long)0) != mtime_ns) {
+      return why = o.files[i] + " changed since", false;
+    }
   }
 
   if (!j.contains("profile") || !j["profile"].is_object()) return false;
@@ -380,12 +425,17 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 
   if (!s.bundle_search && j.contains("dino") && j["dino"].is_object()) {
     const auto& d = j["dino"];
+    // The bracket the previous run converted on (its sidecar's): with --target it must be that one. Before, the
+    // bracket was picked here with select_bundle_target_without_dino, before any exposure range was measured, so it
+    // was always the first admissible bracket and a run without --target was reused only when that happened to match.
     int expected_idx = -1;
     if (s.is_bundle) {
-      expected_idx = s.manual_target_idx >= 0 ? s.manual_target_idx
-                                              : select_bundle_target_without_dino(s.bundle, kDefaultMinTargetIdx);
-      if (expected_idx < 0 || expected_idx >= (int)s.bundle.targets.size()) return false;
-      if (prof.value("bundle_target", "") != s.bundle.targets[expected_idx].name) return false;
+      const std::string recorded = prof.value("bundle_target", "");
+      for (size_t t = 0; t < s.bundle.targets.size(); ++t) {
+        if (s.bundle.targets[t].name == recorded) expected_idx = (int)t;
+      }
+      if (expected_idx < 0) return why = "its bracket is not in this bundle", false;
+      if (s.manual_target_idx >= 0 && s.manual_target_idx != expected_idx) return why = "it converted another bracket", false;
     }
     float base_e = 0.0f, base_g = 0.0f, base_b = 0.0f;
     if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") &&
@@ -438,6 +488,40 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   }
 
   return false;
+}
+
+// Checks whether <output>.json exists and was written by this build for the same inputs and arguments (apart from the
+// output and the knobs), so --brightness, --tint and --warmth move its Auto or DINOv3 result instead of searching again.
+// Anything unreadable or different refuses the reuse, says why, and leaves s as it was.
+static bool try_load_cached_sidecar(const Options& o, Setup& s) {
+  const std::string sidecar_path = o.output + ".json";
+  if (!is_regular_file(sidecar_path)) return false;
+  std::ifstream ifs(sidecar_path);
+  if (!ifs.is_open()) return false;
+  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
+  const bool had = s.has_cached_sidecar, had_search = s.bundle_search;
+  const CachedSidecar had_cache = s.cached_sidecar;
+  const std::string had_dino_path = s.dino_path;
+  std::string why = "it does not match this conversion";
+  bool ok = false;
+  if (!j.is_object()) {
+    why = "it is not JSON";
+  } else {
+    try {
+      ok = load_cached_sidecar(j, o, s, why);
+    } catch (const std::exception& e) {  // a field of the wrong type
+      why = std::string("it cannot be read (") + e.what() + ")";
+      ok = false;
+    }
+  }
+  if (!ok) {
+    s.has_cached_sidecar = had;
+    s.bundle_search = had_search;
+    s.cached_sidecar = had_cache;
+    s.dino_path = had_dino_path;
+    log_info("Not reusing %s: %s; converting from scratch\n", sidecar_path.c_str(), why.c_str());
+  }
+  return ok;
 }
 
 int prepare(const Options& o, Setup& s) {
