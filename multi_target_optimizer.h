@@ -202,6 +202,18 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995 = nullptr, const double* film_base_rgb = nullptr);
 
+struct KnobSolveResult {
+  float e = 1.0f, g = 1.0f, b = 1.0f;
+  bool limited = false;
+  float grey_lab[3] = {50.0f, 0.0f, 0.0f};
+};
+
+// Solves the conversion gains (E, g, b) that move the grey that base=(base_e, base_g, base_b) renders as neutral L* 50
+// through prof by brightness_stops (in stops of luminance), tint_a (CIELAB a*), and warmth_b (CIELAB b*), matching
+// negicc-station's GreyPoint and ConversionSession._solve_knobs.
+bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
+                      float tint_a, float warmth_b, KnobSolveResult& out);
+
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso
 // are the capture's exposure.

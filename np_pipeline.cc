@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +34,7 @@
 #include "cfa_pipeline.h"
 #include "color_pipeline.h"
 #include "embedded_data.h"
+#include "nlohmann/json.hpp"
 #include "np_conversion.h"
 #include "np_geometry.h"
 #include "np_input.h"
@@ -172,6 +174,272 @@ void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc
   }
 }
 
+static bool paths_match(const std::string& a, const std::string& b) {
+  if (a == b) return true;
+  std::error_code ec;
+  if (std::filesystem::exists(a, ec) && std::filesystem::exists(b, ec) && std::filesystem::equivalent(a, b, ec)) {
+    return true;
+  }
+  return false;
+}
+
+static bool extract_cli_egb(const nlohmann::ordered_json& cli, float& e_out, float& g_out, float& b_out) {
+  if (!cli.is_array()) return false;
+  bool got_e = false, got_g = false, got_b = false;
+  for (size_t i = 0; i + 1 < cli.size(); ++i) {
+    if (!cli[i].is_string() || !cli[i + 1].is_string()) continue;
+    const std::string flag = cli[i].get<std::string>();
+    const std::string val_str = cli[i + 1].get<std::string>();
+    char* end = nullptr;
+    const float v = std::strtof(val_str.c_str(), &end);
+    if (!end || *end != '\0' || !std::isfinite(v)) continue;
+    if (flag == "-E" || flag == "--exposure_comp") {
+      e_out = v;
+      got_e = true;
+      ++i;
+    } else if (flag == "--gain_g") {
+      g_out = v;
+      got_g = true;
+      ++i;
+    } else if (flag == "--gain_b") {
+      b_out = v;
+      got_b = true;
+      ++i;
+    }
+  }
+  return got_e && got_g && got_b;
+}
+
+static bool argv_input_modifiers_match(const nlohmann::ordered_json& argv_json, const Options& o) {
+  if (!argv_json.is_array()) return true;
+  std::string prev_flat;
+  bool prev_row_given[3] = {false, false, false};
+  float prev_rows[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  for (size_t i = 1; i < argv_json.size(); ++i) {
+    if (!argv_json[i].is_string()) continue;
+    const std::string arg = argv_json[i].get<std::string>();
+    if (arg == "--flat" && i + 1 < argv_json.size() && argv_json[i + 1].is_string()) {
+      prev_flat = argv_json[i + 1].get<std::string>();
+      ++i;
+    } else if ((arg == "-r" || arg == "--r_coeff" || arg == "-g" || arg == "--g_coeff" || arg == "-b" ||
+                arg == "--b_coeff") &&
+               i + 3 < argv_json.size()) {
+      const int r = (arg == "-r" || arg == "--r_coeff") ? 0 : (arg == "-g" || arg == "--g_coeff") ? 1 : 2;
+      prev_row_given[r] = true;
+      for (int c = 0; c < 3; ++c) {
+        if (!argv_json[i + 1 + c].is_string()) return false;
+        prev_rows[r][c] = std::strtof(argv_json[i + 1 + c].get<std::string>().c_str(), nullptr);
+      }
+      i += 3;
+    }
+  }
+  if (prev_flat.empty() != o.flat.empty() || (!o.flat.empty() && !paths_match(prev_flat, o.flat))) return false;
+  const std::vector<float>* cur_rows[3] = {&o.r_coeff, &o.g_coeff, &o.b_coeff};
+  for (int r = 0; r < 3; ++r) {
+    if (prev_row_given[r] != o.row_given[r]) return false;
+    if (o.row_given[r]) {
+      for (int c = 0; c < 3; ++c) {
+        if (std::fabs(prev_rows[r][c] - (*cur_rows[r])[c]) > 1e-6f) return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Checks whether <output>.json exists and matches the current capture, light source, bundle/profile, target and
+// geometry so --brightness, --tint and --warmth can solve for (E, g, b) from the cached Auto/DINOv3 base parameters.
+static bool try_load_cached_sidecar(const Options& o, Setup& s) {
+  const std::string sidecar_path = o.output + ".json";
+  if (!is_regular_file(sidecar_path)) return false;
+  std::ifstream ifs(sidecar_path);
+  if (!ifs.is_open()) return false;
+  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
+  if (!j.is_object()) return false;
+  if (j.value("schema", "") != "negicc.neg_process.sidecar/1") return false;
+  if (j.contains("argv") && !argv_input_modifiers_match(j["argv"], o)) return false;
+
+  if (!j.contains("inputs") || !j["inputs"].is_object() || !j["inputs"].contains("raw_files") ||
+      !j["inputs"]["raw_files"].is_array()) {
+    return false;
+  }
+  const auto& raw_files = j["inputs"]["raw_files"];
+  if (raw_files.size() != o.files.size()) return false;
+  for (size_t i = 0; i < o.files.size(); ++i) {
+    if (!raw_files[i].is_string() || !paths_match(raw_files[i].get<std::string>(), o.files[i])) return false;
+  }
+
+  if (!j.contains("profile") || !j["profile"].is_object()) return false;
+  const auto& prof = j["profile"];
+  const std::string prof_type = prof.value("type", "");
+  const std::string prof_path = prof.value("path", "");
+  if (s.is_bundle) {
+    if (prof_type != "bundle") return false;
+    if (!paths_match(prof_path, s.bundle.path)) return false;
+    if (prof.value("input_space", "") != std::string(to_string(s.bundle.input_space))) return false;
+  } else {
+    if (prof_type != "icc") return false;
+    if (!paths_match(prof_path, s.film_prof_arg) && !paths_match(prof_path, resolve_profile_path(s.film_prof_arg))) {
+      return false;
+    }
+  }
+
+  if (!j.contains("geometry") || !j["geometry"].is_object()) return false;
+  const auto& geom = j["geometry"];
+  if (!geom.contains("rot_cw") || !geom["rot_cw"].is_number_integer() || geom["rot_cw"].get<int>() != o.rot_cw) {
+    return false;
+  }
+  if (!geom.contains("hflip") || !geom["hflip"].is_boolean() || geom["hflip"].get<bool>() != o.hflip) return false;
+  if (!geom.contains("vflip") || !geom["vflip"].is_boolean() || geom["vflip"].get<bool>() != o.vflip) return false;
+  const std::string roi_source = geom.value("roi_source", "");
+  if (o.roi_auto) {
+    if (roi_source != "auto" && roi_source != "auto_fallback") return false;
+    if (j.contains("frame_detection") && j["frame_detection"].is_object()) {
+      if (j["frame_detection"].value("film_format", "") != std::string(film_format_name(o.film_format))) return false;
+    }
+  } else if (o.has_roi) {
+    if (roi_source != "cli" || !geom.contains("roi") || !geom["roi"].is_array() || geom["roi"].size() != 4) {
+      return false;
+    }
+    for (int k = 0; k < 4; ++k) {
+      if (!geom["roi"][k].is_number_integer() || geom["roi"][k].get<int>() != o.roi[k]) return false;
+    }
+  } else {
+    if (roi_source != "none") return false;
+  }
+
+  if (!j.contains("matrix") || !j["matrix"].is_object() || !j["matrix"].contains("pins") ||
+      !j["matrix"]["pins"].is_object()) {
+    return false;
+  }
+  const bool saved_pin_e = j["matrix"]["pins"].value("e", false);
+  if (saved_pin_e != s.exposure_given) return false;
+
+  // Match either a previous bundle Auto run ("auto") or a previous single-target DINOv3 run ("dino").
+  if (s.is_bundle && !s.exposure_given && j.contains("auto") && j["auto"].is_object()) {
+    const auto& a = j["auto"];
+    if (!a.contains("target_idx") || !a["target_idx"].is_number_integer()) return false;
+    const int tgt_idx = a["target_idx"].get<int>();
+    if (tgt_idx < 0 || tgt_idx >= (int)s.bundle.targets.size()) return false;
+    if (s.manual_target_idx >= 0 && s.manual_target_idx != tgt_idx) return false;
+    if (a.value("target", "") != s.bundle.targets[tgt_idx].name) return false;
+    if (!a.contains("e") || !a["e"].is_number() || !a.contains("g") || !a["g"].is_number() || !a.contains("b") ||
+        !a["b"].is_number()) {
+      return false;
+    }
+    const float base_e = a["e"].get<float>();
+    const float base_g = a["g"].get<float>();
+    const float base_b = a["b"].get<float>();
+    if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+
+    s.has_cached_sidecar = true;
+    s.bundle_search = true;
+    s.cached_sidecar.is_auto = true;
+    s.cached_sidecar.target_idx = tgt_idx;
+    s.cached_sidecar.target_name = s.bundle.targets[tgt_idx].name;
+    s.cached_sidecar.base_e = base_e;
+    s.cached_sidecar.base_g = base_g;
+    s.cached_sidecar.base_b = base_b;
+    s.cached_sidecar.auto_json_str = a.dump();
+    s.dino_path = a.value("model", "");
+    s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
+    s.cached_sidecar.t_auto_ms = a.value("time_ms", 0.0);
+    // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
+    // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
+    if (j.contains("input_curves") && j["input_curves"].is_object()) {
+      const auto& ic = j["input_curves"];
+      negicc::InputCurves c;
+      bool ok = ic.contains("channels") && ic["channels"].is_object() && ic.value("target_idx", -1) == tgt_idx;
+      const char* names[2] = {"G", "B"};
+      for (int i = 0; ok && i < 2; ++i) {
+        const auto& ch = ic["channels"].value(names[i], nlohmann::ordered_json());
+        ok = ch.is_object() && ch.contains("a") && ch.contains("k") && ch.contains("ref") && ch.contains("u_med");
+        if (!ok) break;
+        c.a[i] = ch["a"].get<float>();
+        c.k[i] = ch["k"].get<float>();
+        c.ref[i] = ch["ref"].get<float>();
+        c.u_med[i] = ch["u_med"].get<float>();
+        if (ch.contains("u_lo")) c.u_lo[i] = ch["u_lo"].get<float>();
+      }
+      if (!ok || !(c.ref[0] > 0.0f) || !(c.ref[1] > 0.0f)) return false;
+      s.cached_sidecar.has_curves = true;
+      s.cached_sidecar.curves = c;
+      s.cached_sidecar.curves_source = ic.value("source", "fit");
+      s.cached_sidecar.input_curves_json_str = ic.dump();
+      if (ic.contains("remeter") && ic["remeter"].is_object()) {
+        const auto& rm = ic["remeter"];
+        s.cached_sidecar.base_e = rm.value("e", base_e);
+        s.cached_sidecar.base_g = rm.value("g", base_g);
+        s.cached_sidecar.base_b = rm.value("b", base_b);
+      }
+    }
+    if (j.contains("intent_field") && j["intent_field"].is_object()) {
+      s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
+    }
+    return true;
+  }
+
+  if (!s.bundle_search && j.contains("dino") && j["dino"].is_object()) {
+    const auto& d = j["dino"];
+    int expected_idx = -1;
+    if (s.is_bundle) {
+      expected_idx = s.manual_target_idx >= 0 ? s.manual_target_idx
+                                              : select_bundle_target_without_dino(s.bundle, kDefaultMinTargetIdx);
+      if (expected_idx < 0 || expected_idx >= (int)s.bundle.targets.size()) return false;
+      if (prof.value("bundle_target", "") != s.bundle.targets[expected_idx].name) return false;
+    }
+    float base_e = 0.0f, base_g = 0.0f, base_b = 0.0f;
+    if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") &&
+        j["knobs"]["base"].is_object()) {
+      const auto& kb = j["knobs"]["base"];
+      if (!kb.contains("e") || !kb["e"].is_number() || !kb.contains("g") || !kb["g"].is_number() ||
+          !kb.contains("b") || !kb["b"].is_number()) {
+        return false;
+      }
+      base_e = kb["e"].get<float>();
+      base_g = kb["g"].get<float>();
+      base_b = kb["b"].get<float>();
+    } else if (!j.contains("cli_equivalent") || !extract_cli_egb(j["cli_equivalent"], base_e, base_g, base_b)) {
+      return false;
+    }
+    if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+    if (s.exposure_given && std::fabs(base_e - o.exposure_comp) > 1e-4f * std::max(1.0f, std::fabs(o.exposure_comp))) {
+      return false;
+    }
+
+    s.has_cached_sidecar = true;
+    s.cached_sidecar.is_auto = false;
+    s.cached_sidecar.target_idx = expected_idx;
+    if (s.is_bundle && expected_idx >= 0) s.cached_sidecar.target_name = s.bundle.targets[expected_idx].name;
+    s.cached_sidecar.base_e = base_e;
+    s.cached_sidecar.base_g = base_g;
+    s.cached_sidecar.base_b = base_b;
+    s.cached_sidecar.dino_json_str = d.dump();
+    if (j.contains("intent_field") && j["intent_field"].is_object()) {
+      s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
+    }
+    s.dino_path = d.value("model", "");
+    s.cached_sidecar.dino_backend = d.value("backend", o.dino_backend);
+    if (j.contains("timings_ms") && j["timings_ms"].is_object()) {
+      const auto& tm = j["timings_ms"];
+      if (tm.contains("dino_views") && tm["dino_views"].is_number()) {
+        s.cached_sidecar.t_dino_views_ms = tm["dino_views"].get<double>();
+      }
+      if (tm.contains("dino_render") && tm["dino_render"].is_number()) {
+        s.cached_sidecar.t_dino_render_ms = tm["dino_render"].get<double>();
+      }
+      if (tm.contains("dino_inference") && tm["dino_inference"].is_number()) {
+        s.cached_sidecar.t_dino_infer_ms = tm["dino_inference"].get<double>();
+      }
+      if (tm.contains("dino_search") && tm["dino_search"].is_number()) {
+        s.cached_sidecar.t_dino_search_ms = tm["dino_search"].get<double>();
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
 int prepare(const Options& o, Setup& s) {
   if (!o.flat.empty()) {
     try {
@@ -236,6 +504,11 @@ int prepare(const Options& o, Setup& s) {
     log_info("Profile bundle: %s (%s, %zu brackets)\n", bundle.key.c_str(), bundle.path.c_str(), bundle.targets.size());
   }
   s.has_profile = s.is_bundle || !s.film_prof_arg.empty();
+  if (o.knobs_given && !s.has_profile) {
+    log_error("--brightness, --tint and --warmth require a film profile (--film_stock and --light_source, or "
+              "--film_profile)\n");
+    return 1;
+  }
 
   if (o.target_given) {
     if (!s.is_bundle) {
@@ -360,6 +633,9 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
+  // --fit_curves auto: on wherever on applies, nothing elsewhere.
+  s.fit_curves_auto_active = o.fit_curves_auto && s.is_bundle && s.white_light && !s.has_crosstalk &&
+                             !o.colorspace.empty() && s.bundle_search;
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
               "(--fit_curves with eight comma-separated numbers replays recorded curves)\n");
@@ -376,7 +652,21 @@ int prepare(const Options& o, Setup& s) {
     s.input_curves_source = "cli";
   }
 
-  if (s.use_dino) {
+  // --brightness, --tint and --warmth on a previous run's output (<output>.json): its Auto or DINOv3 result is the
+  // base the knobs move, so neither the backbone nor the search runs again; its fitted curves are replayed on its
+  // bracket.
+  if (o.knobs_given && s.use_dino && try_load_cached_sidecar(o, s)) {
+    log_info("Reusing cached metadata from %s (base E %.4f g %.4f b %.4f%s%s%s)\n", (o.output + ".json").c_str(),
+             s.cached_sidecar.base_e, s.cached_sidecar.base_g, s.cached_sidecar.base_b,
+             s.is_bundle ? ", target " : "", s.is_bundle ? s.cached_sidecar.target_name.c_str() : "",
+             s.cached_sidecar.has_curves ? ", fitted curves replayed" : "");
+    if (s.cached_sidecar.has_curves && s.input_curves_source.empty()) {
+      apply_input_curves(bundle.targets[s.cached_sidecar.target_idx].film_prof, s.cached_sidecar.curves);
+      s.input_curves = s.cached_sidecar.curves;
+      s.input_curves_source = s.cached_sidecar.curves_source;
+    }
+    s.fit_curves_auto_active = false;  // the curves (or none) come from the previous run
+  } else if (s.use_dino) {
     const EmbeddedFile* trt = find_embedded_backbone(true);
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
@@ -449,16 +739,43 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   const int given_target_idx = !s.is_bundle ? -1
                                : s.manual_target_idx >= 0 ? s.manual_target_idx
                                                           : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-  auto measure_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
+  // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
+  // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
+  // highlight roll-off measured at them.
+  auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx;
-    const float e = scan.has_auto_res ? scan.params().e
-                                 : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
-                                                   scan.film_base_rgb());
-    const float g = scan.has_auto_res ? scan.params().g : o.gain_g;
-    const float b = scan.has_auto_res ? scan.params().b : o.gain_b;
+    const float base_e = scan.has_auto_res ? scan.params().e
+                                           : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
+                                                             scan.film_base_rgb());
+    const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
+    const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
+    float e = base_e, g = base_g, b = base_b;
+    if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
+      scan.knob_base[0] = base_e;
+      scan.knob_base[1] = base_g;
+      scan.knob_base[2] = base_b;
+      if (!solve_grey_knobs(bundle.targets[target_idx].film_prof.data, base_e, base_g, base_b, o.brightness, o.tint,
+                            o.warmth, scan.knob_res)) {
+        log_error("Failed to solve grey-point knobs for target %s\n", bundle.targets[target_idx].name.c_str());
+        return false;
+      }
+      scan.has_knob_res = true;
+      e = scan.knob_res.e;
+      g = scan.knob_res.g;
+      b = scan.knob_res.b;
+    }
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
                                              ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
     scan.has_rolloff = true;
+    return true;
+  };
+  // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
+  // g, b on the combined profile the curves were replayed into) in place of the search.
+  auto restore_cached_auto = [&]() {
+    scan.auto_res.target_idx = s.cached_sidecar.target_idx;
+    scan.auto_res.target_name = s.cached_sidecar.target_name;
+    scan.auto_res.params = {s.cached_sidecar.base_e, s.cached_sidecar.base_g, s.cached_sidecar.base_b, 1.0f};
+    scan.has_auto_res = true;
   };
 
   // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
@@ -514,7 +831,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                   s.white_light ? det_sensor_w : 0, s.white_light ? det_sensor_h : 0);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      if (s.bundle_search) {
+      if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
+        restore_cached_auto();
+      } else if (s.bundle_search) {
         ParamSearchOptions opts;
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
@@ -524,22 +843,23 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
-        if (o.fit_curves) {
-          // The curves on the bracket the search chose, then E, g and b again on its combined profile (the
-          // station's Fit curves toggle); the conversion takes those (Scan::params).
-          negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25 (Iterations 227 and 228)
+        if (o.fit_curves || s.fit_curves_auto_active) {
+          // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
+          // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
+          // white-light bundle search.
+          negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25, 1 stop from the base TRC
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
                                              fit_opts, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
           s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = "fit";
+          s.input_curves_source = o.fit_curves ? "fit" : "auto";
           scan.has_curve_params = true;
           scan.curve_params = s.curve_fit.params;
         }
       }
-      measure_rolloff(frame, scan_shutter_s, scan_iso);
+      if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       return true;
     };
@@ -811,7 +1131,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     oriented_half_view = search_half_view;
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
-    if (s.bundle_search) {
+    if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
+      restore_cached_auto();
+    } else if (s.bundle_search) {
       const double t_auto_0 = omp_get_wtime();
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
@@ -831,7 +1153,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      measure_rolloff(search_half_view, scan_shutter_s, scan_iso);
+      if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
+        delete proc;
+        return 1;
+      }
     }
     scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
 
@@ -1004,7 +1329,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    if (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) {
+    if (!s.has_cached_sidecar && (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E))) {
       // Sets each bracket's exposure range on the bundle (e_min, e_max, e_center, is_feasible), which the target
       // selection, set_target_bounds and given_station_e read below. The scene statistics it returns are unused.
       float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
@@ -1030,28 +1355,42 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     }
   }
 
+  auto log_knobs = [&]() {
+    if (!scan.has_knob_res) return;
+    log_info("Knobs (brightness %+.2f, tint %+.2f, warmth %+.2f%s): grey L*=%.2f a*=%.2f b*=%.2f -> E %.4f g %.4f b %.4f\n",
+             o.brightness, o.tint, o.warmth, scan.knob_res.limited ? ", limited" : "",
+             scan.knob_res.grey_lab[0], scan.knob_res.grey_lab[1], scan.knob_res.grey_lab[2],
+             scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
+  };
+
   if (scan.has_auto_res) {
     const ParamSearchResult& res = scan.auto_res;
     c.bundle_target_idx = res.target_idx;
     c.bundle_target_name = res.target_name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The search's E, g and b (after the curve fit's fixed point with --fit_curves on), converted as the station
-    // converts them (the sidecar's cli_equivalent reproduces it).
+    // The search's E, g and b (after the curve fit's re-meter with --fit_curves on or auto), moved by the knobs when
+    // given, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
     const ConversionParams& p = scan.params();
-    apply_station(p.e, p.g, p.b);
-    log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", res.target_name.c_str(),
-           res.params.e, res.params.g, res.params.b, res.residual, to_string(res.status),
-           res.inferences);
-    auto ms = [](std::chrono::steady_clock::duration d) {
-      return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
-    };
-    log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
-           ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
-           ms(res.total_time));
+    const float fe = scan.has_knob_res ? scan.knob_res.e : p.e;
+    const float fg = scan.has_knob_res ? scan.knob_res.g : p.g;
+    const float fb = scan.has_knob_res ? scan.knob_res.b : p.b;
+    apply_station(fe, fg, fb);
+    if (!(s.has_cached_sidecar && s.cached_sidecar.is_auto)) {
+      log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", res.target_name.c_str(),
+             res.params.e, res.params.g, res.params.b, res.residual, to_string(res.status),
+             res.inferences);
+      auto ms = [](std::chrono::steady_clock::duration d) {
+        return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+      };
+      log_info("Timings (ms): render %lld, infer %lld, residual %lld, search %lld, total %lld\n",
+             ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
+             ms(res.total_time));
+    }
     if (scan.has_curve_params)
       log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
-    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", p.e, p.g, p.b, c.bundle_target_idx);
+    log_knobs();
+    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
   } else if (s.use_dino) {
     if (!s.is_bundle && !c.film_prof.data.has_profile) {
       log_error("The parameter search requires a film profile to evaluate intent losses.\n");
@@ -1064,7 +1403,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     const int max_iters = o.dino_iters;
     IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
-    if (s.is_bundle && (c.pin_mask & PIN_E)) {
+    if (!s.has_cached_sidecar && s.is_bundle && (c.pin_mask & PIN_E)) {
       // A pinned -E is the station's: the search starts from it (and the station's g = b = 1) in absolute units.
       apply_station(c.exposure_comp, 1.0f, 1.0f);
       user_gains = {c.exposure_comp, c.gain_g, c.gain_b};
@@ -1074,8 +1413,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     if (s.is_bundle) {
       // -E without --target: the bracket the bundle picks without the search.
-      c.bundle_target_idx = s.manual_target_idx >= 0 ? s.manual_target_idx
-                                                 : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+      c.bundle_target_idx = s.has_cached_sidecar && s.cached_sidecar.target_idx >= 0
+                                ? s.cached_sidecar.target_idx
+                                : (s.manual_target_idx >= 0 ? s.manual_target_idx
+                                                            : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx));
       log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
       const auto& tgt = bundle.targets[c.bundle_target_idx];
       c.bundle_target_name = tgt.name;
@@ -1086,86 +1427,118 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       cfg.prof = &c.film_prof.data;
     }
 
-    // TODO: Run `solve_dinov3_intent` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
-    // full-resolution `cfa_export_rgb` buffer once single-target solver baselines are updated.
-    const bool solve_ok = scan.cfa
-        ? solve_dinov3_intent(s.engine, cfg, c.merged_matrix,
-                              negicc::RgbView::from_interleaved_rgb(
-                                  scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                              user_gains, c.pin_mask, max_iters, c.dino_res)
-        : solve_dinov3_intent(s.engine, cfg, c.merged_matrix, (const uint16_t (*)[4])proc->imgdata.image,
-                              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
-                              user_gains, c.pin_mask, max_iters, c.dino_res);
-    if (!solve_ok) {
-      log_error("DINOv3 intent solver failed.\n");
-      return 1;
-    }
+    // The base E, g, b: a previous run's (<output>.json, with the knobs) or the solver's; with a bundle the station's
+    // values, else the absolute ones.
+    float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
+    if (s.has_cached_sidecar && !s.cached_sidecar.is_auto) {
+      base_e = s.cached_sidecar.base_e;
+      base_g = s.cached_sidecar.base_g;
+      base_b = s.cached_sidecar.base_b;
+    } else {
+      // TODO: Run `solve_dinov3_intent` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
+      // full-resolution `cfa_export_rgb` buffer once single-target solver baselines are updated.
+      const bool solve_ok = scan.cfa
+          ? solve_dinov3_intent(s.engine, cfg, c.merged_matrix,
+                                negicc::RgbView::from_interleaved_rgb(
+                                    scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
+                                user_gains, c.pin_mask, max_iters, c.dino_res)
+          : solve_dinov3_intent(s.engine, cfg, c.merged_matrix, (const uint16_t (*)[4])proc->imgdata.image,
+                                proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight,
+                                user_gains, c.pin_mask, max_iters, c.dino_res);
+      if (!solve_ok) {
+        log_error("DINOv3 intent solver failed.\n");
+        return 1;
+      }
 
 
-    std::string pins_str = "none";
-    if (c.pin_mask != 0) {
-      pins_str = "";
-      if (c.pin_mask & PIN_E) pins_str += "E ";
-      if (c.pin_mask & PIN_G) pins_str += "g ";
-      if (c.pin_mask & PIN_B) pins_str += "b";
-      if (!pins_str.empty() && pins_str.back() == ' ') pins_str.pop_back();
-    }
-    log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
-           c.dino_res.grid_w, c.dino_res.grid_h, c.dino_res.target_w, c.dino_res.target_h,
-           s.engine.backend_name(), c.dino_res.e_center, c.dino_res.bounds_lo, c.dino_res.bounds_hi,
-           max_iters, pins_str.c_str());
-    if (c.dino_res.anchor_clamped) {
-      log_warn("ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
-    }
-    log_info(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
-    for (const auto& it : c.dino_res.iterations) {
-      if (it.residual < 0.0f) {
-        log_info("  %c  %5.3f  %5.3f  %5.3f       -  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
-               it.tag, it.e, it.g, it.b, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
-               it.penalty_clip, it.penalty_anchor, it.objective);
+      std::string pins_str = "none";
+      if (c.pin_mask != 0) {
+        pins_str = "";
+        if (c.pin_mask & PIN_E) pins_str += "E ";
+        if (c.pin_mask & PIN_G) pins_str += "g ";
+        if (c.pin_mask & PIN_B) pins_str += "b";
+        if (!pins_str.empty() && pins_str.back() == ' ') pins_str.pop_back();
+      }
+      log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
+             c.dino_res.grid_w, c.dino_res.grid_h, c.dino_res.target_w, c.dino_res.target_h,
+             s.engine.backend_name(), c.dino_res.e_center, c.dino_res.bounds_lo, c.dino_res.bounds_hi,
+             max_iters, pins_str.c_str());
+      if (c.dino_res.anchor_clamped) {
+        log_warn("ANCHOR_CLAMPED (median L* 50 not reached within E_c 2^[-4, 4])\n");
+      }
+      log_info(" it      E      g      b   resid    L_L    L_a    L_b  clip%%  P_clip  P_anch       J\n");
+      for (const auto& it : c.dino_res.iterations) {
+        if (it.residual < 0.0f) {
+          log_info("  %c  %5.3f  %5.3f  %5.3f       -  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
+                 it.tag, it.e, it.g, it.b, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
+                 it.penalty_clip, it.penalty_anchor, it.objective);
+        } else {
+          log_info("  %c  %5.3f  %5.3f  %5.3f  %6.3f  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
+                 it.tag, it.e, it.g, it.b, it.residual, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
+                 it.penalty_clip, it.penalty_anchor, it.objective);
+        }
+      }
+      log_info("Status: %s after %d inferences (best it %d, resid %.3f)\n",
+             c.dino_res.status.c_str(), c.dino_res.total_inferences, c.dino_res.best_iteration, c.dino_res.best_residual);
+      log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
+             c.dino_res.solved_relative.e, c.dino_res.solved_relative.g, c.dino_res.solved_relative.b);
+      if (s.is_bundle) {
+        // The station's values, which -E, --gain_g and --gain_b take with a bundle.
+        // The station's values of the solved absolute ones.
+        c.station_params = std::array<float, 3>{(float)(c.dino_res.solved_absolute.e / row_scale[0]),
+                                                (float)(c.dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
+                                                (float)(c.dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
+        log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n", (*c.station_params)[0],
+                 (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
       } else {
-        log_info("  %c  %5.3f  %5.3f  %5.3f  %6.3f  %5.3f  %5.3f  %5.3f  %5.2f  %6.3f  %6.3f  %6.3f\n",
-               it.tag, it.e, it.g, it.b, it.residual, it.loss_L, it.loss_a, it.loss_b, it.clip_pct,
-               it.penalty_clip, it.penalty_anchor, it.objective);
+        log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g\n", c.dino_res.solved_absolute.e,
+                 c.dino_res.solved_absolute.g, c.dino_res.solved_absolute.b);
+      }
+      if (c.dino_res.solved_relative.g < 0.5f || c.dino_res.solved_relative.g > 2.0f ||
+          c.dino_res.solved_relative.b < 0.5f || c.dino_res.solved_relative.b > 2.0f) {
+        log_warn("GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
+      }
+      if (c.dino_res.best_iteration >= 0 && (size_t)c.dino_res.best_iteration + 1 < c.dino_res.iterations.size()) {
+        const auto& bit = c.dino_res.iterations[c.dino_res.best_iteration + 1];
+        float log2_ratio = (bit.e > 0.0f) ? std::log2(bit.e) : 0.0f;
+        log_info("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
+               bit.penalty_clip, bit.clip_pct, bit.clip_pct <= 2.5f ? "<=" : ">", bit.penalty_anchor, log2_ratio);
+      }
+      log_info("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
+             c.dino_res.timing_views_ms, c.dino_res.timing_render_ms, c.dino_res.timing_infer_ms,
+             c.dino_res.timing_residual_ms, c.dino_res.timing_search_ms);
+      if (s.is_bundle) {
+        base_e = (*c.station_params)[0];
+        base_g = (*c.station_params)[1];
+        base_b = (*c.station_params)[2];
+      } else {
+        base_e = c.dino_res.solved_absolute.e;
+        base_g = c.dino_res.solved_absolute.g;
+        base_b = c.dino_res.solved_absolute.b;
       }
     }
-    log_info("Status: %s after %d inferences (best it %d, resid %.3f)\n",
-           c.dino_res.status.c_str(), c.dino_res.total_inferences, c.dino_res.best_iteration, c.dino_res.best_residual);
-    log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
-           c.dino_res.solved_relative.e, c.dino_res.solved_relative.g, c.dino_res.solved_relative.b);
-    if (s.is_bundle) {
-      // The station's values, which -E, --gain_g and --gain_b take with a bundle.
-      // The station's values of the solved absolute ones.
-      c.station_params = std::array<float, 3>{(float)(c.dino_res.solved_absolute.e / row_scale[0]),
-                                              (float)(c.dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
-                                              (float)(c.dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
-      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n", (*c.station_params)[0],
-               (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
-    } else {
-      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g\n", c.dino_res.solved_absolute.e,
-               c.dino_res.solved_absolute.g, c.dino_res.solved_absolute.b);
+    float final_e = base_e, final_g = base_g, final_b = base_b;
+    if (o.knobs_given) {
+      scan.knob_base[0] = base_e;
+      scan.knob_base[1] = base_g;
+      scan.knob_base[2] = base_b;
+      if (!solve_grey_knobs(c.film_prof.data, base_e, base_g, base_b, o.brightness, o.tint, o.warmth, scan.knob_res)) {
+        log_error("Failed to solve grey-point knobs\n");
+        return 1;
+      }
+      scan.has_knob_res = true;
+      final_e = scan.knob_res.e;
+      final_g = scan.knob_res.g;
+      final_b = scan.knob_res.b;
+      log_knobs();
     }
-    if (c.dino_res.solved_relative.g < 0.5f || c.dino_res.solved_relative.g > 2.0f ||
-        c.dino_res.solved_relative.b < 0.5f || c.dino_res.solved_relative.b > 2.0f) {
-      log_warn("GAIN_RANGE (relative g or b outside [0.5, 2.0])\n");
-    }
-    if (c.dino_res.best_iteration >= 0 && (size_t)c.dino_res.best_iteration + 1 < c.dino_res.iterations.size()) {
-      const auto& bit = c.dino_res.iterations[c.dino_res.best_iteration + 1];
-      float log2_ratio = (bit.e > 0.0f) ? std::log2(bit.e) : 0.0f;
-      log_info("Penalties: clip %.3f (%.2f%% %s 2.50%%), anchor %.3f (log2(E/E_c) %+.3f)\n",
-             bit.penalty_clip, bit.clip_pct, bit.clip_pct <= 2.5f ? "<=" : ">", bit.penalty_anchor, log2_ratio);
-    }
-    log_info("Timings (ms): views %.1f, render %.1f, infer %.1f, residual %.1f, search %.1f\n\n",
-           c.dino_res.timing_views_ms, c.dino_res.timing_render_ms, c.dino_res.timing_infer_ms,
-           c.dino_res.timing_residual_ms, c.dino_res.timing_search_ms);
-
     if (s.is_bundle) {
       // Rendered as the station renders those values, so the sidecar's cli_equivalent reproduces it.
-      apply_station((*c.station_params)[0], (*c.station_params)[1], (*c.station_params)[2]);
+      apply_station(final_e, final_g, final_b);
     } else {
-      c.exposure_comp = c.dino_res.solved_absolute.e;
-      c.gain_g = c.dino_res.solved_absolute.g;
-      c.gain_b = c.dino_res.solved_absolute.b;
+      c.exposure_comp = final_e;
+      c.gain_g = final_g;
+      c.gain_b = final_b;
       adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b,
                                c.profile_film_base_rgb, unit_fb, c.merged_matrix);
     }
@@ -1182,8 +1555,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
     double scan_shutter_s = 0.125, scan_iso = 100.0;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-    apply_station(given_station_e(o, bundle, c.bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()),
-                  c.gain_g, c.gain_b);
+    if (scan.has_knob_res) {
+      apply_station(scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
+      log_knobs();
+    } else {
+      apply_station(given_station_e(o, bundle, c.bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()),
+                    c.gain_g, c.gain_b);
+    }
   }
 
   if (s.is_bundle && c.bundle_target_idx >= 0) {
@@ -1339,10 +1717,33 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.shoulder.source = "off";
     sc.shoulder.has_knee = false;
   }
-  sc.dino = s.use_dino && !scan.has_auto_res ? &c.dino_res : nullptr;
+  sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar ? &c.dino_res : nullptr;
   sc.dino_model = s.dino_path;
-  sc.dino_backend = s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend;
-  sc.auto_res = scan.has_auto_res ? &scan.auto_res : nullptr;
+  sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
+                                         : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);
+  sc.auto_res = scan.has_auto_res && !s.has_cached_sidecar ? &scan.auto_res : nullptr;
+  if (s.has_cached_sidecar) {
+    // The previous run's search records, its intent field and its curves' record carry over unchanged.
+    if (s.cached_sidecar.is_auto) {
+      sc.cached_auto_json_str = s.cached_sidecar.auto_json_str;
+    } else {
+      sc.cached_dino_json_str = s.cached_sidecar.dino_json_str;
+      sc.cached_dino_views_ms = s.cached_sidecar.t_dino_views_ms;
+      sc.cached_dino_render_ms = s.cached_sidecar.t_dino_render_ms;
+      sc.cached_dino_infer_ms = s.cached_sidecar.t_dino_infer_ms;
+      sc.cached_dino_search_ms = s.cached_sidecar.t_dino_search_ms;
+    }
+    sc.cached_intent_field_json_str = s.cached_sidecar.intent_field_json_str;
+    sc.cached_input_curves_json_str = s.cached_sidecar.input_curves_json_str;
+  }
+  if (scan.has_knob_res) {
+    sc.has_knobs = true;
+    sc.brightness = o.brightness;
+    sc.tint = o.tint;
+    sc.warmth = o.warmth;
+    for (int i = 0; i < 3; ++i) sc.knob_base[i] = scan.knob_base[i];
+    sc.knob_res = scan.knob_res;
+  }
   sc.auto_frame_half = scan.auto_frame_half;
   sc.colorspace = cs_name;
   sc.t_raw_decode_ms = scan.t_raw_decode_ms;
@@ -1353,7 +1754,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
-    sc.curve_fit = s.input_curves_source == "fit" ? &s.curve_fit : nullptr;
+    sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
+                       ? &s.curve_fit : nullptr;
   }
   write_json_sidecar(sc);
   return 0;
