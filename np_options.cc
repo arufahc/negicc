@@ -244,8 +244,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "visible frame (geometry.roi_source auto_fallback).")
     .nargs(1, 7);
   parser.add_argument("--film_format")
-    .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, or 6x9.")
-    .default_value(std::string("35mm"));
+    .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
+          "is the frame to find; with any frame it is the frame the film base is read around (the rebate).")
+    .default_value(std::string("auto"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
     .scan<'i', int>()
@@ -372,15 +373,14 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
 
+  // The film format of the frame detector: --roi auto's search, and the film base's frame detection with a given
+  // frame. Before, it defaulted to 35mm, so --roi auto on a medium-format scan looked for a 35 mm frame unless told
+  // otherwise, and it was refused without --roi auto, so the film base's detection with a given --roi could never be
+  // told the format.
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
-  if (o.film_format == FILM_FORMAT_AUTO) {
-    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, or 6x9)\n",
-            film_format_arg.c_str());
-    return 1;
-  }
-  if (parser.is_used("--film_format") && !o.roi_auto) {
-    log_error("--film_format requires --roi auto\n");
+  if (o.film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
+    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9, or auto)\n", film_format_arg.c_str());
     return 1;
   }
 
