@@ -261,6 +261,29 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
   return j;
 }
 
+// The intent field the parameter search converted against (designs/plan_intent_field_sidecar.md in
+// negicc-station): per DINOv3 grid cell, row-major over the oriented frame, the Lab colour the intent adapter predicts
+// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran.
+static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
+                                      int grid_h, int target_idx, const Sidecar& sc) {
+  const size_t n = static_cast<size_t>(grid_w) * static_cast<size_t>(grid_h);
+  if (n == 0 || mu.size() != n * 3 || sigma.size() != n * 3) return nullptr;
+  ordered_json j;
+  j["version"] = 1;
+  j["grid"] = {{"rows", grid_h}, {"cols", grid_w}, {"patch_px", 16}, {"order", "row-major, oriented frame"}};
+  j["source"] = "auto";
+  j["target_idx"] = target_idx >= 0 ? ordered_json(target_idx) : ordered_json(nullptr);
+  j["model"] = {{"name", sc.dino_model}, {"backend", sc.dino_backend}, {"negicc", NEGICC_GIT_VERSION}};
+  ordered_json m = ordered_json::array(), s = ordered_json::array();
+  for (size_t i = 0; i < n; ++i) {
+    m.push_back({num(mu[i * 3], "%.2f"), num(mu[i * 3 + 1], "%.2f"), num(mu[i * 3 + 2], "%.2f")});
+    s.push_back({num(sigma[i * 3], "%.4g"), num(sigma[i * 3 + 1], "%.4g"), num(sigma[i * 3 + 2], "%.4g")});
+  }
+  j["mu_lab"] = m;
+  j["sigma_lab"] = s;
+  return j;
+}
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -361,6 +384,15 @@ bool write_json_sidecar(const Sidecar& sc) {
   // auto: the conversion parameter search (multi_target_optimizer.h)
   j["auto"] = sc.auto_res ? auto_json(*sc.auto_res, sc.auto_frame_half, sc) : ordered_json(nullptr);
   j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
+  if (sc.auto_res)
+    j["intent_field"] = intent_field_json(sc.auto_res->intent_mu, sc.auto_res->intent_sigma,
+                                          sc.auto_res->intent_grid_w, sc.auto_res->intent_grid_h,
+                                          sc.auto_res->target_idx, sc);
+  else if (sc.dino)
+    j["intent_field"] = intent_field_json(sc.dino->best_mu, sc.dino->best_sigma, sc.dino->grid_w, sc.dino->grid_h,
+                                          -1, sc);
+  else
+    j["intent_field"] = nullptr;
 
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},

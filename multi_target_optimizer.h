@@ -151,6 +151,10 @@ struct FixedPointResult {
   float shoulder_q995 = 0.0f;   // the measured 99.5% point before clamping (auto only)
   float shoulder_knee = 1.0f;   // the linear knee x_k (1 when off)
   bool shoulder_guard = false;  // the intent loss with the shoulder is more than 2% worse than without
+  // The intent field DINOv3 predicted from the best step's preview (the field that step's parameters were searched
+  // against next and its residual was measured with): grid_h x grid_w cells, row-major, [L*, a*, b*] per cell.
+  std::vector<float> mu, sigma;
+  int grid_w = 0, grid_h = 0;
 };
 
 struct ParamSearchResult {
@@ -163,6 +167,11 @@ struct ParamSearchResult {
   float shoulder_knee = 1.0f;
   bool shoulder_guard = false;
   FixedPointStatus status = FixedPointStatus::kMaxIters;  // and its FixedPointResult::status
+  // The chosen step's intent field (FixedPointResult::mu, sigma, grid_w, grid_h), written to the sidecar's
+  // intent_field, and that step's parameters (E in the search's reference units) and bracket.
+  std::vector<float> intent_mu, intent_sigma;
+  int intent_grid_w = 0, intent_grid_h = 0;
+  ConversionParams intent_params;
 
   // The bracket's input matrix and the frame's exposure. With X the bundle's crosstalk matrix, f the film base
   // RGB, n the bundle's normalisation target and rho the exposure of the film base capture over this frame's
