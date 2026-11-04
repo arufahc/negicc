@@ -461,8 +461,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
   // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
   // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
-  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; LibRaw's decode and RGB files have no
-  // mosaic for the detector, so the base comes from the statistics.
+  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the
+  // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
+  // detector, so the base comes from the statistics.
   // TODO: with --roi auto, load_raw decodes only the frame, so the statistics there see the frame, not the whole scan.
   // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
@@ -476,6 +477,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
   };
 
+  // The frame detection the film base reads with a given --roi on the white-light decode (find_frame, below).
+  FrameDetection base_det;
+  bool has_base_det = false;
+  // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
+  int det_sensor_w = 0, det_sensor_h = 0;
   HalfSizeAnalysis analyse;
   if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
     analyse = [&](const LibRaw& raw) -> bool {
@@ -500,8 +506,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
           &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
       // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
-      detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : nullptr,
-                  s.white_light ? raw.imgdata.sizes.width : 0, s.white_light ? raw.imgdata.sizes.height : 0);
+      // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
+      // own size put the base patch off the image, so neg_process fell back to the statistics).
+      detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
+                  s.white_light ? det_sensor_w : 0, s.white_light ? det_sensor_h : 0);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
       if (s.bundle_search) {
@@ -552,6 +560,23 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   det_params.format = o.film_format;
   det_params.axis_hint = o.roi_axis_hint;
   RawRegionFinder find_frame;
+  // The film base's frame detection when the frame is given (--roi x y w h, or none): negicc-station's white-light
+  // decode runs the detector on every scan's mosaic as unpacked, with the default parameters
+  // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, so
+  // both read the same base. With --roi auto the detection that found the frame serves (base_det: above).
+  if (!o.roi_auto && s.white_light && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
+    find_frame = [&](LibRaw& raw, int roi[4]) {
+      FilmImage mosaic;
+      if (film_image_from_raw(raw, mosaic)) {
+        detect_film_frame(mosaic, FrameDetectionParams(), base_det);
+        has_base_det = true;
+        det_sensor_w = mosaic.width;
+        det_sensor_h = mosaic.height;
+      }
+      roi[0] = roi[1] = roi[2] = roi[3] = 0;   // only looked: the given roi stays
+      return true;
+    };
+  }
   if (o.roi_auto && o.files.size() != 4) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       const double t_det_0 = omp_get_wtime();
@@ -563,6 +588,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       det_params.crop_align = mosaic.step;
       detect_frame_or_fallback(mosaic, det_params, scan.frame_det);
       scan.t_frame_det_ms = (omp_get_wtime() - t_det_0) * 1000.0;
+      det_sensor_w = mosaic.width;
+      det_sensor_h = mosaic.height;
       take_detected_frame(mosaic.width, mosaic.height);
       for (int i = 0; i < 4; ++i) roi[i] = scan.roi[i];
       return true;

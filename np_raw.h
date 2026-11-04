@@ -93,7 +93,8 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level);
 // output.
 //
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
-// (--roi auto: the detected frame), so that the analysis and the decode see only that region.
+// (--roi auto: the detected frame), so that the analysis and the decode see only that region. A finder that leaves
+// the region empty (width or height 0) only looked at the mosaic, and roi stays.
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
                  const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
