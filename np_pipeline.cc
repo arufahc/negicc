@@ -362,7 +362,7 @@ int prepare(const Options& o, Setup& s) {
   }
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
-              "(--fit_curves with eight numbers replays recorded curves)\n");
+              "(--fit_curves with eight comma-separated numbers replays recorded curves)\n");
     return 1;
   }
   if (o.input_curves_given) {

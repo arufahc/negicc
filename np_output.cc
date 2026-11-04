@@ -287,7 +287,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
 // The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
-// (--fit_curves with the eight numbers) rebuilds the same tables.
+// (--fit_curves with the eight comma-separated numbers) rebuilds the same tables.
 static ordered_json input_curves_json(const Sidecar& sc) {
   const negicc::InputCurves& c = *sc.input_curves;
   auto n9 = [](double v) { return num(v, "%.9g"); };
@@ -420,8 +420,10 @@ bool write_json_sidecar(const Sidecar& sc) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted).
     const negicc::InputCurves& c = *sc.input_curves;
     cli.push_back("--fit_curves");
+    std::string v8;
     for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})
-      cli.push_back(num_str(v, "%.9g"));
+      v8 += (v8.empty() ? "" : ",") + num_str(v, "%.9g");
+    cli.push_back(v8);
   }
   j["cli_equivalent"] = cli;
 
