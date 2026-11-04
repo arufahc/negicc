@@ -61,6 +61,7 @@ struct Options {
   bool has_roi = false, roi_auto = false;      // --roi given as numbers / as 'auto'
   char roi_axis_hint = 0;                      // --roi auto h|v
   FilmFormat film_format = FILM_35MM;          // --film_format
+  bool film_format_given = false;              // --film_format was given (else 35mm for --roi auto)
   int rot_cw = 0;                              // --rot_cw (or the --roi's fifth value)
   bool hflip = false, vflip = false;
 

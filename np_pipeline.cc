@@ -993,14 +993,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The film base's frame detection when the frame is given (--roi x y w h, or none): negicc-station's white-light
   // decode runs the detector on every scan's mosaic as unpacked, with the default parameters
   // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, with
-  // --film_format when given (every format by default, as the station), so both read the same base. With --roi auto
+  // --film_format when given (every format otherwise, as the station), so both read the same base. With --roi auto
   // the detection that found the frame serves (base_det: above).
   if (!o.roi_auto && s.white_light && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       FilmImage mosaic;
       if (film_image_from_raw(raw, mosaic)) {
         FrameDetectionParams base_params;
-        base_params.format = o.film_format;  // --film_format, else every format
+        if (o.film_format_given) base_params.format = o.film_format;  // else every format, as the station
         detect_film_frame(mosaic, base_params, base_det);
         has_base_det = true;
         det_sensor_w = mosaic.width;
@@ -1191,7 +1191,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                               [filters](int row, int col) { return negicc::bayer_color_at(row, col, filters); },
                               no_black, cfa_white_level, mosaic);
       FrameDetectionParams base_params;
-      base_params.format = o.film_format;  // --film_format, else every format
+      if (o.film_format_given) base_params.format = o.film_format;  // else every format, as the station
       if (has_det) detect_film_frame(mosaic, base_params, base_det);
       detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
     }

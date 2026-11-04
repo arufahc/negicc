@@ -244,8 +244,9 @@ int parse_options(int ac, char* av[], Options& o) {
     .nargs(1, 7);
   parser.add_argument("--film_format")
     .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
-          "is the frame to find; with any frame it is the frame the film base is read around (the rebate).")
-    .default_value(std::string("auto"));
+          "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
+          "around (the rebate; default: every format, as negicc-station).")
+    .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
     .scan<'i', int>()
@@ -371,10 +372,11 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
 
-  // The film format of the frame detector: --roi auto's search, and the film base's frame detection with a given
-  // frame. Before, it defaulted to 35mm, so --roi auto on a medium-format scan looked for a 35 mm frame unless told
-  // otherwise, and it was refused without --roi auto, so the film base's detection with a given --roi could never be
-  // told the format.
+  // The film format of the frame detector: --roi auto's search (35mm unless given, as negicc-station and the recorded
+  // parity cases), and, when given, the film base's frame detection with a given frame. Before, it was refused without
+  // --roi auto, so the film base's detection with a given --roi could never be told the format; and auto (every
+  // format) could not be asked for.
+  o.film_format_given = parser.is_used("--film_format");
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
   if (o.film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
