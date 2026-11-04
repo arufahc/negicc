@@ -317,6 +317,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["remeter"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
                     {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)},
                     {"x_hi", n9(f->x_hi)}, {"passes", f->remeter_passes}, {"converged", f->remeter_converged},
+                    {"shape_scale", n9(f->shape_scale)},
                     {"loss", n9(f->loss_export)}};
   } else {
     j["lambda"] = nullptr;

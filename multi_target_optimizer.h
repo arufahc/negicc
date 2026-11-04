@@ -250,6 +250,7 @@ struct CurveRefitResult {
   int remeter_passes = 0;         // re-meter and roll-off alternations until the roll-off held still
   bool remeter_converged = false; // the roll-off of the last pass equals the one its re-meter ran with
   double loss_export = 0.0;       // the intent loss at params on the combined profile, on the export's render
+  float shape_scale = 1.0f;       // a and k scaled by this to keep the shape at the export's anchor (1: not needed)
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
