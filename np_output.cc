@@ -284,6 +284,43 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
   return j;
 }
 
+// The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
+// the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
+// the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
+// (--fit_curves with the eight numbers) rebuilds the same tables.
+static ordered_json input_curves_json(const Sidecar& sc) {
+  const negicc::InputCurves& c = *sc.input_curves;
+  auto n9 = [](double v) { return num(v, "%.9g"); };
+  ordered_json j;
+  j["version"] = 1;
+  j["space"] = "profile input, after the input matrix and the knee";
+  j["source"] = sc.input_curves_source;
+  j["target_idx"] = sc.bundle_target_idx >= 0 ? ordered_json(sc.bundle_target_idx) : ordered_json(nullptr);
+  ordered_json ch;
+  const char* names[2] = {"G", "B"};
+  for (int i = 0; i < 2; ++i)
+    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
+  j["channels"] = ch;
+  if (const CurveRefitResult* f = sc.curve_fit) {
+    const negicc::CurveFitOptions defaults;
+    j["lambda"] = n9(defaults.lambda);
+    j["bound"] = n9(defaults.curve_bound);
+    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
+                {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)}};
+    j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
+                          {"x_hi", n9(f->params_before.shoulder)}};
+    j["fixed_point"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
+                        {"residual", n9(f->residual)}, {"status", to_string(f->status)}};
+  } else {
+    j["lambda"] = nullptr;
+    j["bound"] = nullptr;
+    j["fit"] = nullptr;
+    j["params_before"] = nullptr;
+    j["fixed_point"] = nullptr;
+  }
+  return j;
+}
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -379,6 +416,13 @@ bool write_json_sidecar(const Sidecar& sc) {
       cli.push_back(std::to_string(v));
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  if (sc.input_curves) {
+    // Replays the combined profile without fitting (the curves need -P, as when they were fitted).
+    const negicc::InputCurves& c = *sc.input_curves;
+    cli.push_back("--fit_curves");
+    for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})
+      cli.push_back(num_str(v, "%.9g"));
+  }
   j["cli_equivalent"] = cli;
 
   // auto: the conversion parameter search (multi_target_optimizer.h)
@@ -393,6 +437,8 @@ bool write_json_sidecar(const Sidecar& sc) {
                                           -1, sc);
   else
     j["intent_field"] = nullptr;
+
+  j["input_curves"] = sc.input_curves ? input_curves_json(sc) : ordered_json(nullptr);
 
   const ShoulderInfo& sh = sc.shoulder;
   j["tone"] = {{"knee", num(sc.knee, "%.9g")},

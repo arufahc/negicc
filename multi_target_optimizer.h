@@ -22,6 +22,7 @@
 
 #include "cfa_pipeline.h"
 #include "dinov3_engine.h"
+#include "input_curves.h"
 #include "profile_bundle.h"
 
 // Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
@@ -225,5 +226,38 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
+
+// ---- Fitted G/B input curves (negicc-station designs/plan_fit_curves.md, input_curves.h) ----------------------
+
+// Composes the G and B input tables of prof with curves, in place (its own tables, then rebound), so every copy of
+// the bracket's profile (the search's renders, the grey point, the export) is the combined profile. No curves: no
+// change.
+void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves);
+
+// What fit_input_curves_after_search did.
+struct CurveRefitResult {
+  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the fit with E fixed, its losses
+  ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
+  ConversionParams params;        // after the fixed point on the combined profile (E in this frame's units)
+  float residual = 0.0f;          // the fixed point's residual and status
+  FixedPointStatus status = FixedPointStatus::kMaxIters;
+  int steps = 0;
+};
+
+// The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
+// bundles: on the same frame as the search,
+//   1. ref and u_med from the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at the
+//      search's E, g, b, then g, b and the curves fitted with E fixed against the search's intent field on the
+//      frame's grid (negicc::fit_input_curves, the same code as the station's Converter.fit_input_curves);
+//   2. the bracket's G and B input tables composed with the curves in place (apply_input_curves on
+//      bundle.targets[res.target_idx]);
+//   3. E, g, b solved on the combined profile as the station's PerTargetConverter.fit_bracket does with Auto's field:
+//      E metered to L* 50 within the bracket's exposure range, a search from (that E, the fitted g, b), then the
+//      fixed-point loop.
+// False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
+bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                                   double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                                   const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
+                                   CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

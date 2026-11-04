@@ -1574,3 +1574,126 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.total_time = Clock::now() - t_start;
   return true;
 }
+
+// ---- Fitted G/B input curves ---------------------------------------------------------------------------------
+
+void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
+  if (!curves.active() || !prof.data.has_profile) return;
+  for (int ch = 1; ch <= 2; ++ch) {
+    std::vector<float>& table = prof.in_trc[ch];
+    if (table.size() < 2) continue;
+    std::vector<float> composed(table.size());
+    const int i = ch - 1;
+    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
+                                curves.k[i], composed.data());
+    table.swap(composed);
+  }
+  prof.rebind_pointers();
+}
+
+// py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
+// negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
+bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                                   double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                                   const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
+                                   CurveRefitResult& out) {
+  if (bundle.has_crosstalk) {
+    std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
+                 "not mark the dark end of every channel" << std::endl;
+    return false;
+  }
+  const int idx = res.target_idx;
+  if (idx < 0 || idx >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
+    return false;
+  }
+  ParamSearchResult scratch;  // the inferences and timings of the frame below; not reported
+  SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
+  fr.set_shoulder(1.0f, true);
+  fr.set_frame(frame, opts.crop_ratio);
+  const FrameStats& stats = fr.stats();
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+  const float e_norm = fr.e_norm();
+  const size_t n = stats.grid.size() / 3;
+  if (res.intent_grid_w != stats.grid_w || res.intent_grid_h != stats.grid_h || res.intent_mu.size() != n * 3 ||
+      res.intent_sigma.size() != n * 3 || n == 0) {
+    std::cerr << "ERROR! The search's intent field does not match the frame's grid" << std::endl;
+    return false;
+  }
+  // The search's matrix and E: white-light bundles search on M_frame with E in this frame's units.
+  const float* merged = fr.input_matrix();
+  const float e_int = res.params.e;  // white light (checked above): the search's E is already in this frame's units
+  out.params_before = res.params;
+
+  // 1. ref and u_med, then the fit with E fixed (the station's Converter.fit_input_curves).
+  float fb[3];
+  if (opts.film_base_rgb_d) {
+    for (int c = 0; c < 3; ++c) fb[c] = (float)opts.film_base_rgb_d[c];
+  } else if (opts.film_base_rgb) {
+    for (int c = 0; c < 3; ++c) fb[c] = opts.film_base_rgb[c];
+  } else {
+    // No film base read from the scan: the brightest grid cell per channel, as the station takes it.
+    for (int c = 0; c < 3; ++c) fb[c] = 0.0f;
+    for (size_t i = 0; i < n; ++i)
+      for (int c = 0; c < 3; ++c) fb[c] = std::max(fb[c], (float)stats.grid[i * 3 + c]);
+  }
+  ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
+  const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
+  negicc::InputCurves curves;
+  negicc::input_curve_reference(merged, e_int, res.params.g, res.params.b, AUTO_KNEE, fb, stats.grid.data(), (int)n,
+                                curves);
+  out.fit = negicc::fit_input_curves(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n,
+                                     res.intent_mu.data(), res.intent_sigma.data(), curves, fit_opts);
+  if (opts.verbose) {
+    const negicc::InputCurves& c = out.fit.curves;
+    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << " ref " << fixed(c.ref[0], 4)
+              << " u_med " << fixed(c.u_med[0], 3) << ", B a " << fixed(c.a[1], 4) << " k " << fixed(c.k[1], 4)
+              << " ref " << fixed(c.ref[1], 4) << " u_med " << fixed(c.u_med[1], 3) << "; g " << fixed(out.fit.g, 4)
+              << " b " << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
+              << fixed((float)out.fit.loss_after, 3) << " (" << out.fit.evaluations << " evaluations)\n";
+  }
+
+  // 2. The combined profile, in place: every later use of the bracket renders through it.
+  apply_input_curves(prof, out.fit.curves);
+
+  // 3. The fixed point on the combined profile, as fit_bracket solves a bracket from Auto's field.
+  const bool white_light = true;
+  const float g_lo = std::max(1.0f, stats.g_lo);
+  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
+  const float g_scale = white_light ? e_norm : 1.0f;
+  Enclosure enc;
+  if (!bracket_enclosure(bundle.targets[idx], idx, g_lo * g_scale, g_hi * g_scale, enc)) {
+    std::cerr << "ERROR! " << bundle.targets[idx].name << " has no patch readings" << std::endl;
+    return false;
+  }
+  float eb[3] = {std::min(enc.e_min, enc.e_max), std::max(enc.e_min, enc.e_max), enc.e_center};
+  float e0 = enc.e_center;
+  {
+    float p_scene[3];
+    for (int r = 0; r < 3; ++r) {
+      p_scene[r] = 0.0f;
+      for (int c = 0; c < 3; ++c) p_scene[r] += merged[r * 3 + c] * stats.log_avg_rgb[c];
+    }
+    const GreyPoint gp(prof.data);
+    float e_met = 0.0f;
+    if (gp.reference_grey() && exposure_for_lightness(gp, p_scene, 1.10f, 1.15f, e_met))
+      e0 = std::clamp(e_met, eb[0], eb[1]);
+  }
+  const ConversionParams initial{e0, out.fit.g, out.fit.b, 1.0f};
+  ConversionParams start;
+  fr.search(idx, res.intent_mu, res.intent_sigma, &initial, eb, start);
+  if (opts.verbose) std::cout << "Curves: fixed point on " << bundle.targets[idx].name << " (combined profile)\n";
+  FixedPointResult fp;
+  if (!fr.fixed_point(idx, start, eb, fp)) return false;
+  out.params = fp.params;
+  out.residual = fp.residual;
+  out.status = fp.status;
+  out.steps = fp.steps;
+  if (opts.verbose) {
+    std::cout << "Curves: E " << fixed(out.params.e, 4) << " g " << fixed(out.params.g, 4) << " b "
+              << fixed(out.params.b, 4) << " (resid " << fixed(out.residual, 4) << ", " << to_string(out.status)
+              << ")\n";
+  }
+  return true;
+}

@@ -21,6 +21,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -262,6 +263,17 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--target", "--bundle_target")
     .help("Target index (0-based) or target name in JSON profile bundle.")
     .default_value(std::string(""));
+  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
+  parser.add_argument("--fit_curves")
+    .help("off (default), on, or aG kG aB kB refG refB u_medG u_medB. on: after the bundle search, fit G and B input "
+          "curves (with g and b, E fixed) to the search's intent field on the bracket it chose, then solve E, g and b "
+          "again on that bracket's profile with its input tables composed with the curves (the combined profile), as "
+          "negicc-station's Fit curves toggle does; needs the bundle search (no --target, -E, --gain_g or --gain_b). "
+          "Eight numbers: convert through the --target bracket's combined profile with these recorded curves, "
+          "without fitting (a sidecar's input_curves; its cli_equivalent writes them). White-light (d65) bundles "
+          "and -P only.")
+    .nargs(1, 8)
+    .default_value(std::vector<std::string>{"off"});
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--flat")
@@ -352,6 +364,37 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
+  {
+    const std::vector<std::string> fc = parser.get<std::vector<std::string>>("--fit_curves");
+    if (fc.size() == 1 && (fc[0] == "on" || fc[0] == "off")) {
+      o.fit_curves = fc[0] == "on";
+    } else if (fc.size() == 8) {
+      float v[8];
+      for (int i = 0; i < 8; ++i) {
+        char* end = nullptr;
+        v[i] = std::strtof(fc[i].c_str(), &end);
+        if (!end || *end != '\0' || !std::isfinite(v[i])) {
+          log_error("--fit_curves: '%s' is not a number (give off, on, or aG kG aB kB refG refB u_medG u_medB)\n",
+                    fc[i].c_str());
+          return 1;
+        }
+      }
+      o.input_curves_given = true;
+      for (int i = 0; i < 2; ++i) {
+        o.input_curves.a[i] = v[i * 2];
+        o.input_curves.k[i] = v[i * 2 + 1];
+        o.input_curves.ref[i] = v[4 + i];
+        o.input_curves.u_med[i] = v[6 + i];
+        if (!(o.input_curves.ref[i] > 0.0f)) {
+          log_error("--fit_curves: refG and refB must be positive\n");
+          return 1;
+        }
+      }
+    } else {
+      log_error("--fit_curves takes off, on, or eight numbers (aG kG aB kB refG refB u_medG u_medB)\n");
+      return 1;
+    }
+  }
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
   o.quality = parser.get<int>("--quality");
