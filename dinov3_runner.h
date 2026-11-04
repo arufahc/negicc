@@ -5,9 +5,12 @@
 // DinoV3AdapterRunner, the per-stock adapter that maps the tokens to the intent field, so one backbone file serves
 // every film stock and the adapters ship inside neg_process (embedded_data.h).
 //
-// The ONNX Runtime CPU runner (dinov3_ort_runner.cc) is built everywhere. The TensorRT runner
-// (dinov3_trt_runner.cc) is built only with USE_CUDA=1 and runs the device-specific model.engine that
-// `make engine` builds in negicc-station. When USE_CUDA=0, dinov3_nocuda.cc provides the fallback stubs.
+// The adapter runs where the backbone runs: ONNX Runtime with an ONNX Runtime backbone, TensorRT with a TensorRT
+// backbone, reading the backbone's tokens from device memory (DinoV3Runner::device_tokens) so they never leave the GPU.
+//
+// The ONNX Runtime CPU runners (dinov3_ort_runner.cc) are built everywhere. The TensorRT runners
+// (dinov3_trt_runner.cc) are built only with USE_CUDA=1 and run the device-specific backbone.engine and adapter.engine
+// files `make dinov3_engine` builds. When USE_CUDA=0, dinov3_nocuda.cc provides the fallback stubs.
 // These sources live in negicc and are consumed by negicc-station via git submodule at 3rd_party/negicc.
 //
 // py-ref: negicc_station/src/export_intent_engine.py:49-70, 104-112 @ 2f7ee4a (output contract)
@@ -64,6 +67,11 @@ public:
     virtual bool has_pooled() const { return false; }
     virtual bool has_pooled_tone() const { return false; }
     virtual size_t memory_bytes() const { return 0; }
+    // Device address of the last run's "tokens" output when the backbone runs on TensorRT (valid until the next run),
+    // so a TensorRT adapter reads the tokens where they are; null for other runners.
+    virtual const void* device_tokens() const { return nullptr; }
+    // Device-to-host copies of the tokens made so far (tests: a GPU backbone paired with a GPU adapter makes none).
+    virtual int token_downloads() const { return 0; }
 
     // Multi-head forward pass with selectable destination buffers.
     virtual void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
@@ -79,18 +87,27 @@ public:
     }
 };
 
-// Deserialises a TensorRT engine; throws std::runtime_error on failure or in CPU-only builds.
 // Per-stock adapter: tokens [1, N, 768] -> mu, sigma [1, N, 3].
 class DinoV3AdapterRunner {
 public:
     virtual ~DinoV3AdapterRunner() = default;
+    // Tokens in host memory.
     virtual void run(const float* tokens, int patches, float* mu, float* sigma) = 0;
+    // The adapter runs on the GPU and takes its tokens from device memory (run_device).
+    virtual bool on_device() const { return false; }
+    // Tokens in device memory (DinoV3Runner::device_tokens of a TensorRT backbone); mu and sigma land on the host.
+    virtual void run_device(const void* /*device_tokens*/, int /*patches*/, float* /*mu*/, float* /*sigma*/);
     virtual size_t memory_bytes() const { return 0; }
 };
 
 // ONNX Runtime adapter from an in-memory adapter.onnx (input "tokens", outputs "mu", "sigma").
 std::unique_ptr<DinoV3AdapterRunner> make_ort_adapter(const void* onnx_data, size_t onnx_size, int num_threads = 1);
 
+// TensorRT adapter from an in-memory adapter.engine (make dinov3_engine); throws std::runtime_error on failure or in
+// CPU-only builds.
+std::unique_ptr<DinoV3AdapterRunner> make_trt_adapter(const void* engine_data, size_t engine_size);
+
+// Deserialises a TensorRT engine; throws std::runtime_error on failure or in CPU-only builds.
 std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path);
 // The same from a serialized engine held in memory.
 std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size);

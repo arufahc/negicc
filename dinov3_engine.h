@@ -42,11 +42,19 @@ public:
                      const std::string& backend = "auto", int num_threads = 4, int max_size = 512,
                      int patch_size = 16);
 
-    // Adapter for a backbone model: an adapter.onnx held in memory (embedded in neg_process) or read from a file.
-    // name is reported by adapter_name(). Ignored by fused models, which carry their own adapter. Throws
-    // std::runtime_error when the adapter cannot be read or loaded.
-    void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1);
+    // Adapter for a backbone model, after load(): its adapter.onnx and its TensorRT adapter.engine (make
+    // dinov3_engine), held in memory (embedded in neg_process) or read from files. The adapter runs where the
+    // backbone runs: a TensorRT backbone needs the engine (there is no CPU adapter behind a GPU backbone), an ONNX
+    // Runtime backbone uses the .onnx. name is reported by adapter_name(). Ignored by fused models, which carry their
+    // own adapter. Throws std::runtime_error when the adapter the backbone needs is missing or cannot be loaded.
+    void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1,
+                     const void* engine_data = nullptr, size_t engine_size = 0);
+    // path: adapter.onnx or adapter.engine (or a directory holding them); the other file is taken from beside it.
     void load_adapter_file(const std::string& path, int num_threads = 1);
+    // The adapter runs on the GPU (TensorRT).
+    bool adapter_on_device() const { return adapter_ && adapter_->on_device(); }
+    // Device-to-host copies of the backbone's tokens so far (0 when the backbone and adapter both run on the GPU).
+    int token_downloads() const { return runner_ ? runner_->token_downloads() : 0; }
     const std::string& adapter_name() const { return adapter_name_; }
     // The loaded model is a backbone and needs an adapter.
     bool needs_adapter() const;

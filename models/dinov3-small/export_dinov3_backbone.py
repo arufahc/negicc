@@ -128,6 +128,28 @@ def build_engine(onnx_path, engine_path, workspace_mb, fp16):
     print(f"Built {engine_path}")
 
 
+def build_adapter_engine(onnx_path, workspace_mb, fp16):
+    """adapter.engine beside an intent adapter's adapter.onnx: input tokens [1, N, 768] over the backbone's patch range."""
+    trtexec = find_trtexec()
+    if not trtexec:
+        sys.exit("trtexec not found (install TensorRT, e.g. JetPack's nvidia-tensorrt)")
+    lo = 8 * PATCH_SIZE
+    opt_h = IMAGE_SIZE - 2 * PATCH_SIZE
+    n = lambda h, w: (h // PATCH_SIZE) * (w // PATCH_SIZE)
+    engine_path = os.path.join(os.path.dirname(onnx_path), "adapter.engine")
+    cmd = [
+        trtexec, f"--onnx={onnx_path}", f"--saveEngine={engine_path}",
+        f"--minShapes=tokens:1x{n(lo, lo)}x768",
+        f"--optShapes=tokens:1x{n(opt_h, IMAGE_SIZE)}x768",
+        f"--maxShapes=tokens:1x{n(IMAGE_SIZE, IMAGE_SIZE)}x768",
+        f"--memPoolSize=workspace:{workspace_mb}M",
+        "--fp16" if fp16 else "--noTF32",
+    ]
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+    print(f"Built {engine_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", default=DEFAULT_SOURCE, help="Hugging Face model id or local model directory")
@@ -137,12 +159,16 @@ def main():
     ap.add_argument("--engine-only", action="store_true", help="build the engine from an existing backbone.onnx")
     ap.add_argument("--fp16", action="store_true", help="build an FP16 engine instead of strict FP32")
     ap.add_argument("--workspace-mb", type=int, default=512, help="TensorRT builder workspace limit (MiB)")
+    ap.add_argument("--adapters", nargs="*", default=[],
+                    help="intent adapters (adapter.onnx) to build an adapter.engine for, beside each")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     onnx_path = os.path.join(args.out, "backbone.onnx")
     if args.engine_only:
         build_engine(onnx_path, os.path.join(args.out, "backbone.engine"), args.workspace_mb, args.fp16)
+        for a in args.adapters:
+            build_adapter_engine(a, args.workspace_mb, args.fp16)
         return
 
     from transformers import AutoModel

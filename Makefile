@@ -1,7 +1,7 @@
 # neg_process: converts film negative RAW scans with the profiles and intent adapters built into it.
 #
 #   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
-#   make dinov3_engine      # its TensorRT engine, for USE_CUDA=1 builds (on the machine that runs it)
+#   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs them)
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
 #   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
@@ -286,8 +286,11 @@ bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
 # also its TensorRT engine (make dinov3_engine, on the machine that runs it), which falls back to the .onnx when it
 # cannot be loaded. Without the backbone neg_process still builds, but converts only with --gain_g or --gain_b given.
+# USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
+# the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
-EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx)) \
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx \
+                                $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
               $(wildcard $(BACKBONE_FILES))
 
 EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
@@ -395,8 +398,10 @@ DINOV3_SOURCE ?= Tooony133/dinov3-vits16-pretrain-lvd1689m
 dinov3_model:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --source $(DINOV3_SOURCE)
 
+# The backbone's engine and one engine per intent adapter (models/dinov3-small_*/adapter.engine), on the device that
+# runs them (engines are device-specific and not checked in). On the Orin Nano: about 41 s + 10 s per adapter.
 dinov3_engine:
-	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only
+	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
 
 clean: clean_lib
 

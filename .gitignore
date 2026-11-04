@@ -12,3 +12,4 @@ __pycache__
 3rd_party/onnxruntime/*
 !3rd_party/onnxruntime/README.md
 models/dinov3-small/backbone.engine
+models/dinov3-small_*/adapter.engine
