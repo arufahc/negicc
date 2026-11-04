@@ -1039,8 +1039,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
       // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
       // own size put the base patch off the image, so neg_process fell back to the statistics).
-      detect_base(half_view, (s.white_light && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
-                  s.white_light ? det_sensor_w : 0, s.white_light ? det_sensor_h : 0);
+      // A single RAW's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, white light or
+      // not; before, only white light used it, so TriLED with -q >= 0 (this path, not the CFA one) lost the rebate
+      // base and read it from the statistics.
+      const bool raw_det = s.white_light || (o.input_mode == InputMode::kRaw && o.files.size() == 1);
+      detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
+                  raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -1113,7 +1117,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, with
   // --film_format when given (every format otherwise, as the station), so both read the same base. With --roi auto
   // the detection that found the frame serves (base_det: above).
-  if (!o.roi_auto && s.white_light && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
+  if (!o.roi_auto && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       FilmImage mosaic;
       if (film_image_from_raw(raw, mosaic)) {

@@ -1544,8 +1544,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
         const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
         const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-        const float lo = base_lo;
-        const float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        float lo = base_lo;
+        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
+        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
+        if (lo > hi) std::swap(lo, hi);
         const float depth_r = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
                               SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
         depths_res.push_back({c, e_met, depth_r, lo, hi});
