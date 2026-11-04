@@ -794,10 +794,8 @@ class SearchFrame {
         best_err = err;
         best = curr;
         best_q995 = cur_q995;
-        if (best.shoulder > negicc::kShoulderOff) {
-          best_mu = mu;
-          best_sigma = sigma;
-        }
+        best_mu = mu;  // kept for the shoulder guard and for the sidecar's intent field
+        best_sigma = sigma;
       }
       if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
         status = FixedPointStatus::kDiverged;
@@ -841,6 +839,10 @@ class SearchFrame {
     fp.residual = best_err;
     fp.status = status;
     fp.steps = steps;
+    fp.mu = std::move(best_mu);
+    fp.sigma = std::move(best_sigma);
+    fp.grid_w = stats_.grid_w;
+    fp.grid_h = stats_.grid_h;
     return true;
   }
 
@@ -1561,6 +1563,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.shoulder_knee = chosen.shoulder_knee;
   out.shoulder_guard = chosen.shoulder_guard;
   out.status = chosen.status;
+  out.intent_mu = chosen.mu;
+  out.intent_sigma = chosen.sigma;
+  out.intent_grid_w = chosen.grid_w;
+  out.intent_grid_h = chosen.grid_h;
+  out.intent_params = chosen.params;
   out.headroom = headroom.outcome;
   out.headroom_ev = headroom.delta_ev;
   fr.write_timings();
