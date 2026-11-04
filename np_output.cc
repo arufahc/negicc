@@ -17,6 +17,7 @@
 #include "np_output.h"
 
 #include <lcms2.h>
+#include <zlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <netinet/in.h>
@@ -27,6 +28,7 @@
 #include <cstring>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
@@ -335,6 +337,23 @@ static ordered_json input_curves_json(const Sidecar& sc) {
 
 const char* neg_process_version() { return NEGICC_GIT_VERSION; }
 
+bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return false;
+  std::vector<char> buf(1 << 20);
+  uLong c = crc32(0L, Z_NULL, 0);
+  size = 0;
+  while (f) {
+    f.read(buf.data(), (std::streamsize)buf.size());
+    const std::streamsize n = f.gcount();
+    if (n <= 0) break;
+    c = crc32_z(c, reinterpret_cast<const Bytef*>(buf.data()), (z_size_t)n);
+    size += (uintmax_t)n;
+  }
+  crc = (uint32_t)c;
+  return !f.bad();
+}
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -351,17 +370,14 @@ bool write_json_sidecar(const Sidecar& sc) {
     else if (!model.empty()) camera = model;
     else if (!make.empty()) camera = make;
   }
-  // Each input's size and modification time, so a later run reusing this sidecar (the knobs) can tell the same file
-  // from another saved under the same name.
+  // Each input's size and CRC-32, so a later run reusing this sidecar (the knobs) can tell the same file from another
+  // saved under the same name, also when the file was copied or downloaded again in between (a new modification time).
   ordered_json stats = ordered_json::array();
   for (const std::string& f : sc.files) {
-    std::error_code ec;
-    const uintmax_t size = std::filesystem::file_size(f, ec);
-    const auto t = std::filesystem::last_write_time(f, ec);
-    stats.push_back(ec ? ordered_json(nullptr)
-                       : ordered_json({{"size", size},
-                                       {"mtime_ns", (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                        t.time_since_epoch()).count()}}));
+    uintmax_t size = 0;
+    uint32_t crc = 0;
+    stats.push_back(file_fingerprint(f, size, crc) ? ordered_json({{"size", size}, {"crc32", crc}})
+                                                   : ordered_json(nullptr));
   }
   j["inputs"] = {{"raw_files", sc.files},
                  {"raw_file_stats", stats},

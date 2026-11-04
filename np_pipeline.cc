@@ -268,17 +268,6 @@ static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, c
   return true;
 }
 
-// The size and modification time of a file, as the sidecar records each input (inputs.raw_file_stats).
-static bool file_stat(const std::string& path, uintmax_t& size, long long& mtime_ns) {
-  std::error_code ec;
-  size = std::filesystem::file_size(path, ec);
-  if (ec) return false;
-  const auto t = std::filesystem::last_write_time(path, ec);
-  if (ec) return false;
-  mtime_ns = (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
-  return true;
-}
-
 // The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
 // serve this conversion.
 static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
@@ -301,15 +290,16 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       return why = "it converted other files", false;
     }
   }
-  // The same files, not only the same names: a capture saved again under the same name has another size or time.
+  // The same files, not only the same names: a capture saved again under the same name has another size or CRC-32.
+  // (Not the modification time: a file copied or downloaded again, as negicc-web stages its inputs, keeps its content.)
   const auto& stats = j["inputs"].value("raw_file_stats", nlohmann::ordered_json());
-  if (!stats.is_array() || stats.size() != o.files.size()) return why = "it records no input file sizes and times", false;
+  if (!stats.is_array() || stats.size() != o.files.size()) return why = "it records no input file sizes and CRCs", false;
   for (size_t i = 0; i < o.files.size(); ++i) {
     uintmax_t size = 0;
-    long long mtime_ns = 0;
-    if (!file_stat(o.files[i], size, mtime_ns) || !stats[i].is_object() ||
-        stats[i].value("size", (uintmax_t)0) != size || stats[i].value("mtime_ns", (long long)0) != mtime_ns) {
-      return why = o.files[i] + " changed since", false;
+    uint32_t crc = 0;
+    if (!file_fingerprint(o.files[i], size, crc) || !stats[i].is_object() ||
+        stats[i].value("size", (uintmax_t)0) != size || stats[i].value("crc32", (uint32_t)0) != crc) {
+      return why = o.files[i] + " is not the file it converted", false;
     }
   }
 

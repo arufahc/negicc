@@ -95,4 +95,7 @@ struct Sidecar {
 // The build's version (git describe), as the sidecar's tool.version records it.
 const char* neg_process_version();
 
+// A file's size and CRC-32 (zlib), as the sidecar records each input (inputs.raw_file_stats). False when unreadable.
+bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
+
 bool write_json_sidecar(const Sidecar& sc);
