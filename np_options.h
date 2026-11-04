@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "film_frame_detector.h"
+#include "input_curves.h"
 #include "np_conversion.h"
 #include "np_input.h"
 
@@ -64,6 +65,11 @@ struct Options {
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;
+
+  // Fitted G/B input curves (input_curves.h)
+  bool fit_curves = false;                     // --fit_curves on
+  bool input_curves_given = false;             // --input_curves (replayed, not fitted)
+  negicc::InputCurves input_curves;
 
   // Output
   std::string output;                          // -o
