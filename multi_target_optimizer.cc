@@ -1659,7 +1659,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const float e_int = res.params.e;  // white light (checked above): the search's E is already in this frame's units
   out.params_before = res.params;
 
-  // 1. ref and u_med, then the fit with E fixed (the station's Converter.fit_input_curves).
+  // 1. The fit with E fixed (the station's Converter.fit_input_curves).
   float fb[3];
   if (opts.film_base_rgb_d) {
     for (int c = 0; c < 3; ++c) fb[c] = (float)opts.film_base_rgb_d[c];
@@ -1673,33 +1673,39 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   }
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
-  negicc::InputCurves curves;
-  negicc::input_curve_reference(merged, e_int, res.params.g, res.params.b, AUTO_KNEE, fb, stats.grid.data(), (int)n,
-                                curves);
-  out.fit = negicc::fit_input_curves(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n,
-                                     res.intent_mu.data(), res.intent_sigma.data(), curves, fit_opts);
+  negicc::CurveFrame cf;
+  cf.merged = merged;
+  cf.knee = AUTO_KNEE;
+  std::copy(fb, fb + 3, cf.film_base);
+  cf.grid = stats.grid.data();
+  cf.n = (int)n;
+  // Each candidate's curves are anchored (ref, u_med) at its own g and b, with E fixed at Auto's.
+  out.fit = negicc::fit_input_curves(cfg, cf, e_int, res.params.g, res.params.b, res.intent_mu.data(),
+                                     res.intent_sigma.data(), fit_opts);
   if (opts.verbose) {
     const negicc::InputCurves& c = out.fit.curves;
-    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << " ref " << fixed(c.ref[0], 4)
-              << " u_med " << fixed(c.u_med[0], 3) << ", B a " << fixed(c.a[1], 4) << " k " << fixed(c.k[1], 4)
-              << " ref " << fixed(c.ref[1], 4) << " u_med " << fixed(c.u_med[1], 3) << "; g " << fixed(out.fit.g, 4)
-              << " b " << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
-              << fixed((float)out.fit.loss_after, 3) << " (" << out.fit.evaluations << " evaluations)\n";
+    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
+              << " k " << fixed(c.k[1], 4) << "; g " << fixed(out.fit.g, 4) << " b " << fixed(out.fit.b, 4)
+              << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> " << fixed((float)out.fit.loss_after, 3)
+              << " (" << out.fit.evaluations << " evaluations)\n";
   }
 
-  // Auto's grid median L* on the bracket's own profile: the re-meter's target (step 3). Measured before step 2, which
-  // replaces the profile's tables (cfg points at them).
+  // Auto's grid median L* on the bracket's own profile: the re-meter's target (step 2).
   const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
 
-  // 2. The combined profile, in place: every later use of the bracket renders through it.
-  apply_input_curves(prof, out.fit.curves);
+  // 2. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
+  //    (negicc-station Iteration 230's F6L), the curves anchored at each E it tries. The E/g/b fixed point it replaces
+  //    re-predicted the intent field from the curved render and followed it darker; this keeps Auto's lightness and the
+  //    fit's colour.
+  const float e_new = negicc::remeter_e_median(cfg, cf, out.fit.curves, e_int, out.fit.g, out.fit.b, target_L);
 
-  // 3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
-  //    (negicc-station Iteration 230's F6L). The E/g/b fixed point it replaces re-predicted the intent field from the
-  //    curved render and followed it darker; this keeps Auto's lightness and the fit's colour.
+  // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
+  //    combined profile built from them in place: every later use of the bracket renders through it. Before, ref and
+  //    u_med stayed at Auto's E, g and b while the export rendered at the re-metered E and the fitted g and b, so the
+  //    curves no longer pivoted on the film base.
+  out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
+  apply_input_curves(prof, out.fit.curves);
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
-  const float e_new = negicc::remeter_e_median(cfg_comb, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
-                                               target_L);
   out.params = {e_new, out.fit.g, out.fit.b, res.params.shoulder};
   out.target_median_L = target_L;
   out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);

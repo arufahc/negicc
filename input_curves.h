@@ -6,8 +6,10 @@
 //
 //   u = log2(v / ref)  for v < ref,   s = 1 + a + k tanh((u - u_med) / 1 stop),   v' = ref 2^(u s);   v >= ref: v
 //
-// ref is the film base at that point at Auto's E, g, b (frozen when the curves are fitted), u_med the median over the
-// intent grid's cells of min(u, 0). The combined profile is the bracket profile with its G and B input tables
+// ref is the film base at that point and u_med the median over the intent grid's cells of min(u, 0), both at the E, g
+// and b the conversion renders with (anchor_curves): the fit anchors each candidate at its own g and b, and the
+// re-meter each E it tries, so the recorded curves pivot on the film base of the export's parameters. A replay (and the
+// knobs, which move E, g and b afterwards) keeps the recorded ref and u_med. The combined profile is the bracket profile with its G and B input tables
 // replaced by in(curve(v)) sampled on the table's own entries; red, the matrix, the cLUT and the output curves are
 // unchanged. White light only: with a crosstalk matrix the film base does not mark the dark end of every channel.
 //
@@ -106,6 +108,23 @@ inline void input_curve_reference(const float* merged, float e, float g, float b
   c.u_med[1] = median(ub);
 }
 
+// What anchors a curve on a frame: the 3x3 input matrix before the per-candidate rows (candidate_matrix), the knee,
+// the film base (camera units, as the grid) and the grid's n cells of 16-bit camera-linear RGB.
+struct CurveFrame {
+  const float* merged = nullptr;
+  float knee = 0.95f;
+  float film_base[3] = {0.0f, 0.0f, 0.0f};
+  const uint16_t* grid = nullptr;
+  int n = 0;
+};
+
+// shape's a and k anchored at (e, g, b): ref, u_med and u_lo from the frame there (input_curve_reference).
+inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, float e, float g, float b) {
+  InputCurves c = shape;
+  input_curve_reference(f.merged, e, g, b, f.knee, f.film_base, f.grid, f.n, c);
+  return c;
+}
+
 // One channel's curve over the frame's density range [u_lo, 0] (u in stops below the film base): monotonic (denser
 // film never renders lighter in this channel) and within max_dev stops of the base TRC (|u s(u) - u|), checked on
 // samples+1 evenly spaced points. The identity (a = k = 0) always passes.
@@ -159,24 +178,28 @@ struct CurveFitResult {
   int evaluations = 0;
 };
 
-// Joint fit of g, b and the four curve numbers with E fixed, against the frozen intent field mu, sigma on the grid:
-// a deterministic bounded pattern search (each coordinate tried at +step and -step in turn, kept when the objective
-// falls; all steps halve after a sweep without improvement). c carries ref and u_med (input_curve_reference).
+// Joint fit of g, b and the four curve numbers with E fixed, against the frozen intent field mu, sigma on the frame's
+// grid: a deterministic bounded pattern search (each coordinate tried at +step and -step in turn, kept when the
+// objective falls; all steps halve after a sweep without improvement). Each candidate's curves are anchored at its own
+// g and b (anchor_curves), so the curves the result carries pivot on the film base at the fitted g and b.
 //
 // TODO(cuda): this evaluates on the CPU (about 700 cells x 1,000 to 2,500 evaluations). On a CUDA build it should run
 // as a kernel that composes the input tables and scores the cells on the device, using the profile's existing device
 // copy, so the fit never copies the grid render back to the host per evaluation.
-inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, float e, float g0, float b0,
-                                       const uint16_t* grid, int n, const float* mu, const float* sigma,
-                                       InputCurves c, const CurveFitOptions& o = CurveFitOptions()) {
+inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, float e, float g0, float b0,
+                                       const float* mu, const float* sigma, const CurveFitOptions& o = CurveFitOptions()) {
   const ProfileData base = cfg.profile;
   CombinedProfile comb;
-  auto objective = [&](const float* p, int& evals) {
-    InputCurves t = c;
+  auto curves_of = [&](const float* p) {
+    InputCurves t;
     t.a[0] = p[2];
     t.k[0] = p[3];
     t.a[1] = p[4];
     t.k[1] = p[5];
+    return anchor_curves(t, f, e, p[0], p[1]);
+  };
+  auto objective = [&](const float* p, int& evals) {
+    const InputCurves t = curves_of(p);
     ++evals;
     // Monotonic and bounded over the frame's density range, or not a candidate.
     if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.u_lo[0], o.max_dev_stops) ||
@@ -186,7 +209,7 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
     cfg.profile = comb.data;
     const double pen = o.lambda * (static_cast<double>(p[2]) * p[2] + static_cast<double>(p[3]) * p[3] +
                                    static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
-    return grid_intent_loss(cfg, merged, e, p[0], p[1], grid, n, mu, sigma) + pen;
+    return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) + pen;
   };
   const float lo[6] = {g0 - o.g_bound, b0 - o.b_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound};
   const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
@@ -204,9 +227,9 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
         std::copy(p, p + 6, q);
         q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step[d]));
         if (q[d] == p[d]) continue;
-        const double f = objective(q, evals);
-        if (f < best) {
-          best = f;
+        const double fq = objective(q, evals);
+        if (fq < best) {
+          best = fq;
           std::copy(q, q + 6, p);
           improved = true;
           break;
@@ -215,26 +238,19 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const float* merged, 
     }
     if (!improved) {
       float mx = 0.0f;
-      for (float& s : step) {
-        s *= 0.5f;
-        mx = std::max(mx, s);
+      for (float& st : step) {
+        st *= 0.5f;
+        mx = std::max(mx, st);
       }
       if (mx < o.step_min) break;
     }
   }
-  r.curves = c;
-  r.curves.a[0] = p[2];
-  r.curves.k[0] = p[3];
-  r.curves.a[1] = p[4];
-  r.curves.k[1] = p[5];
+  r.curves = curves_of(p);
   r.g = p[0];
   r.b = p[1];
-  r.loss_after = grid_intent_loss([&] {
-    PipelineConfig c2 = cfg;
-    comb.build(base, r.curves);
-    c2.profile = comb.data;
-    return c2;
-  }(), merged, e, r.g, r.b, grid, n, mu, sigma);
+  comb.build(base, r.curves);
+  cfg.profile = comb.data;
+  r.loss_after = grid_intent_loss(cfg, f.merged, e, r.g, r.b, f.grid, f.n, mu, sigma);
   r.evaluations = evals;
   return r;
 }
@@ -251,15 +267,24 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
   return L[n / 2];
 }
 
-// E re-metered so the grid's median L* through cfg (the combined profile) at the fitted g, b equals target_L (Auto's):
-// a bisection in log E over [e0 / 4, e0 * 4] (a larger E renders darker). negicc-station Iteration 230's F6L, which
-// replaces the E/g/b fixed point after the curve fit (the fixed point followed its own darker render).
-inline float remeter_e_median(const PipelineConfig& cfg, const float* merged, float e0, float g, float b,
-                              const uint16_t* grid, int n, float target_L, int iters = 40) {
+// E re-metered so the grid's median L* through the combined profile at the fitted g, b equals target_L (Auto's): a
+// bisection in log E over [e0 / 4, e0 * 4] (a larger E renders darker), the curves (shape's a and k) anchored at each E
+// it tries, so the profile it measures is the one the export renders at that E. cfg carries the bracket's own profile.
+// negicc-station Iteration 230's F6L, which replaces the E/g/b fixed point after the curve fit (the fixed point
+// followed its own darker render).
+inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
+                              float b, float target_L, int iters = 40) {
+  const ProfileData base = cfg.profile;
+  CombinedProfile comb;
+  auto median_at = [&](float e) {
+    comb.build(base, anchor_curves(shape, f, e, g, b));
+    cfg.profile = comb.data;
+    return grid_median_L(cfg, f.merged, e, g, b, f.grid, f.n);
+  };
   float lo = e0 * 0.25f, hi = e0 * 4.0f;
   for (int i = 0; i < iters; ++i) {
     const float mid = std::sqrt(lo * hi);
-    if (grid_median_L(cfg, merged, mid, g, b, grid, n) < target_L) hi = mid;
+    if (median_at(mid) < target_L) hi = mid;
     else lo = mid;
   }
   return std::sqrt(lo * hi);
