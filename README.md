@@ -144,7 +144,7 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 
 # 6. White light: fit G/B input curves after the search (the sidecar's input_curves records them; its cli_equivalent
-#    replays them with --input_curves aG kG aB kB refG refB u_medG u_medB and --target)
+#    replays them with --fit_curves aG kG aB kB refG refB u_medG u_medB and --target)
 bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
 ```
 

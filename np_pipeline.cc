@@ -348,7 +348,7 @@ int prepare(const Options& o, Setup& s) {
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
   if (o.fit_curves || o.input_curves_given) {
-    const char* opt = o.fit_curves ? "--fit_curves on" : "--input_curves";
+    const char* opt = o.fit_curves ? "--fit_curves on" : "--fit_curves with recorded curves";
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
       log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: with a crosstalk matrix the film base "
                 "does not mark the dark end of every channel\n", opt);
@@ -362,12 +362,12 @@ int prepare(const Options& o, Setup& s) {
   }
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
-              "(--input_curves replays recorded curves)\n");
+              "(--fit_curves with eight numbers replays recorded curves)\n");
     return 1;
   }
   if (o.input_curves_given) {
     if (s.manual_target_idx < 0) {
-      log_error("--input_curves needs --target: the curves belong to one bracket's profile\n");
+      log_error("--fit_curves with recorded curves needs --target: the curves belong to one bracket's profile\n");
       return 1;
     }
     // The --target bracket's profile becomes the combined profile before anything renders through it.
