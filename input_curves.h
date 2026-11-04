@@ -30,8 +30,8 @@ struct InputCurves {
   float k[2] = {0.0f, 0.0f};
   float ref[2] = {1.0f, 1.0f};
   float u_med[2] = {0.0f, 0.0f};
-  // The densest grid cell's u (<= 0): the low end of the frame's density range, over which the fit keeps each curve
-  // monotonic and within CurveFitOptions::max_dev_stops of the base TRC. Fitting only; replay does not need it.
+  // The densest grid cell's u (<= 0): the low end of the frame's density range. Recorded only (the shape is checked
+  // over the whole input table, curve_shape_ok); replay does not need it.
   float u_lo[2] = {0.0f, 0.0f};
   bool active() const { return a[0] != 0.0f || k[0] != 0.0f || a[1] != 0.0f || k[1] != 0.0f; }
 };
@@ -125,17 +125,22 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
   return c;
 }
 
-// One channel's curve over the frame's density range [u_lo, 0] (u in stops below the film base): monotonic (denser
-// film never renders lighter in this channel) and within max_dev stops of the base TRC (|u s(u) - u|), checked on
-// samples+1 evenly spaced points. The identity (a = k = 0) always passes.
-inline bool curve_shape_ok(float a, float k, float u_med, float u_lo, float max_dev, int samples = 64) {
+// One channel's curve over the whole input table it is composed into (compose_input_table): at every entry
+// v = i / (n - 1) below ref, u = log2(v / ref), the curve is monotonic (denser film never renders lighter in this
+// channel) and within max_dev stops of the base TRC (|u s(u) - u|). Before, this was checked only over the frame's
+// density range [u_lo, 0] (the densest grid cell), while the table carries the curve down to 1 / (n - 1), where
+// pixels denser than any grid cell land: there the curve could fold over or move arbitrarily far from the TRC. The
+// identity (a = k = 0) always passes.
+inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev) {
   if (a == 0.0f && k == 0.0f) return true;
-  if (!(u_lo < 0.0f)) return true;
-  float prev = -INFINITY;
-  for (int i = 0; i <= samples; ++i) {
-    const float u = u_lo * (1.0f - static_cast<float>(i) / samples);  // u_lo up to 0
+  if (!(ref > 0.0f) || table_n < 2) return true;
+  float prev = INFINITY;  // f at the entry above; the table is walked from ref down
+  for (int i = table_n - 1; i >= 1; --i) {
+    const float v = static_cast<float>(i) / static_cast<float>(table_n - 1);
+    if (!(v < ref)) continue;
+    const float u = std::log2(v / ref);
     const float f = u * (1.0f + a + k * std::tanh(u - u_med));
-    if (!(f > prev) || std::fabs(f - u) > max_dev) return false;
+    if (!(f < prev) || std::fabs(f - u) > max_dev) return false;
     prev = f;
   }
   return true;
@@ -161,7 +166,7 @@ inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, f
 
 struct CurveFitOptions {
   float curve_bound = 0.25f;  // |a|, |k| <= this
-  float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the frame (curve_shape_ok)
+  float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
   float g_bound = 0.5f;       // |g - g0| <= this
   float b_bound = 0.6f;       // |b - b0| <= this
   float lambda = 0.0f;        // penalty on a^2 + k^2 (Iterations 227 and 228: 0)
@@ -201,9 +206,9 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
   auto objective = [&](const float* p, int& evals) {
     const InputCurves t = curves_of(p);
     ++evals;
-    // Monotonic and bounded over the frame's density range, or not a candidate.
-    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.u_lo[0], o.max_dev_stops) ||
-        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.u_lo[1], o.max_dev_stops))
+    // Monotonic and bounded over the whole input table, or not a candidate.
+    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.ref[0], base.in_trc_size[1], o.max_dev_stops) ||
+        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.ref[1], base.in_trc_size[2], o.max_dev_stops))
       return static_cast<double>(INFINITY);
     comb.build(base, t);
     cfg.profile = comb.data;
