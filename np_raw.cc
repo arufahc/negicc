@@ -525,13 +525,15 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     delete proc;
     return NULL;
   }
-  int found_roi[4];
+  int found_roi[4] = {0, 0, 0, 0};
   if (find_region) {
     if (!find_region(*proc, found_roi)) {
       delete proc;
       return NULL;
     }
-    roi = found_roi;
+    // A finder that only looked at the mosaic (the film base's frame detection with a given --roi) leaves the region
+    // empty: the given roi, or the whole image, stays.
+    if (found_roi[2] > 0 && found_roi[3] > 0) roi = found_roi;
   }
   // The ROI is checked and clamped to the sensor before the analysis read, which runs the whole bracket search, so
   // that an ROI outside the sensor fails before the DINOv3 inferences.
