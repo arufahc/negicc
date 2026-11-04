@@ -1418,12 +1418,15 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     const int max_iters = o.dino_iters;
     IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
-    if (!s.has_cached_sidecar && s.is_bundle && (c.pin_mask & PIN_E)) {
-      // A pinned -E is the station's: the search starts from it (and the station's g = b = 1) in absolute units.
-      apply_station(c.exposure_comp, 1.0f, 1.0f);
-      user_gains = {c.exposure_comp, c.gain_g, c.gain_b};
-      adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b, unit_fb, unit_fb,
-                               c.merged_matrix);
+    if (!s.has_cached_sidecar && s.is_bundle) {
+      // With a bundle the search runs on the station's merged matrix (the crosstalk with each row normalised by the
+      // film base, station_base), in the station's E, g and b, as the bundle search and given values do: it starts
+      // from -E (or 1) and g = b = 1, the film base rendered neutral. Before, only a pinned -E started there; --target
+      // alone searched on the bare crosstalk from absolute g = b = 1, which on a negative is far from neutral (the
+      // orange mask), with the bracket's exposure range in those units.
+      const float e0 = (c.pin_mask & PIN_E) ? o.exposure_comp : 1.0f;
+      negicc::candidate_matrix(station_base, e0, 1.0f, 1.0f, c.merged_matrix);
+      user_gains = {e0, 1.0f, 1.0f};
     }
 
     if (s.is_bundle) {
@@ -1438,6 +1441,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.film_prof = tgt.film_prof;
       c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
+      // The bracket's exposure range is in absolute E (the bare crosstalk's first row); the search's E is the
+      // station's, so its centre is too (given_station_e does the same). The bounds are ratios to the centre.
+      if (cfg.has_custom_bounds) cfg.custom_e_center = (float)((double)cfg.custom_e_center / row_scale[0]);
     } else {
       cfg.prof = &c.film_prof.data;
     }
@@ -1498,11 +1504,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
              c.dino_res.solved_relative.e, c.dino_res.solved_relative.g, c.dino_res.solved_relative.b);
       if (s.is_bundle) {
-        // The station's values, which -E, --gain_g and --gain_b take with a bundle.
-        // The station's values of the solved absolute ones.
-        c.station_params = std::array<float, 3>{(float)(c.dino_res.solved_absolute.e / row_scale[0]),
-                                                (float)(c.dino_res.solved_absolute.g * row_scale[0] / row_scale[1]),
-                                                (float)(c.dino_res.solved_absolute.b * row_scale[0] / row_scale[2])};
+        // The station's values, which -E, --gain_g and --gain_b take with a bundle: the search's own, since it ran on
+        // the station's matrix.
+        c.station_params = std::array<float, 3>{c.dino_res.solved_absolute.e, c.dino_res.solved_absolute.g,
+                                                c.dino_res.solved_absolute.b};
         log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n", (*c.station_params)[0],
                  (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
       } else {
