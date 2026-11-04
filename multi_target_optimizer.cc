@@ -1031,6 +1031,15 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb) {
+  return measure_rolloff_x_hi(bundle, bundle.targets[target_idx].film_prof.data, frame, scan_shutter_s, scan_iso, e, g,
+                              b, crop_ratio, q995, film_base_rgb);
+}
+
+float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof_in, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995, const double* film_base_rgb) {
+  ProfileData prof;
+  static_cast<negicc::ProfileData&>(prof) = prof_in;
   ParamSearchOptions base_opts;
   base_opts.film_base_rgb_d = film_base_rgb;
   base_opts.film_base_from_scan = film_base_rgb != nullptr;
@@ -1042,7 +1051,7 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
   measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
-                         AUTO_KNEE, bundle.targets[target_idx].film_prof.data, kCeil, 1.0f, hist.data());
+                         AUTO_KNEE, prof, kCeil, 1.0f, hist.data());
   return shoulder_x_hi_from_hist(hist.data(), q995);
 }
 
@@ -1629,7 +1638,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out) {
+                                   int encoding, CurveRefitResult& out) {
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
@@ -1671,7 +1680,18 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       for (int c = 0; c < 3; ++c) fb[c] = std::max(fb[c], (float)stats.grid[i * 3 + c]);
   }
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
-  const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
+  // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
+  // measures every conversion's), which only the sRGB encoding applies. Before, the fit and the re-meter rendered
+  // sRGB with the search's own roll-off, whatever the export's encoding, and the export then re-measured the roll-off at
+  // the re-metered E on the combined profile, so the median L* it rendered was not the one the re-meter matched.
+  out.encoding = encoding;
+  auto rolloff_at = [&](const negicc::ProfileData& p, float e, float g, float b) {
+    if (encoding != ENCODE_SRGB) return 1.0f;
+    return measure_rolloff_x_hi(bundle, p, frame, scan_shutter_s, scan_iso, e, g, b, opts.crop_ratio, nullptr,
+                                opts.film_base_rgb_d);
+  };
+  out.x_hi_fit = rolloff_at(prof.data, e_int, res.params.g, res.params.b);
+  const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_fit, encoding);
   negicc::CurveFrame cf;
   cf.merged = merged;
   cf.knee = AUTO_KNEE;
@@ -1689,25 +1709,40 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
               << " (" << out.fit.evaluations << " evaluations)\n";
   }
 
-  // Auto's grid median L* on the bracket's own profile: the re-meter's target (step 2).
+  // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the re-meter's target.
   const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
 
   // 2. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
-  //    (negicc-station Iteration 230's F6L), the curves anchored at each E it tries. The E/g/b fixed point it replaces
-  //    re-predicted the intent field from the curved render and followed it darker; this keeps Auto's lightness and the
-  //    fit's colour.
-  const float e_new = negicc::remeter_e_median(cfg, cf, out.fit.curves, e_int, out.fit.g, out.fit.b, target_L);
+  //    (negicc-station Iteration 230's F6L), the curves anchored at each E it tries; alternated with the roll-off the
+  //    export measures at that E on the combined profile, until the roll-off holds still. The E/g/b fixed point the
+  //    re-meter replaces re-predicted the intent field from the curved render and followed it darker.
+  negicc::CombinedProfile comb;
+  float x = out.x_hi_fit, e_new = e_int;
+  constexpr int kMaxPasses = 6;
+  for (out.remeter_passes = 1; out.remeter_passes <= kMaxPasses; ++out.remeter_passes) {
+    e_new = negicc::remeter_e_median(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves, e_int,
+                                     out.fit.g, out.fit.b, target_L);
+    comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
+    const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b);
+    if (x_new == x) {
+      out.remeter_converged = true;
+      break;
+    }
+    x = x_new;
+  }
+  out.remeter_passes = std::min(out.remeter_passes, kMaxPasses);
 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
-  //    combined profile built from them in place: every later use of the bracket renders through it. Before, ref and
-  //    u_med stayed at Auto's E, g and b while the export rendered at the re-metered E and the fitted g and b, so the
-  //    curves no longer pivoted on the film base.
+  //    combined profile built from them in place: every later use of the bracket renders through it.
   out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
   apply_input_curves(prof, out.fit.curves);
-  const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
-  out.params = {e_new, out.fit.g, out.fit.b, res.params.shoulder};
+  out.x_hi = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b);
+  const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
+  out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = target_L;
   out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
+  out.loss_export = negicc::grid_intent_loss(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
+                                             res.intent_mu.data(), res.intent_sigma.data());
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)

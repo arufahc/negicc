@@ -309,14 +309,22 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
     j["max_dev_stops"] = n9(defaults.max_dev_stops);
+    // Measured on the export's render: its encoding and the roll-off it measures (x_hi_fit at Auto's parameters, which
+    // the fit ran with; x_hi at the result, which the export measures again).
+    j["render"] = {{"encoding", f->encoding == ENCODE_SRGB ? "srgb" : f->encoding == ENCODE_SRGB_LINEAR ? "srgb-linear"
+                                                                                                       : "custom"},
+                   {"x_hi_fit", n9(f->x_hi_fit)}};
     j["remeter"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
-                    {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)}};
+                    {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)},
+                    {"x_hi", n9(f->x_hi)}, {"passes", f->remeter_passes}, {"converged", f->remeter_converged},
+                    {"loss", n9(f->loss_export)}};
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
     j["fit"] = nullptr;
     j["params_before"] = nullptr;
     j["max_dev_stops"] = nullptr;
+    j["render"] = nullptr;
     j["remeter"] = nullptr;
   }
   return j;

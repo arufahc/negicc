@@ -868,8 +868,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
           // white-light bundle search.
           negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25, 1 stop from the base TRC
+          // The fit and the re-meter render the grid as the export will: -P's encoding (curves need -P).
+          const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB
+                                      : (o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear") ? ENCODE_SRGB_LINEAR
+                                                                                                       : ENCODE_CUSTOM;
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
-                                             fit_opts, s.curve_fit)) {
+                                             fit_opts, export_encoding, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
