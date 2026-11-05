@@ -138,6 +138,11 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
     const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
     r.search_lo = std::max(u_min, r.e_center * std::pow(2.0f, -margin_ev));
     r.search_hi = std::min(u_max, r.e_center * std::pow(2.0f, margin_ev));
+    // The usable range can cut the window from both sides past each other (u_min above e_center * 2^margin, or u_max
+    // below e_center / 2^margin): ordered here, for every caller and every bundle. Before, only Step 1 on white light
+    // swapped it, so TriLED and the other callers (the step-up, the bounds of the chosen bracket) searched an
+    // inverted window.
+    if (r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
   }
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
   return true;
@@ -1048,7 +1053,6 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
     if (!(bundle.targets[i].exposure_s > 0.0f)) continue;
     Enclosure r;
     if (!bracket_enclosure(bundle.targets[i], (int)i, g_lo * g_scale, g_hi * g_scale, r)) continue;
-    if (r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
     // The search's E is the station's on white light; on TriLED it runs on M_frame / e_norm, and its result is
     // params.e / e_norm (search_conversion_params' out.params).
     const float to_station = white_light ? 1.0f : 1.0f / scale.e_norm;
@@ -1237,7 +1241,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   for (int i : filter_admissible_targets(bundle)) {
     Enclosure r;
     if (bracket_enclosure(bundle.targets[i], i, g_lo_ref, g_hi_ref, r)) {
-      if (white_light && r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
       enclosure.push_back(r);
     }
   }
