@@ -15,6 +15,7 @@
 
 #include "embedded_data.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 
@@ -106,22 +107,64 @@ std::vector<std::string> list_embedded_bundles() {
   return keys;
 }
 
-const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::string& adapter_dir) {
+const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::string& adapter_dir, bool* fell_back) {
   static const std::string kBackbone = "dinov3-small";
-  std::string bundle_key, stock_key;
-  parse_profile_stem(profile_name, bundle_key, stock_key);
-  std::vector<std::string> dirs;
-  if (!bundle_key.empty()) {
-    dirs.push_back("models/" + kBackbone + "_" + bundle_key);
-    dirs.push_back("models/" + kBackbone + "_" + lower(bundle_key));
+  static const std::string kPrefix = "models/" + kBackbone + "_";
+  if (fell_back) *fell_back = false;
+  auto normalised = [](const std::string& v) {
+    std::string n;
+    for (char c : v)
+      if (std::isalnum((unsigned char)c)) n += (char)std::tolower((unsigned char)c);
+    return n;
+  };
+  // The embedded adapters' stock names (models/dinov3-small_<stock>/adapter.onnx), longest first.
+  std::vector<std::string> stocks;
+  for (uint64_t i = 0; i < EMBED_COUNT; ++i) {
+    const std::string path = EMBED_TABLE[i].name;
+    if (path.rfind(kPrefix, 0) == 0 && ends_with(path, "/adapter.onnx")) {
+      stocks.push_back(path.substr(kPrefix.size(), path.size() - kPrefix.size() - std::strlen("/adapter.onnx")));
+    }
   }
-  if (!stock_key.empty()) dirs.push_back("models/" + kBackbone + "_" + stock_key);
-  dirs.push_back("models/" + kBackbone + "_portra400");
+  std::sort(stocks.begin(), stocks.end(), [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+  // The name, then each directory above it (a profile inside a bundle's directory names the stock there).
+  std::vector<std::string> names = {profile_name};
+  std::string p = profile_name;
+  for (;;) {
+    while (!p.empty() && (p.back() == '/' || p.back() == '\\')) p.pop_back();
+    const size_t slash = p.find_last_of("/\\");
+    if (slash == std::string::npos) break;
+    p = p.substr(0, slash);
+    const size_t s2 = p.find_last_of("/\\");
+    const std::string comp = s2 == std::string::npos ? p : p.substr(s2 + 1);
+    if (!comp.empty() && comp != "." && comp != "..") names.push_back(comp);
+  }
+  std::vector<std::string> dirs;
+  for (const std::string& name : names) {
+    std::string bundle_key, stock_key;
+    parse_profile_stem(name, bundle_key, stock_key);
+    if (!bundle_key.empty()) {
+      dirs.push_back(kPrefix + bundle_key);
+      dirs.push_back(kPrefix + lower(bundle_key));
+    }
+    if (!stock_key.empty()) dirs.push_back(kPrefix + stock_key);
+    // The stock name before any truncation at '-' or '_' ("Portra_400-..." or "portra-400"), matched as a prefix of
+    // the normalised name.
+    const std::string n = normalised(bundle_key.empty() ? name : bundle_key);
+    for (const std::string& st : stocks) {
+      const std::string ns = normalised(st);
+      if (!ns.empty() && n.rfind(ns, 0) == 0) dirs.push_back(kPrefix + st);
+    }
+  }
   for (const std::string& d : dirs) {
     if (const EmbeddedFile* f = find_embedded_file(d + "/adapter.onnx")) {
       adapter_dir = d;
       return f;
     }
+  }
+  if (const EmbeddedFile* f = find_embedded_file(kPrefix + "portra400/adapter.onnx")) {
+    adapter_dir = kPrefix + "portra400";
+    if (fell_back) *fell_back = true;
+    return f;
   }
   adapter_dir.clear();
   return nullptr;

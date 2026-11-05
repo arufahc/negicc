@@ -61,6 +61,7 @@ struct Options {
   bool has_roi = false, roi_auto = false;      // --roi given as numbers / as 'auto'
   char roi_axis_hint = 0;                      // --roi auto h|v
   FilmFormat film_format = FILM_35MM;          // --film_format
+  bool film_format_given = false;              // --film_format was given (else 35mm for --roi auto)
   int rot_cw = 0;                              // --rot_cw (or the --roi's fifth value)
   bool hflip = false, vflip = false;
 
@@ -72,8 +73,8 @@ struct Options {
 
   // Fitted G/B input curves (input_curves.h)
   bool fit_curves = false;                     // --fit_curves on
-  // --fit_curves auto: the curves on every white-light bundle search with -P, nothing elsewhere (TriLED, no -P, given
-  // parameters), so a front end can pass it for every scan (negicc-web's default).
+  // --fit_curves auto: the curves on every white-light bundle search with -P srgb or srgb-g10, nothing elsewhere
+  // (TriLED, another or no -P, given parameters), so a front end can pass it for every scan (negicc-web's default).
   bool fit_curves_auto = false;
   bool input_curves_given = false;             // --input_curves (replayed, not fitted)
   negicc::InputCurves input_curves;

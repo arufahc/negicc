@@ -182,10 +182,13 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
   parser.add_argument("-E", "--exposure_comp")
-    .help("Exposure. With a bundle, E as negicc-station and the parameter search give it (the sidecar's auto.e): "
+    .help("Exposure. With a bundle, E as negicc-station and the parameter search give it (the sidecar's "
+          "cli_equivalent: auto.e, the search's own; with fitted curves, input_curves.remeter.e, re-metered on the "
+          "combined profile; after the knobs, knobs.egb.e): "
           "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
           "corrected RGB. Given, the parameter search keeps it and solves only the gains, on the bracket --target "
-          "picks (or the bundle's default).")
+          "picks (or the bundle's default). Not given with given gains: with a bundle, the centre of the bracket's "
+          "exposure range as the bundle search meters it; with an ICC profile, 1.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--no-metadata")
@@ -193,18 +196,19 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--gain_g")
-    .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
-          "it turns the parameter search off.")
+    .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
+          "neutral). Defaults to 1.0. Given, it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
-    .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it). Defaults to 1.0. Given, "
-          "it turns the parameter search off.")
+    .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
+          "neutral). Defaults to 1.0. Given, it turns the parameter search off.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--brightness")
     .help("Brightness offset after the parameter search, in stops of the reference grey's luminance (as in "
-          "negicc-station). Reuses <output>.json when it matches the capture, light, profile and target.")
+          "negicc-station). Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input "
+          "files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")
@@ -243,7 +247,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "visible frame (geometry.roi_source auto_fallback).")
     .nargs(1, 7);
   parser.add_argument("--film_format")
-    .help("Film format for --roi auto: 35mm, 645, 6x6, 6x7, or 6x9.")
+    .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
+          "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
+          "around (the rebate; default: every format, as negicc-station).")
     .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
@@ -280,16 +286,20 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
-    .help("off (default), auto, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB (one comma-separated value). auto: as on "
-          "wherever on applies (a white-light bundle search with -P), and nothing elsewhere (TriLED, no -P, given "
-          "parameters), so it can be passed for every scan. on: after the "
-          "bundle search, fit G and B input curves (with g and b, E fixed) to the search's intent field on the bracket "
-          "it chose, then solve E, g and b again on that bracket's profile with its input tables composed with the "
-          "curves (the combined profile), as negicc-station's Fit curves toggle does; needs the bundle search (no "
-          "--target, -E, --gain_g or --gain_b). Eight numbers: convert through the --target bracket's combined "
-          "profile with these recorded curves at the given -E, --gain_g and --gain_b, without fitting or searching "
-          "(a sidecar's input_curves; its cli_equivalent writes them with the bracket, E, g and b). Needs --target, "
-          "-E, --gain_g and --gain_b. White-light (d65) bundles and -P only.")
+    .help("off (default), auto, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
+          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
+          "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
+          "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
+          "and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket it chose, each "
+          "candidate at the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
+          "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
+          "needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P srgb or srgb-g10. Recorded curves: "
+          "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
+          "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
+          "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "
+          "are positive, because the parser takes a value starting with '-' for an option. The older order "
+          "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
+          "White-light (d65) bundles and -P only.")
     .default_value(std::string("off"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
@@ -371,15 +381,15 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
 
+  // The film format of the frame detector: --roi auto's search (35mm unless given, as negicc-station and the recorded
+  // parity cases), and, when given, the film base's frame detection with a given frame. Before, it was refused without
+  // --roi auto, so the film base's detection with a given --roi could never be told the format; and auto (every
+  // format) could not be asked for.
+  o.film_format_given = parser.is_used("--film_format");
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
-  if (o.film_format == FILM_FORMAT_AUTO) {
-    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, or 6x9)\n",
-            film_format_arg.c_str());
-    return 1;
-  }
-  if (parser.is_used("--film_format") && !o.roi_auto) {
-    log_error("--film_format requires --roi auto\n");
+  if (o.film_format == FILM_FORMAT_AUTO && film_format_arg != "auto") {
+    log_error("Invalid --film_format '%s' (must be 35mm, 645, 6x6, 6x7, 6x9, or auto)\n", film_format_arg.c_str());
     return 1;
   }
 
@@ -391,7 +401,12 @@ int parse_options(int ac, char* av[], Options& o) {
   if (o.target_given) o.target = parser.get<std::string>("--target");
   {
     // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves on in.ARW").
-    const std::string fcv = parser.get<std::string>("--fit_curves");
+    // Recorded curves lead with "ref:" and the refs (refG,refB,u_medG,u_medB,aG,kG,aB,kB[,u_loG,u_loB]): the older
+    // order led with aG, and a negative aG made the value start with '-', which argparse rejects as an unknown option
+    // (with "--fit_curves=" too), so a sidecar's cli_equivalent did not parse. The older order is still read.
+    std::string fcv = parser.get<std::string>("--fit_curves");
+    const bool ref_first = fcv.compare(0, 4, "ref:") == 0;
+    if (ref_first) fcv.erase(0, 4);
     std::vector<std::string> fc;
     for (size_t p0 = 0;;) {
       const size_t p1 = fcv.find(',', p0);
@@ -399,33 +414,41 @@ int parse_options(int ac, char* av[], Options& o) {
       if (p1 == std::string::npos) break;
       p0 = p1 + 1;
     }
-    if (fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
+    if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on";
       o.fit_curves_auto = fc[0] == "auto";
-    } else if (fc.size() == 8) {
-      float v[8];
-      for (int i = 0; i < 8; ++i) {
+    } else if (fc.size() == 8 || fc.size() == 10) {
+      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB.
+      float v[10];
+      for (size_t i = 0; i < fc.size(); ++i) {
         char* end = nullptr;
         v[i] = std::strtof(fc[i].c_str(), &end);
         if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
-          log_error("--fit_curves: '%s' is not a number (give off, auto, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n",
+          log_error("--fit_curves: '%s' is not a number (give off, auto, on, or "
+                    "ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB with u_loG,u_loB appended for a held curve)\n",
                     fc[i].c_str());
           return 1;
         }
       }
       o.input_curves_given = true;
+      // Where each number sits: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, or the older aG,kG,aB,kB,refG,refB,u_medG,
+      // u_medB; u_loG,u_loB last in both.
+      const int at_ref = ref_first ? 0 : 4, at_u_med = ref_first ? 2 : 6, at_ak = ref_first ? 4 : 0;
       for (int i = 0; i < 2; ++i) {
-        o.input_curves.a[i] = v[i * 2];
-        o.input_curves.k[i] = v[i * 2 + 1];
-        o.input_curves.ref[i] = v[4 + i];
-        o.input_curves.u_med[i] = v[6 + i];
+        o.input_curves.a[i] = v[at_ak + i * 2];
+        o.input_curves.k[i] = v[at_ak + i * 2 + 1];
+        o.input_curves.ref[i] = v[at_ref + i];
+        o.input_curves.u_med[i] = v[at_u_med + i];
+        if (fc.size() == 10) o.input_curves.u_lo[i] = v[8 + i];
+        o.input_curves.hold = fc.size() == 10;
         if (!(o.input_curves.ref[i] > 0.0f)) {
           log_error("--fit_curves: refG and refB must be positive\n");
           return 1;
         }
       }
     } else {
-      log_error("--fit_curves takes off, auto, on, or eight comma-separated numbers (aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n");
+      log_error("--fit_curves takes off, auto, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (eight "
+                "comma-separated numbers), ten for a held curve (and u_loG,u_loB)\n");
       return 1;
     }
   }

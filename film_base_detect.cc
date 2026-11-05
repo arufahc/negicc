@@ -469,9 +469,29 @@ void thinnest_film_base(const RgbView& half, float out[3]) {
   thinnest_film_base_impl(half, false, out);
 }
 
+void film_base_ratios(const double rgb[3], const float expected[3], double& rg, double& bg) {
+  rg = bg = 0.0;
+  if (!(rgb[0] > 0) || !(rgb[1] > 0) || !(rgb[2] > 0) || !(expected[0] > 0) || !(expected[1] > 0) ||
+      !(expected[2] > 0)) {
+    return;
+  }
+  rg = (rgb[0] / rgb[1]) / ((double)expected[0] / expected[1]);
+  bg = (rgb[2] / rgb[1]) / ((double)expected[2] / expected[1]);
+}
+
+bool film_base_in_envelope(double rg, double bg) {
+  return rg >= 1.0 && rg <= kBaseRgMax && bg >= kBaseBgMin && bg <= 1.0;
+}
+
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
-                      const double* crosstalk, FilmBaseDetection& out) {
+                      const double* crosstalk, FilmBaseDetection& out, const float* expected_rgb) {
   out = FilmBaseDetection{};
+  out.has_chroma_check = expected_rgb != nullptr;
+  // Whether a reading (the film base space) lies in the stock's envelope; records its ratios.
+  auto in_envelope = [&](const double rgb[3], double& rg, double& bg) {
+    film_base_ratios(rgb, expected_rgb, rg, bg);
+    return film_base_in_envelope(rg, bg);
+  };
   const int W = half.width, H = half.height;
   bool has_box = false;
   int box[4] = {0, 0, 0, 0};
@@ -481,7 +501,10 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     out.std_d = det->base_std_d;
     out.frame_conf = det->conf;
     out.light_clipped = det->light_clipped;
-    if (det->ok && det->has_base && sensor_w > 0 && sensor_h > 0) {
+    // A failed or unconfident detection (where neg_process takes the whole image instead of its frame) does not place
+    // its patch: on a frame it did not find, the patch may lie on picture.
+    if (det->ok && det->has_base && det->conf < kBaseMinFrameConf) out.reason += ",frame_conf_low";
+    if (det->ok && det->has_base && det->conf >= kBaseMinFrameConf && sensor_w > 0 && sensor_h > 0) {
       const double sx = W / (double)sensor_w, sy = H / (double)sensor_h;
       if (std::fabs(sx - sy) > 0.02 * std::max(sx, sy)) {
         out.reason += ",decode_not_sensor_aligned";  // the decode is not the sensor's area scaled (turned)
@@ -494,7 +517,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         b[1] = std::max(0, b[1]);
         b[2] = std::min(W, b[2]);
         b[3] = std::min(H, b[3]);
-        if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
+        if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples || b[2] - b[0] < kBaseMinSide ||
+            b[3] - b[1] < kBaseMinSide) {
           out.reason += ",patch_too_small";
         } else {
           has_box = true;
@@ -508,6 +532,10 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
   }
   thinnest_film_base_impl(half, crosstalk == nullptr, out.thinnest);
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
+  double stats_rgb[3];
+  corrected(thinnest, crosstalk, stats_rgb);
+  const bool stats_positive =
+      std::min({thinnest[0], thinnest[1], thinnest[2]}) > 1.0 && std::min({stats_rgb[0], stats_rgb[1], stats_rgb[2]}) > 0;
   if (has_box) {
     std::vector<uint16_t> ch[3];
     for (auto& c : ch) c.reserve((size_t)box[2] * box[3]);
@@ -525,7 +553,22 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     for (int c = 0; c < 3; ++c) outshone = std::max(outshone, std::log2(thinnest[c] / std::max(dec[c], 1.0)));
     out.has_outshone = true;
     out.thinnest_over_patch_stops = outshone;
-    if (std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0 && outshone <= kRebateMargin) {
+    const bool positive = std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0;
+    bool plausible = true;
+    if (expected_rgb && positive) {
+      // Two readings of the same base that agree are taken; otherwise the rebate must lie in the stock's envelope.
+      if (stats_positive) {
+        double d = 0.0;
+        for (int c = 0; c < 3; ++c) d = std::max(d, std::fabs(std::log2(rgb[c] / stats_rgb[c])));
+        out.has_agreement = true;
+        out.agreement_stops = d;
+        out.readings_agree = d <= kBaseAgreeStops;
+      }
+      plausible = out.readings_agree || in_envelope(rgb, out.rebate_rg, out.rebate_bg);
+      if (out.readings_agree) film_base_ratios(rgb, expected_rgb, out.rebate_rg, out.rebate_bg);
+      out.rebate_refused = !plausible;
+    }
+    if (positive && outshone <= kRebateMargin && plausible) {
       out.found = true;
       out.source = "rebate";
       std::copy(dec, dec + 3, out.decode_rgb);
@@ -535,13 +578,17 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
       return true;
     }
   }
-  double rgb[3];
-  corrected(thinnest, crosstalk, rgb);
-  if (std::min({thinnest[0], thinnest[1], thinnest[2]}) <= 1.0 || std::min({rgb[0], rgb[1], rgb[2]}) <= 0) return false;
+  if (!stats_positive) return false;
+  // The statistics alone (no patch, or the patch refused): in the stock's envelope, unless both readings agreed.
+  if (expected_rgb) {
+    const bool ok = in_envelope(stats_rgb, out.statistics_rg, out.statistics_bg) || out.readings_agree;
+    out.statistics_refused = !ok;
+    if (!ok) return false;
+  }
   out.found = true;
   out.source = "statistics";
   std::copy(thinnest, thinnest + 3, out.decode_rgb);
-  std::copy(rgb, rgb + 3, out.rgb);
+  std::copy(stats_rgb, stats_rgb + 3, out.rgb);
   return true;
 }
 

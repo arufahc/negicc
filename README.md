@@ -105,7 +105,7 @@ Instead of relying on simple grey-world heuristics, `neg_process` uses Meta's **
 ![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
 To convert a frame automatically:
-1. **Auto Film-Base & Frame Detection:** Automatically samples the unexposed orange film base from the scan border (rebate or thinnest film; *TODO: add support for reading the film base from a separate unexposed film capture*) and crops the film frame (`--roi auto --film_format 35mm|645|6x6|6x7|6x9`).
+1. **Auto Film-Base & Frame Detection:** Automatically samples the unexposed orange film base from the scan border (rebate or thinnest film; *TODO: add support for reading the film base from a separate unexposed film capture*) and crops the film frame (`--roi auto --film_format 35mm|645|6x6|6x7|6x9|auto`; `auto` tries every format). With `--roi auto` the format defaults to 35mm; with a given frame (`--roi x y w h`, or none) the film base's frame detection tries every format unless `--film_format` names one, as negicc-station does.
 2. **Bracket Screening & Iterative Error Minimization:** Screens the 7 brackets against the predicted target Lab patch field, then iteratively adjusts exposure (`E`) and green/blue color balance (`g`, `b`) on the top brackets—re-evaluating the DINOv3 target Lab field at each step—until the patch Lab residual error converges to a minimum (with automatic highlight pullback and bracket step-up if highlights clip). As shown below on a second scene (Lake Ashi & Mt. Fuji), an unbalanced initial render with a heavy cyan/green cast produces large patch Lab residuals across the sky and water (`21.6 ΔE` median patch error, score `6.30`); DINOv3 drives the residual error down by **72%** (`8.7 ΔE` median, score `1.79`) to recover natural daylight balance:
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
@@ -143,11 +143,38 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 # 5. Manual override: pick a bracket (0..6), exposure (-E), or green/blue gains (--gain_g, --gain_b)
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 
-# 6. White light: fit G/B input curves after the search (the sidecar's input_curves records them; its cli_equivalent
-#    replays them with --fit_curves aG,kG,aB,kB,refG,refB,u_medG,u_medB, --target, -E, --gain_g and --gain_b, all
-#    four required with recorded curves)
+# 6. White light: fit g, b and G/B input curves jointly after the search, keeping Auto's lightness (-P srgb or
+#    srgb-g10; the sidecar's input_curves records them; its cli_equivalent replays them with
+#    --fit_curves ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (u_loG,u_loB appended for a held curve), --target, -E,
+#    --gain_g and --gain_b, all four required with recorded curves; the older aG,kG,aB,kB,refG,refB,u_medG,u_medB
+#    order without the prefix is still read when aG is not negative)
 bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
 ```
+
+## Options
+
+`bin_out/neg_process --help` prints every option. In short:
+
+| Option | Meaning |
+| :--- | :--- |
+| `--film_stock`, `--light_source tri\|d65` | A built-in bundle (`--list_profiles` lists them). |
+| `-p`, `--film_profile` | A bundle JSON (or its directory), or a single ICC profile. |
+| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | The output encoding. Only `srgb` applies the highlight roll-off; the input curves need `srgb` or `srgb-g10`. |
+| `-o`, `--output` | The TIFF; `<output>.json` is its sidecar unless `--no-metadata` is given. |
+| `--target N` | The bracket (0-based index or name). Without `-E` and the gains: the single-bracket DINOv3 search on that bracket. |
+| `-E`, `--exposure_comp` | E as negicc-station gives it. With a bundle and given gains it defaults to the centre of the bracket's exposure range as the bundle search meters it; with an ICC profile, to 1. Given alone, the search keeps it. |
+| `--gain_g`, `--gain_b` | G and B gains relative to R (default 1). Either given turns the DINOv3 search off. |
+| `--brightness`, `--tint`, `--warmth` | Grey-point knobs after the search (or on given values); reuse `<output>.json` when it was written by this build from the same inputs and arguments. |
+| `--fit_curves off\|auto\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto`: on wherever on applies. `on`: fit after the bundle search. Eight or ten comma-separated numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
+| `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
+| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` finds (default 35mm); with a given frame, the format the film base is read around (default: every format). |
+| `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
+| `-q`, `--quality` | Demosaic: -1 auto (grain-aware on Sony CFA, else bilinear), or a LibRaw quality (4: DCB). |
+| `-r`, `-g`, `-b` | Rows of the crosstalk correction (default: the bundle's). |
+| `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
+| `--flat` | A flat-field `.npz` measured on the empty gate. |
+| `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
+| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 # Licences
 

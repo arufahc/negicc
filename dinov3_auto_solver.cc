@@ -624,7 +624,9 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     e_center = std::pow(2.0, 0.5 * (log2_lo + log2_hi));
     }
   }
-  out.e_center = (float)e_center;
+  // The centre in the caller's E (user_merged carries user_gains.e): with a pinned E that is the given E, not the
+  // relative 1 the search runs at.
+  out.e_center = (float)((double)user_gains.e * e_center);
 
   // Search in E_c-normalized units: all rows scaled once by E_c.
   float merged_norm[9];

@@ -35,12 +35,22 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
                const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
 
 // What the sidecar records.
+// An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
+// the sidecar writer share it.
+struct FileFingerprint {
+  bool ok = false;
+  uintmax_t size = 0;
+  uint32_t crc = 0;
+};
+
 struct Sidecar {
   std::string output_path;               // the TIFF; the sidecar is <output_path>.json
   int argc = 0;
   char** argv = nullptr;
   const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
   std::vector<std::string> files;
+  // Each file's fingerprint when this run already took it (the sidecar loader); null or short: taken here.
+  const std::vector<FileFingerprint>* file_fingerprints = nullptr;
   int orig_w = 0, orig_h = 0;
   bool half_size = false;
   bool has_roi = false;
@@ -85,11 +95,20 @@ struct Sidecar {
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
   double t_auto_ms = 0.0;
   // Fitted G/B input curves of the conversion's bracket (input_curves.h): source "fit" (--fit_curves on, with
-  // curve_fit) or "cli" (--input_curves); empty: none.
+  // curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;
+  // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
+  // null: input_curves.
+  const negicc::InputCurves* cli_input_curves = nullptr;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).
+// The build's version (git describe), as the sidecar's tool.version records it.
+const char* neg_process_version();
+
+// A file's size and CRC-32 (zlib), as the sidecar records each input (inputs.raw_file_stats). False when unreadable.
+bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
+
 bool write_json_sidecar(const Sidecar& sc);

@@ -51,6 +51,7 @@
 #include "multi_target_optimizer.h"
 #include "neg_pipeline.h"
 #include "np_options.h"
+#include "np_output.h"
 #include "np_raw.h"
 #include "profile_bundle.h"
 
@@ -63,7 +64,6 @@ struct CachedSidecar {
   std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
   std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
   std::string dino_backend;
-  double t_auto_ms = 0.0;
   double t_dino_views_ms = 0.0, t_dino_render_ms = 0.0;
   double t_dino_infer_ms = 0.0, t_dino_search_ms = 0.0;
   // The previous run's fitted G/B input curves (replayed on its bracket, not refitted) and its intent field, carried
@@ -77,6 +77,9 @@ struct CachedSidecar {
 
 // What the profile and the options decide before the scan is read.
 struct Setup {
+  // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
+  // reused by the sidecar writer.
+  std::vector<FileFingerprint> input_fingerprints;
   bool is_bundle = false;
   ProfileBundle bundle;
   std::string film_prof_arg;             // -p naming an ICC profile (not a bundle)
@@ -97,10 +100,15 @@ struct Setup {
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
-  // on: curve_fit has the fit), "cli" (--input_curves) or empty (none).
+  // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
+  // empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   CurveRefitResult curve_fit;
+  // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
+  // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
 };
 
 // The scan as data for a backend: a CFA mosaic (one, or the four frames of a pixel shift), black subtracted, in place.
@@ -187,14 +195,20 @@ struct Scan {
 
   // Each bracket's exposure range (compute_bundle_enclosures) was measured on the half-size frame, in decode.
   bool has_enclosures = false;
+  // Each bracket's exposure range in the station's E, as the bundle search meters it (meter_bracket_exposures).
+  std::vector<BracketExposure> bracket_exposure;
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
-  // With --fit_curves on: E, g and b of the curve fit's fixed point on the combined profile, which the conversion
-  // takes in place of the search's (auto_res keeps the search's own).
+  // With --fit_curves on or auto: the curve fit's re-metered E and fitted g and b on the combined profile, which the
+  // conversion takes in place of the search's (auto_res keeps the search's own).
   bool has_curve_params = false;
   ConversionParams curve_params;
   const ConversionParams& params() const { return has_curve_params ? curve_params : auto_res.params; }
+  // The curves re-anchored at the knobs' E, g and b, which the bracket renders through after the knobs and the
+  // cli_equivalent replays (Setup::input_curves stays the record at the knobs' base, as the sidecar keeps it).
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
 
   bool has_knob_res = false;             // --brightness, --tint or --warmth solved
   float knob_base[3] = {1.0f, 1.0f, 1.0f};

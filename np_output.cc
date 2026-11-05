@@ -17,6 +17,7 @@
 #include "np_output.h"
 
 #include <lcms2.h>
+#include <zlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <netinet/in.h>
@@ -25,6 +26,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
@@ -178,6 +182,9 @@ static ordered_json frame_detection_json(const FrameDetection& fd) {
   return j;
 }
 
+// The search's own result: e, g, b and residual are its values before any curve fit, which a run with fitted curves
+// converts at other values (input_curves.remeter's e, g and b, after the fit and the re-meter; the sidecar loader
+// reads those as the knobs' base when they are there, and auto's otherwise).
 static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half, const Sidecar& sc) {
   ordered_json j;
   j["target"] = a.target_name;
@@ -261,17 +268,38 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
 
 // The intent field the parameter search converted against (designs/plan_intent_field_sidecar.md in
 // negicc-station): per DINOv3 grid cell, row-major over the oriented frame, the Lab colour the intent adapter predicts
-// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran.
+// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran. source: "auto" (the
+// bundle search, on the frame's inner crop_ratio crop) or "dino" (the single-bracket search, on the whole frame).
+// The model's short name (the backbone's directory, e.g. dinov3-small), not the path the build embedded it from.
+static std::string model_stem(std::string path) {
+  const std::string kBuiltIn = "[built-in] ";
+  if (path.rfind(kBuiltIn, 0) == 0) path = path.substr(kBuiltIn.size());
+  const size_t slash = path.find_last_of("/\\");
+  std::string file = slash == std::string::npos ? path : path.substr(slash + 1);
+  if (slash != std::string::npos && file.rfind("backbone.", 0) == 0) {
+    const std::string dir = path.substr(0, slash);
+    const size_t s2 = dir.find_last_of("/\\");
+    return s2 == std::string::npos ? dir : dir.substr(s2 + 1);
+  }
+  const size_t dot = file.find_last_of('.');
+  return dot == std::string::npos ? file : file.substr(0, dot);
+}
+
 static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
-                                      int grid_h, int target_idx, const Sidecar& sc) {
+                                      int grid_h, int target_idx, const char* source, float crop_ratio,
+                                      const Sidecar& sc) {
   const size_t n = static_cast<size_t>(grid_w) * static_cast<size_t>(grid_h);
   if (n == 0 || mu.size() != n * 3 || sigma.size() != n * 3) return nullptr;
   ordered_json j;
   j["version"] = 1;
   j["grid"] = {{"rows", grid_h}, {"cols", grid_w}, {"patch_px", 16}, {"order", "row-major, oriented frame"}};
-  j["source"] = "auto";
+  j["source"] = source;
+  j["crop_ratio"] = num(crop_ratio, "%.3g");
   j["target_idx"] = target_idx >= 0 ? ordered_json(target_idx) : ordered_json(nullptr);
-  j["model"] = {{"name", sc.dino_model}, {"backend", sc.dino_backend}, {"negicc", NEGICC_GIT_VERSION}};
+  j["model"] = {{"name", model_stem(sc.dino_model)},
+                {"path", sc.dino_model},
+                {"backend", sc.dino_backend},
+                {"negicc", NEGICC_GIT_VERSION}};
   ordered_json m = ordered_json::array(), s = ordered_json::array();
   for (size_t i = 0; i < n; ++i) {
     m.push_back({num(mu[i * 3], "%.2f"), num(mu[i * 3 + 1], "%.2f"), num(mu[i * 3 + 2], "%.2f")});
@@ -285,7 +313,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
 // The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
-// (--fit_curves with the eight comma-separated numbers) rebuilds the same tables.
+// (--fit_curves with the recorded numbers, as the cli_equivalent writes them) rebuilds the same tables.
 static ordered_json input_curves_json(const Sidecar& sc) {
   const negicc::InputCurves& c = *sc.input_curves;
   auto n9 = [](double v) { return num(v, "%.9g"); };
@@ -296,30 +324,86 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   j["target_idx"] = sc.bundle_target_idx >= 0 ? ordered_json(sc.bundle_target_idx) : ordered_json(nullptr);
   ordered_json ch;
   const char* names[2] = {"G", "B"};
-  for (int i = 0; i < 2; ++i)
-    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])},
-                    {"u_lo", n9(c.u_lo[i])}};
+  // u_lo is known from a fit, and from recorded curves only when held (the ten-number form): an eight-number replay
+  // has none, and before 0 was written for it as if it had been measured.
+  const bool u_lo_known = sc.input_curves_source != "cli" || c.hold;
+  for (int i = 0; i < 2; ++i) {
+    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
+    if (u_lo_known) ch[names[i]]["u_lo"] = n9(c.u_lo[i]);
+  }
   j["channels"] = ch;
+  j["hold"] = c.hold;  // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
   if (const CurveRefitResult* f = sc.curve_fit) {
-    const negicc::CurveFitOptions defaults;
-    j["lambda"] = n9(defaults.lambda);
-    j["bound"] = n9(defaults.curve_bound);
+    // The options the fit ran with (before, the defaults were written whatever ran, and half of them were missing).
+    const negicc::CurveFitOptions& op = f->options;
+    j["lambda"] = n9(op.lambda);
+    j["bound"] = n9(op.curve_bound);
+    j["options"] = {{"curve_bound", n9(op.curve_bound)}, {"max_dev_stops", n9(op.max_dev_stops)},
+                    {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)}, {"lambda", n9(op.lambda)},
+                    {"step0_gain", n9(op.step0_gain)}, {"step0_curve", n9(op.step0_curve)},
+                    {"step_min", n9(op.step_min)}, {"max_evals", op.max_evals},
+                    {"polish_step0", n9(op.polish_step0)}, {"polish_max_evals", op.polish_max_evals},
+                    {"starts", op.starts}, {"start_a", n9(op.start_a)}, {"hold_slope", op.hold_slope},
+                    {"l_weight", n9(op.l_weight)}, {"huber", n9(op.huber)}, {"solve_e", op.solve_e},
+                    {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
-                {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)}};
+                {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
+                {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
+                {"iterations", f->fit_iterations}, {"converged", f->fit_converged},
+                {"polish_evaluations", f->fit_polish}, {"start", f->fit_start}, {"passes", f->fit_passes},
+                {"intent_repredicted", f->intent_repredicted}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
-    j["max_dev_stops"] = n9(defaults.max_dev_stops);
+    j["max_dev_stops"] = n9(op.max_dev_stops);
+    // Measured on the export's render: its encoding and the roll-off it measures (x_hi_auto at Auto's parameters,
+    // which the first fit ran with; x_hi_fit, which the last fit ran with; x_hi at the result, which the export uses).
+    j["render"] = {{"encoding", f->encoding == ENCODE_SRGB ? "srgb" : f->encoding == ENCODE_SRGB_LINEAR ? "srgb-linear"
+                                                                                                       : "custom"},
+                   {"x_hi_auto", n9(f->x_hi_auto)}, {"x_hi_fit", n9(f->x_hi_fit)}};
     j["remeter"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
-                    {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)}};
+                    {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)},
+                    {"x_hi", n9(f->x_hi)}, {"passes", f->remeter_passes}, {"converged", f->remeter_converged},
+                    {"e_lo", n9(f->e_lo)}, {"e_hi", n9(f->e_hi)},
+                    {"shape_scale", n9(f->shape_scale)},
+                    {"shape_scale_ch", {n9(f->shape_scale_ch[0]), n9(f->shape_scale_ch[1])}},
+                    {"fallback", f->fallback ? ordered_json(f->fallback) : ordered_json(nullptr)},
+                    {"intent_lightness_failed", f->intent_lightness_failed},
+                    {"cells_excluded", f->cells_excluded}, {"cells_total", f->cells_total},
+                    {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
+                    {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
+                    {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
+                    {"time_ms", num(f->time_ms, "%.1f")},
+                    {"loss", n9(f->loss_export)}};
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
+    j["options"] = nullptr;
     j["fit"] = nullptr;
     j["params_before"] = nullptr;
     j["max_dev_stops"] = nullptr;
+    j["render"] = nullptr;
     j["remeter"] = nullptr;
   }
   return j;
+}
+
+const char* neg_process_version() { return NEGICC_GIT_VERSION; }
+
+bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return false;
+  std::vector<char> buf(1 << 20);
+  uLong c = crc32(0L, Z_NULL, 0);
+  size = 0;
+  while (f) {
+    f.read(buf.data(), (std::streamsize)buf.size());
+    const std::streamsize n = f.gcount();
+    if (n <= 0) break;
+    c = crc32_z(c, reinterpret_cast<const Bytef*>(buf.data()), (z_size_t)n);
+    size += (uintmax_t)n;
+  }
+  crc = (uint32_t)c;
+  return !f.bad();
 }
 
 bool write_json_sidecar(const Sidecar& sc) {
@@ -338,7 +422,20 @@ bool write_json_sidecar(const Sidecar& sc) {
     else if (!model.empty()) camera = model;
     else if (!make.empty()) camera = make;
   }
+  // Each input's size and CRC-32, so a later run reusing this sidecar (the knobs) can tell the same file from another
+  // saved under the same name, also when the file was copied or downloaded again in between (a new modification time).
+  ordered_json stats = ordered_json::array();
+  for (size_t i = 0; i < sc.files.size(); ++i) {
+    FileFingerprint fp;
+    if (sc.file_fingerprints && i < sc.file_fingerprints->size() && (*sc.file_fingerprints)[i].ok) {
+      fp = (*sc.file_fingerprints)[i];  // hashed once already, by the sidecar loader
+    } else {
+      fp.ok = file_fingerprint(sc.files[i], fp.size, fp.crc);
+    }
+    stats.push_back(fp.ok ? ordered_json({{"size", fp.size}, {"crc32", fp.crc}}) : ordered_json(nullptr));
+  }
   j["inputs"] = {{"raw_files", sc.files},
+                 {"raw_file_stats", stats},
                  {"camera", camera},
                  {"iso", sc.proc ? num(sc.proc->imgdata.other.iso_speed) : ordered_json(0)},
                  {"shutter", sc.proc ? num(sc.proc->imgdata.other.shutter) : ordered_json(0)}};
@@ -384,6 +481,22 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else {
     fb["detector"] = nullptr;
   }
+  if (d && d->has_chroma_check) {
+    // The plausibility gate against the stock's base (film_base_detect.h kBaseAgreeStops): the two readings'
+    // agreement, and each reading's R/G and B/G over the stock's.
+    auto ratio = [](double v) { return v > 0 ? num(v, "%.4f") : ordered_json(nullptr); };
+    fb["chroma_check"] = {
+        {"agree_stops", num(negicc::kBaseAgreeStops, "%.3g")},
+        {"envelope", {{"rg", {1.0, num(negicc::kBaseRgMax, "%.3g")}}, {"bg", {num(negicc::kBaseBgMin, "%.3g"), 1.0}}}},
+        {"agreement_stops", d->has_agreement ? num(d->agreement_stops, "%.4f") : ordered_json(nullptr)},
+        {"readings_agree", d->readings_agree},
+        {"rebate_rg", ratio(d->rebate_rg)},
+        {"rebate_bg", ratio(d->rebate_bg)},
+        {"rebate_refused", d->rebate_refused},
+        {"statistics_rg", ratio(d->statistics_rg)},
+        {"statistics_bg", ratio(d->statistics_bg)},
+        {"statistics_refused", d->statistics_refused}};
+  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   j["film_base"] = fb;
 
@@ -418,12 +531,16 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
   if (sc.input_curves) {
-    // Replays the combined profile without fitting (the curves need -P, as when they were fitted).
-    const negicc::InputCurves& c = *sc.input_curves;
+    // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
+    // above: after the knobs, the curves re-anchored there.
+    // The value leads with "ref:" and the refs (always positive): the older order led with aG, and a negative aG
+    // made the value start with '-', which the parser rejects as an unknown option, so the line did not replay.
+    const negicc::InputCurves& c = sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves;
     cli.push_back("--fit_curves");
-    std::string v8;
-    for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})
-      v8 += (v8.empty() ? "" : ",") + num_str(v, "%.9g");
+    std::string v8 = "ref:";
+    for (float v : {c.ref[0], c.ref[1], c.u_med[0], c.u_med[1], c.a[0], c.k[0], c.a[1], c.k[1]})
+      v8 += (v8.size() > 4 ? "," : "") + num_str(v, "%.9g");
+    if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
     cli.push_back(v8);
   }
   j["cli_equivalent"] = cli;
@@ -445,10 +562,10 @@ bool write_json_sidecar(const Sidecar& sc) {
   else if (sc.auto_res)
     j["intent_field"] = intent_field_json(sc.auto_res->intent_mu, sc.auto_res->intent_sigma,
                                           sc.auto_res->intent_grid_w, sc.auto_res->intent_grid_h,
-                                          sc.auto_res->target_idx, sc);
+                                          sc.auto_res->target_idx, "auto", ParamSearchOptions{}.crop_ratio, sc);
   else if (sc.dino)
     j["intent_field"] = intent_field_json(sc.dino->best_mu, sc.dino->best_sigma, sc.dino->grid_w, sc.dino->grid_h,
-                                          -1, sc);
+                                          sc.bundle_target_idx, "dino", 1.0f, sc);
   else
     j["intent_field"] = nullptr;
 

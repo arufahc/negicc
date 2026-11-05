@@ -138,6 +138,11 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
     const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
     r.search_lo = std::max(u_min, r.e_center * std::pow(2.0f, -margin_ev));
     r.search_hi = std::min(u_max, r.e_center * std::pow(2.0f, margin_ev));
+    // The usable range can cut the window from both sides past each other (u_min above e_center * 2^margin, or u_max
+    // below e_center / 2^margin): ordered here, for every caller and every bundle. Before, only Step 1 on white light
+    // swapped it, so TriLED and the other callers (the step-up, the bounds of the chosen bracket) searched an
+    // inverted window.
+    if (r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
   }
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
   return true;
@@ -746,6 +751,14 @@ class SearchFrame {
                 << stats_.grid_w << "x" << stats_.grid_h << std::endl;
       return false;
     }
+    // Every loss divides by sigma: a non-positive or non-finite sigma, or a non-finite mu, would make the search's
+    // and the curve fit's losses NaN or infinite (as dinov3_auto_solver.cc's infer_checked rejects them).
+    for (size_t i = 0; i < n; ++i) {
+      if (!(r.sigma[i] > 0.0f) || !std::isfinite(r.sigma[i]) || !std::isfinite(r.mu[i])) {
+        std::cerr << "ERROR! DINOv3 intent field has a non-positive or non-finite sigma or mu at " << i << std::endl;
+        return false;
+      }
+    }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     return true;
@@ -1028,9 +1041,68 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
   return s;
 }
 
+void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, float crop_ratio, const double* film_base_rgb,
+                             std::vector<BracketExposure>& out) {
+  out.assign(bundle.targets.size(), BracketExposure{});
+  ParamSearchOptions opts;
+  opts.film_base_rgb_d = film_base_rgb;
+  opts.film_base_from_scan = film_base_rgb != nullptr;
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  // The statistics the search reads (SearchFrame::set_frame); the grid's size does not change g_lo and g_hi.
+  FrameStats stats;
+  compute_frame_stats(frame, crop_ratio, 224, 16, stats);
+  // As search_conversion_params' Step 1.
+  const bool white_light = !bundle.has_crosstalk;
+  const float g_lo = std::max(1.0f, stats.g_lo);
+  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
+  const float g_scale = white_light ? scale.e_norm : 1.0f;
+  // The scene vector Step 2 meters: the search's input matrix (SearchFrame::set_frame_matrix: M_frame on white light,
+  // M_frame / e_norm on TriLED) applied to the log-average RGB.
+  const float mat_div = white_light ? 1.0f : scale.e_norm;
+  float p_scene[3];
+  for (int r = 0; r < 3; ++r) {
+    p_scene[r] = 0.0f;
+    for (int c = 0; c < 3; ++c) p_scene[r] += scale.frame_matrix[r * 3 + c] / mat_div * stats.log_avg_rgb[c];
+  }
+  for (size_t i = 0; i < bundle.targets.size(); ++i) {
+    if (!(bundle.targets[i].exposure_s > 0.0f)) continue;
+    Enclosure r;
+    if (!bracket_enclosure(bundle.targets[i], (int)i, g_lo * g_scale, g_hi * g_scale, r)) continue;
+    // The search's E is the station's on white light; on TriLED it runs on M_frame / e_norm, and its result is
+    // params.e / e_norm (search_conversion_params' out.params).
+    const float to_station = white_light ? 1.0f : 1.0f / scale.e_norm;
+    BracketExposure& b = out[i];
+    b.feasible = r.feasible;
+    b.e_min = r.e_min * to_station;
+    b.e_max = r.e_max * to_station;
+    b.e_center = r.e_center * to_station;
+    b.search_lo = r.search_lo * to_station;
+    b.search_hi = r.search_hi * to_station;
+    b.valid = b.e_min > 0.0f && b.e_max > 0.0f && std::isfinite(b.e_center) && b.e_center > 0.0f;
+    b.e_metered = b.e_center;
+    const GreyPoint gp(bundle.targets[i].film_prof.data);
+    float e_met = 0.0f;
+    if (gp.reference_grey() && exposure_for_lightness(gp, p_scene, 1.10f, 1.15f, e_met) && e_met > 0.0f) {
+      b.has_metered = true;
+      b.e_metered = std::clamp(e_met, r.search_lo, r.search_hi) * to_station;
+    }
+  }
+}
+
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb) {
+  return measure_rolloff_x_hi(bundle, bundle.targets[target_idx].film_prof.data, frame, scan_shutter_s, scan_iso, e, g,
+                              b, crop_ratio, q995, film_base_rgb);
+}
+
+float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof_in,
+                           const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995, const double* film_base_rgb) {
+  ProfileData prof;
+  static_cast<negicc::ProfileData&>(prof) = prof_in;
   ParamSearchOptions base_opts;
   base_opts.film_base_rgb_d = film_base_rgb;
   base_opts.film_base_from_scan = film_base_rgb != nullptr;
@@ -1042,7 +1114,7 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
   measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
-                         AUTO_KNEE, bundle.targets[target_idx].film_prof.data, kCeil, 1.0f, hist.data());
+                         AUTO_KNEE, prof, kCeil, 1.0f, hist.data());
   return shoulder_x_hi_from_hist(hist.data(), q995);
 }
 
@@ -1192,7 +1264,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   for (int i : filter_admissible_targets(bundle)) {
     Enclosure r;
     if (bracket_enclosure(bundle.targets[i], i, g_lo_ref, g_hi_ref, r)) {
-      if (white_light && r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
       enclosure.push_back(r);
     }
   }
@@ -1485,8 +1556,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
         const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
         const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-        const float lo = base_lo;
-        const float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        float lo = base_lo;
+        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
+        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
+        if (lo > hi) std::swap(lo, hi);
         const float depth_r = std::min(std::log2(e_met / std::max(1e-6f, lo)), std::log2(std::max(1e-6f, hi) / e_met)) -
                               SLACK_PENALTY_SCALE * std::max(0.0f, -c.slack_ev);
         depths_res.push_back({c, e_met, depth_r, lo, hi});
@@ -1603,6 +1677,13 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.intent_grid_w = chosen.grid_w;
   out.intent_grid_h = chosen.grid_h;
   out.intent_params = chosen.params;
+  {
+    Enclosure enc{};
+    if (bounds_of(chosen.target_idx, enc) && enc.feasible) {
+      out.e_range_lo = white_light ? enc.e_min : enc.e_min / e_norm;
+      out.e_range_hi = white_light ? enc.e_max : enc.e_max / e_norm;
+    }
+  }
   fr.write_timings();
   out.total_time = Clock::now() - t_start;
   return true;
@@ -1618,10 +1699,99 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
     std::vector<float> composed(table.size());
     const int i = ch - 1;
     negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data());
+                                curves.k[i], composed.data(), curves.u_hold(i));
     table.swap(composed);
   }
   prof.rebind_pointers();
+}
+
+void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves) {
+  for (int ch = 1; ch <= 2; ++ch) {
+    const std::vector<float>& table = base.in_trc[ch];
+    if (!curves.active() || !base.data.has_profile || table.size() < 2) {
+      prof.in_trc[ch] = table;
+      continue;
+    }
+    std::vector<float> composed(table.size());
+    const int i = ch - 1;
+    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
+                                curves.k[i], composed.data(), curves.u_hold(i));
+    prof.in_trc[ch].swap(composed);
+  }
+  prof.rebind_pointers();
+}
+
+// What anchors the curves on a frame (negicc::CurveFrame) from its statistics: the search's matrix, the knee, and the
+// film base read from the scan (opts), else the brightest grid cell per channel, as the station takes it. stats must
+// outlive the result (its grid is not copied).
+static negicc::CurveFrame curve_frame_of(const FrameStats& stats, const float* merged, const ParamSearchOptions& opts) {
+  negicc::CurveFrame cf;
+  cf.merged = merged;
+  cf.knee = AUTO_KNEE;
+  const size_t n = stats.grid.size() / 3;
+  if (opts.film_base_rgb_d) {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = (float)opts.film_base_rgb_d[c];
+  } else if (opts.film_base_rgb) {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = opts.film_base_rgb[c];
+  } else {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = 0.0f;
+    for (size_t i = 0; i < n; ++i)
+      for (int c = 0; c < 3; ++c) cf.film_base[c] = std::max(cf.film_base[c], (float)stats.grid[i * 3 + c]);
+  }
+  cf.grid = stats.grid.data();
+  cf.n = (int)n;
+  return cf;
+}
+
+// The largest factor t in [0, 1] (bisection; t = 0, the identity, always passes) by which channel ch's a and k are
+// scaled to keep the shape where ok says.
+template <typename Ok>
+static float shape_scale_of(Ok ok) {
+  if (ok(1.0f)) return 1.0f;
+  float lo = 0.0f, hi = 1.0f;
+  for (int it = 0; it < 24; ++it) {
+    const float mid = 0.5f * (lo + hi);
+    if (ok(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engine, int target_idx,
+                           const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
+                           const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]) {
+  out = curves;
+  scale[0] = scale[1] = 1.0f;
+  if (bundle.has_crosstalk || target_idx < 0 || target_idx >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! Re-anchoring the input curves needs a white-light bundle's bracket" << std::endl;
+    return false;
+  }
+  if (!curves.active()) return true;
+  // The frame as the fit saw it: the same statistics' grid and the search's matrix (white light: M_frame).
+  FrameStats stats;
+  compute_frame_stats(frame, opts.crop_ratio, engine.max_size(), engine.patch_size(), stats);
+  const FrameScale fs = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  const negicc::CurveFrame cf = curve_frame_of(stats, fs.frame_matrix, opts);
+  if (cf.n <= 0) return true;
+  // Moved by the difference of two fresh anchors rather than replaced by the one at to, so a replay's recorded ref and
+  // u_med carry over exactly where nothing moves.
+  const negicc::InputCurves a0 = negicc::anchor_curves(curves, cf, from[0], from[1], from[2]);
+  const negicc::InputCurves a1 = negicc::anchor_curves(curves, cf, to[0], to[1], to[2]);
+  const ProfileData& pd = bundle.targets[target_idx].film_prof.data;
+  for (int ch = 0; ch < 2; ++ch) {
+    if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
+    out.u_med[ch] = curves.u_med[ch] + (a1.u_med[ch] - a0.u_med[ch]);
+    out.u_lo[ch] = curves.u_lo[ch] + (a1.u_lo[ch] - a0.u_lo[ch]);
+    const int table_n = pd.in_trc_size[ch + 1];
+    scale[ch] = shape_scale_of([&](float t) {
+      return negicc::curve_shape_ok(t * out.a[ch], t * out.k[ch], out.u_med[ch], out.ref[ch], table_n, max_dev_stops,
+                                    out.u_hold(ch));
+    });
+    out.a[ch] *= scale[ch];
+    out.k[ch] *= scale[ch];
+  }
+  return true;
 }
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
@@ -1629,7 +1799,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out) {
+                                   int encoding, CurveRefitResult& out) {
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
@@ -1640,6 +1810,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
     return false;
   }
+  const Clock::time_point t_fit0 = Clock::now();
   ParamSearchResult scratch;  // the inferences and timings of the frame below; not reported
   SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
   fr.set_shoulder(1.0f, true);
@@ -1647,7 +1818,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const FrameStats& stats = fr.stats();
   const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
   fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
-  const float e_norm = fr.e_norm();
   const size_t n = stats.grid.size() / 3;
   if (res.intent_grid_w != stats.grid_w || res.intent_grid_h != stats.grid_h || res.intent_mu.size() != n * 3 ||
       res.intent_sigma.size() != n * 3 || n == 0) {
@@ -1658,55 +1828,273 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const float* merged = fr.input_matrix();
   const float e_int = res.params.e;  // white light (checked above): the search's E is already in this frame's units
   out.params_before = res.params;
+  out.options = fit_opts;
 
-  // 1. ref and u_med, then the fit with E fixed (the station's Converter.fit_input_curves).
-  float fb[3];
-  if (opts.film_base_rgb_d) {
-    for (int c = 0; c < 3; ++c) fb[c] = (float)opts.film_base_rgb_d[c];
-  } else if (opts.film_base_rgb) {
-    for (int c = 0; c < 3; ++c) fb[c] = opts.film_base_rgb[c];
-  } else {
-    // No film base read from the scan: the brightest grid cell per channel, as the station takes it.
-    for (int c = 0; c < 3; ++c) fb[c] = 0.0f;
-    for (size_t i = 0; i < n; ++i)
-      for (int c = 0; c < 3; ++c) fb[c] = std::max(fb[c], (float)stats.grid[i * 3 + c]);
+  // The intent field the fit scores against: the search's, predicted from the preview at intent_params. The highlight
+  // pullback (and the clip fallback) move E, or the bracket's parameters, after that preview, so there the field is
+  // predicted again from a preview at the search's final parameters on the bracket's own profile: before, the fit ran
+  // at the pulled-back E against a field predicted at another E. One DINOv3 inference, only then.
+  std::vector<float> mu = res.intent_mu, sigma = res.intent_sigma;
+  {
+    const ConversionParams& ip = res.intent_params;  // the search's own units, which are this frame's on white light
+    auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
+    if (moved(ip.e, res.params.e) || moved(ip.g, res.params.g) || moved(ip.b, res.params.b) ||
+        moved(ip.shoulder, res.params.shoulder)) {
+      std::vector<uint8_t> preview;
+      fr.render_preview(idx, res.params, preview);
+      if (!fr.predict(preview, mu, sigma)) return false;
+      out.intent_repredicted = true;
+    }
+  }
+
+  // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel (of
+  // the whole grid, before any cell is left out below).
+  negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
+  // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
+  // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
+  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells.
+  constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
+  std::vector<uint16_t> kept_grid;
+  const uint16_t* fit_grid = stats.grid.data();
+  size_t nf = n;
+  out.cells_total = (int)n;
+  if (opts.fallback_crop && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
+    std::vector<float> kept_mu, kept_sigma;
+    const float base_lim[2] = {cf.film_base[1] * std::exp2(-kBaseCellStops), cf.film_base[2] * std::exp2(-kBaseCellStops)};
+    const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
+    for (size_t i = 0; i < n; ++i) {
+      const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
+      if ((g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+      kept_grid.insert(kept_grid.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
+      kept_mu.insert(kept_mu.end(), mu.begin() + i * 3, mu.begin() + i * 3 + 3);
+      kept_sigma.insert(kept_sigma.end(), sigma.begin() + i * 3, sigma.begin() + i * 3 + 3);
+    }
+    // Only with enough picture left; else the whole grid, as before.
+    if (kept_grid.size() / 3 >= std::max<size_t>(16, n / 4) && kept_grid.size() / 3 < n) {
+      out.cells_excluded = (int)(n - kept_grid.size() / 3);
+      nf = kept_grid.size() / 3;
+      fit_grid = kept_grid.data();
+      mu.swap(kept_mu);
+      sigma.swap(kept_sigma);
+      cf.grid = fit_grid;
+      cf.n = (int)nf;
+      if (opts.verbose) {
+        std::cout << "Curves: fallback crop, " << out.cells_excluded << " of " << n
+                  << " grid cells at the film base's level or holder-dark left out\n";
+      }
+    }
   }
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
-  const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
-  negicc::InputCurves curves;
-  negicc::input_curve_reference(merged, e_int, res.params.g, res.params.b, AUTO_KNEE, fb, stats.grid.data(), (int)n,
-                                curves);
-  out.fit = negicc::fit_input_curves(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n,
-                                     res.intent_mu.data(), res.intent_sigma.data(), curves, fit_opts);
-  if (opts.verbose) {
-    const negicc::InputCurves& c = out.fit.curves;
-    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << " ref " << fixed(c.ref[0], 4)
-              << " u_med " << fixed(c.u_med[0], 3) << ", B a " << fixed(c.a[1], 4) << " k " << fixed(c.k[1], 4)
-              << " ref " << fixed(c.ref[1], 4) << " u_med " << fixed(c.u_med[1], 3) << "; g " << fixed(out.fit.g, 4)
-              << " b " << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
-              << fixed((float)out.fit.loss_after, 3) << " (" << out.fit.evaluations << " evaluations)\n";
+  // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
+  // measures every conversion's), which only the sRGB encoding applies. Before, the fit and the re-meter rendered
+  // sRGB with the search's own roll-off, whatever the export's encoding, and the export then re-measured the roll-off
+  // at the re-metered E on the combined profile, so the median L* it rendered was not the one the re-meter matched.
+  out.encoding = encoding;
+  auto rolloff_at = [&](const negicc::ProfileData& p, float e, float g, float b, float* q995) {
+    if (encoding != ENCODE_SRGB) return 1.0f;
+    return measure_rolloff_x_hi(bundle, p, frame, scan_shutter_s, scan_iso, e, g, b, opts.crop_ratio, q995,
+                                opts.film_base_rgb_d);
+  };
+  float q995_auto = 0.0f;
+  out.x_hi_auto = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
+  const negicc::PipelineConfig cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
+  // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
+  // keeps.
+  const float target_L =
+      negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, fit_grid, (int)nf);
+  // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
+  out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
+                                                  fit_grid, (int)nf, mu.data(), sigma.data());
+
+  // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
+  // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
+  // and the curves may not take E further out of the bracket's range than Auto took it; without a range, 2 stops
+  // either side of Auto's E, as before. A result whose E would need to leave them falls back to Auto's (step 2).
+  const float margin = std::exp2(0.1f);
+  if (res.e_range_lo > 0.0f && res.e_range_hi >= res.e_range_lo) {
+    out.e_lo = std::min(res.e_range_lo, e_int / margin);
+    out.e_hi = std::max(res.e_range_hi, e_int * margin);
+  } else {
+    out.e_lo = e_int * 0.25f;
+    out.e_hi = e_int * 4.0f;
   }
 
-  // Auto's grid median L* on the bracket's own profile: the re-meter's target (step 3). Measured before step 2, which
-  // replaces the profile's tables (cfg points at them).
-  const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+  const int table_n[2] = {prof.data.in_trc_size[1], prof.data.in_trc_size[2]};
+  negicc::CombinedProfile comb;
+  float x = out.x_hi_auto, q995 = q995_auto, e_new = e_int;
+  constexpr int kMaxPasses = 6;
+  bool clipped = false;
+  out.remeter_passes = 0;
+  // Auto's own result, no curves (the fallback of the steps below).
+  auto fall_back = [&](const char* why) {
+    for (int ch = 0; ch < 2; ++ch) {
+      out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
+      out.shape_scale_ch[ch] = 0.0f;
+    }
+    out.fit.g = res.params.g;
+    out.fit.b = res.params.b;
+    e_new = e_int;
+    x = out.x_hi_auto;
+    q995 = q995_auto;
+    out.fallback = why;
+  };
+  // E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
+  // analytically instead of through the tables), around the fit's E, the curves anchored at each E it tries;
+  // alternated with the roll-off the export measures at that E on the combined profile, until the roll-off holds
+  // still. After each call x (and q995) is the roll-off measured at e_new on the profile composed at e_new, which is
+  // the profile step 3 builds: the export reuses it instead of measuring it again. remeter_passes counts the passes of
+  // every call; clipped is the last pass's (its target outside the bounds).
+  auto remeter = [&](float e_centre) {
+    out.remeter_converged = false;
+    for (int pass = 1; pass <= kMaxPasses; ++pass) {
+      ++out.remeter_passes;
+      e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
+                                          e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, target_L, &clipped);
+      comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
+      float q = 0.0f;
+      const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b, &q);
+      q995 = q;
+      if (x_new == x) {
+        out.remeter_converged = true;
+        break;
+      }
+      x = x_new;
+    }
+  };
+  // The shape (monotonic, within max_dev_stops of the base TRC over the whole table) was checked where the fit anchored
+  // the curves; anchored at the re-metered E, ref moves and the table reaches further below it, so a curve can step
+  // just past the limit (on the 41 white-LED frames up to 0.002 stops, on 4 frames). There that channel's a and k are
+  // scaled down by the largest factor that keeps its shape at the export's anchor (each channel on its own: before, one
+  // factor for both also flattened the channel that passed), and E is re-metered again.
+  auto shape_scales = [&](const negicc::InputCurves& shape, float e, float t[2]) {
+    const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
+    bool all = true;
+    for (int ch = 0; ch < 2; ++ch) {
+      t[ch] = shape_scale_of([&](float s) {
+        return negicc::curve_shape_ok(s * c.a[ch], s * c.k[ch], c.u_med[ch], c.ref[ch], table_n[ch],
+                                      fit_opts.max_dev_stops, c.u_hold(ch));
+      });
+      all = all && t[ch] == 1.0f;
+    }
+    return all;
+  };
 
-  // 2. The combined profile, in place: every later use of the bracket renders through it.
+  // 1. The joint fit: g, b and the curves, each candidate scored at the E that keeps target_L (negicc::
+  //    fit_input_curves_joint), its curves anchored at its own E, g and b; then 2. the re-meter and the shape check.
+  //    The fit renders with a roll-off, which the export measures again at the result on the combined profile: where
+  //    that differs from the one the fit ran with (the first fit runs with Auto's), the fit runs again with it, up to
+  //    two more times. Before, the fit ran once with Auto's roll-off and the re-meter then moved E for another.
+  constexpr int kMaxFitPasses = 3;
+  float x_fit = out.x_hi_auto;
+  out.fit_passes = 0;
+  // Auto's median L* far outside a picture's lightness: the intent failed (a render nearly black or blown out), and
+  // keeping that lightness would carry the failure into the curves. No fit: no curves, Auto's g and b, and E re-metered
+  // to the centre of the bracket's calibrated range (sqrt(e_min e_max)), clamped to the bounds.
+  out.intent_lightness_failed = !(target_L >= kIntentMinL && target_L <= kIntentMaxL);
+  for (int pass = 0; !out.intent_lightness_failed && pass < kMaxFitPasses; ++pass) {
+    ++out.fit_passes;
+    out.x_hi_fit = x_fit;
+    out.fallback = nullptr;
+    const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding);
+    const negicc::JointCurveFit jf =
+        negicc::fit_input_curves_joint(cfg, cf, e_int, res.params.g, res.params.b, mu.data(), sigma.data(), target_L,
+                                       table_n, fit_opts, out.e_lo, out.e_hi);
+    out.fit.curves = jf.curves;
+    out.fit.g = jf.g;
+    out.fit.b = jf.b;
+    out.fit.loss_before = jf.loss_before;
+    out.fit.loss_after = jf.loss_after;
+    out.fit.evaluations = jf.evaluations;
+    out.fit_e = jf.e;
+    out.fit_renders = jf.renders;
+    out.fit_iterations = jf.iterations;
+    out.fit_converged = jf.converged;
+    out.fit_polish = jf.polish_evaluations;
+    out.fit_start = jf.start;
+    if (opts.verbose) {
+      const negicc::InputCurves& c = out.fit.curves;
+      std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
+                << " k " << fixed(c.k[1], 4) << "; E " << fixed(jf.e, 4) << " g " << fixed(out.fit.g, 4) << " b "
+                << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
+                << fixed((float)out.fit.loss_after, 3) << " (" << jf.iterations << " steps, " << jf.evaluations
+                << " evaluations, " << jf.renders << " renders for E, roll-off " << fixed(x_fit, 3) << ")\n";
+    }
+    if (!jf.feasible) {  // not even Auto's g and b keep target_L within the bounds on the model
+      fall_back("clip");
+      break;
+    }
+    {  // the loss's parts right after the fit, at its own E, on the real combined tables
+      negicc::CombinedProfile c0;
+      c0.build(prof.data, out.fit.curves);
+      negicc::PipelineConfig c0cfg = cfg;
+      c0cfg.profile = c0.data;
+      out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, fit_grid,
+                                                     (int)nf, mu.data(), sigma.data());
+    }
+
+    // 2. The re-meter from the roll-off the fit ran with, around the fit's E (before, around Auto's), and the shape at
+    //    the re-metered anchor.
+    x = x_fit;
+    remeter(jf.e);
+    out.shape_scale_ch[0] = out.shape_scale_ch[1] = 1.0f;
+    bool shape_ok = false;
+    for (int round = 0; round < 4 && !clipped; ++round) {
+      float t[2];
+      if (shape_scales(out.fit.curves, e_new, t)) {
+        shape_ok = true;
+        break;
+      }
+      if (round == 3) break;  // three rounds of scaling and re-metering did not settle
+      for (int ch = 0; ch < 2; ++ch) {
+        out.fit.curves.a[ch] *= t[ch];
+        out.fit.curves.k[ch] *= t[ch];
+        out.shape_scale_ch[ch] *= t[ch];
+      }
+      remeter(e_new);
+    }
+    // E outside the bounds on the real tables, or the shape still past the limit: no curves, and Auto's own result
+    // (its E, g and b and its roll-off on the bracket's profile). Before, a failed shape dropped the curves but kept
+    // the fit's g and b, chosen together with them, and re-metered E for them, a result that was neither the fit's
+    // nor Auto's; a clipped E was taken as it came.
+    if (clipped || !shape_ok) {
+      fall_back(clipped ? "clip" : "shape");
+      break;
+    }
+    if (x == x_fit) break;  // the fit ran with the roll-off the export measures at its result
+    x_fit = x;
+  }
+  if (out.intent_lightness_failed) {
+    fall_back("intent_lightness");
+    if (res.e_range_lo > 0.0f && res.e_range_hi > 0.0f) {
+      e_new = std::clamp(std::sqrt(res.e_range_lo * res.e_range_hi), out.e_lo, out.e_hi);
+      x = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b, &q995);
+    }
+    std::cerr << "WARNING: Auto's grid median L* " << fixed(target_L, 1) << " is outside [" << fixed(kIntentMinL, 0)
+              << ", " << fixed(kIntentMaxL, 0) << "]: the intent failed; no curves, E " << fixed(e_new, 4)
+              << " (the bracket's range centre)\n";
+  }
+  out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
+
+  // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
+  //    combined profile built from them in place: every later use of the bracket renders through it.
+  out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
   apply_input_curves(prof, out.fit.curves);
-
-  // 3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
-  //    (negicc-station Iteration 230's F6L). The E/g/b fixed point it replaces re-predicted the intent field from the
-  //    curved render and followed it darker; this keeps Auto's lightness and the fit's colour.
-  const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, res.params.shoulder, ENCODE_SRGB);
-  const float e_new = negicc::remeter_e_median(cfg_comb, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(), (int)n,
-                                               target_L);
-  out.params = {e_new, out.fit.g, out.fit.b, res.params.shoulder};
+  out.x_hi = x;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
+  out.x_hi_q995 = q995;
+  out.rolloff_measured = encoding == ENCODE_SRGB;
+  const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
+  out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = target_L;
-  out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
+  out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid, (int)nf);
+  out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid,
+                                                    (int)nf, mu.data(), sigma.data());
+  out.loss_export = out.parts_export.total();
+  out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
-              << " b " << fixed(out.params.b, 4) << "\n";
+              << " b " << fixed(out.params.b, 4) << (out.fallback ? "; no curves, Auto's result (" : "")
+              << (out.fallback ? out.fallback : "") << (out.fallback ? ")" : "") << "\n";
   }
   return true;
 }

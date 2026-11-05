@@ -51,7 +51,10 @@ struct RgbImage {
 //      bracket whose range holds the frame.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
-// measures its x_hi at each iteration's incoming parameters, and once more at the final ones.
+// measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
+// parameters, after the clip fallback and the pullback have moved E (and possibly the bracket) past the loop that
+// froze it, so the written image's shoulder matches its highlights. The intent field the result carries
+// (ParamSearchResult::intent_mu) stays the one the chosen loop step predicted, at intent_params.
 //
 // The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
 // should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
@@ -110,6 +113,10 @@ struct ParamSearchOptions {
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
   bool film_base_from_scan = false;
   bool verbose = true;
+  // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
+  // rebate, bare light or holder. The curve fit then leaves out the grid cells at the film base's level or holder-dark
+  // (fit_input_curves_after_search).
+  bool fallback_crop = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
@@ -184,6 +191,9 @@ struct ParamSearchResult {
   ClipFallbackOutcome clip_fallback = ClipFallbackOutcome::kNotNeeded;
   float clip_fallback_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
   bool highlight_pullback = false;        // the highlight pullback moved E or the bracket
+  // The chosen bracket's calibrated range of E (its enclosure's e_min and e_max) in params.e's units; 0 when the
+  // bracket has none (infeasible). The curve fit bounds E with it.
+  float e_range_lo = 0.0f, e_range_hi = 0.0f;
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
@@ -192,12 +202,38 @@ struct ParamSearchResult {
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
 
+// A bracket's exposure range on a frame, as the bundle search's Step 1 meters it (bracket_enclosure): the scene's
+// green 0.5% and 99.5% points over the inner crop (crop_ratio), scaled by e_norm on white-light bundles, onto the
+// bracket's calibrated range. In the station's E, which -E, Auto's result and the single-bracket search take, so the
+// exposure given values default to and the single-bracket search centres on are the ones Auto meters for that bracket.
+struct BracketExposure {
+  bool valid = false;       // the bracket has patch readings
+  bool feasible = false;    // e_min <= e_max
+  float e_min = 0.0f, e_max = 0.0f;
+  float e_center = 0.0f;    // sqrt(e_min * e_max)
+  float search_lo = 0.0f, search_hi = 0.0f;  // the range the search would search E in
+  // The metered exposure (Step 2): the E at which the scene's log-average renders at L* 50 through the bracket with
+  // the bootstrap's g 1.10 and b 1.15, clamped to the search range: the E Auto's bootstrap starts that bracket from.
+  // e_center when the bracket has no neutral L* 50 or the metering does not converge (has_metered false).
+  bool has_metered = false;
+  float e_metered = 0.0f;
+};
+// One BracketExposure per bracket of the bundle (out.size() == bundle.targets.size()). film_base_rgb: a film base read
+// from this scan, as for measure_rolloff_x_hi; null for the bundle's.
+void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, float crop_ratio, const double* film_base_rgb,
+                             std::vector<BracketExposure>& out);
+
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
 // orientation, converted through bracket target_idx at the search's E, g and b (ParamSearchResult::params, the
 // station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's
 // last step measures the same on its half-size frame; neg_process measures every bundle conversion's there too, so
 // given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detect.h),
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
+// The same through a given profile (the bracket's, or a combined profile built from it).
+float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
+                           double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995 = nullptr, const double* film_base_rgb = nullptr);
@@ -231,29 +267,96 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // the bracket's profile (the search's renders, the grey point, the export) is the combined profile. No curves: no
 // change.
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves);
+// The same from base's (un-curved) G and B input tables into prof's: curves applied again at another anchor replace
+// the earlier composition instead of composing on top of it. No curves: prof gets base's tables back.
+void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves);
+
+// curves (anchored at from = {E, g, b}) re-anchored at to = {E, g, b} on frame, for the knobs, which move E, g and b
+// after the curves were fitted or recorded: ref, u_med and u_lo moved by what the frame's film base and grid move
+// between anchor_curves at from and at to, so with to == from the result is curves unchanged, bit for bit. frame,
+// scan_shutter_s, scan_iso and opts (its film base and crop) as fit_input_curves_after_search took them; engine gives
+// the grid's size only (it need not be loaded). Where the re-anchored curves leave the shape over the bracket's input
+// table (curve_shape_ok at max_dev_stops), each channel's a and k are scaled down by the largest factor that keeps it
+// (scale[0], scale[1]; 1: not needed). False (reported) on a bundle with a crosstalk matrix or a bad bracket.
+bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engine, int target_idx,
+                           const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
+                           const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]);
+
+// The plausible range of Auto's grid median L* (the lightness the curve fit keeps): outside it the intent failed (a
+// render nearly black or blown out, as when the frame holds rebate or holder), and the fit does not chase it.
+constexpr float kIntentMinL = 12.0f;
+constexpr float kIntentMaxL = 85.0f;
 
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
-  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the fit with E fixed, its losses
+  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
   ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
-  float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target)
-  float median_L = 0.0f;          // the grid median L* at params on the combined profile
+  float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target), on the export's render at Auto's
+  float median_L = 0.0f;          // the grid median L* at params on the combined profile, on the export's render
+  // The export's render: its encoding and roll-off (only the sRGB encoding applies one; 1 otherwise).
+  int encoding = negicc::ENCODE_SRGB;  // OutputEncoding
+  float x_hi_auto = 1.0f;         // the export's roll-off at Auto's parameters on the bracket's profile
+  float x_hi_fit = 1.0f;          // the roll-off the last fit pass ran with (the first runs with x_hi_auto)
+  int fit_passes = 0;             // fits run: one, and again while the result's roll-off moved (at most three)
+  // The roll-off at params on the combined profile (and its q995): measured as the export measures it (only for the
+  // sRGB encoding: rolloff_measured), so the export reuses it with no knobs instead of measuring it again.
+  float x_hi = 1.0f, x_hi_q995 = 0.0f;
+  bool rolloff_measured = false;
+  int remeter_passes = 0;         // re-meter and roll-off alternations, over every re-meter (the shape rounds re-meter)
+  bool remeter_converged = false; // the roll-off of the last pass equals the one its re-meter ran with
+  double loss_export = 0.0;       // the intent loss at params on the combined profile, on the export's render
+  // G's and B's a and k scaled by these to keep the shape at the export's anchor (1: not needed; 0: dropped), and the
+  // smaller of the two.
+  float shape_scale_ch[2] = {1.0f, 1.0f};
+  float shape_scale = 1.0f;
+  // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
+  // after three rounds of scaling), "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*), or
+  // "intent_lightness" (Auto's grid median L* outside [kIntentMinL, kIntentMaxL]: the intent failed, and E is re-metered
+  // to the centre of the bracket's range instead of kept at Auto's).
+  const char* fallback = nullptr;
+  bool intent_lightness_failed = false;
+  // Grid cells the fit left out on a fallback crop (ParamSearchOptions::fallback_crop), of the grid's cells.
+  int cells_excluded = 0, cells_total = 0;
+  // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.
+  float e_lo = 0.0f, e_hi = 0.0f;
+  // The search's intent field was predicted again at its final parameters (the pullback or the clip fallback moved
+  // them after its preview), and the fit scored against that one.
+  bool intent_repredicted = false;
+  // The fit's options as it ran (the sidecar records them).
+  negicc::CurveFitOptions options;
+  // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, the fit's
+  // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
+  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit_e
+  double time_ms = 0.0;
+  // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
+  float fit_e = 1.0f;
+  int fit_renders = 0, fit_iterations = 0, fit_polish = 0, fit_start = 0;
+  bool fit_converged = false;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
 // bundles: on the same frame as the search,
-//   1. ref and u_med from the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at the
-//      search's E, g, b, then g, b and the curves fitted with E fixed against the search's intent field on the
-//      frame's grid (negicc::fit_input_curves, the same code as the station's Converter.fit_input_curves);
-//   2. the bracket's G and B input tables composed with the curves in place (apply_input_curves on
-//      bundle.targets[res.target_idx]);
-//   3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's (the
-//      station's Iteration 230 F6L; no DINOv3 pass).
+//   1. the joint fit (negicc::fit_input_curves_joint): g, b and the four curve numbers by Levenberg-Marquardt against
+//      the search's intent field on the frame's grid (predicted again at the search's final parameters when the
+//      pullback or the clip fallback moved them after its preview), each candidate at the E that keeps Auto's grid
+//      median L*, within the bracket's calibrated range of E widened to hold Auto's E; its curves anchored (ref,
+//      u_med) on the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at its own E, g, b;
+//   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
+//      equals Auto's (the station's Iteration 230 F6L; no DINOv3 pass), each channel's curve scaled down where its
+//      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
+//      own result with no curves (CurveRefitResult::fallback);
+//   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
+//      (apply_input_curves on bundle.targets[res.target_idx]).
+// Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
+// ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
+// parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
+// the fit run again (up to twice) when that roll-off differs from the one it ran with.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   CurveRefitResult& out);
+                                   int encoding, CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H
