@@ -149,6 +149,31 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
 ```
 
+## Options
+
+`bin_out/neg_process --help` prints every option. In short:
+
+| Option | Meaning |
+| :--- | :--- |
+| `--film_stock`, `--light_source tri\|d65` | A built-in bundle (`--list_profiles` lists them). |
+| `-p`, `--film_profile` | A bundle JSON (or its directory), or a single ICC profile. |
+| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | The output encoding. Only `srgb` applies the highlight roll-off; the input curves need `srgb` or `srgb-g10`. |
+| `-o`, `--output` | The TIFF; `<output>.json` is its sidecar unless `--no-metadata` is given. |
+| `--target N` | The bracket (0-based index or name). Without `-E` and the gains: the single-bracket DINOv3 search on that bracket. |
+| `-E`, `--exposure_comp` | E as negicc-station gives it. With a bundle and given gains it defaults to the centre of the bracket's exposure range as the bundle search meters it; with an ICC profile, to 1. Given alone, the search keeps it. |
+| `--gain_g`, `--gain_b` | G and B gains relative to R (default 1). Either given turns the DINOv3 search off. |
+| `--brightness`, `--tint`, `--warmth` | Grey-point knobs after the search (or on given values); reuse `<output>.json` when it was written by this build from the same inputs and arguments. |
+| `--fit_curves off\|auto\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto`: on wherever on applies. `on`: fit after the bundle search. Eight or ten comma-separated numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
+| `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
+| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` finds (default 35mm); with a given frame, the format the film base is read around (default: every format). |
+| `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
+| `-q`, `--quality` | Demosaic: -1 auto (grain-aware on Sony CFA, else bilinear), or a LibRaw quality (4: DCB). |
+| `-r`, `-g`, `-b` | Rows of the crosstalk correction (default: the bundle's). |
+| `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
+| `--flat` | A flat-field `.npz` measured on the empty gate. |
+| `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
+| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
+
 # Licences
 
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx`, which `neg_process` packs into its binary, is Meta's DINOv3 and is under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a `neg_process` built with it, only under that licence and with a copy of it.
