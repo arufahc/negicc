@@ -77,8 +77,8 @@ struct FilmBaseDetection {
 void thinnest_film_base(const RgbView& half, float out[3]);
 
 // The film base of the scan whose half-size decode (flat field applied) is |half|. |det| is the frame detector's
-// result on the RAW's mosaic of sensor_w x sensor_h photosites (null when there is none: a white-light decode, an RGB
-// file); |crosstalk| the 3x3 row-major crosstalk matrix (null for none). False (out.found false) when neither step gives
+// result on the RAW's mosaic of sensor_w x sensor_h photosites (the CFA path's, or the white-light decode's run before
+// it decodes; null when there is none: an RGB file, three captures, a linear DNG); |crosstalk| the 3x3 row-major crosstalk matrix (null for none). False (out.found false) when neither step gives
 // a positive base; out still carries the detector's record. |expected_rgb|: the base the profile expects, in the same
 // space (a bundle's film_base_avg), or null: a reading whose R/G or B/G lies more than kBaseChromaTolerance stops from
 // it is refused (the rebate patch falls back to the statistics, the statistics to none, so the caller's base).
