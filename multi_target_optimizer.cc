@@ -1684,7 +1684,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
     std::vector<float> composed(table.size());
     const int i = ch - 1;
     negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data());
+                                curves.k[i], composed.data(), curves.u_hold(i));
     table.swap(composed);
   }
   prof.rebind_pointers();
@@ -1781,6 +1781,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.fit_iterations = jf.iterations;
   out.fit_converged = jf.converged;
   out.fit_polish = jf.polish_evaluations;
+  out.fit_start = jf.start;
   if (opts.verbose) {
     const negicc::InputCurves& c = out.fit.curves;
     std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
@@ -1828,8 +1829,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   auto shape_ok_at = [&](const negicc::InputCurves& shape, float e) {
     const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
     const float dev = fit_opts.max_dev_stops;
-    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], dev) &&
-           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], dev);
+    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], dev, c.u_hold(0)) &&
+           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], dev, c.u_hold(1));
   };
   auto scaled = [](negicc::InputCurves c, float t) {
     for (int ch = 0; ch < 2; ++ch) {

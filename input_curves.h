@@ -34,21 +34,31 @@ struct InputCurves {
   // The densest grid cell's u (<= 0): the low end of the frame's density range. Recorded only (the shape is checked
   // over the whole input table, curve_shape_ok); replay does not need it.
   float u_lo[2] = {0.0f, 0.0f};
+  // Below u_lo the curve stops bending and keeps the offset it has there (slope 1 in stops): its departure from the
+  // base TRC beyond the frame's density range is the one at u_lo. Off: the curve's form continues to the table's end.
+  bool hold = false;
+  float u_hold(int i) const { return hold ? u_lo[i] : -INFINITY; }
   bool active() const { return a[0] != 0.0f || k[0] != 0.0f || a[1] != 0.0f || k[1] != 0.0f; }
 };
 
-inline float input_curve(float v, float ref, float u_med, float a, float k) {
+// f(u) = u s(u), held below u_hold at f(u_hold) + (u - u_hold) (u_hold = -inf: not held).
+inline float curve_stops(float u, float u_med, float a, float k, float u_hold = -INFINITY) {
+  if (u < u_hold) return u_hold * (1.0f + a + k * std::tanh(u_hold - u_med)) + (u - u_hold);
+  return u * (1.0f + a + k * std::tanh(u - u_med));
+}
+
+inline float input_curve(float v, float ref, float u_med, float a, float k, float u_hold = -INFINITY) {
   if (!(v < ref) || (a == 0.0f && k == 0.0f)) return v;
   const float vv = std::max(v, 1e-12f);
   const float u = std::min(std::log2(vv / ref), 0.0f);
-  const float s = 1.0f + a + k * std::tanh(u - u_med);
-  return ref * std::exp2(u * s);
+  return ref * std::exp2(curve_stops(u, u_med, a, k, u_hold));
 }
 
 // out[i] = in(curve(i / (n - 1))), in sampled with apply_trc's linear interpolation.
-inline void compose_input_table(const float* in, int n, float ref, float u_med, float a, float k, float* out) {
+inline void compose_input_table(const float* in, int n, float ref, float u_med, float a, float k, float* out,
+                                float u_hold = -INFINITY) {
   for (int i = 0; i < n; ++i) {
-    float v = input_curve(static_cast<float>(i) / static_cast<float>(n - 1), ref, u_med, a, k);
+    float v = input_curve(static_cast<float>(i) / static_cast<float>(n - 1), ref, u_med, a, k, u_hold);
     v = std::min(1.0f, std::max(0.0f, v));
     out[i] = apply_trc(v, in, n);
   }
@@ -66,12 +76,12 @@ struct CombinedProfile {
     const int ng = base.in_trc_size[1], nb = base.in_trc_size[2];
     if (ng > 1 && base.in_trc[1]) {
       in_g.resize(ng);
-      compose_input_table(base.in_trc[1], ng, c.ref[0], c.u_med[0], c.a[0], c.k[0], in_g.data());
+      compose_input_table(base.in_trc[1], ng, c.ref[0], c.u_med[0], c.a[0], c.k[0], in_g.data(), c.u_hold(0));
       data.in_trc[1] = in_g.data();
     }
     if (nb > 1 && base.in_trc[2]) {
       in_b.resize(nb);
-      compose_input_table(base.in_trc[2], nb, c.ref[1], c.u_med[1], c.a[1], c.k[1], in_b.data());
+      compose_input_table(base.in_trc[2], nb, c.ref[1], c.u_med[1], c.a[1], c.k[1], in_b.data(), c.u_hold(1));
       data.in_trc[2] = in_b.data();
     }
   }
@@ -132,7 +142,8 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
 // density range [u_lo, 0] (the densest grid cell), while the table carries the curve down to 1 / (n - 1), where
 // pixels denser than any grid cell land: there the curve could fold over or move arbitrarily far from the TRC. The
 // identity (a = k = 0) always passes.
-inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev) {
+inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev,
+                           float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
   if (!(ref > 0.0f) || table_n < 2) return true;
   float prev = INFINITY;  // f at the entry above; the table is walked from ref down
@@ -140,7 +151,7 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
     const float v = static_cast<float>(i) / static_cast<float>(table_n - 1);
     if (!(v < ref)) continue;
     const float u = std::log2(v / ref);
-    const float f = u * (1.0f + a + k * std::tanh(u - u_med));
+    const float f = curve_stops(u, u_med, a, k, u_hold);
     if (!(f < prev) || std::fabs(f - u) > max_dev) return false;
     prev = f;
   }
@@ -193,6 +204,12 @@ struct CurveFitOptions {
   int max_evals = 8000;
   float polish_step0 = 0.02f;   // the joint fit's coordinate polish: first step, and its budget
   int polish_max_evals = 600;
+  // Step 2 options, off by default (the defaults reproduce the joint fit):
+  int starts = 1;               // seeds: no curves, then a = +-start_a on G and B in turn; the lowest loss wins
+  float start_a = 0.06f;
+  bool hold_slope = false;      // InputCurves::hold for the fitted curves
+  float l_weight = 1.0f;        // weight of the cells' L* residuals in the loss (lightness is held by the constraint)
+  float huber = 0.0f;           // > 0: each residual through a Huber function with this threshold (in sigma units)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
   // E stays at Auto's (the measurement of the solver against the pattern search).
 #ifdef NEGICC_CURVE_FIT_E_FIXED
@@ -312,6 +329,7 @@ struct JointCurveFit {
   int renders = 0;      // grid median renders spent solving E
   int iterations = 0;   // accepted Levenberg-Marquardt steps
   int polish_evaluations = 0;  // of them, the coordinate polish's
+  int start = 0;               // the seed that won (CurveFitOptions::starts)
   bool converged = false;
 };
 
@@ -354,8 +372,8 @@ class JointCurveModel {
   Lab cell_lab(int i, float e, float g, float b, const InputCurves& c) const {
     Rgb v = {knee_compress(e * rows_[3 * i], f_.knee), knee_compress(e * g * rows_[3 * i + 1], f_.knee),
              knee_compress(e * b * rows_[3 * i + 2], f_.knee)};
-    v.g = clamp01(input_curve(v.g, c.ref[0], c.u_med[0], c.a[0], c.k[0]));
-    v.b = clamp01(input_curve(v.b, c.ref[1], c.u_med[1], c.a[1], c.k[1]));
+    v.g = clamp01(input_curve(v.g, c.ref[0], c.u_med[0], c.a[0], c.k[0], c.u_hold(0)));
+    v.b = clamp01(input_curve(v.b, c.ref[1], c.u_med[1], c.a[1], c.k[1], c.u_hold(1)));
     return linear_srgb_to_lab(to_display(cfg_, pcs_to_linear_srgb_pre_shoulder(apply_profile(cfg_.profile, v))));
   }
 
@@ -368,15 +386,26 @@ class JointCurveModel {
 
   // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the mean of
   // their squares (grid_intent_loss).
+  // l_weight and huber reshape the residuals (CurveFitOptions); 1 and 0 leave them as grid_intent_loss's.
+  void set_weighting(float l_weight, float huber) {
+    l_scale_ = std::sqrt(std::max(l_weight, 0.0f));
+    huber_ = huber;
+  }
+
   double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
     const InputCurves c = anchored(shape, e, g, b);
     r.resize(3 * (size_t)f_.n);
     double s = 0.0;
+    auto robust = [&](double x) {
+      if (!(huber_ > 0.0f) || std::fabs(x) <= huber_) return x;
+      const double ax = std::fabs(x);
+      return (x < 0 ? -1.0 : 1.0) * std::sqrt(2.0 * huber_ * ax - (double)huber_ * huber_);  // r'^2 = 2 Huber(r)
+    };
     for (int i = 0; i < f_.n; ++i) {
       const Lab lab = cell_lab(i, e, g, b, c);
-      r[3 * i] = (lab.L - mu_[3 * i]) / sigma_[3 * i];
-      r[3 * i + 1] = (lab.a - mu_[3 * i + 1]) / sigma_[3 * i + 1];
-      r[3 * i + 2] = (lab.b - mu_[3 * i + 2]) / sigma_[3 * i + 2];
+      r[3 * i] = robust(l_scale_ * (lab.L - mu_[3 * i]) / sigma_[3 * i]);
+      r[3 * i + 1] = robust((lab.a - mu_[3 * i + 1]) / sigma_[3 * i + 1]);
+      r[3 * i + 2] = robust((lab.b - mu_[3 * i + 2]) / sigma_[3 * i + 2]);
       s += r[3 * i] * r[3 * i] + r[3 * i + 1] * r[3 * i + 1] + r[3 * i + 2] * r[3 * i + 2];
     }
     return f_.n ? s / f_.n : 0.0;
@@ -428,6 +457,7 @@ class JointCurveModel {
   const float* mu_;
   const float* sigma_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
+  float l_scale_ = 1.0f, huber_ = 0.0f;
   std::vector<float> rows_, L_, ug_, ub_;
 };
 
@@ -437,10 +467,12 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions()) {
   JointCurveModel model(cfg, f, mu, sigma);
+  model.set_weighting(o.l_weight, o.huber);
   const float lo[6] = {g0 - o.g_bound, b0 - o.b_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound};
   const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
-  auto shape_of = [](const float* p) {
+  auto shape_of = [&](const float* p) {
     InputCurves c;
+    c.hold = o.hold_slope;
     c.a[0] = p[2];
     c.k[0] = p[3];
     c.a[1] = p[4];
@@ -455,8 +487,8 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     e = o.solve_e ? model.solve_e(p[0], p[1], shape, target_L, e_warm, e0, renders) : e0;
     if (check_shape) {
       const InputCurves c = model.anchored(shape, e, p[0], p[1]);
-      if (!curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops) ||
-          !curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops))
+      if (!curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) ||
+          !curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1)))
         return false;
     }
     cost = model.residuals(e, p[0], p[1], shape, r);
@@ -464,144 +496,174 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     return true;
   };
 
-  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f};
-  float e = e0;
-  std::vector<double> r, rt, rj;
-  double cost = 0.0;
-  evaluate(p, e0, e, r, cost, false);
-  out.loss_before = cost;
-  const int m = 6;
-  double lambda = 1e-3;
-  for (int iter = 0; iter < 60 && !out.converged; ++iter) {
-    // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E).
-    const size_t nr = r.size();
-    std::vector<double> J(nr * m);
-    for (int j = 0; j < m; ++j) {
-      float q[6];
-      std::copy(p, p + 6, q);
-      const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
-      q[j] += h;
-      float ej = e;
-      double cj = 0.0;
-      evaluate(q, e, ej, rj, cj, false);
-      for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
-    }
-    double A[6][6] = {}, gvec[6] = {};
-    for (size_t k = 0; k < nr; ++k) {
-      for (int a = 0; a < m; ++a) {
-        gvec[a] += J[k * m + a] * r[k];
-        for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
-      }
-    }
-    for (int a = 0; a < m; ++a)
-      for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
-    bool accepted = false;
-    for (int tries = 0; tries < 12 && !accepted; ++tries) {
-      // (A + lambda diag(A)) delta = -g, by Gaussian elimination with partial pivoting.
-      double M[6][7];
-      for (int a = 0; a < m; ++a) {
-        for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-12) : 0.0);
-        M[a][6] = -gvec[a];
-      }
-      for (int c = 0; c < m; ++c) {
-        int piv = c;
-        for (int rr = c + 1; rr < m; ++rr)
-          if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
-        for (int cc = 0; cc < 7; ++cc) std::swap(M[c][cc], M[piv][cc]);
-        if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
-        for (int rr = c + 1; rr < m; ++rr) {
-          const double fct = M[rr][c] / M[c][c];
-          for (int cc = c; cc < 7; ++cc) M[rr][cc] -= fct * M[c][cc];
-        }
-      }
-      double delta[6];
-      for (int c = m - 1; c >= 0; --c) {
-        double sum = M[c][6];
-        for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
-        delta[c] = sum / M[c][c];
-      }
-      float q[6];
-      float step = 0.0f;
+  // One run of the solver and the polish from p_init; its result in p_out, e_out, cost_out.
+  auto run = [&](const float* p_init, bool first, float* p_out, float& e_out, double& cost_out, bool& settled_out) {
+    float p[6];
+    std::copy(p_init, p_init + 6, p);
+    float e = e0;
+    std::vector<double> r, rt, rj;
+    double cost = 0.0;
+    evaluate(p, e0, e, r, cost, false);
+    if (first) out.loss_before = cost;
+    const int m = 6;
+    double lambda = 1e-3;
+    bool settled = false;
+    for (int iter = 0; iter < 60 && !settled; ++iter) {
+      // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E).
+      const size_t nr = r.size();
+      std::vector<double> J(nr * m);
       for (int j = 0; j < m; ++j) {
-        q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
-        step = std::max(step, std::fabs(q[j] - p[j]));
+        float q[6];
+        std::copy(p, p + 6, q);
+        const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
+        q[j] += h;
+        float ej = e;
+        double cj = 0.0;
+        evaluate(q, e, ej, rj, cj, false);
+        for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
       }
-      if (step < 1e-6f) {
-        out.converged = true;
-        break;
-      }
-      float eq = e;
-      double cq = 0.0;
-      bool feasible = evaluate(q, e, eq, rt, cq, true);
-      if (!feasible) {
-        // The step leaves the shape: the furthest point along it that keeps the shape (the optimum of a strong cast
-        // usually sits on that boundary, and rejecting the whole step stalled the solver inside it).
-        float t_ok = 0.0f, t_bad = 1.0f;
-        for (int it = 0; it < 12; ++it) {
-          const float t = 0.5f * (t_ok + t_bad);
-          float qt[6];
-          for (int j = 0; j < m; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
-          const InputCurves c = model.anchored(shape_of(qt), e, qt[0], qt[1]);
-          if (curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops) &&
-              curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops))
-            t_ok = t;
-          else
-            t_bad = t;
-        }
-        if (t_ok > 0.0f) {
-          for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
-          feasible = evaluate(q, e, eq, rt, cq, true);
+      double A[6][6] = {}, gvec[6] = {};
+      for (size_t k = 0; k < nr; ++k) {
+        for (int a = 0; a < m; ++a) {
+          gvec[a] += J[k * m + a] * r[k];
+          for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
         }
       }
-      if (feasible && cq < cost) {
-        const double gain = cost - cq;
-        std::copy(q, q + 6, p);
-        e = eq;
-        r.swap(rt);
-        cost = cq;
-        lambda = std::max(lambda / 3.0, 1e-9);
-        accepted = true;
-        ++out.iterations;
-        if (gain < 1e-7 * std::max(1.0, cost)) out.converged = true;
-      } else {
-        lambda *= 4.0;
-      }
-    }
-    if (!accepted) {
-      out.converged = true;  // no step lowers the loss at any damping tried
-      break;
-    }
-  }
-  // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the loss falls,
-  // steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where the
-  // Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
-  {
-    float step = o.polish_step0;
-    int polish = 0;
-    while (step >= o.step_min && polish < o.polish_max_evals) {
-      bool improved = false;
-      for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
-        for (int sgn : {1, -1}) {
-          float q[6];
-          std::copy(p, p + 6, q);
-          q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
-          if (q[d] == p[d]) continue;
-          float eq = e;
-          double cq = 0.0;
-          ++polish;
-          if (evaluate(q, e, eq, rt, cq, true) && cq < cost) {
-            std::copy(q, q + 6, p);
-            e = eq;
-            r.swap(rt);
-            cost = cq;
-            improved = true;
-            break;
+      for (int a = 0; a < m; ++a)
+        for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
+      bool accepted = false;
+      for (int tries = 0; tries < 12 && !accepted; ++tries) {
+        // (A + lambda diag(A)) delta = -g, by Gaussian elimination with partial pivoting.
+        double M[6][7];
+        for (int a = 0; a < m; ++a) {
+          for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-12) : 0.0);
+          M[a][6] = -gvec[a];
+        }
+        for (int c = 0; c < m; ++c) {
+          int piv = c;
+          for (int rr = c + 1; rr < m; ++rr)
+            if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
+          for (int cc = 0; cc < 7; ++cc) std::swap(M[c][cc], M[piv][cc]);
+          if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
+          for (int rr = c + 1; rr < m; ++rr) {
+            const double fct = M[rr][c] / M[c][c];
+            for (int cc = c; cc < 7; ++cc) M[rr][cc] -= fct * M[c][cc];
           }
         }
+        double delta[6];
+        for (int c = m - 1; c >= 0; --c) {
+          double sum = M[c][6];
+          for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
+          delta[c] = sum / M[c][c];
+        }
+        float q[6];
+        float step = 0.0f;
+        for (int j = 0; j < m; ++j) {
+          q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
+          step = std::max(step, std::fabs(q[j] - p[j]));
+        }
+        if (step < 1e-6f) {
+          settled = true;
+          break;
+        }
+        float eq = e;
+        double cq = 0.0;
+        bool feasible = evaluate(q, e, eq, rt, cq, true);
+        if (!feasible) {
+          // The step leaves the shape: the furthest point along it that keeps the shape (the optimum of a strong cast
+          // usually sits on that boundary, and rejecting the whole step stalled the solver inside it).
+          float t_ok = 0.0f, t_bad = 1.0f;
+          for (int it = 0; it < 12; ++it) {
+            const float t = 0.5f * (t_ok + t_bad);
+            float qt[6];
+            for (int j = 0; j < m; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
+            const InputCurves c = model.anchored(shape_of(qt), e, qt[0], qt[1]);
+            if (curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) &&
+                curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1)))
+              t_ok = t;
+            else
+              t_bad = t;
+          }
+          if (t_ok > 0.0f) {
+            for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
+            feasible = evaluate(q, e, eq, rt, cq, true);
+          }
+        }
+        if (feasible && cq < cost) {
+          const double gain = cost - cq;
+          std::copy(q, q + 6, p);
+          e = eq;
+          r.swap(rt);
+          cost = cq;
+          lambda = std::max(lambda / 3.0, 1e-9);
+          accepted = true;
+          ++out.iterations;
+          if (gain < 1e-7 * std::max(1.0, cost)) settled = true;
+        } else {
+          lambda *= 4.0;
+        }
       }
-      if (!improved) step *= 0.5f;
+      if (!accepted) {
+        settled = true;  // no step lowers the loss at any damping tried
+        break;
+      }
     }
-    out.polish_evaluations = polish;
+    // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the loss falls,
+    // steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where the
+    // Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
+    {
+      float step = o.polish_step0;
+      int polish = 0;
+      while (step >= o.step_min && polish < o.polish_max_evals) {
+        bool improved = false;
+        for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
+          for (int sgn : {1, -1}) {
+            float q[6];
+            std::copy(p, p + 6, q);
+            q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
+            if (q[d] == p[d]) continue;
+            float eq = e;
+            double cq = 0.0;
+            ++polish;
+            if (evaluate(q, e, eq, rt, cq, true) && cq < cost) {
+              std::copy(q, q + 6, p);
+              e = eq;
+              r.swap(rt);
+              cost = cq;
+              improved = true;
+              break;
+            }
+          }
+        }
+        if (!improved) step *= 0.5f;
+      }
+      out.polish_evaluations += polish;
+    }
+    std::copy(p, p + 6, p_out);
+    e_out = e;
+    cost_out = cost;
+    settled_out = settled;
+  };
+
+  // The seeds: no curves, then a = +start_a and -start_a on G and on B in turn (CurveFitOptions::starts of them); the
+  // run with the lowest loss wins, the first on a tie.
+  const float seeds[5][2] = {{0.0f, 0.0f}, {1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
+  float p[6], e = e0;
+  double cost = INFINITY;
+  out.converged = true;
+  for (int si = 0; si < std::max(1, std::min(o.starts, 5)); ++si) {
+    float p0[6] = {g0, b0, seeds[si][0] * o.start_a, 0.0f, seeds[si][1] * o.start_a, 0.0f};
+    float ps[6], es = e0;
+    double cs = 0.0;
+    bool settled = false;
+    run(p0, si == 0, ps, es, cs, settled);
+    out.converged = out.converged && settled;
+    if (cs < cost) {
+      std::copy(ps, ps + 6, p);
+      e = es;
+      cost = cs;
+      out.start = si;
+    }
   }
   out.g = p[0];
   out.b = p[1];

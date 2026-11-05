@@ -304,6 +304,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])},
                     {"u_lo", n9(c.u_lo[i])}};
   j["channels"] = ch;
+  j["hold"] = c.hold;  // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
   if (const CurveRefitResult* f = sc.curve_fit) {
     const negicc::CurveFitOptions defaults;
     j["lambda"] = n9(defaults.lambda);
@@ -312,7 +313,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
                 {"iterations", f->fit_iterations}, {"converged", f->fit_converged},
-                {"polish_evaluations", f->fit_polish}};
+                {"polish_evaluations", f->fit_polish}, {"start", f->fit_start}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
     j["max_dev_stops"] = n9(defaults.max_dev_stops);
@@ -476,6 +477,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     std::string v8;
     for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})
       v8 += (v8.empty() ? "" : ",") + num_str(v, "%.9g");
+    if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
     cli.push_back(v8);
   }
   j["cli_equivalent"] = cli;
