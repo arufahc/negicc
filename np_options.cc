@@ -204,7 +204,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(1.0f);
   parser.add_argument("--brightness")
     .help("Brightness offset after the parameter search, in stops of the reference grey's luminance (as in "
-          "negicc-station). Reuses <output>.json when it matches the capture, light, profile and target.")
+          "negicc-station). Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input "
+          "files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")

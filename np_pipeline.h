@@ -51,6 +51,7 @@
 #include "multi_target_optimizer.h"
 #include "neg_pipeline.h"
 #include "np_options.h"
+#include "np_output.h"
 #include "np_raw.h"
 #include "profile_bundle.h"
 
@@ -63,7 +64,6 @@ struct CachedSidecar {
   std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
   std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
   std::string dino_backend;
-  double t_auto_ms = 0.0;
   double t_dino_views_ms = 0.0, t_dino_render_ms = 0.0;
   double t_dino_infer_ms = 0.0, t_dino_search_ms = 0.0;
   // The previous run's fitted G/B input curves (replayed on its bracket, not refitted) and its intent field, carried
@@ -77,6 +77,9 @@ struct CachedSidecar {
 
 // What the profile and the options decide before the scan is read.
 struct Setup {
+  // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
+  // reused by the sidecar writer.
+  std::vector<FileFingerprint> input_fingerprints;
   bool is_bundle = false;
   ProfileBundle bundle;
   std::string film_prof_arg;             // -p naming an ICC profile (not a bundle)

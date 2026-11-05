@@ -373,11 +373,14 @@ bool write_json_sidecar(const Sidecar& sc) {
   // Each input's size and CRC-32, so a later run reusing this sidecar (the knobs) can tell the same file from another
   // saved under the same name, also when the file was copied or downloaded again in between (a new modification time).
   ordered_json stats = ordered_json::array();
-  for (const std::string& f : sc.files) {
-    uintmax_t size = 0;
-    uint32_t crc = 0;
-    stats.push_back(file_fingerprint(f, size, crc) ? ordered_json({{"size", size}, {"crc32", crc}})
-                                                   : ordered_json(nullptr));
+  for (size_t i = 0; i < sc.files.size(); ++i) {
+    FileFingerprint fp;
+    if (sc.file_fingerprints && i < sc.file_fingerprints->size() && (*sc.file_fingerprints)[i].ok) {
+      fp = (*sc.file_fingerprints)[i];  // hashed once already, by the sidecar loader
+    } else {
+      fp.ok = file_fingerprint(sc.files[i], fp.size, fp.crc);
+    }
+    stats.push_back(fp.ok ? ordered_json({{"size", fp.size}, {"crc32", fp.crc}}) : ordered_json(nullptr));
   }
   j["inputs"] = {{"raw_files", sc.files},
                  {"raw_file_stats", stats},
