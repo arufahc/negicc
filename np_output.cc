@@ -503,8 +503,9 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
   if (sc.input_curves) {
-    // Replays the combined profile without fitting (the curves need -P, as when they were fitted).
-    const negicc::InputCurves& c = *sc.input_curves;
+    // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
+    // above: after the knobs, the curves re-anchored there.
+    const negicc::InputCurves& c = sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves;
     cli.push_back("--fit_curves");
     std::string v8;
     for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})

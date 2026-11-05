@@ -1690,6 +1690,95 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
   prof.rebind_pointers();
 }
 
+void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves) {
+  for (int ch = 1; ch <= 2; ++ch) {
+    const std::vector<float>& table = base.in_trc[ch];
+    if (!curves.active() || !base.data.has_profile || table.size() < 2) {
+      prof.in_trc[ch] = table;
+      continue;
+    }
+    std::vector<float> composed(table.size());
+    const int i = ch - 1;
+    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
+                                curves.k[i], composed.data(), curves.u_hold(i));
+    prof.in_trc[ch].swap(composed);
+  }
+  prof.rebind_pointers();
+}
+
+// What anchors the curves on a frame (negicc::CurveFrame) from its statistics: the search's matrix, the knee, and the
+// film base read from the scan (opts), else the brightest grid cell per channel, as the station takes it. stats must
+// outlive the result (its grid is not copied).
+static negicc::CurveFrame curve_frame_of(const FrameStats& stats, const float* merged, const ParamSearchOptions& opts) {
+  negicc::CurveFrame cf;
+  cf.merged = merged;
+  cf.knee = AUTO_KNEE;
+  const size_t n = stats.grid.size() / 3;
+  if (opts.film_base_rgb_d) {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = (float)opts.film_base_rgb_d[c];
+  } else if (opts.film_base_rgb) {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = opts.film_base_rgb[c];
+  } else {
+    for (int c = 0; c < 3; ++c) cf.film_base[c] = 0.0f;
+    for (size_t i = 0; i < n; ++i)
+      for (int c = 0; c < 3; ++c) cf.film_base[c] = std::max(cf.film_base[c], (float)stats.grid[i * 3 + c]);
+  }
+  cf.grid = stats.grid.data();
+  cf.n = (int)n;
+  return cf;
+}
+
+// The largest factor t in [0, 1] (bisection; t = 0, the identity, always passes) by which channel ch's a and k are
+// scaled to keep the shape where ok says.
+template <typename Ok>
+static float shape_scale_of(Ok ok) {
+  if (ok(1.0f)) return 1.0f;
+  float lo = 0.0f, hi = 1.0f;
+  for (int it = 0; it < 24; ++it) {
+    const float mid = 0.5f * (lo + hi);
+    if (ok(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engine, int target_idx,
+                           const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
+                           const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]) {
+  out = curves;
+  scale[0] = scale[1] = 1.0f;
+  if (bundle.has_crosstalk || target_idx < 0 || target_idx >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! Re-anchoring the input curves needs a white-light bundle's bracket" << std::endl;
+    return false;
+  }
+  if (!curves.active()) return true;
+  // The frame as the fit saw it: the same statistics' grid and the search's matrix (white light: M_frame).
+  FrameStats stats;
+  compute_frame_stats(frame, opts.crop_ratio, engine.max_size(), engine.patch_size(), stats);
+  const FrameScale fs = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  const negicc::CurveFrame cf = curve_frame_of(stats, fs.frame_matrix, opts);
+  if (cf.n <= 0) return true;
+  // Moved by the difference of two fresh anchors rather than replaced by the one at to, so a replay's recorded ref and
+  // u_med carry over exactly where nothing moves.
+  const negicc::InputCurves a0 = negicc::anchor_curves(curves, cf, from[0], from[1], from[2]);
+  const negicc::InputCurves a1 = negicc::anchor_curves(curves, cf, to[0], to[1], to[2]);
+  const ProfileData& pd = bundle.targets[target_idx].film_prof.data;
+  for (int ch = 0; ch < 2; ++ch) {
+    if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
+    out.u_med[ch] = curves.u_med[ch] + (a1.u_med[ch] - a0.u_med[ch]);
+    out.u_lo[ch] = curves.u_lo[ch] + (a1.u_lo[ch] - a0.u_lo[ch]);
+    const int table_n = pd.in_trc_size[ch + 1];
+    scale[ch] = shape_scale_of([&](float t) {
+      return negicc::curve_shape_ok(t * out.a[ch], t * out.k[ch], out.u_med[ch], out.ref[ch], table_n, max_dev_stops,
+                                    out.u_hold(ch));
+    });
+    out.a[ch] *= scale[ch];
+    out.k[ch] *= scale[ch];
+  }
+  return true;
+}
+
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
 // negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
@@ -1725,18 +1814,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const float e_int = res.params.e;  // white light (checked above): the search's E is already in this frame's units
   out.params_before = res.params;
 
-  // 1. The fit with E fixed (the station's Converter.fit_input_curves).
-  float fb[3];
-  if (opts.film_base_rgb_d) {
-    for (int c = 0; c < 3; ++c) fb[c] = (float)opts.film_base_rgb_d[c];
-  } else if (opts.film_base_rgb) {
-    for (int c = 0; c < 3; ++c) fb[c] = opts.film_base_rgb[c];
-  } else {
-    // No film base read from the scan: the brightest grid cell per channel, as the station takes it.
-    for (int c = 0; c < 3; ++c) fb[c] = 0.0f;
-    for (size_t i = 0; i < n; ++i)
-      for (int c = 0; c < 3; ++c) fb[c] = std::max(fb[c], (float)stats.grid[i * 3 + c]);
-  }
+  // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel.
+  const negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
   // measures every conversion's), which only the sRGB encoding applies. Before, the fit and the re-meter rendered
@@ -1750,12 +1829,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   };
   out.x_hi_fit = rolloff_at(prof.data, e_int, res.params.g, res.params.b);
   const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_fit, encoding);
-  negicc::CurveFrame cf;
-  cf.merged = merged;
-  cf.knee = AUTO_KNEE;
-  std::copy(fb, fb + 3, cf.film_base);
-  cf.grid = stats.grid.data();
-  cf.n = (int)n;
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
   // keeps.
   const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);

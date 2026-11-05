@@ -257,6 +257,21 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // the bracket's profile (the search's renders, the grey point, the export) is the combined profile. No curves: no
 // change.
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves);
+// The same from base's (un-curved) G and B input tables into prof's: curves applied again at another anchor replace
+// the earlier composition instead of composing on top of it. No curves: prof gets base's tables back.
+void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves);
+
+// curves (anchored at from = {E, g, b}) re-anchored at to = {E, g, b} on frame, for the knobs, which move E, g and b
+// after the curves were fitted or recorded: ref, u_med and u_lo moved by what the frame's film base and grid move
+// between anchor_curves at from and at to, so with to == from the result is curves unchanged, bit for bit. frame,
+// scan_shutter_s, scan_iso and opts (its film base and crop) as fit_input_curves_after_search took them; engine gives
+// the grid's size only (it need not be loaded). Where the re-anchored curves leave the shape over the bracket's input
+// table (curve_shape_ok at max_dev_stops), each channel's a and k are scaled down by the largest factor that keeps it
+// (scale[0], scale[1]; 1: not needed). False (reported) on a bundle with a crosstalk matrix or a bad bracket.
+bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engine, int target_idx,
+                           const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
+                           const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]);
 
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
