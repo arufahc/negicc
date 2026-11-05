@@ -192,6 +192,23 @@ struct ParamSearchResult {
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
 
+// A bracket's exposure range on a frame, as the bundle search's Step 1 meters it (bracket_enclosure): the scene's
+// green 0.5% and 99.5% points over the inner crop (crop_ratio), scaled by e_norm on white-light bundles, onto the
+// bracket's calibrated range. In the station's E, which -E, Auto's result and the single-bracket search take, so the
+// exposure given values default to and the single-bracket search centres on are the ones Auto meters for that bracket.
+struct BracketExposure {
+  bool valid = false;       // the bracket has patch readings
+  bool feasible = false;    // e_min <= e_max
+  float e_min = 0.0f, e_max = 0.0f;
+  float e_center = 0.0f;    // sqrt(e_min * e_max)
+  float search_lo = 0.0f, search_hi = 0.0f;  // the range the search would search E in
+};
+// One BracketExposure per bracket of the bundle (out.size() == bundle.targets.size()). film_base_rgb: a film base read
+// from this scan, as for measure_rolloff_x_hi; null for the bundle's.
+void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, float crop_ratio, const double* film_base_rgb,
+                             std::vector<BracketExposure>& out);
+
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
 // orientation, converted through bracket target_idx at the search's E, g and b (ParamSearchResult::params, the
 // station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's

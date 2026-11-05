@@ -751,7 +751,9 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
       tgt.is_feasible = false;
       continue;
     }
-    const float k_t = (!bundle.has_crosstalk && tgt.exposure_s > 0.0f) ? (0.125f / tgt.exposure_s) : 1.0f;
+    // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
+    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
     tgt.is_feasible = (tgt.e_max >= tgt.e_min);
@@ -814,7 +816,9 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
       tgt.is_feasible = false;
       continue;
     }
-    const float k_t = (!bundle.has_crosstalk && tgt.exposure_s > 0.0f) ? (0.125f / tgt.exposure_s) : 1.0f;
+    // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
+    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
     tgt.is_feasible = (tgt.e_max >= tgt.e_min);
