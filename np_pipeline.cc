@@ -210,38 +210,89 @@ static bool extract_cli_egb(const nlohmann::ordered_json& cli, float& e_out, flo
   return got_e && got_g && got_b;
 }
 
-// The arguments of a run that decide its result: argv without the program name, the output (-o, --output) and the
-// knobs (--brightness, --tint, --warmth), each with its value, in "--flag value", "--flag=value" or (-o) "-ovalue"
-// form. "--flag=value" of any other option is split into "--flag" and "value", so either spelling compares equal.
+// The arguments of a run that decide its result, normalised so that spelling and order do not matter: argv without
+// the program name, the output (-o, --output, -oFILE) and the knobs (--brightness, --tint, --warmth); each option under
+// its long name (-E and --exposure_comp alike) with its values ("--flag value", "--flag=value" or a short flag's
+// attached "-Evalue" alike), the options sorted by name (an option given twice keeps its order), then "--" and the
+// positional arguments (the inputs) in their order. Options neg_process does not know keep their own group.
 static std::vector<std::string> result_args(const std::vector<std::string>& argv) {
-  static const char* const kSkip[] = {"-o", "--output", "--brightness", "--tint", "--warmth"};
-  std::vector<std::string> out;
+  struct Opt {
+    const char* shrt;
+    const char* lng;
+    int arity;  // values; -1: --roi (up to 7 numbers, or auto [h|v])
+    bool skip;  // the output and the knobs
+  };
+  static const Opt kOpts[] = {
+      {"-C", "--no_crop", 0, false},      {"-q", "--quality", 1, false},        {"-r", "--r_coeff", 3, false},
+      {"-g", "--g_coeff", 3, false},      {"-b", "--b_coeff", 3, false},        {"-E", "--exposure_comp", 1, false},
+      {"", "--no-metadata", 0, false},    {"", "--gain_g", 1, false},           {"", "--gain_b", 1, false},
+      {"", "--brightness", 1, true},      {"", "--tint", 1, true},              {"", "--warmth", 1, true},
+      {"", "--film_stock", 1, false},     {"", "--light_source", 1, false},     {"-p", "--film_profile", 1, false},
+      {"-P", "--colorspace", 1, false},   {"", "--roi", -1, false},             {"", "--film_format", 1, false},
+      {"", "--rot", 1, false},            {"", "--rot_cw", 1, false},           {"", "--hflip", 0, false},
+      {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
+      {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
+      {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
+      {"", "--flat", 1, false},
+  };
+  auto is_number = [](const std::string& t) {
+    char* e = nullptr;
+    std::strtod(t.c_str(), &e);
+    return !t.empty() && e && *e == '\0';
+  };
+  auto canonical = [](const char* lng) {
+    const std::string l = lng;
+    return l == "--rot" ? std::string("--rot_cw") : l == "--bundle_target" ? std::string("--target") : l;
+  };
+  std::vector<std::vector<std::string>> groups;  // [name, values...]
+  std::vector<std::string> positional;
   for (size_t i = 1; i < argv.size(); ++i) {
     const std::string& a = argv[i];
-    // The output attached to its short flag (-oout.tif).
-    if (a.size() > 2 && a[0] == '-' && a[1] == 'o' && a[2] != '-') continue;
-    bool skip = false;
-    for (const char* f : kSkip) {
-      const size_t n = std::strlen(f);
-      if (a == f) {
-        skip = true;
-        ++i;  // and its value
-        break;
-      }
-      if (a.size() > n && a.compare(0, n, f) == 0 && a[n] == '=') {
-        skip = true;
-        break;
-      }
+    if (a.size() < 2 || a[0] != '-' || is_number(a)) {
+      positional.push_back(a);
+      continue;
     }
-    if (skip) continue;
-    const size_t eq = a.find('=');
-    if (a.size() > 2 && a.compare(0, 2, "--") == 0 && eq != std::string::npos) {
-      out.push_back(a.substr(0, eq));
-      out.push_back(a.substr(eq + 1));
-    } else {
-      out.push_back(a);
+    std::string flag = a, attached;
+    bool has_attached = false;
+    if (a.compare(0, 2, "--") == 0) {
+      const size_t eq = a.find('=');
+      if (eq != std::string::npos) {
+        flag = a.substr(0, eq);
+        attached = a.substr(eq + 1);
+        has_attached = true;
+      }
+    } else if (a.size() > 2) {  // a short flag with its value attached
+      flag = a.substr(0, 2);
+      attached = a.substr(2);
+      has_attached = true;
     }
+    const Opt* opt = nullptr;
+    for (const Opt& o : kOpts)
+      if (flag == o.lng || (o.shrt[0] && flag == o.shrt)) opt = &o;
+    std::vector<std::string> g = {opt ? canonical(opt->lng) : flag};
+    if (has_attached) g.push_back(attached);
+    if (opt && opt->arity < 0) {
+      // --roi: auto [h|v], or x y w h [rot_cw [hflip [vflip]]].
+      while (g.size() < 8 && i + 1 < argv.size()) {
+        const std::string& v = argv[i + 1];
+        const bool ok = g.size() == 1   ? (v == "auto" || is_number(v))
+                        : g[1] == "auto" ? (g.size() == 2 && (v == "h" || v == "v" || v == "H" || v == "V"))
+                                         : is_number(v);
+        if (!ok) break;
+        g.push_back(argv[++i]);
+      }
+    } else if (opt) {
+      for (int k = (int)g.size() - 1; k < opt->arity && i + 1 < argv.size(); ++k) g.push_back(argv[++i]);
+    }
+    if (opt && opt->skip) continue;
+    groups.push_back(g);
   }
+  std::stable_sort(groups.begin(), groups.end(),
+                   [](const std::vector<std::string>& x, const std::vector<std::string>& y) { return x[0] < y[0]; });
+  std::vector<std::string> out;
+  for (const auto& g : groups) out.insert(out.end(), g.begin(), g.end());
+  out.push_back("--");
+  out.insert(out.end(), positional.begin(), positional.end());
   return out;
 }
 
@@ -256,7 +307,8 @@ static bool same_number(const std::string& a, const std::string& b) {
 }
 
 // Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and
-// the knobs: the same tokens in the same order, a path token also matching when both name the same existing file. Any
+// the knobs: the same normalised arguments (result_args), a number also matching the same number written otherwise
+// (1 and 1.0) and a path the same existing file. Any
 // option that changes the result (the profile, the flat field, -r/-g/-b, -E, --target, the gains, --roi,
 // --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must therefore be the same. Before, only
 // --flat and -r/-g/-b were compared, and a sidecar without an argv array matched anything.
