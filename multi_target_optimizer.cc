@@ -1822,12 +1822,13 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // sRGB with the search's own roll-off, whatever the export's encoding, and the export then re-measured the roll-off
   // at the re-metered E on the combined profile, so the median L* it rendered was not the one the re-meter matched.
   out.encoding = encoding;
-  auto rolloff_at = [&](const negicc::ProfileData& p, float e, float g, float b) {
+  auto rolloff_at = [&](const negicc::ProfileData& p, float e, float g, float b, float* q995) {
     if (encoding != ENCODE_SRGB) return 1.0f;
-    return measure_rolloff_x_hi(bundle, p, frame, scan_shutter_s, scan_iso, e, g, b, opts.crop_ratio, nullptr,
+    return measure_rolloff_x_hi(bundle, p, frame, scan_shutter_s, scan_iso, e, g, b, opts.crop_ratio, q995,
                                 opts.film_base_rgb_d);
   };
-  out.x_hi_fit = rolloff_at(prof.data, e_int, res.params.g, res.params.b);
+  float q995_auto = 0.0f;
+  out.x_hi_fit = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
   const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_fit, encoding);
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
   // keeps.
@@ -1874,67 +1875,89 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
 
   // 2. E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
   //    analytically instead of through the tables), the curves anchored at each E it tries; alternated with the
-  //    roll-off the export measures at that E on the combined profile, until the roll-off holds still.
+  //    roll-off the export measures at that E on the combined profile, until the roll-off holds still. After each
+  //    call x (and q995) is the roll-off measured at e_new on the profile composed at e_new, which is the profile step 3
+  //    builds: the export reuses it instead of measuring it again. remeter_passes counts the passes of every call.
   negicc::CombinedProfile comb;
-  float x = out.x_hi_fit, e_new = e_int;
+  float x = out.x_hi_fit, q995 = q995_auto, e_new = e_int;
   constexpr int kMaxPasses = 6;
+  out.remeter_passes = 0;
   auto remeter = [&]() {
     out.remeter_converged = false;
-    for (out.remeter_passes = 1; out.remeter_passes <= kMaxPasses; ++out.remeter_passes) {
+    for (int pass = 1; pass <= kMaxPasses; ++pass) {
+      ++out.remeter_passes;
       e_new = negicc::remeter_e_median(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
                                        e_int, out.fit.g, out.fit.b, target_L);
       comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
-      const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b);
+      float q = 0.0f;
+      const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b, &q);
+      q995 = q;
       if (x_new == x) {
         out.remeter_converged = true;
         break;
       }
       x = x_new;
     }
-    out.remeter_passes = std::min(out.remeter_passes, kMaxPasses);
   };
   remeter();
 
   // The shape (monotonic, within max_dev_stops of the base TRC over the whole table) was checked where the fit anchored
-  // the curves, at Auto's E; anchored at the re-metered E, ref moves and the table reaches further below it, so the
-  // curves can step just past the limit (on the 41 white-LED frames up to 0.002 stops, on 4 frames). There a and k are
-  // scaled down by the largest factor that keeps the shape at the export's anchor, and E is re-metered again.
-  auto shape_ok_at = [&](const negicc::InputCurves& shape, float e) {
+  // the curves; anchored at the re-metered E, ref moves and the table reaches further below it, so a curve can step
+  // just past the limit (on the 41 white-LED frames up to 0.002 stops, on 4 frames). There that channel's a and k are
+  // scaled down by the largest factor that keeps its shape at the export's anchor (each channel on its own: before, one
+  // factor for both also flattened the channel that passed), and E is re-metered again.
+  auto shape_scales = [&](const negicc::InputCurves& shape, float e, float t[2]) {
     const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
-    const float dev = fit_opts.max_dev_stops;
-    return negicc::curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], prof.data.in_trc_size[1], dev, c.u_hold(0)) &&
-           negicc::curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], prof.data.in_trc_size[2], dev, c.u_hold(1));
-  };
-  auto scaled = [](negicc::InputCurves c, float t) {
+    bool all = true;
     for (int ch = 0; ch < 2; ++ch) {
-      c.a[ch] *= t;
-      c.k[ch] *= t;
+      t[ch] = shape_scale_of([&](float s) {
+        return negicc::curve_shape_ok(s * c.a[ch], s * c.k[ch], c.u_med[ch], c.ref[ch], prof.data.in_trc_size[ch + 1],
+                                      fit_opts.max_dev_stops, c.u_hold(ch));
+      });
+      all = all && t[ch] == 1.0f;
     }
-    return c;
+    return all;
   };
-  out.shape_scale = 1.0f;
-  for (int round = 0; round < 3 && !shape_ok_at(out.fit.curves, e_new); ++round) {
-    float lo = 0.0f, hi = 1.0f;  // the identity (t = 0) always passes
-    for (int it = 0; it < 24; ++it) {
-      const float mid = 0.5f * (lo + hi);
-      if (shape_ok_at(scaled(out.fit.curves, mid), e_new)) lo = mid;
-      else hi = mid;
+  out.shape_scale_ch[0] = out.shape_scale_ch[1] = 1.0f;
+  bool shape_ok = false;
+  for (int round = 0; round < 4; ++round) {
+    float t[2];
+    if (shape_scales(out.fit.curves, e_new, t)) {
+      shape_ok = true;
+      break;
     }
-    out.fit.curves = scaled(out.fit.curves, lo);
-    out.shape_scale *= lo;
+    if (round == 3) break;  // three rounds of scaling and re-metering did not settle
+    for (int ch = 0; ch < 2; ++ch) {
+      out.fit.curves.a[ch] *= t[ch];
+      out.fit.curves.k[ch] *= t[ch];
+      out.shape_scale_ch[ch] *= t[ch];
+    }
     remeter();
   }
-  if (!shape_ok_at(out.fit.curves, e_new)) {  // still past the limit after three rounds: no curves
-    out.fit.curves = scaled(out.fit.curves, 0.0f);
-    out.shape_scale = 0.0f;
-    remeter();
+  if (!shape_ok) {
+    // Still past the limit: no curves, and Auto's own result (its E, g and b and its roll-off on the bracket's profile).
+    // Before, the curves were dropped but the fit's g and b, chosen together with them, were kept and E re-metered
+    // for them, a result that was neither the fit's nor Auto's.
+    for (int ch = 0; ch < 2; ++ch) {
+      out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
+      out.shape_scale_ch[ch] = 0.0f;
+    }
+    out.fit.g = res.params.g;
+    out.fit.b = res.params.b;
+    e_new = e_int;
+    x = out.x_hi_fit;
+    q995 = q995_auto;
+    out.fallback = "shape";
   }
+  out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
   //    combined profile built from them in place: every later use of the bracket renders through it.
   out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
   apply_input_curves(prof, out.fit.curves);
-  out.x_hi = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b);
+  out.x_hi = x;  // measured on this profile at these parameters (step 2)
+  out.x_hi_q995 = q995;
+  out.rolloff_measured = encoding == ENCODE_SRGB;
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = target_L;

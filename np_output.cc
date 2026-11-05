@@ -347,6 +347,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)},
                     {"x_hi", n9(f->x_hi)}, {"passes", f->remeter_passes}, {"converged", f->remeter_converged},
                     {"shape_scale", n9(f->shape_scale)},
+                    {"shape_scale_ch", {n9(f->shape_scale_ch[0]), n9(f->shape_scale_ch[1])}},
+                    {"fallback", f->fallback ? ordered_json(f->fallback) : ordered_json(nullptr)},
                     {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
