@@ -907,10 +907,15 @@ int prepare(const Options& o, Setup& s) {
         std::string adapter_dir;
         const std::string profile_name = !o.film_stock.empty() ? o.film_stock
                                          : s.is_bundle ? bundle.key : s.film_prof_arg;
-        const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir);
+        bool fell_back = false;
+        const EmbeddedFile* a = find_embedded_adapter(profile_name, adapter_dir, &fell_back);
         if (!a) {
           log_error("No intent adapter for profile '%s'\n", profile_name.c_str());
           return 1;
+        }
+        if (fell_back) {
+          log_warn("no intent adapter matches profile '%s'; using %s (--dino gives another)\n",
+                   profile_name.c_str(), adapter_dir.c_str());
         }
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
