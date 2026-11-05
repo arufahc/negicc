@@ -17,7 +17,7 @@
 //
 // Sizes used below
 //   image   W x H        the input's pixel grid (FilmImage::width x height); never copied
-//   lattice nx x ny      samples per channel (FilmImage::samples_x/y): W / step x H / step
+//   lattice nx x ny      samples per channel (FilmImage::samples_x/y): about W / step x H / step
 //   work    ww x wh      box-averaged lattice, long side <= params.work_size (1024): ~1024 x 683 for 3:2
 //   canvas  cw x ch      the work image turned upright by the film's tilt; equals the work size when there is no
 //                        tilt and is at most ~9% wider and taller at 5 degrees
@@ -1128,7 +1128,10 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   }
   if (pol == FILM_NEGATIVE && ci.base_valid) {
     // Holder-framed negatives with no visible rebate: the brightest mode of the film is a bright picture region
-    // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture.
+    // (covering > 30% of the film and > 30% of its central box). Reclassify those interior pixels as picture: the
+    // base parts that reach the central box or are not lines. A part outside it that spans half the canvas along x or
+    // y (a rebate band beside the frame, a gap between frames) stays base, so a strip with a large base fraction keeps
+    // the gaps and rebate that bound its frames.
     size_t nb = 0, ni = 0, ndark = 0, nb_c = 0, n_c = 0;
     const int cx0 = W / 4, cx1 = W - W / 4, cy0 = H / 4, cy1 = H - H / 4;
     for (int y = 0; y < H; ++y) {
@@ -1145,8 +1148,30 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       }
     }
     if (nb + ni > 0 && nb > 0.30 * (nb + ni) && n_c > 0 && nb_c > 0.30 * n_c) {
-      for (size_t i = 0; i < N; ++i)
-        if (ci.cls[i] == CL_BASE) ci.cls[i] = CL_IMAGE;
+      std::vector<uint8_t> bm(N, 0);
+      for (size_t i = 0; i < N; ++i) bm[i] = ci.cls[i] == CL_BASE ? 1 : 0;
+      Labels L;
+      components(bm, cv.valid, lum, W, H, L);
+      const size_t nk = L.area.size();
+      std::vector<uint8_t> central(nk, 0);
+      std::vector<int> bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
+      for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+          const int k = L.lab[(size_t)y * W + x];
+          if (k < 0) continue;
+          if (y >= cy0 && y < cy1 && x >= cx0 && x < cx1) central[k] = 1;
+          bx0[k] = std::min(bx0[k], x);
+          bx1[k] = std::max(bx1[k], x);
+          by0[k] = std::min(by0[k], y);
+          by1[k] = std::max(by1[k], y);
+        }
+      }
+      for (size_t i = 0; i < N; ++i) {
+        const int k = L.lab[i];
+        if (k < 0) continue;
+        const bool line = 2 * (bx1[k] - bx0[k] + 1) >= W || 2 * (by1[k] - by0[k] + 1) >= H;
+        if (central[k] || !line) ci.cls[i] = CL_IMAGE;
+      }
     } else if (nlight > 0 || ndark > 0) {
       // Vignetted light sources: an inter-frame gap or border rebate line whose ends reach ci.base (>= 15% CL_BASE)
       // can dip up to 0.60 stop below ci.base across its middle while keeping film-base chromaticity (mean spread
@@ -2360,7 +2385,14 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         if ((a.det.axis != '?') != (b.det.axis != '?')) return a.det.axis != '?';
         return a.base_patches.size() > b.base_patches.size();
       };
-      if (better_strip(alt, res)) res = std::move(alt);
+      // The alternate axis takes over only with evidence of its own: a film gap it found or a better rectangle. With
+      // neither, a reading along the other axis can still score full confidence (both frame ends at a hard limit, no
+      // gap seen) and would win on that alone, cutting a sub-frame out of the picture. A width-matched medium-format
+      // reading (both strip edges seen at the format's width) is such evidence too. On a square frame this also stops
+      // the tie-breaks above (neighbours, a decided axis, base patches) from moving a reading that has none of these.
+      const bool alt_evidence =
+          alt.det.n_gaps > 0 || alt.score > res.score || (fmt != FILM_35MM && width_matched(alt));
+      if (alt_evidence && better_strip(alt, res)) res = std::move(alt);
     }
   }
   return true;
@@ -2369,17 +2401,20 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
 }  // namespace
 
 
+// A channel's samples on a line of n pixels lie at x0, x0 + step, ...: the last at or before pixel n - 1, so
+// ceil((n - x0) / step) of them (a floor would drop the last one whenever n - x0 is not a multiple of step, e.g. every
+// G and B sample column of a Bayer mosaic of even width); the lattice takes the fewest over the channels.
 int FilmImage::samples_x() const {
   if (step <= 0) return 0;
   int n = width;
-  for (const FilmChannel& c : ch) n = std::min(n, (width - c.x0) / step);
+  for (const FilmChannel& c : ch) n = std::min(n, (width - c.x0 + step - 1) / step);
   return std::max(0, n);
 }
 
 int FilmImage::samples_y() const {
   if (step <= 0) return 0;
   int n = height;
-  for (const FilmChannel& c : ch) n = std::min(n, (height - c.y0) / step);
+  for (const FilmChannel& c : ch) n = std::min(n, (height - c.y0 + step - 1) / step);
   return std::max(0, n);
 }
 
