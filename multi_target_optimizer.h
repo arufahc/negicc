@@ -51,7 +51,10 @@ struct RgbImage {
 //      bracket whose range holds the frame.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
-// measures its x_hi at each iteration's incoming parameters, and once more at the final ones.
+// measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
+// parameters, after the clip fallback and the pullback have moved E (and possibly the bracket) past the loop that
+// froze it, so the written image's shoulder matches its highlights. The intent field the result carries
+// (ParamSearchResult::intent_mu) stays the one the chosen loop step predicted, at intent_params.
 //
 // The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
 // should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
@@ -321,16 +324,21 @@ struct CurveRefitResult {
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
 // bundles: on the same frame as the search,
-//   1. ref and u_med from the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at the
-//      search's E, g, b, then g, b and the curves fitted with E fixed against the search's intent field on the
-//      frame's grid (negicc::fit_input_curves, the same code as the station's Converter.fit_input_curves);
-//   2. the bracket's G and B input tables composed with the curves in place (apply_input_curves on
-//      bundle.targets[res.target_idx]);
-//   3. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's (the
-//      station's Iteration 230 F6L; no DINOv3 pass).
-// Every step renders the grid as the export renders it (encoding: the export's OutputEncoding): its roll-off, measured
-// as the export measures it, at Auto's parameters for the fit and the target, and alternated with the re-meter until
-// it holds still at the result.
+//   1. the joint fit (negicc::fit_input_curves_joint): g, b and the four curve numbers by Levenberg-Marquardt against
+//      the search's intent field on the frame's grid (predicted again at the search's final parameters when the
+//      pullback or the clip fallback moved them after its preview), each candidate at the E that keeps Auto's grid
+//      median L*, within the bracket's calibrated range of E widened to hold Auto's E; its curves anchored (ref,
+//      u_med) on the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at its own E, g, b;
+//   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
+//      equals Auto's (the station's Iteration 230 F6L; no DINOv3 pass), each channel's curve scaled down where its
+//      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
+//      own result with no curves (CurveRefitResult::fallback);
+//   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
+//      (apply_input_curves on bundle.targets[res.target_idx]).
+// Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
+// ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
+// parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
+// the fit run again (up to twice) when that roll-off differs from the one it ran with.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,

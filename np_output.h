@@ -95,7 +95,7 @@ struct Sidecar {
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
   double t_auto_ms = 0.0;
   // Fitted G/B input curves of the conversion's bracket (input_curves.h): source "fit" (--fit_curves on, with
-  // curve_fit) or "cli" (--input_curves); empty: none.
+  // curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;

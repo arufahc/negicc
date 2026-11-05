@@ -247,10 +247,12 @@ struct CurveFitResult {
   int evaluations = 0;
 };
 
-// Joint fit of g, b and the four curve numbers with E fixed, against the frozen intent field mu, sigma on the frame's
-// grid: a deterministic bounded pattern search (each coordinate tried at +step and -step in turn, kept when the
-// objective falls; all steps halve after a sweep without improvement). Each candidate's curves are anchored at its own
-// g and b (anchor_curves), so the curves the result carries pivot on the film base at the fitted g and b.
+// The first fit, which the joint fit below replaced in neg_process: g, b and the four curve numbers with E fixed,
+// against the frozen intent field mu, sigma on the frame's grid: a deterministic bounded pattern search (each
+// coordinate tried at +step and -step in turn, kept when the objective falls; all steps halve after a sweep without
+// improvement) on the same objective (z2 plus the lambda penalty) and with the same held curves (hold_slope). Each
+// candidate's curves are anchored at its own g and b (anchor_curves), so the curves the result carries pivot on the
+// film base at the fitted g and b.
 //
 // TODO(cuda): this evaluates on the CPU (about 700 cells x 1,000 to 2,500 evaluations). On a CUDA build it should run
 // as a kernel that composes the input tables and scores the cells on the device, using the profile's existing device

@@ -182,6 +182,9 @@ static ordered_json frame_detection_json(const FrameDetection& fd) {
   return j;
 }
 
+// The search's own result: e, g, b and residual are its values before any curve fit, which a run with fitted curves
+// converts at other values (input_curves.remeter's e, g and b, after the fit and the re-meter; the sidecar loader
+// reads those as the knobs' base when they are there, and auto's otherwise).
 static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half, const Sidecar& sc) {
   ordered_json j;
   j["target"] = a.target_name;
@@ -310,7 +313,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
 // The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
-// (--fit_curves with the eight comma-separated numbers) rebuilds the same tables.
+// (--fit_curves with the recorded numbers, as the cli_equivalent writes them) rebuilds the same tables.
 static ordered_json input_curves_json(const Sidecar& sc) {
   const negicc::InputCurves& c = *sc.input_curves;
   auto n9 = [](double v) { return num(v, "%.9g"); };
@@ -321,15 +324,28 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   j["target_idx"] = sc.bundle_target_idx >= 0 ? ordered_json(sc.bundle_target_idx) : ordered_json(nullptr);
   ordered_json ch;
   const char* names[2] = {"G", "B"};
-  for (int i = 0; i < 2; ++i)
-    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])},
-                    {"u_lo", n9(c.u_lo[i])}};
+  // u_lo is known from a fit, and from recorded curves only when held (the ten-number form): an eight-number replay
+  // has none, and before 0 was written for it as if it had been measured.
+  const bool u_lo_known = sc.input_curves_source != "cli" || c.hold;
+  for (int i = 0; i < 2; ++i) {
+    ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
+    if (u_lo_known) ch[names[i]]["u_lo"] = n9(c.u_lo[i]);
+  }
   j["channels"] = ch;
   j["hold"] = c.hold;  // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
   if (const CurveRefitResult* f = sc.curve_fit) {
-    const negicc::CurveFitOptions defaults;
-    j["lambda"] = n9(defaults.lambda);
-    j["bound"] = n9(defaults.curve_bound);
+    // The options the fit ran with (before, the defaults were written whatever ran, and half of them were missing).
+    const negicc::CurveFitOptions& op = f->options;
+    j["lambda"] = n9(op.lambda);
+    j["bound"] = n9(op.curve_bound);
+    j["options"] = {{"curve_bound", n9(op.curve_bound)}, {"max_dev_stops", n9(op.max_dev_stops)},
+                    {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)}, {"lambda", n9(op.lambda)},
+                    {"step0_gain", n9(op.step0_gain)}, {"step0_curve", n9(op.step0_curve)},
+                    {"step_min", n9(op.step_min)}, {"max_evals", op.max_evals},
+                    {"polish_step0", n9(op.polish_step0)}, {"polish_max_evals", op.polish_max_evals},
+                    {"starts", op.starts}, {"start_a", n9(op.start_a)}, {"hold_slope", op.hold_slope},
+                    {"l_weight", n9(op.l_weight)}, {"huber", n9(op.huber)}, {"solve_e", op.solve_e},
+                    {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
@@ -338,7 +354,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                 {"intent_repredicted", f->intent_repredicted}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
-    j["max_dev_stops"] = n9(defaults.max_dev_stops);
+    j["max_dev_stops"] = n9(op.max_dev_stops);
     // Measured on the export's render: its encoding and the roll-off it measures (x_hi_auto at Auto's parameters,
     // which the first fit ran with; x_hi_fit, which the last fit ran with; x_hi at the result, which the export uses).
     j["render"] = {{"encoding", f->encoding == ENCODE_SRGB ? "srgb" : f->encoding == ENCODE_SRGB_LINEAR ? "srgb-linear"
@@ -359,6 +375,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
+    j["options"] = nullptr;
     j["fit"] = nullptr;
     j["params_before"] = nullptr;
     j["max_dev_stops"] = nullptr;
@@ -509,11 +526,13 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (sc.input_curves) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.
+    // The value leads with "ref:" and the refs (always positive): the older order led with aG, and a negative aG
+    // made the value start with '-', which the parser rejects as an unknown option, so the line did not replay.
     const negicc::InputCurves& c = sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves;
     cli.push_back("--fit_curves");
-    std::string v8;
-    for (float v : {c.a[0], c.k[0], c.a[1], c.k[1], c.ref[0], c.ref[1], c.u_med[0], c.u_med[1]})
-      v8 += (v8.empty() ? "" : ",") + num_str(v, "%.9g");
+    std::string v8 = "ref:";
+    for (float v : {c.ref[0], c.ref[1], c.u_med[0], c.u_med[1], c.a[0], c.k[0], c.a[1], c.k[1]})
+      v8 += (v8.size() > 4 ? "," : "") + num_str(v, "%.9g");
     if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
     cli.push_back(v8);
   }
