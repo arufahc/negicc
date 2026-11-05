@@ -104,6 +104,10 @@ struct Setup {
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   CurveRefitResult curve_fit;
+  // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
+  // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
 };
 
 // The scan as data for a backend: a CFA mosaic (one, or the four frames of a pixel shift), black subtracted, in place.
@@ -200,6 +204,10 @@ struct Scan {
   bool has_curve_params = false;
   ConversionParams curve_params;
   const ConversionParams& params() const { return has_curve_params ? curve_params : auto_res.params; }
+  // The curves re-anchored at the knobs' E, g and b, which the bracket renders through after the knobs and the
+  // cli_equivalent replays (Setup::input_curves stays the record at the knobs' base, as the sidecar keeps it).
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
 
   bool has_knob_res = false;             // --brightness, --tint or --warmth solved
   float knob_base[3] = {1.0f, 1.0f, 1.0f};

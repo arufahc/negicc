@@ -826,7 +826,11 @@ int prepare(const Options& o, Setup& s) {
                 "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
-    // The --target bracket's profile becomes the combined profile before anything renders through it.
+    // The --target bracket's profile becomes the combined profile before anything renders through it (its un-curved
+    // tables kept for the knobs).
+    s.curves_base_idx = s.manual_target_idx;
+    s.curves_base_prof = bundle.targets[s.manual_target_idx].film_prof;
+    s.curves_base_prof.rebind_pointers();
     apply_input_curves(bundle.targets[s.manual_target_idx].film_prof, o.input_curves);
     s.input_curves = o.input_curves;
     s.input_curves_source = "cli";
@@ -841,6 +845,9 @@ int prepare(const Options& o, Setup& s) {
              s.is_bundle ? ", target " : "", s.is_bundle ? s.cached_sidecar.target_name.c_str() : "",
              s.cached_sidecar.has_curves ? ", fitted curves replayed" : "");
     if (s.cached_sidecar.has_curves && s.input_curves_source.empty()) {
+      s.curves_base_idx = s.cached_sidecar.target_idx;
+      s.curves_base_prof = bundle.targets[s.cached_sidecar.target_idx].film_prof;
+      s.curves_base_prof.rebind_pointers();
       apply_input_curves(bundle.targets[s.cached_sidecar.target_idx].film_prof, s.cached_sidecar.curves);
       s.input_curves = s.cached_sidecar.curves;
       s.input_curves_source = s.cached_sidecar.curves_source;
@@ -963,6 +970,26 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       e = scan.knob_res.e;
       g = scan.knob_res.g;
       b = scan.knob_res.b;
+      // The knobs moved E, g and b off the anchor of the curves the bracket renders through (fitted, recorded or a
+      // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones,
+      // so the curves stay on the film densities they were fitted to. Before, the tables kept the base's anchor, so
+      // a brightness knob slid the curves along the table.
+      if (target_idx == s.curves_base_idx && s.input_curves.active()) {
+        ParamSearchOptions ro;
+        ro.film_base_rgb_d = scan.film_base_rgb();
+        ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
+        const float from[3] = {base_e, base_g, base_b}, to[3] = {e, g, b};
+        float scale[2] = {1.0f, 1.0f};
+        if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro, s.input_curves,
+                                   from, to, negicc::CurveFitOptions().max_dev_stops, scan.knob_curves, scale)) {
+          return false;
+        }
+        apply_input_curves(bundle.targets[target_idx].film_prof, s.curves_base_prof, scan.knob_curves);
+        scan.has_knob_curves = true;
+        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s)\n", e, g, b,
+                 scan.knob_curves.ref[0], scan.knob_curves.ref[1],
+                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "");
+      }
     }
     scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
                                              ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
@@ -1096,6 +1123,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB
                                       : linear               ? ENCODE_SRGB_LINEAR
                                                              : ENCODE_CUSTOM;
+          s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
+          s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
+          s.curves_base_prof.rebind_pointers();
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res,
                                              fit_opts, export_encoding, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
@@ -2029,6 +2059,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
+    sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
     sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
   }

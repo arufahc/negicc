@@ -8,8 +8,12 @@
 //
 // ref is the film base at that point and u_med the median over the intent grid's cells of min(u, 0), both at the E, g
 // and b the conversion renders with (anchor_curves): the fit anchors each candidate at its own g and b, and the
-// re-meter each E it tries, so the recorded curves pivot on the film base of the export's parameters. A replay (and the
-// knobs, which move E, g and b afterwards) keeps the recorded ref and u_med. The combined profile is the bracket
+// re-meter each E it tries, so the recorded curves pivot on the film base of the export's parameters. A replay at the
+// recorded E, g and b keeps the recorded ref and u_med. The knobs (--brightness, --tint, --warmth) move E, g and b
+// after the curves were anchored: there the curves are re-anchored at the knobbed E, g and b (ref and u_med moved by
+// what the frame's film base and grid move between the two anchors) and the input tables composed again from the
+// bracket's un-curved ones (neg_process's reanchor_input_curves), so the curves stay on the same film densities
+// instead of sliding along the table with E. The combined profile is the bracket
 // profile with its G and B input tables replaced by in(curve(v)) sampled on the table's own entries; red, the matrix,
 // the cLUT and the output curves are unchanged. White light only: with a crosstalk matrix the film base does not mark
 // the dark end of every channel.
@@ -192,6 +196,9 @@ inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, f
   return grid_intent_loss_parts(cfg, merged, e, g, b, grid, n, mu, sigma).total();
 }
 
+// The lowest g or b a fit may reach (CurveFitOptions::g_bound, b_bound below g0, b0 are floored here).
+constexpr float kGainFloor = 1e-3f;
+
 struct CurveFitOptions {
   float curve_bound = 0.25f;  // |a|, |k| <= this
   float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
@@ -260,7 +267,10 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
                                    static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
     return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) + pen;
   };
-  const float lo[6] = {g0 - o.g_bound, b0 - o.b_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound};
+  // The gains keep a positive floor: at g or b = 0 the channel's ref (the film base through the gain) is 0 and the
+  // curve's anchor collapses (u = log2(v / ref) is undefined), so a wide g_bound or b_bound never reaches it.
+  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
+                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
   const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
   float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f};
   float step[6] = {o.step0_gain, o.step0_gain, o.step0_curve, o.step0_curve, o.step0_curve, o.step0_curve};
@@ -272,6 +282,7 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
     bool improved = false;
     for (int d = 0; d < 6 && evals < o.max_evals; ++d) {
       for (int sgn : {1, -1}) {
+        if (evals >= o.max_evals) break;  // checked per trial, so the budget is never overrun by the second sign
         float q[6];
         std::copy(p, p + 6, q);
         q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step[d]));
@@ -468,7 +479,9 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
                                             const CurveFitOptions& o = CurveFitOptions()) {
   JointCurveModel model(cfg, f, mu, sigma);
   model.set_weighting(o.l_weight, o.huber);
-  const float lo[6] = {g0 - o.g_bound, b0 - o.b_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound};
+  // The gains' positive floor, as in fit_input_curves.
+  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
+                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
   const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
   auto shape_of = [&](const float* p) {
     InputCurves c;
@@ -618,6 +631,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
         bool improved = false;
         for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
           for (int sgn : {1, -1}) {
+            if (polish >= o.polish_max_evals) break;  // per trial, so the budget is never overrun
             float q[6];
             std::copy(p, p + 6, q);
             q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
