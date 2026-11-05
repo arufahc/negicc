@@ -774,6 +774,23 @@ int prepare(const Options& o, Setup& s) {
                 "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
+    // The shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the whole input
+    // table, curve_shape_ok): numbers typed by hand, or edited, could fold the table over or move it arbitrarily far
+    // from the bracket's TRC, and were composed unchecked. A fit's own numbers (written to 9 significant digits, which
+    // round-trip a float) pass.
+    {
+      const negicc::InputCurves& c = o.input_curves;
+      const ProfileData& pd = bundle.targets[s.manual_target_idx].film_prof.data;
+      const float dev = negicc::CurveFitOptions().max_dev_stops;
+      const char* names[2] = {"G", "B"};
+      for (int i = 0; i < 2; ++i) {
+        if (!negicc::curve_shape_ok(c.a[i], c.k[i], c.u_med[i], c.ref[i], pd.in_trc_size[i + 1], dev, c.u_hold(i))) {
+          log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
+                    "bracket's input TRC, over its input table\n", names[i], dev);
+          return 1;
+        }
+      }
+    }
     // The --target bracket's profile becomes the combined profile before anything renders through it (its un-curved
     // tables kept for the knobs).
     s.curves_base_idx = s.manual_target_idx;
