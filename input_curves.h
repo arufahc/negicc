@@ -191,6 +191,15 @@ struct CurveFitOptions {
   float step0_curve = 0.05f;
   float step_min = 1e-4f;
   int max_evals = 8000;
+  float polish_step0 = 0.02f;   // the joint fit's coordinate polish: first step, and its budget
+  int polish_max_evals = 600;
+  // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
+  // E stays at Auto's (the measurement of the solver against the pattern search).
+#ifdef NEGICC_CURVE_FIT_E_FIXED
+  bool solve_e = false;
+#else
+  bool solve_e = true;
+#endif
 };
 
 struct CurveFitResult {
@@ -276,6 +285,331 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
   r.loss_after = grid_intent_loss(cfg, f.merged, e, r.g, r.b, f.grid, f.n, mu, sigma);
   r.evaluations = evals;
   return r;
+}
+
+
+// ---- The joint fit -------------------------------------------------------------------------------------------
+//
+// g, b and the four curve numbers fitted against the intent field with E tied to the lightness constraint: each
+// candidate is scored at the E that renders the grid's median L* at target_L (Auto's), so the fit chooses its colour at
+// the lightness the export will have, instead of fitting at Auto's E and moving E afterwards (which moved the colour
+// it had fitted). The loss is the same (grid_intent_loss), evaluated on a per-cell model:
+//   - each cell's three matrix rows are taken once (merged · rgb), and a candidate's (e, g, b) only scales them;
+//   - the curve is applied to each cell's G and B value analytically, in(curve(v)), in place of composing the two
+//     4096-entry tables per candidate (the export's tables sample the same function at their entries);
+//   - E is solved by secant steps on log E warm-started from the previous candidate's E (one to three grid renders),
+//     with a bisection as the fallback;
+//   - the solver is Levenberg-Marquardt on the cells' residuals (dL, da, db) / sigma, with a forward-difference
+//     Jacobian, box bounds by projection and the shape (curve_shape_ok over the whole table, at each candidate's anchor)
+//     by rejecting a step and raising the damping.
+// The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
+// it by the small difference between the model and the tables.
+struct JointCurveFit {
+  InputCurves curves;
+  float e = 1.0f, g = 1.0f, b = 1.0f;
+  double loss_before = 0.0, loss_after = 0.0;
+  int evaluations = 0;  // residual evaluations (each with its E solved)
+  int renders = 0;      // grid median renders spent solving E
+  int iterations = 0;   // accepted Levenberg-Marquardt steps
+  int polish_evaluations = 0;  // of them, the coordinate polish's
+  bool converged = false;
+};
+
+class JointCurveModel {
+ public:
+  JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* mu, const float* sigma)
+      : cfg_(cfg), f_(f), mu_(mu), sigma_(sigma), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
+    for (int i = 0; i < f.n; ++i) {
+      const Rgb x = load_u16(f.grid + 3 * i);
+      for (int r = 0; r < 3; ++r)
+        rows_[3 * i + r] = f.merged[3 * r] * x.r + f.merged[3 * r + 1] * x.g + f.merged[3 * r + 2] * x.b;
+    }
+    for (int r = 0; r < 3; ++r)
+      fb_[r] = (f.merged[3 * r] * f.film_base[0] + f.merged[3 * r + 1] * f.film_base[1] +
+                f.merged[3 * r + 2] * f.film_base[2]) / 65535.0f;
+  }
+
+  int n() const { return f_.n; }
+
+  // The curves of shape (its a and k) anchored at (e, g, b), as anchor_curves anchors them.
+  InputCurves anchored(const InputCurves& shape, float e, float g, float b) {
+    InputCurves c = shape;
+    const float refs[2] = {knee_compress(e * g * fb_[1], f_.knee), knee_compress(e * b * fb_[2], f_.knee)};
+    for (int i = 0; i < f_.n; ++i) {
+      const float vg = std::max(knee_compress(e * g * rows_[3 * i + 1], f_.knee), 1e-12f);
+      const float vb = std::max(knee_compress(e * b * rows_[3 * i + 2], f_.knee), 1e-12f);
+      ug_[i] = std::min(std::log2(vg / std::max(refs[0], 1e-12f)), 0.0f);
+      ub_[i] = std::min(std::log2(vb / std::max(refs[1], 1e-12f)), 0.0f);
+    }
+    c.ref[0] = refs[0];
+    c.ref[1] = refs[1];
+    c.u_lo[0] = f_.n ? *std::min_element(ug_.begin(), ug_.end()) : 0.0f;
+    c.u_lo[1] = f_.n ? *std::min_element(ub_.begin(), ub_.end()) : 0.0f;
+    c.u_med[0] = median(ug_);
+    c.u_med[1] = median(ub_);
+    return c;
+  }
+
+  // One cell through the pipeline with the curves applied to its G and B value (c anchored).
+  Lab cell_lab(int i, float e, float g, float b, const InputCurves& c) const {
+    Rgb v = {knee_compress(e * rows_[3 * i], f_.knee), knee_compress(e * g * rows_[3 * i + 1], f_.knee),
+             knee_compress(e * b * rows_[3 * i + 2], f_.knee)};
+    v.g = clamp01(input_curve(v.g, c.ref[0], c.u_med[0], c.a[0], c.k[0]));
+    v.b = clamp01(input_curve(v.b, c.ref[1], c.u_med[1], c.a[1], c.k[1]));
+    return linear_srgb_to_lab(to_display(cfg_, pcs_to_linear_srgb_pre_shoulder(apply_profile(cfg_.profile, v))));
+  }
+
+  float median_L(float e, float g, float b, const InputCurves& shape) {
+    const InputCurves c = anchored(shape, e, g, b);
+    for (int i = 0; i < f_.n; ++i) L_[i] = cell_lab(i, e, g, b, c).L;
+    std::nth_element(L_.begin(), L_.begin() + f_.n / 2, L_.end());
+    return L_[f_.n / 2];
+  }
+
+  // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the mean of
+  // their squares (grid_intent_loss).
+  double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
+    const InputCurves c = anchored(shape, e, g, b);
+    r.resize(3 * (size_t)f_.n);
+    double s = 0.0;
+    for (int i = 0; i < f_.n; ++i) {
+      const Lab lab = cell_lab(i, e, g, b, c);
+      r[3 * i] = (lab.L - mu_[3 * i]) / sigma_[3 * i];
+      r[3 * i + 1] = (lab.a - mu_[3 * i + 1]) / sigma_[3 * i + 1];
+      r[3 * i + 2] = (lab.b - mu_[3 * i + 2]) / sigma_[3 * i + 2];
+      s += r[3 * i] * r[3 * i] + r[3 * i + 1] * r[3 * i + 1] + r[3 * i + 2] * r[3 * i + 2];
+    }
+    return f_.n ? s / f_.n : 0.0;
+  }
+
+  // E with the grid's median L* at target_L (a larger E renders darker): secant steps on log E from e_warm, then a
+  // bisection over [e0 / 4, e0 * 4] when they do not settle within tol.
+  float solve_e(float g, float b, const InputCurves& shape, float target_L, float e_warm, float e0, int& renders,
+                float tol = 1e-3f) {
+    const float lo_t = std::log(e0 * 0.25f), hi_t = std::log(e0 * 4.0f);
+    auto f = [&](float t) {
+      ++renders;
+      return median_L(std::exp(t), g, b, shape) - target_L;
+    };
+    float t0 = std::min(hi_t, std::max(lo_t, std::log(e_warm))), f0 = f(t0);
+    if (std::fabs(f0) <= tol) return std::exp(t0);
+    float t1 = std::min(hi_t, std::max(lo_t, t0 + (f0 > 0.0f ? 0.05f : -0.05f))), f1 = f(t1);
+    for (int it = 0; it < 6; ++it) {
+      if (std::fabs(f1) <= tol) return std::exp(t1);
+      if (f1 == f0) break;
+      const float t2 = t1 - f1 * (t1 - t0) / (f1 - f0);
+      if (!(t2 > lo_t && t2 < hi_t)) break;
+      t0 = t1;
+      f0 = f1;
+      t1 = t2;
+      f1 = f(t1);
+    }
+    float lo = lo_t, hi = hi_t;  // the fallback: median L* falls with log E
+    for (int it = 0; it < 40; ++it) {
+      const float mid = 0.5f * (lo + hi);
+      if (f(mid) < 0.0f) hi = mid;
+      else lo = mid;
+    }
+    return std::exp(0.5f * (lo + hi));
+  }
+
+ private:
+  static float median(std::vector<float> v) {
+    if (v.empty()) return 0.0f;
+    const size_t h = v.size() / 2;
+    std::nth_element(v.begin(), v.begin() + h, v.end());
+    const float hi = v[h];
+    if (v.size() % 2) return hi;
+    return 0.5f * (*std::max_element(v.begin(), v.begin() + h) + hi);
+  }
+
+  PipelineConfig cfg_;
+  CurveFrame f_;
+  const float* mu_;
+  const float* sigma_;
+  float fb_[3] = {0.0f, 0.0f, 0.0f};
+  std::vector<float> rows_, L_, ug_, ub_;
+};
+
+// The joint fit from Auto's (e0, g0, b0) and no curves; cfg carries the bracket's own profile and the export's encoding
+// and roll-off. target_L: Auto's grid median L*. table_n: the G and B input tables' sizes, for the shape check.
+inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
+                                            const float* mu, const float* sigma, float target_L, const int table_n[2],
+                                            const CurveFitOptions& o = CurveFitOptions()) {
+  JointCurveModel model(cfg, f, mu, sigma);
+  const float lo[6] = {g0 - o.g_bound, b0 - o.b_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound, -o.curve_bound};
+  const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
+  auto shape_of = [](const float* p) {
+    InputCurves c;
+    c.a[0] = p[2];
+    c.k[0] = p[3];
+    c.a[1] = p[4];
+    c.k[1] = p[5];
+    return c;
+  };
+  JointCurveFit out;
+  int renders = 0;
+  // A point: its E (solved, or Auto's) and its residuals; false when its curves leave the shape at its anchor.
+  auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, bool check_shape) {
+    const InputCurves shape = shape_of(p);
+    e = o.solve_e ? model.solve_e(p[0], p[1], shape, target_L, e_warm, e0, renders) : e0;
+    if (check_shape) {
+      const InputCurves c = model.anchored(shape, e, p[0], p[1]);
+      if (!curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops) ||
+          !curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops))
+        return false;
+    }
+    cost = model.residuals(e, p[0], p[1], shape, r);
+    ++out.evaluations;
+    return true;
+  };
+
+  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f};
+  float e = e0;
+  std::vector<double> r, rt, rj;
+  double cost = 0.0;
+  evaluate(p, e0, e, r, cost, false);
+  out.loss_before = cost;
+  const int m = 6;
+  double lambda = 1e-3;
+  for (int iter = 0; iter < 60 && !out.converged; ++iter) {
+    // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E).
+    const size_t nr = r.size();
+    std::vector<double> J(nr * m);
+    for (int j = 0; j < m; ++j) {
+      float q[6];
+      std::copy(p, p + 6, q);
+      const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
+      q[j] += h;
+      float ej = e;
+      double cj = 0.0;
+      evaluate(q, e, ej, rj, cj, false);
+      for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
+    }
+    double A[6][6] = {}, gvec[6] = {};
+    for (size_t k = 0; k < nr; ++k) {
+      for (int a = 0; a < m; ++a) {
+        gvec[a] += J[k * m + a] * r[k];
+        for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
+      }
+    }
+    for (int a = 0; a < m; ++a)
+      for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
+    bool accepted = false;
+    for (int tries = 0; tries < 12 && !accepted; ++tries) {
+      // (A + lambda diag(A)) delta = -g, by Gaussian elimination with partial pivoting.
+      double M[6][7];
+      for (int a = 0; a < m; ++a) {
+        for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-12) : 0.0);
+        M[a][6] = -gvec[a];
+      }
+      for (int c = 0; c < m; ++c) {
+        int piv = c;
+        for (int rr = c + 1; rr < m; ++rr)
+          if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
+        for (int cc = 0; cc < 7; ++cc) std::swap(M[c][cc], M[piv][cc]);
+        if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
+        for (int rr = c + 1; rr < m; ++rr) {
+          const double fct = M[rr][c] / M[c][c];
+          for (int cc = c; cc < 7; ++cc) M[rr][cc] -= fct * M[c][cc];
+        }
+      }
+      double delta[6];
+      for (int c = m - 1; c >= 0; --c) {
+        double sum = M[c][6];
+        for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
+        delta[c] = sum / M[c][c];
+      }
+      float q[6];
+      float step = 0.0f;
+      for (int j = 0; j < m; ++j) {
+        q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
+        step = std::max(step, std::fabs(q[j] - p[j]));
+      }
+      if (step < 1e-6f) {
+        out.converged = true;
+        break;
+      }
+      float eq = e;
+      double cq = 0.0;
+      bool feasible = evaluate(q, e, eq, rt, cq, true);
+      if (!feasible) {
+        // The step leaves the shape: the furthest point along it that keeps the shape (the optimum of a strong cast
+        // usually sits on that boundary, and rejecting the whole step stalled the solver inside it).
+        float t_ok = 0.0f, t_bad = 1.0f;
+        for (int it = 0; it < 12; ++it) {
+          const float t = 0.5f * (t_ok + t_bad);
+          float qt[6];
+          for (int j = 0; j < m; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
+          const InputCurves c = model.anchored(shape_of(qt), e, qt[0], qt[1]);
+          if (curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops) &&
+              curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops))
+            t_ok = t;
+          else
+            t_bad = t;
+        }
+        if (t_ok > 0.0f) {
+          for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
+          feasible = evaluate(q, e, eq, rt, cq, true);
+        }
+      }
+      if (feasible && cq < cost) {
+        const double gain = cost - cq;
+        std::copy(q, q + 6, p);
+        e = eq;
+        r.swap(rt);
+        cost = cq;
+        lambda = std::max(lambda / 3.0, 1e-9);
+        accepted = true;
+        ++out.iterations;
+        if (gain < 1e-7 * std::max(1.0, cost)) out.converged = true;
+      } else {
+        lambda *= 4.0;
+      }
+    }
+    if (!accepted) {
+      out.converged = true;  // no step lowers the loss at any damping tried
+      break;
+    }
+  }
+  // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the loss falls,
+  // steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where the
+  // Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
+  {
+    float step = o.polish_step0;
+    int polish = 0;
+    while (step >= o.step_min && polish < o.polish_max_evals) {
+      bool improved = false;
+      for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
+        for (int sgn : {1, -1}) {
+          float q[6];
+          std::copy(p, p + 6, q);
+          q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
+          if (q[d] == p[d]) continue;
+          float eq = e;
+          double cq = 0.0;
+          ++polish;
+          if (evaluate(q, e, eq, rt, cq, true) && cq < cost) {
+            std::copy(q, q + 6, p);
+            e = eq;
+            r.swap(rt);
+            cost = cq;
+            improved = true;
+            break;
+          }
+        }
+      }
+      if (!improved) step *= 0.5f;
+    }
+    out.polish_evaluations = polish;
+  }
+  out.g = p[0];
+  out.b = p[1];
+  out.e = e;
+  out.curves = model.anchored(shape_of(p), e, p[0], p[1]);
+  out.loss_after = cost;
+  out.renders = renders;
+  return out;
 }
 
 // The grid's median L* through cfg at (e, g, b) (nearest rank over the cells).

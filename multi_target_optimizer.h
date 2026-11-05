@@ -277,6 +277,10 @@ struct CurveRefitResult {
   // fit's result at Auto's E, and the result on the combined profile; and the time the fit, re-meter and checks took.
   negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the fit, at Auto's E
   double time_ms = 0.0;
+  // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
+  float fit_e = 1.0f;
+  int fit_renders = 0, fit_iterations = 0, fit_polish = 0;
+  bool fit_converged = false;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light

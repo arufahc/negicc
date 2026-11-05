@@ -309,7 +309,10 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["lambda"] = n9(defaults.lambda);
     j["bound"] = n9(defaults.curve_bound);
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
-                {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)}};
+                {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
+                {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
+                {"iterations", f->fit_iterations}, {"converged", f->fit_converged},
+                {"polish_evaluations", f->fit_polish}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
     j["max_dev_stops"] = n9(defaults.max_dev_stops);
