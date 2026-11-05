@@ -113,6 +113,10 @@ struct ParamSearchOptions {
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
   bool film_base_from_scan = false;
   bool verbose = true;
+  // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
+  // rebate, bare light or holder. The curve fit then leaves out the grid cells at the film base's level or holder-dark
+  // (fit_input_curves_after_search).
+  bool fallback_crop = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
@@ -279,6 +283,11 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
                            const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
                            const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]);
 
+// The plausible range of Auto's grid median L* (the lightness the curve fit keeps): outside it the intent failed (a
+// render nearly black or blown out, as when the frame holds rebate or holder), and the fit does not chase it.
+constexpr float kIntentMinL = 12.0f;
+constexpr float kIntentMaxL = 85.0f;
+
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
   negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
@@ -303,8 +312,13 @@ struct CurveRefitResult {
   float shape_scale_ch[2] = {1.0f, 1.0f};
   float shape_scale = 1.0f;
   // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
-  // after three rounds of scaling) or "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*).
+  // after three rounds of scaling), "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*), or
+  // "intent_lightness" (Auto's grid median L* outside [kIntentMinL, kIntentMaxL]: the intent failed, and E is re-metered
+  // to the centre of the bracket's range instead of kept at Auto's).
   const char* fallback = nullptr;
+  bool intent_lightness_failed = false;
+  // Grid cells the fit left out on a fallback crop (ParamSearchOptions::fallback_crop), of the grid's cells.
+  int cells_excluded = 0, cells_total = 0;
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.
   float e_lo = 0.0f, e_hi = 0.0f;
   // The search's intent field was predicted again at its final parameters (the pullback or the clip fallback moved
