@@ -287,8 +287,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "it chose, then solve E, g and b again on that bracket's profile with its input tables composed with the "
           "curves (the combined profile), as negicc-station's Fit curves toggle does; needs the bundle search (no "
           "--target, -E, --gain_g or --gain_b). Eight numbers: convert through the --target bracket's combined "
-          "profile with these recorded curves, without fitting (a sidecar's input_curves; its cli_equivalent writes "
-          "them). White-light (d65) bundles and -P only.")
+          "profile with these recorded curves at the given -E, --gain_g and --gain_b, without fitting or searching "
+          "(a sidecar's input_curves; its cli_equivalent writes them with the bracket, E, g and b). Needs --target, "
+          "-E, --gain_g and --gain_b. White-light (d65) bundles and -P only.")
     .default_value(std::string("off"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.

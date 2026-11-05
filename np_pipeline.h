@@ -200,10 +200,15 @@ struct Scan {
   float knob_base[3] = {1.0f, 1.0f, 1.0f};
   KnobSolveResult knob_res;
 
-  // The highlight roll-off of Auto's result or of given values, measured on the half-size frame as the bracket search
-  // measures it, while that frame exists (render frees the mosaic; LibRaw's half-size decode is analysed and gone).
+  // The highlight roll-off of every bundle conversion, measured on the half-size frame as the bracket search measures
+  // it: Auto's result and given values in decode, while that frame exists (render frees the mosaic; LibRaw's
+  // half-size decode is analysed and gone); the single-bracket search in solve, at its final E, g, b, on
+  // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  std::vector<uint16_t> rolloff_frame;
+  int rolloff_frame_w = 0, rolloff_frame_h = 0;
+  double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
