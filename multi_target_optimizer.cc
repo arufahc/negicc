@@ -1044,6 +1044,14 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
   const float g_lo = std::max(1.0f, stats.g_lo);
   const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
   const float g_scale = white_light ? scale.e_norm : 1.0f;
+  // The scene vector Step 2 meters: the search's input matrix (SearchFrame::set_frame_matrix: M_frame on white light,
+  // M_frame / e_norm on TriLED) applied to the log-average RGB.
+  const float mat_div = white_light ? 1.0f : scale.e_norm;
+  float p_scene[3];
+  for (int r = 0; r < 3; ++r) {
+    p_scene[r] = 0.0f;
+    for (int c = 0; c < 3; ++c) p_scene[r] += scale.frame_matrix[r * 3 + c] / mat_div * stats.log_avg_rgb[c];
+  }
   for (size_t i = 0; i < bundle.targets.size(); ++i) {
     if (!(bundle.targets[i].exposure_s > 0.0f)) continue;
     Enclosure r;
@@ -1060,6 +1068,13 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
     b.search_lo = r.search_lo * to_station;
     b.search_hi = r.search_hi * to_station;
     b.valid = b.e_min > 0.0f && b.e_max > 0.0f && std::isfinite(b.e_center) && b.e_center > 0.0f;
+    b.e_metered = b.e_center;
+    const GreyPoint gp(bundle.targets[i].film_prof.data);
+    float e_met = 0.0f;
+    if (gp.reference_grey() && exposure_for_lightness(gp, p_scene, 1.10f, 1.15f, e_met) && e_met > 0.0f) {
+      b.has_metered = true;
+      b.e_metered = std::clamp(e_met, r.search_lo, r.search_hi) * to_station;
+    }
   }
 }
 

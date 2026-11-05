@@ -202,6 +202,11 @@ struct BracketExposure {
   float e_min = 0.0f, e_max = 0.0f;
   float e_center = 0.0f;    // sqrt(e_min * e_max)
   float search_lo = 0.0f, search_hi = 0.0f;  // the range the search would search E in
+  // The metered exposure (Step 2): the E at which the scene's log-average renders at L* 50 through the bracket with
+  // the bootstrap's g 1.10 and b 1.15, clamped to the search range: the E Auto's bootstrap starts that bracket from.
+  // e_center when the bracket has no neutral L* 50 or the metering does not converge (has_metered false).
+  bool has_metered = false;
+  float e_metered = 0.0f;
 };
 // One BracketExposure per bracket of the bundle (out.size() == bundle.targets.size()). film_base_rgb: a film base read
 // from this scan, as for measure_rolloff_x_hi; null for the bundle's.
