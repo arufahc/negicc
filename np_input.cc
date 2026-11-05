@@ -221,23 +221,19 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
   } else if (roi) {
     std::copy(roi, roi + 4, region);
   }
-  // As load_raw: --roi auto decodes (here: keeps) only the frame before the analysis; a given --roi is applied by the
-  // analysis to its half-size image and cut from the full image after it.
-  if (frame_det && (region[0] || region[1] || region[2] != w || region[3] != h)) {
-    if (!extract_roi_and_transform(proc, region[0], region[1], region[2], region[3], 0, false, false)) {
-      proc->free_image();
-      delete proc;
-      return nullptr;
-    }
-    w = proc->imgdata.sizes.iwidth;
-    h = proc->imgdata.sizes.iheight;
-  }
+  // As load_raw: the analysis sees the whole image at half size (the film base's statistics read the rebate and the
+  // gaps around the frame, not only the picture), and places the frame in it (--roi halved, or --roi auto's detected
+  // crop); the frame is cut from the full image after it. Before, --roi auto kept only the frame before the analysis,
+  // so the film base was read from the picture.
   if (analyse) {
     const int hw = w / 2, hh = h / 2;
     std::unique_ptr<LibRaw> half(new_image_proc(hw, hh));
     if (!half) return delete proc, nullptr;
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+    // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
+    half->imgdata.rawdata.sizes.width = (ushort)w;
+    half->imgdata.rawdata.sizes.height = (ushort)h;
     // Three captures of the whole image: each channel's own half-size image (above), when all three have the size.
     bool planes = mode == InputMode::kThreeShot && region[0] == 0 && region[1] == 0 && region[2] == w && region[3] == h;
     for (int k = 0; k < 3 && planes; ++k) planes = half_w[k] == hw && half_h[k] == hh && !half_planes[k].empty();
@@ -258,7 +254,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     }
     if (!analyse(*half)) return delete proc, nullptr;
   }
-  if (!frame_det && roi && (region[0] || region[1] || region[2] != w || region[3] != h)) {
+  if ((frame_det || roi) && (region[0] || region[1] || region[2] != w || region[3] != h)) {
     if (!extract_roi_and_transform(proc, region[0], region[1], region[2], region[3], 0, false, false)) {
       proc->free_image();
       delete proc;
