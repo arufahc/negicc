@@ -2026,7 +2026,22 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     // be two frames with no visible gap between them, and is split as before, unless the strip says the format is
     // wrong (format_mismatch), when the nominal length is no guide.
     const bool two_gaps = lt == 1 && rt == 1 && std::min(sl, sr) >= 0.5f * std::max(sl, sr);
-    const bool keep_measured = two_gaps && (len <= 1.6f * L_exp || format_mismatch);
+    // The measured frame is kept only when its aspect is a film format's (within the given format's length tolerance):
+    // the case above is another film given the wrong format (a 645, 6x6 or 6x7 given on a 35mm strip), whose frame
+    // between its gaps has its own film's aspect. Two "gaps" that are lines in a picture filling the sensor bound a
+    // piece of no format's aspect: Scan_001243 (35mm B&W) measured 1.18 between two such lines and was cropped to it
+    // (0.91 -> 0.73), while the white-LED frame 1793430239844_bvKJe2h1, a 35mm frame between real gaps, measures
+    // 0.67 (24 / 36).
+    bool film_aspect = false;
+    for (FilmFormat ff : {FILM_35MM, FILM_645, FILM_6X6, FILM_6X7, FILM_6X9}) {
+      const FormatGeom g = format_geom(ff);
+      // either way round: a frame may lie turned on the strip (the white-LED frame measures 0.67, 24 / 36)
+      if (across_px <= 0.0f) continue;
+      const float d = std::fabs(std::log(len / across_px / (g.along / g.across)));  // |log(measured / format aspect)|
+      if (d <= fg.len_tol || std::fabs(std::log(len / across_px * (g.along / g.across))) <= fg.len_tol)
+        film_aspect = true;
+    }
+    const bool keep_measured = two_gaps && film_aspect && (len <= 1.6f * L_exp || format_mismatch);
     if (len > L_exp * (1 + tol) || len < L_exp * (1 - tol)) {
       if (lg && rg && std::min(sl, sr) >= 0.5f * std::max(sl, sr) && len > L_exp * (1 - 2 * tol) &&
           len < L_exp * (1 + 2 * tol)) {
