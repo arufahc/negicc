@@ -1774,8 +1774,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       return sides;
     };
     const int t_lr = film_sides(true), t_tb = film_sides(false);
-    if (t_lr >= 1 && t_tb == 0 && no_film_lines(true) > 0.03f) axis_ev = 1;
-    else if (t_tb >= 1 && t_lr == 0 && no_film_lines(false) > 0.03f) axis_ev = -1;
+    if (t_lr >= 1 && t_tb == 0 && no_film_lines(true) > 0.05f) axis_ev = 1;
+    else if (t_tb >= 1 && t_lr == 0 && no_film_lines(false) > 0.05f) axis_ev = -1;
   }
   bool tr0;
   if (P.axis_hint == 'h' || P.axis_hint == 'H') tr0 = false;
