@@ -402,6 +402,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
         c.u_med[i] = ch["u_med"].get<float>();
         if (ch.contains("u_lo")) c.u_lo[i] = ch["u_lo"].get<float>();
       }
+      c.hold = ic.value("hold", false);
+      if (c.hold && !(ic["channels"]["G"].contains("u_lo") && ic["channels"]["B"].contains("u_lo"))) ok = false;
       if (!ok || !(c.ref[0] > 0.0f) || !(c.ref[1] > 0.0f)) return false;
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;

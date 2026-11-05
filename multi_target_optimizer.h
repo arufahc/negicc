@@ -257,7 +257,7 @@ struct CurveRefitResult {
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;
-  int fit_renders = 0, fit_iterations = 0, fit_polish = 0;
+  int fit_renders = 0, fit_iterations = 0, fit_polish = 0, fit_start = 0;
   bool fit_converged = false;
 };
 

@@ -403,14 +403,15 @@ int parse_options(int ac, char* av[], Options& o) {
     if (fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on";
       o.fit_curves_auto = fc[0] == "auto";
-    } else if (fc.size() == 8) {
-      float v[8];
-      for (int i = 0; i < 8; ++i) {
+    } else if (fc.size() == 8 || fc.size() == 10) {
+      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB.
+      float v[10];
+      for (size_t i = 0; i < fc.size(); ++i) {
         char* end = nullptr;
         v[i] = std::strtof(fc[i].c_str(), &end);
         if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
-          log_error("--fit_curves: '%s' is not a number (give off, auto, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n",
-                    fc[i].c_str());
+          log_error("--fit_curves: '%s' is not a number (give off, auto, on, aG,kG,aB,kB,refG,refB,u_medG,u_medB, or "
+                    "those and u_loG,u_loB for a held curve)\n", fc[i].c_str());
           return 1;
         }
       }
@@ -420,13 +421,16 @@ int parse_options(int ac, char* av[], Options& o) {
         o.input_curves.k[i] = v[i * 2 + 1];
         o.input_curves.ref[i] = v[4 + i];
         o.input_curves.u_med[i] = v[6 + i];
+        if (fc.size() == 10) o.input_curves.u_lo[i] = v[8 + i];
+        o.input_curves.hold = fc.size() == 10;
         if (!(o.input_curves.ref[i] > 0.0f)) {
           log_error("--fit_curves: refG and refB must be positive\n");
           return 1;
         }
       }
     } else {
-      log_error("--fit_curves takes off, auto, on, or eight comma-separated numbers (aG,kG,aB,kB,refG,refB,u_medG,u_medB)\n");
+      log_error("--fit_curves takes off, auto, on, or eight comma-separated numbers (aG,kG,aB,kB,refG,refB,u_medG,"
+                "u_medB), ten for a held curve (and u_loG,u_loB)\n");
       return 1;
     }
   }
