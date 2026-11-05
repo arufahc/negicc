@@ -642,8 +642,12 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
   if (o.input_curves_given) {
-    if (s.manual_target_idx < 0) {
-      log_error("--fit_curves with recorded curves needs --target: the curves belong to one bracket's profile\n");
+    // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
+    // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
+    // which the curves were not fitted with, and give other values.
+    if (s.manual_target_idx < 0 || !o.exposure_given || !o.gain_g_given || !o.gain_b_given) {
+      log_error("--fit_curves with recorded curves needs --target, -E, --gain_g and --gain_b: the curves belong to "
+                "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
     // The --target bracket's profile becomes the combined profile before anything renders through it.
@@ -735,15 +739,31 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
 
-  // The bracket of given values (the search's is its own), for the roll-off measured on the half-size frame.
-  const int given_target_idx = !s.is_bundle ? -1
-                               : s.manual_target_idx >= 0 ? s.manual_target_idx
-                                                          : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked without
+  // the search, the single-bracket search's bounds and the exposure of given values read. Measured here, on the
+  // half-size frame every bundle conversion analyses, before anything picks a bracket: before, solve measured it
+  // after decode had already picked one (from the defaults, always the first admissible bracket) and measured the
+  // roll-off and solved the knobs there. The bundle search measures its own; a previous run's sidecar names its bracket.
+  const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
+                                (s.use_dino || s.manual_target_idx < 0 || !s.exposure_given);
+  auto measure_enclosures = [&](const negicc::RgbView& frame) {
+    if (!needs_enclosures) return;
+    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+    int num_feasible = 0;
+    compute_bundle_enclosures(bundle, frame, g_lo, g_hi, scene_ev, num_feasible);
+    scan.has_enclosures = true;
+  };
+  // The bracket of given values (the search's is its own), once the enclosures are measured.
+  auto given_target_idx = [&]() {
+    return !s.is_bundle ? -1
+           : s.manual_target_idx >= 0 ? s.manual_target_idx
+                                      : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
+  };
   // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
   // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
   // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
-    const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx;
+    const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
                                            : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
                                                              scan.film_base_rgb());
@@ -777,6 +797,22 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.auto_res.params = {s.cached_sidecar.base_e, s.cached_sidecar.base_g, s.cached_sidecar.base_b, 1.0f};
     scan.has_auto_res = true;
   };
+  // The single-bracket search (-E or --target without given gains, or a previous run's result reused with the knobs)
+  // has its final E, g, b only in solve, after the half-size frame is gone: a copy of the frame (and the scan's
+  // exposure) stays for its roll-off, which solve measures there as decode measures every other conversion's.
+  auto keep_rolloff_frame = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
+    const int w = frame.width, h = frame.height;
+    scan.rolloff_frame.resize((size_t)w * h * 3);
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < h; ++y) {
+      uint16_t* row = scan.rolloff_frame.data() + (size_t)y * w * 3;
+      for (int x = 0; x < w; ++x) frame.sample(x, y, row + (size_t)x * 3);
+    }
+    scan.rolloff_frame_w = w;
+    scan.rolloff_frame_h = h;
+    scan.rolloff_shutter_s = scan_shutter_s;
+    scan.rolloff_iso = scan_iso;
+  };
 
   // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
   // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
@@ -801,10 +837,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   bool has_base_det = false;
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
   int det_sensor_w = 0, det_sensor_h = 0;
+  // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
+  // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
+  // Before, only the bundle search and given gains built it, so -E and --target there converted with the bundle's film
+  // base instead of the scan's, unlike the same scan on the CFA path or with the search.
   HalfSizeAnalysis analyse;
-  if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
+  if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
-      const double t_auto_0 = omp_get_wtime();
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(raw, scan_shutter_s, scan_iso);
       // --roi halved, or the whole image.
@@ -834,6 +873,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
+        // Auto's time (the sidecar's auto.time_ms): the search and the curve fit, as on the CFA path.
+        const double t_auto_0 = omp_get_wtime();
         ParamSearchOptions opts;
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
@@ -858,9 +899,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           scan.has_curve_params = true;
           scan.curve_params = s.curve_fit.params;
         }
+        scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+      } else {
+        measure_enclosures(frame);
       }
-      if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
-      scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+      // The single-bracket search (-E or --target without given gains) solves in solve, on the full image; its
+      // roll-off is measured there, on a copy of this frame, at its final E, g, b.
+      if (s.bundle_search || !s.use_dino) {
+        if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
+      } else {
+        keep_rolloff_frame(frame, scan_shutter_s, scan_iso);
+      }
       return true;
     };
   }
@@ -1149,13 +1198,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       }
       scan.has_auto_res = true;
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
+    } else {
+      measure_enclosures(search_half_view);
     }
-    if (s.bundle_search || (s.is_bundle && !s.use_dino)) {
+    if (s.is_bundle) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
-        delete proc;
-        return 1;
+      if (s.bundle_search || !s.use_dino) {
+        if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
+          delete proc;
+          return 1;
+        }
+      } else {
+        // The single-bracket search: its roll-off is measured in solve at its final E, g, b, on a copy of the frame
+        // (the mosaic this view reads is freed by render).
+        keep_rolloff_frame(search_half_view, scan_shutter_s, scan_iso);
       }
     }
     scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
@@ -1329,25 +1386,12 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    if (!s.has_cached_sidecar && (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E))) {
-      // Sets each bracket's exposure range on the bundle (e_min, e_max, e_center, is_feasible), which the target
-      // selection, set_target_bounds and given_station_e read below. The scene statistics it returns are unused.
-      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-      int num_feasible = 0;
-      if (scan.cfa) {
-        // TODO: Run `compute_bundle_enclosures` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
-        // full-resolution `cfa_export_rgb` buffer once single-target enclosure baselines are updated.
-        compute_bundle_enclosures(bundle,
-                                  negicc::RgbView::from_interleaved_rgb(
-                                      scan.rgb3.data(), proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight),
-                                  g_lo, g_hi, scene_ev, num_feasible);
-      } else {
-        compute_bundle_enclosures(bundle,
-                                  (const uint16_t (*)[4])proc->imgdata.image,
-                                  proc->imgdata.sizes.iwidth,
-                                  proc->imgdata.sizes.iheight,
-                                  g_lo, g_hi, scene_ev, num_feasible);
-      }
+    // Each bracket's exposure range, which the target selection, set_target_bounds and given_station_e read below,
+    // was measured in decode on the half-size frame (measure_enclosures), before decode picked a bracket.
+    if (!s.has_cached_sidecar && (s.use_dino || s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) &&
+        !scan.has_enclosures) {
+      log_error("Internal error: the brackets' exposure ranges were not measured on the scan\n");
+      return 1;
     }
   } else if (!s.is_bundle) {
     if (!s.film_prof_arg.empty() && !load_film_profile(s.film_prof_arg, c.film_prof)) {
@@ -1535,6 +1579,21 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     if (s.is_bundle) {
       // Rendered as the station renders those values, so the sidecar's cli_equivalent reproduces it.
       apply_station(final_e, final_g, final_b);
+      // The roll-off at those values (after the knobs), on the half-size frame decode kept, as every other bundle
+      // conversion measures it: the solver's own x_hi is at its pre-knob values, and a previous run's result reused
+      // with the knobs has none.
+      if (scan.rolloff_frame.empty()) {
+        log_error("Internal error: no half-size frame kept for the roll-off\n");
+        return 1;
+      }
+      const negicc::RgbView rolloff_view = negicc::RgbView::from_interleaved_rgb(
+          scan.rolloff_frame.data(), scan.rolloff_frame_w, scan.rolloff_frame_h);
+      scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, c.bundle_target_idx, rolloff_view, scan.rolloff_shutter_s,
+                                               scan.rolloff_iso, final_e, final_g, final_b,
+                                               ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995,
+                                               scan.film_base_rgb());
+      scan.has_rolloff = true;
+      std::vector<uint16_t>().swap(scan.rolloff_frame);
     } else {
       c.exposure_comp = final_e;
       c.gain_g = final_g;
@@ -1570,15 +1629,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params) {
     // The highlight roll-off of the conversion, as the bracket search measures it at its final parameters (on the
     // half-size frame), so given values (cli_equivalent) reproduce it: Auto's result and given values were measured
-    // in decode; a pinned -E or --target search keeps its solver's own x_hi.
-    float q995 = 0.0f;
-    if (scan.has_rolloff) {
-      c.shoulder.x_hi = scan.rolloff_x_hi;
-      q995 = scan.rolloff_q995;
-    } else {
-      c.shoulder.x_hi = c.dino_res.shoulder.x_hi;
-      q995 = c.dino_res.shoulder.q995;
+    // in decode, the single-bracket search above at its final E, g, b.
+    if (!scan.has_rolloff) {
+      log_error("Internal error: the roll-off was not measured\n");
+      return 1;
     }
+    c.shoulder.x_hi = scan.rolloff_x_hi;
+    const float q995 = scan.rolloff_q995;
     c.shoulder.has_q995 = true;
     c.shoulder.q995 = q995;
     if (c.shoulder.active()) {
