@@ -997,7 +997,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the
   // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
   // detector, so the base comes from the statistics.
-  // TODO: with --roi auto, load_raw decodes only the frame, so the statistics there see the frame, not the whole scan.
   // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
@@ -1019,11 +1018,30 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
   // Before, only the bundle search and given gains built it, so -E and --target there converted with the bundle's film
   // base instead of the scan's, unlike the same scan on the CFA path or with the search.
+  // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
+  auto take_detected_frame = [&](int full_w, int full_h) {
+    if (scan.frame_det.conf < kLowFrameConfidence) {
+      scan.roi[0] = 0;
+      scan.roi[1] = 0;
+      scan.roi[2] = full_w;
+      scan.roi[3] = full_h;
+    } else {
+      for (int i = 0; i < 4; ++i) scan.roi[i] = scan.frame_det.crop[i];
+    }
+    scan.has_roi = true;
+  };
   HalfSizeAnalysis analyse;
   if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(raw, scan_shutter_s, scan_iso);
+      // An RGB file or three captures with --roi auto: the detection ran on the whole image before this analysis,
+      // which sees the whole image too, so the frame is placed from it here (the RAW path's find_frame does so before
+      // the half-size decode). raw's rawdata sizes are the full image's (load_rgb_input).
+      if (o.roi_auto && !scan.has_roi &&
+          (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot)) {
+        take_detected_frame(raw.imgdata.rawdata.sizes.width, raw.imgdata.rawdata.sizes.height);
+      }
       // --roi halved, or the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
       int* bbox = scan.auto_frame_half;
@@ -1101,18 +1119,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     };
   }
 
-  // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
-  auto take_detected_frame = [&](int full_w, int full_h) {
-    if (scan.frame_det.conf < kLowFrameConfidence) {
-      scan.roi[0] = 0;
-      scan.roi[1] = 0;
-      scan.roi[2] = full_w;
-      scan.roi[3] = full_h;
-    } else {
-      for (int i = 0; i < 4; ++i) scan.roi[i] = scan.frame_det.crop[i];
-    }
-    scan.has_roi = true;
-  };
 
   FrameDetectionParams det_params;
   det_params.format = o.film_format;
