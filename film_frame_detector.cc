@@ -931,12 +931,75 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     for (size_t i = 0; i < N; ++i) dc[i] = (cv.valid[i] && !light[i] && lum.d[i] < lim) ? 1 : 0;
     Labels L;
     components(dc, cv.valid, lum, W, H, L);
-    std::vector<double> gsum(L.area.size(), 0.0);
-    for (size_t i = 0; i < N; ++i)
-      if (L.lab[i] >= 0) gsum[L.lab[i]] += grad[i];
-    std::vector<uint8_t> keep(L.area.size(), 0);
-    for (size_t k = 0; k < L.area.size(); ++k)
-      keep[k] = L.touch[k] && L.area[k] >= 0.01 * (double)nvalid && gsum[k] / L.area[k] < 0.08;
+    // Flatness on the log of the luminance averaged over 5 x 5 pixels: a holder sits at 1% of the base or below, where
+    // sensor noise alone gives a per-pixel log-luminance gradient near the limit (0.08 to 0.10 stop on a holder-framed
+    // 6x6 scan whose masks were then taken for picture). Averaging first leaves the noise a fifth of that and keeps
+    // the structure of a dense picture region, which spans many pixels.
+    std::vector<float> lb(N, 0.0f);
+    {
+      std::vector<double> I((size_t)(W + 1) * (H + 1), 0.0);
+      for (int y = 0; y < H; ++y) {
+        double row = 0.0;
+        for (int x = 0; x < W; ++x) {
+          row += cv.valid[(size_t)y * W + x] ? lum.d[(size_t)y * W + x] : 0.0;
+          I[(size_t)(y + 1) * (W + 1) + x + 1] = I[(size_t)y * (W + 1) + x + 1] + row;
+        }
+      }
+      std::vector<int> C((size_t)(W + 1) * (H + 1), 0);
+      for (int y = 0; y < H; ++y) {
+        int row = 0;
+        for (int x = 0; x < W; ++x) {
+          row += cv.valid[(size_t)y * W + x] ? 1 : 0;
+          C[(size_t)(y + 1) * (W + 1) + x + 1] = C[(size_t)y * (W + 1) + x + 1] + row;
+        }
+      }
+      const float lf = std::log2(std::max(1e-6f, black_frac * ref));
+      #pragma omp parallel for schedule(static)
+      for (int y = 0; y < H; ++y) {
+        const int y0 = std::max(0, y - 2), y1 = std::min(H, y + 3);
+        for (int x = 0; x < W; ++x) {
+          const int x0 = std::max(0, x - 2), x1 = std::min(W, x + 3);
+          auto at = [&](const auto& T, int yy, int xx) { return T[(size_t)yy * (W + 1) + xx]; };
+          const double sum = at(I, y1, x1) - at(I, y0, x1) - at(I, y1, x0) + at(I, y0, x0);
+          const int cnt = at(C, y1, x1) - at(C, y0, x1) - at(C, y1, x0) + at(C, y0, x0);
+          lb[(size_t)y * W + x] = std::max(lf, (float)std::log2(std::max(1e-6, cnt ? sum / cnt : 0.0)));
+        }
+      }
+    }
+    const size_t nk = L.area.size();
+    std::vector<double> gsum(nk, 0.0), gsmooth(nk, 0.0);
+    std::vector<int> bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
+    for (size_t i = 0; i < N; ++i) {
+      const int k = L.lab[i];
+      if (k < 0) continue;
+      gsum[k] += grad[i];
+      const int x = (int)(i % W), y = (int)(i / W);
+      bx0[k] = std::min(bx0[k], x);
+      bx1[k] = std::max(bx1[k], x);
+      by0[k] = std::min(by0[k], y);
+      by1[k] = std::max(by1[k], y);
+    }
+    for (int y = 1; y < H - 1; ++y) {
+      for (int x = 1; x < W - 1; ++x) {
+        const size_t i = (size_t)y * W + x;
+        if (L.lab[i] < 0) continue;
+        const float gx = (lb[i - W + 1] + 2 * lb[i + 1] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - 1] - lb[i + W - 1]) *
+                         0.125f;
+        const float gy = (lb[i + W - 1] + 2 * lb[i + W] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - W] - lb[i - W + 1]) *
+                         0.125f;
+        gsmooth[L.lab[i]] += std::sqrt(gx * gx + gy * gy);
+      }
+    }
+    // Flat per pixel (as before), or flat once averaged and rectangular: a holder's opening is straight-edged, so the
+    // part fills its bounding box (0.96 to 0.99 on holder-framed scans), while a slide's deep shadows that reach the
+    // border are as dark and as smooth but ragged (0.3) and stay picture. Averaging raises the gradient of a ragged
+    // part (its box mixes in the brighter picture around it), so the per-pixel test still decides those.
+    std::vector<uint8_t> keep(nk, 0);
+    for (size_t k = 0; k < nk; ++k) {
+      if (!L.touch[k] || L.area[k] < 0.01 * (double)nvalid) continue;
+      const double fill = L.area[k] / (double)((bx1[k] - bx0[k] + 1) * (by1[k] - by0[k] + 1));
+      keep[k] = gsum[k] / L.area[k] < 0.08 || (gsmooth[k] / L.area[k] < 0.08 && fill >= 0.9);
+    }
     for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
   }
   // Slide: its unexposed film is the densest mode; within 0.7 stop of it is DARK.
