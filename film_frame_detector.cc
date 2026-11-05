@@ -2251,7 +2251,14 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   if (try_alt) {
     FormatResult alt;
     if (eval_strip(!tr0, alt)) {
-      auto better_strip = [square, axis_ev](const FormatResult& a, const FormatResult& b) {
+      auto better_strip = [square, axis_ev, fmt](const FormatResult& a, const FormatResult& b) {
+        // Medium format: a reading whose strip width matches the format beats one that does not, unless it is far less
+        // sure. The border vote (axis_ev) is wrong when a 120 frame is taller than the sensor and a holder hides the
+        // sides: the film then runs off the top and bottom although the strip runs across. (Not 35mm, whose strip
+        // edges and perforations show; there the vote held and the swap cost three slides their crop.)
+        const bool am = a.det.reason.find("strip_width_mismatch") != std::string::npos;
+        const bool bm = b.det.reason.find("strip_width_mismatch") != std::string::npos;
+        if (fmt != FILM_35MM && am != bm && std::fabs(a.det.conf - b.det.conf) <= 0.2f) return bm;
         if (a.det.conf != b.det.conf)
           return axis_ev != 0 ? (a.det.conf > b.det.conf + 0.1f) : (a.det.conf > b.det.conf);
         if (!square) return false;
