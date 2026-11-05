@@ -143,9 +143,11 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 # 5. Manual override: pick a bracket (0..6), exposure (-E), or green/blue gains (--gain_g, --gain_b)
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 
-# 6. White light: fit G/B input curves after the search (the sidecar's input_curves records them; its cli_equivalent
-#    replays them with --fit_curves aG,kG,aB,kB,refG,refB,u_medG,u_medB, --target, -E, --gain_g and --gain_b, all
-#    four required with recorded curves)
+# 6. White light: fit g, b and G/B input curves jointly after the search, keeping Auto's lightness (-P srgb or
+#    srgb-g10; the sidecar's input_curves records them; its cli_equivalent replays them with
+#    --fit_curves ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (u_loG,u_loB appended for a held curve), --target, -E,
+#    --gain_g and --gain_b, all four required with recorded curves; the older aG,kG,aB,kB,refG,refB,u_medG,u_medB
+#    order without the prefix is still read when aG is not negative)
 bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
 ```
 

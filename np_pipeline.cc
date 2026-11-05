@@ -824,7 +824,7 @@ int prepare(const Options& o, Setup& s) {
                              fit_encoding_ok && s.bundle_search;
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
-              "(--fit_curves with eight comma-separated numbers replays recorded curves)\n");
+              "(--fit_curves with recorded curves, ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, replays them)\n");
     return 1;
   }
   if (o.input_curves_given) {
@@ -1152,7 +1152,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
           // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
           // white-light bundle search.
-          negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25, 1 stop from the base TRC
+          negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
           // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
           const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
           s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
