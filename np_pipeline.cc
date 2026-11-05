@@ -1070,18 +1070,26 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
     const double* xt = (s.bundle.has_crosstalk && !s.white_light) ? s.bundle.crosstalk_matrix_d : nullptr;
-    // A reading far from the bundle's base in chroma is picture or bare light, not base (unmasked frames turned
-    // magenta, or got a crossover, from a rebate patch or statistics taken unchecked).
-    const float* expected = s.bundle.has_film_base ? s.bundle.film_base_avg : nullptr;
+    // The plausibility gate (film_base_detect.h kBaseAgreeStops): picture or bare light read as base turned unmasked
+    // frames magenta, or gave them a crossover. Only on white light with the bundle's own illuminant: three captures
+    // (one light per channel) and custom -r/-g/-b rows put the base somewhere the bundle's average does not describe.
+    const bool custom_rows = o.row_given[0] || o.row_given[1] || o.row_given[2];
+    const float* expected = (s.bundle.has_film_base && s.white_light && !xt && !custom_rows &&
+                             o.input_mode != InputMode::kThreeShot)
+                                ? s.bundle.film_base_avg
+                                : nullptr;
     const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, scan.film_base, expected);
     const negicc::FilmBaseDetection& fb = scan.film_base;
+    if (fb.has_agreement && !fb.readings_agree) {
+      log_info("Film base: the rebate patch and the thinnest film differ by %.2f stops\n", fb.agreement_stops);
+    }
     if (fb.rebate_refused) {
-      log_warn("film base: the rebate patch is %.2f stops from the bundle's base in chroma; not taken\n",
-               fb.rebate_chroma_stops);
+      log_warn("film base: the rebate patch (R/G %.2fx, B/G %.2fx the stock's) is outside the stock's envelope; not "
+               "taken\n", fb.rebate_rg, fb.rebate_bg);
     }
     if (fb.statistics_refused) {
-      log_warn("film base: the thinnest film is %.2f stops from the bundle's base in chroma; not taken\n",
-               fb.statistics_chroma_stops);
+      log_warn("film base: the thinnest film (R/G %.2fx, B/G %.2fx the stock's) is outside the stock's envelope; not "
+               "taken\n", fb.statistics_rg, fb.statistics_bg);
     }
     if (found) {
       log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", fb.source.c_str(), fb.rgb[0], fb.rgb[1], fb.rgb[2]);
