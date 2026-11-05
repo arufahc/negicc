@@ -1169,7 +1169,17 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       for (size_t i = 0; i < N; ++i) {
         const int k = L.lab[i];
         if (k < 0) continue;
-        const bool line = 2 * (bx1[k] - bx0[k] + 1) >= W || 2 * (by1[k] - by0[k] + 1) >= H;
+        // A band: long and thin, as a rebate beside the frame or a gap between frames is. Its mean thickness (area
+        // over its length) is at least about a millimetre (1% of the canvas's short side, the width of a 35mm gap on
+        // a frame filling the image), so a printed or drawn line a pixel or two thick is picture, and its length is at
+        // least 6 times that thickness, so a bright picture region that merely reaches half the canvas (a white patch
+        // of a test chart, 190 x 478 canvas pixels, 4 times as long as thick) is picture too. Without this,
+        // test_capture_ref.ARW (negicc-station's bundle-search parity case, a barcode chart) kept two chart patches
+        // as base and went from almost the whole image to a crop cut short on the right.
+        const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
+        const double thick = (double)L.area[k] / span;
+        const bool band = thick >= std::max(2.0, 0.01 * std::min(W, H)) && span >= 6.0 * thick;
+        const bool line = (2 * (bx1[k] - bx0[k] + 1) >= W || 2 * (by1[k] - by0[k] + 1) >= H) && band;
         if (central[k] || !line) ci.cls[i] = CL_IMAGE;
       }
     } else if (nlight > 0 || ndark > 0) {
