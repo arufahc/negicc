@@ -184,6 +184,9 @@ struct ParamSearchResult {
   ClipFallbackOutcome clip_fallback = ClipFallbackOutcome::kNotNeeded;
   float clip_fallback_white_clip = 0.0f;  // the fraction of the inner crop the first choice white-clips
   bool highlight_pullback = false;        // the highlight pullback moved E or the bracket
+  // The chosen bracket's calibrated range of E (its enclosure's e_min and e_max) in params.e's units; 0 when the
+  // bracket has none (infeasible). The curve fit bounds E with it.
+  float e_range_lo = 0.0f, e_range_hi = 0.0f;
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
@@ -275,14 +278,16 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
-  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the fit with E fixed, its losses
+  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
   ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
   float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target), on the export's render at Auto's
   float median_L = 0.0f;          // the grid median L* at params on the combined profile, on the export's render
   // The export's render: its encoding and roll-off (only the sRGB encoding applies one; 1 otherwise).
   int encoding = negicc::ENCODE_SRGB;  // OutputEncoding
-  float x_hi_fit = 1.0f;          // the roll-off the fit ran with: the export's at Auto's parameters
+  float x_hi_auto = 1.0f;         // the export's roll-off at Auto's parameters on the bracket's profile
+  float x_hi_fit = 1.0f;          // the roll-off the last fit pass ran with (the first runs with x_hi_auto)
+  int fit_passes = 0;             // fits run: one, and again while the result's roll-off moved (at most three)
   // The roll-off at params on the combined profile (and its q995): measured as the export measures it (only for the
   // sRGB encoding: rolloff_measured), so the export reuses it with no knobs instead of measuring it again.
   float x_hi = 1.0f, x_hi_q995 = 0.0f;
@@ -294,11 +299,19 @@ struct CurveRefitResult {
   // smaller of the two.
   float shape_scale_ch[2] = {1.0f, 1.0f};
   float shape_scale = 1.0f;
-  // Why the fit fell back to Auto's result with no curves ("shape"), or null when it did not.
+  // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
+  // after three rounds of scaling) or "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*).
   const char* fallback = nullptr;
-  // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, and the
-  // fit's result at Auto's E, and the result on the combined profile; and the time the fit, re-meter and checks took.
-  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the fit, at Auto's E
+  // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.
+  float e_lo = 0.0f, e_hi = 0.0f;
+  // The search's intent field was predicted again at its final parameters (the pullback or the clip fallback moved
+  // them after its preview), and the fit scored against that one.
+  bool intent_repredicted = false;
+  // The fit's options as it ran (the sidecar records them).
+  negicc::CurveFitOptions options;
+  // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, the fit's
+  // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
+  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit_e
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;
