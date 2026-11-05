@@ -481,22 +481,6 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else {
     fb["detector"] = nullptr;
   }
-  if (d && d->has_chroma_check) {
-    // The plausibility gate against the stock's base (film_base_detect.h kBaseAgreeStops): the two readings'
-    // agreement, and each reading's R/G and B/G over the stock's.
-    auto ratio = [](double v) { return v > 0 ? num(v, "%.4f") : ordered_json(nullptr); };
-    fb["chroma_check"] = {
-        {"agree_stops", num(negicc::kBaseAgreeStops, "%.3g")},
-        {"envelope", {{"rg", {1.0, num(negicc::kBaseRgMax, "%.3g")}}, {"bg", {num(negicc::kBaseBgMin, "%.3g"), 1.0}}}},
-        {"agreement_stops", d->has_agreement ? num(d->agreement_stops, "%.4f") : ordered_json(nullptr)},
-        {"readings_agree", d->readings_agree},
-        {"rebate_rg", ratio(d->rebate_rg)},
-        {"rebate_bg", ratio(d->rebate_bg)},
-        {"rebate_refused", d->rebate_refused},
-        {"statistics_rg", ratio(d->statistics_rg)},
-        {"statistics_bg", ratio(d->statistics_bg)},
-        {"statistics_refused", d->statistics_refused}};
-  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   j["film_base"] = fb;
 
