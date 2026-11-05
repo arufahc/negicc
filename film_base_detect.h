@@ -44,6 +44,10 @@ constexpr double kBasePatchInset = 0.15;  // fraction of the patch's box dropped
 constexpr int kBaseMinSamples = 32;       // pixels the inner box must hold
 constexpr double kRebateMargin = 0.5;     // stops: the thinnest film may exceed a base patch by at most this
 constexpr int kBaseWorkSize = 512;        // long side (px) of the image the thinnest film is read on
+// stops: how far a reading's R/G or B/G may lie from the expected base's (the bundle's average) before it is taken for
+// picture or bare light rather than base. Wide, so only gross misreadings are refused: an unmasked or differently
+// masked stock under another stock's bundle lies well within it. Not tuned on a corpus.
+constexpr double kBaseChromaTolerance = 1.0;
 
 struct FilmBaseDetection {
   bool found = false;
@@ -62,6 +66,11 @@ struct FilmBaseDetection {
   bool light_clipped = false;
   bool has_outshone = false;
   double thinnest_over_patch_stops = 0.0;
+  // With an expected base: the largest |log2| deviation of each reading's R/G and B/G from it (stops), and which
+  // readings the gate refused.
+  bool has_chroma_check = false;
+  double rebate_chroma_stops = 0.0, statistics_chroma_stops = 0.0;
+  bool rebate_refused = false, statistics_refused = false;
 };
 
 // The thinnest film on the half-size decode |half| (step 2. above), in its units.
@@ -70,8 +79,13 @@ void thinnest_film_base(const RgbView& half, float out[3]);
 // The film base of the scan whose half-size decode (flat field applied) is |half|. |det| is the frame detector's
 // result on the RAW's mosaic of sensor_w x sensor_h photosites (null when there is none: a white-light decode, an RGB
 // file); |crosstalk| the 3x3 row-major crosstalk matrix (null for none). False (out.found false) when neither step gives
-// a positive base; out still carries the detector's record.
+// a positive base; out still carries the detector's record. |expected_rgb|: the base the profile expects, in the same
+// space (a bundle's film_base_avg), or null: a reading whose R/G or B/G lies more than kBaseChromaTolerance stops from
+// it is refused (the rebate patch falls back to the statistics, the statistics to none, so the caller's base).
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
-                      const double* crosstalk, FilmBaseDetection& out);
+                      const double* crosstalk, FilmBaseDetection& out, const float* expected_rgb = nullptr);
+
+// The largest |log2| deviation (stops) of rgb's R/G and B/G from expected's; infinity when either is not positive.
+double film_base_chroma_stops(const double rgb[3], const float expected[3]);
 
 }  // namespace negicc

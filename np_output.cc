@@ -458,6 +458,17 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else {
     fb["detector"] = nullptr;
   }
+  if (d && d->has_chroma_check) {
+    // The plausibility gate against the bundle's base (film_base_detect.h kBaseChromaTolerance).
+    fb["chroma_check"] = {
+        {"tolerance_stops", num(negicc::kBaseChromaTolerance, "%.3g")},
+        {"rebate_stops", d->has_outshone ? num(d->rebate_chroma_stops, "%.4f") : ordered_json(nullptr)},
+        {"rebate_refused", d->rebate_refused},
+        {"statistics_stops", (d->found && d->source == "statistics") || d->statistics_refused
+                                 ? num(d->statistics_chroma_stops, "%.4f")
+                                 : ordered_json(nullptr)},
+        {"statistics_refused", d->statistics_refused}};
+  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   j["film_base"] = fb;
 
