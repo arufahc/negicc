@@ -54,7 +54,12 @@ std::vector<std::string> list_embedded_bundles();
 // resolve_model_for_profile: models/dinov3-small_<BundleKey>, then models/dinov3-small_<bundlekey>, then
 // models/dinov3-small_<stock>, then models/dinov3-small_portra400. adapter_dir receives the directory used.
 // py-ref: negicc_station/src/intent_model.py @ 93be1ec (resolve_model_for_profile)
-const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::string& adapter_dir);
+// A path (an ICC profile inside a bundle's directory, e.g. profiles/Ektar100-A7R4-D65/Target_4.icc) is tried by its
+// file name and then by each directory above it, and each name also by the embedded adapters' stock names it starts
+// with once lowercased with everything but letters and digits dropped, before the portra400 fallback. fell_back
+// (when given) is set when only that fallback matched.
+const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::string& adapter_dir,
+                                          bool* fell_back = nullptr);
 
 // The DINOv3 backbone built in: its TensorRT engine (backbone.engine) when trt_engine, else its ONNX model
 // (backbone.onnx). Null when the build has none.
