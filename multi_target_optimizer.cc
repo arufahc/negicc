@@ -1703,36 +1703,51 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   std::copy(fb, fb + 3, cf.film_base);
   cf.grid = stats.grid.data();
   cf.n = (int)n;
-  // Each candidate's curves are anchored (ref, u_med) at its own g and b, with E fixed at Auto's.
-  out.fit = negicc::fit_input_curves(cfg, cf, e_int, res.params.g, res.params.b, res.intent_mu.data(),
-                                     res.intent_sigma.data(), fit_opts);
-  if (opts.verbose) {
-    const negicc::InputCurves& c = out.fit.curves;
-    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
-              << " k " << fixed(c.k[1], 4) << "; g " << fixed(out.fit.g, 4) << " b " << fixed(out.fit.b, 4)
-              << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> " << fixed((float)out.fit.loss_after, 3)
-              << " (" << out.fit.evaluations << " evaluations)\n";
-  }
-
-  {  // the loss's parts right after the fit, at Auto's E (before the re-meter moves it)
-    negicc::CombinedProfile c0;
-    c0.build(prof.data, out.fit.curves);
-    negicc::PipelineConfig c0cfg = cfg;
-    c0cfg.profile = c0.data;
-    out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, e_int, out.fit.g, out.fit.b, stats.grid.data(),
-                                                   (int)n, res.intent_mu.data(), res.intent_sigma.data());
-  }
-
-  // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the re-meter's target.
+  // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
+  // keeps.
   const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
   out.parts_auto = negicc::grid_intent_loss_parts(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(),
                                                   (int)n, res.intent_mu.data(), res.intent_sigma.data());
 
-  // 2. E re-metered so the grid's median L* through the combined profile, at the fitted g and b, equals Auto's
-  //    (negicc-station Iteration 230's F6L), the curves anchored at each E it tries; alternated with the roll-off the
-  //    export measures at that E on the combined profile, until the roll-off holds still. The E/g/b fixed point the
-  //    re-meter replaces re-predicted the intent field from the curved render and followed it darker.
+  // 1. The joint fit: g, b and the curves, each candidate scored at the E that keeps target_L (negicc::
+  //    fit_input_curves_joint), its curves anchored at its own E, g and b. Before, the fit ran at Auto's E and the
+  //    re-meter moved E afterwards, which moved the colour the fit had chosen.
+  const int table_n[2] = {prof.data.in_trc_size[1], prof.data.in_trc_size[2]};
+  const negicc::JointCurveFit jf = negicc::fit_input_curves_joint(cfg, cf, e_int, res.params.g, res.params.b,
+                                                                  res.intent_mu.data(), res.intent_sigma.data(),
+                                                                  target_L, table_n, fit_opts);
+  out.fit.curves = jf.curves;
+  out.fit.g = jf.g;
+  out.fit.b = jf.b;
+  out.fit.loss_before = jf.loss_before;
+  out.fit.loss_after = jf.loss_after;
+  out.fit.evaluations = jf.evaluations;
+  out.fit_e = jf.e;
+  out.fit_renders = jf.renders;
+  out.fit_iterations = jf.iterations;
+  out.fit_converged = jf.converged;
+  out.fit_polish = jf.polish_evaluations;
+  if (opts.verbose) {
+    const negicc::InputCurves& c = out.fit.curves;
+    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
+              << " k " << fixed(c.k[1], 4) << "; E " << fixed(jf.e, 4) << " g " << fixed(out.fit.g, 4) << " b "
+              << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
+              << fixed((float)out.fit.loss_after, 3) << " (" << jf.iterations << " steps, " << jf.evaluations
+              << " evaluations, " << jf.renders << " renders for E)\n";
+  }
+  {  // the loss's parts right after the fit, at its own E, on the real combined tables
+    negicc::CombinedProfile c0;
+    c0.build(prof.data, out.fit.curves);
+    negicc::PipelineConfig c0cfg = cfg;
+    c0cfg.profile = c0.data;
+    out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, stats.grid.data(),
+                                                   (int)n, res.intent_mu.data(), res.intent_sigma.data());
+  }
+
+  // 2. E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
+  //    analytically instead of through the tables), the curves anchored at each E it tries; alternated with the
+  //    roll-off the export measures at that E on the combined profile, until the roll-off holds still.
   negicc::CombinedProfile comb;
   float x = out.x_hi_fit, e_new = e_int;
   constexpr int kMaxPasses = 6;
