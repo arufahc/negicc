@@ -1696,6 +1696,9 @@ struct FormatResult {
   FrameDetection det;
   std::vector<FilmRect> base_patches;  // candidate film base patches, image coordinates
   double score = 0.0;                  // rectangle search score per search pixel (compares formats)
+  // A reading along either strip axis had a strip width that does not contradict the format (the auto format choice
+  // marks a format down only when neither does).
+  bool width_ok_any = true;
 };
 
 // Steps 5a-c for one format. Allocates: the search map (sw x sh floats, gated copy, three double prefix planes)
@@ -2469,7 +2472,10 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       // 0.60).
       const bool alt_evidence = alt.det.n_gaps > 0 || alt.score > res.score || evidence(alt) > evidence(res) ||
                                 (bounded(alt) && !bounded(res)) || alt.det.conf >= res.det.conf + 0.25f;
+      const bool width_ok_any = res.det.reason.find("strip_width_mismatch") == std::string::npos ||
+                                alt.det.reason.find("strip_width_mismatch") == std::string::npos;
       if (alt_evidence && better_strip(alt, res)) res = std::move(alt);
+      res.width_ok_any = width_ok_any;
     }
   }
   return true;
@@ -2683,7 +2689,11 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, 
     double key = r.score;
     if (P.format == FILM_FORMAT_AUTO) {
       key *= r.det.conf;
-      if (r.det.reason.find("strip_width_mismatch") != std::string::npos) key *= 0.7;
+      // Marked down when the strip contradicts the format: when neither axis reading had a strip width that fits.
+      // The kept reading's own flag is not enough: on a square format both axes find the same rectangle, and since
+      // dea52c1 the kept one could be the reading whose width does not fit while the other's did, which moved Film
+      // Scan9041, 9043 and Scan_001034 (holder-framed 6x6) to 6x7 crops running into the holder, and DSC03842 1 to 645.
+      if (r.det.reason.find("strip_width_mismatch") != std::string::npos && !r.width_ok_any) key *= 0.7;
       // A format whose frame length its own gaps contradict (the frame was kept at its measured length) is as
       // unlikely as one whose strip width does not fit.
       if (r.det.reason.find("format_length_mismatch") != std::string::npos) key *= 0.7;
