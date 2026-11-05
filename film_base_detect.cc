@@ -497,8 +497,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         b[1] = std::max(0, b[1]);
         b[2] = std::min(W, b[2]);
         b[3] = std::min(H, b[3]);
-        if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples || b[2] - b[0] < kBaseMinSide ||
-            b[3] - b[1] < kBaseMinSide) {
+        if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
           out.reason += ",patch_too_small";
         } else {
           has_box = true;

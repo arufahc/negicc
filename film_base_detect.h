@@ -44,7 +44,6 @@ constexpr double kBasePatchInset = 0.15;  // fraction of the patch's box dropped
 constexpr int kBaseMinSamples = 32;       // pixels the inner box must hold
 constexpr double kRebateMargin = 0.5;     // stops: the thinnest film may exceed a base patch by at most this
 constexpr int kBaseWorkSize = 512;        // long side (px) of the image the thinnest film is read on
-constexpr int kBaseMinSide = 16;          // px: the inner box's width and height must each reach this
 constexpr float kBaseMinFrameConf = 0.5f; // the detection's confidence below which its patch is not used (the frame
                                           // detection neg_process falls back from at the same level)
 
