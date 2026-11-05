@@ -1957,9 +1957,52 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     if (run >= 2) return hard > base ? 2 : 1;
     return 0;
   };
+  // The strip's transverse edges around the band [y0, y1) over the columns [x0, x1): outward while rows are film, at
+  // most lim rows each way; edge0/edge1 when a non-film row ends the strip (not the image or invalid canvas).
+  auto strip_edges = [&](int x0, int x1, float y0, float y1, int lim, int& s0, int& s1, bool& edge0, bool& edge1) {
+    s0 = (int)y0;
+    s1 = (int)y1;
+    edge0 = edge1 = false;
+    for (int y = (int)y0 - 1; y >= std::max(0, (int)y0 - lim); --y) {
+      if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
+      if (row_frac(v, y, x0, x1, film) < 0.25f) {
+        edge0 = true;
+        break;
+      }
+      s0 = y;
+    }
+    for (int y = (int)y1; y < std::min(VH, (int)y1 + lim); ++y) {
+      if (row_frac(v, y, x0, x1, is_valid) < 0.6f) break;
+      if (row_frac(v, y, x0, x1, film) < 0.25f) {
+        edge1 = true;
+        break;
+      }
+      s1 = y + 1;
+    }
+  };
+  // Whether the strip says the format is wrong: both strip edges found within a wide search (up to 40% of the frame
+  // height each way, enough for 35mm's rebate, whose share of the strip is the largest), and the strip-to-frame ratio
+  // more than 8% from the format's and nearer the other film's (35mm 35 / 24 = 1.46, 120 61.5 / 56 = 1.10): a 120
+  // strip whose rebate a holder hides reads about 1.0, off its own ratio but no nearer 35mm's. Then even a frame longer
+  // than 1.6 nominal lengths between two gaps is one frame, not two (below).
+  bool format_mismatch = false;
+  {
+    int ps0 = 0, ps1 = 0;
+    bool pe0 = false, pe1 = false;
+    strip_edges(std::max(0, (int)fr.x0), std::min(VW, (int)fr.x1), fr.y0, fr.y1,
+                (int)std::lround(0.4f * across_px) + 3, ps0, ps1, pe0, pe1);
+    if (pe0 && pe1 && across_px > 0.0f) {
+      const float ratio = (ps1 - ps0) / across_px, expected = fg.film_width / fg.across;
+      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;
+      format_mismatch = (ratio / expected < 0.92f || ratio / expected > 1.08f) &&
+                        std::fabs(std::log(ratio / other)) < std::fabs(std::log(ratio / expected));
+    }
+  }
+  bool length_mismatch = false;  // a frame kept at its measured length against the format's (format_length_mismatch)
   // Each segment becomes a frame candidate. Its measured length is kept when both ends are bounded and it is near
-  // the nominal length (cameras differ) or when a hard limit cuts it; otherwise the nominal length is laid from the
-  // bounded end (or around the centre when neither end is bounded).
+  // the nominal length (cameras differ), when a hard limit cuts it, or when both ends are film gaps with edges of
+  // similar strength; otherwise the nominal length is laid from the bounded end (or around the centre when neither
+  // end is bounded).
   struct Cand { Rect r; float meas_x0, meas_x1; int lt, rt; float vis; bool complete; };
   std::vector<Cand> cands;
   const float tol = fg.len_tol;
@@ -1973,10 +2016,20 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     int lt = bound_type((int)r.x0 - 1, -1), rt = bound_type((int)r.x1, +1);
     const bool lg = lt > 0, rg = rt > 0;
     const float len = r.w();
+    // Both ends film gaps (not the holder or the strip end) with edges of similar strength (not a shadow band at one
+    // end): two real gaps, so the frame between them is the frame whatever the format says. Before, the format's
+    // length was laid over every frame not within 2 len_tol of it, so a 645, 6x6 or 6x7 given on a 35mm strip shrank
+    // the crop to that aspect, and a frame read short was extended past its own gap. Beyond 1.6 nominal lengths it may
+    // be two frames with no visible gap between them, and is split as before, unless the strip says the format is
+    // wrong (format_mismatch), when the nominal length is no guide.
+    const bool two_gaps = lt == 1 && rt == 1 && std::min(sl, sr) >= 0.5f * std::max(sl, sr);
+    const bool keep_measured = two_gaps && (len <= 1.6f * L_exp || format_mismatch);
     if (len > L_exp * (1 + tol) || len < L_exp * (1 - tol)) {
       if (lg && rg && std::min(sl, sr) >= 0.5f * std::max(sl, sr) && len > L_exp * (1 - 2 * tol) &&
           len < L_exp * (1 + 2 * tol)) {
         // camera-specific frame length: keep
+      } else if (keep_measured) {
+        length_mismatch = true;  // the format's length does not fit the frame its gaps bound: keep the measured one
       } else if (lg && rg && len < L_exp && (lt == 2 || rt == 2)) {
         // cut by the holder aperture or the strip end: keep the visible extent
       } else if (lg && rg && len < L_exp) {
@@ -2086,25 +2139,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   const int fx0 = std::max(0, (int)pr.x0), fx1 = std::min(VW, (int)pr.x1);
   int s0 = (int)pr.y0, s1 = (int)pr.y1;
   bool edge0 = false, edge1 = false;
-  {
-    const int lim = (int)std::lround((fg.film_width - fg.across) * 0.5f * ppm * 1.6f) + 3;
-    for (int y = (int)pr.y0 - 1; y >= std::max(0, (int)pr.y0 - lim); --y) {
-      if (row_frac(v, y, fx0, fx1, is_valid) < 0.6f) break;
-      if (row_frac(v, y, fx0, fx1, film) < 0.25f) {
-        edge0 = true;
-        break;
-      }
-      s0 = y;
-    }
-    for (int y = (int)pr.y1; y < std::min(VH, (int)pr.y1 + lim); ++y) {
-      if (row_frac(v, y, fx0, fx1, is_valid) < 0.6f) break;
-      if (row_frac(v, y, fx0, fx1, film) < 0.25f) {
-        edge1 = true;
-        break;
-      }
-      s1 = y + 1;
-    }
-  }
+  strip_edges(fx0, fx1, pr.y0, pr.y1, (int)std::lround((fg.film_width - fg.across) * 0.5f * ppm * 1.6f) + 3, s0, s1,
+              edge0, edge1);
+  if (length_mismatch) reasons.push_back("format_length_mismatch");
   int e0 = fx0, e1 = fx1;
   bool end0 = false, end1 = false;
   {
@@ -2607,6 +2644,9 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, 
     if (P.format == FILM_FORMAT_AUTO) {
       key *= r.det.conf;
       if (r.det.reason.find("strip_width_mismatch") != std::string::npos) key *= 0.7;
+      // A format whose frame length its own gaps contradict (the frame was kept at its measured length) is as
+      // unlikely as one whose strip width does not fit.
+      if (r.det.reason.find("format_length_mismatch") != std::string::npos) key *= 0.7;
       if (!r.det.sprockets.empty()) key *= 1.15;
     }
     if (key > best_key) {
