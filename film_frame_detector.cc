@@ -1706,8 +1706,13 @@ struct FormatResult {
   FrameDetection det;
   std::vector<FilmRect> base_patches;  // candidate film base patches, image coordinates
   double score = 0.0;                  // rectangle search score per search pixel (compares formats)
-  // A reading along either strip axis had a strip width that does not contradict the format (the auto format choice
-  // marks a format down only when neither does).
+  // The auto format choice marks a format down for its strip width only when this stays false: when the alternate
+  // strip axis was read and neither reading had a strip width that fits. A reading with no alternate (it was sure
+  // enough, confidence >= 0.5, and when the border vote named its axis it also found a gap) is not marked down by its
+  // width alone: the width is read across the frame, where a holder or the sensor's edge often hides the rebate.
+  // Marking such readings down too (as master did) turns 35mm frames into 6x9 or 645 in auto mode: on the 400-frame
+  // truth set that gets 340 formats right against 346 this way, with the same crops passing (5 white-LED 35mm frames
+  // and Scan_001122 go to 6x9 / 645).
   bool width_ok_any = true;
 };
 
