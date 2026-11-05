@@ -469,9 +469,27 @@ void thinnest_film_base(const RgbView& half, float out[3]) {
   thinnest_film_base_impl(half, false, out);
 }
 
+double film_base_chroma_stops(const double rgb[3], const float expected[3]) {
+  if (!(rgb[0] > 0) || !(rgb[1] > 0) || !(rgb[2] > 0) || !(expected[0] > 0) || !(expected[1] > 0) ||
+      !(expected[2] > 0)) {
+    return INFINITY;
+  }
+  const double rg = std::log2((rgb[0] / rgb[1]) / ((double)expected[0] / expected[1]));
+  const double bg = std::log2((rgb[2] / rgb[1]) / ((double)expected[2] / expected[1]));
+  return std::max(std::fabs(rg), std::fabs(bg));
+}
+
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
-                      const double* crosstalk, FilmBaseDetection& out) {
+                      const double* crosstalk, FilmBaseDetection& out, const float* expected_rgb) {
   out = FilmBaseDetection{};
+  out.has_chroma_check = expected_rgb != nullptr;
+  // Whether a reading (the film base space) is plausible against the expected base; records the deviation.
+  auto plausible = [&](const double rgb[3], double& stops, bool& refused) {
+    if (!expected_rgb) return true;
+    stops = film_base_chroma_stops(rgb, expected_rgb);
+    refused = !(stops <= kBaseChromaTolerance);
+    return !refused;
+  };
   const int W = half.width, H = half.height;
   bool has_box = false;
   int box[4] = {0, 0, 0, 0};
@@ -525,7 +543,9 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     for (int c = 0; c < 3; ++c) outshone = std::max(outshone, std::log2(thinnest[c] / std::max(dec[c], 1.0)));
     out.has_outshone = true;
     out.thinnest_over_patch_stops = outshone;
-    if (std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0 && outshone <= kRebateMargin) {
+    const bool chroma_ok = plausible(rgb, out.rebate_chroma_stops, out.rebate_refused);
+    if (std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0 && outshone <= kRebateMargin &&
+        chroma_ok) {
       out.found = true;
       out.source = "rebate";
       std::copy(dec, dec + 3, out.decode_rgb);
@@ -538,6 +558,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
   double rgb[3];
   corrected(thinnest, crosstalk, rgb);
   if (std::min({thinnest[0], thinnest[1], thinnest[2]}) <= 1.0 || std::min({rgb[0], rgb[1], rgb[2]}) <= 0) return false;
+  if (!plausible(rgb, out.statistics_chroma_stops, out.statistics_refused)) return false;
   out.found = true;
   out.source = "statistics";
   std::copy(thinnest, thinnest + 3, out.decode_rgb);
