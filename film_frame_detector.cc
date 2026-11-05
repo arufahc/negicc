@@ -56,8 +56,9 @@
 //                          inside the tilted frame), and the flattest base patch (film_sample_patch, full resolution).
 //
 // Memory: besides the input (read in place) the detector allocates work-image sized buffers only: about 30 float or
-// byte planes of the canvas size, transiently, for a 1024 px work image about 20 MB at the peak (classify). Each
-// allocation is marked "Allocates:" below.
+// byte planes of the canvas size, transiently. For a 1024 px work image the peak, in classify, is about 50 MB: the six
+// work planes (17 MB), the canvas (10 MB) and classify's own planes (about 23 MB, see there). Each allocation is marked
+// "Allocates:" below.
 //
 // Units: the work image holds sample / white (1.0 is a clipped photosite). Densities and colour ratios are log2
 // ("stops") unless named otherwise.
@@ -615,7 +616,9 @@ struct ClassInfo {
 // Classifies every canvas pixel (see the file comment, step 4). Levels: ref is the 99.9th percentile luminance and
 // refc the per channel 99.9th percentiles (bare light when some is visible, else the thinnest film); m(i), the
 // minimum over channels of value / refc, is how close a pixel is to that reference in every channel (log2).
-// Allocates (transiently, canvas sized): ~12 float planes and ~12 byte masks, and component label planes.
+// Allocates (transiently, canvas sized): ~6 float planes and ~16 byte masks, and component label planes, of which at
+// most 6 float or label planes and ~6 byte masks are live at once; the holder test adds one float plane only when a
+// large dark part at the border fails its per-pixel flatness test.
 void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   const int W = cv.w, H = cv.h;
   const size_t N = (size_t)W * H;
@@ -922,86 +925,6 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         if (add[i] && !black[i] && cv.valid[i]) light[i] = 1;
     }
   }
-  // Holder / carrier: large (>= 1% of the image), flat parts that reach the border, darker than 2% of the base
-  // (negative) or 1% of the light (slide); flare can keep them above black.
-  std::vector<uint8_t> holder(N, 0);
-  {
-    const float lim = pol == FILM_NEGATIVE ? 0.02f * base_lum : 0.01f * ref;
-    std::vector<uint8_t> dc(N, 0);
-    for (size_t i = 0; i < N; ++i) dc[i] = (cv.valid[i] && !light[i] && lum.d[i] < lim) ? 1 : 0;
-    Labels L;
-    components(dc, cv.valid, lum, W, H, L);
-    // Flatness on the log of the luminance averaged over 5 x 5 pixels: a holder sits at 1% of the base or below, where
-    // sensor noise alone gives a per-pixel log-luminance gradient near the limit (0.08 to 0.10 stop on a holder-framed
-    // 6x6 scan whose masks were then taken for picture). Averaging first leaves the noise a fifth of that and keeps
-    // the structure of a dense picture region, which spans many pixels.
-    std::vector<float> lb(N, 0.0f);
-    {
-      std::vector<double> I((size_t)(W + 1) * (H + 1), 0.0);
-      for (int y = 0; y < H; ++y) {
-        double row = 0.0;
-        for (int x = 0; x < W; ++x) {
-          row += cv.valid[(size_t)y * W + x] ? lum.d[(size_t)y * W + x] : 0.0;
-          I[(size_t)(y + 1) * (W + 1) + x + 1] = I[(size_t)y * (W + 1) + x + 1] + row;
-        }
-      }
-      std::vector<int> C((size_t)(W + 1) * (H + 1), 0);
-      for (int y = 0; y < H; ++y) {
-        int row = 0;
-        for (int x = 0; x < W; ++x) {
-          row += cv.valid[(size_t)y * W + x] ? 1 : 0;
-          C[(size_t)(y + 1) * (W + 1) + x + 1] = C[(size_t)y * (W + 1) + x + 1] + row;
-        }
-      }
-      const float lf = std::log2(std::max(1e-6f, black_frac * ref));
-      #pragma omp parallel for schedule(static)
-      for (int y = 0; y < H; ++y) {
-        const int y0 = std::max(0, y - 2), y1 = std::min(H, y + 3);
-        for (int x = 0; x < W; ++x) {
-          const int x0 = std::max(0, x - 2), x1 = std::min(W, x + 3);
-          auto at = [&](const auto& T, int yy, int xx) { return T[(size_t)yy * (W + 1) + xx]; };
-          const double sum = at(I, y1, x1) - at(I, y0, x1) - at(I, y1, x0) + at(I, y0, x0);
-          const int cnt = at(C, y1, x1) - at(C, y0, x1) - at(C, y1, x0) + at(C, y0, x0);
-          lb[(size_t)y * W + x] = std::max(lf, (float)std::log2(std::max(1e-6, cnt ? sum / cnt : 0.0)));
-        }
-      }
-    }
-    const size_t nk = L.area.size();
-    std::vector<double> gsum(nk, 0.0), gsmooth(nk, 0.0);
-    std::vector<int> bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
-    for (size_t i = 0; i < N; ++i) {
-      const int k = L.lab[i];
-      if (k < 0) continue;
-      gsum[k] += grad[i];
-      const int x = (int)(i % W), y = (int)(i / W);
-      bx0[k] = std::min(bx0[k], x);
-      bx1[k] = std::max(bx1[k], x);
-      by0[k] = std::min(by0[k], y);
-      by1[k] = std::max(by1[k], y);
-    }
-    for (int y = 1; y < H - 1; ++y) {
-      for (int x = 1; x < W - 1; ++x) {
-        const size_t i = (size_t)y * W + x;
-        if (L.lab[i] < 0) continue;
-        const float gx = (lb[i - W + 1] + 2 * lb[i + 1] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - 1] - lb[i + W - 1]) *
-                         0.125f;
-        const float gy = (lb[i + W - 1] + 2 * lb[i + W] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - W] - lb[i - W + 1]) *
-                         0.125f;
-        gsmooth[L.lab[i]] += std::sqrt(gx * gx + gy * gy);
-      }
-    }
-    // Flat per pixel (as before), or flat once averaged and rectangular: a holder's opening is straight-edged, so the
-    // part fills its bounding box (0.96 to 0.99 on holder-framed scans), while a slide's deep shadows that reach the
-    // border are as dark and as smooth but ragged (0.3) and stay picture. Averaging raises the gradient of a ragged
-    // part (its box mixes in the brighter picture around it), so the per-pixel test still decides those.
-    std::vector<uint8_t> keep(nk, 0);
-    for (size_t k = 0; k < nk; ++k) {
-      if (!L.touch[k] || L.area[k] < 0.01 * (double)nvalid) continue;
-      const double fill = L.area[k] / (double)((bx1[k] - bx0[k] + 1) * (by1[k] - by0[k] + 1));
-      keep[k] = gsum[k] / L.area[k] < 0.08 || (gsmooth[k] / L.area[k] < 0.08 && fill >= 0.9);
-    }
-    for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
-  }
   // Slide: its unexposed film is the densest mode; within 0.7 stop of it is DARK.
   float slide_dark = -100.0f;
   if (pol == FILM_POSITIVE) {
@@ -1013,6 +936,177 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     const std::vector<int> pk = mh.peaks(0.02);
     slide_dark = pk.empty() ? std::log2(0.006f) : mh.center(pk.front()) + 0.7f;
   }
+  // DARK by level alone (the holder test below adds large flat parts). Negative: very dense, or dense and less orange
+  // than the base (flare on a carrier is less orange than film, which keeps its mask; relative to the measured base,
+  // so the lamp's colour cancels). Slide: near its densest mode.
+  auto dense_dark = [&](size_t i) {
+    const float l = lum.d[i];
+    if (pol == FILM_POSITIVE) return std::log2(std::max(l, 1e-7f) / ref) <= slide_dark;
+    const float q = std::log2(std::max(cv.r.d[i], 1e-7f) / std::max(cv.b.d[i], 1e-7f));
+    return l < 0.006f * base_lum || (l < 0.02f * base_lum && q < base_q - 0.10f) ||
+           (l < 0.06f * base_lum && q < base_q - 0.6f);
+  };
+  // Holder / carrier: large (>= 1% of the image), flat parts that reach the border, darker than 2% of the base
+  // (negative) or 1% of the light (slide); flare can keep them above black.
+  std::vector<uint8_t> holder(N, 0);
+  {
+    const float lim = pol == FILM_NEGATIVE ? 0.02f * base_lum : 0.01f * ref;
+    std::vector<uint8_t> dc(N, 0);
+    for (size_t i = 0; i < N; ++i) dc[i] = (cv.valid[i] && !light[i] && lum.d[i] < lim) ? 1 : 0;
+    Labels L;
+    components(dc, cv.valid, lum, W, H, L);
+    // Flat per pixel: the mean Sobel magnitude over the part's pixels where it is measured (not the canvas border).
+    const size_t nk = L.area.size();
+    std::vector<double> gsum(nk, 0.0);
+    std::vector<int> gcnt(nk, 0);
+    for (int y = 1; y < H - 1; ++y) {
+      for (int x = 1; x < W - 1; ++x) {
+        const size_t i = (size_t)y * W + x;
+        if (L.lab[i] < 0) continue;
+        gsum[L.lab[i]] += grad[i];
+        gcnt[L.lab[i]]++;
+      }
+    }
+    // cand: large parts that reach the border but are not flat per pixel. A holder sits at 1% of the base or below,
+    // where sensor noise alone gives a per-pixel log-luminance gradient near the limit (0.08 to 0.10 stop on a
+    // holder-framed 6x6 scan whose masks were then taken for picture), so those are tested again below.
+    std::vector<uint8_t> keep(nk, 0), cand(nk, 0);
+    bool any_cand = false;
+    for (size_t k = 0; k < nk; ++k) {
+      if (!L.touch[k] || L.area[k] < 0.01 * (double)nvalid) continue;
+      if (gcnt[k] > 0 && gsum[k] / gcnt[k] < 0.08) {
+        keep[k] = 1;
+      } else {
+        cand[k] = 1;
+        any_cand = true;
+      }
+    }
+    if (any_cand) {
+      // Flat once averaged: the log of the luminance averaged over the part's own pixels within 5 x 5, its Sobel
+      // magnitude taken where the 3 x 3 neighbourhood lies in the part, so neither the brighter picture beside it nor
+      // the canvas border enters. Averaging leaves the noise a fifth of the per-pixel gradient and keeps the structure
+      // of a dense picture region, which spans many pixels. Allocates: one canvas float plane, and per such part two
+      // counts per canvas row and column on each side.
+      const float lf = std::log2(std::max(1e-6f, black_frac * ref));
+      std::vector<float> lb(N, 0.0f);
+      #pragma omp parallel for schedule(static)
+      for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+          const size_t i = (size_t)y * W + x;
+          const int k = L.lab[i];
+          if (k < 0 || !cand[k]) continue;
+          double sum = 0.0;
+          int cnt = 0;
+          for (int yy = std::max(0, y - 2); yy < std::min(H, y + 3); ++yy) {
+            for (int xx = std::max(0, x - 2); xx < std::min(W, x + 3); ++xx) {
+              const size_t j = (size_t)yy * W + xx;
+              if (L.lab[j] != k) continue;
+              sum += lum.d[j];
+              cnt++;
+            }
+          }
+          lb[i] = std::max(lf, (float)std::log2(std::max(1e-6, sum / cnt)));
+        }
+      }
+      // Straight-edged: a holder's opening is straight and its mask solid, so the part is as deep from the image's edge
+      // all along each side it reaches. Per side it reaches, over the half of the canvas nearest that side, each row
+      // (left, right) or column (top, bottom) counts the part's pixels and its depth (from the line's first valid pixel
+      // to the part's farthest pixel); the part must fill the box of its length along the side by its median depth.
+      // A slide's deep shadows that reach the border are as dark and as smooth but ragged, and a part with holes fills
+      // only what it covers, so both stay picture. This replaces the part's bounding-box fill (0.96 to 0.99 on
+      // holder-framed scans, 0.3 on those shadows), which also failed masks that turn a corner and masks along the
+      // slanted image edge of a tilted canvas: depths start at the image's edge on the canvas, where the film and its
+      // holder stand upright, and the median ignores the lines where an L-shaped mask turns the corner (the other arm).
+      std::vector<int> xv0(H, W), xv1(H, -1), yv0(W, H), yv1(W, -1);  // first and last valid pixel per row, column
+      for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+          if (!cv.valid[(size_t)y * W + x]) continue;
+          xv0[y] = std::min(xv0[y], x);
+          xv1[y] = std::max(xv1[y], x);
+          yv0[x] = std::min(yv0[x], y);
+          yv1[x] = std::max(yv1[x], y);
+        }
+      }
+      std::vector<int> cidx(nk, -1);
+      int ncand = 0;
+      for (size_t k = 0; k < nk; ++k)
+        if (cand[k]) cidx[k] = ncand++;
+      // Per candidate: left and right per row, top and bottom per column, the count and the depth.
+      std::vector<int> lines((size_t)ncand * 2 * (W + H), 0), depths(lines.size(), 0);
+      std::vector<uint8_t> reaches((size_t)ncand * 4, 0);  // the part holds a line's first valid pixel on that side
+      auto line_at = [&](int c, int side) {
+        return (size_t)c * 2 * (W + H) + (side < 2 ? (size_t)side * H : 2 * (size_t)H + (size_t)(side - 2) * W);
+      };
+      std::vector<double> gsm(nk, 0.0);
+      std::vector<int> gsm_cnt(nk, 0), ndark(nk, 0);
+      for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+          const size_t i = (size_t)y * W + x;
+          const int k = L.lab[i];
+          if (k < 0 || !cand[k]) continue;
+          if (dense_dark(i)) ndark[k]++;
+          const int sx = 2 * x < W ? 0 : 1, sy = 2 * y < H ? 2 : 3;
+          const size_t jx = line_at(cidx[k], sx) + y, jy = line_at(cidx[k], sy) + x;
+          lines[jx]++;
+          lines[jy]++;
+          depths[jx] = std::max(depths[jx], sx == 0 ? x - xv0[y] + 1 : xv1[y] - x + 1);
+          depths[jy] = std::max(depths[jy], sy == 2 ? y - yv0[x] + 1 : yv1[x] - y + 1);
+          if (x == (sx == 0 ? xv0[y] : xv1[y])) reaches[(size_t)cidx[k] * 4 + sx] = 1;
+          if (y == (sy == 2 ? yv0[x] : yv1[x])) reaches[(size_t)cidx[k] * 4 + sy] = 1;
+          if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) continue;
+          bool interior = true;
+          for (int dy = -1; dy <= 1 && interior; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+              if (L.lab[i + (ptrdiff_t)dy * W + dx] != k) {
+                interior = false;
+                break;
+              }
+          if (!interior) continue;
+          const float gx = (lb[i - W + 1] + 2 * lb[i + 1] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - 1] -
+                            lb[i + W - 1]) * 0.125f;
+          const float gy = (lb[i + W - 1] + 2 * lb[i + W] + lb[i + W + 1] - lb[i - W - 1] - 2 * lb[i - W] -
+                            lb[i - W + 1]) * 0.125f;
+          gsm[k] += std::sqrt(gx * gx + gy * gy);
+          gsm_cnt[k]++;
+        }
+      }
+      // A part also passes when flat once averaged and straight-edged, and either DARK by level for most of its
+      // pixels or lying along the whole of one side of the image (>= 90% of its length), as a holder's mask does
+      // beside a frame that fills the sensor's other dimension. A flat, straight-edged band of dense picture at the
+      // border that is neither that dark nor that long stays picture. (Dark by level alone is not required: the masks
+      // this test was added for were taken for picture, so they did not meet those levels.)
+      const float ww = 2.0f * cv.cxw, wh = 2.0f * cv.cyw;
+      for (size_t k = 0; k < nk; ++k) {
+        if (!cand[k]) continue;
+        double in = 0.0, box = 0.0;
+        bool whole_side = false;
+        for (int s = 0; s < 4; ++s) {
+          if (!reaches[(size_t)cidx[k] * 4 + s]) continue;
+          const int* c = &lines[line_at(cidx[k], s)];
+          const int* e = &depths[line_at(cidx[k], s)];
+          const int n = s < 2 ? H : W;
+          std::vector<float> es;
+          int a0 = n, a1 = -1;
+          for (int a = 0; a < n; ++a) {
+            if (!c[a]) continue;
+            es.push_back((float)e[a]);
+            a0 = std::min(a0, a);
+            a1 = a;
+          }
+          if (es.empty()) continue;
+          const float m = percentile(es, 0.5);
+          for (int a = a0; a <= a1; ++a) in += std::min((float)c[a], m);
+          box += (double)(a1 - a0 + 1) * m;
+          // The image's side spans its work-image length, turned by the tilt, along the canvas.
+          if (a1 - a0 + 1 >= 0.9f * std::fabs(cv.ct) * (s < 2 ? wh : ww)) whole_side = true;
+        }
+        const double fill = box > 0.0 ? in / box : 0.0;
+        keep[k] = gsm_cnt[k] > 0 && gsm[k] / gsm_cnt[k] < 0.08 && fill >= 0.9 &&
+                  (ndark[k] >= 0.5 * L.area[k] || whole_side);
+      }
+    }
+    for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
+  }
   ci.cls.assign(N, CL_INVALID);
   for (size_t i = 0; i < N; ++i) {
     if (!cv.valid[i]) continue;
@@ -1020,27 +1114,16 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       ci.cls[i] = CL_LIGHT;
       continue;
     }
-    if (black[i]) {
+    if (black[i] || holder[i] || dense_dark(i)) {
       ci.cls[i] = CL_DARK;
       continue;
     }
-    const float l = lum.d[i];
     if (pol == FILM_NEGATIVE) {
-      // Dark: the holder, very dense, or dense and less orange than the base (flare on a carrier is less orange
-      // than film, which keeps its mask; relative to the measured base, so the lamp's colour cancels).
-      const float q = std::log2(std::max(cv.r.d[i], 1e-7f) / std::max(cv.b.d[i], 1e-7f));
-      const bool dark = holder[i] || l < 0.006f * base_lum || (l < 0.02f * base_lum && q < base_q - 0.10f) ||
-                        (l < 0.06f * base_lum && q < base_q - 0.6f);
-      if (dark) {
-        ci.cls[i] = CL_DARK;
-        continue;
-      }
       const float k = std::exp2(-base_margin);
       const bool thin = cv.r.d[i] >= ci.base[0] * k && cv.g.d[i] >= ci.base[1] * k && cv.b.d[i] >= ci.base[2] * k;
       ci.cls[i] = thin ? CL_BASE : CL_IMAGE;
     } else {
-      const bool dense = std::log2(std::max(l, 1e-7f) / ref) <= slide_dark;
-      ci.cls[i] = (dense || holder[i]) ? CL_DARK : CL_IMAGE;
+      ci.cls[i] = CL_IMAGE;
     }
   }
   if (pol == FILM_NEGATIVE && ci.base_valid) {
@@ -2251,14 +2334,20 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   if (try_alt) {
     FormatResult alt;
     if (eval_strip(!tr0, alt)) {
-      auto better_strip = [square, axis_ev, fmt](const FormatResult& a, const FormatResult& b) {
+      // A reading's strip width matches the format only when both strip edges were seen and their distance fits: with
+      // one edge or none (strip_edges_partial) the width was never measured.
+      auto width_matched = [](const FormatResult& r) {
+        return r.det.reason.find("strip_width_mismatch") == std::string::npos &&
+               r.det.reason.find("strip_edges_partial") == std::string::npos;
+      };
+      auto better_strip = [square, axis_ev, fmt, &width_matched](const FormatResult& a, const FormatResult& b) {
         // Medium format: a reading whose strip width matches the format beats one that does not, unless it is far less
         // sure. The border vote (axis_ev) is wrong when a 120 frame is taller than the sensor and a holder hides the
         // sides: the film then runs off the top and bottom although the strip runs across. (Not 35mm, whose strip
-        // edges and perforations show; there the vote held and the swap cost three slides their crop.)
-        const bool am = a.det.reason.find("strip_width_mismatch") != std::string::npos;
-        const bool bm = b.det.reason.find("strip_width_mismatch") != std::string::npos;
-        if (fmt != FILM_35MM && am != bm && std::fabs(a.det.conf - b.det.conf) <= 0.2f) return bm;
+        // edges and perforations show; there the vote held and the swap cost three slides their crop.) An unmeasured
+        // width does not count as a match, so a reading with a partial edge cannot beat a measured one.
+        const bool am = width_matched(a), bm = width_matched(b);
+        if (fmt != FILM_35MM && am != bm && std::fabs(a.det.conf - b.det.conf) <= 0.2f) return am;
         if (a.det.conf != b.det.conf)
           return axis_ev != 0 ? (a.det.conf > b.det.conf + 0.1f) : (a.det.conf > b.det.conf);
         if (!square) return false;

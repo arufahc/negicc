@@ -2,11 +2,13 @@
 """Scores the film frame detector against truth.json.
 
 usage: score.py --bin bin_out/frame_detect --root triled=DIR --root web=DIR --root film_scans=DIR [--jobs N]
-               [--out result.json] [--compare other_result.json]
+               [--truth truth.json] [--out result.json] [--compare other_result.json]
 
 Each frame runs with its true format (as negicc-web runs --roi auto with --film_format); a crop passes when its IoU
-with the truth is at least 0.90. Frames whose root is not given are skipped and counted. Sets: triled, white (web), bw,
-neg35, mf (film_scans by folder). --compare lists the frames whose pass changed against an earlier result.
+with the truth is at least 0.90. Frames whose root is not given are skipped and counted. --truth names the truth file
+(default: truth.json next to this script). A frame's set is its "set" field when it has one, else from its root and
+folder: triled, white (web), bw, neg35, mf (film_scans by folder); the summary lists the sets the truth file holds.
+--compare lists the frames whose pass changed against an earlier result.
 """
 import argparse
 import json
@@ -25,6 +27,8 @@ def iou(a, b):
 
 
 def set_of(v):
+    if "set" in v:
+        return v["set"]
     if v["root"] == "triled":
         return "triled"
     if v["root"] == "web":
@@ -38,11 +42,12 @@ def main():
     ap.add_argument("--bin", required=True)
     ap.add_argument("--root", action="append", default=[], help="NAME=DIR")
     ap.add_argument("--jobs", type=int, default=1)
+    ap.add_argument("--truth", default=os.path.join(HERE, "truth.json"))
     ap.add_argument("--out")
     ap.add_argument("--compare")
     a = ap.parse_args()
     roots = dict(r.split("=", 1) for r in a.root)
-    T = json.load(open(os.path.join(HERE, "truth.json")))
+    T = json.load(open(a.truth))
     env = dict(os.environ, OMP_NUM_THREADS=str(max(1, (os.cpu_count() or 1) // max(1, a.jobs))))
 
     def run(item):
@@ -65,7 +70,8 @@ def main():
         res[k] = {"set": set_of(v), "iou": round(s, 4), "pass": s >= 0.90, "crop": d.get("crop"), "truth": v["crop"],
                   "conf": d.get("conf"), "reason": d.get("reason")}
     summary = {}
-    for sn in ["triled", "white", "bw", "neg35", "mf"]:
+    sets = list(dict.fromkeys(set_of(v) for v in T["frames"].values()))  # in the truth file's order
+    for sn in sets:
         r = [x for x in res.values() if x["set"] == sn]
         summary[sn] = {"frames": len(r), "pass": sum(x["pass"] for x in r)}
     summary["all"] = {"frames": len(res), "pass": sum(x["pass"] for x in res.values()), "skipped": skipped}
