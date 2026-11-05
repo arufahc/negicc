@@ -1700,6 +1700,9 @@ struct FormatResult {
 
 // Steps 5a-c for one format. Allocates: the search map (sw x sh floats, gated copy, three double prefix planes)
 // and view-length profiles.
+// A reading bounded its frame at both ends (rather than laying the format's length around a picture run).
+inline bool bounded(const FormatResult& r) { return r.det.reason.find("frame_ends_unbounded") == std::string::npos; }
+
 bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& cv, const ClassInfo& ci,
                        const FrameDetectionParams& P, FilmFormat fmt, FormatResult& res) {
   const FormatGeom fg = format_geom(fmt);
@@ -2396,20 +2399,38 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   if (try_alt) {
     FormatResult alt;
     if (eval_strip(!tr0, alt)) {
-      // A reading's strip width matches the format only when both strip edges were seen and their distance fits: with
-      // one edge or none (strip_edges_partial) the width was never measured.
-      auto width_matched = [](const FormatResult& r) {
-        return r.det.reason.find("strip_width_mismatch") == std::string::npos &&
-               r.det.reason.find("strip_edges_partial") == std::string::npos;
+      // The evidence a reading has for its frame: its strip width (+1 both strip edges seen at the format's width, 0
+      // one edge or none, -1 a width that contradicts the format) plus +1 when it bounded the frame at both ends (no
+      // frame_ends_unbounded) rather than laying the nominal length around a picture run. A reading that bounded its
+      // frame (or found the better rectangle) and has more evidence wins (below), which keeps the cases that moved this
+      // rule back and forth:
+      // - a 120 frame taller than the sensor shows one strip edge at most, so its right reading is partial (0 + 1)
+      //   against a wrong-axis reading whose width contradicts the format (-1); counting only fully measured widths
+      //   (dea52c1) lost TriLED 10-06 raw_0009, raw_0020, raw_0036 and Scan_001168, 001171, 001172;
+      // - a reading with both edges measured beats a partial one when both bounded their frames (2 against 1), the
+      //   case dea52c1 meant to cover;
+      // - a partial reading that bounded nothing beats a contradicted one only with a better rectangle: TriLED raw_0036's
+      //   right reading bounded nothing but found the better rectangle (0.25 against 0.20); on Scan_001053 the
+      //   partial reading laid a frame around a short run with no better rectangle (0.52 against 0.52), and the
+      //   contradicted reading's crop was right.
+      auto evidence = [](const FormatResult& r) {
+        const std::string& s = r.det.reason;
+        const int width = s.find("strip_width_mismatch") != std::string::npos ? -1
+                          : s.find("strip_edges_partial") != std::string::npos ? 0
+                                                                                : 1;
+        return width + (bounded(r) ? 1 : 0);
       };
-      auto better_strip = [square, axis_ev, fmt, &width_matched](const FormatResult& a, const FormatResult& b) {
-        // Medium format: a reading whose strip width matches the format beats one that does not, unless it is far less
+      auto width_preferred = [fmt, &evidence](const FormatResult& a, const FormatResult& b) {
+        return fmt != FILM_35MM && (bounded(a) || a.score > b.score) && evidence(a) > evidence(b) &&
+               std::fabs(a.det.conf - b.det.conf) <= 0.2f;
+      };
+      auto better_strip = [square, axis_ev, &width_preferred](const FormatResult& a, const FormatResult& b) {
+        // Medium format: the reading with more evidence for its frame (above) beats the other unless it is far less
         // sure. The border vote (axis_ev) is wrong when a 120 frame is taller than the sensor and a holder hides the
         // sides: the film then runs off the top and bottom although the strip runs across. (Not 35mm, whose strip
-        // edges and perforations show; there the vote held and the swap cost three slides their crop.) An unmeasured
-        // width does not count as a match, so a reading with a partial edge cannot beat a measured one.
-        const bool am = width_matched(a), bm = width_matched(b);
-        if (fmt != FILM_35MM && am != bm && std::fabs(a.det.conf - b.det.conf) <= 0.2f) return am;
+        // edges and perforations show; there the vote held and the swap cost three slides their crop.)
+        if (width_preferred(a, b)) return true;
+        if (width_preferred(b, a)) return false;
         if (a.det.conf != b.det.conf)
           return axis_ev != 0 ? (a.det.conf > b.det.conf + 0.1f) : (a.det.conf > b.det.conf);
         if (!square) return false;
@@ -2428,7 +2449,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       // reading (both strip edges seen at the format's width) is such evidence too. On a square frame this also stops
       // the tie-breaks above (neighbours, a decided axis, base patches) from moving a reading that has none of these.
       const bool alt_evidence =
-          alt.det.n_gaps > 0 || alt.score > res.score || (fmt != FILM_35MM && width_matched(alt));
+          alt.det.n_gaps > 0 || alt.score > res.score || width_preferred(alt, res);
       if (alt_evidence && better_strip(alt, res)) res = std::move(alt);
     }
   }
