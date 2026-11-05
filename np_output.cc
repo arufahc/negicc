@@ -268,17 +268,38 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
 
 // The intent field the parameter search converted against (designs/plan_intent_field_sidecar.md in
 // negicc-station): per DINOv3 grid cell, row-major over the oriented frame, the Lab colour the intent adapter predicts
-// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran.
+// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran. source: "auto" (the
+// bundle search, on the frame's inner crop_ratio crop) or "dino" (the single-bracket search, on the whole frame).
+// The model's short name (the backbone's directory, e.g. dinov3-small), not the path the build embedded it from.
+static std::string model_stem(std::string path) {
+  const std::string kBuiltIn = "[built-in] ";
+  if (path.rfind(kBuiltIn, 0) == 0) path = path.substr(kBuiltIn.size());
+  const size_t slash = path.find_last_of("/\\");
+  std::string file = slash == std::string::npos ? path : path.substr(slash + 1);
+  if (slash != std::string::npos && file.rfind("backbone.", 0) == 0) {
+    const std::string dir = path.substr(0, slash);
+    const size_t s2 = dir.find_last_of("/\\");
+    return s2 == std::string::npos ? dir : dir.substr(s2 + 1);
+  }
+  const size_t dot = file.find_last_of('.');
+  return dot == std::string::npos ? file : file.substr(0, dot);
+}
+
 static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
-                                      int grid_h, int target_idx, const Sidecar& sc) {
+                                      int grid_h, int target_idx, const char* source, float crop_ratio,
+                                      const Sidecar& sc) {
   const size_t n = static_cast<size_t>(grid_w) * static_cast<size_t>(grid_h);
   if (n == 0 || mu.size() != n * 3 || sigma.size() != n * 3) return nullptr;
   ordered_json j;
   j["version"] = 1;
   j["grid"] = {{"rows", grid_h}, {"cols", grid_w}, {"patch_px", 16}, {"order", "row-major, oriented frame"}};
-  j["source"] = "auto";
+  j["source"] = source;
+  j["crop_ratio"] = num(crop_ratio, "%.3g");
   j["target_idx"] = target_idx >= 0 ? ordered_json(target_idx) : ordered_json(nullptr);
-  j["model"] = {{"name", sc.dino_model}, {"backend", sc.dino_backend}, {"negicc", NEGICC_GIT_VERSION}};
+  j["model"] = {{"name", model_stem(sc.dino_model)},
+                {"path", sc.dino_model},
+                {"backend", sc.dino_backend},
+                {"negicc", NEGICC_GIT_VERSION}};
   ordered_json m = ordered_json::array(), s = ordered_json::array();
   for (size_t i = 0; i < n; ++i) {
     m.push_back({num(mu[i * 3], "%.2f"), num(mu[i * 3 + 1], "%.2f"), num(mu[i * 3 + 2], "%.2f")});
@@ -534,10 +555,10 @@ bool write_json_sidecar(const Sidecar& sc) {
   else if (sc.auto_res)
     j["intent_field"] = intent_field_json(sc.auto_res->intent_mu, sc.auto_res->intent_sigma,
                                           sc.auto_res->intent_grid_w, sc.auto_res->intent_grid_h,
-                                          sc.auto_res->target_idx, sc);
+                                          sc.auto_res->target_idx, "auto", ParamSearchOptions{}.crop_ratio, sc);
   else if (sc.dino)
     j["intent_field"] = intent_field_json(sc.dino->best_mu, sc.dino->best_sigma, sc.dino->grid_w, sc.dino->grid_h,
-                                          -1, sc);
+                                          sc.bundle_target_idx, "dino", 1.0f, sc);
   else
     j["intent_field"] = nullptr;
 
