@@ -1912,6 +1912,29 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       apply_station(given_station_e(o, scan, c.bundle_target_idx),
                     c.gain_g, c.gain_b);
     }
+  } else if (o.knobs_given) {
+    // A single ICC profile with given gains: the knobs move the given (absolute) E, g and b through that profile, as
+    // they move the solver's result above. Before, they were accepted and never solved, and the sidecar recorded a
+    // zeroed knobs block.
+    if (!c.film_prof.data.has_profile) {
+      log_error("--brightness, --tint and --warmth need the film profile to solve the grey point\n");
+      return 1;
+    }
+    scan.knob_base[0] = c.exposure_comp;
+    scan.knob_base[1] = c.gain_g;
+    scan.knob_base[2] = c.gain_b;
+    if (!solve_grey_knobs(c.film_prof.data, c.exposure_comp, c.gain_g, c.gain_b, o.brightness, o.tint, o.warmth,
+                          scan.knob_res)) {
+      log_error("Failed to solve grey-point knobs\n");
+      return 1;
+    }
+    scan.has_knob_res = true;
+    c.exposure_comp = scan.knob_res.e;
+    c.gain_g = scan.knob_res.g;
+    c.gain_b = scan.knob_res.b;
+    adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b,
+                             c.profile_film_base_rgb, unit_fb, c.merged_matrix);
+    log_knobs();
   }
 
   if (s.is_bundle && c.bundle_target_idx >= 0) {
