@@ -211,12 +211,15 @@ static bool extract_cli_egb(const nlohmann::ordered_json& cli, float& e_out, flo
 }
 
 // The arguments of a run that decide its result: argv without the program name, the output (-o, --output) and the
-// knobs (--brightness, --tint, --warmth), each with its value, in "--flag value" or "--flag=value" form.
+// knobs (--brightness, --tint, --warmth), each with its value, in "--flag value", "--flag=value" or (-o) "-ovalue"
+// form. "--flag=value" of any other option is split into "--flag" and "value", so either spelling compares equal.
 static std::vector<std::string> result_args(const std::vector<std::string>& argv) {
   static const char* const kSkip[] = {"-o", "--output", "--brightness", "--tint", "--warmth"};
   std::vector<std::string> out;
   for (size_t i = 1; i < argv.size(); ++i) {
     const std::string& a = argv[i];
+    // The output attached to its short flag (-oout.tif).
+    if (a.size() > 2 && a[0] == '-' && a[1] == 'o' && a[2] != '-') continue;
     bool skip = false;
     for (const char* f : kSkip) {
       const size_t n = std::strlen(f);
@@ -230,9 +233,26 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
         break;
       }
     }
-    if (!skip) out.push_back(a);
+    if (skip) continue;
+    const size_t eq = a.find('=');
+    if (a.size() > 2 && a.compare(0, 2, "--") == 0 && eq != std::string::npos) {
+      out.push_back(a.substr(0, eq));
+      out.push_back(a.substr(eq + 1));
+    } else {
+      out.push_back(a);
+    }
   }
   return out;
+}
+
+// Whether two argument tokens are the same number (1 and 1.0, 0.5 and .5): a finite number in full on both sides.
+static bool same_number(const std::string& a, const std::string& b) {
+  char* ea = nullptr;
+  char* eb = nullptr;
+  const double va = std::strtod(a.c_str(), &ea);
+  const double vb = std::strtod(b.c_str(), &eb);
+  return !a.empty() && !b.empty() && ea && *ea == '\0' && eb && *eb == '\0' && std::isfinite(va) &&
+         std::isfinite(vb) && va == vb;
 }
 
 // Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and
@@ -260,7 +280,8 @@ static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, c
     return false;
   }
   for (size_t i = 0; i < pa.size(); ++i) {
-    if (pa[i] != ca[i] && !(is_regular_file(pa[i]) && is_regular_file(ca[i]) && paths_match(pa[i], ca[i]))) {
+    if (pa[i] != ca[i] && !same_number(pa[i], ca[i]) &&
+        !(is_regular_file(pa[i]) && is_regular_file(ca[i]) && paths_match(pa[i], ca[i]))) {
       why = "it was given " + pa[i] + " where this run has " + ca[i];
       return false;
     }
@@ -297,11 +318,17 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
   if (!stats.is_array() || stats.size() != o.files.size()) {
     return why = "it records no input file sizes and CRCs", false;
   }
+  s.input_fingerprints.assign(o.files.size(), FileFingerprint{});
   for (size_t i = 0; i < o.files.size(); ++i) {
-    uintmax_t size = 0;
-    uint32_t crc = 0;
-    if (!file_fingerprint(o.files[i], size, crc) || !stats[i].is_object() ||
-        stats[i].value("size", (uintmax_t)0) != size || stats[i].value("crc32", (uint32_t)0) != crc) {
+    FileFingerprint& fp = s.input_fingerprints[i];
+    fp.ok = file_fingerprint(o.files[i], fp.size, fp.crc);
+    const auto& st = stats[i];
+    // Both recorded, as unsigned integers: a missing key must not read as 0 and match an empty file's CRC.
+    if (!st.is_object() || !st.contains("size") || !st["size"].is_number_unsigned() || !st.contains("crc32") ||
+        !st["crc32"].is_number_unsigned()) {
+      return why = "it records no size and CRC-32 for " + o.files[i], false;
+    }
+    if (!fp.ok || st["size"].get<uintmax_t>() != fp.size || st["crc32"].get<uint32_t>() != fp.crc) {
       return why = o.files[i] + " is not the file it converted", false;
     }
   }
@@ -371,7 +398,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     const float base_e = a["e"].get<float>();
     const float base_g = a["g"].get<float>();
     const float base_b = a["b"].get<float>();
-    if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+    auto positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
+    if (!positive(base_e) || !positive(base_g) || !positive(base_b)) return why = "its Auto result is not positive", false;
 
     s.has_cached_sidecar = true;
     s.bundle_search = true;
@@ -384,7 +412,6 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.cached_sidecar.auto_json_str = a.dump();
     s.dino_path = a.value("model", "");
     s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
-    s.cached_sidecar.t_auto_ms = a.value("time_ms", 0.0);
     // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
     // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
     if (j.contains("input_curves") && j["input_curves"].is_object()) {
@@ -404,7 +431,10 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       }
       c.hold = ic.value("hold", false);
       if (c.hold && !(ic["channels"]["G"].contains("u_lo") && ic["channels"]["B"].contains("u_lo"))) ok = false;
-      if (!ok || !(c.ref[0] > 0.0f) || !(c.ref[1] > 0.0f)) return false;
+      for (int i = 0; ok && i < 2; ++i) {
+        ok = std::isfinite(c.a[i]) && std::isfinite(c.k[i]) && std::isfinite(c.u_med[i]) && std::isfinite(c.u_lo[i]);
+      }
+      if (!ok || !positive(c.ref[0]) || !positive(c.ref[1])) return why = "its input curves are not valid", false;
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;
       s.cached_sidecar.curves_source = ic.value("source", "fit");
@@ -414,6 +444,11 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
         s.cached_sidecar.base_e = rm.value("e", base_e);
         s.cached_sidecar.base_g = rm.value("g", base_g);
         s.cached_sidecar.base_b = rm.value("b", base_b);
+        // The re-metered values replace the checked ones: checked again (a remeter.e of -1 aborted solve_grey_knobs).
+        if (!positive(s.cached_sidecar.base_e) || !positive(s.cached_sidecar.base_g) ||
+            !positive(s.cached_sidecar.base_b)) {
+          return why = "its re-metered values are not positive", false;
+        }
       }
     }
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
@@ -452,7 +487,10 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     } else if (!j.contains("cli_equivalent") || !extract_cli_egb(j["cli_equivalent"], base_e, base_g, base_b)) {
       return false;
     }
-    if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+    if (!std::isfinite(base_e) || !std::isfinite(base_g) || !std::isfinite(base_b) || !(base_e > 0.0f) ||
+        !(base_g > 0.0f) || !(base_b > 0.0f)) {
+      return why = "its result is not positive", false;
+    }
     if (s.exposure_given && std::fabs(base_e - o.exposure_comp) > 1e-4f * std::max(1.0f, std::fabs(o.exposure_comp))) {
       return false;
     }
@@ -1859,6 +1897,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.argv = o.argv;
   sc.proc = proc;
   sc.files = o.files;
+  sc.file_fingerprints = &s.input_fingerprints;
   sc.orig_w = scan.orig_w;
   sc.orig_h = scan.orig_h;
   sc.has_roi = scan.has_roi;

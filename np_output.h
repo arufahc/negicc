@@ -35,12 +35,22 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
                const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
 
 // What the sidecar records.
+// An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
+// the sidecar writer share it.
+struct FileFingerprint {
+  bool ok = false;
+  uintmax_t size = 0;
+  uint32_t crc = 0;
+};
+
 struct Sidecar {
   std::string output_path;               // the TIFF; the sidecar is <output_path>.json
   int argc = 0;
   char** argv = nullptr;
   const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
   std::vector<std::string> files;
+  // Each file's fingerprint when this run already took it (the sidecar loader); null or short: taken here.
+  const std::vector<FileFingerprint>* file_fingerprints = nullptr;
   int orig_w = 0, orig_h = 0;
   bool half_size = false;
   bool has_roi = false;
