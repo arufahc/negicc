@@ -809,9 +809,19 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
+  // The fit scores the grid in CIELAB through linear sRGB (input_curves.h, to_display), which is what -P srgb and
+  // srgb-g10 write; a custom -P goes through its ICC profile with LittleCMS, which the fit does not model, while the
+  // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
+  // curves takes any -P, since it renders the combined profile and fits nothing.
+  const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
+  if (o.fit_curves && !fit_encoding_ok) {
+    log_error("--fit_curves on needs -P srgb or -P srgb-g10: the fit scores the frame through linear sRGB, not "
+              "through a custom output profile\n");
+    return 1;
+  }
   // --fit_curves auto: on wherever on applies, nothing elsewhere.
   s.fit_curves_auto_active = o.fit_curves_auto && s.is_bundle && s.white_light && !s.has_crosstalk &&
-                             !o.colorspace.empty() && s.bundle_search;
+                             fit_encoding_ok && s.bundle_search;
   if (o.fit_curves && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
               "(--fit_curves with eight comma-separated numbers replays recorded curves)\n");
@@ -1008,8 +1018,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "");
       }
     }
-    scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
-                                             ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995, scan.film_base_rgb());
+    if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
+      // The curve fit measured the roll-off on this frame, at these E, g and b, on this combined profile, as below
+      // (its last re-meter pass): the same numbers, not measured a third time.
+      scan.rolloff_x_hi = s.curve_fit.x_hi;
+      scan.rolloff_q995 = s.curve_fit.x_hi_q995;
+    } else {
+      scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
+                                               ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995,
+                                               scan.film_base_rgb());
+    }
     scan.has_rolloff = true;
     return true;
   };
@@ -1135,11 +1153,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
           // white-light bundle search.
           negicc::CurveFitOptions fit_opts;  // lambda 0, bound 0.25, 1 stop from the base TRC
-          // The fit and the re-meter render the grid as the export will: -P's encoding (curves need -P).
-          const bool linear = o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
-          const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB
-                                      : linear               ? ENCODE_SRGB_LINEAR
-                                                             : ENCODE_CUSTOM;
+          // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
+          const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
           s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
           s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
           s.curves_base_prof.rebind_pointers();

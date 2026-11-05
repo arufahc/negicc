@@ -283,11 +283,19 @@ struct CurveRefitResult {
   // The export's render: its encoding and roll-off (only the sRGB encoding applies one; 1 otherwise).
   int encoding = negicc::ENCODE_SRGB;  // OutputEncoding
   float x_hi_fit = 1.0f;          // the roll-off the fit ran with: the export's at Auto's parameters
-  float x_hi = 1.0f;              // the roll-off at params on the combined profile, which the export measures again
-  int remeter_passes = 0;         // re-meter and roll-off alternations until the roll-off held still
+  // The roll-off at params on the combined profile (and its q995): measured as the export measures it (only for the
+  // sRGB encoding: rolloff_measured), so the export reuses it with no knobs instead of measuring it again.
+  float x_hi = 1.0f, x_hi_q995 = 0.0f;
+  bool rolloff_measured = false;
+  int remeter_passes = 0;         // re-meter and roll-off alternations, over every re-meter (the shape rounds re-meter)
   bool remeter_converged = false; // the roll-off of the last pass equals the one its re-meter ran with
   double loss_export = 0.0;       // the intent loss at params on the combined profile, on the export's render
-  float shape_scale = 1.0f;       // a and k scaled by this to keep the shape at the export's anchor (1: not needed)
+  // G's and B's a and k scaled by these to keep the shape at the export's anchor (1: not needed; 0: dropped), and the
+  // smaller of the two.
+  float shape_scale_ch[2] = {1.0f, 1.0f};
+  float shape_scale = 1.0f;
+  // Why the fit fell back to Auto's result with no curves ("shape"), or null when it did not.
+  const char* fallback = nullptr;
   // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, and the
   // fit's result at Auto's E, and the result on the combined profile; and the time the fit, re-meter and checks took.
   negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the fit, at Auto's E

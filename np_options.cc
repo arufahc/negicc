@@ -284,8 +284,8 @@ int parse_options(int ac, char* av[], Options& o) {
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
     .help("off (default), auto, on, or aG,kG,aB,kB,refG,refB,u_medG,u_medB (one comma-separated value). auto: as on "
-          "wherever on applies (a white-light bundle search with -P), and nothing elsewhere (TriLED, no -P, given "
-          "parameters), so it can be passed for every scan. on: after the "
+          "wherever on applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, "
+          "another or no -P, given parameters), so it can be passed for every scan. on: after the "
           "bundle search, fit G and B input curves (with g and b, E fixed) to the search's intent field on the bracket "
           "it chose, then solve E, g and b again on that bracket's profile with its input tables composed with the "
           "curves (the combined profile), as negicc-station's Fit curves toggle does; needs the bundle search (no "
