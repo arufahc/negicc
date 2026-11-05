@@ -1028,6 +1028,41 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
   return s;
 }
 
+void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, float crop_ratio, const double* film_base_rgb,
+                             std::vector<BracketExposure>& out) {
+  out.assign(bundle.targets.size(), BracketExposure{});
+  ParamSearchOptions opts;
+  opts.film_base_rgb_d = film_base_rgb;
+  opts.film_base_from_scan = film_base_rgb != nullptr;
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  // The statistics the search reads (SearchFrame::set_frame); the grid's size does not change g_lo and g_hi.
+  FrameStats stats;
+  compute_frame_stats(frame, crop_ratio, 224, 16, stats);
+  // As search_conversion_params' Step 1.
+  const bool white_light = !bundle.has_crosstalk;
+  const float g_lo = std::max(1.0f, stats.g_lo);
+  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
+  const float g_scale = white_light ? scale.e_norm : 1.0f;
+  for (size_t i = 0; i < bundle.targets.size(); ++i) {
+    if (!(bundle.targets[i].exposure_s > 0.0f)) continue;
+    Enclosure r;
+    if (!bracket_enclosure(bundle.targets[i], (int)i, g_lo * g_scale, g_hi * g_scale, r)) continue;
+    if (r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
+    // The search's E is the station's on white light; on TriLED it runs on M_frame / e_norm, and its result is
+    // params.e / e_norm (search_conversion_params' out.params).
+    const float to_station = white_light ? 1.0f : 1.0f / scale.e_norm;
+    BracketExposure& b = out[i];
+    b.feasible = r.feasible;
+    b.e_min = r.e_min * to_station;
+    b.e_max = r.e_max * to_station;
+    b.e_center = r.e_center * to_station;
+    b.search_lo = r.search_lo * to_station;
+    b.search_hi = r.search_hi * to_station;
+    b.valid = b.e_min > 0.0f && b.e_max > 0.0f && std::isfinite(b.e_center) && b.e_center > 0.0f;
+  }
+}
+
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb) {

@@ -802,16 +802,16 @@ int prepare(const Options& o, Setup& s) {
   return 0;
 }
 
-// The station's E of given values: -E, else the exposure of bracket target_idx's e_center (absolute, as when no
-// exposure is given) on the station's scale.
-static float given_station_e(const Options& o, const ProfileBundle& bundle, int target_idx, double scan_shutter_s,
-                             double scan_iso, const double* film_base_rgb) {
-  if (o.exposure_given || bundle.targets[target_idx].e_center <= 0.0f) return o.exposure_comp;
-  float base[9];
-  double row_scale[3];
-  compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, film_base_rgb, film_base_rgb != nullptr, base, nullptr,
-                                row_scale);
-  return (float)((double)bundle.targets[target_idx].e_center / row_scale[0]);
+// The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
+// meters it (Scan::bracket_exposure, meter_bracket_exposures). Before, the bundle's e_center over the first row's
+// scale: the whole frame's statistics without e_norm (and on TriLED without the bracket's exposure ratio), which put
+// it up to a few stops from the E Auto meters for the same bracket.
+static float given_station_e(const Options& o, const Scan& scan, int target_idx) {
+  if (o.exposure_given || target_idx < 0 || target_idx >= (int)scan.bracket_exposure.size() ||
+      !scan.bracket_exposure[target_idx].valid) {
+    return o.exposure_comp;
+  }
+  return scan.bracket_exposure[target_idx].e_center;
 }
 
 int decode(const Options& o, Setup& s, Scan& scan) {
@@ -833,11 +833,15 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // bracket.
   const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
                                 (s.use_dino || s.manual_target_idx < 0 || !s.exposure_given);
-  auto measure_enclosures = [&](const negicc::RgbView& frame) {
+  auto measure_enclosures = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     if (!needs_enclosures) return;
     float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
     int num_feasible = 0;
     compute_bundle_enclosures(bundle, frame, g_lo, g_hi, scene_ev, num_feasible);
+    // And each bracket's range in the station's E, as the bundle search meters it: the E given values default to and
+    // the single-bracket search centres on.
+    meter_bracket_exposures(bundle, frame, scan_shutter_s, scan_iso, ParamSearchOptions{}.crop_ratio,
+                            scan.film_base_rgb(), scan.bracket_exposure);
     scan.has_enclosures = true;
   };
   // The bracket of given values (the search's is its own), once the enclosures are measured.
@@ -852,8 +856,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
-                                           : given_station_e(o, bundle, target_idx, scan_shutter_s, scan_iso,
-                                                             scan.film_base_rgb());
+                                           : given_station_e(o, scan, target_idx);
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
@@ -997,7 +1000,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         }
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       } else {
-        measure_enclosures(frame);
+        measure_enclosures(frame, scan_shutter_s, scan_iso);
       }
       // The single-bracket search (-E or --target without given gains) solves in solve, on the full image; its
       // roll-off is measured there, on a copy of this frame, at its final E, g, b.
@@ -1299,12 +1302,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       }
       scan.has_auto_res = true;
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
-    } else {
-      measure_enclosures(search_half_view);
     }
     if (s.is_bundle) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+      if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
       if (s.bundle_search || !s.use_dino) {
         if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
           delete proc;
@@ -1571,9 +1573,21 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.film_prof = tgt.film_prof;
       c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
-      // The bracket's exposure range is in absolute E (the bare crosstalk's first row); the search's E is the
-      // station's, so its centre is too (given_station_e does the same). The bounds are ratios to the centre.
-      if (cfg.has_custom_bounds) cfg.custom_e_center = (float)((double)cfg.custom_e_center / row_scale[0]);
+      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (and searches
+      // its range), so --target without -E starts where Auto would on that bracket. Before, the bundle's e_center
+      // over the first row's scale, up to a few stops off (a black render, or one stop dark on TriLED). The bounds
+      // are ratios to the centre.
+      const int ti = c.bundle_target_idx;
+      if (ti < (int)scan.bracket_exposure.size() && scan.bracket_exposure[ti].valid) {
+        const BracketExposure& be = scan.bracket_exposure[ti];
+        cfg.has_custom_bounds = true;
+        cfg.custom_e_center = be.e_center;
+        cfg.custom_e_bounds[0] = be.search_lo / be.e_center;
+        cfg.custom_e_bounds[1] = be.search_hi / be.e_center;
+        cfg.custom_e_bounds[2] = 1.0f;
+      } else if (cfg.has_custom_bounds) {
+        cfg.custom_e_center = (float)((double)cfg.custom_e_center / row_scale[0]);
+      }
     } else {
       cfg.prof = &c.film_prof.data;
     }
@@ -1724,7 +1738,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       apply_station(scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
       log_knobs();
     } else {
-      apply_station(given_station_e(o, bundle, c.bundle_target_idx, scan_shutter_s, scan_iso, scan.film_base_rgb()),
+      apply_station(given_station_e(o, scan, c.bundle_target_idx),
                     c.gain_g, c.gain_b);
     }
   }
