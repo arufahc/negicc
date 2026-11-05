@@ -2443,13 +2443,17 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         if ((a.det.axis != '?') != (b.det.axis != '?')) return a.det.axis != '?';
         return a.base_patches.size() > b.base_patches.size();
       };
-      // The alternate axis takes over only with evidence of its own: a film gap it found or a better rectangle. With
-      // neither, a reading along the other axis can still score full confidence (both frame ends at a hard limit, no
-      // gap seen) and would win on that alone, cutting a sub-frame out of the picture. A width-matched medium-format
-      // reading (both strip edges seen at the format's width) is such evidence too. On a square frame this also stops
-      // the tie-breaks above (neighbours, a decided axis, base patches) from moving a reading that has none of these.
-      const bool alt_evidence =
-          alt.det.n_gaps > 0 || alt.score > res.score || width_preferred(alt, res);
+      // The alternate axis takes over only with evidence of its own, so that a reading along the other axis cannot win
+      // on its confidence alone (432a23e): a film gap it found, a better rectangle, more evidence for its frame (above),
+      // a frame it bounded where the first reading laid the nominal length, or a confidence well above the first
+      // reading's (by 0.25: the first reading's own flags, such as weak_transverse_edges or no_film_base, then say it is
+      // the doubtful one). Without the last three the gate kept wrong first readings: Scan_001101 (the alternate bounds
+      // the frame between the holder's edges, the first reading bounds nothing; 1.00 -> 0.00), Scan_001310 (the first
+      // reading's two "gaps" are lines in the picture, confidence 0.32 against 0.60; 0.92 -> 0.84), Ektar100+3 (the
+      // alternate measured the strip width, the first did not; 1.00 -> 0.90) and Scan_001050 (confidence 0.85 against
+      // 0.60).
+      const bool alt_evidence = alt.det.n_gaps > 0 || alt.score > res.score || evidence(alt) > evidence(res) ||
+                                (bounded(alt) && !bounded(res)) || alt.det.conf >= res.det.conf + 0.25f;
       if (alt_evidence && better_strip(alt, res)) res = std::move(alt);
     }
   }
