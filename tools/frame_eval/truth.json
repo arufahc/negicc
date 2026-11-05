@@ -1,0 +1,4829 @@
+{
+ "roots": {
+  "triled": "negicc-station TriLED development RAWs (stage26_setup_inventory.json raw_path)",
+  "web": "the white-LED review corpus (FILM_NEGATIVES_DIR)",
+  "film_scans": "a library of film scans: 35mm BW, 35mm Negative, Negative Scans, 120 Targets, Ektar100 Research"
+ },
+ "frames": {
+  "1793430239784_oKg5JAtJmAkObLnKNgA02o0FpNG.NEF.nef": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430239784_oKg5JAtJmAkObLnKNgA02o0FpNG.NEF.nef",
+   "format": "645",
+   "crop": [
+    1600,
+    912,
+    3024,
+    2240
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430239789_hL5BFSEM8LCtp17aPCiQtJ7GHP2.RAF.raf": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430239789_hL5BFSEM8LCtp17aPCiQtJ7GHP2.RAF.raf",
+   "format": "35mm",
+   "crop": [
+    312,
+    216,
+    5730,
+    3852
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430239796_4bR6zFGf1DbkiBdofqczZXEtza9.CR3.cr3": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430239796_4bR6zFGf1DbkiBdofqczZXEtza9.CR3.cr3",
+   "format": "6x6",
+   "crop": [
+    2340,
+    160,
+    4238,
+    4234
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430239838_KZvCiWklehPpNIz6Basjns2rPJ.NEF.nef": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430239838_KZvCiWklehPpNIz6Basjns2rPJ.NEF.nef",
+   "format": "35mm",
+   "crop": [
+    220,
+    228,
+    5588,
+    3782
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430239844_bvKJe2h1Q1dt12KqXGSOexNtTWw.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430239844_bvKJe2h1Q1dt12KqXGSOexNtTWw.CR2.cr2",
+   "format": "35mm",
+   "crop": [
+    702,
+    450,
+    3628,
+    2432
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430280098_ebWXYHcM85zLXdcULKj3S12wAps.raf": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430280098_ebWXYHcM85zLXdcULKj3S12wAps.raf",
+   "format": "6x7",
+   "crop": [
+    210,
+    24,
+    5112,
+    4122
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430281770_p8EX5AWgpLA9oJHMPwF0tgBvoBG.raf": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430281770_p8EX5AWgpLA9oJHMPwF0tgBvoBG.raf",
+   "format": "6x9",
+   "crop": [
+    0,
+    24,
+    5814,
+    4122
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430291311_sHU5qDGd8XfhRRI3JPqyPGrKxGW.ARW.arw": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430291311_sHU5qDGd8XfhRRI3JPqyPGrKxGW.ARW.arw",
+   "format": "35mm",
+   "crop": [
+    452,
+    402,
+    5134,
+    3394
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430298092_ryzH6BMI78tJHnTHMwLYGcqMBqG.CR3.cr3": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430298092_ryzH6BMI78tJHnTHMwLYGcqMBqG.CR3.cr3",
+   "format": "35mm",
+   "crop": [
+    104,
+    42,
+    6550,
+    4342
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430352317_qwggfuh9aNKhNT9q39GdGKox9F5.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430352317_qwggfuh9aNKhNT9q39GdGKox9F5.cr2",
+   "format": "35mm",
+   "crop": [
+    256,
+    222,
+    5270,
+    3776
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430367764_buQQHgfCogRkj2qI76su3W7h5cO.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430367764_buQQHgfCogRkj2qI76su3W7h5cO.CR2.cr2",
+   "format": "645",
+   "crop": [
+    550,
+    0,
+    4280,
+    2928
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430375737_p36oueJpceQZzvG2wuTOlQSMCTb.arw": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430375737_p36oueJpceQZzvG2wuTOlQSMCTb.arw",
+   "format": "35mm",
+   "crop": [
+    474,
+    332,
+    4996,
+    3396
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430407791_kObk41QafgUkbnVqH65QavvzFjt.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430407791_kObk41QafgUkbnVqH65QavvzFjt.CR2.cr2",
+   "format": "35mm",
+   "crop": [
+    2036,
+    940,
+    6060,
+    4064
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430416988_k83VYthYaYtI6FnYjkoTZrbjoIm.CR3.cr3": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430416988_k83VYthYaYtI6FnYjkoTZrbjoIm.CR3.cr3",
+   "format": "35mm",
+   "crop": [
+    208,
+    174,
+    6328,
+    4212
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430493794_adyvhH53BDGYIof6DWgbKK92Pzi.nef": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430493794_adyvhH53BDGYIof6DWgbKK92Pzi.nef",
+   "format": "35mm",
+   "crop": [
+    108,
+    24,
+    7218,
+    4738
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430508332_xO6gQcM1ypu8G6OcV9GTznEn1Y8.NEF.nef": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430508332_xO6gQcM1ypu8G6OcV9GTznEn1Y8.NEF.nef",
+   "format": "35mm",
+   "crop": [
+    152,
+    138,
+    5740,
+    3818
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430518141_3zoe3SKK2Ewtj2zCyc9Lu7Ngjec.NEF.nef": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430518141_3zoe3SKK2Ewtj2zCyc9Lu7Ngjec.NEF.nef",
+   "format": "35mm",
+   "crop": [
+    120,
+    68,
+    5630,
+    3852
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430558216_9lufxeTtPzB9SqZOf11KD4659Hg.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430558216_9lufxeTtPzB9SqZOf11KD4659Hg.CR2.cr2",
+   "format": "35mm",
+   "crop": [
+    438,
+    452,
+    4082,
+    2720
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430561669_hN0bT3lc3RxJ47IH4dOn23FB67l.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430561669_hN0bT3lc3RxJ47IH4dOn23FB67l.CR2.cr2",
+   "format": "35mm",
+   "crop": [
+    1112,
+    494,
+    3656,
+    2424
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430696152_o7Ujct8u7PhlM3Darb3b2XrEIVb.CR3.cr3": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430696152_o7Ujct8u7PhlM3Darb3b2XrEIVb.CR3.cr3",
+   "format": "35mm",
+   "crop": [
+    242,
+    202,
+    6318,
+    4192
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430717682_sikq5mt2tQnnD8LReF4JlsNXqI2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430717682_sikq5mt2tQnnD8LReF4JlsNXqI2.cr2",
+   "format": "645",
+   "crop": [
+    420,
+    524,
+    1730,
+    2112
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793430872735_j0LXZeA3hx1EIFwwS1ORISuxFOe.ORF.orf": {
+   "root": "web",
+   "rel": "corpus/pixls/1793430872735_j0LXZeA3hx1EIFwwS1ORISuxFOe.ORF.orf",
+   "format": "35mm",
+   "crop": [
+    146,
+    568,
+    4618,
+    3098
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793431028169_vmUCDfvhqCtirbRv1AefNR3jWfo.CR2.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793431028169_vmUCDfvhqCtirbRv1AefNR3jWfo.CR2.cr2",
+   "format": "35mm",
+   "crop": [
+    782,
+    656,
+    6982,
+    4676
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793433583409_fb2eaf0ce770962b5c809c3a054aee6275e8b4ce.cr2": {
+   "root": "web",
+   "rel": "corpus/pixls/1793433583409_fb2eaf0ce770962b5c809c3a054aee6275e8b4ce.cr2",
+   "format": "35mm",
+   "crop": [
+    428,
+    158,
+    5216,
+    3502
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793469824155_3727849_133679372297920_DSC09786.ARW": {
+   "root": "web",
+   "rel": "corpus/negativelab/1793469824155_3727849_133679372297920_DSC09786.ARW",
+   "format": "6x7",
+   "crop": [
+    466,
+    162,
+    6420,
+    5172
+   ],
+   "how": "review set sensor frame"
+  },
+  "1793470141913_3727849_133679867205312_DSC_1911.NEF": {
+   "root": "web",
+   "rel": "corpus/reddit/1793470141913_3727849_133679867205312_DSC_1911.NEF",
+   "format": "35mm",
+   "crop": [
+    402,
+    210,
+    5208,
+    3508
+   ],
+   "how": "review set sensor frame"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0001.ARW",
+   "format": "645",
+   "crop": [
+    2286,
+    54,
+    5050,
+    6268
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0002.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0002.ARW",
+   "format": "645",
+   "crop": [
+    2548,
+    186,
+    4958,
+    6154
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0003.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0003.ARW",
+   "format": "645",
+   "crop": [
+    2642,
+    186,
+    4958,
+    6154
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0004.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0004.ARW",
+   "format": "645",
+   "crop": [
+    1918,
+    18,
+    5122,
+    6358
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0005.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0005.ARW",
+   "format": "645",
+   "crop": [
+    2062,
+    94,
+    5032,
+    6246
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0006.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0006.ARW",
+   "format": "645",
+   "crop": [
+    2118,
+    94,
+    5032,
+    6246
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0007.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0007.ARW",
+   "format": "645",
+   "crop": [
+    1786,
+    0,
+    5138,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0008.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0008.ARW",
+   "format": "645",
+   "crop": [
+    2026,
+    54,
+    5050,
+    6268
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0009.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0009.ARW",
+   "format": "645",
+   "crop": [
+    2360,
+    130,
+    4958,
+    6154
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0010.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0010.ARW",
+   "format": "645",
+   "crop": [
+    2148,
+    48,
+    5006,
+    6214
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0011.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0011.ARW",
+   "format": "645",
+   "crop": [
+    2544,
+    50,
+    5060,
+    6280
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0012.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0012.ARW",
+   "format": "645",
+   "crop": [
+    2174,
+    94,
+    5032,
+    6246
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0013.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0013.ARW",
+   "format": "645",
+   "crop": [
+    2286,
+    94,
+    5032,
+    6246
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0014.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0014.ARW",
+   "format": "645",
+   "crop": [
+    1896,
+    0,
+    5138,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0015.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0015.ARW",
+   "format": "645",
+   "crop": [
+    2362,
+    8,
+    5132,
+    6368
+   ],
+   "how": "station export crop"
+  },
+  "2026_10_06_Portra400_A7R4_TriLED_2_raw_0016.ARW": {
+   "root": "triled",
+   "rel": "2026_10_06_Portra400_A7R4_TriLED_2_raw_0016.ARW",
+   "format": "645",
+   "crop": [
+    2352,
+    130,
+    4958,
+    6154
+   ],
+   "how": "station export crop"
+  },
+  "DSC09862.ARW": {
+   "root": "web",
+   "rel": "corpus/negativelab/DSC09862.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7028,
+    4688
+   ],
+   "how": "review set sensor frame"
+  },
+  "DSCF4476.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/DSCF4476.RAF",
+   "format": "35mm",
+   "crop": [
+    246,
+    96,
+    5568,
+    3906
+   ],
+   "how": "review set sensor frame"
+  },
+  "Ektar100+1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100+1.ARW",
+   "format": "6x6",
+   "crop": [
+    1894,
+    44,
+    6092,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100+2.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100+2.ARW",
+   "format": "6x6",
+   "crop": [
+    1452,
+    44,
+    6210,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100+3.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100+3.ARW",
+   "format": "6x6",
+   "crop": [
+    1602,
+    202,
+    5974,
+    5970
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100-0.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100-0.ARW",
+   "format": "6x6",
+   "crop": [
+    1532,
+    88,
+    5986,
+    6196
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100-1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100-1.ARW",
+   "format": "6x6",
+   "crop": [
+    1578,
+    44,
+    5786,
+    6284
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100-2.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100-2.ARW",
+   "format": "6x6",
+   "crop": [
+    1906,
+    44,
+    6094,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Ektar100-3.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Ektar100-3.ARW",
+   "format": "6x6",
+   "crop": [
+    1628,
+    70,
+    5966,
+    6240
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0006.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0006.ARW",
+   "format": "35mm",
+   "crop": [
+    66,
+    250,
+    9306,
+    6126
+   ],
+   "how": "chart frame (Film Scan0007's crop, checked)"
+  },
+  "Film Scan0007.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0007.ARW",
+   "format": "35mm",
+   "crop": [
+    66,
+    250,
+    9306,
+    6126
+   ],
+   "how": "chart frame (Film Scan0007's crop, checked)"
+  },
+  "Film Scan0010.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0010.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0039.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0039.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0044.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0044.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0045.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0045.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0046.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0046.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0048.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0048.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0049.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0049.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0050.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0050.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0051.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0051.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0053.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0053.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0054.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0054.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0055.ARW": {
+   "root": "film_scans",
+   "rel": "35mm Negative/Film Scan0055.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    9568,
+    6376
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Film Scan0070.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0070.ARW",
+   "format": "645",
+   "crop": [
+    2478,
+    140,
+    4838,
+    6100
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0071.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0071.ARW",
+   "format": "645",
+   "crop": [
+    2396,
+    146,
+    4814,
+    6072
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0072.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0072.ARW",
+   "format": "645",
+   "crop": [
+    2450,
+    40,
+    5004,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0073.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0073.ARW",
+   "format": "645",
+   "crop": [
+    2432,
+    46,
+    5002,
+    6218
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0074.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0074.ARW",
+   "format": "645",
+   "crop": [
+    1796,
+    92,
+    4930,
+    6184
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0075.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0075.ARW",
+   "format": "645",
+   "crop": [
+    2214,
+    52,
+    4986,
+    6268
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0076.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan0076.ARW",
+   "format": "645",
+   "crop": [
+    2374,
+    46,
+    5012,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0837.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan0837.ARW",
+   "format": "6x6",
+   "crop": [
+    1628,
+    122,
+    5270,
+    6214
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan0838.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan0838.ARW",
+   "format": "6x6",
+   "crop": [
+    1356,
+    86,
+    6554,
+    6208
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2125.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2125.ARW",
+   "format": "6x7",
+   "crop": [
+    616,
+    68,
+    7902,
+    6234
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2126.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2126.ARW",
+   "format": "6x7",
+   "crop": [
+    678,
+    46,
+    7940,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2127.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2127.ARW",
+   "format": "6x7",
+   "crop": [
+    696,
+    40,
+    7932,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2128.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2128.ARW",
+   "format": "6x7",
+   "crop": [
+    720,
+    48,
+    7980,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2129.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2129.ARW",
+   "format": "6x7",
+   "crop": [
+    750,
+    70,
+    7908,
+    6242
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2130.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2130.ARW",
+   "format": "6x7",
+   "crop": [
+    642,
+    70,
+    7928,
+    6236
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2131.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2131.ARW",
+   "format": "6x7",
+   "crop": [
+    516,
+    40,
+    7986,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2132.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2132.ARW",
+   "format": "6x7",
+   "crop": [
+    826,
+    78,
+    7910,
+    6218
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2133.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2133.ARW",
+   "format": "6x7",
+   "crop": [
+    700,
+    132,
+    7858,
+    6162
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan2134.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan2134.ARW",
+   "format": "6x7",
+   "crop": [
+    710,
+    72,
+    7834,
+    6224
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4181.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4181.ARW",
+   "format": "645",
+   "crop": [
+    1734,
+    40,
+    5012,
+    6278
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4182.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4182.ARW",
+   "format": "645",
+   "crop": [
+    1970,
+    46,
+    4994,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4183.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4183.ARW",
+   "format": "645",
+   "crop": [
+    2346,
+    132,
+    4854,
+    6110
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4184.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4184.ARW",
+   "format": "645",
+   "crop": [
+    2246,
+    48,
+    5012,
+    6278
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4185.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4185.ARW",
+   "format": "645",
+   "crop": [
+    2300,
+    204,
+    4940,
+    6102
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4186.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4186.ARW",
+   "format": "645",
+   "crop": [
+    2368,
+    224,
+    4998,
+    6104
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4187.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4187.ARW",
+   "format": "645",
+   "crop": [
+    2428,
+    128,
+    4914,
+    6162
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4188.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4188.ARW",
+   "format": "645",
+   "crop": [
+    2230,
+    92,
+    4940,
+    6188
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4191.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4191.ARW",
+   "format": "645",
+   "crop": [
+    2360,
+    108,
+    4898,
+    6158
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4192.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4192.ARW",
+   "format": "645",
+   "crop": [
+    2384,
+    78,
+    4952,
+    6136
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4193.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4193.ARW",
+   "format": "645",
+   "crop": [
+    2208,
+    244,
+    4906,
+    6028
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4194.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4194.ARW",
+   "format": "645",
+   "crop": [
+    2460,
+    214,
+    4962,
+    6092
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4195.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4195.ARW",
+   "format": "645",
+   "crop": [
+    2290,
+    204,
+    4912,
+    6076
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan4196.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan4196.ARW",
+   "format": "645",
+   "crop": [
+    2366,
+    190,
+    4918,
+    6096
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6978.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6978.ARW",
+   "format": "6x7",
+   "crop": [
+    628,
+    40,
+    8008,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6979.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6979.ARW",
+   "format": "6x7",
+   "crop": [
+    1170,
+    96,
+    7748,
+    6232
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6980.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6980.ARW",
+   "format": "6x7",
+   "crop": [
+    680,
+    70,
+    8036,
+    6226
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6981.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6981.ARW",
+   "format": "6x7",
+   "crop": [
+    692,
+    38,
+    7802,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6982.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6982.ARW",
+   "format": "6x7",
+   "crop": [
+    664,
+    52,
+    7922,
+    6268
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6983.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6983.ARW",
+   "format": "6x7",
+   "crop": [
+    816,
+    40,
+    7960,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6984.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6984.ARW",
+   "format": "6x7",
+   "crop": [
+    612,
+    46,
+    8070,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6985.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6985.ARW",
+   "format": "6x7",
+   "crop": [
+    560,
+    74,
+    7898,
+    6230
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan6986.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan6986.ARW",
+   "format": "6x7",
+   "crop": [
+    750,
+    70,
+    7918,
+    6232
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9033.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9033.ARW",
+   "format": "6x6",
+   "crop": [
+    1776,
+    38,
+    6302,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9034.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9034.ARW",
+   "format": "6x6",
+   "crop": [
+    1604,
+    72,
+    6440,
+    6230
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9035.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9035.ARW",
+   "format": "6x6",
+   "crop": [
+    1352,
+    50,
+    6506,
+    6270
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9036.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9036.ARW",
+   "format": "6x6",
+   "crop": [
+    1388,
+    48,
+    6498,
+    6276
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9037.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9037.ARW",
+   "format": "6x6",
+   "crop": [
+    1414,
+    70,
+    6510,
+    6236
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9039.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9039.ARW",
+   "format": "6x6",
+   "crop": [
+    1546,
+    46,
+    6524,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9040.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9040.ARW",
+   "format": "6x6",
+   "crop": [
+    1570,
+    108,
+    6452,
+    6166
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9041.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9041.ARW",
+   "format": "6x6",
+   "crop": [
+    1712,
+    64,
+    6520,
+    6240
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9042.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9042.ARW",
+   "format": "6x6",
+   "crop": [
+    1556,
+    38,
+    6490,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9043.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9043.ARW",
+   "format": "6x6",
+   "crop": [
+    1588,
+    58,
+    6536,
+    6256
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9044.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9044.ARW",
+   "format": "6x6",
+   "crop": [
+    1460,
+    38,
+    6538,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9045.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Film Scan9045.ARW",
+   "format": "6x6",
+   "crop": [
+    1672,
+    52,
+    6122,
+    6270
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9783.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9783.ARW",
+   "format": "6x6",
+   "crop": [
+    1588,
+    128,
+    6568,
+    6166
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9784.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9784.ARW",
+   "format": "6x6",
+   "crop": [
+    1588,
+    128,
+    6566,
+    6166
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9785.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9785.ARW",
+   "format": "6x6",
+   "crop": [
+    1714,
+    110,
+    6446,
+    6200
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9786.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9786.ARW",
+   "format": "6x6",
+   "crop": [
+    1714,
+    110,
+    6446,
+    6200
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9789.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9789.ARW",
+   "format": "6x6",
+   "crop": [
+    1642,
+    154,
+    6518,
+    6156
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9790.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9790.ARW",
+   "format": "6x6",
+   "crop": [
+    1642,
+    154,
+    6518,
+    6156
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9791.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9791.ARW",
+   "format": "6x6",
+   "crop": [
+    1654,
+    160,
+    6582,
+    6150
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9792.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9792.ARW",
+   "format": "6x6",
+   "crop": [
+    1654,
+    158,
+    6582,
+    6152
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9793.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9793.ARW",
+   "format": "6x6",
+   "crop": [
+    1744,
+    220,
+    6584,
+    6088
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9794.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9794.ARW",
+   "format": "6x6",
+   "crop": [
+    1744,
+    218,
+    6584,
+    6090
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9795.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research/Film Scan9795.ARW",
+   "format": "6x6",
+   "crop": [
+    1638,
+    98,
+    6408,
+    6184
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9797.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9797.ARW",
+   "format": "6x6",
+   "crop": [
+    2184,
+    102,
+    6012,
+    6230
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9798.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9798.ARW",
+   "format": "6x6",
+   "crop": [
+    2184,
+    102,
+    6012,
+    6230
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9799.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9799.ARW",
+   "format": "6x6",
+   "crop": [
+    1820,
+    60,
+    6404,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9800.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9800.ARW",
+   "format": "6x6",
+   "crop": [
+    1818,
+    60,
+    6408,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9801.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9801.ARW",
+   "format": "6x6",
+   "crop": [
+    1454,
+    80,
+    6558,
+    6206
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9802.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9802.ARW",
+   "format": "6x6",
+   "crop": [
+    1454,
+    80,
+    6556,
+    6206
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9803.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9803.ARW",
+   "format": "6x6",
+   "crop": [
+    1544,
+    48,
+    6480,
+    6276
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9804.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9804.ARW",
+   "format": "6x6",
+   "crop": [
+    1542,
+    48,
+    6480,
+    6276
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9805.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9805.ARW",
+   "format": "6x6",
+   "crop": [
+    1796,
+    116,
+    6610,
+    6208
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9806.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9806.ARW",
+   "format": "6x6",
+   "crop": [
+    1796,
+    116,
+    6610,
+    6208
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9807.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9807.ARW",
+   "format": "6x6",
+   "crop": [
+    1700,
+    182,
+    6632,
+    6156
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9808.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9808.ARW",
+   "format": "6x6",
+   "crop": [
+    1700,
+    182,
+    6632,
+    6156
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9809.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9809.ARW",
+   "format": "6x6",
+   "crop": [
+    1284,
+    78,
+    6572,
+    6222
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9810.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9810.ARW",
+   "format": "6x6",
+   "crop": [
+    1284,
+    78,
+    6572,
+    6222
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9811.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9811.ARW",
+   "format": "6x6",
+   "crop": [
+    1692,
+    44,
+    6286,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Film Scan9812.ARW": {
+   "root": "film_scans",
+   "rel": "Ektar100 Research 2/Film Scan9812.ARW",
+   "format": "6x6",
+   "crop": [
+    1692,
+    44,
+    6286,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra160+1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra160+1.ARW",
+   "format": "6x6",
+   "crop": [
+    1458,
+    64,
+    6242,
+    6250
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra160+2.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra160+2.ARW",
+   "format": "6x6",
+   "crop": [
+    1492,
+    44,
+    6410,
+    6284
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra160-0.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra160-0.ARW",
+   "format": "6x6",
+   "crop": [
+    1952,
+    78,
+    6004,
+    6206
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra160-1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra160-1.ARW",
+   "format": "6x6",
+   "crop": [
+    1472,
+    102,
+    6436,
+    6174
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra400+1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra400+1.ARW",
+   "format": "6x6",
+   "crop": [
+    1850,
+    46,
+    5926,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra400+2.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra400+2.ARW",
+   "format": "6x6",
+   "crop": [
+    1656,
+    44,
+    6106,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra400-1.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra400-1.ARW",
+   "format": "6x6",
+   "crop": [
+    1290,
+    44,
+    6442,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra400.ARW": {
+   "root": "film_scans",
+   "rel": "120 Targets/Portra400.ARW",
+   "format": "6x6",
+   "crop": [
+    1648,
+    62,
+    6066,
+    6242
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Portra400_A7R4_TriLED_raw_0001.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0001.ARW",
+   "format": "6x6",
+   "crop": [
+    1556,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0005.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0005.ARW",
+   "format": "6x6",
+   "crop": [
+    1550,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0009.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0009.ARW",
+   "format": "6x6",
+   "crop": [
+    1540,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0010.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0010.ARW",
+   "format": "6x6",
+   "crop": [
+    1528,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0011.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0011.ARW",
+   "format": "6x6",
+   "crop": [
+    1534,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0013.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0013.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0014.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0014.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0017.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0017.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0019.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0019.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0020.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0020.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0021.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0021.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0026.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0026.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0028.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0028.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0029.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0029.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0030.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0030.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0033.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0033.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0036.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0036.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    0,
+    4726,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0040.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0040.ARW",
+   "format": "6x6",
+   "crop": [
+    1528,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0042.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0042.ARW",
+   "format": "6x6",
+   "crop": [
+    1556,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0045.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0045.ARW",
+   "format": "6x6",
+   "crop": [
+    1534,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0046.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0046.ARW",
+   "format": "6x6",
+   "crop": [
+    1524,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0048.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0048.ARW",
+   "format": "6x6",
+   "crop": [
+    1536,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0049.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0049.ARW",
+   "format": "6x6",
+   "crop": [
+    1538,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0050.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0050.ARW",
+   "format": "6x6",
+   "crop": [
+    1542,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0054.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0054.ARW",
+   "format": "6x6",
+   "crop": [
+    1542,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0055.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0055.ARW",
+   "format": "6x6",
+   "crop": [
+    1526,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0056.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0056.ARW",
+   "format": "6x6",
+   "crop": [
+    1532,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0057.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0057.ARW",
+   "format": "6x6",
+   "crop": [
+    1556,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0059.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0059.ARW",
+   "format": "6x6",
+   "crop": [
+    1550,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0063.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0063.ARW",
+   "format": "6x6",
+   "crop": [
+    1540,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0064.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0064.ARW",
+   "format": "6x6",
+   "crop": [
+    1536,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0067.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0067.ARW",
+   "format": "6x6",
+   "crop": [
+    1526,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0071.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0071.ARW",
+   "format": "6x6",
+   "crop": [
+    1526,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_A7R4_TriLED_raw_0073.ARW": {
+   "root": "triled",
+   "rel": "Portra400_A7R4_TriLED_raw_0073.ARW",
+   "format": "6x6",
+   "crop": [
+    1524,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_raw_0009.ARW": {
+   "root": "triled",
+   "rel": "Portra400_raw_0009.ARW",
+   "format": "6x6",
+   "crop": [
+    1700,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_raw_0011.ARW": {
+   "root": "triled",
+   "rel": "Portra400_raw_0011.ARW",
+   "format": "6x6",
+   "crop": [
+    1370,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_raw_0012.ARW": {
+   "root": "triled",
+   "rel": "Portra400_raw_0012.ARW",
+   "format": "6x6",
+   "crop": [
+    1480,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_raw_0013.ARW": {
+   "root": "triled",
+   "rel": "Portra400_raw_0013.ARW",
+   "format": "6x6",
+   "crop": [
+    1700,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "Portra400_raw_0015.ARW": {
+   "root": "triled",
+   "rel": "Portra400_raw_0015.ARW",
+   "format": "6x6",
+   "crop": [
+    1564,
+    0,
+    6376,
+    6376
+   ],
+   "how": "station export crop"
+  },
+  "R6II2677-365.CR3": {
+   "root": "web",
+   "rel": "corpus/negativelab/R6II2677-365.CR3",
+   "format": "35mm",
+   "crop": [
+    78,
+    20,
+    5828,
+    3852
+   ],
+   "how": "review set sensor frame"
+  },
+  "Scan_001026.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001026.ARW",
+   "format": "6x6",
+   "crop": [
+    2082,
+    74,
+    5998,
+    6232
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001027.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001027.ARW",
+   "format": "6x6",
+   "crop": [
+    1464,
+    112,
+    6522,
+    6148
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001028.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001028.ARW",
+   "format": "6x6",
+   "crop": [
+    1436,
+    64,
+    6588,
+    6246
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001029.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001029.ARW",
+   "format": "6x6",
+   "crop": [
+    1310,
+    126,
+    6478,
+    6120
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001031.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001031.ARW",
+   "format": "6x6",
+   "crop": [
+    1560,
+    98,
+    6310,
+    6186
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001033.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001033.ARW",
+   "format": "6x6",
+   "crop": [
+    1950,
+    84,
+    6358,
+    6246
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001034.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001034.ARW",
+   "format": "6x6",
+   "crop": [
+    1444,
+    94,
+    6502,
+    6192
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001036.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001036.ARW",
+   "format": "6x6",
+   "crop": [
+    1512,
+    52,
+    6452,
+    6270
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001038.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001038.ARW",
+   "format": "6x6",
+   "crop": [
+    1632,
+    62,
+    6256,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001041.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001041.ARW",
+   "format": "6x6",
+   "crop": [
+    1812,
+    110,
+    6258,
+    6220
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001044.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001044.ARW",
+   "format": "6x6",
+   "crop": [
+    1534,
+    102,
+    6548,
+    6178
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001046.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001046.ARW",
+   "format": "6x6",
+   "crop": [
+    3090,
+    156,
+    5790,
+    6060
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001047.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001047.ARW",
+   "format": "6x6",
+   "crop": [
+    1582,
+    98,
+    6300,
+    6186
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001048.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001048.ARW",
+   "format": "6x6",
+   "crop": [
+    1526,
+    82,
+    6618,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001049.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001049.ARW",
+   "format": "6x6",
+   "crop": [
+    1468,
+    78,
+    6558,
+    6208
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001050.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001050.ARW",
+   "format": "6x6",
+   "crop": [
+    1806,
+    46,
+    6048,
+    6204
+   ],
+   "how": "hand+snap"
+  },
+  "Scan_001051.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001051.ARW",
+   "format": "6x6",
+   "crop": [
+    1712,
+    86,
+    6182,
+    6184
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001053.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001053.ARW",
+   "format": "6x6",
+   "crop": [
+    1380,
+    48,
+    6528,
+    6280
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001055.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001055.ARW",
+   "format": "6x6",
+   "crop": [
+    1618,
+    46,
+    6290,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001057.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001057.ARW",
+   "format": "6x6",
+   "crop": [
+    1798,
+    38,
+    6206,
+    6290
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001059.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001059.ARW",
+   "format": "6x6",
+   "crop": [
+    1622,
+    38,
+    6568,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001061.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001061.ARW",
+   "format": "6x6",
+   "crop": [
+    1466,
+    44,
+    6526,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001062.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001062.ARW",
+   "format": "6x6",
+   "crop": [
+    1580,
+    44,
+    6428,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001063.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001063.ARW",
+   "format": "6x6",
+   "crop": [
+    1514,
+    38,
+    6410,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001065.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001065.ARW",
+   "format": "6x6",
+   "crop": [
+    1502,
+    88,
+    6478,
+    6206
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001066.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001066.ARW",
+   "format": "6x6",
+   "crop": [
+    1492,
+    130,
+    6506,
+    6124
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001067.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001067.ARW",
+   "format": "6x6",
+   "crop": [
+    1394,
+    66,
+    6580,
+    6250
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001068.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001068.ARW",
+   "format": "6x6",
+   "crop": [
+    1466,
+    38,
+    6558,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001069.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001069.ARW",
+   "format": "6x6",
+   "crop": [
+    1810,
+    46,
+    6196,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001070.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001070.ARW",
+   "format": "6x6",
+   "crop": [
+    1720,
+    204,
+    6472,
+    6126
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001071.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001071.ARW",
+   "format": "6x6",
+   "crop": [
+    1520,
+    96,
+    6486,
+    6192
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001072.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001072.ARW",
+   "format": "6x6",
+   "crop": [
+    2004,
+    150,
+    6232,
+    6156
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001074.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001074.ARW",
+   "format": "6x6",
+   "crop": [
+    1654,
+    56,
+    6172,
+    6262
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001076.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001076.ARW",
+   "format": "6x6",
+   "crop": [
+    1552,
+    100,
+    6400,
+    6144
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001078.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001078.ARW",
+   "format": "6x6",
+   "crop": [
+    1364,
+    52,
+    6604,
+    6270
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001080.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001080.ARW",
+   "format": "6x6",
+   "crop": [
+    1660,
+    56,
+    6306,
+    6262
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001082.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001082.ARW",
+   "format": "6x6",
+   "crop": [
+    1832,
+    162,
+    6388,
+    6174
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001084.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001084.ARW",
+   "format": "6x6",
+   "crop": [
+    1574,
+    62,
+    6450,
+    6258
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001085.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001085.ARW",
+   "format": "6x6",
+   "crop": [
+    1486,
+    54,
+    6402,
+    6274
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001086.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001086.ARW",
+   "format": "6x6",
+   "crop": [
+    1536,
+    72,
+    6450,
+    6230
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001087.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001087.ARW",
+   "format": "6x6",
+   "crop": [
+    1526,
+    112,
+    6394,
+    6212
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001089.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001089.ARW",
+   "format": "6x6",
+   "crop": [
+    1612,
+    70,
+    6370,
+    6234
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001091.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001091.ARW",
+   "format": "6x6",
+   "crop": [
+    1552,
+    102,
+    6148,
+    6220
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001092.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001092.ARW",
+   "format": "6x6",
+   "crop": [
+    1944,
+    90,
+    6308,
+    6222
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001094.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001094.ARW",
+   "format": "6x6",
+   "crop": [
+    1390,
+    38,
+    6568,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001095.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001095.ARW",
+   "format": "6x6",
+   "crop": [
+    1636,
+    148,
+    6434,
+    6154
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001097.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001097.ARW",
+   "format": "35mm",
+   "crop": [
+    1688,
+    40,
+    6558,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001099.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001099.ARW",
+   "format": "35mm",
+   "crop": [
+    1630,
+    38,
+    6194,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001101.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001101.ARW",
+   "format": "35mm",
+   "crop": [
+    5328,
+    198,
+    2446,
+    6092
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001102.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001102.ARW",
+   "format": "35mm",
+   "crop": [
+    1382,
+    50,
+    6540,
+    6136
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001106.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001106.ARW",
+   "format": "35mm",
+   "crop": [
+    1470,
+    98,
+    6454,
+    6174
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001109.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001109.ARW",
+   "format": "35mm",
+   "crop": [
+    1508,
+    64,
+    6354,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001115.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001115.ARW",
+   "format": "35mm",
+   "crop": [
+    4910,
+    1852,
+    3468,
+    2864
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001116.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001116.ARW",
+   "format": "35mm",
+   "crop": [
+    4918,
+    1626,
+    3848,
+    2806
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001117.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001117.ARW",
+   "format": "35mm",
+   "crop": [
+    4926,
+    1570,
+    4230,
+    2822
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001118.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001118.ARW",
+   "format": "35mm",
+   "crop": [
+    4874,
+    1902,
+    3612,
+    2860
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001119.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001119.ARW",
+   "format": "35mm",
+   "crop": [
+    2736,
+    1804,
+    3594,
+    2800
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001120.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001120.ARW",
+   "format": "35mm",
+   "crop": [
+    2682,
+    1806,
+    4126,
+    2820
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001121.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001121.ARW",
+   "format": "35mm",
+   "crop": [
+    2632,
+    1826,
+    4140,
+    2800
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001122.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001122.ARW",
+   "format": "35mm",
+   "crop": [
+    2580,
+    1756,
+    4020,
+    2804
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001123.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001123.ARW",
+   "format": "35mm",
+   "crop": [
+    2762,
+    1804,
+    4122,
+    2796
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001124.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001124.ARW",
+   "format": "35mm",
+   "crop": [
+    2804,
+    1794,
+    4144,
+    2800
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001126.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001126.ARW",
+   "format": "6x6",
+   "crop": [
+    1504,
+    38,
+    6544,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001127.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001127.ARW",
+   "format": "6x6",
+   "crop": [
+    1556,
+    58,
+    6480,
+    6258
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001131.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001131.ARW",
+   "format": "6x6",
+   "crop": [
+    1462,
+    38,
+    6536,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001133.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001133.ARW",
+   "format": "6x6",
+   "crop": [
+    1370,
+    38,
+    6634,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001135.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001135.ARW",
+   "format": "6x6",
+   "crop": [
+    1410,
+    38,
+    6634,
+    6288
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001137.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001137.ARW",
+   "format": "6x6",
+   "crop": [
+    1520,
+    38,
+    6546,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001138.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001138.ARW",
+   "format": "6x6",
+   "crop": [
+    1464,
+    38,
+    6536,
+    6296
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001140.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001140.ARW",
+   "format": "6x6",
+   "crop": [
+    1464,
+    44,
+    6632,
+    6286
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001142.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001142.ARW",
+   "format": "6x6",
+   "crop": [
+    1368,
+    38,
+    6636,
+    6298
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001153.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001153.ARW",
+   "format": "645",
+   "crop": [
+    2632,
+    46,
+    4646,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001154.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001154.ARW",
+   "format": "645",
+   "crop": [
+    2604,
+    46,
+    4666,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001155.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001155.ARW",
+   "format": "645",
+   "crop": [
+    1352,
+    0,
+    6526,
+    3262
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001160.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001160.ARW",
+   "format": "645",
+   "crop": [
+    2402,
+    40,
+    4802,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001162.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001162.ARW",
+   "format": "645",
+   "crop": [
+    2392,
+    40,
+    4786,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001163.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001163.ARW",
+   "format": "645",
+   "crop": [
+    2330,
+    76,
+    4734,
+    6220
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001164.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001164.ARW",
+   "format": "645",
+   "crop": [
+    2392,
+    48,
+    4788,
+    6278
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001165.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001165.ARW",
+   "format": "645",
+   "crop": [
+    2364,
+    40,
+    4788,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001166.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001166.ARW",
+   "format": "645",
+   "crop": [
+    2432,
+    96,
+    4722,
+    6182
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001167.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001167.ARW",
+   "format": "645",
+   "crop": [
+    2316,
+    64,
+    4764,
+    6244
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001168.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001168.ARW",
+   "format": "645",
+   "crop": [
+    2366,
+    46,
+    4734,
+    6282
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001170.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001170.ARW",
+   "format": "645",
+   "crop": [
+    2356,
+    54,
+    4774,
+    6266
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001171.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001171.ARW",
+   "format": "645",
+   "crop": [
+    2406,
+    50,
+    4698,
+    6274
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001172.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001172.ARW",
+   "format": "645",
+   "crop": [
+    2456,
+    80,
+    4652,
+    6214
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001174.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001174.ARW",
+   "format": "645",
+   "crop": [
+    2502,
+    130,
+    4736,
+    6148
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001175.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001175.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    62,
+    4760,
+    6250
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001176.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_001176.ARW",
+   "format": "645",
+   "crop": [
+    2406,
+    40,
+    4792,
+    6294
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_001232.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001232.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001234.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001234.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001235.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001235.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001236.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001236.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001237.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001237.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001238.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001238.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001239.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001239.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001240.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001240.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001241.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001241.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001242.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001242.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001243.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001243.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001244.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001244.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001245.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001245.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001246.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001246.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001247.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001247.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001248.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001248.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001249.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001249.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001250.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001250.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001251.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001251.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001252.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001252.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001253.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001253.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001254.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001254.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001255.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001255.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001256.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001256.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001257.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001257.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001258.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001258.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001259.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001259.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001260.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001260.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001261.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001261.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001262.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001262.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001263.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001263.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001264.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001264.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001265.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001265.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001266.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001266.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001267.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001267.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001268.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001268.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001269.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001269.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001270.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001270.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001271.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001271.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001272.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001272.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001273.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001273.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001274.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001274.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001275.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001275.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001276.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001276.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001277.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001277.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001278.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001278.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001279.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001279.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001280.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001280.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001281.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001281.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001282.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001282.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001283.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001283.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001284.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001284.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001285.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001285.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001286.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001286.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001287.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001287.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001288.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001288.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001289.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001289.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001290.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001290.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001291.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001291.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001292.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001292.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001293.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001293.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001294.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001294.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001295.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001295.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001296.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001296.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001297.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001297.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001298.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001298.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001299.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001299.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001300.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001300.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001301.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001301.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001302.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001302.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001303.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001303.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001304.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001304.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001305.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001305.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001306.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001306.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001307.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001307.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001308.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001308.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001309.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001309.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001310.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001310.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001311.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001311.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001312.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001312.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001313.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001313.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001314.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001314.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001315.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001315.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001316.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001316.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001317.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001317.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001318.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001318.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001319.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001319.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001320.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001320.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001321.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001321.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_001322.ARW": {
+   "root": "film_scans",
+   "rel": "35mm BW/Scan_001322.ARW",
+   "format": "35mm",
+   "crop": [
+    0,
+    0,
+    7968,
+    5320
+   ],
+   "how": "full sensor (picture fills it)"
+  },
+  "Scan_7272.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7272.ARW",
+   "format": "645",
+   "crop": [
+    2352,
+    70,
+    4944,
+    6234
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7273.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7273.ARW",
+   "format": "645",
+   "crop": [
+    2396,
+    140,
+    4940,
+    6158
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7274.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7274.ARW",
+   "format": "645",
+   "crop": [
+    2422,
+    94,
+    4914,
+    6184
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7275.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7275.ARW",
+   "format": "645",
+   "crop": [
+    2370,
+    168,
+    4792,
+    6030
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7276.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7276.ARW",
+   "format": "645",
+   "crop": [
+    2344,
+    84,
+    4928,
+    6204
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7277.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7277.ARW",
+   "format": "645",
+   "crop": [
+    2278,
+    68,
+    4932,
+    6238
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7278.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7278.ARW",
+   "format": "645",
+   "crop": [
+    2350,
+    72,
+    4962,
+    6240
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7279.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7279.ARW",
+   "format": "645",
+   "crop": [
+    2388,
+    116,
+    4866,
+    6134
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7280.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7280.ARW",
+   "format": "645",
+   "crop": [
+    2332,
+    84,
+    4948,
+    6206
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7281.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7281.ARW",
+   "format": "645",
+   "crop": [
+    2310,
+    78,
+    4954,
+    6218
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7282.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7282.ARW",
+   "format": "645",
+   "crop": [
+    2358,
+    56,
+    4978,
+    6262
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7283.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7283.ARW",
+   "format": "645",
+   "crop": [
+    2464,
+    94,
+    4912,
+    6190
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7284.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7284.ARW",
+   "format": "645",
+   "crop": [
+    2366,
+    172,
+    4944,
+    6150
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7285.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7285.ARW",
+   "format": "645",
+   "crop": [
+    2412,
+    64,
+    4956,
+    6248
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7286.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7286.ARW",
+   "format": "645",
+   "crop": [
+    2302,
+    46,
+    4984,
+    6172
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "Scan_7287.ARW": {
+   "root": "film_scans",
+   "rel": "Negative Scans/Scan_7287.ARW",
+   "format": "645",
+   "crop": [
+    2378,
+    68,
+    4936,
+    6238
+   ],
+   "how": "detector crop checked by eye"
+  },
+  "_DSC7391.dng": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSC7391.dng",
+   "format": "6x6",
+   "crop": [
+    836,
+    172,
+    3702,
+    3696
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF8434.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF8434.RAF",
+   "format": "6x6",
+   "crop": [
+    1098,
+    354,
+    3504,
+    3498
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF8948.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF8948.RAF",
+   "format": "6x6",
+   "crop": [
+    1470,
+    270,
+    3516,
+    3546
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF8951.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF8951.RAF",
+   "format": "6x6",
+   "crop": [
+    1440,
+    246,
+    3510,
+    3546
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF8983.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF8983.RAF",
+   "format": "6x6",
+   "crop": [
+    1446,
+    216,
+    3612,
+    3540
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9229.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9229.RAF",
+   "format": "6x6",
+   "crop": [
+    1080,
+    204,
+    3564,
+    3594
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9231.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9231.RAF",
+   "format": "6x6",
+   "crop": [
+    1044,
+    132,
+    3684,
+    3666
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9235.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9235.RAF",
+   "format": "6x6",
+   "crop": [
+    1056,
+    174,
+    3678,
+    3666
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9237.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9237.RAF",
+   "format": "6x6",
+   "crop": [
+    1062,
+    144,
+    3696,
+    3672
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9238.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9238.RAF",
+   "format": "6x6",
+   "crop": [
+    1062,
+    210,
+    3690,
+    3672
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9239.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9239.RAF",
+   "format": "6x6",
+   "crop": [
+    1080,
+    192,
+    3642,
+    3630
+   ],
+   "how": "review set sensor frame"
+  },
+  "_DSF9243.RAF": {
+   "root": "web",
+   "rel": "corpus/negativelab/_DSF9243.RAF",
+   "format": "6x6",
+   "crop": [
+    1056,
+    168,
+    3672,
+    3660
+   ],
+   "how": "review set sensor frame"
+  }
+ },
+ "excluded": {
+  "Film Scan0077.ARW": "blank frame",
+  "Film Scan2124.ARW": "blank test frame",
+  "Film Scan4189.ARW": "blank frame",
+  "Film Scan4190.ARW": "blank frame",
+  "Film Scan4197.ARW": "blank frame",
+  "Film Scan6977.ARW": "blank frame",
+  "Film Scan9038.ARW": "blank frame",
+  "Film Scan9796.ARW": "blank frame",
+  "Scan_001025.ARW": "rebate text inside the frame edge",
+  "Scan_001030.ARW": "blank frame",
+  "Scan_001073.ARW": "two half frames",
+  "Scan_001093.ARW": "two half frames",
+  "Scan_001130.ARW": "two half frames",
+  "Scan_001161.ARW": "two half frames",
+  "Scan_001169.ARW": "frame split by the holder",
+  "Scan_001173.ARW": "frame split by the holder",
+  "Scan_7270.ARW": "frame split by the holder",
+  "Scan_7271.ARW": "frame split by the holder"
+ }
+}
