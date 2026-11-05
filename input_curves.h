@@ -204,10 +204,10 @@ struct CurveFitOptions {
   int max_evals = 8000;
   float polish_step0 = 0.02f;   // the joint fit's coordinate polish: first step, and its budget
   int polish_max_evals = 600;
-  // Step 2 options, off by default (the defaults reproduce the joint fit):
+  // Step 2 options (hold_slope on; the others off, which reproduces the joint fit):
   int starts = 1;               // seeds: no curves, then a = +-start_a on G and B in turn; the lowest loss wins
   float start_a = 0.06f;
-  bool hold_slope = false;      // InputCurves::hold for the fitted curves
+  bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
   float l_weight = 1.0f;        // weight of the cells' L* residuals in the loss (lightness is held by the constraint)
   float huber = 0.0f;           // > 0: each residual through a Huber function with this threshold (in sigma units)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
