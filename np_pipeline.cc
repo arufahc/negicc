@@ -1634,17 +1634,18 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.film_prof = tgt.film_prof;
       c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
-      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (and searches
-      // its range), so --target without -E starts where Auto would on that bracket. Before, the bundle's e_center
-      // over the first row's scale, up to a few stops off (a black render, or one stop dark on TriLED). The bounds
-      // are ratios to the centre.
+      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (Step 2, the
+      // E its bootstrap starts the bracket from) and searches the bracket's range as the bundle search does, so
+      // --target without -E starts where Auto would on that bracket. Before, the bundle's e_center over the first
+      // row's scale, up to a few stops off (a black render, or one stop dark on TriLED). The bounds are ratios to the
+      // centre.
       const int ti = c.bundle_target_idx;
       if (ti < (int)scan.bracket_exposure.size() && scan.bracket_exposure[ti].valid) {
         const BracketExposure& be = scan.bracket_exposure[ti];
         cfg.has_custom_bounds = true;
-        cfg.custom_e_center = be.e_center;
-        cfg.custom_e_bounds[0] = be.search_lo / be.e_center;
-        cfg.custom_e_bounds[1] = be.search_hi / be.e_center;
+        cfg.custom_e_center = be.e_metered;
+        cfg.custom_e_bounds[0] = be.search_lo / be.e_metered;
+        cfg.custom_e_bounds[1] = be.search_hi / be.e_metered;
         cfg.custom_e_bounds[2] = 1.0f;
       } else if (cfg.has_custom_bounds) {
         cfg.custom_e_center = (float)((double)cfg.custom_e_center / row_scale[0]);
