@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <omp.h>
+
 #include <algorithm>
 
 void normalize_rotation(int& rot_cw, bool& hflip, bool& vflip) {
