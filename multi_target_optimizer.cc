@@ -751,6 +751,14 @@ class SearchFrame {
                 << stats_.grid_w << "x" << stats_.grid_h << std::endl;
       return false;
     }
+    // Every loss divides by sigma: a non-positive or non-finite sigma, or a non-finite mu, would make the search's
+    // and the curve fit's losses NaN or infinite (as dinov3_auto_solver.cc's infer_checked rejects them).
+    for (size_t i = 0; i < n; ++i) {
+      if (!(r.sigma[i] > 0.0f) || !std::isfinite(r.sigma[i]) || !std::isfinite(r.mu[i])) {
+        std::cerr << "ERROR! DINOv3 intent field has a non-positive or non-finite sigma or mu at " << i << std::endl;
+        return false;
+      }
+    }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     return true;
@@ -1669,6 +1677,13 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.intent_grid_w = chosen.grid_w;
   out.intent_grid_h = chosen.grid_h;
   out.intent_params = chosen.params;
+  {
+    Enclosure enc{};
+    if (bounds_of(chosen.target_idx, enc) && enc.feasible) {
+      out.e_range_lo = white_light ? enc.e_min : enc.e_min / e_norm;
+      out.e_range_hi = white_light ? enc.e_max : enc.e_max / e_norm;
+    }
+  }
   fr.write_timings();
   out.total_time = Clock::now() - t_start;
   return true;
@@ -1813,6 +1828,24 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const float* merged = fr.input_matrix();
   const float e_int = res.params.e;  // white light (checked above): the search's E is already in this frame's units
   out.params_before = res.params;
+  out.options = fit_opts;
+
+  // The intent field the fit scores against: the search's, predicted from the preview at intent_params. The highlight
+  // pullback (and the clip fallback) move E, or the bracket's parameters, after that preview, so there the field is
+  // predicted again from a preview at the search's final parameters on the bracket's own profile: before, the fit ran
+  // at the pulled-back E against a field predicted at another E. One DINOv3 inference, only then.
+  std::vector<float> mu = res.intent_mu, sigma = res.intent_sigma;
+  {
+    const ConversionParams& ip = res.intent_params;  // the search's own units, which are this frame's on white light
+    auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
+    if (moved(ip.e, res.params.e) || moved(ip.g, res.params.g) || moved(ip.b, res.params.b) ||
+        moved(ip.shoulder, res.params.shoulder)) {
+      std::vector<uint8_t> preview;
+      fr.render_preview(idx, res.params, preview);
+      if (!fr.predict(preview, mu, sigma)) return false;
+      out.intent_repredicted = true;
+    }
+  }
 
   // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel.
   const negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
@@ -1828,66 +1861,60 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                 opts.film_base_rgb_d);
   };
   float q995_auto = 0.0f;
-  out.x_hi_fit = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
-  const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_fit, encoding);
+  out.x_hi_auto = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
+  const negicc::PipelineConfig cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
   // keeps.
-  const float target_L = negicc::grid_median_L(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+  const float target_L =
+      negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
-  out.parts_auto = negicc::grid_intent_loss_parts(cfg, merged, e_int, res.params.g, res.params.b, stats.grid.data(),
-                                                  (int)n, res.intent_mu.data(), res.intent_sigma.data());
+  out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
+                                                  stats.grid.data(), (int)n, mu.data(), sigma.data());
 
-  // 1. The joint fit: g, b and the curves, each candidate scored at the E that keeps target_L (negicc::
-  //    fit_input_curves_joint), its curves anchored at its own E, g and b. Before, the fit ran at Auto's E and the
-  //    re-meter moved E afterwards, which moved the colour the fit had chosen.
+  // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
+  // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
+  // and the curves may not take E further out of the bracket's range than Auto took it; without a range, 2 stops
+  // either side of Auto's E, as before. A result whose E would need to leave them falls back to Auto's (step 2).
+  const float margin = std::exp2(0.1f);
+  if (res.e_range_lo > 0.0f && res.e_range_hi >= res.e_range_lo) {
+    out.e_lo = std::min(res.e_range_lo, e_int / margin);
+    out.e_hi = std::max(res.e_range_hi, e_int * margin);
+  } else {
+    out.e_lo = e_int * 0.25f;
+    out.e_hi = e_int * 4.0f;
+  }
+
   const int table_n[2] = {prof.data.in_trc_size[1], prof.data.in_trc_size[2]};
-  const negicc::JointCurveFit jf = negicc::fit_input_curves_joint(cfg, cf, e_int, res.params.g, res.params.b,
-                                                                  res.intent_mu.data(), res.intent_sigma.data(),
-                                                                  target_L, table_n, fit_opts);
-  out.fit.curves = jf.curves;
-  out.fit.g = jf.g;
-  out.fit.b = jf.b;
-  out.fit.loss_before = jf.loss_before;
-  out.fit.loss_after = jf.loss_after;
-  out.fit.evaluations = jf.evaluations;
-  out.fit_e = jf.e;
-  out.fit_renders = jf.renders;
-  out.fit_iterations = jf.iterations;
-  out.fit_converged = jf.converged;
-  out.fit_polish = jf.polish_evaluations;
-  out.fit_start = jf.start;
-  if (opts.verbose) {
-    const negicc::InputCurves& c = out.fit.curves;
-    std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
-              << " k " << fixed(c.k[1], 4) << "; E " << fixed(jf.e, 4) << " g " << fixed(out.fit.g, 4) << " b "
-              << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
-              << fixed((float)out.fit.loss_after, 3) << " (" << jf.iterations << " steps, " << jf.evaluations
-              << " evaluations, " << jf.renders << " renders for E)\n";
-  }
-  {  // the loss's parts right after the fit, at its own E, on the real combined tables
-    negicc::CombinedProfile c0;
-    c0.build(prof.data, out.fit.curves);
-    negicc::PipelineConfig c0cfg = cfg;
-    c0cfg.profile = c0.data;
-    out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, stats.grid.data(),
-                                                   (int)n, res.intent_mu.data(), res.intent_sigma.data());
-  }
-
-  // 2. E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
-  //    analytically instead of through the tables), the curves anchored at each E it tries; alternated with the
-  //    roll-off the export measures at that E on the combined profile, until the roll-off holds still. After each
-  //    call x (and q995) is the roll-off measured at e_new on the profile composed at e_new, which is the profile step 3
-  //    builds: the export reuses it instead of measuring it again. remeter_passes counts the passes of every call.
   negicc::CombinedProfile comb;
-  float x = out.x_hi_fit, q995 = q995_auto, e_new = e_int;
+  float x = out.x_hi_auto, q995 = q995_auto, e_new = e_int;
   constexpr int kMaxPasses = 6;
+  bool clipped = false;
   out.remeter_passes = 0;
-  auto remeter = [&]() {
+  // Auto's own result, no curves (the fallback of the steps below).
+  auto fall_back = [&](const char* why) {
+    for (int ch = 0; ch < 2; ++ch) {
+      out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
+      out.shape_scale_ch[ch] = 0.0f;
+    }
+    out.fit.g = res.params.g;
+    out.fit.b = res.params.b;
+    e_new = e_int;
+    x = out.x_hi_auto;
+    q995 = q995_auto;
+    out.fallback = why;
+  };
+  // E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
+  // analytically instead of through the tables), around the fit's E, the curves anchored at each E it tries;
+  // alternated with the roll-off the export measures at that E on the combined profile, until the roll-off holds
+  // still. After each call x (and q995) is the roll-off measured at e_new on the profile composed at e_new, which is
+  // the profile step 3 builds: the export reuses it instead of measuring it again. remeter_passes counts the passes of
+  // every call; clipped is the last pass's (its target outside the bounds).
+  auto remeter = [&](float e_centre) {
     out.remeter_converged = false;
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out.remeter_passes;
-      e_new = negicc::remeter_e_median(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
-                                       e_int, out.fit.g, out.fit.b, target_L);
+      e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
+                                          e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, target_L, &clipped);
       comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
       float q = 0.0f;
       const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b, &q);
@@ -1899,8 +1926,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       x = x_new;
     }
   };
-  remeter();
-
   // The shape (monotonic, within max_dev_stops of the base TRC over the whole table) was checked where the fit anchored
   // the curves; anchored at the re-metered E, ref moves and the table reaches further below it, so a curve can step
   // just past the limit (on the 41 white-LED frames up to 0.002 stops, on 4 frames). There that channel's a and k are
@@ -1911,43 +1936,93 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     bool all = true;
     for (int ch = 0; ch < 2; ++ch) {
       t[ch] = shape_scale_of([&](float s) {
-        return negicc::curve_shape_ok(s * c.a[ch], s * c.k[ch], c.u_med[ch], c.ref[ch], prof.data.in_trc_size[ch + 1],
+        return negicc::curve_shape_ok(s * c.a[ch], s * c.k[ch], c.u_med[ch], c.ref[ch], table_n[ch],
                                       fit_opts.max_dev_stops, c.u_hold(ch));
       });
       all = all && t[ch] == 1.0f;
     }
     return all;
   };
-  out.shape_scale_ch[0] = out.shape_scale_ch[1] = 1.0f;
-  bool shape_ok = false;
-  for (int round = 0; round < 4; ++round) {
-    float t[2];
-    if (shape_scales(out.fit.curves, e_new, t)) {
-      shape_ok = true;
+
+  // 1. The joint fit: g, b and the curves, each candidate scored at the E that keeps target_L (negicc::
+  //    fit_input_curves_joint), its curves anchored at its own E, g and b; then 2. the re-meter and the shape check.
+  //    The fit renders with a roll-off, which the export measures again at the result on the combined profile: where
+  //    that differs from the one the fit ran with (the first fit runs with Auto's), the fit runs again with it, up to
+  //    two more times. Before, the fit ran once with Auto's roll-off and the re-meter then moved E for another.
+  constexpr int kMaxFitPasses = 3;
+  float x_fit = out.x_hi_auto;
+  out.fit_passes = 0;
+  for (int pass = 0; pass < kMaxFitPasses; ++pass) {
+    ++out.fit_passes;
+    out.x_hi_fit = x_fit;
+    out.fallback = nullptr;
+    const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding);
+    const negicc::JointCurveFit jf =
+        negicc::fit_input_curves_joint(cfg, cf, e_int, res.params.g, res.params.b, mu.data(), sigma.data(), target_L,
+                                       table_n, fit_opts, out.e_lo, out.e_hi);
+    out.fit.curves = jf.curves;
+    out.fit.g = jf.g;
+    out.fit.b = jf.b;
+    out.fit.loss_before = jf.loss_before;
+    out.fit.loss_after = jf.loss_after;
+    out.fit.evaluations = jf.evaluations;
+    out.fit_e = jf.e;
+    out.fit_renders = jf.renders;
+    out.fit_iterations = jf.iterations;
+    out.fit_converged = jf.converged;
+    out.fit_polish = jf.polish_evaluations;
+    out.fit_start = jf.start;
+    if (opts.verbose) {
+      const negicc::InputCurves& c = out.fit.curves;
+      std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
+                << " k " << fixed(c.k[1], 4) << "; E " << fixed(jf.e, 4) << " g " << fixed(out.fit.g, 4) << " b "
+                << fixed(out.fit.b, 4) << ", loss " << fixed((float)out.fit.loss_before, 3) << " -> "
+                << fixed((float)out.fit.loss_after, 3) << " (" << jf.iterations << " steps, " << jf.evaluations
+                << " evaluations, " << jf.renders << " renders for E, roll-off " << fixed(x_fit, 3) << ")\n";
+    }
+    if (!jf.feasible) {  // not even Auto's g and b keep target_L within the bounds on the model
+      fall_back("clip");
       break;
     }
-    if (round == 3) break;  // three rounds of scaling and re-metering did not settle
-    for (int ch = 0; ch < 2; ++ch) {
-      out.fit.curves.a[ch] *= t[ch];
-      out.fit.curves.k[ch] *= t[ch];
-      out.shape_scale_ch[ch] *= t[ch];
+    {  // the loss's parts right after the fit, at its own E, on the real combined tables
+      negicc::CombinedProfile c0;
+      c0.build(prof.data, out.fit.curves);
+      negicc::PipelineConfig c0cfg = cfg;
+      c0cfg.profile = c0.data;
+      out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, stats.grid.data(),
+                                                     (int)n, mu.data(), sigma.data());
     }
-    remeter();
-  }
-  if (!shape_ok) {
-    // Still past the limit: no curves, and Auto's own result (its E, g and b and its roll-off on the bracket's profile).
-    // Before, the curves were dropped but the fit's g and b, chosen together with them, were kept and E re-metered
-    // for them, a result that was neither the fit's nor Auto's.
-    for (int ch = 0; ch < 2; ++ch) {
-      out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
-      out.shape_scale_ch[ch] = 0.0f;
+
+    // 2. The re-meter from the roll-off the fit ran with, around the fit's E (before, around Auto's), and the shape at
+    //    the re-metered anchor.
+    x = x_fit;
+    remeter(jf.e);
+    out.shape_scale_ch[0] = out.shape_scale_ch[1] = 1.0f;
+    bool shape_ok = false;
+    for (int round = 0; round < 4 && !clipped; ++round) {
+      float t[2];
+      if (shape_scales(out.fit.curves, e_new, t)) {
+        shape_ok = true;
+        break;
+      }
+      if (round == 3) break;  // three rounds of scaling and re-metering did not settle
+      for (int ch = 0; ch < 2; ++ch) {
+        out.fit.curves.a[ch] *= t[ch];
+        out.fit.curves.k[ch] *= t[ch];
+        out.shape_scale_ch[ch] *= t[ch];
+      }
+      remeter(e_new);
     }
-    out.fit.g = res.params.g;
-    out.fit.b = res.params.b;
-    e_new = e_int;
-    x = out.x_hi_fit;
-    q995 = q995_auto;
-    out.fallback = "shape";
+    // E outside the bounds on the real tables, or the shape still past the limit: no curves, and Auto's own result
+    // (its E, g and b and its roll-off on the bracket's profile). Before, a failed shape dropped the curves but kept
+    // the fit's g and b, chosen together with them, and re-metered E for them, a result that was neither the fit's
+    // nor Auto's; a clipped E was taken as it came.
+    if (clipped || !shape_ok) {
+      fall_back(clipped ? "clip" : "shape");
+      break;
+    }
+    if (x == x_fit) break;  // the fit ran with the roll-off the export measures at its result
+    x_fit = x;
   }
   out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
 
@@ -1955,7 +2030,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   //    combined profile built from them in place: every later use of the bracket renders through it.
   out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
   apply_input_curves(prof, out.fit.curves);
-  out.x_hi = x;  // measured on this profile at these parameters (step 2)
+  out.x_hi = x;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
   out.x_hi_q995 = q995;
   out.rolloff_measured = encoding == ENCODE_SRGB;
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
@@ -1963,13 +2038,14 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.target_median_L = target_L;
   out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
   out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(),
-                                                    (int)n, res.intent_mu.data(), res.intent_sigma.data());
+                                                    (int)n, mu.data(), sigma.data());
   out.loss_export = out.parts_export.total();
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
-              << " b " << fixed(out.params.b, 4) << "\n";
+              << " b " << fixed(out.params.b, 4) << (out.fallback ? "; no curves, Auto's result (" : "")
+              << (out.fallback ? out.fallback : "") << (out.fallback ? ")" : "") << "\n";
   }
   return true;
 }

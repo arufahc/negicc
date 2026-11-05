@@ -162,8 +162,13 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
   return true;
 }
 
+// The smallest sigma the losses divide by. The intent field's sigma is checked positive and finite where it is
+// predicted (SearchFrame::predict), but a sigma just above 0 would still let one cell's residual swamp the fit; the
+// floor is far below any sigma DINOv3 predicts (a few L* or a*/b* units), so it never moves an ordinary loss.
+constexpr float kSigmaFloor = 1e-3f;
+
 // The intent loss of the grid through cfg (its profile possibly combined) at (e, g, b): mean over cells of
-// |(Lab - mu) / sigma|^2, the sum of cpu_intent_loss's three terms.
+// |(Lab - mu) / sigma|^2, the sum of cpu_intent_loss's three terms (3 z2 in multi_target_optimizer.h's terms).
 // The loss's lightness and colour parts: mean over cells of ((L - mu_L) / sigma_L)^2, and of the a* and b* terms.
 struct LossParts {
   double L = 0.0, ab = 0.0;
@@ -178,9 +183,9 @@ inline LossParts grid_intent_loss_parts(const PipelineConfig& cfg, const float* 
   for (int i = 0; i < n; ++i) {
     const Rgb lin = convert_pixel_linear(cfg, m, grid + 3 * i);
     const Lab lab = linear_srgb_to_lab(to_display(cfg, lin));
-    const float dL = (lab.L - mu[i * 3]) / sigma[i * 3];
-    const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
-    const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
+    const float dL = (lab.L - mu[i * 3]) / std::max(sigma[i * 3], kSigmaFloor);
+    const float da = (lab.a - mu[i * 3 + 1]) / std::max(sigma[i * 3 + 1], kSigmaFloor);
+    const float db = (lab.b - mu[i * 3 + 2]) / std::max(sigma[i * 3 + 2], kSigmaFloor);
     s.L += static_cast<double>(dL) * dL;
     s.ab += static_cast<double>(da) * da + static_cast<double>(db) * db;
   }
@@ -204,7 +209,11 @@ struct CurveFitOptions {
   float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
   float g_bound = 0.5f;       // |g - g0| <= this
   float b_bound = 0.6f;       // |b - b0| <= this
-  float lambda = 0.0f;        // penalty on a^2 + k^2 (Iterations 227 and 228: 0)
+  // Penalty on the four curve numbers, lambda (aG^2 + kG^2 + aB^2 + kB^2), added to the fits' objective z2 (the mean
+  // of the squared residuals over the 3 n cell terms). The gains and the curves' slope terms (1 + a) move the
+  // residuals almost alike, so without it the Levenberg-Marquardt normal matrix is nearly singular along that
+  // direction; the small default only fixes the direction the residuals leave free (Iterations 227 and 228 ran 0).
+  float lambda = 1e-3f;
   float step0_gain = 0.08f;
   float step0_curve = 0.05f;
   float step_min = 1e-4f;
@@ -224,6 +233,11 @@ struct CurveFitOptions {
 #else
   bool solve_e = true;
 #endif
+  // The tolerance, in L*, of each candidate's E solve (JointCurveModel::solve_e). The Jacobian's probes move a
+  // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 (before) left the probe's E
+  // either unchanged or moved by up to the tolerance, so the derivative through E was noise. 2e-5 is a few float steps
+  // of L* near 50.
+  float e_tol_L = 2e-5f;
 };
 
 struct CurveFitResult {
@@ -248,6 +262,7 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
   CombinedProfile comb;
   auto curves_of = [&](const float* p) {
     InputCurves t;
+    t.hold = o.hold_slope;  // as the joint fit's curves (before, this fit ignored hold_slope)
     t.a[0] = p[2];
     t.k[0] = p[3];
     t.a[1] = p[4];
@@ -258,14 +273,15 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
     const InputCurves t = curves_of(p);
     ++evals;
     // Monotonic and bounded over the whole input table, or not a candidate.
-    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.ref[0], base.in_trc_size[1], o.max_dev_stops) ||
-        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.ref[1], base.in_trc_size[2], o.max_dev_stops))
+    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.ref[0], base.in_trc_size[1], o.max_dev_stops, t.u_hold(0)) ||
+        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.ref[1], base.in_trc_size[2], o.max_dev_stops, t.u_hold(1)))
       return static_cast<double>(INFINITY);
     comb.build(base, t);
     cfg.profile = comb.data;
     const double pen = o.lambda * (static_cast<double>(p[2]) * p[2] + static_cast<double>(p[3]) * p[3] +
                                    static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
-    return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) + pen;
+    // z2 (grid_intent_loss is the sum of the three per-cell means, 3 z2) plus the penalty, as the joint fit's.
+    return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) / 3.0 + pen;
   };
   // The gains keep a positive floor: at g or b = 0 the channel's ref (the film base through the gain) is 0 and the
   // curve's anchor collapses (u = log2(v / ref) is undefined), so a wide g_bound or b_bound never reaches it.
@@ -277,7 +293,11 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
   CurveFitResult r;
   int evals = 0;
   double best = objective(p, evals);
-  r.loss_before = best;
+  {
+    comb.build(base, curves_of(p));
+    cfg.profile = comb.data;
+    r.loss_before = grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma);
+  }
   while (evals < o.max_evals) {
     bool improved = false;
     for (int d = 0; d < 6 && evals < o.max_evals; ++d) {
@@ -321,27 +341,35 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
 // g, b and the four curve numbers fitted against the intent field with E tied to the lightness constraint: each
 // candidate is scored at the E that renders the grid's median L* at target_L (Auto's), so the fit chooses its colour at
 // the lightness the export will have, instead of fitting at Auto's E and moving E afterwards (which moved the colour
-// it had fitted). The loss is the same (grid_intent_loss), evaluated on a per-cell model:
+// it had fitted). The objective is z2 (the mean of the cells' squared residuals over their 3 n terms, grid_intent_loss
+// / 3) plus CurveFitOptions::lambda times the curves' squared numbers, evaluated on a per-cell model:
 //   - each cell's three matrix rows are taken once (merged · rgb), and a candidate's (e, g, b) only scales them;
 //   - the curve is applied to each cell's G and B value analytically, in(curve(v)), in place of composing the two
 //     4096-entry tables per candidate (the export's tables sample the same function at their entries);
-//   - E is solved by secant steps on log E warm-started from the previous candidate's E (one to three grid renders),
-//     with a bisection as the fallback;
-//   - the solver is Levenberg-Marquardt on the cells' residuals (dL, da, db) / sigma, with a forward-difference
-//     Jacobian, box bounds by projection and the shape (curve_shape_ok over the whole table, at each candidate's anchor)
-//     by rejecting a step and raising the damping.
+//   - E is solved within [e_lo, e_hi] by secant steps on log E warm-started from the previous candidate's E (one to
+//     three grid renders), with a bracketed bisection as the fallback; a candidate whose E would leave the bounds is
+//     not one (the export could not render it at target_L there);
+//   - the solver is Levenberg-Marquardt on the residuals (dL, da, db) / (sigma sqrt(3 n)) and sqrt(lambda) times the
+//     curve numbers, with a forward-difference Jacobian, box bounds by projection and the shape (curve_shape_ok over
+//     the whole table, at each candidate's anchor) by cutting a step back to the furthest point that keeps it (its E
+//     solved at each point tried) or rejecting it and raising the damping.
 // The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
 // it by the small difference between the model and the tables.
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
+  // The data loss (grid_intent_loss's units: the sum of the three per-cell means, without the penalty) at the first
+  // seed (Auto's g and b, no curves, E solved) and at the result.
   double loss_before = 0.0, loss_after = 0.0;
-  int evaluations = 0;  // residual evaluations (each with its E solved)
-  int renders = 0;      // grid median renders spent solving E
+  int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
+  int renders = 0;      // grid median renders spent solving E (the evaluations' and the cut-backs')
   int iterations = 0;   // accepted Levenberg-Marquardt steps
-  int polish_evaluations = 0;  // of them, the coordinate polish's
+  int polish_evaluations = 0;  // of the evaluations, the coordinate polish's (counted the same way)
   int start = 0;               // the seed that won (CurveFitOptions::starts)
-  bool converged = false;
+  bool converged = false;      // every feasible run settled (a step or gain below tolerance), none stalled
+  // False when no seed is feasible (not even Auto's g and b without curves keeps target_L within the E bounds): the
+  // result is then Auto's g, b and e0 with no curves, which the caller should not take as a fit.
+  bool feasible = true;
 };
 
 class JointCurveModel {
@@ -395,8 +423,9 @@ class JointCurveModel {
     return L_[f_.n / 2];
   }
 
-  // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the mean of
-  // their squares (grid_intent_loss).
+  // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the sum of their
+  // squares over the n cells (grid_intent_loss's units, the sum of the three per-cell means; the fit's objective
+  // divides the residuals by sqrt(3 n)).
   // l_weight and huber reshape the residuals (CurveFitOptions); 1 and 0 leave them as grid_intent_loss's.
   void set_weighting(float l_weight, float huber) {
     l_scale_ = std::sqrt(std::max(l_weight, 0.0f));
@@ -414,43 +443,89 @@ class JointCurveModel {
     };
     for (int i = 0; i < f_.n; ++i) {
       const Lab lab = cell_lab(i, e, g, b, c);
-      r[3 * i] = robust(l_scale_ * (lab.L - mu_[3 * i]) / sigma_[3 * i]);
-      r[3 * i + 1] = robust((lab.a - mu_[3 * i + 1]) / sigma_[3 * i + 1]);
-      r[3 * i + 2] = robust((lab.b - mu_[3 * i + 2]) / sigma_[3 * i + 2]);
+      r[3 * i] = robust(l_scale_ * (lab.L - mu_[3 * i]) / std::max(sigma_[3 * i], kSigmaFloor));
+      r[3 * i + 1] = robust((lab.a - mu_[3 * i + 1]) / std::max(sigma_[3 * i + 1], kSigmaFloor));
+      r[3 * i + 2] = robust((lab.b - mu_[3 * i + 2]) / std::max(sigma_[3 * i + 2], kSigmaFloor));
       s += r[3 * i] * r[3 * i] + r[3 * i + 1] * r[3 * i + 1] + r[3 * i + 2] * r[3 * i + 2];
     }
     return f_.n ? s / f_.n : 0.0;
   }
 
-  // E with the grid's median L* at target_L (a larger E renders darker): secant steps on log E from e_warm, then a
-  // bisection over [e0 / 4, e0 * 4] when they do not settle within tol.
-  float solve_e(float g, float b, const InputCurves& shape, float target_L, float e_warm, float e0, int& renders,
-                float tol = 1e-3f) {
-    const float lo_t = std::log(e0 * 0.25f), hi_t = std::log(e0 * 4.0f);
+  // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with
+  // log E, each cell's L* does). Secant steps on log E from e_warm (clamped into the bounds), each new point kept in a
+  // bracket of the two nearest points either side of the target; where the secant leaves the bracket or stalls, the
+  // bounds the bracket lacks are tested and the bracket bisected. False when the target lies outside the bounds (the
+  // median at one bound is already past it): e is that bound, and the point is not one the export can render at
+  // target_L. Before, a warm start at a bound was stepped outward and clamped back onto itself (the secant then saw
+  // two equal points and gave up), the fallback bisected [e0 / 4, 4 e0] without testing its ends, and an unreachable
+  // target returned a bound as if it were the answer.
+  bool solve_e(float g, float b, const InputCurves& shape, float target_L, float e_warm, float e_lo, float e_hi,
+               float tol, int& renders, float& e) {
+    const float lo_t = std::log(e_lo), hi_t = std::log(e_hi);
     auto f = [&](float t) {
       ++renders;
       return median_L(std::exp(t), g, b, shape) - target_L;
     };
+    // The bracket: ta the largest log E seen with the median above the target (f > 0), tc the smallest below it.
+    bool has_a = false, has_c = false;
+    float ta = lo_t, tc = hi_t;
+    auto note = [&](float t, float ft) {
+      if (ft > 0.0f) {
+        if (!has_a || t > ta) ta = t;
+        has_a = true;
+      } else {
+        if (!has_c || t < tc) tc = t;
+        has_c = true;
+      }
+    };
+    auto at = [&](float t, bool reached) {
+      e = std::exp(t);
+      return reached;
+    };
     float t0 = std::min(hi_t, std::max(lo_t, std::log(e_warm))), f0 = f(t0);
-    if (std::fabs(f0) <= tol) return std::exp(t0);
-    float t1 = std::min(hi_t, std::max(lo_t, t0 + (f0 > 0.0f ? 0.05f : -0.05f))), f1 = f(t1);
-    for (int it = 0; it < 6; ++it) {
-      if (std::fabs(f1) <= tol) return std::exp(t1);
+    if (std::fabs(f0) <= tol) return at(t0, true);
+    note(t0, f0);
+    // The second point: 0.05 in log E towards the target. Where t0 sits on the bound that step would cross, the
+    // target is beyond the bound (the median is monotonic in log E): not reachable.
+    const float d = f0 > 0.0f ? 0.05f : -0.05f;
+    const float t_bound = d > 0.0f ? hi_t : lo_t;
+    if (t0 == t_bound) return at(t0, false);
+    float t1 = (d > 0.0f) ? std::min(hi_t, t0 + d) : std::max(lo_t, t0 + d), f1 = f(t1);
+    if (std::fabs(f1) <= tol) return at(t1, true);
+    note(t1, f1);
+    if (t1 == t_bound && (f1 > 0.0f) == (f0 > 0.0f)) return at(t1, false);  // still short at the bound
+    for (int it = 0; it < 8; ++it) {
       if (f1 == f0) break;
       const float t2 = t1 - f1 * (t1 - t0) / (f1 - f0);
-      if (!(t2 > lo_t && t2 < hi_t)) break;
+      const float b_lo = has_a ? ta : lo_t, b_hi = has_c ? tc : hi_t;
+      if (!(t2 > b_lo && t2 < b_hi)) break;  // outside the bracket (or the bounds): bisect instead
       t0 = t1;
       f0 = f1;
       t1 = t2;
       f1 = f(t1);
+      if (std::fabs(f1) <= tol) return at(t1, true);
+      note(t1, f1);
     }
-    float lo = lo_t, hi = hi_t;  // the fallback: median L* falls with log E
-    for (int it = 0; it < 40; ++it) {
-      const float mid = 0.5f * (lo + hi);
-      if (f(mid) < 0.0f) hi = mid;
-      else lo = mid;
+    // The bisection needs both sides: test the bound the bracket lacks (the target beyond it: not reachable).
+    if (!has_a) {
+      const float fl = f(lo_t);
+      if (std::fabs(fl) <= tol) return at(lo_t, true);
+      if (fl < 0.0f) return at(lo_t, false);
+      note(lo_t, fl);
     }
-    return std::exp(0.5f * (lo + hi));
+    if (!has_c) {
+      const float fh = f(hi_t);
+      if (std::fabs(fh) <= tol) return at(hi_t, true);
+      if (fh > 0.0f) return at(hi_t, false);
+      note(hi_t, fh);
+    }
+    for (int it = 0; it < 40 && tc - ta > 1e-6f; ++it) {
+      const float mid = 0.5f * (ta + tc), fm = f(mid);
+      if (std::fabs(fm) <= tol) return at(mid, true);
+      note(mid, fm);
+    }
+    e = std::exp(0.5f * (ta + tc));
+    return true;
   }
 
  private:
@@ -473,12 +548,16 @@ class JointCurveModel {
 };
 
 // The joint fit from Auto's (e0, g0, b0) and no curves; cfg carries the bracket's own profile and the export's encoding
-// and roll-off. target_L: Auto's grid median L*. table_n: the G and B input tables' sizes, for the shape check.
+// and roll-off. target_L: Auto's grid median L*. table_n: the G and B input tables' sizes, for the shape check. e_lo,
+// e_hi: the bounds of every candidate's E (0: e0 / 4 and 4 e0, as before they were given); they should hold e0.
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
-                                            const CurveFitOptions& o = CurveFitOptions()) {
+                                            const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
+                                            float e_hi = 0.0f) {
   JointCurveModel model(cfg, f, mu, sigma);
   model.set_weighting(o.l_weight, o.huber);
+  if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
+  if (!(e_hi > e_lo)) e_hi = std::max(e_lo, e0 * 4.0f);
   // The gains' positive floor, as in fit_input_curves.
   const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
                        -o.curve_bound, -o.curve_bound, -o.curve_bound};
@@ -494,35 +573,96 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   };
   JointCurveFit out;
   int renders = 0;
-  // A point: its E (solved, or Auto's) and its residuals; false when its curves leave the shape at its anchor.
-  auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, bool check_shape) {
+  const double inv_sqrt_3n = f.n > 0 ? 1.0 / std::sqrt(3.0 * f.n) : 0.0;
+  const double sqrt_lambda = std::sqrt(std::max(0.0, static_cast<double>(o.lambda)));
+  // A point's E (solved within the bounds, or e0) and whether the point is a candidate: its E reaches target_L within
+  // the bounds and (check_shape) its curves keep the shape at its anchor.
+  auto solve_point = [&](const float* p, float e_warm, float& e, bool check_shape) {
     const InputCurves shape = shape_of(p);
-    e = o.solve_e ? model.solve_e(p[0], p[1], shape, target_L, e_warm, e0, renders) : e0;
-    if (check_shape) {
-      const InputCurves c = model.anchored(shape, e, p[0], p[1]);
-      if (!curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) ||
-          !curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1)))
-        return false;
+    if (o.solve_e) {
+      if (!model.solve_e(p[0], p[1], shape, target_L, e_warm, e_lo, e_hi, o.e_tol_L, renders, e)) return false;
+    } else {
+      e = e0;
     }
-    cost = model.residuals(e, p[0], p[1], shape, r);
+    if (!check_shape) return true;
+    const InputCurves c = model.anchored(shape, e, p[0], p[1]);
+    return curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) &&
+           curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1));
+  };
+  // A point evaluated: its E, the solver's residual vector r (the cells' over sqrt(3 n), then the penalty's four),
+  // the objective (the sum of r's squares) and the data loss; false when it is not a candidate (solve_point).
+  auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
+                      bool check_shape) {
     ++out.evaluations;
-    return true;
+    if (!solve_point(p, e_warm, e, check_shape)) return false;
+    data = model.residuals(e, p[0], p[1], shape_of(p), r);
+    const size_t nd = r.size();
+    double sum = 0.0;
+    for (size_t k = 0; k < nd; ++k) {
+      r[k] *= inv_sqrt_3n;
+      sum += r[k] * r[k];
+    }
+    r.resize(nd + 4);
+    for (int j = 0; j < 4; ++j) {
+      r[nd + j] = sqrt_lambda * p[2 + j];
+      sum += r[nd + j] * r[nd + j];
+    }
+    cost = sum;
+    return std::isfinite(cost);
+  };
+  // The furthest point p + t (q - p), t in [0, 1], that is a candidate (its E solved at each t tried, warm-started at
+  // e; t = 0, p itself, is one), by bisection; its t, and its E in e_t. Before, the shape was checked at p's E and the
+  // point then evaluated at its own, where it could fail again, so the solver stalled on the boundary.
+  auto cut_back = [&](const float* p, const float* q, float e, float& e_t) {
+    float t_ok = 0.0f, t_bad = 1.0f;
+    e_t = e;
+    for (int it = 0; it < 10; ++it) {
+      const float t = 0.5f * (t_ok + t_bad);
+      float qt[6];
+      for (int j = 0; j < 6; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
+      float et = e;
+      if (solve_point(qt, e, et, true)) {
+        t_ok = t;
+        e_t = et;
+      } else {
+        t_bad = t;
+      }
+    }
+    return t_ok;
   };
 
-  // One run of the solver and the polish from p_init; its result in p_out, e_out, cost_out.
-  auto run = [&](const float* p_init, bool first, float* p_out, float& e_out, double& cost_out, bool& settled_out) {
+  // One run of the solver and the polish from p_init; its result in p_out, e_out, cost_out (the objective), data_out
+  // (the data loss); feasible_out false when not even the seed's no-curve end is a candidate.
+  auto run = [&](const float* p_init, bool first, float* p_out, float& e_out, double& cost_out, double& data_out,
+                 bool& settled_out, bool& feasible_out) {
     float p[6];
     std::copy(p_init, p_init + 6, p);
     float e = e0;
     std::vector<double> r, rt, rj;
-    double cost = 0.0;
-    evaluate(p, e0, e, r, cost, false);
-    if (first) out.loss_before = cost;
+    double cost = 0.0, data = 0.0;
+    settled_out = false;
+    feasible_out = false;
+    // The seed must be a candidate (before, it was evaluated without the shape check, so an infeasible seed could
+    // win): where its curves leave the shape or its E the bounds, they are cut back towards none.
+    if (!evaluate(p, e0, e, r, cost, data, true)) {
+      float none[6];
+      std::copy(p, p + 6, none);
+      for (int j = 2; j < 6; ++j) none[j] = 0.0f;
+      float e_none = e0;
+      if (!solve_point(none, e0, e_none, true)) return;
+      float e_t = e_none;
+      const float t = cut_back(none, p, e_none, e_t);
+      for (int j = 2; j < 6; ++j) p[j] = t * p[j];
+      if (!evaluate(p, e_t, e, r, cost, data, true)) return;
+    }
+    feasible_out = true;
+    if (first) out.loss_before = data;
     const int m = 6;
     double lambda = 1e-3;
     bool settled = false;
     for (int iter = 0; iter < 60 && !settled; ++iter) {
-      // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E).
+      // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E, to
+      // CurveFitOptions::e_tol_L, so the probe's E follows the parameter instead of the solver's tolerance).
       const size_t nr = r.size();
       std::vector<double> J(nr * m);
       for (int j = 0; j < m; ++j) {
@@ -531,8 +671,12 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
         const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
         q[j] += h;
         float ej = e;
-        double cj = 0.0;
-        evaluate(q, e, ej, rj, cj, false);
+        double cj = 0.0, dj = 0.0;
+        if (!evaluate(q, e, ej, rj, cj, dj, false) || rj.size() != nr) {
+          // The probe's E left the bounds: no derivative along j this iteration.
+          for (size_t k = 0; k < nr; ++k) J[k * m + j] = 0.0;
+          continue;
+        }
         for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
       }
       double A[6][6] = {}, gvec[6] = {};
@@ -580,26 +724,16 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
           break;
         }
         float eq = e;
-        double cq = 0.0;
-        bool feasible = evaluate(q, e, eq, rt, cq, true);
+        double cq = 0.0, dq = 0.0;
+        bool feasible = evaluate(q, e, eq, rt, cq, dq, true);
         if (!feasible) {
-          // The step leaves the shape: the furthest point along it that keeps the shape (the optimum of a strong cast
-          // usually sits on that boundary, and rejecting the whole step stalled the solver inside it).
-          float t_ok = 0.0f, t_bad = 1.0f;
-          for (int it = 0; it < 12; ++it) {
-            const float t = 0.5f * (t_ok + t_bad);
-            float qt[6];
-            for (int j = 0; j < m; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
-            const InputCurves c = model.anchored(shape_of(qt), e, qt[0], qt[1]);
-            if (curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) &&
-                curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1)))
-              t_ok = t;
-            else
-              t_bad = t;
-          }
+          // The step leaves the shape or the E bounds: the furthest candidate along it (the optimum of a strong cast
+          // usually sits on the shape's boundary, and rejecting the whole step stalled the solver inside it).
+          float e_t = e;
+          const float t_ok = cut_back(p, q, e, e_t);
           if (t_ok > 0.0f) {
             for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
-            feasible = evaluate(q, e, eq, rt, cq, true);
+            feasible = evaluate(q, e_t, eq, rt, cq, dq, true);
           }
         }
         if (feasible && cq < cost) {
@@ -608,6 +742,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
           e = eq;
           r.swap(rt);
           cost = cq;
+          data = dq;
           lambda = std::max(lambda / 3.0, 1e-9);
           accepted = true;
           ++out.iterations;
@@ -616,14 +751,13 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
           lambda *= 4.0;
         }
       }
-      if (!accepted) {
-        settled = true;  // no step lowers the loss at any damping tried
-        break;
-      }
+      // No step lowers the objective at any damping tried while the steps were not yet negligible: the solver stalled
+      // (before, this was reported as settled).
+      if (!accepted && !settled) break;
     }
-    // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the loss falls,
-    // steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where the
-    // Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
+    // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the objective
+    // falls, steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where
+    // the Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
     {
       float step = o.polish_step0;
       int polish = 0;
@@ -637,13 +771,14 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
             q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
             if (q[d] == p[d]) continue;
             float eq = e;
-            double cq = 0.0;
+            double cq = 0.0, dq = 0.0;
             ++polish;
-            if (evaluate(q, e, eq, rt, cq, true) && cq < cost) {
+            if (evaluate(q, e, eq, rt, cq, dq, true) && cq < cost) {
               std::copy(q, q + 6, p);
               e = eq;
               r.swap(rt);
               cost = cq;
+              data = dq;
               improved = true;
               break;
             }
@@ -656,34 +791,42 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     std::copy(p, p + 6, p_out);
     e_out = e;
     cost_out = cost;
+    data_out = data;
     settled_out = settled;
   };
 
   // The seeds: no curves, then a = +start_a and -start_a on G and on B in turn (CurveFitOptions::starts of them); the
-  // run with the lowest loss wins, the first on a tie.
+  // feasible run with the lowest objective wins, the first on a tie. The result starts as the first seed's point, so it
+  // is defined even when no run is feasible.
   const float seeds[5][2] = {{0.0f, 0.0f}, {1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
-  float p[6], e = e0;
-  double cost = INFINITY;
+  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f}, e = e0;
+  double cost = INFINITY, data = 0.0;
+  bool any = false;
   out.converged = true;
   for (int si = 0; si < std::max(1, std::min(o.starts, 5)); ++si) {
     float p0[6] = {g0, b0, seeds[si][0] * o.start_a, 0.0f, seeds[si][1] * o.start_a, 0.0f};
     float ps[6], es = e0;
-    double cs = 0.0;
-    bool settled = false;
-    run(p0, si == 0, ps, es, cs, settled);
+    double cs = 0.0, ds = 0.0;
+    bool settled = false, feasible = false;
+    run(p0, si == 0, ps, es, cs, ds, settled, feasible);
+    if (!feasible) continue;
     out.converged = out.converged && settled;
-    if (cs < cost) {
+    if (!any || cs < cost) {
       std::copy(ps, ps + 6, p);
       e = es;
       cost = cs;
+      data = ds;
       out.start = si;
+      any = true;
     }
   }
+  out.feasible = any;
+  if (!any) out.converged = false;
   out.g = p[0];
   out.b = p[1];
   out.e = e;
   out.curves = model.anchored(shape_of(p), e, p[0], p[1]);
-  out.loss_after = cost;
+  out.loss_after = any ? data : 0.0;
   out.renders = renders;
   return out;
 }
@@ -701,12 +844,17 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
 }
 
 // E re-metered so the grid's median L* through the combined profile at the fitted g, b equals target_L (Auto's): a
-// bisection in log E over [e0 / 4, e0 * 4] (a larger E renders darker), the curves (shape's a and k) anchored at each E
-// it tries, so the profile it measures is the one the export renders at that E. cfg carries the bracket's own profile.
+// bisection in log E (a larger E renders darker), the curves (shape's a and k) anchored at each E it tries, so the
+// profile it measures is the one the export renders at that E. cfg carries the bracket's own profile. The bisection
+// runs over [e_centre / 2, 2 e_centre] within [e_lo, e_hi] when the target lies there (both ends tested first), else
+// over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. Before,
+// it bisected [e0 / 4, 4 e0] around Auto's E whatever E the fit had solved, without testing the ends, and an
+// unreachable target returned a bound as if it were the answer.
 // negicc-station Iteration 230's F6L, which replaces the E/g/b fixed point after the curve fit (the fixed point
 // followed its own darker render).
-inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
-                              float b, float target_L, int iters = 40) {
+inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
+                                 float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
+                                 int iters = 40) {
   const ProfileData base = cfg.profile;
   CombinedProfile comb;
   auto median_at = [&](float e) {
@@ -714,13 +862,30 @@ inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const Inp
     cfg.profile = comb.data;
     return grid_median_L(cfg, f.merged, e, g, b, f.grid, f.n);
   };
-  float lo = e0 * 0.25f, hi = e0 * 4.0f;
+  if (clipped) *clipped = false;
+  float lo = std::max(e_lo, e_centre * 0.5f), hi = std::min(e_hi, e_centre * 2.0f);
+  const bool enclosed = lo < hi && median_at(lo) >= target_L && median_at(hi) <= target_L;
+  if (!enclosed) {
+    lo = e_lo;
+    hi = e_hi;
+    const bool dark_at_lo = median_at(lo) < target_L;  // darker than the target even at the lowest E
+    if (dark_at_lo || median_at(hi) > target_L) {      // or lighter even at the highest
+      if (clipped) *clipped = true;
+      return dark_at_lo ? lo : hi;
+    }
+  }
   for (int i = 0; i < iters; ++i) {
     const float mid = std::sqrt(lo * hi);
     if (median_at(mid) < target_L) hi = mid;
     else lo = mid;
   }
   return std::sqrt(lo * hi);
+}
+
+// The same around e0 over [e0 / 4, 4 e0] (the bounds before they were given).
+inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
+                              float b, float target_L, int iters = 40) {
+  return remeter_e_median_in(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
 }
 
 }  // namespace negicc

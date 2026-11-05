@@ -313,18 +313,20 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
                 {"iterations", f->fit_iterations}, {"converged", f->fit_converged},
-                {"polish_evaluations", f->fit_polish}, {"start", f->fit_start}};
+                {"polish_evaluations", f->fit_polish}, {"start", f->fit_start}, {"passes", f->fit_passes},
+                {"intent_repredicted", f->intent_repredicted}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
     j["max_dev_stops"] = n9(defaults.max_dev_stops);
-    // Measured on the export's render: its encoding and the roll-off it measures (x_hi_fit at Auto's parameters, which
-    // the fit ran with; x_hi at the result, which the export measures again).
+    // Measured on the export's render: its encoding and the roll-off it measures (x_hi_auto at Auto's parameters,
+    // which the first fit ran with; x_hi_fit, which the last fit ran with; x_hi at the result, which the export uses).
     j["render"] = {{"encoding", f->encoding == ENCODE_SRGB ? "srgb" : f->encoding == ENCODE_SRGB_LINEAR ? "srgb-linear"
                                                                                                        : "custom"},
-                   {"x_hi_fit", n9(f->x_hi_fit)}};
+                   {"x_hi_auto", n9(f->x_hi_auto)}, {"x_hi_fit", n9(f->x_hi_fit)}};
     j["remeter"] = {{"e", n9(f->params.e)}, {"g", n9(f->params.g)}, {"b", n9(f->params.b)},
                     {"target_median_L", n9(f->target_median_L)}, {"median_L", n9(f->median_L)},
                     {"x_hi", n9(f->x_hi)}, {"passes", f->remeter_passes}, {"converged", f->remeter_converged},
+                    {"e_lo", n9(f->e_lo)}, {"e_hi", n9(f->e_hi)},
                     {"shape_scale", n9(f->shape_scale)},
                     {"shape_scale_ch", {n9(f->shape_scale_ch[0]), n9(f->shape_scale_ch[1])}},
                     {"fallback", f->fallback ? ordered_json(f->fallback) : ordered_json(nullptr)},
