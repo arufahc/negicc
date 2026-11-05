@@ -1847,8 +1847,43 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     }
   }
 
-  // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel.
-  const negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
+  // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel (of
+  // the whole grid, before any cell is left out below).
+  negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
+  // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
+  // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
+  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells.
+  constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
+  std::vector<uint16_t> kept_grid;
+  const uint16_t* fit_grid = stats.grid.data();
+  size_t nf = n;
+  out.cells_total = (int)n;
+  if (opts.fallback_crop && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
+    std::vector<float> kept_mu, kept_sigma;
+    const float base_lim[2] = {cf.film_base[1] * std::exp2(-kBaseCellStops), cf.film_base[2] * std::exp2(-kBaseCellStops)};
+    const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
+    for (size_t i = 0; i < n; ++i) {
+      const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
+      if ((g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+      kept_grid.insert(kept_grid.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
+      kept_mu.insert(kept_mu.end(), mu.begin() + i * 3, mu.begin() + i * 3 + 3);
+      kept_sigma.insert(kept_sigma.end(), sigma.begin() + i * 3, sigma.begin() + i * 3 + 3);
+    }
+    // Only with enough picture left; else the whole grid, as before.
+    if (kept_grid.size() / 3 >= std::max<size_t>(16, n / 4) && kept_grid.size() / 3 < n) {
+      out.cells_excluded = (int)(n - kept_grid.size() / 3);
+      nf = kept_grid.size() / 3;
+      fit_grid = kept_grid.data();
+      mu.swap(kept_mu);
+      sigma.swap(kept_sigma);
+      cf.grid = fit_grid;
+      cf.n = (int)nf;
+      if (opts.verbose) {
+        std::cout << "Curves: fallback crop, " << out.cells_excluded << " of " << n
+                  << " grid cells at the film base's level or holder-dark left out\n";
+      }
+    }
+  }
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
   // measures every conversion's), which only the sRGB encoding applies. Before, the fit and the re-meter rendered
@@ -1866,10 +1901,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
   // keeps.
   const float target_L =
-      negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, stats.grid.data(), (int)n);
+      negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, fit_grid, (int)nf);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
   out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
-                                                  stats.grid.data(), (int)n, mu.data(), sigma.data());
+                                                  fit_grid, (int)nf, mu.data(), sigma.data());
 
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
   // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
@@ -1952,7 +1987,11 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   constexpr int kMaxFitPasses = 3;
   float x_fit = out.x_hi_auto;
   out.fit_passes = 0;
-  for (int pass = 0; pass < kMaxFitPasses; ++pass) {
+  // Auto's median L* far outside a picture's lightness: the intent failed (a render nearly black or blown out), and
+  // keeping that lightness would carry the failure into the curves. No fit: no curves, Auto's g and b, and E re-metered
+  // to the centre of the bracket's calibrated range (sqrt(e_min e_max)), clamped to the bounds.
+  out.intent_lightness_failed = !(target_L >= kIntentMinL && target_L <= kIntentMaxL);
+  for (int pass = 0; !out.intent_lightness_failed && pass < kMaxFitPasses; ++pass) {
     ++out.fit_passes;
     out.x_hi_fit = x_fit;
     out.fallback = nullptr;
@@ -1989,8 +2028,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       c0.build(prof.data, out.fit.curves);
       negicc::PipelineConfig c0cfg = cfg;
       c0cfg.profile = c0.data;
-      out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, stats.grid.data(),
-                                                     (int)n, mu.data(), sigma.data());
+      out.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged, jf.e, out.fit.g, out.fit.b, fit_grid,
+                                                     (int)nf, mu.data(), sigma.data());
     }
 
     // 2. The re-meter from the roll-off the fit ran with, around the fit's E (before, around Auto's), and the shape at
@@ -2024,6 +2063,16 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     if (x == x_fit) break;  // the fit ran with the roll-off the export measures at its result
     x_fit = x;
   }
+  if (out.intent_lightness_failed) {
+    fall_back("intent_lightness");
+    if (res.e_range_lo > 0.0f && res.e_range_hi > 0.0f) {
+      e_new = std::clamp(std::sqrt(res.e_range_lo * res.e_range_hi), out.e_lo, out.e_hi);
+      x = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b, &q995);
+    }
+    std::cerr << "WARNING: Auto's grid median L* " << fixed(target_L, 1) << " is outside [" << fixed(kIntentMinL, 0)
+              << ", " << fixed(kIntentMaxL, 0) << "]: the intent failed; no curves, E " << fixed(e_new, 4)
+              << " (the bracket's range centre)\n";
+  }
   out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
@@ -2036,9 +2085,9 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = target_L;
-  out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(), (int)n);
-  out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, stats.grid.data(),
-                                                    (int)n, mu.data(), sigma.data());
+  out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid, (int)nf);
+  out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid,
+                                                    (int)nf, mu.data(), sigma.data());
   out.loss_export = out.parts_export.total();
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
