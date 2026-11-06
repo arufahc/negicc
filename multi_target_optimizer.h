@@ -48,8 +48,8 @@ struct RgbImage {
 //   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
-//      run Steps 2-4 again with the enclosure penalties on and take the result if it clips no more and moves to a
-//      later bracket or a higher E.
+//      run Steps 2-4 again with penalties on E outside the bracket's calibrated range in place of the pull toward the
+//      centre, and take the result if it clips no more and moves to a later bracket or a higher E.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
 // measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
@@ -69,8 +69,8 @@ struct RgbImage {
 // py-ref comments name the functions) so both pick the same bracket and parameters.
 // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (PerTargetConverter.convert)
 
-// The parameters the search solves. With the input matrix M the search runs on (rows R, G, B; see
-// ParamSearchResult::input_matrix) the conversion matrix is
+// The parameters the search solves. With the input matrix M the search runs on (rows R, G, B; input_matrix on
+// TriLED, M_frame on white light, see ParamSearchResult::input_matrix) the conversion matrix is
 //
 //   diag(E, E g, E b) * M,
 //
@@ -86,8 +86,8 @@ struct ConversionParams {
 // How the fixed-point loop of a bracket stopped.
 enum class FixedPointStatus {
   // E, g, b moved by 0.02 or less in total in the last step; or, on TriLED, the residual by 1.5 % or less (in the
-  // pullback's search also not rising); or, on white light, the residual rose again after passing its minimum (the
-  // best step is kept).
+  // pullback's search also not rising); or, on white light, the residual, already above the best step's, did not fall
+  // again (the best step is kept). On white light a residual that holds still does not end the loop.
   kConverged,
   kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
   kMaxIters,   // neither within ParamSearchOptions::max_steps steps
@@ -131,7 +131,8 @@ struct ParamSearchOptions {
 // cheaply; the best two go on to the tournament.
 struct ScreeningResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
-  ConversionParams params;  // the best (E, g, b), E in the search's units (see ParamSearchResult::input_matrix)
+  ConversionParams params;  // the best (E, g, b), E in the search's units (reference on TriLED, this frame's on white
+                            // light; see ParamSearchResult::input_matrix)
   // z2 of the render at params against the bootstrap field, plus the search's penalties on clipping and on E far
   // from the bracket's centre exposure.
   float intent_loss = 0;
@@ -139,9 +140,9 @@ struct ScreeningResult {
   float e_metered = 0;       // E that renders the scene's log-average at L* 50; e_center when no bracket metered
 };
 
-// Step 4, one row per shortlisted bracket: its fixed-point loop. Each step renders the frame at the current
-// (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next (E, g, b)
-// against that render's own intent field. The row keeps the step with the lowest residual.
+// Step 4, one row for each of the best two screened brackets: its fixed-point loop. Each step renders the frame at
+// the current (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next
+// (E, g, b) against that render's own intent field. The row keeps the step with the lowest residual.
 struct FixedPointResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   ConversionParams params;  // (E, g, b) of the best step, E in the search's units

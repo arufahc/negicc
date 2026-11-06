@@ -20,8 +20,8 @@
 //   lattice nx x ny      samples per channel (FilmImage::samples_x/y): about W / step x H / step
 //   work    ww x wh      box-averaged lattice, long side <= params.work_size (1024): ~1024 x 683 for 3:2
 //   canvas  cw x ch      the work image turned upright by the film's tilt; equals the work size when there is no
-//                        tilt and grows by w sin + h cos (and likewise) otherwise: at 5 degrees a 3:2 work image is
-//                        ~5% wider and ~13% taller
+//                        tilt and is w cos + h sin wide and w sin + h cos tall otherwise: at 5 degrees a 3:2 work
+//                        image is ~5% wider and ~13% taller
 //   search  sw x sh      the canvas reduced to <= 320 px on the long side for the rectangle search
 //
 // Pipeline
@@ -50,8 +50,9 @@
 //                          The primary is the complete frame nearest the image centre (else the most visible); the
 //                          neighbours are walked at the measured pitch. Then the strip's edges and ends (film base), the sprocket holes, and
 //                          candidate base patches (gaps and rebate next to the primary). Without an axis hint, a
-//                          reading that is not confident or found no film gap is run again on the other strip axis,
-//                          and the reading with the stronger evidence is kept (try_alt).
+//                          square frame, a reading that is not confident, or one that found no film gap on the axis
+//                          the border vote named is read again on the other strip axis; the other reading replaces
+//                          it when it has evidence of its own and wins better_strip (try_alt).
 //     c. refine_edge_full  each edge of the primary moved to the steepest log-luminance step within a few pixels, on
 //                          the full-resolution image (bilinear samples, 48 profiles per edge).
 //  6. detect_film_frame    the format (or the best of all formats for AUTO), the crop (largest axis-aligned rectangle
@@ -209,8 +210,9 @@ void downsample(const FilmImage& im, int work_size, WorkImage& wi) {
     upsample_lattice(im, wi);
     return;
   }
-  // Large inputs: read every k-th sample along both axes, k = box size / 2.5, so a box still averages about 3 to 5
-  // samples per axis: enough to suppress grain and noise at a fraction of the reading cost.
+  // Large inputs: read every k-th sample along both axes, k = box size / 2.5 rounded down, so a box still averages 2
+  // to 5 samples per axis (1 or 2 for a box under 2.5 samples): enough to suppress grain and noise at a fraction of
+  // the reading cost.
   const int k = std::max(1, (int)((float)std::max(nx, ny) / (2.5f * (float)std::max(wi.w, wi.h))));
   const float inv_white = 1.0f / im.white;
   #pragma omp parallel
@@ -826,8 +828,8 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
 
   // Film base. A first estimate from the film's percentiles (the thinnest film for a negative, the densest for a
   // slide). For a negative then the brightest mode of m (modes holding >= 0.4% of the film) whose pixels (within 0.15
-  // stop) form large connected regions, rebate bands and gaps (parts of >= 0.15% of the film, >= 0.3% in all), not
-  // only small blobs (unclipped holes, blended edges). The walk goes down from the brightest mode and stops 2.5 stops
+  // stop) form large connected regions, rebate bands and gaps (parts of >= 0.15% of the valid canvas, >= 0.3% in
+  // all), not only small blobs (unclipped holes, blended edges). The walk goes down from the brightest mode and stops 2.5 stops
   // below the brightest bin (denser film is picture), or, with no bare light seen, once more than 2.5% of the film is
   // brighter than the mode (the base is the thinnest film; a mode with that much above it is picture). Failing that,
   // the brightest mode within 0.35 stop of the brightest bin with no bare light seen (without light the brightest film
@@ -1076,7 +1078,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       // pixels or lying along the whole of one side of the image (>= 90% of its length), as a holder's mask does
       // beside a frame that fills the sensor's other dimension. A flat, straight-edged band of dense picture at the
       // border that is neither that dark nor that long stays picture. (Dark by level is not required on the whole-side
-      // path: such a mask is often lighter than the DARK level and classed picture by level.)
+      // path: such a mask can be lighter than the DARK level and classed picture by level.)
       const float ww = 2.0f * cv.cxw, wh = 2.0f * cv.cyw;
       for (size_t k = 0; k < nk; ++k) {
         if (!cand[k]) continue;
@@ -1445,17 +1447,18 @@ inline bool is_gap(uint8_t c) { return c == CL_BASE || c == CL_LIGHT || c == CL_
 // within +-delta of t0 is scored in * (in - outside), with in and outside the mean picture fraction over k samples
 // on either side (outside also over k / 3, so a thin gap next to the edge still counts), minus a small pull toward
 // t0 (0.002 at the window's end, a tie-break); the best position wins. Beyond the profile counts as non-image.
-// strength: in - outside at that position (1: a clean edge). Three guards keep the edge on the frame:
-//   - extension: when the picture side at t0 is under 70% picture and no position within delta has a clean (< 2%
-//     picture) outside, the edge is blurred or shadowed past delta, so the window is widened outward to delta_ext
-//     (ext_used).
+// strength: in - outside - pull at that position, outside taken before the neighbour guard (1: a clean edge). Three
+// guards keep the edge on the frame:
+//   - extension: when the picture side at t0 is under 70% picture and no position from t0 out to delta on the outside
+//     has a clean (< 2% picture) outside, the edge is blurred or shadowed past delta, so the window is widened outward
+//     to delta_ext (ext_used).
 //   - no step inward onto picture: when t0's outside is clean (< 5% picture: t0 is already off the picture), a
 //     position further in is skipped once its outside holds 6% picture or more, unless the picture there is solid
 //     (>= 70%) and no solid picture (a neighbour) lies further out; otherwise a dark band inside the picture would
 //     pull the crop into it.
-//   - no step onto a neighbour: in the widened window, a position whose next k samples further out are mostly
-//     picture (> 80%, with > 50% further in) lies between two pictures, so half of that outer picture counts as
-//     outside.
+//   - no step onto a neighbour: in the widened window, a position whose samples k to 2k further out are mostly
+//     picture (> 80%, with > 50% in those k to 2k further in) lies between two pictures, so half of that outer picture
+//     counts as outside.
 float refine_edge_profile(const std::vector<float>& p, float t0, int delta, int k, bool rising, float* strength,
                           int delta_ext = 0) {
   const int n = (int)p.size();
@@ -1719,10 +1722,10 @@ struct FormatResult {
   FrameDetection det;
   std::vector<FilmRect> base_patches;  // candidate film base patches, image coordinates
   double score = 0.0;                  // rectangle search score per search pixel (compares formats)
-  // False when the alternate strip axis was read (try_alt) and neither reading had a strip width that fits the
-  // format; the auto format choice then marks the format down. A reading with no alternate (an axis hint, or a sure
-  // first reading) keeps true: its width alone is weak evidence, read across the frame where a holder or the
-  // sensor's edge often hides the rebate, and marking it down turns 35mm frames into 6x9 or 645.
+  // False when the alternate strip axis was read (try_alt) and both readings' strip widths contradict the format;
+  // the auto format choice then marks the format down. Without a second reading (an axis hint, a sure first reading,
+  // or an alternate reading that failed) it stays true: one width alone is weak evidence, read across the frame where
+  // a holder or the sensor's edge can hide the rebate, and marking it down risks turning 35mm frames into 6x9 or 645.
   bool width_ok_any = true;
   // On a square format, when both strip axes were read and frame the same square: the higher of their confidences,
   // which the auto format choice weighs instead of det.conf. -1 otherwise.
@@ -2039,7 +2042,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   bool length_mismatch = false;  // a frame kept at its measured length against the format's (format_length_mismatch)
   // Each segment becomes a frame candidate. Its measured length stands when it is within len_tol of the format's
   // nominal length L_exp, and otherwise when
-  //   - both ends are film gaps of similar edge strength and the length is within 2 len_tol (cameras space frames
+  //   - both ends are bounded with similar edge strengths and the length is within 2 len_tol (cameras space frames
   //     slightly differently),
   //   - both ends are film gaps of similar edge strength and the frame has some film format's aspect (keep_measured:
   //     another film given the wrong format; lines in a picture bound a piece of no format's aspect), or
@@ -2408,8 +2411,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // Confidence: 1, marked down per doubt; the smaller the factor, the more that doubt suggests a wrong frame. A
   // partial primary (x0.7) or one with an open end (x0.85) may be laid at the nominal length rather than measured;
   // weak transverse edges (strength < 0.4, x0.8) may be a band inside the picture; and nothing that bounds the film
-  // (no holder, light, strip end or perforations, and no strip edge plus film base beside the frame: no_film_base,
-  // x0.4) means the "frame" may be any rectangle in a picture filling the image, the strongest doubt.
+  // (no holder, light, strip end, strip edge or perforations, and no film gap or base patch beside a strip that runs
+  // to the image border: no_film_base, x0.4) means the "frame" may be any rectangle in a picture filling the image,
+  // the strongest doubt.
   float conf = 1.0f;
   if (!cands[pi].complete) {
     conf *= 0.7f;
@@ -2711,11 +2715,11 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, 
   // 5. The format given, or the best of all. Each format's rectangle score (how well a frame of its aspect fits) is
   // weighed by
   //   - the reading's confidence (auto_conf on a square format whose two readings frame the same square),
-  //   - x0.7 when the strip width contradicts the format on every strip axis read (width_ok_any false),
+  //   - x0.7 when the alternate strip axis was read and both readings' widths contradict the format (width_ok_any
+  //     false),
   //   - x0.7 when the frame's own gaps contradict the format's length (format_length_mismatch),
   //   - x1.15 when 35mm perforations were found beside the frame.
-  // The two marks-down are equal: each is one piece of geometry that contradicts the format, and one alone should
-  // not outweigh a clearly better rectangle. Perforations are evidence only 35mm can have, so they earn a bonus.
+  // Perforations are evidence only 35mm can have, so they earn a bonus.
   std::vector<FilmFormat> fmts;
   if (P.format == FILM_FORMAT_AUTO) fmts = {FILM_35MM, FILM_645, FILM_6X6, FILM_6X7, FILM_6X9};
   else fmts = {P.format};

@@ -108,8 +108,8 @@ using negicc::compute_inner_crop;
 // searched in. Otherwise the scene spans more than the bracket, and the search gets a window of 0.60 to 0.85 stop
 // either side of e_center (within 1.5 stops of highlight and 1.2 stops of shadow tolerance): the wider the scene's
 // overflow, the wider the window (0.6 stop per stop of overflow), so E can trade highlights against shadows. The
-// tolerances let a scene overflow the calibration a little, more on the highlight side, where the profile's
-// shoulder extends past the chart's white.
+// tolerances let a scene overflow the calibration a little; their values are kept from negicc-station, which records
+// no reason for them.
 struct Enclosure {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   bool feasible = false;    // e_min <= e_max
@@ -118,7 +118,7 @@ struct Enclosure {
   float search_lo = 0, search_hi = 0;  // the range E is searched in
   float e_center = 0;                  // sqrt(e_min * e_max)
   float slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
-  float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the share of the bracket the scene uses
+  float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the scene's contrast ratio over the bracket's
 };
 
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
@@ -780,8 +780,9 @@ class SearchFrame {
 
   // The coordinate descent of (E, g, b) of bracket target_idx against an intent field, from initial (or the
   // search's defaults when null) with E within e_bounds = {lo, hi, centre}; returns the intent loss
-  // (ScreeningResult::intent_loss). pullback_search (the highlight pullback's re-search) adds the penalties on E
-  // outside the bracket's calibrated range and searches g and b on wider grids (dinov3_auto_solver.cc).
+  // (ScreeningResult::intent_loss). pullback_search (the highlight pullback's re-search) replaces the pull of E toward
+  // the centre with penalties on E outside the bracket's calibrated range and searches g and b on wider grids
+  // (dinov3_auto_solver.cc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
@@ -812,8 +813,8 @@ class SearchFrame {
   }
 
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
-  // kept within the trust region e_bounds = {lo, hi, centre}; the centre is where the search's penalty pulls E. An
-  // inverted region is ordered and centred on its midpoint. pullback_search as for search().
+  // kept within the trust region e_bounds = {lo, hi, centre}; outside pullback_search the search's penalty pulls E
+  // toward the centre. An inverted region is ordered and centred on its midpoint. pullback_search as for search().
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
@@ -1315,9 +1316,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::cout << os.str();
   }
 
-  // The bracket whose calibrated range the scene fits best: the scene filling about 85% of the bracket's green range
-  // (it uses the bracket's calibrated precision and leaves a margin at both ends), less SLACK_PENALTY_SCALE per stop
-  // the scene overflows an infeasible bracket by. Only the bootstrap falls back to it, when no bracket meters.
+  // The bracket whose calibrated range the scene fits best: the lowest |fill_ratio - 0.85| (the scene's green contrast
+  // ratio over the bracket's) plus SLACK_PENALTY_SCALE per stop the scene overflows an infeasible bracket by. Only the
+  // bootstrap falls back to it, when no bracket meters.
   auto rank = [](const Enclosure& r) {
     return std::fabs(r.fill_ratio - 0.85f) + SLACK_PENALTY_SCALE * std::max(0.0f, -r.slack_ev);
   };
@@ -1340,7 +1341,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
   // A metered bracket: its E for L* 50 (e_met), the window [lo, hi] E is searched in, and the depth of e_met inside
   // that window in stops, less SLACK_PENALTY_SCALE per stop of overflow on an infeasible bracket. The deepest bracket
-  // renders the bootstrap: its metered render sits furthest from the ends of its calibrated range.
+  // renders the bootstrap: its metered E sits furthest from the ends of its search window.
   struct Depth {
     Enclosure cand;
     float e_met, depth, lo, hi;
@@ -1393,7 +1394,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   if (!fr.predict(preview, mu1, sig1)) return false;
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
-  // first. The pullback's re-search (Step 6) screens with its enclosure penalties on (pullback_search).
+  // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
+  // centre (pullback_search).
   auto screen_all = [&](const std::vector<Depth>& ds, const std::vector<float>& mu, const std::vector<float>& sigma,
                         bool pullback_search) {
     std::vector<Screened> rows;
@@ -1476,9 +1478,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   ConversionParams params = chosen.params;
 
   // The enclosure-regularised residual that ranks the pullback's tournament (Step 6): the residual plus quadratic
-  // penalties on E outside the bracket's calibrated range, heaviest on the highlight side (E below e_min: the dense
-  // highlights leave the calibration, where the render shows it most), and on the scene overflowing an infeasible
-  // bracket. The weights are those of the pullback search's own penalties (dinov3_auto_solver.cc compute_penalties).
+  // penalties on E outside the bracket's calibrated range, heaviest on the highlight side (E below e_min), and on the
+  // scene overflowing an infeasible bracket. The weights are those of the pullback search's own penalties
+  // (dinov3_auto_solver.cc compute_penalties).
   auto tourney_score = [&](const FixedPointResult& a) {
     for (const auto& c : enclosure) {
       if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
@@ -1571,14 +1573,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // midtones are bright (median L* >= 58, or >= 48 with more highlights) was rendered too bright by an E below the
   // bracket's calibrated range, or by a bracket whose range cannot hold the scene. A dark or backlit frame (low
   // median L*) is left alone: its highlights are the subject's surroundings, and darkening would sink the subject.
-  //   tier 1: median L* >= 58 and >= 2.2% of the inner crop's max channel above sRGB 242;
-  //   tier 2: median L* >= 48 and >= 7.5% above 242, or, on bracket index 3 and above (the brackets at and over the
-  //           bundle's nominal exposure, whose shoulders compress highlights hardest), >= 11% above 235.
+  //   tier 1: median L* >= 58 and >= 2.2% of the inner crop above sRGB 242 in the worst channel;
+  //   tier 2: median L* >= 48 and >= 7.5% above 242 in the worst channel, or, on bracket index 3 and above, >= 11%
+  //           above 235 in the worst channel.
   // When the chosen bracket is feasible, E is raised toward the bracket's e_min by at most 0.15 stop (a nudge, not a
   // re-solve: the loop's intent stays close). When it is not, Steps 2-4 run again on windows that reach a little
-  // further (pullback_search: enclosure penalties on), ranked by the enclosure-regularised residual (tourney_score),
-  // and the result is taken only if it clips no more, does not darken the midtones past what the scene allows, and
-  // moves to a later bracket or raises E by more than 2%.
+  // further (pullback_search: enclosure penalties instead of the pull toward the centre), ranked by the
+  // enclosure-regularised residual (tourney_score) among the converged runs when any converged, on white light as on
+  // TriLED, and the result is taken only if it clips no more, does not darken the midtones past what the scene allows,
+  // and moves to a later bracket or raises E by more than 2%.
   // The thresholds are negicc-station's, ported unchanged so both pick the same result.
   if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
@@ -1600,8 +1603,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
       // The re-search window of each metered bracket: its calibrated range united with the infeasible window
-      // (bracket_enclosure), raised to hold 0.2 stop above its metered E (within the usable range), so the pullback
-      // can reach the brighter-than-metered side the first search could not.
+      // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
+      // so the pullback can reach the darker-than-metered side the first search could not.
       std::vector<Depth> depths_res;
       for (const auto& c : pool) {
         const auto d = std::find_if(depths.begin(), depths.end(),
@@ -1649,8 +1652,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
           dl = hc_res_242.median_L - hc_242.median_L;
         }
-        // Taken when it clips no more (within 0.5%), keeps the midtones at L* 48 or within 6 of the first choice's,
-        // and actually moves: a later bracket, or E up by more than 2%.
+        // Taken when it clips no more (at most 0.5 percentage point more of the crop above 242 in the worst channel),
+        // keeps the midtones at L* 48 or within 6 of the first choice's, and actually moves: a later bracket, or E up
+        // by more than 2%.
         const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
         const float exc_res_242 = max_excess(hc_res_242);
         if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
@@ -1868,9 +1872,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
   // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
   // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
-  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. A quarter stop
-  // covers the base's own spread (grain, light falloff); 9 stops below the base is denser than a negative's
-  // densest highlight, so only a holder or carrier is that dark.
+  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both limits are
+  // assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below the base.
   constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
   std::vector<uint16_t> kept_grid;
   const uint16_t* fit_grid = stats.grid.data();

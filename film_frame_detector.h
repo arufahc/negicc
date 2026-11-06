@@ -149,7 +149,7 @@ struct FrameDetection {
   float base_std_d = 0.0f;
   bool light_clipped = false;         // bare light around the film is clipped
   // 1: the frame is complete, bounded on both ends, with strong transverse edges and the film's bounds (holder,
-  // light, strip end, perforations or film base) seen; lower per doubt, each named in reason.
+  // light, strip end, strip edge, perforations or film base) seen; lower per doubt, each named in reason.
   float conf = 0.0f;
   std::string reason;                 // comma-separated diagnostics ("" when nothing to report)
 };
