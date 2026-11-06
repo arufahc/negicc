@@ -496,6 +496,11 @@ bool write_json_sidecar(const Sidecar& sc) {
     fb["detector"] = nullptr;
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
+  // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
+  // film_base_rgb and decode_rgb are read after them.
+  const float* k = sc.balance_gains;
+  fb["balance_gains"] =
+      k ? ordered_json{num(k[0], "%.6f"), num(k[1], "%.6f"), num(k[2], "%.6f")} : ordered_json(nullptr);
   j["film_base"] = fb;
 
   if (sc.profile_path.empty()) {

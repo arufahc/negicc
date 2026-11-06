@@ -192,6 +192,8 @@ struct Scan {
   // when no film base is given; not found: the bundle's.
   negicc::FilmBaseDetection film_base;
   const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
+  // The white-light decode's gains on the camera channels (ChannelBalance); 1, 1, 1: the mosaic was left as it was.
+  float balance_gains[3] = {1, 1, 1};
 
   // Each bracket's exposure range (compute_bundle_enclosures) was measured on the half-size frame, in decode.
   bool has_enclosures = false;

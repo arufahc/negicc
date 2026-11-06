@@ -286,7 +286,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
-    .help("off (default), auto, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
+    .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
           "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
           "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
@@ -300,7 +300,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "are positive, because the parser takes a value starting with '-' for an option. The older order "
           "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
           "White-light (d65) bundles and -P only.")
-    .default_value(std::string("off"));
+    .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--flat")
