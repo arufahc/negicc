@@ -466,7 +466,26 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
     // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
     // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
-    if (j.contains("input_curves") && j["input_curves"].is_object()) {
+    // A fit that fell back (applied false, channels null) has no curves to replay, but its re-metered values are the
+    // base all the same.
+    const bool no_curves = j.contains("input_curves") && j["input_curves"].is_object() &&
+                           j["input_curves"].value("applied", true) == false &&
+                           j["input_curves"].value("channels", nlohmann::ordered_json()).is_null();
+    // The re-metered values replace the checked ones: checked again (a remeter.e of -1 aborted solve_grey_knobs).
+    auto read_remeter = [&](const nlohmann::ordered_json& ic) {
+      if (!ic.contains("remeter") || !ic["remeter"].is_object()) return true;
+      const auto& rm = ic["remeter"];
+      s.cached_sidecar.base_e = rm.value("e", base_e);
+      s.cached_sidecar.base_g = rm.value("g", base_g);
+      s.cached_sidecar.base_b = rm.value("b", base_b);
+      return positive(s.cached_sidecar.base_e) && positive(s.cached_sidecar.base_g) &&
+             positive(s.cached_sidecar.base_b);
+    };
+    if (no_curves) {
+      s.cached_sidecar.input_curves_json_str = j["input_curves"].dump();
+      if (!read_remeter(j["input_curves"])) return why = "its re-metered values are not positive", false;
+    }
+    if (j.contains("input_curves") && j["input_curves"].is_object() && !no_curves) {
       const auto& ic = j["input_curves"];
       negicc::InputCurves c;
       bool ok = ic.contains("channels") && ic["channels"].is_object() && ic.value("target_idx", -1) == tgt_idx;
@@ -491,17 +510,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       s.cached_sidecar.curves = c;
       s.cached_sidecar.curves_source = ic.value("source", "fit");
       s.cached_sidecar.input_curves_json_str = ic.dump();
-      if (ic.contains("remeter") && ic["remeter"].is_object()) {
-        const auto& rm = ic["remeter"];
-        s.cached_sidecar.base_e = rm.value("e", base_e);
-        s.cached_sidecar.base_g = rm.value("g", base_g);
-        s.cached_sidecar.base_b = rm.value("b", base_b);
-        // The re-metered values replace the checked ones: checked again (a remeter.e of -1 aborted solve_grey_knobs).
-        if (!positive(s.cached_sidecar.base_e) || !positive(s.cached_sidecar.base_g) ||
-            !positive(s.cached_sidecar.base_b)) {
-          return why = "its re-metered values are not positive", false;
-        }
-      }
+      if (!read_remeter(ic)) return why = "its re-metered values are not positive", false;
     }
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
@@ -1751,8 +1760,12 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
              ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
              ms(res.total_time));
     }
-    if (scan.has_curve_params)
+    if (scan.has_curve_params && s.curve_fit.fallback) {
+      log_info("Curve fit fell back (%s): no curves; E %.4f g %.4f b %.4f on the bracket's profile\n",
+               s.curve_fit.fallback, p.e, p.g, p.b);
+    } else if (scan.has_curve_params) {
       log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
+    }
     log_knobs();
     log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
   } else if (s.use_dino) {
