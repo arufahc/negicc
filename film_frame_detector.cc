@@ -1714,6 +1714,9 @@ struct FormatResult {
   // truth set that gets 340 formats right against 346 this way, with the same crops passing (5 white-LED 35mm frames
   // and Scan_001122 go to 6x9 / 645).
   bool width_ok_any = true;
+  // The confidence the auto format choice weighs: the kept reading's, or on a square format the other reading's when
+  // that is higher and frames the same square (below).
+  float auto_conf = -1.0f;
 };
 
 // Steps 5a-c for one format. Allocates: the search map (sw x sh floats, gated copy, three double prefix planes)
@@ -1890,11 +1893,14 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   std::vector<float> cps = cp;
   smooth1d(cps, std::max(0.6f, 0.15f * ppm));
 
-  // Segments: runs of picture columns; a run ends at >= 0.35 mm of columns under 30% picture.
+  // Segments: runs of picture columns; a run ends at half the format's narrowest gap (0.75 mm on 120, 0.4 mm on 35mm)
+  // of columns under 30% picture. A thinner dip is a line in the picture: at 0.35 mm a 0.3 mm white line in Portra160-1
+  // (6x6, 4 work columns since 432a23e counts every lattice sample, 3 before) split the frame, the piece left of the
+  // line was dropped as too short, and the line became the frame's end (0.99 -> 0.91, 480 px of picture cut).
   struct Seg { int a, b; };
   std::vector<Seg> segs;
   {
-    const int gap_min_px = std::max(1, (int)std::lround(0.35f * ppm));
+    const int gap_min_px = std::max(1, (int)std::lround(0.5f * fg.gap_min * ppm));
     int x = 0;
     while (x < VW) {
       while (x < VW && cps[x] < 0.5f) ++x;
@@ -2489,7 +2495,23 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
                                 (bounded(alt) && !bounded(res)) || alt.det.conf >= res.det.conf + 0.25f;
       const bool width_ok_any = res.det.reason.find("strip_width_mismatch") == std::string::npos ||
                                 alt.det.reason.find("strip_width_mismatch") == std::string::npos;
+      // On a square format both readings may frame the same square, one measuring across the strip what the other
+      // measures along it. The kept reading's crop stands, but the auto format choice weighs the surer of the two:
+      // Film Scan9811/9812 (6x6 in a holder) keep the reading with both "strip edges" (the holder's aperture) and a
+      // weak transverse edge (0.68) since dea52c1, while the other reading frames the same square at 0.85; weighed at
+      // 0.68, 6x6 lost to a 6x7 crop (0.85) reaching 1340 px into the holder. Taking the surer reading's crop as well
+      // moves their 6x6 crops off the base-to-picture step (0.9994 -> 0.971).
+      auto same_frame = [](const FrameDetection& a, const FrameDetection& b) {
+        const int* p = a.primary.visible;
+        const int* q = b.primary.visible;
+        const double ix = std::max(0, std::min(p[0] + p[2], q[0] + q[2]) - std::max(p[0], q[0]));
+        const double iy = std::max(0, std::min(p[1] + p[3], q[1] + q[3]) - std::max(p[1], q[1]));
+        const double in = ix * iy, un = (double)p[2] * p[3] + (double)q[2] * q[3] - in;
+        return un > 0.0 && in / un >= 0.9;
+      };
+      const float other_conf = square && same_frame(alt.det, res.det) ? std::max(alt.det.conf, res.det.conf) : -1.0f;
       if (alt_evidence && better_strip(alt, res)) res = std::move(alt);
+      res.auto_conf = other_conf;
       res.width_ok_any = width_ok_any;
     }
   }
@@ -2703,7 +2725,7 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, 
     if (!detect_one_format(im, wi, cv, ci, P, fm, r)) continue;
     double key = r.score;
     if (P.format == FILM_FORMAT_AUTO) {
-      key *= r.det.conf;
+      key *= std::max(r.det.conf, r.auto_conf);
       // Marked down when the strip contradicts the format: when neither axis reading had a strip width that fits.
       // The kept reading's own flag is not enough: on a square format both axes find the same rectangle, and since
       // dea52c1 the kept one could be the reading whose width does not fit while the other's did, which moved Film
