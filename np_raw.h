@@ -50,7 +50,11 @@ using WhiteBalanceFinder = std::function<bool(const LibRaw& half, float k[3])>;
 // matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised. A light of another
 // colour than the profile's gives the base another colour in the camera's own channels; balancing it there, before
 // the matrix mixes them, keeps the matrix's negative terms from driving dense areas below zero (clamped: blue shadows
-// and skies with a warm light). False, k untouched, when either base has a camera channel that is not positive.
+// and skies with a warm light). It also keeps the conversion on the transform the profile was trained with: the
+// profile's patches were read as Rec.2020 divided by the calibration scan's base, which is M with its rows divided by
+// that base; dividing by another scan's base scales the rows by another vector, while after these gains every scan's
+// base is the profile's, and K is 1 for the calibration scan itself. False, k untouched, when either base has a
+// camera channel that is not positive.
 bool film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]);
 
 // Called by load_raw with the unpacked RAW in proc (imgdata.rawdata.raw_image holds the CFA mosaic, margins
