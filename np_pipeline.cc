@@ -466,7 +466,26 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
     // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
     // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
-    if (j.contains("input_curves") && j["input_curves"].is_object()) {
+    // A fit that fell back (applied false, channels null) has no curves to replay, but its re-metered values are the
+    // base all the same.
+    const bool no_curves = j.contains("input_curves") && j["input_curves"].is_object() &&
+                           j["input_curves"].value("applied", true) == false &&
+                           j["input_curves"].value("channels", nlohmann::ordered_json()).is_null();
+    // The re-metered values replace the checked ones: checked again (a remeter.e of -1 aborted solve_grey_knobs).
+    auto read_remeter = [&](const nlohmann::ordered_json& ic) {
+      if (!ic.contains("remeter") || !ic["remeter"].is_object()) return true;
+      const auto& rm = ic["remeter"];
+      s.cached_sidecar.base_e = rm.value("e", base_e);
+      s.cached_sidecar.base_g = rm.value("g", base_g);
+      s.cached_sidecar.base_b = rm.value("b", base_b);
+      return positive(s.cached_sidecar.base_e) && positive(s.cached_sidecar.base_g) &&
+             positive(s.cached_sidecar.base_b);
+    };
+    if (no_curves) {
+      s.cached_sidecar.input_curves_json_str = j["input_curves"].dump();
+      if (!read_remeter(j["input_curves"])) return why = "its re-metered values are not positive", false;
+    }
+    if (j.contains("input_curves") && j["input_curves"].is_object() && !no_curves) {
       const auto& ic = j["input_curves"];
       negicc::InputCurves c;
       bool ok = ic.contains("channels") && ic["channels"].is_object() && ic.value("target_idx", -1) == tgt_idx;
@@ -491,17 +510,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       s.cached_sidecar.curves = c;
       s.cached_sidecar.curves_source = ic.value("source", "fit");
       s.cached_sidecar.input_curves_json_str = ic.dump();
-      if (ic.contains("remeter") && ic["remeter"].is_object()) {
-        const auto& rm = ic["remeter"];
-        s.cached_sidecar.base_e = rm.value("e", base_e);
-        s.cached_sidecar.base_g = rm.value("g", base_g);
-        s.cached_sidecar.base_b = rm.value("b", base_b);
-        // The re-metered values replace the checked ones: checked again (a remeter.e of -1 aborted solve_grey_knobs).
-        if (!positive(s.cached_sidecar.base_e) || !positive(s.cached_sidecar.base_g) ||
-            !positive(s.cached_sidecar.base_b)) {
-          return why = "its re-metered values are not positive", false;
-        }
-      }
+      if (!read_remeter(ic)) return why = "its re-metered values are not positive", false;
     }
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
@@ -1006,21 +1015,64 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones,
       // so the curves stay on the film densities they were fitted to. Before, the tables kept the base's anchor, so
       // a brightness knob slid the curves along the table.
+      //
+      // The knobs were solved on the profile at the base's anchor, and the re-anchored curves change it: the grey then
+      // missed its target (on two white-LED frames up to 0.08 stop and 5 a* for a 0.5 stop brightness). So, until the
+      // gains hold still (each within kKnobTol of the previous pass, at most kMaxKnobPasses): the knobs solved on the
+      // re-anchored profile for the same grey (the one the base's profile renders as neutral L* 50), and the curves
+      // re-anchored at that result. Each pass cuts the miss about fourfold.
       if (target_idx == s.curves_base_idx && s.input_curves.active()) {
+        constexpr int kMaxKnobPasses = 8;
+        constexpr float kKnobTol = 1e-4f;
+        ParsedFilmProfile& prof = bundle.targets[target_idx].film_prof;
+        ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
+        grey_prof.rebind_pointers();
         ParamSearchOptions ro;
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
-        const float from[3] = {base_e, base_g, base_b}, to[3] = {e, g, b};
+        const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
-        if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro, s.input_curves,
-                                   from, to, negicc::CurveFitOptions().max_dev_stops, scan.knob_curves, scale)) {
-          return false;
+        auto reanchor_at = [&](const float to[3]) {
+          if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
+                                     s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
+                                     scan.knob_curves, scale)) {
+            return false;
+          }
+          apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
+          return true;
+        };
+        const float to1[3] = {e, g, b};
+        if (!reanchor_at(to1)) return false;
+        float lab1[3];
+        knob_grey_lab(grey_prof.data, prof.data, from, to1, lab1);
+        KnobSolveResult k2 = scan.knob_res;
+        int passes = 0;
+        for (bool moved = true; moved && passes < kMaxKnobPasses; ++passes) {
+          const float prev[3] = {k2.e, k2.g, k2.b};
+          if (!solve_grey_knobs(prof.data, base_e, base_g, base_b, o.brightness, o.tint, o.warmth, k2,
+                                &grey_prof.data)) {
+            log_error("Failed to solve grey-point knobs on the re-anchored curves\n");
+            return false;
+          }
+          const float to2[3] = {k2.e, k2.g, k2.b};
+          if (!reanchor_at(to2)) return false;
+          moved = false;
+          for (int i = 0; i < 3; ++i) moved = moved || std::fabs(to2[i] - prev[i]) > kKnobTol * prev[i];
         }
-        apply_input_curves(bundle.targets[target_idx].film_prof, s.curves_base_prof, scan.knob_curves);
+        const float to2[3] = {k2.e, k2.g, k2.b};
+        knob_grey_lab(grey_prof.data, prof.data, from, to2, k2.grey_lab);
+        scan.knob_res = k2;
+        e = k2.e;
+        g = k2.g;
+        b = k2.b;
         scan.has_knob_curves = true;
-        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s)\n", e, g, b,
-                 scan.knob_curves.ref[0], scan.knob_curves.ref[1],
-                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "");
+        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey L* %.3f "
+                 "a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, %+.4f "
+                 "stop, before them)\n",
+                 e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
+                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "", k2.grey_lab[0],
+                 k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
+                 lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
@@ -1178,9 +1230,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           scan.curve_params = s.curve_fit.params;
         }
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
-      } else {
-        measure_enclosures(frame, scan_shutter_s, scan_iso);
       }
+      // The bracket analysis (timings_ms.analysis, not raw_decode): the enclosures, the knobs and the roll-off, or the
+      // frame's copy for the single-bracket search.
+      const double t_analysis_0 = omp_get_wtime();
+      if (!s.bundle_search) measure_enclosures(frame, scan_shutter_s, scan_iso);
       // The single-bracket search (-E or --target without given gains) solves in solve, on the full image; its
       // roll-off is measured there, on a copy of this frame, at its final E, g, b.
       if (s.bundle_search || !s.use_dino) {
@@ -1188,6 +1242,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       } else {
         keep_rolloff_frame(frame, scan_shutter_s, scan_iso);
       }
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
       return true;
     };
   }
@@ -1473,6 +1528,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     if (s.is_bundle) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+      const double t_analysis_0 = omp_get_wtime();  // timings_ms.analysis, as on the LibRaw path
       if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
       if (s.bundle_search || !s.use_dino) {
         if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
@@ -1484,8 +1540,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // (the mosaic this view reads is freed by render).
         keep_rolloff_frame(search_half_view, scan_shutter_s, scan_iso);
       }
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
     }
-    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms -
+                           scan.t_analysis_ms;
 
     // The mosaic and the frame, for render.
     scan.mosaic.frames[0] = cfa_origin;
@@ -1542,7 +1600,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, scan.rot_cw, scan.hflip ? 1 : 0,
              scan.vflip ? 1 : 0);
     }
-    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms -
+                           scan.t_analysis_ms;
   }
 
   const int orig_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
@@ -1701,8 +1760,12 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
              ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
              ms(res.total_time));
     }
-    if (scan.has_curve_params)
+    if (scan.has_curve_params && s.curve_fit.fallback) {
+      log_info("Curve fit fell back (%s): no curves; E %.4f g %.4f b %.4f on the bracket's profile\n",
+               s.curve_fit.fallback, p.e, p.g, p.b);
+    } else if (scan.has_curve_params) {
       log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
+    }
     log_knobs();
     log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
   } else if (s.use_dino) {
@@ -1850,6 +1913,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       }
     }
     float final_e = base_e, final_g = base_g, final_b = base_b;
+    const double t_analysis_0 = omp_get_wtime();  // the knobs and the roll-off: timings_ms.analysis
     if (o.knobs_given) {
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
@@ -1882,6 +1946,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
                                                scan.film_base_rgb());
       scan.has_rolloff = true;
       std::vector<uint16_t>().swap(scan.rolloff_frame);
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
     } else {
       c.exposure_comp = final_e;
       c.gain_g = final_g;
@@ -2120,6 +2185,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_full_conversion_ms = scan.t_full_conversion_ms;
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
+  sc.t_analysis_ms = scan.t_analysis_ms;
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;

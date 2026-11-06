@@ -1128,7 +1128,7 @@ static float lstar_after_stops(float L, float stops) {
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
-                      float tint_a, float warmth_b, KnobSolveResult& out) {
+                      float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof) {
   out.e = base_e;
   out.g = base_g;
   out.b = base_b;
@@ -1139,8 +1139,9 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
 
   const GreyPoint gp(prof);
+  // The grey: the input grey_prof (else prof) renders as neutral L* 50.
   float log_t0[3];
-  if (!gp.reference_grey(log_t0)) return false;
+  if (!GreyPoint(grey_prof ? *grey_prof : prof).reference_grey(log_t0)) return false;
   const float base[3] = {base_e, base_g, base_b};
 
   if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {
@@ -1209,6 +1210,19 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   out.limited = true;
   gp.grey(log_t0, base, best, out.grey_lab);
   return true;
+}
+
+bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
+                   float lab_out[3]) {
+  float log_t0[3];
+  if (!GreyPoint(grey_prof).reference_grey(log_t0)) return false;
+  GreyPoint(prof).grey(log_t0, base, egb, lab_out);
+  return true;
+}
+
+float knob_grey_miss_stops(float brightness_stops, float grey_L) {
+  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / 903.3; };
+  return (float)std::log2(Y(grey_L) / Y(lstar_after_stops(50.0f, brightness_stops)));
 }
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
@@ -2064,14 +2078,22 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     x_fit = x;
   }
   if (out.intent_lightness_failed) {
+    // E re-metered so the grid's median L* is Auto's moved to the nearer end of [kIntentMinL, kIntentMaxL] (no
+    // curves, Auto's g and b), within [e_lo, e_hi]. Before, E went to the centre of the bracket's calibrated range, and
+    // stayed at Auto's when the bracket had none (its enclosure infeasible), which on the white-light corpus (443
+    // frames, --roi auto) was 11 of the 13 frames this fallback fired on. The nearer end, not L* 50: two of the 13 are
+    // night scenes whose dark render was right (L* 50 blew them out); it moves no frame further than the range needs.
     fall_back("intent_lightness");
-    if (res.e_range_lo > 0.0f && res.e_range_hi > 0.0f) {
-      e_new = std::clamp(std::sqrt(res.e_range_lo * res.e_range_hi), out.e_lo, out.e_hi);
-      x = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b, &q995);
-    }
+    out.fallback_target_L = std::clamp(target_L, kIntentMinL, kIntentMaxL);
+    e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
+                                        e_int, out.e_lo, out.e_hi, out.fit.g, out.fit.b, out.fallback_target_L,
+                                        &out.fallback_clipped);
+    out.fallback_e_moved = e_new != e_int;
+    if (out.fallback_e_moved) x = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b, &q995);
     std::cerr << "WARNING: Auto's grid median L* " << fixed(target_L, 1) << " is outside [" << fixed(kIntentMinL, 0)
-              << ", " << fixed(kIntentMaxL, 0) << "]: the intent failed; no curves, E " << fixed(e_new, 4)
-              << " (the bracket's range centre)\n";
+              << ", " << fixed(kIntentMaxL, 0) << "]: taken as a failed intent; no curves, E " << fixed(e_int, 4) << " -> "
+              << fixed(e_new, 4) << " re-metered to grid median L* " << fixed(out.fallback_target_L, 0)
+              << (out.fallback_clipped ? " (not reached within the bounds of E)" : "") << "\n";
   }
   out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
 
@@ -2093,8 +2115,12 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
-              << " b " << fixed(out.params.b, 4) << (out.fallback ? "; no curves, Auto's result (" : "")
-              << (out.fallback ? out.fallback : "") << (out.fallback ? ")" : "") << "\n";
+              << " b " << fixed(out.params.b, 4)
+              << (!out.fallback ? ""
+                  : out.intent_lightness_failed ? "; no curves, Auto's g and b, E re-metered (intent_lightness)"
+                                                : "; no curves, Auto's result (")
+              << (out.fallback && !out.intent_lightness_failed ? out.fallback : "")
+              << (out.fallback && !out.intent_lightness_failed ? ")" : "") << "\n";
   }
   return true;
 }

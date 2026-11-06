@@ -226,6 +226,9 @@ struct Scan {
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
+  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs, the roll-off and the
+  // frame's copy for the single-bracket search (decode), and that search's roll-off and knobs (solve).
+  double t_analysis_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
 
   // The scan's exposure: EXIF (of exposure_file, the first input), else LibRaw's, else 1/8 s at ISO 100 (warned once).

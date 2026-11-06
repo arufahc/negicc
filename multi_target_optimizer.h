@@ -246,9 +246,15 @@ struct KnobSolveResult {
 
 // Solves the conversion gains (E, g, b) that move the grey that base=(base_e, base_g, base_b) renders as neutral L* 50
 // through prof by brightness_stops (in stops of luminance), tint_a (CIELAB a*), and warmth_b (CIELAB b*), matching
-// negicc-station's GreyPoint and ConversionSession._solve_knobs.
+// negicc-station's GreyPoint and ConversionSession._solve_knobs. grey_prof, when given, is the profile whose neutral
+// L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof.
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
-                      float tint_a, float warmth_b, KnobSolveResult& out);
+                      float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof = nullptr);
+// The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof.
+bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
+                   float lab_out[3]);
+// How far, in stops of luminance, a grey rendered at L* grey_L lies from the L* brightness_stops asks for.
+float knob_grey_miss_stops(float brightness_stops, float grey_L);
 
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso
@@ -314,9 +320,13 @@ struct CurveRefitResult {
   // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
   // after three rounds of scaling), "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*), or
   // "intent_lightness" (Auto's grid median L* outside [kIntentMinL, kIntentMaxL]: the intent failed, and E is re-metered
-  // to the centre of the bracket's range instead of kept at Auto's).
+  // so the grid's median L* is the nearer end of that range instead of kept at Auto's).
   const char* fallback = nullptr;
   bool intent_lightness_failed = false;
+  // On "intent_lightness": the L* E was re-metered to, whether the re-meter stopped at a bound of E before reaching
+  // it, and whether E moved from Auto's.
+  float fallback_target_L = 0.0f;
+  bool fallback_clipped = false, fallback_e_moved = false;
   // Grid cells the fit left out on a fallback crop (ParamSearchOptions::fallback_crop), of the grid's cells.
   int cells_excluded = 0, cells_total = 0;
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.

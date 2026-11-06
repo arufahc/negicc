@@ -642,8 +642,10 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     e_bounds[1] = std::pow(2.0, 1.5);
     e_bounds[2] = 1.0;
   }
-  out.bounds_lo = (float)e_bounds[0];
-  out.bounds_hi = (float)e_bounds[1];
+  // The range the search moves E in, as ratios to e_center: with E pinned it holds E at e_center (optimize_impl), so
+  // [1, 1]. Before, a pinned E reported the custom bounds of the bracket, ratios to another E (the metered one).
+  out.bounds_lo = (pin_mask & PIN_E) ? 1.0f : (float)e_bounds[0];
+  out.bounds_hi = (pin_mask & PIN_E) ? 1.0f : (float)e_bounds[1];
 
   // TODO: `preview_u8` is allocated at full `view.width x view.height` (e.g. 61 MP = 183 MB when `solve_dinov3_intent`
   // is called on `cfa_export_rgb`) and downsampled on every iteration inside `eng.infer`. Pass `oriented_half_view`

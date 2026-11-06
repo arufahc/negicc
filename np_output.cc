@@ -331,8 +331,16 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
     if (u_lo_known) ch[names[i]]["u_lo"] = n9(c.u_lo[i]);
   }
-  j["channels"] = ch;
-  j["hold"] = c.hold;  // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
+  // Whether the export renders through curves. Not when the fit fell back (fallback: clip, shape or
+  // intent_lightness, as remeter.fallback): the bracket's own tables, so no channels and no hold. Before, the fallback's
+  // identity curves were written as channels (a = k = 0, with an anchor) and replayed as recorded curves.
+  const bool applied = c.active();
+  const CurveRefitResult* fr = sc.curve_fit;
+  j["applied"] = applied;
+  j["fallback"] = fr && fr->fallback ? ordered_json(fr->fallback) : ordered_json(nullptr);
+  j["channels"] = applied ? ch : ordered_json(nullptr);
+  // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
+  j["hold"] = applied ? ordered_json(c.hold) : ordered_json(nullptr);
   if (const CurveRefitResult* f = sc.curve_fit) {
     // The options the fit ran with (before, the defaults were written whatever ran, and half of them were missing).
     const negicc::CurveFitOptions& op = f->options;
@@ -368,6 +376,12 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"shape_scale_ch", {n9(f->shape_scale_ch[0]), n9(f->shape_scale_ch[1])}},
                     {"fallback", f->fallback ? ordered_json(f->fallback) : ordered_json(nullptr)},
                     {"intent_lightness_failed", f->intent_lightness_failed},
+                    // On "intent_lightness": E re-metered to this grid median L* (clipped: a bound of E stopped it).
+                    {"fallback_remeter", f->intent_lightness_failed
+                                             ? ordered_json{{"target_L", n9(f->fallback_target_L)},
+                                                            {"clipped", f->fallback_clipped},
+                                                            {"e_moved", f->fallback_e_moved}}
+                                             : ordered_json(nullptr)},
                     {"cells_excluded", f->cells_excluded}, {"cells_total", f->cells_total},
                     {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
@@ -514,11 +528,12 @@ bool write_json_sidecar(const Sidecar& sc) {
       cli.push_back(std::to_string(v));
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
-  if (sc.input_curves) {
+  if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.
     // The value leads with "ref:" and the refs (always positive): the older order led with aG, and a negative aG
     // made the value start with '-', which the parser rejects as an unknown option, so the line did not replay.
+    // No curves (the fit fell back): nothing to replay, and the given values alone render the same pixels.
     const negicc::InputCurves& c = sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves;
     cli.push_back("--fit_curves");
     std::string v8 = "ref:";
@@ -589,6 +604,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
   t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
+  // The bracket analysis outside Auto's time (enclosures, knobs, roll-off); before, it counted as raw_decode.
+  t["analysis"] = num(sc.t_analysis_ms, "%.1f");
   const bool has_cached_dino = !sc.cached_dino_json_str.empty();
   t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f")
                             : (has_cached_dino ? num(sc.cached_dino_views_ms, "%.1f") : ordered_json(nullptr));
