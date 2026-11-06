@@ -497,10 +497,11 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
-  // film_base_rgb and decode_rgb are read after them.
+  // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain round-trips
+  // through: with six decimals a replay from the sidecar (negicc-station's) balanced the mosaic with other gains.
   const float* k = sc.balance_gains;
   fb["balance_gains"] =
-      k ? ordered_json{num(k[0], "%.6f"), num(k[1], "%.6f"), num(k[2], "%.6f")} : ordered_json(nullptr);
+      k ? ordered_json{num(k[0], "%.9g"), num(k[1], "%.9g"), num(k[2], "%.9g")} : ordered_json(nullptr);
   j["film_base"] = fb;
 
   if (sc.profile_path.empty()) {
