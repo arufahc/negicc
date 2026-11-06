@@ -368,6 +368,12 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"shape_scale_ch", {n9(f->shape_scale_ch[0]), n9(f->shape_scale_ch[1])}},
                     {"fallback", f->fallback ? ordered_json(f->fallback) : ordered_json(nullptr)},
                     {"intent_lightness_failed", f->intent_lightness_failed},
+                    // On "intent_lightness": E re-metered to this grid median L* (clipped: a bound of E stopped it).
+                    {"fallback_remeter", f->intent_lightness_failed
+                                             ? ordered_json{{"target_L", n9(f->fallback_target_L)},
+                                                            {"clipped", f->fallback_clipped},
+                                                            {"e_moved", f->fallback_e_moved}}
+                                             : ordered_json(nullptr)},
                     {"cells_excluded", f->cells_excluded}, {"cells_total", f->cells_total},
                     {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},

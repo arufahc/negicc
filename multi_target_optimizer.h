@@ -314,9 +314,13 @@ struct CurveRefitResult {
   // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
   // after three rounds of scaling), "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*), or
   // "intent_lightness" (Auto's grid median L* outside [kIntentMinL, kIntentMaxL]: the intent failed, and E is re-metered
-  // to the centre of the bracket's range instead of kept at Auto's).
+  // so the grid's median L* is the nearer end of that range instead of kept at Auto's).
   const char* fallback = nullptr;
   bool intent_lightness_failed = false;
+  // On "intent_lightness": the L* E was re-metered to, whether the re-meter stopped at a bound of E before reaching
+  // it, and whether E moved from Auto's.
+  float fallback_target_L = 0.0f;
+  bool fallback_clipped = false, fallback_e_moved = false;
   // Grid cells the fit left out on a fallback crop (ParamSearchOptions::fallback_crop), of the grid's cells.
   int cells_excluded = 0, cells_total = 0;
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.
