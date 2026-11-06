@@ -743,13 +743,16 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     for (size_t i = 0; i < N; ++i)
       if (L.lab[i] >= 0 && keep[L.lab[i]]) light[i] = 1;
   } else if (nlight < 0.005 * nvalid) {
-    // Unclipped bare light: the brightest mode of m, separated from the next mode (the film base). It must border
-    // flat film base rather than picture, and not lie between two film areas (bare light lies outside the film;
-    // a gap between two frames lies between them).
+    // Unclipped bare light: the brightest mode of m, separated from the next mode (the film base). Nothing seen
+    // through film is brighter than the bare light, so that mode must lie less than 0.35 stop (the separation of two
+    // modes, as in find_light_split) below the brightest bin (top_bin); a mode with that much brighter film above it
+    // is the thinnest picture (a dark forest or night sky at base density) on a scan that shows neither light nor
+    // base. It must border flat film base rather than picture, and not lie between two film areas (bare light lies
+    // outside the film; a gap between two frames lies between them).
     ModeHist mh;
     mh.build(mall, [&](size_t i) { return cv.valid[i] && !black[i] && !light[i]; }, step);
     int top = -1, nxt = -1, val = -1;
-    if (mh.find_light_split(top, nxt, val)) {
+    if (mh.find_light_split(top, nxt, val) && (mh.top_bin() - top) * ModeHist::bw < 0.35f) {
       const bool valley = mh.hs[val] <= 0.35 * std::min(mh.hs[top], mh.hs[nxt]);
       const float mnext = mh.center(nxt);
       const float t = valley ? mh.center(val) : 0.5f * (mh.center(top) + mnext);
@@ -2043,7 +2046,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // Each segment becomes a frame candidate. Its measured length stands when it is within len_tol of the format's
   // nominal length L_exp, and otherwise when
   //   - both ends are bounded with similar edge strengths and the length is within 2 len_tol (cameras space frames
-  //     slightly differently),
+  //     slightly differently), or, when the transverse edges are weak (st_tb < 0.4), within 1.6 L_exp: L_exp is the
+  //     frame's height across the strip times the format's aspect, and a weak edge (one that fades into the picture)
+  //     leaves that height unmeasured, so it cannot overrule two measured ends,
   //   - both ends are film gaps of similar edge strength and the frame has some film format's aspect (keep_measured:
   //     another film given the wrong format; lines in a picture bound a piece of no format's aspect), or
   //   - both ends are bounded, the frame is short and one end is a hard limit (a holder aperture or the strip end cuts
@@ -2081,7 +2086,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const bool keep_measured =
         lt == 1 && rt == 1 && similar && film_aspect && (len <= 1.6f * L_exp || format_mismatch);
     if (len > L_exp * (1 + tol) || len < L_exp * (1 - tol)) {
-      const bool camera_length = lg && rg && similar && len > L_exp * (1 - 2 * tol) && len < L_exp * (1 + 2 * tol);
+      const bool camera_length =
+          lg && rg && similar &&
+          (st_tb < 0.4f ? len < 1.6f * L_exp : len > L_exp * (1 - 2 * tol) && len < L_exp * (1 + 2 * tol));
       const bool cut_short = lg && rg && len < L_exp && (lt == 2 || rt == 2);
       if (camera_length || cut_short) {
         // keep the measured length
