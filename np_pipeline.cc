@@ -1178,9 +1178,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           scan.curve_params = s.curve_fit.params;
         }
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
-      } else {
-        measure_enclosures(frame, scan_shutter_s, scan_iso);
       }
+      // The bracket analysis (timings_ms.analysis, not raw_decode): the enclosures, the knobs and the roll-off, or the
+      // frame's copy for the single-bracket search.
+      const double t_analysis_0 = omp_get_wtime();
+      if (!s.bundle_search) measure_enclosures(frame, scan_shutter_s, scan_iso);
       // The single-bracket search (-E or --target without given gains) solves in solve, on the full image; its
       // roll-off is measured there, on a copy of this frame, at its final E, g, b.
       if (s.bundle_search || !s.use_dino) {
@@ -1188,6 +1190,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       } else {
         keep_rolloff_frame(frame, scan_shutter_s, scan_iso);
       }
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
       return true;
     };
   }
@@ -1473,6 +1476,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     if (s.is_bundle) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+      const double t_analysis_0 = omp_get_wtime();  // timings_ms.analysis, as on the LibRaw path
       if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
       if (s.bundle_search || !s.use_dino) {
         if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
@@ -1484,8 +1488,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // (the mosaic this view reads is freed by render).
         keep_rolloff_frame(search_half_view, scan_shutter_s, scan_iso);
       }
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
     }
-    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms -
+                           scan.t_analysis_ms;
 
     // The mosaic and the frame, for render.
     scan.mosaic.frames[0] = cfa_origin;
@@ -1542,7 +1548,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
              proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight, scan.rot_cw, scan.hflip ? 1 : 0,
              scan.vflip ? 1 : 0);
     }
-    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms;
+    scan.t_raw_decode_ms = (omp_get_wtime() - scan.t_raw_0) * 1000.0 - scan.t_auto_ms - scan.t_frame_det_ms -
+                           scan.t_analysis_ms;
   }
 
   const int orig_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
@@ -1850,6 +1857,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       }
     }
     float final_e = base_e, final_g = base_g, final_b = base_b;
+    const double t_analysis_0 = omp_get_wtime();  // the knobs and the roll-off: timings_ms.analysis
     if (o.knobs_given) {
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
@@ -1882,6 +1890,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
                                                scan.film_base_rgb());
       scan.has_rolloff = true;
       std::vector<uint16_t>().swap(scan.rolloff_frame);
+      scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
     } else {
       c.exposure_comp = final_e;
       c.gain_g = final_g;
@@ -2120,6 +2129,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_full_conversion_ms = scan.t_full_conversion_ms;
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
+  sc.t_analysis_ms = scan.t_analysis_ms;
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;

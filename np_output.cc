@@ -589,6 +589,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
   t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
+  // The bracket analysis outside Auto's time (enclosures, knobs, roll-off); before, it counted as raw_decode.
+  t["analysis"] = num(sc.t_analysis_ms, "%.1f");
   const bool has_cached_dino = !sc.cached_dino_json_str.empty();
   t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f")
                             : (has_cached_dino ? num(sc.cached_dino_views_ms, "%.1f") : ordered_json(nullptr));
