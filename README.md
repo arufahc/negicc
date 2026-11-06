@@ -143,12 +143,12 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 # 5. Manual override: pick a bracket (0..6), exposure (-E), or green/blue gains (--gain_g, --gain_b)
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
 
-# 6. White light: fit g, b and G/B input curves jointly after the search, keeping Auto's lightness (-P srgb or
-#    srgb-g10; the sidecar's input_curves records them; its cli_equivalent replays them with
-#    --fit_curves ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (u_loG,u_loB appended for a held curve), --target, -E,
-#    --gain_g and --gain_b, all four required with recorded curves; the older aG,kG,aB,kB,refG,refB,u_medG,u_medB
-#    order without the prefix is still read when aG is not negative)
-bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
+# 6. White light: g, b and G/B input curves are fitted jointly after the search by default, keeping Auto's lightness
+#    (with -P srgb or srgb-g10; --fit_curves off turns it off). The sidecar's input_curves records them; its
+#    cli_equivalent replays them with --fit_curves ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (u_loG,u_loB appended
+#    for a held curve), --target, -E, --gain_g and --gain_b, all four required with recorded curves; the older
+#    aG,kG,aB,kB,refG,refB,u_medG,u_medB order without the prefix is still read when aG is not negative
+bin_out/neg_process --film_stock portra400 --light_source d65 -P srgb -o out.tif scan.ARW
 ```
 
 ## Options
@@ -165,7 +165,7 @@ bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P
 | `-E`, `--exposure_comp` | E as negicc-station gives it. With a bundle and given gains it defaults to the centre of the bracket's exposure range as the bundle search meters it; with an ICC profile, to 1. Given alone, the search keeps it. |
 | `--gain_g`, `--gain_b` | G and B gains relative to R (default 1). Either given turns the DINOv3 search off. |
 | `--brightness`, `--tint`, `--warmth` | Grey-point knobs after the search (or on given values); reuse `<output>.json` when it was written by this build from the same inputs and arguments. |
-| `--fit_curves off\|auto\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto`: on wherever on applies. `on`: fit after the bundle search. Eight or ten comma-separated numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
+| `--fit_curves auto\|off\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto` (default): on wherever on applies, nothing elsewhere. `off`: no curves. `on`: fit after the bundle search, an error where it does not apply. Eight or ten comma-separated numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` finds (default 35mm); with a given frame, the format the film base is read around (default: every format). |
 | `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
