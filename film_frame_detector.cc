@@ -1890,11 +1890,14 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   std::vector<float> cps = cp;
   smooth1d(cps, std::max(0.6f, 0.15f * ppm));
 
-  // Segments: runs of picture columns; a run ends at >= 0.35 mm of columns under 30% picture.
+  // Segments: runs of picture columns; a run ends at half the format's narrowest gap (0.75 mm on 120, 0.4 mm on 35mm)
+  // of columns under 30% picture. A thinner dip is a line in the picture: at 0.35 mm a 0.3 mm white line in Portra160-1
+  // (6x6, 4 work columns since 432a23e counts every lattice sample, 3 before) split the frame, the piece left of the
+  // line was dropped as too short, and the line became the frame's end (0.99 -> 0.91, 480 px of picture cut).
   struct Seg { int a, b; };
   std::vector<Seg> segs;
   {
-    const int gap_min_px = std::max(1, (int)std::lround(0.35f * ppm));
+    const int gap_min_px = std::max(1, (int)std::lround(0.5f * fg.gap_min * ppm));
     int x = 0;
     while (x < VW) {
       while (x < VW && cps[x] < 0.5f) ++x;
