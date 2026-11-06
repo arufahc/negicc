@@ -1010,17 +1010,32 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   };
   // Holder / carrier: large (>= 1% of the image), flat parts that reach the border, darker than 2% of the base
   // (negative) or 1% of the light (slide); flare can keep them above black.
+  // A holder lit by stray light can be far brighter than that (ce34e25826: a grey holder at 10% of the base, taken for
+  // picture, so the frame ran over the whole scan). But its light has not passed through the film, so it has the
+  // lamp's colour, less orange than any film by the film's mask: on a negative a part under a quarter of the base in
+  // every channel (dense in all three layers, as no single saturated colour is) and less orange than the base by a
+  // stop is a holder candidate too. A part mostly of such pixels is holder when it is flat per pixel and lies along a
+  // whole side of the image, as a holder's mask does: dense picture lit by a warm lamp can have that colour too. A
+  // film without a mask (black and white) gives no such part.
   std::vector<uint8_t> holder(N, 0);
   {
     const float lim = pol == FILM_NEGATIVE ? 0.02f * base_lum : 0.01f * ref;
+    auto lamp_coloured = [&](size_t i) {
+      const float r = cv.r.d[i], g = cv.g.d[i], b = cv.b.d[i];
+      return pol == FILM_NEGATIVE && ci.base_valid && r < 0.25f * ci.base[0] && g < 0.25f * ci.base[1] &&
+             b < 0.25f * ci.base[2] && std::log2(std::max(r, 1e-7f) / std::max(b, 1e-7f)) < base_q - 1.0f;
+    };
     std::vector<uint8_t> dc(N, 0);
-    for (size_t i = 0; i < N; ++i) dc[i] = (cv.valid[i] && !light[i] && lum.d[i] < lim) ? 1 : 0;
+    for (size_t i = 0; i < N; ++i)
+      dc[i] = (cv.valid[i] && !light[i] && (lum.d[i] < lim || lamp_coloured(i))) ? 1 : 0;
     Labels L;
     components(dc, cv.valid, lum, W, H, L);
     // Flat per pixel: the mean Sobel magnitude over the part's pixels where it is measured (not the canvas border).
     const size_t nk = L.area.size();
     std::vector<double> gsum(nk, 0.0);
-    std::vector<int> gcnt(nk, 0);
+    std::vector<int> gcnt(nk, 0), nlevel(nk, 0);  // nlevel: the part's pixels that are dark by level (under lim)
+    for (size_t i = 0; i < N; ++i)
+      if (L.lab[i] >= 0 && lum.d[i] < lim) nlevel[L.lab[i]]++;
     for (int y = 1; y < H - 1; ++y) {
       for (int x = 1; x < W - 1; ++x) {
         const size_t i = (size_t)y * W + x;
@@ -1029,14 +1044,17 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         gcnt[L.lab[i]]++;
       }
     }
-    // cand: large parts that reach the border but are not flat per pixel. A holder sits at 1% of the base or below,
-    // where sensor noise alone gives a per-pixel log-luminance gradient near the limit (0.08 to 0.10 stop on a
-    // holder-framed 6x6 scan whose masks were then taken for picture), so those are tested again below.
-    std::vector<uint8_t> keep(nk, 0), cand(nk, 0);
+    // cand: large parts that reach the border but are not flat per pixel, or are dark mostly by colour (above). A
+    // holder sits at 1% of the base or below, where sensor noise alone gives a per-pixel log-luminance gradient near
+    // the limit (0.08 to 0.10 stop on a holder-framed 6x6 scan whose masks were then taken for picture), so those are
+    // tested again below.
+    std::vector<uint8_t> keep(nk, 0), cand(nk, 0), flat_px(nk, 0), by_colour(nk, 0);
     bool any_cand = false;
     for (size_t k = 0; k < nk; ++k) {
       if (!L.touch[k] || L.area[k] < 0.01 * (double)nvalid) continue;
-      if (gcnt[k] > 0 && gsum[k] / gcnt[k] < 0.08) {
+      flat_px[k] = gcnt[k] > 0 && gsum[k] / gcnt[k] < 0.08;
+      by_colour[k] = 2 * nlevel[k] < L.area[k];
+      if (flat_px[k] && !by_colour[k]) {
         keep[k] = 1;
       } else {
         cand[k] = 1;
@@ -1162,8 +1180,11 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
           if (a1 - a0 + 1 >= 0.9f * std::fabs(cv.ct) * (s < 2 ? wh : ww)) whole_side = true;
         }
         const double fill = box > 0.0 ? in / box : 0.0;
-        keep[k] = gsm_cnt[k] > 0 && gsm[k] / gsm_cnt[k] < 0.08 && fill >= 0.9 &&
-                  (ndark[k] >= 0.5 * L.area[k] || whole_side);
+        // A part dark by colour is not held to the fill: a holder with two openings, one of them cut by the image's
+        // edge, is not as deep all along that side (ce34e25826 fills 0.81).
+        keep[k] = by_colour[k] ? flat_px[k] && whole_side
+                               : gsm_cnt[k] > 0 && gsm[k] / gsm_cnt[k] < 0.08 && fill >= 0.9 &&
+                                     (ndark[k] >= 0.5 * L.area[k] || whole_side);
       }
     }
     for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
