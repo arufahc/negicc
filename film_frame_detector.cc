@@ -1010,17 +1010,32 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   };
   // Holder / carrier: large (>= 1% of the image), flat parts that reach the border, darker than 2% of the base
   // (negative) or 1% of the light (slide); flare can keep them above black.
+  // A holder lit by stray light can be far brighter than that (ce34e25826: a grey holder at 10% of the base, taken for
+  // picture, so the frame ran over the whole scan). But its light has not passed through the film, so it has the
+  // lamp's colour, less orange than any film by the film's mask: on a negative a part under a quarter of the base in
+  // every channel (dense in all three layers, as no single saturated colour is) and less orange than the base by a
+  // stop is a holder candidate too. A part mostly of such pixels is holder when it is flat per pixel and lies along a
+  // whole side of the image, as a holder's mask does: dense picture lit by a warm lamp can have that colour too. A
+  // film without a mask (black and white) gives no such part.
   std::vector<uint8_t> holder(N, 0);
   {
     const float lim = pol == FILM_NEGATIVE ? 0.02f * base_lum : 0.01f * ref;
+    auto lamp_coloured = [&](size_t i) {
+      const float r = cv.r.d[i], g = cv.g.d[i], b = cv.b.d[i];
+      return pol == FILM_NEGATIVE && ci.base_valid && r < 0.25f * ci.base[0] && g < 0.25f * ci.base[1] &&
+             b < 0.25f * ci.base[2] && std::log2(std::max(r, 1e-7f) / std::max(b, 1e-7f)) < base_q - 1.0f;
+    };
     std::vector<uint8_t> dc(N, 0);
-    for (size_t i = 0; i < N; ++i) dc[i] = (cv.valid[i] && !light[i] && lum.d[i] < lim) ? 1 : 0;
+    for (size_t i = 0; i < N; ++i)
+      dc[i] = (cv.valid[i] && !light[i] && (lum.d[i] < lim || lamp_coloured(i))) ? 1 : 0;
     Labels L;
     components(dc, cv.valid, lum, W, H, L);
     // Flat per pixel: the mean Sobel magnitude over the part's pixels where it is measured (not the canvas border).
     const size_t nk = L.area.size();
     std::vector<double> gsum(nk, 0.0);
-    std::vector<int> gcnt(nk, 0);
+    std::vector<int> gcnt(nk, 0), nlevel(nk, 0);  // nlevel: the part's pixels that are dark by level (under lim)
+    for (size_t i = 0; i < N; ++i)
+      if (L.lab[i] >= 0 && lum.d[i] < lim) nlevel[L.lab[i]]++;
     for (int y = 1; y < H - 1; ++y) {
       for (int x = 1; x < W - 1; ++x) {
         const size_t i = (size_t)y * W + x;
@@ -1029,14 +1044,17 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
         gcnt[L.lab[i]]++;
       }
     }
-    // cand: large parts that reach the border but are not flat per pixel. A holder sits at 1% of the base or below,
-    // where sensor noise alone gives a per-pixel log-luminance gradient near the limit (0.08 to 0.10 stop on a
-    // holder-framed 6x6 scan whose masks were then taken for picture), so those are tested again below.
-    std::vector<uint8_t> keep(nk, 0), cand(nk, 0);
+    // cand: large parts that reach the border but are not flat per pixel, or are dark mostly by colour (above). A
+    // holder sits at 1% of the base or below, where sensor noise alone gives a per-pixel log-luminance gradient near
+    // the limit (0.08 to 0.10 stop on a holder-framed 6x6 scan whose masks were then taken for picture), so those are
+    // tested again below.
+    std::vector<uint8_t> keep(nk, 0), cand(nk, 0), flat_px(nk, 0), by_colour(nk, 0);
     bool any_cand = false;
     for (size_t k = 0; k < nk; ++k) {
       if (!L.touch[k] || L.area[k] < 0.01 * (double)nvalid) continue;
-      if (gcnt[k] > 0 && gsum[k] / gcnt[k] < 0.08) {
+      flat_px[k] = gcnt[k] > 0 && gsum[k] / gcnt[k] < 0.08;
+      by_colour[k] = 2 * nlevel[k] < L.area[k];
+      if (flat_px[k] && !by_colour[k]) {
         keep[k] = 1;
       } else {
         cand[k] = 1;
@@ -1162,8 +1180,11 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
           if (a1 - a0 + 1 >= 0.9f * std::fabs(cv.ct) * (s < 2 ? wh : ww)) whole_side = true;
         }
         const double fill = box > 0.0 ? in / box : 0.0;
-        keep[k] = gsm_cnt[k] > 0 && gsm[k] / gsm_cnt[k] < 0.08 && fill >= 0.9 &&
-                  (ndark[k] >= 0.5 * L.area[k] || whole_side);
+        // A part dark by colour is not held to the fill: a holder with two openings, one of them cut by the image's
+        // edge, is not as deep all along that side (ce34e25826 fills 0.81).
+        keep[k] = by_colour[k] ? flat_px[k] && whole_side
+                               : gsm_cnt[k] > 0 && gsm[k] / gsm_cnt[k] < 0.08 && fill >= 0.9 &&
+                                     (ndark[k] >= 0.5 * L.area[k] || whole_side);
       }
     }
     for (size_t i = 0; i < N; ++i) holder[i] = (L.lab[i] >= 0 && keep[L.lab[i]]) ? 1 : 0;
@@ -1498,6 +1519,7 @@ float row_frac(const View& v, int y, int x0, int x1, F pred) {
 inline bool is_image(uint8_t c) { return c == CL_IMAGE; }
 inline bool is_valid(uint8_t c) { return c != CL_INVALID; }
 inline bool is_hard(uint8_t c) { return c == CL_LIGHT || c == CL_DARK; }
+inline bool is_light(uint8_t c) { return c == CL_LIGHT; }
 inline bool is_gap(uint8_t c) { return c == CL_BASE || c == CL_LIGHT || c == CL_DARK; }
 
 // Edge position near t0 in a profile p of picture fractions (rising: picture lies after the edge). Each position t
@@ -1912,8 +1934,17 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const int delta = std::max(3, (int)(0.04f * r.h())), delta_ext = std::max(delta, (int)(0.10f * r.h())),
               k = std::max(2, (int)(0.02f * r.h()));
     float st0, st1;
+    const int c0 = (int)r.y0, c1 = (int)r.y1;
     r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0, delta_ext);
     r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
+    // A full row (90%) of holder or bare light ends the film: the edge does not move outward past one. Stray light on a
+    // holder above the film reads as picture, and the image border beyond it counts as non-image, so the image border
+    // made the cleaner edge and the frame ran over the holder to the top of the image (2c90f60949, 830e867e01,
+    // dd951ab7da, white-light 6x7 scans whose film runs under the holder at the sensor's top edge).
+    for (int y = std::min(c0, VH) - 1; y >= std::max(0, (int)r.y0); --y)
+      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y0 = (float)(y + 1); break; }
+    for (int y = std::max(c1, 0); y < std::min(VH, (int)r.y1); ++y)
+      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y1 = (float)y; break; }
     return std::min(st0, st1);
   };
   // A partial frame cannot hold the full aspect, so the search rectangle can be shorter across the strip than the
@@ -1938,6 +1969,26 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     };
     fr.y0 = std::min(fr.y0, (float)run_end(-1));
     fr.y1 = std::max(fr.y1, (float)run_end(+1) + 1);
+    // 35mm: perforation rows are never picture. The rectangle search does not see them (line_gate keeps lines, and a
+    // row of holes is a row of blobs), and a row through the holes is still about 58% picture-classed land between
+    // them, so the band can take in both hole rows and the rebate. The frame's px per mm is then read from the strip's
+    // width and the hole search, which looks outside the band, finds none: a whole strip of two half frames was cropped
+    // as one 645 frame (6919a1096c, d53baa2ecc, white-light scans of a 35mm strip with unclipped holes), and the
+    // review-set frame 56f30d06a9 kept its bottom hole row. So rows near the band's edges (its outer quarters) where
+    // light covers a quarter of the row are cut off. Only when the band's middle half holds almost no light (under 2%):
+    // a picture misread as light (Film Scan0048, whose base was estimated from the picture) has light everywhere.
+    if (fg.sprockets) {
+      float mid_light = 0.0f;
+      const int m0 = std::max(0, (int)(fr.y0 + 0.25f * fr.h())), m1 = std::min(VH, (int)(fr.y1 - 0.25f * fr.h()));
+      for (int y = m0; y < m1; ++y) mid_light += row_frac(v, y, xa, xb, is_light);
+      if (mid_light < 0.02f * std::max(1, m1 - m0)) {
+        const int lim = (int)(0.25f * fr.h()), ya0 = (int)fr.y0, yb0 = (int)fr.y1;
+        for (int y = std::max(0, ya0); y < std::min(VH, ya0 + lim); ++y)
+          if (row_frac(v, y, xa, xb, is_light) >= 0.25f) fr.y0 = (float)(y + 1);
+        for (int y = std::min(VH, yb0) - 1; y > std::max(-1, yb0 - lim); --y)
+          if (row_frac(v, y, xa, xb, is_light) >= 0.25f) fr.y1 = (float)y;
+      }
+    }
   }
   const float st_tb = refine_tb(fr);
   const float across_px = fr.h();
