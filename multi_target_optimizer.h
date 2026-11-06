@@ -87,7 +87,7 @@ struct ConversionParams {
 enum class FixedPointStatus {
   // E, g, b moved by 0.02 or less in total in the last step; or, on TriLED, the residual by 1.5 % or less (in the
   // pullback's search also not rising); or, on white light, the residual, already above the best step's, did not fall
-  // again (the best step is kept). On white light a residual that holds still does not end the loop.
+  // again (the best step is kept). The 1.5 % rule does not apply on white light.
   kConverged,
   kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
   kMaxIters,   // neither within ParamSearchOptions::max_steps steps

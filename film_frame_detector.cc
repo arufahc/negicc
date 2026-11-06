@@ -217,7 +217,7 @@ void downsample(const FilmImage& im, int work_size, WorkImage& wi) {
     return;
   }
   // Large inputs: read every k-th sample along both axes, k = box size / 2.5 rounded down, so a box still averages 2
-  // to 5 samples per axis (1 or 2 for a box under 2.5 samples): enough to suppress grain and noise at a fraction of
+  // to 5 samples per axis (1 to 3 for a box under 2.5 samples): enough to suppress grain and noise at a fraction of
   // the reading cost.
   const int k = std::max(1, (int)((float)std::max(nx, ny) / (2.5f * (float)std::max(wi.w, wi.h))));
   const float inv_white = 1.0f / im.white;
@@ -886,13 +886,13 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
 
   // Film base. A first estimate from the film's percentiles (the thinnest film for a negative, the densest for a
   // slide). For a negative then the brightest mode of m (modes holding >= 0.4% of the film) whose pixels (within 0.15
-  // stop) form large connected regions, rebate bands and gaps (parts of >= 0.15% of the valid canvas, >= 0.3% in
-  // all), not only small blobs (unclipped holes, blended edges). The walk goes down from the brightest mode and stops 2.5 stops
-  // below the brightest bin (denser film is picture), or, with no bare light seen, once more than 2.5% of the film is
-  // brighter than the mode (the base is the thinnest film; a mode with that much above it is picture). Failing that,
-  // the brightest mode within 0.35 stop of the brightest bin with no bare light seen (without light the brightest film
-  // must be the base), within 2.5 stops with it. The base colour is the median within 0.12 stop of the mode, narrower
-  // than the region test, to keep the mode's skirts out.
+  // stop) form large connected regions, rebate bands and gaps (parts of >= 0.15% of the valid canvas, >= 0.3% in all),
+  // not only small blobs (unclipped holes, blended edges). The walk goes down from the brightest mode and stops 2.5
+  // stops below the brightest bin (denser film is picture), or, with no bare light seen, once more than 2.5% of the
+  // film is brighter than the mode (the base is the thinnest film; a mode with that much above it is picture). Failing
+  // that, the brightest mode within 0.35 stop of the brightest bin with no bare light seen (without light the brightest
+  // film must be the base), within 2.5 stops with it. The base colour is the median within 0.12 stop of the mode,
+  // narrower than the region test, to keep the mode's skirts out.
   {
     std::vector<float> fr[3];
     for (size_t i = 0, k = 0; i < N; ++i) {
@@ -2596,9 +2596,9 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
   // Confidence: 1, marked down per doubt; the smaller the factor, the more that doubt suggests a wrong frame. A
   // partial primary (x0.7) or one with an open end (x0.85) may be laid at the nominal length rather than measured;
   // weak transverse edges (strength < 0.4, x0.8) may be a band inside the picture; and nothing that bounds the film
-  // (no holder, light, strip end, strip edge or perforations, and no film gap or base patch beside a strip that runs
-  // to the image border: no_film_base, x0.4) means the "frame" may be any rectangle in a picture filling the image,
-  // the strongest doubt.
+  // (no holder, light, strip end, strip edge or perforations, and not both transverse edges of strength >= 0.4 and a
+  // film gap or base patch beside a strip that runs to the image border: no_film_base, x0.4) means the "frame" may be
+  // any rectangle in a picture filling the image, the strongest doubt.
   float conf = 1.0f;
   if (!cands[pi].complete) {
     conf *= 0.7f;
