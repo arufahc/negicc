@@ -39,16 +39,17 @@ struct RgbImage {
 //   1. Enclosure: bound each bracket's E so the scene's green range lands inside the green range the bracket's
 //      patches were calibrated over.
 //   2. Bootstrap: meter each admissible bracket so the scene's log-average renders at L* 50, render the bracket
-//      metered deepest inside its bounds and let DINOv3 predict an intent field from that render.
+//      metered deepest inside its bounds (when none meters, the bracket whose range the scene fills best) and let
+//      DINOv3 predict an intent field from that render.
 //   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against that
 //      one intent field.
-//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
-//      the converged ones, when any converged).
-//   5. The clip fallback: move to the next bracket when the chosen one clips clearly more (ClipFallbackOutcome).
-//      (The highlight headroom that raised E first was removed, as negicc-station's deaf9cc removed it.)
-//   6. The highlight pullback (formerly Part 1B, the enclosure-guided rescue): when a bright frame still has many
-//      highlights near white (sRGB 242 and 235), pull E into the bracket's calibrated range or move to a darker
-//      bracket whose range holds the frame.
+//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (on TriLED
+//      among the converged ones, when any converged).
+//   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
+//   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
+//      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
+//      run Steps 2-4 again with penalties on E outside the bracket's calibrated range in place of the pull toward the
+//      centre, and take the result if it clips no more and moves to a later bracket or a higher E.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
 // measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
@@ -68,8 +69,8 @@ struct RgbImage {
 // py-ref comments name the functions) so both pick the same bracket and parameters.
 // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (PerTargetConverter.convert)
 
-// The parameters the search solves. With the input matrix M of a bracket (rows R, G, B; see
-// ParamSearchResult::input_matrix) the conversion matrix is
+// The parameters the search solves. With the input matrix M the search runs on (rows R, G, B; input_matrix on
+// TriLED, M_frame on white light, see ParamSearchResult::input_matrix) the conversion matrix is
 //
 //   diag(E, E g, E b) * M,
 //
@@ -84,15 +85,20 @@ struct ConversionParams {
 
 // How the fixed-point loop of a bracket stopped.
 enum class FixedPointStatus {
-  kConverged,  // E, g, b moved by 0.02 or less in total, or the residual by 1.5 % or less, in the last step
+  // E, g, b moved by 0.02 or less in total in the last step; or, on TriLED, the residual by 1.5 % or less (in the
+  // pullback's search also not rising); or, on white light, the residual, already above the best step's, did not fall
+  // again (the best step is kept). On white light a residual that holds still does not end the loop.
+  kConverged,
   kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
   kMaxIters,   // neither within ParamSearchOptions::max_steps steps
 };
 const char* to_string(FixedPointStatus status);
 
-// What the clip fallback (formerly the highlight rescue, Branch R) did. It is tried when the chosen bracket
-// white-clips more than 0.03 % of the inner crop, on the next bracket of the bundle (target_idx + 1), and taken when
-// that one passes every check.
+// What the clip fallback did. It is tried when the chosen bracket white-clips more than 0.03 % of the inner crop, on
+// the next bracket of the bundle (target_idx + 1), and taken when that one passes every check: it must at least halve
+// the clipping, keep the median L* within -4.5 .. +0.5 of the first choice's (the midtones may darken a little to save
+// the highlights, but the frame's rendering must not change), and keep the residual within 10 % (DINOv3 must still
+// find the render as plausible).
 enum class ClipFallbackOutcome {
   kNotNeeded,        // the chosen bracket does not clip
   kNotScreened,      // the next bracket was not screened
@@ -107,7 +113,8 @@ const char* to_string(ClipFallbackOutcome outcome);
 struct ParamSearchOptions {
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
   int max_steps = 8;         // the most steps of each bracket's fixed-point loop (neg_process's --dino_iters)
-  // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's.
+  // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's. Set
+  // one of the two (neg_process sets film_base_rgb_d): the curve fit's roll-off reads film_base_rgb_d only.
   const float* film_base_rgb = nullptr;
   const double* film_base_rgb_d = nullptr;
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
@@ -124,20 +131,21 @@ struct ParamSearchOptions {
 // cheaply; the best two go on to the tournament.
 struct ScreeningResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
-  ConversionParams params;  // the best (E, g, b), E in reference units (see ParamSearchResult::e_norm)
+  ConversionParams params;  // the best (E, g, b), E in the search's units (reference on TriLED, this frame's on white
+                            // light; see ParamSearchResult::input_matrix)
   // z2 of the render at params against the bootstrap field, plus the search's penalties on clipping and on E far
   // from the bracket's centre exposure.
   float intent_loss = 0;
-  float e_lo = 0, e_hi = 0;  // the bounds E was searched within (reference units)
-  float e_metered = 0;       // E that renders the scene's log-average at L* 50 (reference units)
+  float e_lo = 0, e_hi = 0;  // the bounds E was searched within (the search's units)
+  float e_metered = 0;       // E that renders the scene's log-average at L* 50; e_center when no bracket metered
 };
 
-// Step 4, one row per shortlisted bracket: its fixed-point loop. Each step renders the frame at the current
-// (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next (E, g, b)
-// against that render's own intent field. The row keeps the step with the lowest residual.
+// Step 4, one row for each of the best two screened brackets: its fixed-point loop. Each step renders the frame at
+// the current (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next
+// (E, g, b) against that render's own intent field. The row keeps the step with the lowest residual.
 struct FixedPointResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
-  ConversionParams params;  // (E, g, b) of the best step, E in reference units
+  ConversionParams params;  // (E, g, b) of the best step, E in the search's units
   // The self-consistency residual of that step: z2 of the render against the field DINOv3 predicts from the same
   // render. Low when the render already looks the way DINOv3 expects the image to look.
   float residual = 0;
@@ -146,7 +154,7 @@ struct FixedPointResult {
   // The frozen shoulder of the best step (params.shoulder) and how it was found.
   float shoulder_q995 = 0.0f;   // the measured 99.5% point before clamping (auto only)
   float shoulder_knee = 1.0f;   // the linear knee x_k (1 when off)
-  bool shoulder_guard = false;  // the intent loss with the shoulder is more than 2% worse than without
+  bool shoulder_guard = false;  // the L* part of the intent loss is more than 2% worse with the shoulder than without
   // The intent field DINOv3 predicted from the best step's preview (the field that step's parameters were searched
   // against next and its residual was measured with): grid_h x grid_w cells, row-major, [L*, a*, b*] per cell.
   std::vector<float> mu, sigma;
@@ -164,7 +172,7 @@ struct ParamSearchResult {
   bool shoulder_guard = false;
   FixedPointStatus status = FixedPointStatus::kMaxIters;  // and its FixedPointResult::status
   // The chosen step's intent field (FixedPointResult::mu, sigma, grid_w, grid_h), written to the sidecar's
-  // intent_field, and that step's parameters (E in the search's reference units) and bracket.
+  // intent_field, and that step's parameters (E in the search's units).
   std::vector<float> intent_mu, intent_sigma;
   int intent_grid_w = 0, intent_grid_h = 0;
   ConversionParams intent_params;
@@ -175,12 +183,13 @@ struct ParamSearchResult {
   //
   //   M_frame[r][c] = X[r][c] * n / f[r] * rho            (the merged input matrix of this frame)
   //   e_norm        = M_frame[1][1] / M_ref[1][1]         (M_ref: the same for a 1/8 s, ISO 100 scan)
-  //   input_matrix  = M_frame / e_norm                    (the matrix the search runs on, in reference units)
+  //   input_matrix  = M_frame / e_norm                    (reference units)
   //   row_scale[r]  = n / f[r] * rho / e_norm,  so  input_matrix[r][c] = row_scale[r] * X[r][c]
   //
-  // The search's E is in reference units, so the same E means the same rendering whatever the scan's exposure;
-  // params.e is E / e_norm. row_scale lets the result be written back as the bundle's crosstalk with -E,
-  // --gain_g and --gain_b (neg_process's cli_equivalent).
+  // On TriLED the search runs on input_matrix: its E is in reference units, so the same E means the same rendering
+  // whatever the scan's exposure, and params.e is E / e_norm. On white light (no crosstalk) it runs on M_frame and
+  // scales the scene's green range by e_norm instead (bracket_enclosure), so its E is params.e. row_scale lets the
+  // result be written back as the bundle's crosstalk with -E, --gain_g and --gain_b (neg_process's cli_equivalent).
   float input_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   float e_norm = 1.0f;
   float row_scale[3] = {1.0f, 1.0f, 1.0f};
@@ -197,15 +206,17 @@ struct ParamSearchResult {
 
   std::vector<ScreeningResult> screening;
   std::vector<FixedPointResult> tournament;
-  int inferences = 0;  // DINOv3 inferences of the whole search: the bootstrap plus every fixed-point step
+  // DINOv3 inferences of the whole search: the bootstraps and every fixed-point step (the clip fallback's and the
+  // pullback's included).
+  int inferences = 0;
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
 
 // A bracket's exposure range on a frame, as the bundle search's Step 1 meters it (bracket_enclosure): the scene's
 // green 0.5% and 99.5% points over the inner crop (crop_ratio), scaled by e_norm on white-light bundles, onto the
-// bracket's calibrated range. In the station's E, which -E, Auto's result and the single-bracket search take, so the
-// exposure given values default to and the single-bracket search centres on are the ones Auto meters for that bracket.
+// bracket's calibrated range. E is in the units of -E and of Auto's result (ParamSearchResult::params), so the default
+// exposure of given values and the centre of the single-bracket search are the ones Auto meters for that bracket.
 struct BracketExposure {
   bool valid = false;       // the bracket has patch readings
   bool feasible = false;    // e_min <= e_max
@@ -225,12 +236,12 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
                              std::vector<BracketExposure>& out);
 
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
-// orientation, converted through bracket target_idx at the search's E, g and b (ParamSearchResult::params, the
+// orientation, converted through prof (first overload: a bracket's profile, or a combined profile built from it) or
+// bracket target_idx (second) at the search's E, g and b (ParamSearchResult::params, the
 // station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's
 // last step measures the same on its half-size frame; neg_process measures every bundle conversion's there too, so
 // given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detect.h),
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
-// The same through a given profile (the bracket's, or a combined profile built from it).
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995 = nullptr, const double* film_base_rgb = nullptr);
@@ -240,8 +251,8 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const ne
 
 struct KnobSolveResult {
   float e = 1.0f, g = 1.0f, b = 1.0f;
-  bool limited = false;
-  float grey_lab[3] = {50.0f, 0.0f, 0.0f};
+  bool limited = false;                     // the asked Lab was out of reach: e, g, b reach as far toward it as can be
+  float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the Lab the grey renders at with e, g, b
 };
 
 // Solves the conversion gains (E, g, b) that move the grey that base=(base_e, base_g, base_b) renders as neutral L* 50
@@ -352,9 +363,9 @@ struct CurveRefitResult {
 //      the search's intent field on the frame's grid (predicted again at the search's final parameters when the
 //      pullback or the clip fallback moved them after its preview), each candidate at the E that keeps Auto's grid
 //      median L*, within the bracket's calibrated range of E widened to hold Auto's E; its curves anchored (ref,
-//      u_med) on the film base (film_base_rgb_d in opts, else the brightest grid cell per channel) at its own E, g, b;
+//      u_med) on the film base (the one opts gives, else the brightest grid cell per channel) at its own E, g, b;
 //   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
-//      equals Auto's (the station's Iteration 230 F6L; no DINOv3 pass), each channel's curve scaled down where its
+//      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its
 //      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
 //      own result with no curves (CurveRefitResult::fallback);
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place

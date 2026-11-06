@@ -23,9 +23,10 @@
 //
 // Input: the image is read in place through FilmImage, three channel lattices that may point into one CFA mosaic
 // (one sample per photosite) or into an RGB image (interleaved or planar). Nothing of the input is copied; the
-// detector reads it in two passes: a box-averaged downsample to a work image of at most params.work_size pixels on
-// the long side, and a few thousand bilinear samples along the frame edges and in the film base patch. All
-// intermediate buffers are work-image sized (see film_frame_detector.cc for each one).
+// detector reads it in three ways: a box-averaged downsample to a work image of at most params.work_size pixels on
+// the long side, a few thousand bilinear samples along the primary frame's edges (refinement), and every sample
+// inside each candidate film base patch (film_sample_patch). Intermediate buffers are work-image sized, besides the
+// patch samples (see film_frame_detector.cc for each one).
 //
 // Output coordinates are image pixels: the pixel grid FilmImage::width x FilmImage::height (the sensor for a CFA
 // mosaic, the decoded image for an RGB image), x right and y down, pixel (i, j) covering [i, i + 1) x [j, j + 1).
@@ -93,11 +94,11 @@ FilmFormat film_format_from_name(const std::string& s);
 struct FrameDetectionParams {
   FilmFormat format = FILM_FORMAT_AUTO;  // set by the user for the best accuracy; AUTO tries every format
   FilmPolarity polarity = FILM_NEGATIVE;
-  char axis_hint = 0;            // 'h' the strip runs along x, 'v' along y, 0 detect
+  char axis_hint = 0;            // 'h' (or 'H') the strip runs along x, 'v' (or 'V') along y, 0 detect
   float max_rotation_deg = 5.0f; // tilt search range
-  int work_size = 1024;          // long side of the work image, pixels
+  int work_size = 1024;          // long side of the work image, pixels (at least 256)
   bool refine = true;            // sub-pixel refinement of the primary frame's edges on the full-resolution image
-  float crop_inset = 0.005f;     // FrameDetection::crop: inset per side, as a fraction of the frame size
+  float crop_inset = 0.005f;     // FrameDetection::crop: inset per side, as a fraction of the crop's width or height
   int crop_align = 1;            // FrameDetection::crop: x, y, x + w and y + h multiples of this (the CFA period)
 };
 
@@ -139,15 +140,17 @@ struct FrameDetection {
   int gaps[2][2] = {{-1, -1}, {-1, -1}};
   // A flat patch of unexposed film next to the primary frame (an inter-frame gap or the rebate, tilted with the
   // film), the bounding box (x, y, w, h) of its part inside the image, its median per channel in sample units
-  // (black subtracted, not normalised) and the spread of its green density (standard deviation of log10, as the
-  // previous detector). has_base when that spread is at most 0.025.
+  // (black subtracted, not normalised) and the spread of its green density (standard deviation of log10). has_base
+  // when that spread is at most 0.025 (flat enough to be unexposed film rather than picture).
   bool has_base = false;
   FilmRect base_patch;
   int base_box[4] = {0, 0, 0, 0};
   float base_rgb[3] = {0.0f, 0.0f, 0.0f};
   float base_std_d = 0.0f;
   bool light_clipped = false;         // bare light around the film is clipped
-  float conf = 0.0f;                  // 1: the frame is complete and bounded by gaps or holder on both ends
+  // 1: the frame is complete, bounded on both ends, with strong transverse edges and the film's bounds (holder,
+  // light, strip end, strip edge, perforations or film base) seen; lower per doubt, each named in reason.
+  float conf = 0.0f;
   std::string reason;                 // comma-separated diagnostics ("" when nothing to report)
 };
 
