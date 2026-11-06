@@ -252,3 +252,7 @@ scanner output, one masked picture.
 - A conversion: `neg_process --film_stock portra400 --light_source d65 -P srgb --white_model film --roi auto
   --film_format auto [--rot 90] -o out.tiff scan.raw`. The sidecar's `white_film` block holds the six numbers, the
   factors of steps 5, 7 and 8 and the search log.
+- Regression gates on this branch's build against master dcb478a (the must-pass set, 2026-11-06): the default
+  white-light path renders the 41 review frames pixel-identically in both of its modes; the TriLED suite's 55 frames
+  are pixel-identical in all three arms; the crop suite has no pass-to-fail and unchanged totals, with the one moved
+  frame of section 8 looked at and accepted.
