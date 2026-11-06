@@ -25,6 +25,7 @@
 #include "film_frame_detector.h"
 #include "flat_field.h"
 #include "libraw/libraw.h"
+#include "white_light_balance.h"
 
 // 4-shot pixel shift merge is only available with Sony A7RM4 camera.
 bool is_sony_a7rm4(LibRaw* proc);
@@ -42,21 +43,9 @@ using HalfSizeAnalysis = std::function<bool(const LibRaw& proc)>;
 
 // Called by load_raw's white-light decode with its first half-size image (as HalfSizeAnalysis sees it). Leaves in k
 // the gains for the camera's R, G and B channels that the mosaic takes before the camera matrix
-// (film_base_balance_gains); k comes in as 1, 1, 1, which leaves the mosaic as it is.
+// (film_base_balance_gains, white_light_balance.h); k comes in as 1, 1, 1, which leaves the mosaic as it is.
 using ChannelBalance = std::function<void(const LibRaw& half, float k[3])>;
 
-// The gains for the camera channels that put the film base |base| (linear Rec.2020, as the white-light decode of proc
-// gives it) on the profile's film base |profile_base|: K = (M^-1 profile_base) / (M^-1 base) per channel, M the camera
-// matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised and nothing new
-// clips. k is left as it is when either base has a camera channel that is not positive.
-//
-// Why before the matrix: a light of another colour than the profile's gives the base another colour in the camera's
-// own channels. Corrected after the matrix has mixed them, the matrix's negative terms drive dense areas below zero
-// (clamped: blue shadows and skies with a warm light). And the profile's patches were read as Rec.2020 divided by
-// the calibration scan's base, which is M with its rows divided by that base: dividing by another scan's base scales
-// the rows by another vector, while after these gains every scan's base is the profile's. For the calibration scan
-// itself K is 1.
-void film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]);
 
 // Called by load_raw with the unpacked RAW in proc (imgdata.rawdata.raw_image holds the CFA mosaic, margins
 // included), before the half-size analysis and the decode. Sets roi to the region to decode (x, y, w, h in the
