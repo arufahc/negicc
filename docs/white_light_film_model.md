@@ -24,6 +24,10 @@ numbered step below, and each constant to the experiment that produced it.
   medians for today's default, today's curves mode and the new path: 3.37, 1.78, 1.81 on the development frames and
   2.15, 1.47, 1.41 on the held-out frames. On the frames Alpha rated, the new path is closer in colour to the version
   that was preferred on 29 of 53 verdicts, the same count as today's curves mode (29) and above the default (19).
+- The verdicts in the table are mine, made knowing which picture was which. Alpha's blind test on the 31 held-out
+  frames does not confirm them (section 11): against today's curves mode the new path was picked on 11 frames and
+  the curves on 18, with 2 without preference; against today's default, 17 to 11, with 3 without preference. Neither
+  difference is significant. The new path is not shown to be better than the curves mode.
 - Two detector changes came out of the same frames (section 8): 7 of the 137 crops change, all for the better, and the
   crop evaluation set does not regress.
 - What is not solved: section 9.
@@ -237,7 +241,7 @@ scanner output, one masked picture.
   the search absorbs the balance and the slope step part of the exponents.
 - Peak memory and time were measured on x86 only (61 MP frame: 8.1 s and 1.28 GB against 9.1 s and 1.32 GB for the
   default path); the Orin Nano is not measured.
-- The default is unchanged: `--white_model profile`. Making `film` the default is a decision for after the gallery.
+- The default is unchanged: `--white_model profile`. The blind test of section 11 gives no reason to change it.
 
 ## 10. The port, and how to reproduce
 
@@ -256,3 +260,30 @@ scanner output, one masked picture.
   white-light path renders the 41 review frames pixel-identically in both of its modes; the TriLED suite's 55 frames
   are pixel-identical in all three arms; the crop suite has no pass-to-fail and unchanged totals, with the one moved
   frame of section 8 looked at and accepted.
+
+## 11. Blind test by Alpha (2026-11-06)
+
+Alpha compared the pictures without knowing which was which. The analysis was written down before the first vote:
+counts per comparison, a two-sided sign test on the votes with a direction, no pass threshold.
+
+- Frames: the 31 held-out frames, upright, the three versions with the same crop (this branch's build).
+- 72 pairs, one picture at a time switched in place, answers A, B or no preference: each frame as new path against
+  today's curves mode and as new path against today's default (side random), 6 pairs repeated with the sides
+  swapped, 4 pairs of two identical pictures.
+
+| comparison | new path picked | other picked | no preference | sign test p |
+|---|---|---|---|---|
+| new path against today's curves mode (`--fit_curves auto`) | 11 | 18 | 2 | 0.27 |
+| new path against today's default | 17 | 11 | 3 | 0.35 |
+
+Checks: the 4 identical pairs were all answered "no preference"; the 6 repeated pairs were all answered the same way
+as the first time. Median time per pair 3.2 s.
+
+Against my own verdicts of section 1: of the 12 held-out frames I had called better than the curves mode, Alpha
+picked the new path on 6 and the curves on 6. Of the 15 I had called the same, Alpha picked the curves on 9, the
+new path on 4 and neither on 2. On the held-out Canon R5 frames (8 in the session) the count against the curves
+mode is 4 to 4.
+
+Looked at after the votes, so a lead and not a result: where the new path came out more than 2 L\* lighter than the
+curves mode (13 frames), the curves were picked on 11. The same frames against the default, which has the curves
+mode's lightness, went 6 to 5 for the new path, so lightness alone does not explain the votes.
