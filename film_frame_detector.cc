@@ -36,7 +36,8 @@
 //                          are relative to the film base and the bare light found in the same image, so the lamp's
 //                          colour and the exposure cancel; space decides what levels cannot (bare light lies outside
 //                          the film and reaches the border, a carrier is large, flat and reaches the border, holes
-//                          are small).
+//                          are small, and clipped film, unlike clipped bare light, is neither a band nor an area
+//                          whose lines are light from carrier to carrier).
 //  5. detect_one_format    for one film format:
 //     a. rectangle search  non-image pixels on long lines (line gate) feed a search for the largest rectangle of the
 //                          frame's aspect with few non-image pixels inside (integral image), for both orientations;
@@ -44,8 +45,10 @@
 //                          it) or params.axis_hint picks the orientation.
 //     b. strip model       in the "view" (the canvas, transposed when the strip runs along y, so the strip always
 //                          runs along view x): the frame's transverse edges from row profiles, px per mm from the
-//                          format, the strip cut into frames at gaps that are flat and at the base level, each frame
-//                          end typed as a film gap, a hard limit (holder, light, strip end) or open (image border),
+//                          format, the strip cut into frames at gaps (light, holder, or straight flat bands of film
+//                          base between two transverse edges with picture beside them, found in line profiles along
+//                          the strip), each frame end typed as a film gap, a hard limit (holder, light, strip end)
+//                          or open (image border),
 //                          the format's frame length laid from a trusted end where the measured length is not kept.
 //                          The primary is the complete frame nearest the image centre (else the most visible); the
 //                          neighbours are walked at the measured pitch. Then the strip's edges and ends (film base), the sprocket holes, and
@@ -75,6 +78,9 @@
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
+
+// Stops below the film base still counted as base (classify), and the spread a line of film base may have.
+constexpr float kBaseMargin = 0.30f;
 
 // Classes of canvas pixels (classify). INVALID is outside the image.
 enum PixelClass : uint8_t { CL_INVALID = 0, CL_IMAGE = 1, CL_BASE = 2, CL_LIGHT = 3, CL_DARK = 4 };
@@ -621,7 +627,7 @@ struct ClassInfo {
 // Classifies every canvas pixel (see the file comment, step 4). Levels: ref is the 99.9th percentile luminance and
 // refc the per channel 99.9th percentiles (bare light when some is visible, else the thinnest film); m(i), the
 // minimum over channels of value / refc, is how close a pixel is to that reference in every channel (log2).
-// Allocates (transiently, canvas sized): ~6 float planes and ~16 byte masks, and component label planes, of which at
+// Allocates (transiently, canvas sized): ~6 float planes and ~17 byte masks, and component label planes, of which at
 // most 6 float or label planes and ~6 byte masks are live at once; the holder test adds one float plane only when a
 // large dark part at the border fails its per-pixel flatness test.
 void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
@@ -824,6 +830,55 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     for (size_t i = 0; i < N; ++i)
       if (L.lab[i] >= 0 && hit[L.lab[i]] && L.touch[L.lab[i]]) light[i] = 1;
   }
+  if (ci.light_clipped) {
+    // Clipped film is not bare light. A scan that clips the film base clips its thinnest picture too, and the two form
+    // one clipped part that reaches the border wherever the film runs off the image. Bare light is seen beside the
+    // film along straight lines: as a band (light past the film's end or along a holder's edge: at least 6 times as
+    // long as its mean thickness, as a base band below) or as an area around the film whose rows or columns are light
+    // from carrier to carrier (or the border). So a large clipped part (more than hole-sized, 0.5% of the image) that
+    // is not a band and lies mostly (over half its pixels) off such lines (light for >= 90% of the run between the
+    // carriers or borders, as a full non-image line in the rectangle search) is film: classed by level below.
+    std::vector<uint8_t> on_line(N, 0);
+    for (int cols = 0; cols < 2; ++cols) {
+      const int n = cols ? W : H, m = cols ? H : W;
+      for (int a = 0; a < n; ++a) {
+        auto at = [&](int b) { return cols ? (size_t)b * W + a : (size_t)a * W + b; };
+        for (int b = 0; b < m;) {
+          if (!inside[at(b)]) {
+            ++b;
+            continue;
+          }
+          int e = b, nl = 0;
+          for (; e < m && inside[at(e)]; ++e) nl += light[at(e)];
+          if (nl >= 0.9 * (e - b))
+            for (int k = b; k < e; ++k) on_line[at(k)] = 1;
+          b = e;
+        }
+      }
+    }
+    Labels L;
+    components(light, inside, lum, W, H, L);
+    const size_t nk = L.area.size();
+    std::vector<int> on(nk, 0), bx0(nk, W), bx1(nk, -1), by0(nk, H), by1(nk, -1);
+    for (size_t i = 0; i < N; ++i) {
+      const int k = L.lab[i];
+      if (k < 0) continue;
+      const int x = (int)(i % W), y = (int)(i / W);
+      on[k] += on_line[i];
+      bx0[k] = std::min(bx0[k], x);
+      bx1[k] = std::max(bx1[k], x);
+      by0[k] = std::min(by0[k], y);
+      by1[k] = std::max(by1[k], y);
+    }
+    std::vector<uint8_t> film_part(nk, 0);
+    for (size_t k = 0; k < nk; ++k) {
+      const int span = std::max(bx1[k] - bx0[k] + 1, by1[k] - by0[k] + 1);
+      const bool band = span >= 6.0 * L.area[k] / span;
+      film_part[k] = L.area[k] > 0.005 * (double)nvalid && !band && 2 * on[k] < L.area[k];
+    }
+    for (size_t i = 0; i < N; ++i)
+      if (L.lab[i] >= 0 && film_part[L.lab[i]]) light[i] = 0;
+  }
   // The blended edge of light counts as light.
   dilate(light, W, H, 2);
   for (size_t i = 0; i < N; ++i)
@@ -905,7 +960,6 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
   }
   const float base_lum = (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f;
   const float base_q = std::log2(ci.base[0] / ci.base[2]);  // how orange the base is (log2 R / B)
-  const float base_margin = 0.30f;                          // stops below the base still counted as base
 
   // Unclipped sprocket holes and light patches: small parts brighter than the base by 0.35 stop in every channel
   // (no part of a negative is thinner than its own base).
@@ -1126,7 +1180,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
       continue;
     }
     if (pol == FILM_NEGATIVE) {
-      const float k = std::exp2(-base_margin);
+      const float k = std::exp2(-kBaseMargin);
       const bool thin = cv.r.d[i] >= ci.base[0] * k && cv.g.d[i] >= ci.base[1] * k && cv.b.d[i] >= ci.base[2] * k;
       ci.cls[i] = thin ? CL_BASE : CL_IMAGE;
     } else {
@@ -1862,14 +1916,6 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
     return std::min(st0, st1);
   };
-  auto refine_lr = [&](Rect& r, float* sl, float* sr) {
-    const int ya = (int)(r.y0 + 0.12f * r.h()), yb = (int)(r.y1 - 0.12f * r.h());
-    std::vector<float> cp(VW);
-    for (int x = 0; x < VW; ++x) cp[x] = col_frac(v, x, ya, yb, is_image);
-    const int delta = std::max(3, (int)(0.04f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
-    r.x0 = refine_edge_profile(cp, r.x0, delta, k, true, sl);
-    r.x1 = refine_edge_profile(cp, r.x1, delta, k, false, sr);
-  };
   // A partial frame cannot hold the full aspect, so the search rectangle can be shorter across the strip than the
   // frame: grow the band to the run of picture rows through its centre first.
   {
@@ -1907,8 +1953,94 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     cnon[x] = col_frac(v, x, (int)fr.y0, (int)fr.y1, is_gap);
     cvalid[x] = col_frac(v, x, (int)fr.y0, (int)fr.y1, is_valid);
   }
+  // Gap lines (gap_line, 1 inside a gap), found from geometry rather than from pixel classes, which cannot always
+  // tell a gap from picture: a thin part of the picture at the base level joins a gap into one base region (which may
+  // then be reclassed picture with it), and a scan that clipped the base clips its thinnest picture too. But a gap is
+  // a straight band across the whole strip, bounded by two straight edges, and flat along its length, while picture
+  // varies along any line. So over the band's middle 80% each view column gives
+  //   step:   the mean of the transverse gradient of log luminance along its line; a straight edge adds up over the
+  //           hundreds of rows, picture texture cancels,
+  //   level:  the line's median log luminance, and spread: its 10th to 90th percentile range.
+  // Transverse edges are the local maxima of |step| above 8 robust standard deviations of the profile (median + 8 x
+  // 1.48 MAD: the noise is measured on the profile itself). A gap lies between two consecutive edges that are
+  //   - as far apart as a gap of the format (half its narrowest gap to its widest),
+  //   - a step up into thinner film and a step down out of it (on a negative the gap is the thinnest film),
+  //   - with flat film base between: >= 90% of the lines inside the edges' blurred columns (2 px each side) spread
+  //     less than the base margin and lie at the base level or above (within the margin),
+  //   - and picture on both sides: the line 2 px beyond each edge spreads more than the base margin or lies below the
+  //     gap's level by more than it, and the half narrowest gap of lines from there outward is mostly film (not
+  //     holder or light): a band of base between the film's end and the holder is no gap between frames.
+  // A line in a picture is not flat along the whole band, a blank region at the base level inside a picture has no
+  // picture beside it, and a thin straight line in a picture is narrower than any gap.
+  std::vector<uint8_t> gap_line(VW, 0);
+  if (!positive && ci.base_valid) {
+    const float base_ll = std::log2(std::max(1e-6f, (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f));
+    auto ll_at = [&](int x, int y) { return tr ? ci.logl[(size_t)x * W + y] : ci.logl[(size_t)y * W + x]; };
+    auto ok_at = [&](int x, int y) { return v.at(x, y) != CL_INVALID; };
+    const int gy0 = std::max(0, (int)(fr.y0 + 0.1f * fr.h())), gy1 = std::min(VH, (int)(fr.y1 - 0.1f * fr.h()));
+    std::vector<float> step(VW, 0.0f), level(VW, -100.0f), spread(VW, 100.0f), mags, vals;
+    for (int x = 1; x + 1 < VW; ++x) {
+      double s = 0.0;
+      int n = 0;
+      vals.clear();
+      for (int y = gy0; y < gy1; ++y) {
+        if (!ok_at(x, y)) continue;
+        vals.push_back(ll_at(x, y));
+        if (!ok_at(x - 1, y) || !ok_at(x + 1, y)) continue;
+        s += 0.5f * (ll_at(x + 1, y) - ll_at(x - 1, y));
+        n++;
+      }
+      if (n < 0.9f * (gy1 - gy0)) continue;  // the line leaves the image
+      step[x] = (float)(s / n);
+      mags.push_back(std::fabs(step[x]));
+      level[x] = percentile(vals, 0.5);
+      spread[x] = percentile(vals, 0.9) - percentile(vals, 0.1);
+    }
+    if (mags.size() >= 16) {
+      const float med = percentile(mags, 0.5);
+      for (float& m : mags) m = std::fabs(m - med);
+      const float thr = med + 8.0f * 1.4826f * std::max(percentile(mags, 0.5), 1e-4f);
+      std::vector<int> edges;
+      for (int x = 1; x + 1 < VW; ++x) {
+        const float a = std::fabs(step[x]);
+        if (a >= thr && a >= std::fabs(step[x - 1]) && a > std::fabs(step[x + 1])) edges.push_back(x);
+      }
+      const int wmin = std::max(1, (int)std::lround(0.5f * fg.gap_min * ppm)), wmax = (int)std::ceil(fg.gap_max * ppm);
+      for (size_t i = 0; i + 1 < edges.size(); ++i) {
+        const int a = edges[i], b = edges[i + 1];
+        if (b - a < wmin || b - a > wmax || step[a] <= 0.0f || step[b] >= 0.0f) continue;
+        const int ia = b - a >= 5 ? a + 2 : a + 1, ib = b - a >= 5 ? b - 2 : b - 1;
+        int flat = 0;
+        for (int x = ia; x <= ib; ++x)
+          flat += spread[x] <= kBaseMargin && level[x] >= base_ll - kBaseMargin;
+        if (ib < ia || flat < 0.9f * (ib - ia + 1)) continue;
+        const float gap_level = percentile(std::vector<float>(level.begin() + ia, level.begin() + ib + 1), 0.5);
+        auto picture_beside = [&](int f, int dir) {
+          float hard = 0.0f;
+          for (int k = 0; k < wmin; ++k) {
+            const int x = f + dir * k;
+            if (x < 0 || x >= VW) return false;
+            hard += col_frac(v, x, gy0, gy1, is_hard);
+          }
+          return hard < 0.5f * wmin && (spread[f] > kBaseMargin || level[f] < gap_level - kBaseMargin);
+        };
+        if (!picture_beside(a - 2, -1) || !picture_beside(b + 2, 1)) continue;
+        for (int x = a + 1; x < b; ++x) {
+          gap_line[x] = 1;
+          cp[x] = 0.0f;
+          cnon[x] = 1.0f;
+        }
+      }
+    }
+  }
   std::vector<float> cps = cp;
   smooth1d(cps, std::max(0.6f, 0.15f * ppm));
+  // A frame's ends moved to the picture profile's edges (every frame candidate shares the band, so cp serves all).
+  auto refine_lr = [&](Rect& r, float* sl, float* sr) {
+    const int delta = std::max(3, (int)(0.04f * r.w())), k = std::max(2, (int)(0.02f * r.w()));
+    r.x0 = refine_edge_profile(cp, r.x0, delta, k, true, sl);
+    r.x1 = refine_edge_profile(cp, r.x1, delta, k, false, sr);
+  };
 
   // Segments: runs of picture columns; a run ends at half the format's narrowest gap (0.75 mm on 120, 0.4 mm on 35mm)
   // of columns under 30% picture. A thinner dip is a line in the picture (a 0.3 mm white line must not split a frame
@@ -1935,34 +2067,29 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       if (b - a >= std::max(3, (int)(0.12f * L_exp))) segs.push_back({a, b});
     }
   }
-  // A real gap between frames is non-image and either light / holder or flat film base at the base level;
+  // A real gap between frames is a gap line (above), or non-image and mostly light or holder rather than base;
   // anything else (a thin band in a picture) is merged back when the merged run still fits one frame.
   {
-    const float base_ll = std::log2(std::max(1e-6f, (ci.base[0] + ci.base[1] + ci.base[2]) / 3.0f));
-    auto ll_at = [&](int x, int y) { return tr ? ci.logl[(size_t)x * W + y] : ci.logl[(size_t)y * W + x]; };
     auto real_gap = [&](int a, int b) {
+      for (int x = std::max(0, a); x < std::min(VW, b); ++x)
+        if (gap_line[x]) return true;
       const int y0 = (int)(fr.y0 + 0.1f * fr.h()), y1 = (int)(fr.y1 - 0.1f * fr.h());
       int a2 = a + 1, b2 = b - 1;
       if (b2 <= a2) {
         a2 = a;
         b2 = b;
       }
-      std::vector<float> vals;
-      int non = 0, tot = 0;
+      int non = 0, base = 0, tot = 0;
       for (int x = a2; x < b2; ++x) {
         for (int y = std::max(0, y0); y < std::min(VH, y1); ++y) {
           const uint8_t c = v.at(x, y);
           if (c == CL_INVALID) continue;
           tot++;
-          if (c != CL_IMAGE) non++;
-          if (c == CL_BASE) vals.push_back(ll_at(x, y));
+          non += c != CL_IMAGE;
+          base += c == CL_BASE;
         }
       }
-      if (tot == 0 || non < 0.85f * tot) return false;
-      if (b - a > (int)std::ceil(fg.gap_max * ppm) && vals.size() >= 0.5f * tot) return false;
-      if (vals.size() < 0.5f * tot) return true;
-      return std::fabs(percentile(vals, 0.5) - base_ll) <= 0.25f &&
-             percentile(vals, 0.9) - percentile(vals, 0.1) <= 0.3f;
+      return tot > 0 && non >= 0.85f * tot && base < 0.5f * tot;
     };
     bool merged = true;
     while (merged && segs.size() > 1) {
