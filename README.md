@@ -149,7 +149,13 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 #    --gain_g and --gain_b, all four required with recorded curves; the older aG,kG,aB,kB,refG,refB,u_medG,u_medB
 #    order without the prefix is still read when aG is not negative)
 bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P srgb -o out.tif scan.ARW
+
+# 7. White light through the film model on the camera's own channels instead of the film profile
+bin_out/neg_process --film_stock portra400 --light_source d65 --white_model film --roi auto --film_format auto -P srgb -o out.tif scan.ARW
 ```
+
+The film model (`--white_model film`) and the experiments behind it are described in
+[docs/white_light_film_model.md](docs/white_light_film_model.md).
 
 ## Options
 
@@ -166,6 +172,9 @@ bin_out/neg_process --film_stock portra400 --light_source d65 --fit_curves on -P
 | `--gain_g`, `--gain_b` | G and B gains relative to R (default 1). Either given turns the DINOv3 search off. |
 | `--brightness`, `--tint`, `--warmth` | Grey-point knobs after the search (or on given values); reuse `<output>.json` when it was written by this build from the same inputs and arguments. |
 | `--fit_curves off\|auto\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto`: on wherever on applies. `on`: fit after the bundle search. Eight or ten comma-separated numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
+| `--white_model profile\|film` | White light: through the bundle's film profile (default), or through the film model on the camera's own channels (sRGB output). |
+| `--white_params pR,pG,pB,wG,wB,e` | With `film`: render with these parameters, no search (a sidecar's `cli_equivalent`). |
+| `--white_slopes fG,fB` | With `film`: the factors on the G and B exponents in place of the frame's own (a roll's calibration). |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` finds (default 35mm); with a given frame, the format the film base is read around (default: every format). |
 | `--rot`, `--hflip`, `--vflip` | Orientation of the output. |

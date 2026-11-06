@@ -365,11 +365,11 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
               $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_raw.cc np_geometry.cc np_conversion.cc np_output.cc np_input.cc \
-          rgb_input.cc
+          rgb_input.cc white_film.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
-          multi_target_optimizer.h input_curves.h embedded_data.h 3rd_party/tiff_head.h
+          multi_target_optimizer.h input_curves.h embedded_data.h white_film.h 3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -378,6 +378,10 @@ bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 bin_out/rgb_input.o: rgb_input.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(NP_CXXFLAGS) $(TIFF_INC) $(JPEG_INC) -c $< -o $@
+
+bin_out/white_film.o: white_film.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
 
 bin_out/np_%.o: np_%.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out

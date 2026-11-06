@@ -65,8 +65,12 @@ int main(int ac, char* av[]) {
   Conversion c;
   if (begin_conversion(o, s, c)) return 1;
   CpuBackend backend;
-  if (render(o, s, scan, backend)) return 1;
-  if (solve(o, s, scan, c)) return 1;
-  if (convert(o, s, scan, c, backend)) return 1;
+  if (o.white_film) {
+    if (convert_white_film(scan, c)) return 1;
+  } else {
+    if (render(o, s, scan, backend)) return 1;
+    if (solve(o, s, scan, c)) return 1;
+    if (convert(o, s, scan, c, backend)) return 1;
+  }
   return write(o, s, scan, c);
 }

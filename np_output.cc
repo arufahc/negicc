@@ -520,8 +520,10 @@ bool write_json_sidecar(const Sidecar& sc) {
   const float* egb = sc.station_params;
   const float abs_egb[3] = {sc.exposure_comp, sc.gain_g, sc.gain_b};
   if (!egb) egb = abs_egb;
-  std::vector<std::string> cli = {"-E", num_str(egb[0], "%.9g"), "--gain_g", num_str(egb[1], "%.9g"), "--gain_b",
-                                  num_str(egb[2], "%.9g")};
+  std::vector<std::string> cli = sc.white_film ? white_film_cli(*sc.white_film)
+                                              : std::vector<std::string>{"-E", num_str(egb[0], "%.9g"), "--gain_g",
+                                                                         num_str(egb[1], "%.9g"), "--gain_b",
+                                                                         num_str(egb[2], "%.9g")};
   if (sc.has_roi) {
     cli.push_back("--roi");
     for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
@@ -598,6 +600,12 @@ bool write_json_sidecar(const Sidecar& sc) {
                {"shoulder_source", sh.source},
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
                {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
+
+  // The film model has no profile, matrix or tone stages (nor their search): its own block in their place.
+  if (sc.white_film) {
+    for (const char* k : {"profile", "matrix", "tone"}) j[k] = nullptr;
+    j["white_film"] = white_film_json(*sc.white_film);
+  }
 
   j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
 

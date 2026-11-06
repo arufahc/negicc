@@ -800,6 +800,18 @@ int prepare(const Options& o, Setup& s) {
   s.raw_decode = s.white_light ? RawDecode::kWhiteLight
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
+  // --white_model film (white_film.h): the white-light scan in the camera's own channels (a TIFF's values as they
+  // are), converted by the film model, whose search replaces the bundle's and is the intent model's only use.
+  if (o.white_film) {
+    if (!s.white_light || (o.input_mode == InputMode::kRgbFile && !o.tiff_input)) {
+      log_error("--white_model film needs a white-light (d65) bundle and a RAW, DNG or TIFF of camera RGB\n");
+      return 1;
+    }
+    s.raw_decode = RawDecode::kWhiteCamera;
+    s.camera_rgb_input = o.tiff_input;
+    s.use_dino = o.white_params.empty();
+    s.bundle_search = false;
+  }
 
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md): white light only, since with
   // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
@@ -1192,6 +1204,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                   raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
+      if (o.white_film) {
+        const bool ok = solve_white_film(half_view, frame, scan.film_base, s.engine, o.white_params, o.white_slopes,
+                                         scan.white_film);
+        scan.t_auto_ms = scan.white_film.time_ms;
+        return ok;
+      }
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -2071,6 +2089,16 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   return 0;
 }
 
+int convert_white_film(Scan& scan, Conversion& c) {
+  const double t0 = omp_get_wtime();
+  const RgbInput img = scan.image();
+  render_white_film(scan.white_film, img.pixels, (size_t)img.width * img.height, img.channels);
+  scan.t_full_conversion_ms = (omp_get_wtime() - t0) * 1000.0;
+  c.out.encoding = ENCODE_SRGB;
+  c.out.attach_profile = "srgb";
+  return 0;
+}
+
 int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   LibRaw* proc = scan.proc.get();
   const std::string& attach_profile = c.out.attach_profile;
@@ -2151,7 +2179,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.shoulder.source = "off";
     sc.shoulder.has_knee = false;
   }
-  sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar ? &c.dino_res : nullptr;
+  sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar && !o.white_film ? &c.dino_res : nullptr;
   sc.dino_model = s.dino_path;
   sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
                                          : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);
@@ -2179,6 +2207,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.knob_res = scan.knob_res;
   }
   sc.auto_frame_half = scan.auto_frame_half;
+  sc.white_film = o.white_film ? &scan.white_film : nullptr;
   sc.colorspace = cs_name;
   sc.t_raw_decode_ms = scan.t_raw_decode_ms;
   sc.t_frame_det_ms = scan.t_frame_det_ms;

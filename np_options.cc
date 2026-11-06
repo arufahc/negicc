@@ -140,6 +140,20 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
   return true;
 }
 
+// n comma-separated positive numbers (an option's value) into out. False with the error reported otherwise.
+static bool parse_numbers(const char* opt, const std::string& value, size_t n, std::vector<double>& out) {
+  std::stringstream ss(value);
+  size_t items = 0;
+  for (std::string item; std::getline(ss, item, ','); ++items) {
+    char* end = nullptr;
+    const double v = std::strtod(item.c_str(), &end);
+    if (!item.empty() && *end == '\0' && v > 0.0 && std::isfinite(v)) out.push_back(v);
+  }
+  if (items == n && out.size() == n) return true;
+  log_error("%s takes %zu comma-separated positive numbers (got '%s')\n", opt, n, value.c_str());
+  return false;
+}
+
 int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--list_profiles") == 0) {
@@ -305,6 +319,17 @@ int parse_options(int ac, char* av[], Options& o) {
   // flat field .npz measured from one.
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
+  parser.add_argument("--white_model")
+    .help("profile (default): convert a white-light (d65) scan through the bundle's film profile. film: through the "
+          "white-light film model on the camera's own channels (white_film.h), its exposure and balance searched "
+          "with the intent model; writes sRGB.")
+    .default_value(std::string("profile"));
+  parser.add_argument("--white_params")
+    .help("With --white_model film: pR,pG,pB,wG,wB,e, rendered as given without the search (a sidecar's "
+          "cli_equivalent).");
+  parser.add_argument("--white_slopes")
+    .help("With --white_model film: fG,fB, the factors on the G and B exponents in place of the frame's own (a roll's "
+          "calibration).");
   parser.add_argument("raw_files").nargs(1, 4);
 
   try {
@@ -459,5 +484,31 @@ int parse_options(int ac, char* av[], Options& o) {
   o.output = parser.get<std::string>("--output");
   if (parser.is_used("--colorspace")) o.colorspace = parser.get<std::string>("--colorspace");
   o.no_metadata = parser.get<bool>("--no-metadata");
+
+  const std::string white_model = parser.get<std::string>("--white_model");
+  if (white_model != "profile" && white_model != "film") {
+    log_error("Invalid --white_model '%s' (must be profile or film)\n", white_model.c_str());
+    return 1;
+  }
+  o.white_film = white_model == "film";
+  if (parser.is_used("--white_params") &&
+      !parse_numbers("--white_params", parser.get<std::string>("--white_params"), 6, o.white_params)) {
+    return 1;
+  }
+  if (parser.is_used("--white_slopes") &&
+      !parse_numbers("--white_slopes", parser.get<std::string>("--white_slopes"), 2, o.white_slopes)) {
+    return 1;
+  }
+  if (!o.white_film && (!o.white_params.empty() || !o.white_slopes.empty())) {
+    log_error("--white_params and --white_slopes need --white_model film\n");
+    return 1;
+  }
+  // The film model has its own exposure and balance, and no film profile to move or to fit curves to.
+  if (o.white_film && (o.exposure_given || o.gain_g_given || o.gain_b_given || o.target_given || o.knobs_given ||
+                       parser.is_used("--fit_curves") || (!o.colorspace.empty() && o.colorspace != "srgb"))) {
+    log_error("--white_model film takes no -E, --gain_g, --gain_b, --target, --brightness, --tint, --warmth or "
+              "--fit_curves, and writes sRGB (-P srgb or none)\n");
+    return 1;
+  }
   return 0;
 }

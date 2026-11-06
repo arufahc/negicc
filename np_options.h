@@ -79,6 +79,11 @@ struct Options {
   bool input_curves_given = false;             // --input_curves (replayed, not fitted)
   negicc::InputCurves input_curves;
 
+  // The white-light film model (white_film.h)
+  bool white_film = false;                     // --white_model film (else profile: the film profile's conversion)
+  std::vector<double> white_params;            // --white_params pR,pG,pB,wG,wB,e, empty when not given
+  std::vector<double> white_slopes;            // --white_slopes fG,fB, empty when not given
+
   // Output
   std::string output;                          // -o
   std::string colorspace;                      // -P, empty when not given

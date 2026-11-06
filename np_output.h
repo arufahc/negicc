@@ -28,6 +28,7 @@
 #include "multi_target_optimizer.h"
 #include "np_conversion.h"
 #include "profile_bundle.h"
+#include "white_film.h"
 
 // Writes proc's image (or rgb3, 3 samples a pixel, in its place) as a 16-bit TIFF to output with the ICC profile
 // attach_profile names ("srgb", "srgb-g10" or a file) or, when that is empty, embedded_icc. 0 on success.
@@ -103,6 +104,7 @@ struct Sidecar {
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
   const negicc::InputCurves* cli_input_curves = nullptr;
+  const WhiteFilm* white_film = nullptr;  // --white_model film: its conversion in place of the profile's
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

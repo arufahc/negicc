@@ -307,9 +307,13 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
 // py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
 //
+// With camera (RawDecode::kWhiteCamera), the decode stays in the camera's own channels instead: no white balance and
+// no colour matrix (output_color 0), the white level scaled to 65535 as LibRaw scales a decode with unit multipliers.
+//
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.
-static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, const negicc::FlatField* flat = nullptr) {
+static bool prepare_white_light_mosaic(LibRaw* proc, bool camera, double& clip_fraction,
+                                       const negicc::FlatField* flat = nullptr) {
   auto& S = proc->imgdata.sizes;
   auto& C = proc->imgdata.color;
   uint16_t* raw = proc->imgdata.rawdata.raw_image;
@@ -344,12 +348,12 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   float pre[4];
   for (int i = 0; i < 4; ++i) pre[i] = C.pre_mul[i];
   if (pre[3] <= 0) pre[3] = pre[1];
-  if (!(pre[0] > 0 && pre[1] > 0 && pre[2] > 0)) {
+  if (!camera && !(pre[0] > 0 && pre[1] > 0 && pre[2] > 0)) {
     log_error("No daylight white balance (pre_mul) for this camera; the white-light decode needs one\n");
     return false;
   }
   float wb[4];
-  for (int i = 0; i < 4; ++i) wb[i] = pre[i] / pre[1];
+  for (int i = 0; i < 4; ++i) wb[i] = camera ? 65535.0f / (float)(C.maximum - C.black) : pre[i] / pre[1];
   const unsigned dr = C.cblack[4], dc = C.cblack[5];
   const bool pattern = dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6;
   const unsigned white = C.maximum;
@@ -405,7 +409,7 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   O.use_camera_wb = 0;
   O.use_auto_wb = 0;
   for (int i = 0; i < 4; ++i) O.user_mul[i] = 1;
-  O.output_color = 8;  // linear Rec.2020, through LibRaw's own camera matrix for this camera
+  O.output_color = camera ? 0 : 8;  // camera channels, or linear Rec.2020 through LibRaw's matrix for this camera
   O.output_bps = 16;
   O.gamm[0] = 1;
   O.gamm[1] = 1;
@@ -499,7 +503,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  const HalfSizeAnalysis& analyse, const RawRegionFinder& find_region,
                  const negicc::FlatField* flat,
                  LibRaw* unpacked_proc) {
-  const bool white_light = debayer && decode == RawDecode::kWhiteLight;
+  const bool white_light = debayer && (decode == RawDecode::kWhiteLight || decode == RawDecode::kWhiteCamera);
   int ret;
   LibRaw* proc = unpacked_proc;
   if (!proc) {
@@ -554,11 +558,12 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   }
   if (white_light) {
     double clip_fraction = 0.0;
-    if (!prepare_white_light_mosaic(proc, clip_fraction, flat)) {
+    if (!prepare_white_light_mosaic(proc, decode == RawDecode::kWhiteCamera, clip_fraction, flat)) {
       delete proc;
       return NULL;
     }
-    log_info("White-light decode (linear Rec.2020): %.4f%% of photosites clipped\n", clip_fraction * 100.0);
+    log_info("White-light decode (%s): %.4f%% of photosites clipped\n",
+             decode == RawDecode::kWhiteCamera ? "camera channels" : "linear Rec.2020", clip_fraction * 100.0);
     if (analyse) {
       if (!decode_white_light(proc, true, 0)) {
         delete proc;

@@ -54,6 +54,7 @@
 #include "np_output.h"
 #include "np_raw.h"
 #include "profile_bundle.h"
+#include "white_film.h"
 
 // Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
 struct CachedSidecar {
@@ -210,6 +211,8 @@ struct Scan {
   bool has_knob_curves = false;
   negicc::InputCurves knob_curves;
 
+  WhiteFilm white_film;                  // --white_model film: the film model's conversion (decode solves it)
+
   bool has_knob_res = false;             // --brightness, --tint or --warmth solved
   float knob_base[3] = {1.0f, 1.0f, 1.0f};
   KnobSolveResult knob_res;
@@ -271,4 +274,6 @@ int begin_conversion(const Options& o, const Setup& s, Conversion& c);
 int render(const Options& o, const Setup& s, Scan& scan, Backend& backend);
 int solve(const Options& o, Setup& s, Scan& scan, Conversion& c);
 int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend& backend);
+// --white_model film in place of render, solve and convert: the film model renders the frame in place to sRGB.
+int convert_white_film(Scan& scan, Conversion& c);
 int write(const Options& o, const Setup& s, Scan& scan, Conversion& c);

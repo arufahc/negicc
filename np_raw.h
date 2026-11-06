@@ -50,6 +50,7 @@ enum class RawDecode {
   kRec2020,     // LibRaw to linear Rec.2020 with unit channel multipliers (no profile bundle, no -r -g -b)
   kCameraRgb,   // sensor RGB, unit channel multipliers: a camera_raw_rgb (TriLED) bundle or -r -g -b
   kWhiteLight,  // a rec2020_linear (D65) bundle: prepare_white_light_mosaic, then decode_white_light
+  kWhiteCamera, // --white_model film: the same decode in the camera's own channels (white_film.h)
 };
 
 // The unpacked CFA mosaic of proc as the frame detector reads it, in place (no copy): rawdata.raw_image from its
