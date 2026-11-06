@@ -418,62 +418,6 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
-// Multiplies the mosaic prepare_white_light_mosaic prepared by k, per camera channel. A CFA mosaic holds one sample a
-// photosite, of the photosite's colour; a linear DNG holds three or four a pixel, R, G and B first.
-static void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
-  const auto& S = proc->imgdata.sizes;
-  const auto& R = proc->imgdata.rawdata;
-  const int samples = R.raw_image ? 1 : R.color4_image ? 4 : 3;
-  uint16_t* raw = R.raw_image ? R.raw_image : samples == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
-  const size_t pitch = S.raw_pitch / 2 / samples;  // pixels per row of the raw buffer
-  float tile[36];  // the gain of each photosite of a 6x6 CFA tile (Bayer repeats every 2, X-Trans every 6)
-  for (int r = 0; r < 6; ++r)
-    for (int c = 0; c < 6; ++c) {
-      const int colour = proc->COLOR(r, c);
-      tile[r * 6 + c] = k[colour == 3 ? 1 : colour];  // 3 is the second green
-    }
-  #pragma omp parallel for schedule(static)
-  for (int y = 0; y < S.height; ++y) {
-    uint16_t* p = raw + ((size_t)(y + S.top_margin) * pitch + S.left_margin) * samples;
-    for (int x = 0; x < S.width; ++x, p += samples) {
-      if (samples == 1) {
-        p[0] = (uint16_t)std::nearbyint(p[0] * tile[(y % 6) * 6 + x % 6]);
-      } else {
-        for (int c = 0; c < 3; ++c) p[c] = (uint16_t)std::nearbyint(p[c] * k[c]);
-      }
-    }
-  }
-}
-
-void film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]) {
-  // M = rec2020_rgb x rgb_cam, as LibRaw's convert_to_rgb builds it for output_color 8.
-  double m[3][3];
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j) {
-      m[i][j] = 0;
-      for (int n = 0; n < 3; ++n) m[i][j] += LibRaw_constants::rec2020_rgb[i][n] * proc.imgdata.color.rgb_cam[n][j];
-    }
-  // adj = det(M) M^-1 (the adjugate). The determinant cancels in the ratio of the two bases; it only gives the sign.
-  double adj[3][3];
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j)
-      adj[j][i] = m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3] -
-                  m[(i + 1) % 3][(j + 2) % 3] * m[(i + 2) % 3][(j + 1) % 3];
-  const double det = m[0][0] * adj[0][0] + m[0][1] * adj[1][0] + m[0][2] * adj[2][0];
-  double gain[3];
-  for (int c = 0; c < 3; ++c) {
-    double cam = 0, cam_profile = 0;  // the two bases in camera channel c, each times det(M)
-    for (int j = 0; j < 3; ++j) {
-      cam += adj[c][j] * base[j];
-      cam_profile += adj[c][j] * profile_base[j];
-    }
-    if (!(cam / det > 0 && cam_profile / det > 0)) return;
-    gain[c] = cam_profile / cam;
-  }
-  const double largest = std::max({gain[0], gain[1], gain[2]});
-  for (int c = 0; c < 3; ++c) k[c] = (float)(gain[c] / largest);
-}
-
 // Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
 // half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
 // caller. False when LibRaw cannot process it.
@@ -636,7 +580,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       if (balance) balance(*proc, k);
       if (k[0] != 1 || k[1] != 1 || k[2] != 1) {
         free_half();
-        scale_white_light_mosaic(proc, k);
+        negicc::scale_white_light_mosaic(proc, k);
         if (!decode_white_light(proc, true, 0)) {
           delete proc;
           return NULL;

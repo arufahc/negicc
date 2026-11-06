@@ -1174,7 +1174,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   if (s.white_light && s.bundle.has_film_base) {
     balance = [&](const LibRaw& raw, float k[3]) {
       read_base(raw);
-      if (scan.film_base.found) film_base_balance_gains(raw, scan.film_base.rgb, s.bundle.profile_film_base_rgb, k);
+      if (scan.film_base.found)
+        negicc::film_base_balance_gains(raw, scan.film_base.rgb, s.bundle.profile_film_base_rgb, k);
       std::copy(k, k + 3, scan.balance_gains);
       log_info("Film-base balance before the camera matrix: camera channel gains %.6f %.6f %.6f\n", k[0], k[1], k[2]);
     };
