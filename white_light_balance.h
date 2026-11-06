@@ -27,6 +27,8 @@
 
 #include "libraw/libraw.h"
 
+namespace negicc {
+
 // The gains for the camera channels that put the film base |base| (linear Rec.2020, as the white-light decode of proc
 // gives it) on the profile's film base |profile_base|: K = (M^-1 profile_base) / (M^-1 base) per channel, M the camera
 // matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised and nothing new
@@ -94,5 +96,7 @@ inline void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
     }
   }
 }
+
+}  // namespace negicc
 
 #endif  // NEGICC_WHITE_LIGHT_BALANCE_H

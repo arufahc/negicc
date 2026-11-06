@@ -580,7 +580,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       if (balance) balance(*proc, k);
       if (k[0] != 1 || k[1] != 1 || k[2] != 1) {
         free_half();
-        scale_white_light_mosaic(proc, k);
+        negicc::scale_white_light_mosaic(proc, k);
         if (!decode_white_light(proc, true, 0)) {
           delete proc;
           return NULL;
