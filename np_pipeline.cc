@@ -1006,21 +1006,64 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones,
       // so the curves stay on the film densities they were fitted to. Before, the tables kept the base's anchor, so
       // a brightness knob slid the curves along the table.
+      //
+      // The knobs were solved on the profile at the base's anchor, and the re-anchored curves change it: the grey then
+      // missed its target (on two white-LED frames up to 0.08 stop and 5 a* for a 0.5 stop brightness). So, until the
+      // gains hold still (each within kKnobTol of the previous pass, at most kMaxKnobPasses): the knobs solved on the
+      // re-anchored profile for the same grey (the one the base's profile renders as neutral L* 50), and the curves
+      // re-anchored at that result. Each pass cuts the miss about fourfold.
       if (target_idx == s.curves_base_idx && s.input_curves.active()) {
+        constexpr int kMaxKnobPasses = 8;
+        constexpr float kKnobTol = 1e-4f;
+        ParsedFilmProfile& prof = bundle.targets[target_idx].film_prof;
+        ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
+        grey_prof.rebind_pointers();
         ParamSearchOptions ro;
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
-        const float from[3] = {base_e, base_g, base_b}, to[3] = {e, g, b};
+        const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
-        if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro, s.input_curves,
-                                   from, to, negicc::CurveFitOptions().max_dev_stops, scan.knob_curves, scale)) {
-          return false;
+        auto reanchor_at = [&](const float to[3]) {
+          if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
+                                     s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
+                                     scan.knob_curves, scale)) {
+            return false;
+          }
+          apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
+          return true;
+        };
+        const float to1[3] = {e, g, b};
+        if (!reanchor_at(to1)) return false;
+        float lab1[3];
+        knob_grey_lab(grey_prof.data, prof.data, from, to1, lab1);
+        KnobSolveResult k2 = scan.knob_res;
+        int passes = 0;
+        for (bool moved = true; moved && passes < kMaxKnobPasses; ++passes) {
+          const float prev[3] = {k2.e, k2.g, k2.b};
+          if (!solve_grey_knobs(prof.data, base_e, base_g, base_b, o.brightness, o.tint, o.warmth, k2,
+                                &grey_prof.data)) {
+            log_error("Failed to solve grey-point knobs on the re-anchored curves\n");
+            return false;
+          }
+          const float to2[3] = {k2.e, k2.g, k2.b};
+          if (!reanchor_at(to2)) return false;
+          moved = false;
+          for (int i = 0; i < 3; ++i) moved = moved || std::fabs(to2[i] - prev[i]) > kKnobTol * prev[i];
         }
-        apply_input_curves(bundle.targets[target_idx].film_prof, s.curves_base_prof, scan.knob_curves);
+        const float to2[3] = {k2.e, k2.g, k2.b};
+        knob_grey_lab(grey_prof.data, prof.data, from, to2, k2.grey_lab);
+        scan.knob_res = k2;
+        e = k2.e;
+        g = k2.g;
+        b = k2.b;
         scan.has_knob_curves = true;
-        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s)\n", e, g, b,
-                 scan.knob_curves.ref[0], scan.knob_curves.ref[1],
-                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "");
+        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey L* %.3f "
+                 "a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, %+.4f "
+                 "stop, before them)\n",
+                 e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
+                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "", k2.grey_lab[0],
+                 k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
+                 lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {

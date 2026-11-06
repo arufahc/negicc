@@ -246,9 +246,15 @@ struct KnobSolveResult {
 
 // Solves the conversion gains (E, g, b) that move the grey that base=(base_e, base_g, base_b) renders as neutral L* 50
 // through prof by brightness_stops (in stops of luminance), tint_a (CIELAB a*), and warmth_b (CIELAB b*), matching
-// negicc-station's GreyPoint and ConversionSession._solve_knobs.
+// negicc-station's GreyPoint and ConversionSession._solve_knobs. grey_prof, when given, is the profile whose neutral
+// L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof.
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
-                      float tint_a, float warmth_b, KnobSolveResult& out);
+                      float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof = nullptr);
+// The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof.
+bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
+                   float lab_out[3]);
+// How far, in stops of luminance, a grey rendered at L* grey_L lies from the L* brightness_stops asks for.
+float knob_grey_miss_stops(float brightness_stops, float grey_L);
 
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso

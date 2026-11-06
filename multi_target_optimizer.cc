@@ -1128,7 +1128,7 @@ static float lstar_after_stops(float L, float stops) {
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
-                      float tint_a, float warmth_b, KnobSolveResult& out) {
+                      float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof) {
   out.e = base_e;
   out.g = base_g;
   out.b = base_b;
@@ -1139,8 +1139,9 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
 
   const GreyPoint gp(prof);
+  // The grey: the input grey_prof (else prof) renders as neutral L* 50.
   float log_t0[3];
-  if (!gp.reference_grey(log_t0)) return false;
+  if (!GreyPoint(grey_prof ? *grey_prof : prof).reference_grey(log_t0)) return false;
   const float base[3] = {base_e, base_g, base_b};
 
   if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {
@@ -1209,6 +1210,19 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   out.limited = true;
   gp.grey(log_t0, base, best, out.grey_lab);
   return true;
+}
+
+bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
+                   float lab_out[3]) {
+  float log_t0[3];
+  if (!GreyPoint(grey_prof).reference_grey(log_t0)) return false;
+  GreyPoint(prof).grey(log_t0, base, egb, lab_out);
+  return true;
+}
+
+float knob_grey_miss_stops(float brightness_stops, float grey_L) {
+  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / 903.3; };
+  return (float)std::log2(Y(grey_L) / Y(lstar_after_stops(50.0f, brightness_stops)));
 }
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
