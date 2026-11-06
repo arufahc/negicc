@@ -25,12 +25,12 @@
 
 namespace {
 
-// Starting exponents and balance, and the matrix from x to XYZ D50 (its scale is arbitrary: the exposure takes it):
+// Fitted on the IT8 calibration readings (Portra 400, ILCE-7RM4, white LED): the starting exponents, and the matrix
+// from x to XYZ D50 (its scale is the middle bracket's exposure; the search's exposure takes it).
 // tools/white_film/fit_calibration.py; report Iteration 1.
 // The report is docs/white_light_film_model.md; constants below without a source: its section 4, table of constants.
 constexpr double kPCal[3] = {2.331477, 1.904209, 1.707575};
-constexpr double kWCal[3] = {1.0, 0.955887, 0.895598};
-constexpr double kM[9] = {0.678835, 0.171543, 0.148566, 0.233949, 0.904414, -0.118935, -0.005484, -0.048617, 0.960498};
+constexpr double kM[9] = {1.065838, 0.257458, 0.208911, 0.367323, 1.357380, -0.167243, -0.008611, -0.072967, 1.350631};
 // XYZ D50 to linear sRGB D65 (Bradford).
 constexpr double kXyzD50ToSrgb[9] = {3.1338561, -1.6168667, -0.4906146, -0.9787684, 1.9161415, 0.0334540,
                                      0.0719453, -0.2289914, 1.4052427};
@@ -420,7 +420,7 @@ bool solve_white_film(const negicc::RgbView& half, const negicc::RgbView& frame,
       slopes.empty() ? ratio_factors(img, wf.base) : std::array<double, 2>{slopes[0], slopes[1]};
   const Vec3 p0 = {kPCal[0], kPCal[1] * f[0], kPCal[2] * f[1]};
   q.p = p0;  // step 4, starting values (with step 5's ratios)
-  q.w = {kWCal[0], kWCal[1], kWCal[2]};
+  q.w = {1.0, 1.0, 1.0};
   if (!search(engine, img, wf.base, small, 4, q, wf.log)) return false;
   // Step 7, contrast: the exponents scaled half-way toward what brings the slope of rendered L* on the field's to
   // kSlopeTarget, then the search again from the balance found.

@@ -21,7 +21,7 @@ numbered step below, and each constant to the experiment that produced it.
   | held out (never used for a decision), 31 frames | 13 | 15 | 2 | 1 |
 
   The intent model's own colour score (lower is closer to what it expects; section 2 says how far it can be trusted),
-  medians for today's default, today's curves mode and the new path: 3.37, 1.78, 1.83 on the development frames and
+  medians for today's default, today's curves mode and the new path: 3.37, 1.78, 1.81 on the development frames and
   2.15, 1.47, 1.41 on the held-out frames. On the frames Alpha rated, the new path is closer in colour to the version
   that was preferred on 29 of 53 verdicts, the same count as today's curves mode (29) and above the default (19).
 - Two detector changes came out of the same frames (section 8): 7 of the 137 crops change, all for the better, and the
@@ -89,8 +89,9 @@ Input: the scan, the frame crop and the film-base patch that `neg_process` alrea
        XYZ = M x                               one fixed matrix
        out = sRGB(tone(e * XYZ))               exposure e; tone(s) = s^c / (s^c + 0.18^c (1-g)/g), c = 1.4, g = 0.18
 
-   Six numbers describe a frame: three exponents, two balances, one exposure.
-4. **Starting values** from the calibration: `P_CAL = (2.33, 1.90, 1.71)`, `W_CAL = (1, 0.96, 0.90)`.
+   Six numbers describe a frame: three exponents, two balances (w_R is 1), one exposure.
+4. **Starting values** from the calibration: exponents `P_CAL = (2.33, 1.90, 1.71)`; the balance starts at 1 (the
+   calibration's own balance is inside `M`).
 5. **Exponent ratios from the frame's own densities.** The ratio of the channels' density ranges (2nd to 98th
    percentile over the picture cells) against the calibration's, to the power 0.5 for green and 0.6 for blue.
 6. **Exposure and balance from the intent model.** Up to four rounds: render, predict the field, then (a) balance by
@@ -110,7 +111,7 @@ not take part in any statistic.
 
 | constant | value | from |
 |---|---|---|
-| exponents `P_CAL`, balance `W_CAL`, matrix `M` | see code | fit on the Portra 400 IT8 readings, 7 brackets (Iteration 1; `fit_calibration.py`) |
+| exponents `P_CAL`, matrix `M` | see code | fit on the Portra 400 IT8 readings, 7 brackets (Iteration 1; `fit_calibration.py`) |
 | toe term | -1 | Iteration 1: no parameter, cuts the 90th-percentile error from 9.8 to 7.3 dE00 |
 | ratio weights | 0.5 (G), 0.6 (B) | Iteration 3: variance of the range ratio within a setup against between setups |
 | contrast target and step | 0.9, half-way, limits 0.75-1.2 | Iteration 2-3: slope separates setups (Canon R5 1.06-1.16, Fuji 0.81-0.94, ZV-E1 0.61-0.78) |
@@ -165,22 +166,22 @@ intent residual:
 
 | setup (frames) | master Auto | master curves | new path |
 |---|---|---|---|
-| development, all (106) | 3.37 | 1.78 | 1.83 |
+| development, all (106) | 3.37 | 1.78 | 1.81 |
 | Canon R5 folder (15) | 4.98 | 3.16 | 2.87 |
 | Fuji X-T2 (11) | 3.70 | 1.60 | 2.86 |
-| Canon R6 II folder (11) | 8.10 | 3.11 | 1.14 |
-| Sony ZV-E1 (10) | 1.64 | 1.13 | 1.03 |
-| Nikon Z6 II (5) | 1.46 | 0.70 | 1.05 |
-| Canon EOS R (4) | 2.05 | 0.87 | 1.22 |
-| Canon T3i (4) | 4.27 | 3.72 | 3.29 |
-| Sony A7 II, one night frame four times (4) | 5.59 | 3.09 | 9.24 |
-| singles and pairs (36) | 1.89 | 1.08 | 1.58 |
+| Canon R6 II folder (11) | 8.10 | 3.11 | 1.15 |
+| Sony ZV-E1 (10) | 1.64 | 1.13 | 1.04 |
+| Nikon Z6 II (5) | 1.46 | 0.70 | 1.04 |
+| Canon EOS R (4) | 2.05 | 0.87 | 1.25 |
+| Canon T3i (4) | 4.27 | 3.72 | 3.28 |
+| Sony A7 II, one night frame four times (4) | 5.59 | 3.09 | 8.86 |
+| singles and pairs (36) | 1.89 | 1.08 | 1.60 |
 | held out, all (31) | 2.15 | 1.47 | 1.41 |
-| held out: Canon R5 Portra 400 roll (7) | 3.95 | 2.21 | 1.36 |
-| held out: Sony A7 (5) | 2.06 | 1.29 | 0.83 |
-| held out: singles and pairs (13) | 2.41 | 1.63 | 1.79 |
+| held out: Canon R5 Portra 400 roll (7) | 3.95 | 2.21 | 1.41 |
+| held out: Sony A7 (5) | 2.06 | 1.29 | 0.87 |
+| held out: singles and pairs (13) | 2.41 | 1.63 | 1.80 |
 
-The new path is lower than master's curves on 38 development frames, higher on 41, within 0.3 on 27; held out: 8, 11
+The new path is lower than master's curves on 37 development frames, higher on 41, within 0.3 on 28; held out: 8, 11
 and 12.
 
 Against the rated previews of the 41 voted frames: median a\*b\* distance 5.2 to the rated Auto and 3.1 to the rated
@@ -243,8 +244,10 @@ scanner output, one masked picture.
 - `white_film.cc` against the Python prototype on 14 frames of 9 camera models: median dE00 of the output 0.30 to 1.15
   (about half of it from the decode: the prototype uses another LibRaw build), parameters within a few percent, the
   same base source on all 14. The default path is pixel-identical to master on the two frames checked; the sidecar's
-  `cli_equivalent` replays the film path exactly.
-- Constants: `python3 tools/white_film/fit_calibration.py --ref R190808_ref.json` prints `P_CAL`, `W_CAL` and `M` as
+  `cli_equivalent` replays the film path exactly. The search takes its steps on thresholds, so a change in the last
+  digits of a constant can move a frame by up to 2 dE (median 0.0, 95th percentile 0.8 over the 137 frames when the
+  starting balance was folded into `M`); two runs of one build are identical.
+- Constants: `python3 tools/white_film/fit_calibration.py --ref R190808_ref.json` prints `P_CAL` and `M` as
   the code holds them (the chart reference is the vendor's file, not in this repository).
 - A conversion: `neg_process --film_stock portra400 --light_source d65 -P srgb --white_model film --roi auto
   --film_format auto [--rot 90] -o out.tiff scan.raw`. The sidecar's `white_film` block holds the six numbers, the

@@ -2,15 +2,16 @@
 """Fit the constants of the white-light film model (white_film.cc) to the IT8 calibration readings.
 
 Model, per camera channel c:   d_c = log2(base_c / v_c)        stops below the film base
-                               x_c = w_c (2^(p_c d_c) - 1)     exponent p, balance w; -1: the base's own share
-                               XYZ = M x 2^e                   one matrix; e: one exposure per bracket
+                               x_c = 2^(p_c d_c) - 1           exponent p; -1: the base's own share
+                               XYZ = M x 2^e                   one matrix; e: one exposure per bracket (0 for the middle one)
 Data: profiles/<Stock>-A7R4-D65/bundle.json holds the mean reading of each of the 288 IT8 patches for 7 exposure
 brackets, in linear Rec.2020, with the matrix that produced them from the camera's channels (inverted here), and
-the film base; --ref gives the chart's XYZ (D50). The fit is on Portra 400; the other stocks show what carries over.
+the film base; --ref gives the chart's XYZ (D50). The fit is on Portra 400; the other stocks show what carries over
+when only the exposures are theirs, and when the exponents and a balance w (x_c scaled by w_c) are theirs too.
 
   python3 tools/white_film/fit_calibration.py --ref R190808_ref.json [--profiles profiles]
 
-Prints P_CAL, W_CAL and M as white_film.cc holds them, and the colour error (CIE76) per stock.
+Prints P_CAL and M as white_film.cc holds them, and the colour error (CIE76) per stock.
 """
 import argparse, json
 import numpy as np
@@ -46,29 +47,34 @@ def lab(xyz):
 
 
 def model(th, T, bracket):
-    """th = p (3), log2 w_G, log2 w_B, M (9), e (one per bracket)."""
+    """th = p (3), log2 w_G, log2 w_B (0 in the calibration fit), M (9), e (one per bracket)."""
     x = (2.0 ** (-np.log2(T) * th[:3]) - 1.0) * np.concatenate([[1.0], 2.0 ** th[3:5]])
     return x @ th[5:14].reshape(3, 3).T * 2.0 ** th[14 + bracket]
 
 
-def fit(data, start=None, free=slice(None)):
-    n = 14 + len(data)
-    if start is None:                                  # exponents and exposures from the grey scale, then M linearly
-        def grey(q):
-            return np.concatenate([(np.log2(np.maximum(2.0 ** (-np.log2(T[g]) * q[:3]) - 1.0, 1e-6)) + q[3:6] + q[6 + b]
-                                    - np.log2(xyz[g, 1:2])).ravel() for b, (T, xyz, g) in enumerate(data)])
-        q = least_squares(grey, np.concatenate([[2.5, 2.0, 1.8], [0, 0, 0], 0.9 * (3 - np.arange(len(data)))]), loss="soft_l1", f_scale=0.3).x
-        start = np.zeros(n)
-        start[:3], start[3:5], start[14:] = q[:3], q[4:6] - q[3], q[6:] + q[3]
-        start[5:14] = np.eye(3).ravel()
-        X = np.concatenate([model(start, T, b) for b, (T, _, _) in enumerate(data)])
-        start[5:14] = np.linalg.lstsq(X, np.concatenate([xyz for _, xyz, _ in data]), rcond=None)[0].T.ravel()
-    mask = np.zeros(n, bool); mask[free] = True
+def refine(data, start, free):
+    """Least squares on the Lab residuals over the parameters in `free`, the others kept at `start`."""
+    mask = np.zeros(len(start), bool); mask[free] = True
     def residual(q):
         th = start.copy(); th[mask] = q
         return np.concatenate([(lab(model(th, T, b)) - lab(xyz)).ravel() for b, (T, xyz, _) in enumerate(data)])
-    th = start.copy(); th[mask] = least_squares(residual, start[mask], loss="soft_l1", f_scale=3.0).x
+    th = start.copy(); th[mask] = least_squares(residual, start[mask], loss="soft_l1", f_scale=3.0, xtol=1e-12, ftol=1e-12).x
     return th
+
+
+def calibrate(data):
+    """Exponents and exposures from the grey scale, M linearly, then everything refined (the middle exposure stays 0)."""
+    n, mid = 14 + len(data), len(data) // 2
+    def grey(q):
+        return np.concatenate([(np.log2(np.maximum(2.0 ** (-np.log2(T[g]) * q[:3]) - 1.0, 1e-6)) + q[3:6] + q[6 + b]
+                                - np.log2(xyz[g, 1:2])).ravel() for b, (T, xyz, g) in enumerate(data)])
+    q = least_squares(grey, np.concatenate([[2.5, 2.0, 1.8], [0, 0, 0], 0.9 * (mid - np.arange(len(data)))]), loss="soft_l1", f_scale=0.3).x
+    start = np.zeros(n)
+    start[:3], start[14:] = q[:3], q[6:] - q[6 + mid]
+    start[5:14] = np.eye(3).ravel()
+    X = np.concatenate([model(start, T, b) for b, (T, _, _) in enumerate(data)])
+    start[5:14] = np.linalg.lstsq(X, np.concatenate([xyz for _, xyz, _ in data]), rcond=None)[0].T.ravel()
+    return refine(data, start, np.r_[0:3, 5:14, [14 + b for b in range(len(data)) if b != mid]])
 
 
 def error(th, data):
@@ -81,11 +87,10 @@ if __name__ == "__main__":
     a = ap.parse_args()
     ref = json.load(open(a.ref))["patches"]
     data = {s: load(a.profiles, s, ref) for s in STOCKS}
-    th = fit(data[STOCKS[0]])
-    np.set_printoptions(precision=6, suppress=True)
-    print("P_CAL =", th[:3]); print("W_CAL = 1,", 2.0 ** th[3:5]); print("M =\n", th[5:14].reshape(3, 3))
+    th = calibrate(data[STOCKS[0]])
+    np.set_printoptions(precision=5, suppress=True)
+    print("P_CAL =", th[:3]); print("M =\n", th[5:14].reshape(3, 3))
     print(STOCKS[0], "(fitted):", error(th, data[STOCKS[0]]))
-    setup = np.r_[0:5, 14:14 + 7]                                     # what a scan can be calibrated for: p, w, exposure
     for s in STOCKS[1:]:
-        print(s, "with Portra 400's model and its own exposures:", error(fit(data[s], th, np.r_[14:21]), data[s]))
-        print(s, "with its own exponents and balance as well:  ", error(fit(data[s], th, setup), data[s]))
+        print(s, "with Portra 400's model and its own exposures:", error(refine(data[s], th, np.r_[14:21]), data[s]))
+        print(s, "with its own exponents and balance as well:  ", error(refine(data[s], th, np.r_[0:5, 14:21]), data[s]))
