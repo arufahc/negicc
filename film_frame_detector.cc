@@ -1842,8 +1842,17 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     const int delta = std::max(3, (int)(0.04f * r.h())), delta_ext = std::max(delta, (int)(0.10f * r.h())),
               k = std::max(2, (int)(0.02f * r.h()));
     float st0, st1;
+    const int c0 = (int)r.y0, c1 = (int)r.y1;
     r.y0 = refine_edge_profile(rp, r.y0, delta, k, true, &st0, delta_ext);
     r.y1 = refine_edge_profile(rp, r.y1, delta, k, false, &st1, delta_ext);
+    // A full row (90%) of holder or bare light ends the film: the edge does not move outward past one. Stray light on a
+    // holder above the film reads as picture, and the image border beyond it counts as non-image, so the image border
+    // made the cleaner edge and the frame ran over the holder to the top of the image (2c90f60949, 830e867e01,
+    // dd951ab7da, white-light 6x7 scans whose film runs under the holder at the sensor's top edge).
+    for (int y = std::min(c0, VH) - 1; y >= std::max(0, (int)r.y0); --y)
+      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y0 = (float)(y + 1); break; }
+    for (int y = std::max(c1, 0); y < std::min(VH, (int)r.y1); ++y)
+      if (row_frac(v, y, xa, xb, is_hard) >= 0.9f) { r.y1 = (float)y; break; }
     return std::min(st0, st1);
   };
   auto refine_lr = [&](Rect& r, float* sl, float* sr) {
