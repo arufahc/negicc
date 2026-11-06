@@ -781,8 +781,8 @@ class SearchFrame {
   // The coordinate descent of (E, g, b) of bracket target_idx against an intent field, from initial (or the
   // search's defaults when null) with E within e_bounds = {lo, hi, centre}; returns the intent loss
   // (ScreeningResult::intent_loss). pullback_search (the highlight pullback's re-search) replaces the pull of E toward
-  // the centre with penalties on E outside the bracket's calibrated range and searches g and b on wider grids
-  // (dinov3_auto_solver.cc).
+  // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
+  // searches g and b on wider grids (dinov3_auto_solver.cc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
@@ -1316,9 +1316,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::cout << os.str();
   }
 
-  // The bracket whose calibrated range the scene fits best: the lowest |fill_ratio - 0.85| (the scene's green contrast
-  // ratio over the bracket's) plus SLACK_PENALTY_SCALE per stop the scene overflows an infeasible bracket by. Only the
-  // bootstrap falls back to it, when no bracket meters.
+  // The bracket whose calibrated range the scene fits best, among the admissible ones when there are any: the lowest
+  // |fill_ratio - 0.85| (the scene's green contrast ratio over the bracket's) plus SLACK_PENALTY_SCALE per stop the
+  // scene overflows an infeasible bracket by. Only the bootstrap falls back to it, when no bracket meters.
   auto rank = [](const Enclosure& r) {
     return std::fabs(r.fill_ratio - 0.85f) + SLACK_PENALTY_SCALE * std::max(0.0f, -r.slack_ev);
   };
@@ -1454,8 +1454,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     return true;
   };
-  // The winner of a tournament: the lowest score, with prefer_converged among the converged runs when any converged
-  // (a converged loop's residual is a settled measurement; an unconverged one may be a lucky step).
+  // The winner of a tournament: the lowest score, with prefer_converged among the converged runs when any converged.
   auto winner = [](const std::vector<FixedPointResult>& runs, bool prefer_converged,
                    auto score) -> const FixedPointResult* {
     bool any_converged = false;
