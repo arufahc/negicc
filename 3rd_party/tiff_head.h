@@ -119,19 +119,30 @@ void tiff_head(const LibRaw* proc, struct tiff_hdr *th,
   const unsigned* gpsdata = proc->imgdata.other.gpsdata;
   if (gpsdata[1])
   {
-    uchar latref[4] = { (uchar)(gpsdata[29]),0,0,0 },
-          lonref[4] = { (uchar)(gpsdata[30]),0,0,0 };
+    // The GPS values first: the ASCII tags below measure their strings in th->gps when they are set.
+    memcpy(th->gps, gpsdata, sizeof th->gps);
+    // GPSLatitudeRef and GPSLongitudeRef: one character and its NUL, held in the tag itself. LibRaw's tiff_head passes
+    // the offset of a stack array from th, which tiff_set then reads through th: undefined behaviour, and at -O3 the
+    // tags carried whatever was on the stack, so the same scan wrote different bytes on every run.
+    auto ref_tag = [&](ushort tag, unsigned ref) {
+      struct libraw_tiff_tag* tt = (struct libraw_tiff_tag*)(&th->ngps + 1) + th->ngps;
+      th->ngps++;
+      tt->tag = tag;
+      tt->type = 2;
+      tt->count = (char)ref ? 2 : 1;
+      tt->val.i = 0;
+      tt->val.c[0] = (char)ref;
+    };
     tiff_set(th, &th->ntag, TIFFTAG_GPSIFD, 4, 1, TOFF(th->ngps));
     tiff_set(th, &th->ngps, 0, 1, 4, 0x202);
-    tiff_set(th, &th->ngps, 1, 2, 2, TOFF(latref));
+    ref_tag(1, gpsdata[29]);
     tiff_set(th, &th->ngps, 2, 5, 3, TOFF(th->gps[0]));
-    tiff_set(th, &th->ngps, 3, 2, 2, TOFF(lonref));
+    ref_tag(3, gpsdata[30]);
     tiff_set(th, &th->ngps, 4, 5, 3, TOFF(th->gps[6]));
     tiff_set(th, &th->ngps, 5, 1, 1, gpsdata[31]);
     tiff_set(th, &th->ngps, 6, 5, 1, TOFF(th->gps[18]));
     tiff_set(th, &th->ngps, 7, 5, 3, TOFF(th->gps[12]));
     tiff_set(th, &th->ngps, 18, 2, 12, TOFF(th->gps[20]));
     tiff_set(th, &th->ngps, 29, 2, 12, TOFF(th->gps[23]));
-    memcpy(th->gps, gpsdata, sizeof th->gps);
   }
 }
