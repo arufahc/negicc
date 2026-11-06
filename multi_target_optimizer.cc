@@ -858,11 +858,11 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      // TriLED: a residual that holds still within TOL_REL_ERR ends the loop. White light: only parameters that hold
-      // still (dp), or a residual past its minimum, end it. There the residual often moves by about 1.5% a step
-      // while g and b are still walking, and a change of 0.1% in one channel then decided whether the loop stopped
-      // at its second step or ran on to a residual 15% lower: another bracket won and the picture's median moved by
-      // up to 19 L*.
+      // What counts as converged, besides parameters that hold still (dp). TriLED: a residual that holds still within
+      // TOL_REL_ERR. White light: a residual past its minimum, and not a residual that holds still: there it often
+      // moves by about 1.5% a step while g and b are still walking, and a change of 0.1% in one channel then decided
+      // whether the loop stopped at its second step or ran on to a residual 15% lower. Another bracket won and the
+      // picture's median moved by up to 19 L*.
       const bool rel_conv = bundle_.has_crosstalk && (!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR;
       const bool past_min = !bundle_.has_crosstalk && it >= 2 && err >= prev_err && prev_err > best_err;
       if (it > 0 && (dp <= TOL_PARAM || rel_conv || past_min)) {

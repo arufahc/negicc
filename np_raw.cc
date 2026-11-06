@@ -304,7 +304,7 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // between the sRGB and Rec.2020 gamuts that the sRGB clamp lost. This relies on the pinned LibRaw (3rd_party/libraw):
 // older releases (0.20) do not implement the Rec.2020 output. When flat is given, it is applied in place on the CFA
 // mosaic after black subtraction and white balance. load_raw then multiplies the mosaic by the gains that balance the
-// camera channels on the film base (WhiteBalanceFinder, scale_white_light_mosaic), so that a light of another colour
+// camera channels on the film base (ChannelBalance, scale_white_light_mosaic), so that a light of another colour
 // than the profile's is corrected before the camera matrix mixes the channels, not after.
 // py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
 // py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
@@ -418,57 +418,60 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
-// Multiplies the mosaic prepare_white_light_mosaic prepared by k, per camera channel: each CFA photosite by its
-// colour's gain, or each of the three samples of a linear DNG.
+// Multiplies the mosaic prepare_white_light_mosaic prepared by k, per camera channel. A CFA mosaic holds one sample a
+// photosite, of the photosite's colour; a linear DNG holds three or four a pixel, R, G and B first.
 static void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
   const auto& S = proc->imgdata.sizes;
   const auto& R = proc->imgdata.rawdata;
-  const int ncomp = R.raw_image ? 1 : R.color4_image ? 4 : 3;
-  uint16_t* raw = R.raw_image ? R.raw_image : ncomp == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
-  const size_t pitch = S.raw_pitch / 2 / ncomp;  // pixels per row of the raw buffer
-  int col3[36];  // a 6x6 tile's colours (0..2); a linear DNG's samples are 0, 1, 2
+  const int samples = R.raw_image ? 1 : R.color4_image ? 4 : 3;
+  uint16_t* raw = R.raw_image ? R.raw_image : samples == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
+  const size_t pitch = S.raw_pitch / 2 / samples;  // pixels per row of the raw buffer
+  float tile[36];  // the gain of each photosite of a 6x6 CFA tile (Bayer repeats every 2, X-Trans every 6)
   for (int r = 0; r < 6; ++r)
     for (int c = 0; c < 6; ++c) {
       const int colour = proc->COLOR(r, c);
-      col3[r * 6 + c] = colour == 3 ? 1 : colour;  // the second green of a 4-colour CFA is green
+      tile[r * 6 + c] = k[colour == 3 ? 1 : colour];  // 3 is the second green
     }
   #pragma omp parallel for schedule(static)
   for (int y = 0; y < S.height; ++y) {
-    uint16_t* p = raw + ((size_t)(y + S.top_margin) * pitch + S.left_margin) * ncomp;
-    for (int x = 0; x < S.width; ++x)
-      for (int c = 0; c < (ncomp == 1 ? 1 : 3); ++c) {
-        uint16_t& v = p[(size_t)x * ncomp + c];
-        v = (uint16_t)std::nearbyint(v * k[ncomp == 1 ? col3[(y % 6) * 6 + x % 6] : c]);
+    uint16_t* p = raw + ((size_t)(y + S.top_margin) * pitch + S.left_margin) * samples;
+    for (int x = 0; x < S.width; ++x, p += samples) {
+      if (samples == 1) {
+        p[0] = (uint16_t)std::nearbyint(p[0] * tile[(y % 6) * 6 + x % 6]);
+      } else {
+        for (int c = 0; c < 3; ++c) p[c] = (uint16_t)std::nearbyint(p[c] * k[c]);
       }
+    }
   }
 }
 
-bool film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]) {
-  // M = rec2020_rgb x rgb_cam, as LibRaw's convert_to_rgb builds it for output_color 8, and its inverse (adjugate).
-  double m[3][3], inv[3][3];
+void film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]) {
+  // M = rec2020_rgb x rgb_cam, as LibRaw's convert_to_rgb builds it for output_color 8.
+  double m[3][3];
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
       m[i][j] = 0;
       for (int n = 0; n < 3; ++n) m[i][j] += LibRaw_constants::rec2020_rgb[i][n] * proc.imgdata.color.rgb_cam[n][j];
     }
+  // adj = det(M) M^-1 (the adjugate). The determinant cancels in the ratio of the two bases; it only gives the sign.
+  double adj[3][3];
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j)
-      inv[j][i] = m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3] -
+      adj[j][i] = m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3] -
                   m[(i + 1) % 3][(j + 2) % 3] * m[(i + 2) % 3][(j + 1) % 3];
-  const double det = m[0][0] * inv[0][0] + m[0][1] * inv[1][0] + m[0][2] * inv[2][0];
-  double g[3];
+  const double det = m[0][0] * adj[0][0] + m[0][1] * adj[1][0] + m[0][2] * adj[2][0];
+  double gain[3];
   for (int c = 0; c < 3; ++c) {
-    double cam = 0, cam_profile = 0;  // the two bases in camera channel c
+    double cam = 0, cam_profile = 0;  // the two bases in camera channel c, each times det(M)
     for (int j = 0; j < 3; ++j) {
-      cam += inv[c][j] / det * base[j];
-      cam_profile += inv[c][j] / det * profile_base[j];
+      cam += adj[c][j] * base[j];
+      cam_profile += adj[c][j] * profile_base[j];
     }
-    g[c] = cam_profile / cam;
-    if (!(cam > 0 && cam_profile > 0 && std::isfinite(g[c]))) return false;
+    if (!(cam / det > 0 && cam_profile / det > 0)) return;
+    gain[c] = cam_profile / cam;
   }
-  const double top = std::max({g[0], g[1], g[2]});
-  for (int c = 0; c < 3; ++c) k[c] = (float)(g[c] / top);
-  return true;
+  const double largest = std::max({gain[0], gain[1], gain[2]});
+  for (int c = 0; c < 3; ++c) k[c] = (float)(gain[c] / largest);
 }
 
 // Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
@@ -551,7 +554,7 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
 
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode, const int* roi,
-                 const HalfSizeAnalysis& analyse, const WhiteBalanceFinder& balance,
+                 const HalfSizeAnalysis& analyse, const ChannelBalance& balance,
                  const RawRegionFinder& find_region,
                  const negicc::FlatField* flat,
                  LibRaw* unpacked_proc) {
@@ -630,7 +633,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       // Balance the camera channels on the film base, then decode the half size again from the balanced mosaic, which
       // the analysis and the output both see.
       float k[3] = {1, 1, 1};
-      if (balance && balance(*proc, k) && !(k[0] == 1 && k[1] == 1 && k[2] == 1)) {
+      if (balance) balance(*proc, k);
+      if (k[0] != 1 || k[1] != 1 || k[2] != 1) {
         free_half();
         scale_white_light_mosaic(proc, k);
         if (!decode_white_light(proc, true, 0)) {

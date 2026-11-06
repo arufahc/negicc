@@ -1168,24 +1168,15 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                 raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
     return half_view;
   };
-  // The white-light decode's balance of the camera channels on the film base (film_base_balance_gains): the base read
-  // from its first half-size decode onto the bundle's. The analysis then reads the base again, balanced.
-  WhiteBalanceFinder balance;
+  // The white-light decode's balance of the camera channels on the film base: the base read from its first half-size
+  // decode is put on the bundle's (film_base_balance_gains). The analysis then reads the base again, balanced.
+  ChannelBalance balance;
   if (s.white_light && s.bundle.has_film_base) {
-    balance = [&](const LibRaw& raw, float k[3]) -> bool {
+    balance = [&](const LibRaw& raw, float k[3]) {
       read_base(raw);
-      if (!scan.film_base.found ||
-          !film_base_balance_gains(raw, scan.film_base.rgb, s.bundle.profile_film_base_rgb, k)) {
-        return false;
-      }
-      scan.balanced = true;
-      for (int c = 0; c < 3; ++c) {
-        scan.balance_gains[c] = k[c];
-        scan.base_before_balance[c] = scan.film_base.rgb[c];
-      }
-      log_info("Camera channels balanced on the film base before the camera matrix: gains %.6f %.6f %.6f\n", k[0],
-               k[1], k[2]);
-      return true;
+      if (scan.film_base.found) film_base_balance_gains(raw, scan.film_base.rgb, s.bundle.profile_film_base_rgb, k);
+      std::copy(k, k + 3, scan.balance_gains);
+      log_info("Film-base balance before the camera matrix: camera channel gains %.6f %.6f %.6f\n", k[0], k[1], k[2]);
     };
   }
   HalfSizeAnalysis analyse;
@@ -2158,8 +2149,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
-  sc.balance_gains = scan.balanced ? scan.balance_gains : nullptr;
-  sc.base_before_balance = scan.balanced ? scan.base_before_balance : nullptr;
+  sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;
   sc.bundle_target_name = c.bundle_target_name;
