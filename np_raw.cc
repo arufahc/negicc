@@ -303,7 +303,9 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // its output to [0, 65535]; going to Rec.2020 directly, rather than to sRGB and then to Rec.2020, keeps the colours
 // between the sRGB and Rec.2020 gamuts that the sRGB clamp lost. This relies on the pinned LibRaw (3rd_party/libraw):
 // older releases (0.20) do not implement the Rec.2020 output. When flat is given, it is applied in place on the CFA
-// mosaic after black subtraction and white balance.
+// mosaic after black subtraction and white balance. load_raw then multiplies the mosaic by the gains that balance the
+// camera channels on the film base (WhiteBalanceFinder, scale_white_light_mosaic), so that a light of another colour
+// than the profile's is corrected before the camera matrix mixes the channels, not after.
 // py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
 // py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
 //
@@ -416,6 +418,59 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
+// Multiplies the mosaic prepare_white_light_mosaic prepared by k, per camera channel: each CFA photosite by its
+// colour's gain, or each of the three samples of a linear DNG.
+static void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
+  const auto& S = proc->imgdata.sizes;
+  const auto& R = proc->imgdata.rawdata;
+  const int ncomp = R.raw_image ? 1 : R.color4_image ? 4 : 3;
+  uint16_t* raw = R.raw_image ? R.raw_image : ncomp == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
+  const size_t pitch = S.raw_pitch / 2 / ncomp;  // pixels per row of the raw buffer
+  int col3[36];  // a 6x6 tile's colours (0..2); a linear DNG's samples are 0, 1, 2
+  for (int r = 0; r < 6; ++r)
+    for (int c = 0; c < 6; ++c) {
+      const int colour = proc->COLOR(r, c);
+      col3[r * 6 + c] = colour == 3 ? 1 : colour;  // the second green of a 4-colour CFA is green
+    }
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < S.height; ++y) {
+    uint16_t* p = raw + ((size_t)(y + S.top_margin) * pitch + S.left_margin) * ncomp;
+    for (int x = 0; x < S.width; ++x)
+      for (int c = 0; c < (ncomp == 1 ? 1 : 3); ++c) {
+        uint16_t& v = p[(size_t)x * ncomp + c];
+        v = (uint16_t)std::nearbyint(v * k[ncomp == 1 ? col3[(y % 6) * 6 + x % 6] : c]);
+      }
+  }
+}
+
+bool film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]) {
+  // M = rec2020_rgb x rgb_cam, as LibRaw's convert_to_rgb builds it for output_color 8, and its inverse (adjugate).
+  double m[3][3], inv[3][3];
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j) {
+      m[i][j] = 0;
+      for (int n = 0; n < 3; ++n) m[i][j] += LibRaw_constants::rec2020_rgb[i][n] * proc.imgdata.color.rgb_cam[n][j];
+    }
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      inv[j][i] = m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3] -
+                  m[(i + 1) % 3][(j + 2) % 3] * m[(i + 2) % 3][(j + 1) % 3];
+  const double det = m[0][0] * inv[0][0] + m[0][1] * inv[1][0] + m[0][2] * inv[2][0];
+  double g[3];
+  for (int c = 0; c < 3; ++c) {
+    double cam = 0, cam_profile = 0;  // the two bases in camera channel c
+    for (int j = 0; j < 3; ++j) {
+      cam += inv[c][j] / det * base[j];
+      cam_profile += inv[c][j] / det * profile_base[j];
+    }
+    g[c] = cam_profile / cam;
+    if (!(cam > 0 && cam_profile > 0 && std::isfinite(g[c]))) return false;
+  }
+  const double top = std::max({g[0], g[1], g[2]});
+  for (int c = 0; c < 3; ++c) k[c] = (float)(g[c] / top);
+  return true;
+}
+
 // Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
 // half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
 // caller. False when LibRaw cannot process it.
@@ -496,7 +551,8 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
 
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode, const int* roi,
-                 const HalfSizeAnalysis& analyse, const RawRegionFinder& find_region,
+                 const HalfSizeAnalysis& analyse, const WhiteBalanceFinder& balance,
+                 const RawRegionFinder& find_region,
                  const negicc::FlatField* flat,
                  LibRaw* unpacked_proc) {
   const bool white_light = debayer && decode == RawDecode::kWhiteLight;
@@ -559,20 +615,35 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       return NULL;
     }
     log_info("White-light decode (linear Rec.2020): %.4f%% of photosites clipped\n", clip_fraction * 100.0);
+    // Frees a half-size decode and puts back what unpack() read, with the black level the mosaic no longer has.
+    auto free_half = [proc]() {
+      proc->free_image();
+      proc->raw2image_start();
+      proc->imgdata.color.black = 0;
+      std::memset(proc->imgdata.color.cblack, 0, sizeof(proc->imgdata.color.cblack));
+    };
     if (analyse) {
       if (!decode_white_light(proc, true, 0)) {
         delete proc;
         return NULL;
+      }
+      // Balance the camera channels on the film base, then decode the half size again from the balanced mosaic, which
+      // the analysis and the output both see.
+      float k[3] = {1, 1, 1};
+      if (balance && balance(*proc, k) && !(k[0] == 1 && k[1] == 1 && k[2] == 1)) {
+        free_half();
+        scale_white_light_mosaic(proc, k);
+        if (!decode_white_light(proc, true, 0)) {
+          delete proc;
+          return NULL;
+        }
       }
       if (!analyse(*proc)) {
         proc->free_image();
         delete proc;
         return NULL;
       }
-      proc->free_image();
-      proc->raw2image_start();
-      proc->imgdata.color.black = 0;
-      std::memset(proc->imgdata.color.cblack, 0, sizeof(proc->imgdata.color.cblack));
+      free_half();
     }
   } else {
     if (flat) {

@@ -1152,6 +1152,42 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     scan.has_roi = true;
   };
+  // The film base read from a half-size image (detect_base); gives the image as a view.
+  auto read_base = [&](const LibRaw& raw) {
+    const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
+    negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
+        &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
+    // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
+    // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
+    // own size put the base patch off the image, so neg_process fell back to the statistics).
+    // A single RAW's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, white light or
+    // not; before, only white light used it, so TriLED with -q >= 0 (this path, not the CFA one) lost the rebate
+    // base and read it from the statistics.
+    const bool raw_det = s.white_light || (o.input_mode == InputMode::kRaw && o.files.size() == 1);
+    detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
+                raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
+    return half_view;
+  };
+  // The white-light decode's balance of the camera channels on the film base (film_base_balance_gains): the base read
+  // from its first half-size decode onto the bundle's. The analysis then reads the base again, balanced.
+  WhiteBalanceFinder balance;
+  if (s.white_light && s.bundle.has_film_base) {
+    balance = [&](const LibRaw& raw, float k[3]) -> bool {
+      read_base(raw);
+      if (!scan.film_base.found ||
+          !film_base_balance_gains(raw, scan.film_base.rgb, s.bundle.profile_film_base_rgb, k)) {
+        return false;
+      }
+      scan.balanced = true;
+      for (int c = 0; c < 3; ++c) {
+        scan.balance_gains[c] = k[c];
+        scan.base_before_balance[c] = scan.film_base.rgb[c];
+      }
+      log_info("Camera channels balanced on the film base before the camera matrix: gains %.6f %.6f %.6f\n", k[0],
+               k[1], k[2]);
+      return true;
+    };
+  }
   HalfSizeAnalysis analyse;
   if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
@@ -1179,17 +1215,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         clamp_rect(bbox, half_w, half_h);
       }
       // Step 3 & Step 4: zero-copy RgbView over the half-size image, cropped and oriented in place.
-      negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
-          &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
-      // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
-      // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
-      // own size put the base patch off the image, so neg_process fell back to the statistics).
-      // A single RAW's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, white light or
-      // not; before, only white light used it, so TriLED with -q >= 0 (this path, not the CFA one) lost the rebate
-      // base and read it from the statistics.
-      const bool raw_det = s.white_light || (o.input_mode == InputMode::kRaw && o.files.size() == 1);
-      detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
-                  raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
+      negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -1573,7 +1599,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                       !o.no_crop && !scan.has_roi && !o.roi_auto,
                       s.raw_decode,
                       (!o.roi_auto && scan.has_roi) ? scan.roi : nullptr,
-                      analyse, find_frame, s.flat_field.get(),
+                      analyse, balance, find_frame, s.flat_field.get(),
                       unpacked_probe);
     }
     unpacked_probe = nullptr;
@@ -2132,6 +2158,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
+  sc.balance_gains = scan.balanced ? scan.balance_gains : nullptr;
+  sc.base_before_balance = scan.balanced ? scan.base_before_balance : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;
   sc.bundle_target_name = c.bundle_target_name;

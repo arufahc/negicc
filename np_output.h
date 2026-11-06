@@ -66,6 +66,9 @@ struct Sidecar {
   std::vector<int> profile_film_base_rgb;
   std::string film_base_source;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
+  // The white-light decode's gains on the camera channels and the film base read before them; null: not balanced.
+  const float* balance_gains = nullptr;
+  const double* base_before_balance = nullptr;
   std::string profile_path;              // empty: no profile
   bool is_bundle = false;
   std::string bundle_target_name;
