@@ -1438,6 +1438,7 @@ float row_frac(const View& v, int y, int x0, int x1, F pred) {
 inline bool is_image(uint8_t c) { return c == CL_IMAGE; }
 inline bool is_valid(uint8_t c) { return c != CL_INVALID; }
 inline bool is_hard(uint8_t c) { return c == CL_LIGHT || c == CL_DARK; }
+inline bool is_light(uint8_t c) { return c == CL_LIGHT; }
 inline bool is_gap(uint8_t c) { return c == CL_BASE || c == CL_LIGHT || c == CL_DARK; }
 
 // Edge position near t0 in a profile p of picture fractions: the position within +-delta (extended outward to
@@ -1875,6 +1876,26 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     };
     fr.y0 = std::min(fr.y0, (float)run_end(-1));
     fr.y1 = std::max(fr.y1, (float)run_end(+1) + 1);
+    // 35mm: perforation rows are never picture. The rectangle search does not see them (line_gate keeps lines, and a
+    // row of holes is a row of blobs), and a row through the holes is still about 58% picture-classed land between
+    // them, so the band can take in both hole rows and the rebate. The frame's px per mm is then read from the strip's
+    // width and the hole search, which looks outside the band, finds none: a whole strip of two half frames was cropped
+    // as one 645 frame (6919a1096c, d53baa2ecc, white-light scans of a 35mm strip with unclipped holes), and the
+    // review-set frame 56f30d06a9 kept its bottom hole row. So rows near the band's edges (its outer quarters) where
+    // light covers a quarter of the row are cut off. Only when the band's middle half holds almost no light (under 2%):
+    // a picture misread as light (Film Scan0048, whose base was estimated from the picture) has light everywhere.
+    if (fg.sprockets) {
+      float mid_light = 0.0f;
+      const int m0 = std::max(0, (int)(fr.y0 + 0.25f * fr.h())), m1 = std::min(VH, (int)(fr.y1 - 0.25f * fr.h()));
+      for (int y = m0; y < m1; ++y) mid_light += row_frac(v, y, xa, xb, is_light);
+      if (mid_light < 0.02f * std::max(1, m1 - m0)) {
+        const int lim = (int)(0.25f * fr.h()), ya0 = (int)fr.y0, yb0 = (int)fr.y1;
+        for (int y = std::max(0, ya0); y < std::min(VH, ya0 + lim); ++y)
+          if (row_frac(v, y, xa, xb, is_light) >= 0.25f) fr.y0 = (float)(y + 1);
+        for (int y = std::min(VH, yb0) - 1; y > std::max(-1, yb0 - lim); --y)
+          if (row_frac(v, y, xa, xb, is_light) >= 0.25f) fr.y1 = (float)y;
+      }
+    }
   }
   const float st_tb = refine_tb(fr);
   const float across_px = fr.h();
