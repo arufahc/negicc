@@ -40,6 +40,24 @@ int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn);
 // there. False fails the load.
 using HalfSizeAnalysis = std::function<bool(const LibRaw& proc)>;
 
+// Called by load_raw's white-light decode with its first half-size image (as HalfSizeAnalysis sees it). Leaves in k
+// the gains for the camera's R, G and B channels that the mosaic takes before the camera matrix
+// (film_base_balance_gains); k comes in as 1, 1, 1, which leaves the mosaic as it is.
+using ChannelBalance = std::function<void(const LibRaw& half, float k[3])>;
+
+// The gains for the camera channels that put the film base |base| (linear Rec.2020, as the white-light decode of proc
+// gives it) on the profile's film base |profile_base|: K = (M^-1 profile_base) / (M^-1 base) per channel, M the camera
+// matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised and nothing new
+// clips. k is left as it is when either base has a camera channel that is not positive.
+//
+// Why before the matrix: a light of another colour than the profile's gives the base another colour in the camera's
+// own channels. Corrected after the matrix has mixed them, the matrix's negative terms drive dense areas below zero
+// (clamped: blue shadows and skies with a warm light). And the profile's patches were read as Rec.2020 divided by
+// the calibration scan's base, which is M with its rows divided by that base: dividing by another scan's base scales
+// the rows by another vector, while after these gains every scan's base is the profile's. For the calibration scan
+// itself K is 1.
+void film_base_balance_gains(const LibRaw& proc, const double base[3], const int profile_base[3], float k[3]);
+
 // Called by load_raw with the unpacked RAW in proc (imgdata.rawdata.raw_image holds the CFA mosaic, margins
 // included), before the half-size analysis and the decode. Sets roi to the region to decode (x, y, w, h in the
 // visible sensor area, imgdata.sizes.width x height), as --roi would; false fails the load.
@@ -92,11 +110,16 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level);
 // of the mosaic (read_half_size), or for kWhiteLight its half-size white-light decode, in the same space as the
 // output.
 //
+// |balance|, when set along with analyse, is called for kWhiteLight with a first half-size decode. When it gives gains other than 1,
+// the mosaic's camera channels are multiplied by them and the half size is decoded again for analyse; the output is
+// decoded from the same balanced mosaic. Other decodes ignore it.
+//
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
 // (--roi auto: the detected frame), so that the analysis and the decode see only that region. A finder that leaves
 // the region empty (width or height 0) only looked at the mosaic, and roi stays.
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode = RawDecode::kRec2020, const int* roi = nullptr,
-                 const HalfSizeAnalysis& analyse = {}, const RawRegionFinder& find_region = {},
+                 const HalfSizeAnalysis& analyse = {}, const ChannelBalance& balance = {},
+                 const RawRegionFinder& find_region = {},
                  const negicc::FlatField* flat = nullptr,
                  LibRaw* unpacked_proc = nullptr);

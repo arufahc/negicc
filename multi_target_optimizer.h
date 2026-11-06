@@ -43,8 +43,8 @@ struct RgbImage {
 //      DINOv3 predict an intent field from that render.
 //   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against that
 //      one intent field.
-//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (among
-//      the converged ones, when any converged).
+//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (on TriLED
+//      among the converged ones, when any converged).
 //   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
@@ -85,9 +85,9 @@ struct ConversionParams {
 
 // How the fixed-point loop of a bracket stopped.
 enum class FixedPointStatus {
-  // E, g, b moved by 0.02 or less in total in the last step, or the residual by 1.5 % or less (on white light also
-  // not rising and within 1.5 % of the best step's; on TriLED, in the pullback's search, also not rising), or, on
-  // white light, the residual rose again after passing its minimum (the best step is kept).
+  // E, g, b moved by 0.02 or less in total in the last step; or, on TriLED, the residual by 1.5 % or less (in the
+  // pullback's search also not rising); or, on white light, the residual rose again after passing its minimum (the
+  // best step is kept).
   kConverged,
   kDiverged,   // the residual grew by more than 25 % and more than 1.5 in one step
   kMaxIters,   // neither within ParamSearchOptions::max_steps steps
