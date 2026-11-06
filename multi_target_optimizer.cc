@@ -858,11 +858,12 @@ class SearchFrame {
         }
         std::cout << "\n";
       }
-      // On non-crosstalk (white-light) bundles, stop once the residual has risen for two consecutive steps
-      // past best_err and keep best as a converged tournament candidate (matching negicc-station optimizer.py).
-      const bool rel_conv = bundle_.has_crosstalk
-                                ? ((!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR)
-                                : (err <= prev_err && err <= best_err * (1.0f + TOL_REL_ERR) && rel <= TOL_REL_ERR);
+      // TriLED: a residual that holds still within TOL_REL_ERR ends the loop. White light: only parameters that hold
+      // still (dp), or a residual past its minimum, end it. There the residual often moves by about 1.5% a step
+      // while g and b are still walking, and a change of 0.1% in one channel then decided whether the loop stopped
+      // at its second step or ran on to a residual 15% lower: another bracket won and the picture's median moved by
+      // up to 19 L*.
+      const bool rel_conv = bundle_.has_crosstalk && (!pullback_search || err <= prev_err) && rel <= TOL_REL_ERR;
       const bool past_min = !bundle_.has_crosstalk && it >= 2 && err >= prev_err && prev_err > best_err;
       if (it > 0 && (dp <= TOL_PARAM || rel_conv || past_min)) {
         if (verbose_ && past_min) std::cout << "    T" << target_idx + 1 << ": residual passed minimum, keeping best\n";
@@ -1426,8 +1427,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     adaptive.push_back(fp);
     out.tournament.push_back(fp);
   }
-  // The winner is the lowest plain residual among the converged brackets (when any converged), below. tourney_score,
-  // the enclosure-regularized residual, only ranks the candidates of the highlight pullback.
+  // The winner is the lowest plain residual, below; on TriLED among the converged brackets when any converged. On
+  // white light the status does not count: each loop's best step is a render with a measured residual, and whether a
+  // loop ended as converged, diverged or out of steps flipped with a 0.1% change of the input. tourney_score, the
+  // enclosure-regularized residual, only ranks the candidates of the highlight pullback.
   auto tourney_score = [&](const FixedPointResult& a) {
     for (const auto& c : enclosure) {
       if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
@@ -1439,11 +1442,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     return a.residual;
   };
-  bool any_converged = false;
-  for (const auto& a : adaptive) any_converged |= (a.status == FixedPointStatus::kConverged);
+  bool converged_only = false;
+  for (const auto& a : adaptive) converged_only |= bundle.has_crosstalk && a.status == FixedPointStatus::kConverged;
   const FixedPointResult* win = nullptr;
   for (const auto& a : adaptive) {
-    if (any_converged && a.status != FixedPointStatus::kConverged) continue;
+    if (converged_only && a.status != FixedPointStatus::kConverged) continue;
     if (!win || a.residual < win->residual) win = &a;
   }
   FixedPointResult chosen = *win;
