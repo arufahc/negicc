@@ -20,3 +20,8 @@
 [submodule "3rd_party/libjpeg-turbo"]
 	path = 3rd_party/libjpeg-turbo
 	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
+[submodule "3rd_party/onnxruntime"]
+	path = 3rd_party/onnxruntime
+	url = https://github.com/microsoft/onnxruntime.git
+	shallow = true
+	update = none

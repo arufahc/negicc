@@ -2,14 +2,15 @@
 #
 #   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
 #   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs them)
-#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported
+#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to link ONNX Runtime statically)
 #   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
 #   make deps               # bin_out/liblcms2.a and bin_out/libz.a, from the 3rd_party/lcms2 and zlib submodules
 
 PYTHON ?= python3
+CMAKE ?= cmake
 
-.PHONY: all lib libraw deps neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps onnxruntime neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -154,27 +155,64 @@ ARGPARSE_INC = -isystem 3rd_party/argparse/include
 # DINOv3 C++ Inference Engine & Library
 # ----------------------------------------------------------------------
 ARCH := $(shell uname -m)
+STATIC ?= 0
+ORT_STATIC ?= $(STATIC)
 
-ORT_CANDIDATES := $(wildcard 3rd_party/onnxruntime/include/onnxruntime_cxx_api.h \
-                             ../onnxruntime/include/onnxruntime_cxx_api.h \
-                             ../negicc-station/3rd_party/onnxruntime/include/onnxruntime_cxx_api.h)
-ifneq ($(strip $(ORT_CANDIDATES)),)
-    ORT_DIR ?= $(patsubst %/include/onnxruntime_cxx_api.h,%,$(firstword $(ORT_CANDIDATES)))
+ORT_SRC_DIR = 3rd_party/onnxruntime
+ORT_BUILD_DIR = bin_out/onnxruntime
+ORT_STATIC_LIB = bin_out/libonnxruntime.a
+ORT_CMAKE_TARGETS = onnxruntime_session onnxruntime_optimizer onnxruntime_providers onnxruntime_lora \
+                    onnxruntime_framework onnxruntime_graph onnxruntime_util onnxruntime_mlas \
+                    onnxruntime_common onnxruntime_flatbuffers model_package \
+                    onnx onnx_proto libprotobuf-lite re2 flatbuffers cpuinfo
+
+ifeq ($(ORT_STATIC),1)
+    ORT_INC = -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
+    ORT_DEPS = $(ORT_STATIC_LIB)
+    ORT_LDFLAGS = $(ORT_STATIC_LIB) -ldl -lpthread -lrt -Wl,--gc-sections -Wl,-z,noexecstack
+else ifeq ($(ORT_STATIC),0)
+    ORT_CANDIDATES := $(wildcard 3rd_party/onnxruntime/include/onnxruntime_cxx_api.h \
+                                 ../onnxruntime/include/onnxruntime_cxx_api.h \
+                                 ../negicc-station/3rd_party/onnxruntime/include/onnxruntime_cxx_api.h)
+    ifneq ($(strip $(ORT_CANDIDATES)),)
+        ORT_DIR ?= $(patsubst %/include/onnxruntime_cxx_api.h,%,$(firstword $(ORT_CANDIDATES)))
+    else
+        ORT_DIR ?= 3rd_party/onnxruntime
+    endif
+    ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
+    ifeq ($(ARCH),aarch64)
+        ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
+    else
+        ORT_LIB_DIR ?= $(ORT_DIR)/lib/x86_64
+    endif
+    ifneq ($(filter /%,$(ORT_LIB_DIR)),)
+        ORT_RPATH = -Wl,-rpath,'$(ORT_LIB_DIR)'
+    else
+        ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
+    endif
+    ORT_DEPS =
+    ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime $(ORT_RPATH)
 else
-    ORT_DIR ?= 3rd_party/onnxruntime
+    $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
-ORT_INC = -isystem $(ORT_DIR)/include
-ifeq ($(ARCH),aarch64)
-    ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
-else
-    ORT_LIB_DIR ?= $(ORT_DIR)/lib/x86_64
-endif
-ifneq ($(filter /%,$(ORT_LIB_DIR)),)
-    ORT_RPATH = -Wl,-rpath,'$(ORT_LIB_DIR)'
-else
-    ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
-endif
-ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime $(ORT_RPATH)
+
+$(ORT_STATIC_LIB):
+	test -f $(ORT_SRC_DIR)/cmake/CMakeLists.txt || git submodule update --init --checkout --depth 1 $(ORT_SRC_DIR)
+	$(CMAKE) -S $(ORT_SRC_DIR)/cmake -B $(ORT_BUILD_DIR) \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -Donnxruntime_BUILD_SHARED_LIB=OFF \
+	    -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+	    -Donnxruntime_ENABLE_PYTHON=OFF \
+	    -Wno-dev
+	$(CMAKE) --build $(ORT_BUILD_DIR) --config Release --target $(ORT_CMAKE_TARGETS) --parallel
+	rm -f $@
+	{ echo "CREATE $@"; \
+	  find $(ORT_BUILD_DIR) -name '*.a' ! -name 'libprotobuf.a' ! -name 'libprotoc.a' | sort | \
+	    while read -r a; do echo "ADDLIB $$a"; done; \
+	  echo "SAVE"; echo "END"; } | $(AR) -M
+	ranlib $@
+
+onnxruntime: $(ORT_STATIC_LIB)
 
 NVCC := $(shell which nvcc 2>/dev/null)
 ifeq ($(NVCC),)
@@ -208,10 +246,13 @@ else
     $(error USE_CUDA must be 0 or 1, got '$(USE_CUDA)')
 endif
 
-BUILD_STAMP = bin_out/.use_cuda_$(USE_CUDA)
+BUILD_STAMP = bin_out/.use_cuda_$(USE_CUDA)_static_$(ORT_STATIC)
 
 $(BUILD_STAMP):
 	mkdir -p bin_out
+	@if [ "$(ORT_STATIC)" = "1" ] && [ ! -f "$(ORT_SRC_DIR)/cmake/CMakeLists.txt" ]; then \
+	    git submodule update --init --checkout --depth 1 $(ORT_SRC_DIR); \
+	fi
 	rm -f bin_out/.use_cuda_*
 	touch $@
 
@@ -387,7 +428,7 @@ NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o $(NP_OB
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(NP_HDRS) $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
@@ -410,5 +451,5 @@ clean_lib:
 
 clean_all: clean_lib
 	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_* bin_out/lcms2 bin_out/zlib \
-	       bin_out/libjpeg bin_out/libtiff
+	       bin_out/libjpeg bin_out/libtiff bin_out/onnxruntime bin_out/libonnxruntime.a
 	rm -f bin_out/raw_info bin_out/neg_process

@@ -1,0 +1,94 @@
+name: Build neg_process
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Initialize ONNX Runtime submodule
+        run: |
+          git submodule update --init --checkout --depth 1 3rd_party/onnxruntime
+          echo "ORT_COMMIT=$(git -C 3rd_party/onnxruntime rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Cache static ONNX Runtime build
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin_out/onnxruntime
+            bin_out/libonnxruntime.a
+          key: ort-static-linux-x64-${{ env.ORT_COMMIT }}
+
+      - name: Build static neg_process
+        run: |
+          make neg_process USE_CUDA=0 STATIC=1 GIT_VERSION="${GITHUB_SHA::7}" -j"$(nproc)"
+          strip bin_out/neg_process
+          ! readelf -d bin_out/neg_process | grep -q libonnxruntime
+          ./bin_out/neg_process --version
+          ./bin_out/neg_process --list_profiles
+
+      - name: Package release archive
+        run: |
+          mkdir -p dist/neg_process-linux-x86_64
+          cp bin_out/neg_process dist/neg_process-linux-x86_64/neg_process
+          cp COPYING dist/neg_process-linux-x86_64/COPYING
+          cp models/dinov3-small/LICENSE.md dist/neg_process-linux-x86_64/LICENSE.dinov3.md
+          cp 3rd_party/onnxruntime/LICENSE dist/neg_process-linux-x86_64/LICENSE.onnxruntime
+          tar -C dist -czf dist/neg_process-linux-x86_64.tar.gz neg_process-linux-x86_64
+          (cd dist && sha256sum neg_process-linux-x86_64.tar.gz > neg_process-linux-x86_64.tar.gz.sha256)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neg_process-linux-x86_64
+          path: |
+            bin_out/neg_process
+            dist/neg_process-linux-x86_64.tar.gz
+            dist/neg_process-linux-x86_64.tar.gz.sha256
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            TITLE="neg_process ${TAG}"
+            NOTES="Standalone Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, ONNX Runtime, profile bundles, and DINOv3 models statically linked in."
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              gh release upload "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 --clobber
+            else
+              gh release create "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 \
+                --title "${TITLE}" --notes "${NOTES}"
+            fi
+          elif [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
+            TAG="latest"
+            TITLE="neg_process (${GITHUB_SHA::7})"
+            NOTES="Standalone Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, ONNX Runtime, profile bundles, and DINOv3 models statically linked in."
+            git tag -f "${TAG}" "${GITHUB_SHA}"
+            git push -f origin "refs/tags/${TAG}"
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              gh release edit "${TAG}" --title "${TITLE}" --notes "${NOTES}"
+              gh release upload "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 --clobber
+            else
+              gh release create "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 \
+                --title "${TITLE}" --notes "${NOTES}"
+            fi
+          fi

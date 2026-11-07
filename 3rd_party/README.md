@@ -29,6 +29,11 @@
   submodules pin the same versions (the two headers byte for byte), so nothing changes but where they come from. To
   move one: check out another tag in the submodule, commit it, and check that the TriLED conversions stay
   bit-identical (negicc-station's `tools/triled_parity.py`).
+- `onnxruntime/`: [ONNX Runtime](https://github.com/microsoft/onnxruntime), a shallow git submodule pinned to release
+  v1.30.0 (MIT, see `onnxruntime/LICENSE`), with `update = none` so a plain `git submodule update --init --recursive`
+  does not clone it when linking a prebuilt `libonnxruntime.so`. With `STATIC=1` (`make neg_process STATIC=1`), the
+  Makefile fetches the submodule automatically if needed, builds its static archives with CMake into
+  `bin_out/libonnxruntime.a`, and links ONNX Runtime statically into `bin_out/neg_process`.
 - `tiff_head.h`: LibRaw's TIFF header writer (`src/write/file_write.cpp`), which is not public API, copied here.
 - `tiff.h`: TIFF tag definitions used by `tiff_head.h`.
-- `elle_icc_profiles/`, `onnxruntime/`: see each directory.
+- `elle_icc_profiles/`: see the directory.
