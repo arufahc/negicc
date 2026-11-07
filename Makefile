@@ -9,7 +9,7 @@
 
 PYTHON ?= python3
 
-.PHONY: all lib libraw deps neg_process raw_info frame_detect dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -384,13 +384,6 @@ bin_out/np_%.o: np_%.cc $(NP_HDRS) $(BUILD_STAMP)
 	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
 
 NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o $(NP_OBJS)
-
-# The film frame detector alone (tools/frame_eval): one JSON line per input (RAW, DNG, TIFF or JPEG), for scoring
-# crops against truth.json.
-FRAME_DETECT_OBJS = bin_out/np_raw.o bin_out/np_geometry.o bin_out/np_input.o bin_out/rgb_input.o
-frame_detect: tools/frame_eval/frame_detect.cc $(FRAME_DETECT_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB)
-	mkdir -p bin_out
-	$(CXX) -O3 -std=c++17 -fopenmp -ffp-contract=off -o bin_out/frame_detect tools/frame_eval/frame_detect.cc $(FRAME_DETECT_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(JSON_INC) $(ORT_INC) $(LIBRAW_LDLIBS) $(ORT_LDFLAGS)
 
 neg_process: bin_out/neg_process
 

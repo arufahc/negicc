@@ -201,7 +201,7 @@ re-solved at every step so the picture's median lightness stays where Auto put i
 channel's density response of at most ±25 % slope and one stop of departure from the profile's own curve, held to a
 plain offset below the frame's densest cell, and never above the film base; a fit that would take E out of the
 bracket's range, or a curve that fails those bounds, falls back to Auto's plain result. `--fit_curves off` keeps the
-plain result; the sidecar records the curves and a `cli_equivalent` command that replays them exactly.
+plain result; the sidecar records the curves.
 
 ## More examples
 
@@ -217,10 +217,6 @@ bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --
 
 # Your own choices: bracket 0..6, exposure, green and blue gains (any gain given turns Auto off)
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
-
-# Replay a sidecar's fitted curves exactly (the sidecar's cli_equivalent spells this out)
-bin_out/neg_process --film_stock portra400 --light_source d65 -P srgb --target 3 -E 1.04 --gain_g 1.12 --gain_b 1.01 \
-    --fit_curves ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB -o out.tif scan.ARW
 ```
 
 ## Options

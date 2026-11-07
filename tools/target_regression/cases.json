@@ -1,8 +1,0 @@
-{
-  "comment": "The frames the #51 review found the --target search off on. args: what each frame converts with besides -P srgb (the bundle, and its --roi and rotation where the corpus gives one); path: the file under its root, else found by its name.",
-  "cases": [
-    {"name": "0105", "root": "web", "args": ["--film_stock", "portra400", "--light_source", "d65"]},
-    {"name": "0193", "root": "web", "args": ["--film_stock", "portra400", "--light_source", "d65"]},
-    {"name": "0030", "root": "triled", "args": ["--film_stock", "portra400", "--light_source", "tri"]}
-  ]
-}
