@@ -177,6 +177,10 @@ struct ParamSearchResult {
   std::vector<float> intent_mu, intent_sigma;
   int intent_grid_w = 0, intent_grid_h = 0;
   ConversionParams intent_params;
+  int bootstrap_target_idx = -1;
+  ConversionParams bootstrap_params;
+  float bootstrap_e_min = 0.0f, bootstrap_e_max = 0.0f;
+  std::vector<float> bootstrap_mu, bootstrap_sigma;
 
   // The bracket's input matrix and the frame's exposure. With X the bundle's crosstalk matrix, f the film base
   // RGB, n the bundle's normalisation target and rho the exposure of the film base capture over this frame's
@@ -357,6 +361,7 @@ struct CurveRefitResult {
   float fit_e = 1.0f;
   int fit_renders = 0, fit_iterations = 0, fit_polish = 0, fit_start = 0;
   bool fit_converged = false;
+  int selected_target_idx = -1;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light

@@ -19,6 +19,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -28,6 +30,7 @@
 
 #include "dinov3_auto_solver.h"
 #include "neg_pipeline.h"
+#include "nlohmann/json.hpp"
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {
@@ -1391,6 +1394,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   std::vector<float> mu1, sig1;
   fr.render_preview(cand1.target_idx, {e1_init, BOOTSTRAP_G, BOOTSTRAP_B}, preview);
   if (!fr.predict(preview, mu1, sig1)) return false;
+  out.bootstrap_target_idx = cand1.target_idx;
+  out.bootstrap_params = {e1_init, BOOTSTRAP_G, BOOTSTRAP_B, 1.0f};
+  out.bootstrap_e_min = cand1.e_min;
+  out.bootstrap_e_max = cand1.e_max;
+  out.bootstrap_mu = mu1;
+  out.bootstrap_sigma = sig1;
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
   // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
@@ -1557,10 +1566,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                   << "% vs " << fixed(clip_0 * 100.0f, 4) << "%, dL* " << fixed(dl, 2, true) << ", resid "
                   << fixed(fp_adj.residual, 4) << ": " << to_string(out.clip_fallback) << "\n";
       }
+      const bool no_multi_walk = (std::getenv("NP_PHASE2_SWEEP") != nullptr) ||
+                                 (std::getenv("NP_PHASE2_ARM") != nullptr) ||
+                                 (std::getenv("NP_PHASE2_NO_WALK") != nullptr);
       if (out.clip_fallback == ClipFallbackOutcome::kTaken) {
         chosen = fp_adj;
         params = p_adj;
-      } else if (white_light && out.clip_fallback == ClipFallbackOutcome::kClipsTooMuch && clip_0 > 0.02f) {
+      } else if (white_light && !no_multi_walk && out.clip_fallback == ClipFallbackOutcome::kClipsTooMuch &&
+                 clip_0 > 0.02f) {
         // When severe highlight clipping (>2% white-clipped) is only partially reduced by chosen + 1, continue
         // walking denser brackets with pullback_search (wide g/b range) to find the deepest bracket that clears
         // the highlight clipping or highlight overshoot within the lightness and residual gates.
@@ -1810,8 +1823,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
     if (table.size() < 2) continue;
     std::vector<float> composed(table.size());
     const int i = ch - 1;
-    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
+    negicc::compose_input_table_ch(table.data(), (int)table.size(), curves, i, composed.data(), ts_gb[i], 0.76f);
     table.swap(composed);
   }
   prof.rebind_pointers();
@@ -1840,8 +1852,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
     }
     std::vector<float> composed(table.size());
     const int i = ch - 1;
-    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
+    negicc::compose_input_table_ch(table.data(), (int)table.size(), curves, i, composed.data(), ts_gb[i], 0.76f);
     prof.in_trc[ch].swap(composed);
   }
   prof.rebind_pointers();
@@ -1910,15 +1921,21 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   const ProfileData& pd = bundle.targets[target_idx].film_prof.data;
   for (int ch = 0; ch < 2; ++ch) {
     if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
-    out.u_med[ch] = curves.u_med[ch] + (a1.u_med[ch] - a0.u_med[ch]);
+    const float du = a1.u_med[ch] - a0.u_med[ch];
+    out.u_med[ch] = curves.u_med[ch] + du;
     out.u_lo[ch] = curves.u_lo[ch] + (a1.u_lo[ch] - a0.u_lo[ch]);
+    for (int k = 0; k < out.n_knots; ++k) out.u_knot[ch][k] = curves.u_knot[ch][k] + du;
     const int table_n = pd.in_trc_size[ch + 1];
     scale[ch] = shape_scale_of([&](float t) {
-      return negicc::curve_shape_ok(t * out.a[ch], t * out.k[ch], out.u_med[ch], out.ref[ch], table_n, max_dev_stops,
-                                    out.u_hold(ch));
+      negicc::InputCurves c_try = out;
+      c_try.a[ch] *= t;
+      c_try.k[ch] *= t;
+      for (int s = 0; s < negicc::InputCurves::kMaxSegs; ++s) c_try.a_seg[ch][s] *= t;
+      return negicc::curve_shape_ok_ch(c_try, ch, table_n, max_dev_stops);
     });
     out.a[ch] *= scale[ch];
     out.k[ch] *= scale[ch];
+    for (int s = 0; s < negicc::InputCurves::kMaxSegs; ++s) out.a_seg[ch][s] *= scale[ch];
   }
   out.k_r *= scale[0];
   return true;
@@ -1979,6 +1996,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
 
   // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel (of
   // the whole grid, before any cell is left out below).
+  const std::vector<float> mu_full = mu, sigma_full = sigma;
   negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
   // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
   // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
@@ -2096,8 +2114,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // Auto's own result, no curves (the fallback of the steps below).
   auto fall_back = [&](const char* why) {
     out.fit.curves.k_r = 0.0f;
+    out.fit.curves.n_knots = 0;
     for (int ch = 0; ch < 2; ++ch) {
       out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
+      for (int s = 0; s < negicc::InputCurves::kMaxSegs; ++s) out.fit.curves.a_seg[ch][s] = 0.0f;
       out.shape_scale_ch[ch] = 0.0f;
     }
     out.fit.g = res.params.g;
@@ -2129,8 +2149,11 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     bool all = true;
     for (int ch = 0; ch < 2; ++ch) {
       t[ch] = shape_scale_of([&](float s) {
-        return negicc::curve_shape_ok(s * c.a[ch], s * c.k[ch], c.u_med[ch], c.ref[ch], table_n[ch],
-                                      fit_opts.max_dev_stops, c.u_hold(ch));
+        negicc::InputCurves c_try = c;
+        c_try.a[ch] *= s;
+        c_try.k[ch] *= s;
+        for (int seg = 0; seg < negicc::InputCurves::kMaxSegs; ++seg) c_try.a_seg[ch][seg] *= s;
+        return negicc::curve_shape_ok_ch(c_try, ch, table_n[ch], fit_opts.max_dev_stops);
       });
       all = all && t[ch] == 1.0f;
     }
@@ -2198,6 +2221,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       for (int ch = 0; ch < 2; ++ch) {
         out.fit.curves.a[ch] *= t[ch];
         out.fit.curves.k[ch] *= t[ch];
+        for (int seg = 0; seg < negicc::InputCurves::kMaxSegs; ++seg) out.fit.curves.a_seg[ch][seg] *= t[ch];
         out.shape_scale_ch[ch] *= t[ch];
       }
       remeter(e_new);
@@ -2213,6 +2237,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
   //    combined profile built from them in place: every later use of the bracket renders through it.
+  ParsedFilmProfile prof_uncurved = prof;
+  prof_uncurved.rebind_pointers();
   out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
   apply_input_curves(prof, out.fit.curves);
   out.x_hi = x;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
@@ -2227,6 +2253,835 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.neutral_export = m_neu.neutral_stats_on(cfg_comb, e_new, out.fit.g, out.fit.b);
   out.loss_export = out.parts_export.total();
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
+  if (const char* dump_path = std::getenv("NP_PHASE1_DUMP")) {
+    nlohmann::json j;
+    j["grid_w"] = stats.grid_w;
+    j["grid_h"] = stats.grid_h;
+    j["cells_total"] = (int)n;
+    j["cells_excluded"] = out.cells_excluded;
+    j["kept_idx"] = kept_idx;
+    j["g_lo"] = res.g_lo;
+    j["g_hi"] = res.g_hi;
+    j["e_norm"] = res.e_norm;
+    j["film_base"] = {cf.film_base[0], cf.film_base[1], cf.film_base[2]};
+    j["grid_rgb"] = stats.grid;
+
+    const negicc::CurveFrame cf_full = curve_frame_of(stats, merged, opts);
+    const negicc::InputCurves zero_c{};
+
+    const int bt = res.bootstrap_target_idx >= 0 ? res.bootstrap_target_idx : idx;
+    const ProfileData& bpd = (bt == idx) ? prof_uncurved.data : bundle.targets[bt].film_prof.data;
+    const negicc::PipelineConfig cfg_boot = make_pipeline_config(bpd, AUTO_KNEE, 1.0f, ENCODE_SRGB);
+    negicc::JointCurveModel m_boot(cfg_boot, cf_full);
+    m_boot.set_scene_neutral(res.bootstrap_params.e, res.bootstrap_params.g, res.bootstrap_params.b);
+    std::vector<float> lab_boot(n * 3, 0.0f), lab_fb_neu(n * 3, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+      const negicc::Lab l = m_boot.cell_lab((int)i, res.bootstrap_params.e, res.bootstrap_params.g,
+                                            res.bootstrap_params.b, zero_c);
+      lab_boot[3 * i + 0] = l.L;
+      lab_boot[3 * i + 1] = l.a;
+      lab_boot[3 * i + 2] = l.b;
+      const negicc::Lab l1 = m_boot.cell_lab((int)i, res.bootstrap_params.e, 1.0f, 1.0f, zero_c);
+      lab_fb_neu[3 * i + 0] = l1.L;
+      lab_fb_neu[3 * i + 1] = l1.a;
+      lab_fb_neu[3 * i + 2] = l1.b;
+    }
+    const BundleTarget& bt_tgt = bundle.targets[bt];
+    const float k_t_boot = (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f)) / bt_tgt.exposure_s;
+    j["bootstrap"] = {
+        {"target_idx", bt},
+        {"e", res.bootstrap_params.e},
+        {"g", res.bootstrap_params.g},
+        {"b", res.bootstrap_params.b},
+        {"e_min", res.bootstrap_e_min},
+        {"e_max", res.bootstrap_e_max},
+        {"tgt_min_g", bt_tgt.tgt_min_g},
+        {"tgt_max_g", bt_tgt.tgt_max_g},
+        {"k_t", k_t_boot},
+        {"mu", res.bootstrap_mu},
+        {"sigma", res.bootstrap_sigma},
+        {"lab", lab_boot},
+        {"lab_fb_neutral", lab_fb_neu},
+        {"raw_chroma_pre_gate_idx", m_boot.neu_pre_gate_idx()},
+        {"raw_chroma_post_gate_idx", m_boot.neu_idx()},
+    };
+
+    const negicc::PipelineConfig cfg_auto_full = make_pipeline_config(prof_uncurved.data, AUTO_KNEE, out.x_hi_auto, encoding);
+    negicc::JointCurveModel m_auto_full(cfg_auto_full, cf_full);
+    m_auto_full.set_scene_neutral(e_start, res.params.g, res.params.b);
+    std::vector<float> lab_auto(n * 3, 0.0f), lab_b5(n * 3, 0.0f);
+    negicc::JointCurveModel m_b5_full(cfg_comb, cf_full);
+    for (size_t i = 0; i < n; ++i) {
+      const negicc::Lab la = m_auto_full.cell_lab((int)i, e_start, res.params.g, res.params.b, zero_c);
+      lab_auto[3 * i + 0] = la.L;
+      lab_auto[3 * i + 1] = la.a;
+      lab_auto[3 * i + 2] = la.b;
+      const negicc::Lab lb = m_b5_full.cell_lab((int)i, e_new, out.fit.g, out.fit.b, zero_c);
+      lab_b5[3 * i + 0] = lb.L;
+      lab_b5[3 * i + 1] = lb.a;
+      lab_b5[3 * i + 2] = lb.b;
+    }
+    const BundleTarget& idx_tgt = bundle.targets[idx];
+    const float k_t_idx = (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f)) / idx_tgt.exposure_s;
+    j["auto_final"] = {
+        {"target_idx", idx},
+        {"e_int", e_int},
+        {"e_start", e_start},
+        {"g", res.params.g},
+        {"b", res.params.b},
+        {"x_hi", out.x_hi_auto},
+        {"target_L", target_L},
+        {"fit_target_L", fit_target_L},
+        {"tgt_min_g", idx_tgt.tgt_min_g},
+        {"tgt_max_g", idx_tgt.tgt_max_g},
+        {"k_t", k_t_idx},
+        {"mu", res.intent_mu},
+        {"sigma", res.intent_sigma},
+        {"lab_auto", lab_auto},
+        {"lab_b5", lab_b5},
+        {"raw_chroma_pre_gate_idx", m_auto_full.neu_pre_gate_idx()},
+        {"raw_chroma_post_gate_idx", m_auto_full.neu_idx()},
+    };
+    {
+      std::ofstream ofs(dump_path);
+      ofs << j.dump();
+    }
+    if (const char* ppm_path = std::getenv("NP_PHASE1_PREV_PPM")) {
+      const InnerCrop& ic = fr.inner_crop();
+      std::vector<uint8_t> prev_b5((size_t)ic.w * ic.h * 3);
+      float m_exp[9];
+      negicc::candidate_matrix(merged, e_new, out.fit.g, out.fit.b, m_exp);
+      negicc::RgbView crop_view = frame.crop_and_orient(ic.x0, ic.y0, ic.w, ic.h, 0, false, false);
+      negicc::RenderArgs ra{};
+      ra.in_view = &crop_view;
+      ra.width = ic.w;
+      ra.height = ic.h;
+      ra.matrix = m_exp;
+      ra.cfg = cfg_comb;
+      ra.out_type = 1;
+      ra.out = prev_b5.data();
+      negicc::cpu_render(ra);
+      std::ofstream pf(ppm_path, std::ios::binary);
+      pf << "P6\n" << ic.w << " " << ic.h << "\n255\n";
+      pf.write(reinterpret_cast<const char*>(prev_b5.data()), (std::streamsize)prev_b5.size());
+    }
+    if (const char* ex = std::getenv("NP_PHASE1_EXIT")) {
+      if (ex[0] == '1') std::exit(0);
+    }
+  }
+  if (std::getenv("NP_PHASE2_SWEEP") != nullptr || std::getenv("NP_PHASE2_ARM") != nullptr) {
+    // Restore bracket idx to its un-curved profile before evaluating Phase 2 / Phase 3 arms across brackets.
+    const negicc::InputCurves b5_curves = out.fit.curves;
+    const ConversionParams b5_params = out.params;
+    const float b5_q995 = out.x_hi_q995;
+    const float b5_med_L = out.median_L;
+    const negicc::LossParts b5_parts = out.parts_export;
+    prof = prof_uncurved;
+    prof.rebind_pointers();
+
+    struct AnchorEvalStats {
+      int n_anchors = 0;
+      int n_bands = 0;
+      int band_counts[4] = {0, 0, 0, 0};
+      float anchor_de = 0.0f;
+      float slope_a_L = 0.0f;
+      float slope_b_L = 0.0f;
+      float slope_cross = 0.0f;
+      float max_band_de = 0.0f;
+      float band_spread = 0.0f;
+    };
+
+    auto eval_anchor_stats = [&](const negicc::PipelineConfig& pcfg, float e_ev, float g_ev, float b_ev,
+                                 const float* mu_ref, const float* sig_ref, float c_max_ev, bool var_1b,
+                                 int b_mode) -> AnchorEvalStats {
+      AnchorEvalStats st{};
+      negicc::JointCurveModel m_ev(pcfg, cf, mu_ref, sig_ref);
+      const negicc::PipelineConfig cfg_id = make_pipeline_config(prof_uncurved.data, AUTO_KNEE, out.x_hi_auto, encoding);
+      negicc::JointCurveModel m_id(cfg_id, cf, mu_ref, sig_ref);
+      m_id.set_dinov3_neutral_anchors(e_start, res.params.g, res.params.b, mu_ref, sig_ref, c_max_ev,
+                                      var_1b, b_mode, 0, stats.grid_w);
+      const auto& a_idx = m_id.neu_idx();
+      const auto& a_band = m_id.neu_band();
+      st.n_anchors = (int)a_idx.size();
+      if (st.n_anchors == 0) return st;
+      const negicc::InputCurves zc{};
+      double sum_L = 0.0, sum_a = 0.0, sum_b = 0.0, sum_de = 0.0;
+      double b_sum_a[4] = {0, 0, 0, 0}, b_sum_b[4] = {0, 0, 0, 0};
+      std::vector<negicc::Lab> labs(st.n_anchors);
+      for (int j = 0; j < st.n_anchors; ++j) {
+        const negicc::Lab l = m_ev.cell_lab(a_idx[j], e_ev, g_ev, b_ev, zc);
+        labs[j] = l;
+        sum_L += l.L;
+        sum_a += l.a;
+        sum_b += l.b;
+        sum_de += std::sqrt((double)l.a * l.a + (double)l.b * l.b);
+        const int bk = std::clamp(a_band[j], 0, 3);
+        st.band_counts[bk]++;
+        b_sum_a[bk] += l.a;
+        b_sum_b[bk] += l.b;
+      }
+      st.anchor_de = (float)(sum_de / st.n_anchors);
+      const double mean_L = sum_L / st.n_anchors;
+      const double mean_a = sum_a / st.n_anchors;
+      const double mean_b = sum_b / st.n_anchors;
+      double s_LL = 0.0, s_La = 0.0, s_Lb = 0.0;
+      for (int j = 0; j < st.n_anchors; ++j) {
+        const double dL = labs[j].L - mean_L;
+        s_LL += dL * dL;
+        s_La += dL * (labs[j].a - mean_a);
+        s_Lb += dL * (labs[j].b - mean_b);
+      }
+      float b_mean_a[4] = {0, 0, 0, 0}, b_mean_b[4] = {0, 0, 0, 0};
+      for (int k = 0; k < 4; ++k) {
+        if (st.band_counts[k] >= 2) {
+          ++st.n_bands;
+          b_mean_a[k] = (float)(b_sum_a[k] / st.band_counts[k]);
+          b_mean_b[k] = (float)(b_sum_b[k] / st.band_counts[k]);
+          const float bde = std::sqrt(b_mean_a[k] * b_mean_a[k] + b_mean_b[k] * b_mean_b[k]);
+          st.max_band_de = std::max(st.max_band_de, bde);
+        }
+      }
+      if (st.n_bands >= 2 && s_LL > 1.0) {
+        const double denom = s_LL + 25.0 * st.n_anchors;
+        st.slope_a_L = (float)(100.0 * s_La / denom);
+        st.slope_b_L = (float)(100.0 * s_Lb / denom);
+        st.slope_cross = std::sqrt(st.slope_a_L * st.slope_a_L + st.slope_b_L * st.slope_b_L);
+      }
+      for (int k1 = 0; k1 < 4; ++k1) {
+        if (st.band_counts[k1] < 2) continue;
+        for (int k2 = k1 + 1; k2 < 4; ++k2) {
+          if (st.band_counts[k2] < 2) continue;
+          const float da = b_mean_a[k1] - b_mean_a[k2];
+          const float db = b_mean_b[k1] - b_mean_b[k2];
+          st.band_spread = std::max(st.band_spread, std::sqrt(da * da + db * db));
+        }
+      }
+      return st;
+    };
+
+    struct ArmEvalResult {
+      int target_idx = -1;
+      std::string target_name;
+      int level_used = 0;
+      bool fell_back = false;
+      float e = 1.0f, g = 1.0f, b = 1.0f, x_hi = 1.0f, q995 = 1.0f, median_L = 50.0f, cand_target_L = 50.0f;
+      float white_clip = 0.0f, exc_max = 0.0f, enc_pen = 0.0f, j_score = 0.0f;
+      float heldout_de_before = 0.0f, heldout_de_after = 0.0f;
+      AnchorEvalStats anchor_before{}, anchor_after{};
+      negicc::LossParts parts{};
+      negicc::InputCurves curves{};
+      std::vector<float> lab_grid;
+    };
+
+    auto ceil_of_target = [&](int t_i, float ceil_out[3]) {
+      profile_highlight_ceiling(bundle.targets[t_i].profcheck_output, ceil_out);
+    };
+
+    const negicc::CurveFrame cf_full = curve_frame_of(stats, merged, opts);
+    const float g_scale_enc = bundle.has_crosstalk ? 1.0f : res.e_norm;
+    const float g_lo_ref_enc = std::max(1.0f, res.g_lo) * g_scale_enc;
+    const float g_hi_ref_enc = std::max(std::max(1.0f, res.g_lo) + 1.0f, res.g_hi) * g_scale_enc;
+
+    auto run_dino_arm = [&](int t_cand, const negicc::DinoNeutralConfig& dcfg, const float* mu_in,
+                            const float* sig_in, bool compute_heldout) -> ArmEvalResult {
+      ArmEvalResult ar{};
+      ar.target_idx = t_cand;
+      ar.target_name = bundle.targets[t_cand].name;
+      const ParsedFilmProfile& base_p = bundle.targets[t_cand].film_prof;
+      const int tbl_n[2] = {base_p.data.in_trc_size[1], base_p.data.in_trc_size[2]};
+
+      float e_c0 = e_start, g_c0 = res.params.g, b_c0 = res.params.b;
+      float e_lo_c = e_lo_fit, e_hi_c = e_hi_fit;
+      float cand_L = fit_target_L;
+      Enclosure enc_c{};
+      const bool has_enc = bracket_enclosure(bundle.targets[t_cand], t_cand, g_lo_ref_enc, g_hi_ref_enc, enc_c);
+
+      if (t_cand != idx) {
+        float eb_screen[3] = {e_start * 0.25f, e_start * 4.0f, e_start};
+        for (const auto& s : res.screening) {
+          if (s.target_idx == t_cand) {
+            eb_screen[0] = s.e_lo;
+            eb_screen[1] = s.e_hi;
+            eb_screen[2] = has_enc ? enc_c.e_center : s.e_metered;
+            break;
+          }
+        }
+        ConversionParams p_pb{eb_screen[2], res.params.g, res.params.b, 1.0f};
+        fr.search(t_cand, mu_full, sigma_full, nullptr, eb_screen, p_pb, true);
+        e_c0 = p_pb.e;
+        g_c0 = p_pb.g;
+        b_c0 = p_pb.b;
+        e_lo_c = std::min(eb_screen[0], e_c0 * 0.25f);
+        e_hi_c = std::max(eb_screen[1], e_c0 * 4.0f);
+      }
+      ar.cand_target_L = cand_L;
+
+      float q_c = 0.0f;
+      float x_c = rolloff_at(base_p.data, e_c0, g_c0, b_c0, &q_c);
+      const negicc::PipelineConfig cfg_before = make_pipeline_config(base_p.data, AUTO_KNEE, x_c, encoding);
+      ar.anchor_before = eval_anchor_stats(cfg_before, e_c0, g_c0, b_c0, mu_in, sig_in, dcfg.c_max, dcfg.variant_1b,
+                                           dcfg.band_mode);
+
+      negicc::DinoNeutralConfig dcfg_run = dcfg;
+      dcfg_run.grid_w = stats.grid_w;
+      negicc::DinoNeutralFit df{};
+      ParsedFilmProfile comb_prof = base_p;
+      comb_prof.rebind_pointers();
+      float e_new_c = e_c0;
+      for (int pass = 0; pass < 2; ++pass) {
+        const negicc::PipelineConfig cfg_c = make_pipeline_config(base_p.data, AUTO_KNEE, x_c, encoding);
+        df = negicc::fit_dinov3_neutral_curves(cfg_c, cf, e_c0, g_c0, b_c0, mu_in, sig_in, cand_L, tbl_n, fit_opts,
+                                               e_lo_c, e_hi_c, dcfg_run);
+        bool clip_c = false;
+        for (int rp = 0; rp < 4; ++rp) {
+          e_new_c = negicc::remeter_e_median_in(make_pipeline_config(base_p.data, AUTO_KNEE, x_c, encoding), cf,
+                                                df.jf.curves, df.jf.e, e_lo_c, e_hi_c, df.jf.g, df.jf.b, cand_L, &clip_c);
+          apply_input_curves(comb_prof, base_p, negicc::anchor_curves(df.jf.curves, cf, e_new_c, df.jf.g, df.jf.b));
+          const float x_next = rolloff_at(comb_prof.data, e_new_c, df.jf.g, df.jf.b, &q_c);
+          if (x_next == x_c) break;
+          x_c = x_next;
+        }
+        // Shape check and scale if needed
+        for (int round = 0; round < 3; ++round) {
+          const negicc::InputCurves anc = negicc::anchor_curves(df.jf.curves, cf, e_new_c, df.jf.g, df.jf.b);
+          float sc[2] = {1.0f, 1.0f};
+          bool ok_all = true;
+          for (int ch = 0; ch < 2; ++ch) {
+            sc[ch] = shape_scale_of([&](float s) {
+              negicc::InputCurves c_try = anc;
+              c_try.a[ch] *= s;
+              c_try.k[ch] *= s;
+              for (int seg = 0; seg < negicc::InputCurves::kMaxSegs; ++seg) c_try.a_seg[ch][seg] *= s;
+              return negicc::curve_shape_ok_ch(c_try, ch, tbl_n[ch], fit_opts.max_dev_stops);
+            });
+            ok_all = ok_all && (sc[ch] == 1.0f);
+          }
+          if (ok_all) break;
+          for (int ch = 0; ch < 2; ++ch) {
+            df.jf.curves.a[ch] *= sc[ch];
+            df.jf.curves.k[ch] *= sc[ch];
+            for (int seg = 0; seg < negicc::InputCurves::kMaxSegs; ++seg) df.jf.curves.a_seg[ch][seg] *= sc[ch];
+          }
+          e_new_c = negicc::remeter_e_median_in(make_pipeline_config(base_p.data, AUTO_KNEE, x_c, encoding), cf,
+                                                df.jf.curves, e_new_c, e_lo_c, e_hi_c, df.jf.g, df.jf.b, cand_L, &clip_c);
+          apply_input_curves(comb_prof, base_p, negicc::anchor_curves(df.jf.curves, cf, e_new_c, df.jf.g, df.jf.b));
+          x_c = rolloff_at(comb_prof.data, e_new_c, df.jf.g, df.jf.b, &q_c);
+        }
+      }
+      ar.level_used = df.arm_used;
+      ar.fell_back = df.dropped_down;
+      ar.curves = negicc::anchor_curves(df.jf.curves, cf, e_new_c, df.jf.g, df.jf.b);
+      apply_input_curves(comb_prof, base_p, ar.curves);
+      ar.e = e_new_c;
+      ar.g = df.jf.g;
+      ar.b = df.jf.b;
+      ar.x_hi = x_c;
+      ar.q995 = q_c;
+
+      const negicc::PipelineConfig cfg_after = make_pipeline_config(comb_prof.data, AUTO_KNEE, x_c, encoding);
+      ar.median_L = negicc::grid_median_L(cfg_after, merged, ar.e, ar.g, ar.b, fit_grid, (int)nf);
+      ar.parts = negicc::grid_intent_loss_parts(cfg_after, merged, ar.e, ar.g, ar.b, fit_grid, (int)nf, mu_in, sig_in);
+      ar.anchor_after = eval_anchor_stats(cfg_after, ar.e, ar.g, ar.b, mu_in, sig_in, dcfg.c_max, dcfg.variant_1b,
+                                          dcfg.band_mode);
+
+      if (compute_heldout) {
+        negicc::DinoNeutralConfig hcfg = dcfg_run;
+        hcfg.checker_mode = 1;
+        const negicc::PipelineConfig cfg_h = make_pipeline_config(base_p.data, AUTO_KNEE, x_c, encoding);
+        const negicc::DinoNeutralFit hdf = negicc::fit_dinov3_neutral_curves(
+            cfg_h, cf, e_c0, g_c0, b_c0, mu_in, sig_in, cand_L, tbl_n, fit_opts, e_lo_c, e_hi_c, hcfg);
+        ar.heldout_de_before = hdf.heldout_de_before;
+        ar.heldout_de_after = hdf.heldout_de_after;
+      }
+
+      float m_exp[9];
+      negicc::candidate_matrix(merged, ar.e, ar.g, ar.b, m_exp);
+      std::vector<float> mats(m_exp, m_exp + 9);
+      float ceil_rgb[3];
+      ceil_of_target(t_cand, ceil_rgb);
+      const ClipStats cs = measure_highlight_clip(frame, fr.inner_crop(), mats, AUTO_KNEE, comb_prof.data, ceil_rgb, ar.x_hi)[0];
+      ar.white_clip = cs.white_clip;
+      ar.exc_max = max_excess(cs) * 100.0f;
+
+      if (has_enc && enc_c.e_min > 0.0f && enc_c.e_max > 0.0f) {
+        const float slack_shortfall = std::max(0.0f, -enc_c.slack_ev);
+        const float hi_exc = std::max(0.0f, std::log2(ar.e / enc_c.e_max));
+        const float sh_exc = enc_c.feasible ? std::max(0.0f, std::log2(enc_c.e_min / ar.e))
+                                            : std::max(0.0f, std::log2(enc_c.e_max / ar.e));
+        ar.enc_pen = 0.5f * slack_shortfall + hi_exc + sh_exc;
+      }
+      const float ov = std::max(0.0f, ar.q995 - 1.0f);
+      ar.j_score = (float)ar.parts.total() + 0.5f * ar.anchor_after.anchor_de + 40.0f * ov * ov +
+                   1.2f * ar.white_clip + 1.5f * ar.enc_pen;
+
+      ar.lab_grid.resize(n * 3, 0.0f);
+      negicc::JointCurveModel m_full(cfg_after, cf_full);
+      const negicc::InputCurves zc{};
+      for (size_t i = 0; i < n; ++i) {
+        const negicc::Lab l = m_full.cell_lab((int)i, ar.e, ar.g, ar.b, zc);
+        ar.lab_grid[3 * i + 0] = l.L;
+        ar.lab_grid[3 * i + 1] = l.a;
+        ar.lab_grid[3 * i + 2] = l.b;
+      }
+      return ar;
+    };
+
+    auto arm_to_json = [&](const ArmEvalResult& ar, bool include_lab) -> nlohmann::json {
+      nlohmann::json ja = {
+          {"target_idx", ar.target_idx},
+          {"target_name", ar.target_name},
+          {"level_used", ar.level_used},
+          {"fell_back", ar.fell_back},
+          {"e", ar.e},
+          {"g", ar.g},
+          {"b", ar.b},
+          {"x_hi", ar.x_hi},
+          {"q995", ar.q995},
+          {"median_L", ar.median_L},
+          {"cand_target_L", ar.cand_target_L},
+          {"white_clip", ar.white_clip},
+          {"exc_max", ar.exc_max},
+          {"enc_pen", ar.enc_pen},
+          {"j_score", ar.j_score},
+          {"loss_L", ar.parts.L},
+          {"loss_ab", ar.parts.ab},
+          {"loss_total", ar.parts.total()},
+          {"n_anchors", ar.anchor_after.n_anchors},
+          {"n_bands", ar.anchor_after.n_bands},
+          {"band_counts", {ar.anchor_after.band_counts[0], ar.anchor_after.band_counts[1],
+                           ar.anchor_after.band_counts[2], ar.anchor_after.band_counts[3]}},
+          {"anchor_de_before", ar.anchor_before.anchor_de},
+          {"anchor_de_after", ar.anchor_after.anchor_de},
+          {"heldout_de_before", ar.heldout_de_before},
+          {"heldout_de_after", ar.heldout_de_after},
+          {"slope_a_L_before", ar.anchor_before.slope_a_L},
+          {"slope_b_L_before", ar.anchor_before.slope_b_L},
+          {"slope_cross_before", ar.anchor_before.slope_cross},
+          {"max_band_de_before", ar.anchor_before.max_band_de},
+          {"band_spread_before", ar.anchor_before.band_spread},
+          {"slope_a_L_after", ar.anchor_after.slope_a_L},
+          {"slope_b_L_after", ar.anchor_after.slope_b_L},
+          {"slope_cross_after", ar.anchor_after.slope_cross},
+          {"max_band_de_after", ar.anchor_after.max_band_de},
+          {"band_spread_after", ar.anchor_after.band_spread},
+          {"n_knots", ar.curves.n_knots},
+          {"a_G", ar.curves.a[0]},
+          {"a_B", ar.curves.a[1]},
+          {"a_seg_G", {ar.curves.a_seg[0][0], ar.curves.a_seg[0][1], ar.curves.a_seg[0][2], ar.curves.a_seg[0][3],
+                       ar.curves.a_seg[0][4]}},
+          {"a_seg_B", {ar.curves.a_seg[1][0], ar.curves.a_seg[1][1], ar.curves.a_seg[1][2], ar.curves.a_seg[1][3],
+                       ar.curves.a_seg[1][4]}},
+          {"u_knot_G", {ar.curves.u_knot[0][0], ar.curves.u_knot[0][1], ar.curves.u_knot[0][2], ar.curves.u_knot[0][3]}},
+          {"u_knot_B", {ar.curves.u_knot[1][0], ar.curves.u_knot[1][1], ar.curves.u_knot[1][2], ar.curves.u_knot[1][3]}},
+      };
+      if (include_lab) ja["lab_grid"] = ar.lab_grid;
+      return ja;
+    };
+
+    // Collect admissible candidate brackets (always including idx).
+    std::vector<int> cand_targets;
+    cand_targets.push_back(idx);
+    for (const auto& s : res.screening) {
+      if (s.target_idx != idx) cand_targets.push_back(s.target_idx);
+    }
+    std::sort(cand_targets.begin(), cand_targets.end());
+
+    // Select the best bracket for a given arm under 2-ii:
+    // choose the bracket with the lowest anchor error; among brackets within tau_b of the best,
+    // break the tie by DINOv3 + white-clip score (j_score).
+    auto select_2ii = [&](const std::vector<ArmEvalResult>& per_t, float tau_b = 1.0f) -> ArmEvalResult {
+      int idx_pos = 0;
+      for (size_t i = 0; i < per_t.size(); ++i) {
+        if (per_t[i].target_idx == idx) {
+          idx_pos = (int)i;
+          break;
+        }
+      }
+      const ArmEvalResult& base_ar = per_t[idx_pos];
+      float min_de = base_ar.anchor_after.anchor_de;
+      for (size_t i = 0; i < per_t.size(); ++i) {
+        if (per_t[i].enc_pen <= base_ar.enc_pen + 0.15f) {
+          min_de = std::min(min_de, per_t[i].anchor_after.anchor_de);
+        }
+      }
+      int best_pos = idx_pos;
+      float best_j = (base_ar.anchor_after.anchor_de <= min_de + tau_b) ? (base_ar.j_score - tau_b) : 1e30f;
+      for (size_t i = 0; i < per_t.size(); ++i) {
+        if ((int)i == idx_pos) continue;
+        if (per_t[i].enc_pen > base_ar.enc_pen + 0.15f) continue;
+        if (per_t[i].anchor_after.anchor_de <= min_de + tau_b && per_t[i].j_score < best_j) {
+          best_j = per_t[i].j_score;
+          best_pos = (int)i;
+        }
+      }
+      return per_t[best_pos];
+    };
+
+    if (const char* sweep_path = std::getenv("NP_PHASE2_SWEEP")) {
+      nlohmann::json js;
+      js["grid_w"] = stats.grid_w;
+      js["grid_h"] = stats.grid_h;
+      js["auto_target_idx"] = idx;
+      js["auto_target_name"] = bundle.targets[idx].name;
+      js["target_L"] = target_L;
+      js["fit_target_L"] = fit_target_L;
+      js["mu"] = mu_full;
+      js["sigma"] = sigma_full;
+
+      // Baseline Auto (un-curved) and B5 (on idx)
+      {
+        const negicc::PipelineConfig cfg_au = make_pipeline_config(prof_uncurved.data, AUTO_KNEE, out.x_hi_auto, encoding);
+        AnchorEvalStats st_au = eval_anchor_stats(cfg_au, e_start, res.params.g, res.params.b, mu.data(), sigma.data(),
+                                                  6.0f, false, 0);
+        float m_au[9];
+        negicc::candidate_matrix(merged, e_start, res.params.g, res.params.b, m_au);
+        float ceil_au[3];
+        ceil_of_target(idx, ceil_au);
+        const ClipStats cs_au = measure_highlight_clip(frame, fr.inner_crop(), std::vector<float>(m_au, m_au + 9),
+                                                       AUTO_KNEE, prof_uncurved.data, ceil_au, out.x_hi_auto)[0];
+        std::vector<float> lab_au(n * 3, 0.0f);
+        negicc::JointCurveModel m_au_f(cfg_au, cf_full);
+        for (size_t i = 0; i < n; ++i) {
+          const negicc::Lab l = m_au_f.cell_lab((int)i, e_start, res.params.g, res.params.b, negicc::InputCurves{});
+          lab_au[3 * i + 0] = l.L;
+          lab_au[3 * i + 1] = l.a;
+          lab_au[3 * i + 2] = l.b;
+        }
+        js["Auto_uncurved"] = {
+            {"target_idx", idx},
+            {"e", e_start},
+            {"g", res.params.g},
+            {"b", res.params.b},
+            {"x_hi", out.x_hi_auto},
+            {"q995", q995_auto},
+            {"median_L", target_L},
+            {"white_clip", cs_au.white_clip},
+            {"loss_total", out.parts_auto.total()},
+            {"anchor_de", st_au.anchor_de},
+            {"slope_cross", st_au.slope_cross},
+            {"max_band_de", st_au.max_band_de},
+            {"band_spread", st_au.band_spread},
+            {"lab_grid", lab_au},
+        };
+
+        ParsedFilmProfile comb_b5 = prof_uncurved;
+        apply_input_curves(comb_b5, prof_uncurved, b5_curves);
+        const negicc::PipelineConfig cfg_b5 = make_pipeline_config(comb_b5.data, AUTO_KNEE, b5_params.shoulder, encoding);
+        AnchorEvalStats st_b5 = eval_anchor_stats(cfg_b5, b5_params.e, b5_params.g, b5_params.b, mu.data(), sigma.data(),
+                                                  6.0f, false, 0);
+        float m_b5[9];
+        negicc::candidate_matrix(merged, b5_params.e, b5_params.g, b5_params.b, m_b5);
+        const ClipStats cs_b5 = measure_highlight_clip(frame, fr.inner_crop(), std::vector<float>(m_b5, m_b5 + 9),
+                                                       AUTO_KNEE, comb_b5.data, ceil_au, b5_params.shoulder)[0];
+        std::vector<float> lab_b5(n * 3, 0.0f);
+        negicc::JointCurveModel m_b5_f(cfg_b5, cf_full);
+        for (size_t i = 0; i < n; ++i) {
+          const negicc::Lab l = m_b5_f.cell_lab((int)i, b5_params.e, b5_params.g, b5_params.b, negicc::InputCurves{});
+          lab_b5[3 * i + 0] = l.L;
+          lab_b5[3 * i + 1] = l.a;
+          lab_b5[3 * i + 2] = l.b;
+        }
+        js["B5_2i"] = {
+            {"target_idx", idx},
+            {"e", b5_params.e},
+            {"g", b5_params.g},
+            {"b", b5_params.b},
+            {"x_hi", b5_params.shoulder},
+            {"q995", b5_q995},
+            {"median_L", b5_med_L},
+            {"white_clip", cs_b5.white_clip},
+            {"loss_total", b5_parts.total()},
+            {"anchor_de", st_b5.anchor_de},
+            {"slope_cross", st_b5.slope_cross},
+            {"max_band_de", st_b5.max_band_de},
+            {"band_spread", st_b5.band_spread},
+            {"lab_grid", lab_b5},
+        };
+      }
+
+      auto fill_heldout = [&](ArmEvalResult& ar, const negicc::DinoNeutralConfig& dcfg, const float* mu_in,
+                              const float* sig_in) {
+        const int t_cand = ar.target_idx;
+        const ParsedFilmProfile& base_p = bundle.targets[t_cand].film_prof;
+        const int tbl_n[2] = {base_p.data.in_trc_size[1], base_p.data.in_trc_size[2]};
+        float e_c0 = e_start, g_c0 = res.params.g, b_c0 = res.params.b;
+        float e_lo_c = e_lo_fit, e_hi_c = e_hi_fit;
+        if (t_cand != idx) {
+          Enclosure enc_c{};
+          const bool has_enc = bracket_enclosure(bundle.targets[t_cand], t_cand, g_lo_ref_enc, g_hi_ref_enc, enc_c);
+          float eb_screen[3] = {e_start * 0.25f, e_start * 4.0f, e_start};
+          for (const auto& s : res.screening) {
+            if (s.target_idx == t_cand) {
+              eb_screen[0] = s.e_lo;
+              eb_screen[1] = s.e_hi;
+              eb_screen[2] = has_enc ? enc_c.e_center : s.e_metered;
+              break;
+            }
+          }
+          ConversionParams p_pb{eb_screen[2], res.params.g, res.params.b, 1.0f};
+          fr.search(t_cand, mu_full, sigma_full, nullptr, eb_screen, p_pb, true);
+          e_c0 = p_pb.e;
+          g_c0 = p_pb.g;
+          b_c0 = p_pb.b;
+          e_lo_c = std::min(eb_screen[0], e_c0 * 0.25f);
+          e_hi_c = std::max(eb_screen[1], e_c0 * 4.0f);
+        }
+        negicc::DinoNeutralConfig hcfg = dcfg;
+        hcfg.grid_w = stats.grid_w;
+        hcfg.checker_mode = 1;
+        const negicc::PipelineConfig cfg_h = make_pipeline_config(base_p.data, AUTO_KNEE, ar.x_hi, encoding);
+        const negicc::DinoNeutralFit hdf = negicc::fit_dinov3_neutral_curves(
+            cfg_h, cf, e_c0, g_c0, b_c0, mu_in, sig_in, ar.cand_target_L, tbl_n, fit_opts, e_lo_c, e_hi_c, hcfg);
+        ar.heldout_de_before = hdf.heldout_de_before;
+        ar.heldout_de_after = hdf.heldout_de_after;
+      };
+
+      const char* prev_prefix = std::getenv("NP_PHASE2_PREV_PREFIX");
+      auto save_arm_ppm = [&](const std::string& arm_name, const ArmEvalResult& ar) {
+        if (!prev_prefix || !prev_prefix[0]) return;
+        const int sel_t = ar.target_idx;
+        ParsedFilmProfile comb_p = bundle.targets[sel_t].film_prof;
+        apply_input_curves(comb_p, bundle.targets[sel_t].film_prof, ar.curves);
+        const InnerCrop& ic = fr.inner_crop();
+        std::vector<uint8_t> prev_arm((size_t)ic.w * ic.h * 3);
+        float m_exp[9];
+        negicc::candidate_matrix(merged, ar.e, ar.g, ar.b, m_exp);
+        negicc::RgbView crop_view = frame.crop_and_orient(ic.x0, ic.y0, ic.w, ic.h, 0, false, false);
+        negicc::RenderArgs ra{};
+        ra.in_view = &crop_view;
+        ra.width = ic.w;
+        ra.height = ic.h;
+        ra.matrix = m_exp;
+        ra.cfg = make_pipeline_config(comb_p.data, AUTO_KNEE, ar.x_hi, encoding);
+        ra.out_type = 1;
+        ra.out = prev_arm.data();
+        negicc::cpu_render(ra);
+        std::ofstream pf(std::string(prev_prefix) + "_" + arm_name + ".ppm", std::ios::binary);
+        pf << "P6\n" << ic.w << " " << ic.h << "\n255\n";
+        pf.write(reinterpret_cast<const char*>(prev_arm.data()), (std::streamsize)prev_arm.size());
+      };
+
+      ArmEvalResult saved_2auto_2ii{};
+      const char* lvl_names[4] = {"2A", "2B", "2C", "2auto"};
+      for (int lv = 1; lv <= 4; ++lv) {
+        negicc::DinoNeutralConfig dcfg{};
+        dcfg.force_arm = (lv == 4) ? 0 : lv;
+        dcfg.c_max = 6.0f;
+        dcfg.lambda = 0.25f;
+        dcfg.band_mode = 0;
+        std::vector<ArmEvalResult> per_t;
+        for (int tc : cand_targets) {
+          per_t.push_back(run_dino_arm(tc, dcfg, mu.data(), sigma.data(), false));
+        }
+        ArmEvalResult win_2ii = select_2ii(per_t);
+        for (auto& ar : per_t) {
+          if (ar.target_idx == idx) {
+            fill_heldout(ar, dcfg, mu.data(), sigma.data());
+            if (win_2ii.target_idx == idx) {
+              win_2ii.heldout_de_before = ar.heldout_de_before;
+              win_2ii.heldout_de_after = ar.heldout_de_after;
+            }
+            js[std::string(lvl_names[lv - 1]) + "_2i"] = arm_to_json(ar, true);
+            save_arm_ppm(std::string(lvl_names[lv - 1]) + "_2i", ar);
+          }
+        }
+        if (win_2ii.target_idx != idx) {
+          fill_heldout(win_2ii, dcfg, mu.data(), sigma.data());
+          for (auto& ar : per_t) {
+            if (ar.target_idx == win_2ii.target_idx) {
+              ar.heldout_de_before = win_2ii.heldout_de_before;
+              ar.heldout_de_after = win_2ii.heldout_de_after;
+            }
+          }
+        }
+        nlohmann::json j_brackets = nlohmann::json::array();
+        for (const auto& ar : per_t) j_brackets.push_back(arm_to_json(ar, false));
+        js["brackets"][lvl_names[lv - 1]] = j_brackets;
+        js[std::string(lvl_names[lv - 1]) + "_2ii"] = arm_to_json(win_2ii, true);
+        save_arm_ppm(std::string(lvl_names[lv - 1]) + "_2ii", win_2ii);
+        if (lv == 4) saved_2auto_2ii = win_2ii;
+      }
+
+      // Ablations on 2C (both 2-i and 2-ii): u_quarters (band_mode=1), C_max=8, C_max=4, variant_1b, lambda={0.1, 0.5}
+      {
+        std::vector<int> ab_targets = {idx};
+        if (saved_2auto_2ii.target_idx != idx) ab_targets.push_back(saved_2auto_2ii.target_idx);
+        auto run_ablation = [&](const std::string& tag, const negicc::DinoNeutralConfig& dcfg) {
+          std::vector<ArmEvalResult> per_t;
+          for (int tc : ab_targets) {
+            per_t.push_back(run_dino_arm(tc, dcfg, mu.data(), sigma.data(), false));
+          }
+          ArmEvalResult win_2ii = select_2ii(per_t);
+          for (auto& ar : per_t) {
+            if (ar.target_idx == idx) {
+              fill_heldout(ar, dcfg, mu.data(), sigma.data());
+              if (win_2ii.target_idx == idx) {
+                win_2ii.heldout_de_before = ar.heldout_de_before;
+                win_2ii.heldout_de_after = ar.heldout_de_after;
+              }
+              js[tag + "_2i"] = arm_to_json(ar, true);
+              save_arm_ppm(tag + "_2i", ar);
+            }
+          }
+          if (win_2ii.target_idx != idx) {
+            fill_heldout(win_2ii, dcfg, mu.data(), sigma.data());
+          }
+          js[tag + "_2ii"] = arm_to_json(win_2ii, true);
+          save_arm_ppm(tag + "_2ii", win_2ii);
+        };
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.band_mode = 1;  // u_quarters
+          run_ablation("2C_u", d);
+        }
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.c_max = 8.0f;
+          run_ablation("2C_C8", d);
+        }
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.c_max = 8.0f;
+          d.band_mode = 1;
+          run_ablation("2C_u_C8", d);
+        }
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.variant_1b = true;
+          run_ablation("2C_1b", d);
+        }
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.lambda = 0.10f;
+          run_ablation("2C_lam01", d);
+        }
+        {
+          negicc::DinoNeutralConfig d{};
+          d.force_arm = 3;
+          d.lambda = 0.50f;
+          run_ablation("2C_lam05", d);
+        }
+      }
+
+      // Phase 3: 1-step DINOv3 re-prediction after 2auto_2ii
+      {
+        negicc::DinoNeutralConfig dcfg{};
+        dcfg.force_arm = 0;
+        ArmEvalResult p2_win = saved_2auto_2ii;
+        const int t_p3 = p2_win.target_idx;
+        ParsedFilmProfile p3_prof_save = bundle.targets[t_p3].film_prof;
+        p3_prof_save.rebind_pointers();
+        apply_input_curves(bundle.targets[t_p3].film_prof, p2_win.curves);
+        std::vector<uint8_t> prev_p2;
+        fr.render_preview(t_p3, {p2_win.e, p2_win.g, p2_win.b, p2_win.x_hi}, prev_p2);
+        bundle.targets[t_p3].film_prof = p3_prof_save;
+        bundle.targets[t_p3].film_prof.rebind_pointers();
+
+        std::vector<float> mu_p3, sig_p3;
+        if (fr.predict(prev_p2, mu_p3, sig_p3)) {
+          filter_intent(mu_p3, sig_p3);
+          // Compute Jaccard overlap between Phase 1 anchors (mu) and Phase 3 anchors (mu_p3)
+          const negicc::PipelineConfig cfg_id = make_pipeline_config(prof_uncurved.data, AUTO_KNEE, out.x_hi_auto, encoding);
+          negicc::JointCurveModel m_s1(cfg_id, cf, mu.data(), sigma.data());
+          m_s1.set_dinov3_neutral_anchors(e_start, res.params.g, res.params.b, mu.data(), sigma.data(), 6.0f, false, 0,
+                                          0, stats.grid_w);
+          negicc::JointCurveModel m_s2(cfg_id, cf, mu_p3.data(), sig_p3.data());
+          m_s2.set_dinov3_neutral_anchors(e_start, res.params.g, res.params.b, mu_p3.data(), sig_p3.data(), 6.0f, false,
+                                          0, 0, stats.grid_w);
+          std::vector<int> s1 = m_s1.neu_idx(), s2 = m_s2.neu_idx();
+          std::sort(s1.begin(), s1.end());
+          std::sort(s2.begin(), s2.end());
+          std::vector<int> inter, uni;
+          std::set_intersection(s1.begin(), s1.end(), s2.begin(), s2.end(), std::back_inserter(inter));
+          std::set_union(s1.begin(), s1.end(), s2.begin(), s2.end(), std::back_inserter(uni));
+          const float jaccard = uni.empty() ? 1.0f : (float)inter.size() / (float)uni.size();
+
+          ArmEvalResult ar_p3 = run_dino_arm(t_p3, dcfg, mu_p3.data(), sig_p3.data(), true);
+          // Re-score ar_p3's anchor stats against Phase 1's anchor set so comparison is non-circular
+          ParsedFilmProfile comb_p3 = bundle.targets[t_p3].film_prof;
+          apply_input_curves(comb_p3, bundle.targets[t_p3].film_prof, ar_p3.curves);
+          const negicc::PipelineConfig cfg_p3 = make_pipeline_config(comb_p3.data, AUTO_KNEE, ar_p3.x_hi, encoding);
+          ar_p3.anchor_after = eval_anchor_stats(cfg_p3, ar_p3.e, ar_p3.g, ar_p3.b, mu.data(), sigma.data(), 6.0f, false, 0);
+          nlohmann::json jp3 = arm_to_json(ar_p3, true);
+          jp3["jaccard_s1_s2"] = jaccard;
+          jp3["s1_count"] = (int)s1.size();
+          jp3["s2_count"] = (int)s2.size();
+          js["P3_2auto_2ii"] = jp3;
+          save_arm_ppm("P3_2auto_2ii", ar_p3);
+        }
+      }
+
+      std::ofstream ofs(sweep_path);
+      ofs << js.dump();
+    }
+
+    const char* arm_env = std::getenv("NP_PHASE2_ARM");
+    const std::string arm_str = (arm_env && arm_env[0]) ? std::string(arm_env)
+                              : (std::getenv("NP_PHASE2_SWEEP") ? std::string("B5") : std::string("2auto_2ii"));
+    if (arm_str != "B5") {
+      negicc::DinoNeutralConfig dcfg{};
+      bool use_2ii = (arm_str.find("_2ii") != std::string::npos);
+      if (arm_str.rfind("2A", 0) == 0) dcfg.force_arm = 1;
+      else if (arm_str.rfind("2B", 0) == 0) dcfg.force_arm = 2;
+      else if (arm_str.rfind("2C", 0) == 0) dcfg.force_arm = 3;
+      else dcfg.force_arm = 0;
+      if (arm_str.find("_u") != std::string::npos) dcfg.band_mode = 1;
+      if (arm_str.find("_C8") != std::string::npos) dcfg.c_max = 8.0f;
+
+      ArmEvalResult chosen_ar{};
+      if (use_2ii) {
+        std::vector<ArmEvalResult> per_t;
+        for (int tc : cand_targets) per_t.push_back(run_dino_arm(tc, dcfg, mu.data(), sigma.data(), false));
+        chosen_ar = select_2ii(per_t);
+      } else {
+        chosen_ar = run_dino_arm(idx, dcfg, mu.data(), sigma.data(), false);
+      }
+      const int sel_t = chosen_ar.target_idx;
+      out.selected_target_idx = sel_t;
+      out.fit.curves = chosen_ar.curves;
+      out.fit.g = chosen_ar.g;
+      out.fit.b = chosen_ar.b;
+      out.x_hi = chosen_ar.x_hi;
+      out.x_hi_q995 = chosen_ar.q995;
+      out.rolloff_measured = (encoding == ENCODE_SRGB);
+      out.params = {chosen_ar.e, chosen_ar.g, chosen_ar.b, chosen_ar.x_hi};
+      out.median_L = chosen_ar.median_L;
+      out.parts_export = chosen_ar.parts;
+      out.loss_export = chosen_ar.parts.total();
+      out.fallback = chosen_ar.fell_back ? "dino_fallback" : nullptr;
+      e_new = chosen_ar.e;
+      apply_input_curves(bundle.targets[sel_t].film_prof, out.fit.curves);
+      if (const char* ppm_path = std::getenv("NP_PHASE2_PREV_PPM")) {
+        const InnerCrop& ic = fr.inner_crop();
+        std::vector<uint8_t> prev_arm((size_t)ic.w * ic.h * 3);
+        float m_exp[9];
+        negicc::candidate_matrix(merged, chosen_ar.e, chosen_ar.g, chosen_ar.b, m_exp);
+        negicc::RgbView crop_view = frame.crop_and_orient(ic.x0, ic.y0, ic.w, ic.h, 0, false, false);
+        negicc::RenderArgs ra{};
+        ra.in_view = &crop_view;
+        ra.width = ic.w;
+        ra.height = ic.h;
+        ra.matrix = m_exp;
+        ra.cfg = make_pipeline_config(bundle.targets[sel_t].film_prof.data, AUTO_KNEE, chosen_ar.x_hi, encoding);
+        ra.out_type = 1;
+        ra.out = prev_arm.data();
+        negicc::cpu_render(ra);
+        std::ofstream pf(ppm_path, std::ios::binary);
+        pf << "P6\n" << ic.w << " " << ic.h << "\n255\n";
+        pf.write(reinterpret_cast<const char*>(prev_arm.data()), (std::streamsize)prev_arm.size());
+      }
+    } else {
+      apply_input_curves(prof, b5_curves);
+    }
+    if (const char* ex = std::getenv("NP_PHASE2_EXIT")) {
+      if (ex[0] == '1') std::exit(0);
+    }
+  }
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
