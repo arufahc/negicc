@@ -323,10 +323,48 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
   std::vector<float> tmp(lum);
   const double ref = (double)percentile_f32(tmp, 99.9);
   const float black_level = (float)(kBlackFraction * ref);
-  std::vector<uint8_t> near_carrier(n);
-  for (size_t i = 0; i < n; ++i) near_carrier[i] = lum[i] < (float)(0.01 * ref);
-  dilate(near_carrier, w, h, std::max(1, (kCarrierPad * w + 512) / 1024));
-  const std::vector<uint8_t>* carrier = white_light ? &near_carrier : nullptr;
+  std::vector<uint8_t> near_carrier;
+  const std::vector<uint8_t>* carrier = nullptr;
+  if (white_light) {
+    // On a white-light scan, bare light seen through a holder's aperture borders the dark carrier rather than the image
+    // border. Keep only dark components (lum < 0.01 * ref) that reach the image border, hold black holder pixels, and
+    // cover >= 1% of the work image before dilating by kCarrierPad * w / 1024 px, so dense interior picture highlights
+    // on a pre-cropped scan are not mistaken for a carrier.
+    std::vector<uint8_t> dark(n, 0);
+    const float dark_level = (float)(0.01 * ref);
+    bool any_black = false;
+    for (size_t i = 0; i < n; ++i) {
+      dark[i] = lum[i] < dark_level;
+      any_black |= lum[i] < black_level;
+    }
+    if (any_black) {
+      std::vector<int> dlabels;
+      const int nd = label_components(dark, w, h, dlabels);
+      if (nd > 1) {
+        const std::vector<uint8_t> dedge = border_labels(dlabels, w, h, nd);
+        std::vector<long> darea(nd, 0);
+        std::vector<uint8_t> has_blk(nd, 0);
+        for (size_t i = 0; i < n; ++i) {
+          darea[dlabels[i]]++;
+          if (lum[i] < black_level) has_blk[dlabels[i]] = 1;
+        }
+        std::vector<uint8_t> dkeep(nd, 0);
+        bool any_carrier = false;
+        for (int l = 1; l < nd; ++l) {
+          if (dedge[l] && has_blk[l] && (double)darea[l] >= 0.01 * (double)n) {
+            dkeep[l] = 1;
+            any_carrier = true;
+          }
+        }
+        if (any_carrier) {
+          near_carrier.resize(n);
+          for (size_t i = 0; i < n; ++i) near_carrier[i] = dkeep[dlabels[i]];
+          dilate(near_carrier, w, h, std::max(1, (kCarrierPad * w + 512) / 1024));
+          carrier = &near_carrier;
+        }
+      }
+    }
+  }
   std::vector<uint8_t> black(n), light(n);
   float clip_c[3] = {(float)kClipLevel, (float)kClipLevel, (float)kClipLevel};
   if (white_light) {
