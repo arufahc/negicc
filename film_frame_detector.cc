@@ -2174,13 +2174,13 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         continue;
       } else if (cps[x] >= 0.5f) {
         if (run >= 2) return 1;
-        if (run == 1 && hard == 1 && d <= 3 && maxd >= d + 9) {
+        if (run == 1 && hard == 1 && d <= 3 && d + 6 < maxd) {
           int hrun = 0;
-          for (int k = 4; k < 10; ++k) {
+          for (int k = d + 1; k < maxd && hrun < 6; ++k) {
             const int xk = edge_x + dir * k;
             if (xk < 0 || xk >= VW || cvalid[xk] < 0.9f) break;
             if (cnon[xk] >= 0.85f && col_frac(v, xk, (int)fr.y0, (int)fr.y1, is_hard) >= 0.9f) ++hrun;
-            else break;
+            else if (hrun > 0 || k > 3) break;
           }
           if (hrun == 6) return 2;
         }

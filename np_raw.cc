@@ -223,6 +223,13 @@ bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
   return true;
 }
 
+static void replace_image(LibRaw* proc, ushort(*buf)[4], int w, int h) {
+  proc->free_image();
+  proc->imgdata.image = buf;
+  proc->imgdata.sizes.iwidth = w;
+  proc->imgdata.sizes.iheight = h;
+}
+
 // LibRaw's half-size readout does not serve an X-Trans RAW (filters 9): its 2x2 quads hold several photosites of one
 // colour, which LibRaw's OpenMP loop writes in a race, and the quads of only green photosites get no R or B. Replaces
 // LibRaw's full-size readout in proc with a half-size image of each quad's mean per colour; R and B of the green-only
@@ -258,10 +265,30 @@ static bool shrink_xtrans(LibRaw* proc) {
       for (int k = 0; k < 3; k += 2) px[k] = x > 0 && x + 1 < hw ? (l[k] + r[k]) >> 1 : (x > 0 ? l : r)[k];
     }
   }
-  proc->free_image();
-  proc->imgdata.image = half;
-  proc->imgdata.sizes.iwidth = hw;
-  proc->imgdata.sizes.iheight = hh;
+  replace_image(proc, half, hw, hh);
+  return true;
+}
+
+static bool shrink_rgb(LibRaw* proc) {
+  const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
+  const int hw = (w + 1) / 2, hh = (h + 1) / 2;
+  const ushort(*full)[4] = proc->imgdata.image;
+  ushort(*half)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*half));
+  if (!half) return false;
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < hh; ++y) {
+    const int y1 = std::min(2 * y + 1, h - 1);
+    for (int x = 0; x < hw; ++x) {
+      const int x1 = std::min(2 * x + 1, w - 1);
+      const ushort* a = full[(size_t)(2 * y) * w + 2 * x];
+      const ushort* b = full[(size_t)(2 * y) * w + x1];
+      const ushort* c = full[(size_t)y1 * w + 2 * x];
+      const ushort* d = full[(size_t)y1 * w + x1];
+      for (int k = 0; k < 3; ++k)
+        half[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
+    }
+  }
+  replace_image(proc, half, hw, hh);
   return true;
 }
 
@@ -418,6 +445,12 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
+struct LibRawCallbackAccess : LibRaw {
+  static void set_pre_preinterpolate(LibRaw* p, process_step_callback cb) {
+    static_cast<LibRawCallbackAccess*>(p)->callbacks.pre_preinterpolate_cb = cb;
+  }
+};
+
 // Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
 // half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
 // caller. False when LibRaw cannot process it.
@@ -426,41 +459,31 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   const bool xtrans = proc->imgdata.idata.filters == 9;
   proc->imgdata.params.half_size = (half && !xtrans) ? 1 : 0;
   proc->imgdata.params.user_qual = qual;
-  const int prev_threads = xtrans ? omp_get_max_threads() : 0;
-  if (xtrans) omp_set_num_threads(1);
+  // LibRaw's raw2image_start leaves IO.shrink = 0 when filters == 0 (a linear DNG), and its half-size readout does not
+  // serve an X-Trans RAW (filters == 9, where 2x2 quads lack R or B photosites depending on margin parity). For a
+  // half-size decode of either, shrink the full readout in pre_preinterpolate_cb and clear filters before
+  // dcraw_process demosaics and converts to Rec.2020, as pre_interpolate does for a Bayer half-size decode, avoiding a
+  // full-resolution single-threaded xtrans_interpolate on the analysis and balance passes.
+  if (half && (xtrans || linear)) {
+    LibRawCallbackAccess::set_pre_preinterpolate(proc, [](void* ctx) {
+      LibRaw* self = static_cast<LibRaw*>(ctx);
+      const bool ok = self->imgdata.idata.filters == 9 ? shrink_xtrans(self) : shrink_rgb(self);
+      if (ok) {
+        self->imgdata.sizes.width = self->imgdata.sizes.iwidth;
+        self->imgdata.sizes.height = self->imgdata.sizes.iheight;
+        self->imgdata.idata.filters = 0;
+      }
+    });
+  }
+  const bool single_thread = xtrans && !half;
+  const int prev_threads = single_thread ? omp_get_max_threads() : 0;
+  if (single_thread) omp_set_num_threads(1);
   const int ret = proc->dcraw_process();
-  if (xtrans) omp_set_num_threads(prev_threads);
+  if (single_thread) omp_set_num_threads(prev_threads);
+  LibRawCallbackAccess::set_pre_preinterpolate(proc, nullptr);
   if (ret != LIBRAW_SUCCESS) {
     log_error("Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
-  }
-  // LibRaw's raw2image_start leaves IO.shrink = 0 when filters == 0 (a linear DNG), and its half-size readout does not
-  // serve an X-Trans RAW (filters == 9, where 2x2 quads lack R or B photosites depending on margin parity); decode the
-  // full size and shrink it here so the half-size callers (balance, analyse and their halved ROIs) see the exact 2x2
-  // mean of the full-size decode. (With half_size = 1 on a Bayer RAW, dcraw_process itself clears filters.)
-  if (half && (linear || xtrans)) {
-    const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
-    const int hw = (w + 1) / 2, hh = (h + 1) / 2;
-    const ushort(*full)[4] = proc->imgdata.image;
-    ushort(*shrunk)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*shrunk));
-    if (!shrunk) return false;
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < hh; ++y) {
-      const int y1 = std::min(2 * y + 1, h - 1);
-      for (int x = 0; x < hw; ++x) {
-        const int x1 = std::min(2 * x + 1, w - 1);
-        const ushort* a = full[(size_t)(2 * y) * w + 2 * x];
-        const ushort* b = full[(size_t)(2 * y) * w + x1];
-        const ushort* c = full[(size_t)y1 * w + 2 * x];
-        const ushort* d = full[(size_t)y1 * w + x1];
-        for (int k = 0; k < 3; ++k)
-          shrunk[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
-      }
-    }
-    proc->free_image();
-    proc->imgdata.image = shrunk;
-    proc->imgdata.sizes.iwidth = hw;
-    proc->imgdata.sizes.iheight = hh;
   }
   return true;
 }
