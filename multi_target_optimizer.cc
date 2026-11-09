@@ -1870,21 +1870,22 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // the whole grid, before any cell is left out below).
   negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
   // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
-  // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
-  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both limits are
-  // assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below the base.
+  // bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of the film
+  // itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops below the
+  // base) are not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both
+  // limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below it.
   constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
   std::vector<uint16_t> kept_grid;
   const uint16_t* fit_grid = stats.grid.data();
   size_t nf = n;
   out.cells_total = (int)n;
-  if (opts.fallback_crop && opts.film_base_is_rebate && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
+  if (opts.fallback_crop && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
     std::vector<float> kept_mu, kept_sigma;
     const float base_lim[2] = {cf.film_base[1] * std::exp2(-kBaseCellStops), cf.film_base[2] * std::exp2(-kBaseCellStops)};
     const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
     for (size_t i = 0; i < n; ++i) {
       const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
-      if ((g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+      if ((opts.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
       kept_grid.insert(kept_grid.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
       kept_mu.insert(kept_mu.end(), mu.begin() + i * 3, mu.begin() + i * 3 + 3);
       kept_sigma.insert(kept_sigma.end(), sigma.begin() + i * 3, sigma.begin() + i * 3 + 3);
@@ -1927,11 +1928,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                                   fit_grid, (int)nf, mu.data(), sigma.data());
 
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
-  // measured) widened to hold Auto's E with a margin that scales with the gain bounds (0.1 + 0.5 * max(s_g, s_b)
-  // stops), so a gain change has E room to hold Auto's median L*; without a range, 2 stops either side of Auto's E.
-  const float s_gain = std::max(fit_opts.g_bound_stops > 0.0f ? fit_opts.g_bound_stops : 0.0f,
-                                fit_opts.b_bound_stops > 0.0f ? fit_opts.b_bound_stops : 0.0f);
-  const float margin = std::exp2(0.1f + 0.5f * s_gain);
+  // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
+  // and the curves may not take E further out of the bracket's range than Auto took it; without a range, 2 stops
+  // either side of Auto's E. A result whose E would need to leave them falls back to Auto's (step 2).
+  const float margin = std::exp2(0.1f);
   if (res.e_range_lo > 0.0f && res.e_range_hi >= res.e_range_lo) {
     out.e_lo = std::min(res.e_range_lo, e_int / margin);
     out.e_hi = std::max(res.e_range_hi, e_int * margin);

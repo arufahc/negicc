@@ -870,14 +870,11 @@ inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const 
   if (!enclosed) {
     lo = e_lo;
     hi = e_hi;
-    const float L_lo = median_at(lo), L_hi = median_at(hi);
-    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E (0.05 L* LUT tolerance)
-    if (dark_at_lo || L_hi - 0.05f > target_L) {      // or lighter even at the highest
+    const bool dark_at_lo = median_at(lo) < target_L;  // darker than the target even at the lowest E
+    if (dark_at_lo || median_at(hi) > target_L) {      // or lighter even at the highest
       if (clipped) *clipped = true;
-      return L_lo < target_L ? lo : hi;
+      return dark_at_lo ? lo : hi;
     }
-    if (L_lo <= target_L) return lo;
-    if (L_hi >= target_L) return hi;
   }
   for (int i = 0; i < iters; ++i) {
     const float mid = std::sqrt(lo * hi);
