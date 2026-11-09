@@ -47,9 +47,13 @@ constexpr int kBaseWorkSize = 512;        // long side (px) of the image the thi
 constexpr float kBaseMinFrameConf = 0.5f; // the detection's confidence below which its patch is not used (the frame
                                           // detection neg_process falls back from at the same level)
 
+constexpr const char* kFilmBaseSourceRebate = "rebate";
+constexpr const char* kFilmBaseSourceStatistics = "statistics";
+
 struct FilmBaseDetection {
   bool found = false;
-  std::string source;                 // "rebate" or "statistics" when found
+  std::string source;                 // kFilmBaseSourceRebate or kFilmBaseSourceStatistics when found
+  bool is_rebate() const { return found && source == kFilmBaseSourceRebate; }
   double rgb[3] = {0.0, 0.0, 0.0};    // the film base: decode_rgb through the crosstalk matrix
   double decode_rgb[3] = {0.0, 0.0, 0.0};  // in the half-size decode's units
   float thinnest[3] = {0.0f, 0.0f, 0.0f};  // the thinnest film (2.), in the decode's units

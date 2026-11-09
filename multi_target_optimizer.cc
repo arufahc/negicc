@@ -1638,7 +1638,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
       std::vector<FixedPointResult> res_adaptive;
       if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
-      if (const FixedPointResult* win_res = winner(res_adaptive, true, tourney_score)) {
+      if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
         ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
@@ -1870,9 +1870,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // the whole grid, before any cell is left out below).
   negicc::CurveFrame cf = curve_frame_of(stats, merged, opts);
   // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
-  // bare light: G and B within kBaseCellStops of the base) or holder-dark (G more than kHolderCellStops below it) are
-  // not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both limits are
-  // assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below the base.
+  // bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of the film
+  // itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops below the
+  // base) are not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both
+  // limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below it.
   constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
   std::vector<uint16_t> kept_grid;
   const uint16_t* fit_grid = stats.grid.data();
@@ -1884,7 +1885,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
     for (size_t i = 0; i < n; ++i) {
       const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
-      if ((g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+      if ((opts.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
       kept_grid.insert(kept_grid.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
       kept_mu.insert(kept_mu.end(), mu.begin() + i * 3, mu.begin() + i * 3 + 3);
       kept_sigma.insert(kept_sigma.end(), sigma.begin() + i * 3, sigma.begin() + i * 3 + 3);

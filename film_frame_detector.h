@@ -162,3 +162,10 @@ bool detect_film_frame(const FilmImage& image, const FrameDetectionParams& param
 // samples of a channel. Used for the base patch on the image the caller converts (e.g. the decoded crop in its own
 // colour space; shift the patch's centre by the crop's origin, and halve it for a half-size decode).
 bool film_sample_patch(const FilmImage& image, const FilmRect& patch, float rgb[3], float* std_d);
+
+namespace negicc {
+
+// Square dilation by r pixels (separable distance scans).
+void dilate(std::vector<uint8_t>& m, int W, int H, int r);
+
+}  // namespace negicc

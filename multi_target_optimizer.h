@@ -121,9 +121,12 @@ struct ParamSearchOptions {
   bool film_base_from_scan = false;
   bool verbose = true;
   // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
-  // rebate, bare light or holder. The curve fit then leaves out the grid cells at the film base's level or holder-dark
-  // (fit_input_curves_after_search).
+  // rebate, bare light or holder. The curve fit then leaves out the grid cells that are holder-dark, and (when
+  // film_base_is_rebate is true) those at the film base's level (fit_input_curves_after_search). When the film base
+  // came from the scan's statistics (the 99.5th percentile of the film itself), its level is the thinnest picture
+  // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;
+  bool film_base_is_rebate = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.

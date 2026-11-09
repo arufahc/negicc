@@ -507,7 +507,9 @@ void components(const std::vector<uint8_t>& mask, const std::vector<uint8_t>& in
 }
 
 // Square dilation by r pixels (separable distance scans). Allocates: two canvas byte masks.
-void dilate(std::vector<uint8_t>& m, int W, int H, int r) {
+}  // namespace
+
+void negicc::dilate(std::vector<uint8_t>& m, int W, int H, int r) {
   std::vector<uint8_t> t(m.size(), 0), o(m.size(), 0);
   for (int y = 0; y < H; ++y) {
     int last = -1000000;
@@ -535,6 +537,9 @@ void dilate(std::vector<uint8_t>& m, int W, int H, int r) {
   }
   m.swap(o);
 }
+
+namespace {
+using negicc::dilate;
 
 // Histogram of log2 values in 0.05 stop bins over [-16, 0.6), lightly smoothed, with mode finding.
 struct ModeHist {
@@ -2173,7 +2178,18 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
       } else if (run == 0 && d < 3 && cp[x] < 0.7f) {
         continue;
       } else if (cps[x] >= 0.5f) {
-        return run >= 2 ? 1 : 0;
+        if (run >= 2) return 1;
+        if (run == 1 && hard == 1 && d <= 3 && d + 6 < maxd) {
+          int hrun = 0;
+          for (int k = d + 1; k < maxd && hrun < 6; ++k) {
+            const int xk = edge_x + dir * k;
+            if (xk < 0 || xk >= VW || cvalid[xk] < 0.9f) break;
+            if (cnon[xk] >= 0.85f && col_frac(v, xk, (int)fr.y0, (int)fr.y1, is_hard) >= 0.9f) ++hrun;
+            else if (hrun > 0 || k > 3 || cps[xk] >= 0.5f) break;
+          }
+          if (hrun == 6) return 2;
+        }
+        return 0;
       }
     }
     if (run >= 2) return hard > base ? 2 : 1;

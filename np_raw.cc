@@ -223,6 +223,21 @@ bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
   return true;
 }
 
+static ushort (*alloc_half(const LibRaw* proc, int& hw, int& hh))[4] {
+  hw = (proc->imgdata.sizes.iwidth + 1) / 2;
+  hh = (proc->imgdata.sizes.iheight + 1) / 2;
+  return (ushort(*)[4])::calloc((size_t)hw * hh, sizeof(ushort[4]));
+}
+
+// Replaces proc's image with img (w x h, ::calloc-allocated; proc takes ownership: LibRaw 0.22 free_image
+// calls ::free on an unregistered buffer).
+static void replace_image(LibRaw* proc, ushort (*img)[4], int w, int h) {
+  proc->free_image();
+  proc->imgdata.image = img;
+  proc->imgdata.sizes.iwidth = w;
+  proc->imgdata.sizes.iheight = h;
+}
+
 // LibRaw's half-size readout does not serve an X-Trans RAW (filters 9): its 2x2 quads hold several photosites of one
 // colour, which LibRaw's OpenMP loop writes in a race, and the quads of only green photosites get no R or B. Replaces
 // LibRaw's full-size readout in proc with a half-size image of each quad's mean per colour; R and B of the green-only
@@ -230,9 +245,9 @@ bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
 // memory.
 static bool shrink_xtrans(LibRaw* proc) {
   const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
-  const int hw = (w + 1) / 2, hh = (h + 1) / 2;
+  int hw = 0, hh = 0;
   const ushort(*full)[4] = proc->imgdata.image;
-  ushort(*half)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*half));
+  ushort(*half)[4] = alloc_half(proc, hw, hh);
   if (!half) return false;
   #pragma omp parallel for schedule(static)
   for (int y = 0; y < hh; ++y) {
@@ -258,10 +273,7 @@ static bool shrink_xtrans(LibRaw* proc) {
       for (int k = 0; k < 3; k += 2) px[k] = x > 0 && x + 1 < hw ? (l[k] + r[k]) >> 1 : (x > 0 ? l : r)[k];
     }
   }
-  proc->free_image();
-  proc->imgdata.image = half;
-  proc->imgdata.sizes.iwidth = hw;
-  proc->imgdata.sizes.iheight = hh;
+  replace_image(proc, half, hw, hh);
   return true;
 }
 
@@ -418,13 +430,44 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
-// Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
-// half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
-// caller. False when LibRaw cannot process it.
+struct LibRawRgb : LibRaw {
+  using LibRaw::calloc;
+  using LibRaw::convert_to_rgb;
+  using LibRaw::libraw_internal_data;
+
+  static void to_rgb(LibRaw* proc) {
+    auto& out = (proc->*(&LibRawRgb::libraw_internal_data)).output_data;
+    if (!out.histogram) {
+      out.histogram = (int(*)[LIBRAW_HISTOGRAM_SIZE])(proc->*(&LibRawRgb::calloc))(1, sizeof(*out.histogram) * 4);
+    }
+    proc->imgdata.sizes.width = proc->imgdata.sizes.iwidth;
+    proc->imgdata.sizes.height = proc->imgdata.sizes.iheight;
+    (proc->*(&LibRawRgb::convert_to_rgb))();
+  }
+};
+
+// Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: half-size
+// decode—LibRaw's half-size readout on Bayer, raw2image_ex + shrink_xtrans + convert_to_rgb on X-Trans, or a 2x2
+// downsample on a linear DNG; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set
+// by the caller. False when LibRaw cannot process it.
 static bool decode_white_light(LibRaw* proc, bool half, int qual) {
-  proc->imgdata.params.half_size = half ? 1 : 0;
-  proc->imgdata.params.user_qual = qual;
+  const bool linear = !proc->imgdata.idata.filters;
   const bool xtrans = proc->imgdata.idata.filters == 9;
+  proc->imgdata.params.half_size = (half && !xtrans) ? 1 : 0;
+  proc->imgdata.params.user_qual = qual;
+  if (half && xtrans) {
+    // LibRaw's half-size readout does not serve an X-Trans RAW (filters == 9): read the full mosaic with raw2image_ex,
+    // shrink each 2x2 quad in shrink_xtrans (as read_half_size does) and convert directly to linear Rec.2020 without
+    // running single-threaded xtrans_interpolate on the analysis and balance passes.
+    const int ret = proc->raw2image_ex(1);
+    if (ret != LIBRAW_SUCCESS || !shrink_xtrans(proc)) {
+      log_error("Cannot process the white-light decode: %s\n",
+                ret != LIBRAW_SUCCESS ? libraw_strerror(ret) : "out of memory");
+      return false;
+    }
+    LibRawRgb::to_rgb(proc);
+    return true;
+  }
   const int prev_threads = xtrans ? omp_get_max_threads() : 0;
   if (xtrans) omp_set_num_threads(1);
   const int ret = proc->dcraw_process();
@@ -432,6 +475,32 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   if (ret != LIBRAW_SUCCESS) {
     log_error("Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
+  }
+  // LibRaw's raw2image_start leaves IO.shrink = 0 when filters == 0 (a linear DNG), so dcraw_process decodes at full
+  // sensor dimensions even when half_size = 1. Downsample 2x2 here so callers receive half-resolution coordinates.
+  if (half && linear) {
+    const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
+    int hw = 0, hh = 0;
+    const ushort(*full)[4] = proc->imgdata.image;
+    ushort(*shrunk)[4] = alloc_half(proc, hw, hh);
+    if (!shrunk) {
+      log_error("Cannot process the white-light decode: out of memory\n");
+      return false;
+    }
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < hh; ++y) {
+      const int y1 = std::min(2 * y + 1, h - 1);
+      for (int x = 0; x < hw; ++x) {
+        const int x1 = std::min(2 * x + 1, w - 1);
+        const ushort* a = full[(size_t)(2 * y) * w + 2 * x];
+        const ushort* b = full[(size_t)(2 * y) * w + x1];
+        const ushort* c = full[(size_t)y1 * w + 2 * x];
+        const ushort* d = full[(size_t)y1 * w + x1];
+        for (int k = 0; k < 3; ++k)
+          shrunk[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
+      }
+    }
+    replace_image(proc, shrunk, hw, hh);
   }
   return true;
 }
@@ -506,7 +575,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   int ret;
   LibRaw* proc = unpacked_proc;
   if (!proc) {
-    proc = new LibRaw();
+    proc = new LibRawRgb();
     log_info("Loading RAW file %s\n", fn.c_str());
     if ((ret = open_and_unpack_raw_file(proc, fn)) != LIBRAW_SUCCESS) {
       log_error("Cannot open/unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
@@ -522,6 +591,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   if (linear_dng && proc->imgdata.idata.colors == 4) {
     log_info("Linear DNG with 4 samples a pixel: the first three taken as RGB, the fourth (e.g. infrared) left out\n");
     proc->imgdata.idata.colors = 3;
+    proc->imgdata.rawdata.iparams.colors = 3;
   }
   if (!(proc->imgdata.idata.filters || proc->imgdata.idata.colors == 1 || linear_dng)) {
     log_info("Only Bayer-pattern RAW files supported, sorry....\n");

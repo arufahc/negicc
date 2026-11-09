@@ -1237,6 +1237,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           // --roi auto that fell back to the whole image: the grid may hold rebate, bare light or holder.
           ParamSearchOptions fit_search_opts = opts;
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
+          fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
                                              scan.auto_res, fit_opts, export_encoding, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
