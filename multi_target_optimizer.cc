@@ -2389,6 +2389,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       float slope_cross = 0.0f;
       float max_band_de = 0.0f;
       float band_spread = 0.0f;
+      float low_rc_spread = 0.0f;
     };
 
     auto eval_anchor_stats = [&](const negicc::PipelineConfig& pcfg, float e_ev, float g_ev, float b_ev,
@@ -2400,11 +2401,46 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       negicc::JointCurveModel m_id(cfg_id, cf, mu_ref, sig_ref);
       m_id.set_dinov3_neutral_anchors(e_start, res.params.g, res.params.b, mu_ref, sig_ref, c_max_ev,
                                       var_1b, b_mode, 0, stats.grid_w);
+      const negicc::InputCurves zc{};
+      // Compute Step 3 low-raw-chroma cross-band spread over m_neu.neu_pre_gate_idx()
+      {
+        const auto& rc_idx = m_neu.neu_pre_gate_idx();
+        std::vector<float> rc_a[4], rc_b[4];
+        for (int idx_rc : rc_idx) {
+          const negicc::Lab l0 = m_id.cell_lab(idx_rc, e_start, res.params.g, res.params.b, zc);
+          if (l0.L <= 6.5f || l0.L > 95.0f) continue;
+          const int bk = (l0.L <= 22.0f) ? 0 : ((l0.L <= 45.0f) ? 1 : ((l0.L <= 70.0f) ? 2 : 3));
+          const negicc::Lab lev = m_ev.cell_lab(idx_rc, e_ev, g_ev, b_ev, zc);
+          rc_a[bk].push_back(lev.a);
+          rc_b[bk].push_back(lev.b);
+        }
+        auto med_v = [](std::vector<float>& v) -> float {
+          if (v.empty()) return 0.0f;
+          std::sort(v.begin(), v.end());
+          return v[v.size() / 2];
+        };
+        float med_rc_a[4] = {}, med_rc_b[4] = {};
+        bool has_rc_b[4] = {};
+        for (int k = 0; k < 4; ++k) {
+          if ((int)rc_a[k].size() >= 3) {
+            has_rc_b[k] = true;
+            med_rc_a[k] = med_v(rc_a[k]);
+            med_rc_b[k] = med_v(rc_b[k]);
+          }
+        }
+        for (int k1 = 0; k1 < 4; ++k1) {
+          if (!has_rc_b[k1]) continue;
+          for (int k2 = k1 + 1; k2 < 4; ++k2) {
+            if (!has_rc_b[k2]) continue;
+            st.low_rc_spread = std::max(st.low_rc_spread,
+                                        std::hypot(med_rc_a[k1] - med_rc_a[k2], med_rc_b[k1] - med_rc_b[k2]));
+          }
+        }
+      }
       const auto& a_idx = m_id.neu_idx();
       const auto& a_band = m_id.neu_band();
       st.n_anchors = (int)a_idx.size();
       if (st.n_anchors == 0) return st;
-      const negicc::InputCurves zc{};
       double sum_L = 0.0, sum_a = 0.0, sum_b = 0.0, sum_de = 0.0;
       double b_sum_a[4] = {0, 0, 0, 0}, b_sum_b[4] = {0, 0, 0, 0};
       std::vector<negicc::Lab> labs(st.n_anchors);
@@ -2659,14 +2695,19 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
           {"slope_cross_before", ar.anchor_before.slope_cross},
           {"max_band_de_before", ar.anchor_before.max_band_de},
           {"band_spread_before", ar.anchor_before.band_spread},
+          {"low_rc_spread_before", ar.anchor_before.low_rc_spread},
           {"slope_a_L_after", ar.anchor_after.slope_a_L},
           {"slope_b_L_after", ar.anchor_after.slope_b_L},
           {"slope_cross_after", ar.anchor_after.slope_cross},
           {"max_band_de_after", ar.anchor_after.max_band_de},
           {"band_spread_after", ar.anchor_after.band_spread},
+          {"low_rc_spread_after", ar.anchor_after.low_rc_spread},
           {"n_knots", ar.curves.n_knots},
           {"a_G", ar.curves.a[0]},
           {"a_B", ar.curves.a[1]},
+          {"k_G", ar.curves.k[0]},
+          {"k_B", ar.curves.k[1]},
+          {"k_R", ar.curves.k_r},
           {"a_seg_G", {ar.curves.a_seg[0][0], ar.curves.a_seg[0][1], ar.curves.a_seg[0][2], ar.curves.a_seg[0][3],
                        ar.curves.a_seg[0][4]}},
           {"a_seg_B", {ar.curves.a_seg[1][0], ar.curves.a_seg[1][1], ar.curves.a_seg[1][2], ar.curves.a_seg[1][3],
@@ -2761,6 +2802,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
             {"slope_cross", st_au.slope_cross},
             {"max_band_de", st_au.max_band_de},
             {"band_spread", st_au.band_spread},
+            {"low_rc_spread", st_au.low_rc_spread},
             {"lab_grid", lab_au},
         };
 
@@ -2795,6 +2837,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
             {"slope_cross", st_b5.slope_cross},
             {"max_band_de", st_b5.max_band_de},
             {"band_spread", st_b5.band_spread},
+            {"low_rc_spread", st_b5.low_rc_spread},
             {"lab_grid", lab_b5},
         };
       }
@@ -2861,9 +2904,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
         pf.write(reinterpret_cast<const char*>(prev_arm.data()), (std::streamsize)prev_arm.size());
       };
 
+      const bool fast_f = (std::getenv("NP_PHASE2_FAST_F") != nullptr);
       ArmEvalResult saved_2auto_2ii{};
       const char* lvl_names[4] = {"2A", "2B", "2C", "2auto"};
-      for (int lv = 1; lv <= 4; ++lv) {
+      for (int lv = (fast_f ? 4 : 1); lv <= 4; ++lv) {
         negicc::DinoNeutralConfig dcfg{};
         dcfg.force_arm = (lv == 4) ? 0 : lv;
         dcfg.c_max = 6.0f;
@@ -2902,7 +2946,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
         if (lv == 4) saved_2auto_2ii = win_2ii;
       }
 
-      // Ablations on 2C (both 2-i and 2-ii): u_quarters (band_mode=1), C_max=8, C_max=4, variant_1b, lambda={0.1, 0.5}
+      // Ablations on 2C (both 2-i and 2-ii) and F1/F2/F3 arms
       {
         std::vector<int> ab_targets = {idx};
         if (saved_2auto_2ii.target_idx != idx) ab_targets.push_back(saved_2auto_2ii.target_idx);
@@ -2929,47 +2973,56 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
           js[tag + "_2ii"] = arm_to_json(win_2ii, true);
           save_arm_ppm(tag + "_2ii", win_2ii);
         };
-        {
-          negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.band_mode = 1;  // u_quarters
-          run_ablation("2C_u", d);
+        if (!fast_f) {
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.band_mode = 1;  // u_quarters
+            run_ablation("2C_u", d);
+          }
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.c_max = 8.0f;
+            run_ablation("2C_C8", d);
+          }
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.c_max = 8.0f;
+            d.band_mode = 1;
+            run_ablation("2C_u_C8", d);
+          }
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.variant_1b = true;
+            run_ablation("2C_1b", d);
+          }
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.lambda = 0.10f;
+            run_ablation("2C_lam01", d);
+          }
+          {
+            negicc::DinoNeutralConfig d{};
+            d.force_arm = 3;
+            d.lambda = 0.50f;
+            run_ablation("2C_lam05", d);
+          }
         }
-        {
+        const char* f_names[4] = {"F1", "F2", "F1F2", "F1F2F3"};
+        for (int fm = 1; fm <= 4; ++fm) {
           negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.c_max = 8.0f;
-          run_ablation("2C_C8", d);
-        }
-        {
-          negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.c_max = 8.0f;
-          d.band_mode = 1;
-          run_ablation("2C_u_C8", d);
-        }
-        {
-          negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.variant_1b = true;
-          run_ablation("2C_1b", d);
-        }
-        {
-          negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.lambda = 0.10f;
-          run_ablation("2C_lam01", d);
-        }
-        {
-          negicc::DinoNeutralConfig d{};
-          d.force_arm = 3;
-          d.lambda = 0.50f;
-          run_ablation("2C_lam05", d);
+          d.force_arm = 0;
+          d.f_mode = fm;
+          run_ablation(f_names[fm - 1], d);
         }
       }
 
       // Phase 3: 1-step DINOv3 re-prediction after 2auto_2ii
-      {
+      if (!fast_f) {
         negicc::DinoNeutralConfig dcfg{};
         dcfg.force_arm = 0;
         ArmEvalResult p2_win = saved_2auto_2ii;
@@ -3030,6 +3083,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       else if (arm_str.rfind("2B", 0) == 0) dcfg.force_arm = 2;
       else if (arm_str.rfind("2C", 0) == 0) dcfg.force_arm = 3;
       else dcfg.force_arm = 0;
+      if (arm_str.rfind("F1F2F3", 0) == 0) dcfg.f_mode = 4;
+      else if (arm_str.rfind("F1F2", 0) == 0) dcfg.f_mode = 3;
+      else if (arm_str.rfind("F2", 0) == 0) dcfg.f_mode = 2;
+      else if (arm_str.rfind("F1", 0) == 0) dcfg.f_mode = 1;
       if (arm_str.find("_u") != std::string::npos) dcfg.band_mode = 1;
       if (arm_str.find("_C8") != std::string::npos) dcfg.c_max = 8.0f;
 

@@ -906,6 +906,7 @@ class JointCurveModel {
   int active_bands() const { return n_active_bands_; }
   const int* band_counts() const { return band_counts_; }
   float u_knot(int ch, int k) const { return u_knot_[ch][k]; }
+  bool use_rc_joint() const { return use_rc_joint_; }
 
   // Phase 1 / Phase 2: Select neutral anchors from DINOv3 prediction (mu_sel, sigma_sel) on the statistics grid:
   //   hypot(mu_a - med_a, mu_b - med_b) + |sigma_ab| < c_max
@@ -913,7 +914,8 @@ class JointCurveModel {
   void set_dinov3_neutral_anchors(float e0, float g0, float b0, const float* mu_sel, const float* sigma_sel,
                                   float c_max = 6.0f, bool variant_1b = false, int band_mode = 0,
                                   int checker_mode = 0, int grid_w = 32, int min_band_anchors = 2,
-                                  float g_cal_min = 0.0f, float g_cal_max = 0.0f, float g_cal_scale = 0.0f) {
+                                  float g_cal_min = 0.0f, float g_cal_max = 0.0f, float g_cal_scale = 0.0f,
+                                  int f_mode = 0) {
     neu_idx_.clear();
     neu_band_.clear();
     neu_pre_gate_idx_.clear();
@@ -928,6 +930,9 @@ class JointCurveModel {
     c_a_ = c_b_ = 0.0f;
     if (f_.n <= 0 || !mu_sel || !sigma_sel) return;
 
+    const float min_L_floor = (f_mode >= 1) ? 6.5f : 2.0f;
+    const int min_anc = (f_mode >= 1) ? std::max(5, min_band_anchors) : min_band_anchors;
+
     const InputCurves zero_c = anchored(InputCurves{}, e0, g0, b0);
     std::vector<Lab> lab0(f_.n);
     std::vector<bool> valid(f_.n, false);
@@ -938,7 +943,7 @@ class JointCurveModel {
     for (int i = 0; i < f_.n; ++i) {
       lab0[i] = cell_lab(i, e0, g0, b0, zero_c);
       if (!std::isfinite(lab0[i].L) || !std::isfinite(lab0[i].a) || !std::isfinite(lab0[i].b)) continue;
-      if (lab0[i].L <= 2.0f || lab0[i].L >= 99.5f) continue;
+      if (lab0[i].L <= min_L_floor || lab0[i].L >= 99.5f) continue;
       const uint16_t r16 = f_.grid[3 * i + 0], g16 = f_.grid[3 * i + 1], b16 = f_.grid[3 * i + 2];
       if (std::max({r16, g16, b16}) >= 65500 || std::min({r16, g16, b16}) <= 1) continue;
       if (g_cal_max > g_cal_min && g_cal_scale > 0.0f) {
@@ -983,12 +988,101 @@ class JointCurveModel {
       }
     }
 
+    bool is_strict_band[4] = {false, false, false, false};
+    int n_strict_bands = 0;
+    for (int b = 0; b < 4; ++b) {
+      if ((int)b_sel_all[b].size() >= min_anc) {
+        is_strict_band[b] = true;
+        ++n_strict_bands;
+      }
+    }
+
+    // F2 (f_mode >= 2): Extend correction to unanchored dark/bright tone halves using collinearity-gated
+    // low-raw-chroma scene-neutral cells when at least one band has strict DINOv3 anchors, then apply the
+    // B0 -> B3 collinearity gate on midtone bands B1, B2.
+    use_rc_joint_ = false;
+    if ((f_mode == 2 || f_mode == 3 || f_mode == 4) && n_strict_bands >= 1 && band_mode == 0) {
+      const bool has_dark = (is_strict_band[0] || is_strict_band[1]);
+      const bool only_b0 = (n_strict_bands == 1 && is_strict_band[0]);
+      if (!has_dark || only_b0) {
+        use_rc_joint_ = true;
+        JointCurveModel m_rc(cfg_, f_);
+        m_rc.set_scene_neutral(e0, g0, b0);
+        std::vector<int> rc_bands[4];
+        for (int idx : m_rc.neu_idx()) {
+          if (!valid[idx]) continue;
+          const float L = lab0[idx].L;
+          const int b = (L <= 22.0f) ? 0 : ((L <= 45.0f) ? 1 : ((L <= 70.0f) ? 2 : 3));
+          rc_bands[b].push_back(idx);
+        }
+        if (!has_dark && (int)rc_bands[0].size() >= 16) {
+          b_sel_all[0] = rc_bands[0];
+        }
+        if (only_b0) {
+          for (int b : {1, 2}) {
+            if ((int)b_sel_all[b].size() < min_anc && (int)rc_bands[b].size() >= min_anc) {
+              b_sel_all[b] = rc_bands[b];
+            }
+          }
+        }
+      }
+      if ((int)b_sel_all[0].size() >= 16 && (int)b_sel_all[3].size() >= min_anc &&
+          (int)(b_sel_all[0].size() + b_sel_all[3].size()) >= 24) {
+        double bL[4] = {}, ba[4] = {}, bb[4] = {};
+        for (int b = 0; b < 4; ++b) {
+          if (b_sel_all[b].empty()) continue;
+          for (int idx : b_sel_all[b]) {
+            bL[b] += lab0[idx].L;
+            ba[b] += lab0[idx].a;
+            bb[b] += lab0[idx].b;
+          }
+          const double inv = 1.0 / (double)b_sel_all[b].size();
+          bL[b] *= inv;
+          ba[b] *= inv;
+          bb[b] *= inv;
+        }
+        if (bL[3] - bL[0] > 25.0) {
+          for (int b = 1; b <= 2; ++b) {
+            if ((int)b_sel_all[b].size() < min_anc) continue;
+            const double t = std::clamp((bL[b] - bL[0]) / (bL[3] - bL[0]), 0.0, 1.0);
+            const double a_hat = ba[0] + t * (ba[3] - ba[0]);
+            const double b_hat = bb[0] + t * (bb[3] - bb[0]);
+            if (std::hypot(ba[b] - a_hat, bb[b] - b_hat) > 5.5) {
+              b_sel_all[b].clear();
+              is_strict_band[b] = false;
+            }
+          }
+        }
+      }
+    }
+
+    int n_strict_kept = 0;
+    int n_strict_total = 0;
+    double strict_mu_a = 0.0, strict_mu_b = 0.0;
+    for (int b = 0; b < 4; ++b) {
+      if (is_strict_band[b] && (int)b_sel_all[b].size() >= min_anc) {
+        ++n_strict_kept;
+        double ba = 0.0, bb = 0.0;
+        for (int idx : b_sel_all[b]) {
+          ba += mu_sel[3 * idx + 1];
+          bb += mu_sel[3 * idx + 2];
+          ++n_strict_total;
+        }
+        strict_mu_a += ba / (double)b_sel_all[b].size();
+        strict_mu_b += bb / (double)b_sel_all[b].size();
+      }
+    }
+    if (n_strict_kept > 0) {
+      strict_mu_a /= (double)n_strict_kept;
+      strict_mu_b /= (double)n_strict_kept;
+    }
+
     std::vector<int> b_fit[4], b_hold[4];
     int active_b[4] = {};
     for (int b = 0; b < 4; ++b) {
       band_counts_[b] = (int)b_sel_all[b].size();
       if (bands_all[b].empty() || ((int)bands_all[b].size() < 8 && n_valid >= 64)) continue;
-      if ((int)b_sel_all[b].size() < min_band_anchors) continue;
+      if ((int)b_sel_all[b].size() < min_anc) continue;
       if (checker_mode == 1 && grid_w > 0) {
         for (int idx : b_sel_all[b]) {
           const int r_idx = idx / grid_w, c_idx = idx % grid_w;
@@ -1038,6 +1132,25 @@ class JointCurveModel {
     if (wh_sum > 0.0f) {
       for (float& w : holdout_w_) w /= wh_sum;
     }
+    // F1 (f_mode == 1 or 3): Target the common DINOv3 offset o = (strict_mu_a, strict_mu_b) across all bands.
+    // F3 (f_mode == 4): Damp the common offset toward (0, 0) when broad multi-band / high-count neutral coverage
+    // indicates a true neutral daylight/chart scene, while preserving full o on low-key / golden-hour scenes.
+    if (f_mode == 1 || f_mode == 3) {
+      c_a_ = static_cast<float>(strict_mu_a);
+      c_b_ = static_cast<float>(strict_mu_b);
+    } else if (f_mode == 4) {
+      const bool broad_neutral = (n_strict_kept >= 3 && n_strict_total >= 64) || (n_strict_total >= 150);
+      const double w_o = broad_neutral ? 0.35 : 1.0;
+      double oa = w_o * strict_mu_a;
+      double ob = w_o * strict_mu_b;
+      const double mag = std::hypot(oa, ob);
+      if (mag > 2.5) {
+        oa *= 2.5 / mag;
+        ob *= 2.5 / mag;
+      }
+      c_a_ = static_cast<float>(oa);
+      c_b_ = static_cast<float>(ob);
+    }
     // Ensure knots are strictly ordered: 0 > u_knot[ch][0] > u_knot[ch][1] > ...
     for (int ch = 0; ch < 2; ++ch) {
       float prev = -0.05f;
@@ -1052,7 +1165,7 @@ class JointCurveModel {
     w_quad_ = (n_active_bands_ >= 3) ? 0.25f : 0.0f;
   }
 
-  // Per-anchor-cell neutrality residuals (target a* = b* = 0 after cLUT) with band-equalized weights w_j.
+  // Per-anchor-cell neutrality residuals (target a* = c_a_, b* = c_b_ after cLUT) with band-equalized weights w_j.
   double dinov3_residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
     const int m = (int)neu_idx_.size();
     r.assign(2 * m, 0.0);
@@ -1063,8 +1176,8 @@ class JointCurveModel {
       const int i = neu_idx_[j];
       const double sw = std::sqrt(static_cast<double>(neu_w_[j]));
       const Lab l = cell_lab(i, e, g, b, c);
-      r[2 * j + 0] = sw * static_cast<double>(l.a);
-      r[2 * j + 1] = sw * static_cast<double>(l.b);
+      r[2 * j + 0] = sw * static_cast<double>(l.a - c_a_);
+      r[2 * j + 1] = sw * static_cast<double>(l.b - c_b_);
       sum += r[2 * j + 0] * r[2 * j + 0] + r[2 * j + 1] * r[2 * j + 1];
     }
     return sum;
@@ -1078,7 +1191,7 @@ class JointCurveModel {
     double sum = 0.0;
     for (int j = 0; j < m; ++j) {
       const Lab l = cell_lab(neu_idx_[j], e, g, b, c);
-      sum += static_cast<double>(neu_w_[j]) * std::hypot(l.a, l.b);
+      sum += static_cast<double>(neu_w_[j]) * std::hypot(l.a - c_a_, l.b - c_b_);
     }
     return static_cast<float>(sum);
   }
@@ -1091,12 +1204,12 @@ class JointCurveModel {
     double sum = 0.0;
     for (int j = 0; j < m; ++j) {
       const Lab l = cell_lab(holdout_idx_[j], e, g, b, c);
-      sum += static_cast<double>(holdout_w_[j]) * std::hypot(l.a, l.b);
+      sum += static_cast<double>(holdout_w_[j]) * std::hypot(l.a - c_a_, l.b - c_b_);
     }
     return static_cast<float>(sum);
   }
 
-  // Mean across active bands of hypot(mean_a_k, mean_b_k) at (e, g, b, shape).
+  // Mean across active bands of hypot(mean_a_k - c_a_, mean_b_k - c_b_) at (e, g, b, shape).
   float anchor_band_mean_de(float e, float g, float b, const InputCurves& shape) {
     const int m = (int)neu_idx_.size();
     if (m <= 0 || n_active_bands_ <= 0) return 0.0f;
@@ -1108,8 +1221,8 @@ class JointCurveModel {
       const int bk = (j < (int)neu_band_.size()) ? neu_band_[j] : -1;
       if (bk < 0 || bk >= 4) continue;
       const Lab l = cell_lab(neu_idx_[j], e, g, b, c);
-      ba[bk] += l.a;
-      bb[bk] += l.b;
+      ba[bk] += (l.a - c_a_);
+      bb[bk] += (l.b - c_b_);
       bc[bk] += 1;
     }
     double sum = 0.0;
@@ -1203,6 +1316,7 @@ class JointCurveModel {
   int n_active_bands_ = 0;
   int band_counts_[4] = {0, 0, 0, 0};
   float u_knot_[2][InputCurves::kMaxKnots] = {};
+  bool use_rc_joint_ = false;
 };
 
 struct DinoNeutralConfig {
@@ -1220,6 +1334,7 @@ struct DinoNeutralConfig {
   float g_cal_min = 0.0f;
   float g_cal_max = 0.0f;
   float g_cal_scale = 0.0f;
+  int f_mode = 0;               // 0: 2auto, 1: F1, 2: F2, 3: F1+F2, 4: F1+F2+F3
 };
 
 struct DinoNeutralFit {
@@ -1236,6 +1351,150 @@ struct DinoNeutralFit {
   bool dropped_down = false;
 };
 
+inline void apply_highlight_cliff_desurge(const PipelineConfig& cfg, const CurveFrame& f, float e, float g, float b,
+                                          float max_dev_stops, InputCurves& curves) {
+  if (curves.n_knots > 0 || !cfg.profile.has_profile || !cfg.profile.in_trc[0] || !cfg.profile.in_trc[1] ||
+      !cfg.profile.in_trc[2] || cfg.profile.in_trc_size[0] <= 1 || cfg.profile.in_trc_size[1] <= 1 ||
+      cfg.profile.in_trc_size[2] <= 1 || f.n < 64) {
+    return;
+  }
+  const ProfileData& base = cfg.profile;
+  const float aG1 = curves.a[0], aB1 = curves.a[1];
+  const InputCurves c_p1 = curves;
+  float m_p1[9];
+  candidate_matrix(f.merged, e, g, b, m_p1);
+
+  auto render_p2 = [&](float kR, float aG, float kG, float aB, float kB, std::vector<Lab>& out_lab) -> bool {
+    InputCurves cand = c_p1;
+    cand.a[0] = aG;
+    cand.k[0] = kG;
+    cand.a[1] = aB;
+    cand.k[1] = kB;
+    cand.k_r = kR;
+    if (!curve_shape_ok(cand.a[0], cand.k[0], cand.u_med[0], cand.ref[0], base.in_trc_size[1], max_dev_stops,
+                        cand.u_hold(0)) ||
+        !curve_shape_ok(cand.a[1], cand.k[1], cand.u_med[1], cand.ref[1], base.in_trc_size[2], max_dev_stops,
+                        cand.u_hold(1)) ||
+        !curve_shape_ok(0.0f, cand.k_r, 0.0f, cand.ref_r, base.in_trc_size[0], max_dev_stops, cand.u_hold_r())) {
+      return false;
+    }
+    CombinedProfile comb_p2;
+    comb_p2.build(base, cand);
+    PipelineConfig cfg_p2 = cfg;
+    cfg_p2.profile = comb_p2.data;
+    set_shoulder(cfg_p2, 1.0f);
+    out_lab.resize(f.n);
+    for (int i = 0; i < f.n; ++i) {
+      out_lab[i] = linear_srgb_to_lab(to_display(cfg_p2, convert_pixel_linear(cfg_p2, m_p1, f.grid + 3 * i)));
+    }
+    return true;
+  };
+
+  std::vector<Lab> lab_p1;
+  if (!render_p2(0.0f, aG1, 0.0f, aB1, 0.0f, lab_p1)) return;
+  std::vector<int> blo, bhi;
+  std::vector<float> l_lo, a_lo, b_lo_v, l_hi, a_hi, b_hi_v;
+  for (int i = 0; i < f.n; ++i) {
+    if (f.n >= 640 && f.n % 32 == 0) {
+      const int gh = f.n / 32, r_idx = i / 32, c_idx = i % 32;
+      if (r_idx < 1 || r_idx >= gh - 1 || c_idx < 2 || c_idx >= 30) continue;
+    }
+    if (lab_p1[i].L >= 58.0f && lab_p1[i].L < 70.0f) {
+      blo.push_back(i);
+      l_lo.push_back(lab_p1[i].L);
+      a_lo.push_back(lab_p1[i].a);
+      b_lo_v.push_back(lab_p1[i].b);
+    } else if (lab_p1[i].L >= 75.0f && lab_p1[i].L <= 91.5f) {
+      bhi.push_back(i);
+      l_hi.push_back(lab_p1[i].L);
+      a_hi.push_back(lab_p1[i].a);
+      b_hi_v.push_back(lab_p1[i].b);
+    }
+  }
+  auto med_vec = [](std::vector<float> v) -> float {
+    if (v.empty()) return 0.0f;
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+  };
+  const float med_L_lo = med_vec(l_lo), med_b_lo = med_vec(b_lo_v);
+  const float med_a_hi = med_vec(a_hi), med_b_hi = med_vec(b_hi_v);
+  if (blo.size() < 8 || bhi.size() < 10 || !(med_b_lo < -1.0f && med_a_hi < -2.5f && (med_b_hi - med_b_lo) > 4.0f)) {
+    return;
+  }
+  std::vector<int> sel_cyan, sel_warm;
+  double sum_L_cyan = 0.0;
+  for (int idx : bhi) {
+    if (lab_p1[idx].a <= med_a_hi) {
+      sel_cyan.push_back(idx);
+      sum_L_cyan += lab_p1[idx].L;
+    } else {
+      sel_warm.push_back(idx);
+    }
+  }
+  if (sel_cyan.empty()) return;
+  const double mean_L1_cyan = sum_L_cyan / sel_cyan.size();
+  const double target_L_hi = med_L_lo + 0.60 * (mean_L1_cyan - med_L_lo);
+  const double target_a_hi = 0.2;
+  const double target_b_hi = std::clamp(0.42 * static_cast<double>(med_b_lo), -4.2, -2.8);
+  auto loss_p2 = [&](const float* pk) -> double {
+    if (pk[0] > 0.0f || pk[0] < -0.65f || pk[1] > 0.0f || pk[1] < -0.65f || pk[2] > 0.0f || pk[2] < -0.45f)
+      return 1e18;
+    const float aG = aG1 - 0.085f * pk[1];
+    const float aB = aB1 + 0.035f * pk[2];
+    std::vector<Lab> lab;
+    if (!render_p2(pk[0], aG, pk[1], aB, pk[2], lab)) return 1e18;
+    double mL = 0.0, ma = 0.0, mb = 0.0;
+    for (int idx : sel_cyan) {
+      mL += lab[idx].L;
+      ma += lab[idx].a;
+      mb += lab[idx].b;
+    }
+    mL /= sel_cyan.size();
+    ma /= sel_cyan.size();
+    mb /= sel_cyan.size();
+    double w_a = 0.0;
+    if (!sel_warm.empty()) {
+      for (int idx : sel_warm) w_a += (lab[idx].a - lab_p1[idx].a);
+      w_a /= sel_warm.size();
+    }
+    const double dL = mL - target_L_hi;
+    const double da = ma - target_a_hi;
+    const double db = mb - target_b_hi;
+    const double reg = 15.0 * (pk[0] - 0.823 * pk[1]) * (pk[0] - 0.823 * pk[1]) + 0.5 * (w_a * w_a);
+    return dL * dL + 2.0 * da * da + 2.0 * db * db + reg;
+  };
+  float pk[3] = {-0.42f, -0.48f, -0.15f};
+  float st_k[3] = {0.02f, 0.02f, 0.02f};
+  double cur_k = loss_p2(pk);
+  for (int it = 0; it < 60; ++it) {
+    bool imp = false;
+    for (int d = 0; d < 3; ++d) {
+      for (int sgn : {-1, 1}) {
+        float qk[3] = {pk[0], pk[1], pk[2]};
+        qk[d] += sgn * st_k[d];
+        const double v = loss_p2(qk);
+        if (v < cur_k) {
+          cur_k = v;
+          pk[0] = qk[0];
+          pk[1] = qk[1];
+          pk[2] = qk[2];
+          imp = true;
+        }
+      }
+    }
+    if (!imp) {
+      for (int d = 0; d < 3; ++d) st_k[d] *= 0.6f;
+    }
+  }
+  if (cur_k < 1e17) {
+    curves.k_r = pk[0];
+    curves.a[0] = aG1 - 0.085f * pk[1];
+    curves.k[0] = pk[1];
+    curves.a[1] = aB1 + 0.035f * pk[2];
+    curves.k[1] = pk[2];
+  }
+}
+
 inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0,
                                                 float b0, const float* mu_sel, const float* sigma_sel, float target_L,
                                                 const int table_n[2], const CurveFitOptions& o = CurveFitOptions(),
@@ -1245,7 +1504,7 @@ inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const
   JointCurveModel model(cfg, f, mu_sel, sigma_sel);
   model.set_dinov3_neutral_anchors(e0, g0, b0, mu_sel, sigma_sel, dcfg.c_max, dcfg.variant_1b, dcfg.band_mode,
                                    dcfg.checker_mode, dcfg.grid_w, dcfg.min_band_anchors, dcfg.g_cal_min,
-                                   dcfg.g_cal_max, dcfg.g_cal_scale);
+                                   dcfg.g_cal_max, dcfg.g_cal_scale, dcfg.f_mode);
   res.active_bands = model.active_bands();
   for (int b = 0; b < 4; ++b) res.band_counts[b] = model.band_counts()[b];
   res.anchor_count = (int)model.neu_idx().size();
@@ -1279,12 +1538,22 @@ inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const
   int start_level = (res.active_bands >= 2 && res.anchor_count >= 12) ? 3
                   : (res.active_bands >= 2)                           ? 2
                                                                       : 1;
+  if (dcfg.f_mode >= 2) {
+    start_level = (res.active_bands >= 3 && res.anchor_count >= 12) ? 3
+                : (res.active_bands >= 2)                           ? 2
+                                                                    : 1;
+  }
   if (dcfg.force_arm >= 1 && dcfg.force_arm <= 3) {
     start_level = dcfg.force_arm;
   }
   res.initial_arm = start_level;
 
   const double sqrt_lam = 15.0 * std::sqrt(std::max(0.0, static_cast<double>(dcfg.lambda)));
+  const double sqrt_lam_rc = std::sqrt(std::max(0.0, static_cast<double>(o.joint_lambda)));
+  JointCurveModel rc_model(cfg, f, mu_sel, sigma_sel);
+  if (model.use_rc_joint()) {
+    rc_model.set_scene_neutral(e0, g0, b0);
+  }
   int total_renders = 0, total_evals = 0;
 
   auto run_level = [&](int level, JointCurveFit& out_jf, float& out_de) -> bool {
@@ -1331,20 +1600,53 @@ inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const
                         bool check_shape) {
       ++total_evals;
       if (!solve_point(p, e_warm, e, check_shape)) return false;
-      data = model.dinov3_residuals(e, p[0], p[1], shape_of(p), r);
-      double sum = data;
-      if (n_segs_ch > 0) {
+      if (model.use_rc_joint() && level == 2) {
+        data = rc_model.residuals(e, p[0], p[1], shape_of(p), r);
+        double sum = data;
         for (int j = 2; j < m; ++j) {
-          const double v = sqrt_lam * static_cast<double>(p[j]);
+          const double v = sqrt_lam_rc * static_cast<double>(p[j]);
           r.push_back(v);
           sum += v * v;
         }
-        if (n_segs_ch >= 2) {
+        cost = sum;
+        return std::isfinite(cost);
+      }
+      data = model.dinov3_residuals(e, p[0], p[1], shape_of(p), r);
+      double sum = data;
+      if (n_segs_ch > 0) {
+        if (dcfg.f_mode >= 2 && n_segs_ch >= 2) {
           for (int ch = 0; ch < 2; ++ch) {
+            double mean_s = 0.0;
+            for (int s = 0; s < n_segs_ch; ++s) mean_s += static_cast<double>(p[2 + ch * n_segs_ch + s]);
+            mean_s /= static_cast<double>(n_segs_ch);
+            const double vm = sqrt_lam * mean_s;
+            r.push_back(vm);
+            sum += vm * vm;
+            for (int s = 0; s < n_segs_ch; ++s) {
+              const double v = 0.15 * sqrt_lam * static_cast<double>(p[2 + ch * n_segs_ch + s]);
+              r.push_back(v);
+              sum += v * v;
+            }
             for (int s = 1; s < n_segs_ch; ++s) {
-              const double dv = sqrt_lam * static_cast<double>(p[2 + ch * n_segs_ch + s] - p[2 + ch * n_segs_ch + s - 1]);
+              const double dv = 1.5 * sqrt_lam *
+                                static_cast<double>(p[2 + ch * n_segs_ch + s] - p[2 + ch * n_segs_ch + s - 1]);
               r.push_back(dv);
               sum += dv * dv;
+            }
+          }
+        } else {
+          for (int j = 2; j < m; ++j) {
+            const double v = sqrt_lam * static_cast<double>(p[j]);
+            r.push_back(v);
+            sum += v * v;
+          }
+          if (n_segs_ch >= 2) {
+            for (int ch = 0; ch < 2; ++ch) {
+              for (int s = 1; s < n_segs_ch; ++s) {
+                const double dv = sqrt_lam * static_cast<double>(p[2 + ch * n_segs_ch + s] - p[2 + ch * n_segs_ch + s - 1]);
+                r.push_back(dv);
+                sum += dv * dv;
+              }
             }
           }
         }
@@ -1513,7 +1815,8 @@ inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const
     float cand_de = res.anchor_de_before;
     if (run_level(cur_level, cand_jf, cand_de) && cand_jf.feasible) {
       const float cand_band_de = model.anchor_band_mean_de(cand_jf.e, cand_jf.g, cand_jf.b, cand_jf.curves);
-      if (!has_best || cand_band_de <= best_band_de * 1.05f) {
+      const float tol = (dcfg.f_mode >= 2 && cur_level == 2) ? (best_band_de + 0.35f) : (best_band_de * 1.05f);
+      if (!has_best || cand_band_de <= tol) {
         if (has_best) res.dropped_down = true;
         res.jf = cand_jf;
         res.arm_used = cur_level;
@@ -1522,9 +1825,16 @@ inline DinoNeutralFit fit_dinov3_neutral_curves(const PipelineConfig& cfg, const
         best_band_de = cand_band_de;
         has_best = true;
       }
-      if (dcfg.force_arm > 0 || cur_level == 1 || cand_band_de <= dcfg.eps_fallback) break;
+      const bool check_2b = (dcfg.f_mode >= 2 && dcfg.force_arm == 0 && cur_level == 3);
+      if (!check_2b && (dcfg.force_arm > 0 || cur_level == 1 || cand_band_de <= dcfg.eps_fallback)) break;
     }
     --cur_level;
+  }
+  if (dcfg.f_mode >= 2 && res.jf.curves.n_knots == 0) {
+    apply_highlight_cliff_desurge(cfg, f, res.jf.e, res.jf.g, res.jf.b, o.max_dev_stops, res.jf.curves);
+    res.jf.neutral_after = model.neutral_stats(res.jf.e, res.jf.g, res.jf.b, res.jf.curves);
+    res.anchor_de_after = model.anchor_mean_de(res.jf.e, res.jf.g, res.jf.b, res.jf.curves);
+    res.heldout_de_after = model.heldout_anchor_mean_de(res.jf.e, res.jf.g, res.jf.b, res.jf.curves);
   }
   res.jf.evaluations = total_evals;
   res.jf.renders = total_renders;
