@@ -436,20 +436,20 @@ struct LibRawRgb : LibRaw {
   using LibRaw::libraw_internal_data;
 
   static void to_rgb(LibRaw* proc) {
-    auto* self = static_cast<LibRawRgb*>(proc);
-    auto& out = self->libraw_internal_data.output_data;
+    auto& out = (proc->*(&LibRawRgb::libraw_internal_data)).output_data;
     if (!out.histogram) {
-      out.histogram = (int(*)[LIBRAW_HISTOGRAM_SIZE])self->calloc(1, sizeof(*out.histogram) * 4);
+      out.histogram = (int(*)[LIBRAW_HISTOGRAM_SIZE])(proc->*(&LibRawRgb::calloc))(1, sizeof(*out.histogram) * 4);
     }
     proc->imgdata.sizes.width = proc->imgdata.sizes.iwidth;
     proc->imgdata.sizes.height = proc->imgdata.sizes.iheight;
-    self->convert_to_rgb();
+    (proc->*(&LibRawRgb::convert_to_rgb))();
   }
 };
 
-// Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: LibRaw's
-// half-size decode; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set by the
-// caller. False when LibRaw cannot process it.
+// Demosaics the mosaic prepare_white_light_mosaic prepared to linear Rec.2020 in imgdata.image (half: half-size
+// decode—LibRaw's half-size readout on Bayer, raw2image_ex + shrink_xtrans + convert_to_rgb on X-Trans, or a 2x2
+// downsample on a linear DNG; qual: LibRaw's user_qual, negicc-station uses 0, bilinear). The cropbox, if any, is set
+// by the caller. False when LibRaw cannot process it.
 static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   const bool linear = !proc->imgdata.idata.filters;
   const bool xtrans = proc->imgdata.idata.filters == 9;
@@ -575,7 +575,7 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
   int ret;
   LibRaw* proc = unpacked_proc;
   if (!proc) {
-    proc = new LibRaw();
+    proc = new LibRawRgb();
     log_info("Loading RAW file %s\n", fn.c_str());
     if ((ret = open_and_unpack_raw_file(proc, fn)) != LIBRAW_SUCCESS) {
       log_error("Cannot open/unpack %s: %s\n", fn.c_str(), libraw_strerror(ret));
