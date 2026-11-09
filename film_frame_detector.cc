@@ -507,7 +507,9 @@ void components(const std::vector<uint8_t>& mask, const std::vector<uint8_t>& in
 }
 
 // Square dilation by r pixels (separable distance scans). Allocates: two canvas byte masks.
-void dilate(std::vector<uint8_t>& m, int W, int H, int r) {
+}  // namespace
+
+void negicc::dilate(std::vector<uint8_t>& m, int W, int H, int r) {
   std::vector<uint8_t> t(m.size(), 0), o(m.size(), 0);
   for (int y = 0; y < H; ++y) {
     int last = -1000000;
@@ -535,6 +537,9 @@ void dilate(std::vector<uint8_t>& m, int W, int H, int r) {
   }
   m.swap(o);
 }
+
+namespace {
+using negicc::dilate;
 
 // Histogram of log2 values in 0.05 stop bins over [-16, 0.6), lightly smoothed, with mode finding.
 struct ModeHist {
