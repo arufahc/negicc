@@ -223,9 +223,17 @@ bool film_image_from_raw(LibRaw& proc, FilmImage& img) {
   return true;
 }
 
-static void replace_image(LibRaw* proc, ushort(*buf)[4], int w, int h) {
+static ushort (*alloc_half(const LibRaw* proc, int& hw, int& hh))[4] {
+  hw = (proc->imgdata.sizes.iwidth + 1) / 2;
+  hh = (proc->imgdata.sizes.iheight + 1) / 2;
+  return (ushort(*)[4])::calloc((size_t)hw * hh, sizeof(ushort[4]));
+}
+
+// Replaces proc's image with img (w x h, ::calloc-allocated; proc takes ownership: LibRaw 0.22 free_image
+// calls ::free on an unregistered buffer).
+static void replace_image(LibRaw* proc, ushort (*img)[4], int w, int h) {
   proc->free_image();
-  proc->imgdata.image = buf;
+  proc->imgdata.image = img;
   proc->imgdata.sizes.iwidth = w;
   proc->imgdata.sizes.iheight = h;
 }
@@ -237,9 +245,9 @@ static void replace_image(LibRaw* proc, ushort(*buf)[4], int w, int h) {
 // memory.
 static bool shrink_xtrans(LibRaw* proc) {
   const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
-  const int hw = (w + 1) / 2, hh = (h + 1) / 2;
+  int hw = 0, hh = 0;
   const ushort(*full)[4] = proc->imgdata.image;
-  ushort(*half)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*half));
+  ushort(*half)[4] = alloc_half(proc, hw, hh);
   if (!half) return false;
   #pragma omp parallel for schedule(static)
   for (int y = 0; y < hh; ++y) {
@@ -263,29 +271,6 @@ static bool shrink_xtrans(LibRaw* proc) {
       const ushort* l = half[(size_t)y * hw + std::max(x - 1, 0)];
       const ushort* r = half[(size_t)y * hw + std::min(x + 1, hw - 1)];
       for (int k = 0; k < 3; k += 2) px[k] = x > 0 && x + 1 < hw ? (l[k] + r[k]) >> 1 : (x > 0 ? l : r)[k];
-    }
-  }
-  replace_image(proc, half, hw, hh);
-  return true;
-}
-
-static bool shrink_rgb(LibRaw* proc) {
-  const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
-  const int hw = (w + 1) / 2, hh = (h + 1) / 2;
-  const ushort(*full)[4] = proc->imgdata.image;
-  ushort(*half)[4] = (ushort(*)[4])calloc((size_t)hw * hh, sizeof(*half));
-  if (!half) return false;
-  #pragma omp parallel for schedule(static)
-  for (int y = 0; y < hh; ++y) {
-    const int y1 = std::min(2 * y + 1, h - 1);
-    for (int x = 0; x < hw; ++x) {
-      const int x1 = std::min(2 * x + 1, w - 1);
-      const ushort* a = full[(size_t)(2 * y) * w + 2 * x];
-      const ushort* b = full[(size_t)(2 * y) * w + x1];
-      const ushort* c = full[(size_t)y1 * w + 2 * x];
-      const ushort* d = full[(size_t)y1 * w + x1];
-      for (int k = 0; k < 3; ++k)
-        half[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
     }
   }
   replace_image(proc, half, hw, hh);
@@ -445,9 +430,20 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
   return true;
 }
 
-struct LibRawCallbackAccess : LibRaw {
-  static void set_pre_preinterpolate(LibRaw* p, process_step_callback cb) {
-    static_cast<LibRawCallbackAccess*>(p)->callbacks.pre_preinterpolate_cb = cb;
+struct LibRawRgb : LibRaw {
+  using LibRaw::calloc;
+  using LibRaw::convert_to_rgb;
+  using LibRaw::libraw_internal_data;
+
+  static void to_rgb(LibRaw* proc) {
+    auto* self = static_cast<LibRawRgb*>(proc);
+    auto& out = self->libraw_internal_data.output_data;
+    if (!out.histogram) {
+      out.histogram = (int(*)[LIBRAW_HISTOGRAM_SIZE])self->calloc(1, sizeof(*out.histogram) * 4);
+    }
+    proc->imgdata.sizes.width = proc->imgdata.sizes.iwidth;
+    proc->imgdata.sizes.height = proc->imgdata.sizes.iheight;
+    self->convert_to_rgb();
   }
 };
 
@@ -459,31 +455,52 @@ static bool decode_white_light(LibRaw* proc, bool half, int qual) {
   const bool xtrans = proc->imgdata.idata.filters == 9;
   proc->imgdata.params.half_size = (half && !xtrans) ? 1 : 0;
   proc->imgdata.params.user_qual = qual;
-  // LibRaw's raw2image_start leaves IO.shrink = 0 when filters == 0 (a linear DNG), and its half-size readout does not
-  // serve an X-Trans RAW (filters == 9, where 2x2 quads lack R or B photosites depending on margin parity). For a
-  // half-size decode of either, shrink the full readout in pre_preinterpolate_cb and clear filters before
-  // dcraw_process demosaics and converts to Rec.2020, as pre_interpolate does for a Bayer half-size decode, avoiding a
-  // full-resolution single-threaded xtrans_interpolate on the analysis and balance passes.
-  if (half && (xtrans || linear)) {
-    LibRawCallbackAccess::set_pre_preinterpolate(proc, [](void* ctx) {
-      LibRaw* self = static_cast<LibRaw*>(ctx);
-      const bool ok = self->imgdata.idata.filters == 9 ? shrink_xtrans(self) : shrink_rgb(self);
-      if (ok) {
-        self->imgdata.sizes.width = self->imgdata.sizes.iwidth;
-        self->imgdata.sizes.height = self->imgdata.sizes.iheight;
-        self->imgdata.idata.filters = 0;
-      }
-    });
+  if (half && xtrans) {
+    // LibRaw's half-size readout does not serve an X-Trans RAW (filters == 9): read the full mosaic with raw2image_ex,
+    // shrink each 2x2 quad in shrink_xtrans (as read_half_size does) and convert directly to linear Rec.2020 without
+    // running single-threaded xtrans_interpolate on the analysis and balance passes.
+    const int ret = proc->raw2image_ex(1);
+    if (ret != LIBRAW_SUCCESS || !shrink_xtrans(proc)) {
+      log_error("Cannot process the white-light decode: %s\n",
+                ret != LIBRAW_SUCCESS ? libraw_strerror(ret) : "out of memory");
+      return false;
+    }
+    LibRawRgb::to_rgb(proc);
+    return true;
   }
-  const bool single_thread = xtrans && !half;
-  const int prev_threads = single_thread ? omp_get_max_threads() : 0;
-  if (single_thread) omp_set_num_threads(1);
+  const int prev_threads = xtrans ? omp_get_max_threads() : 0;
+  if (xtrans) omp_set_num_threads(1);
   const int ret = proc->dcraw_process();
-  if (single_thread) omp_set_num_threads(prev_threads);
-  LibRawCallbackAccess::set_pre_preinterpolate(proc, nullptr);
+  if (xtrans) omp_set_num_threads(prev_threads);
   if (ret != LIBRAW_SUCCESS) {
     log_error("Cannot process the white-light decode: %s\n", libraw_strerror(ret));
     return false;
+  }
+  // LibRaw's raw2image_start leaves IO.shrink = 0 when filters == 0 (a linear DNG), so dcraw_process decodes at full
+  // sensor dimensions even when half_size = 1. Downsample 2x2 here so callers receive half-resolution coordinates.
+  if (half && linear) {
+    const int w = proc->imgdata.sizes.iwidth, h = proc->imgdata.sizes.iheight;
+    int hw = 0, hh = 0;
+    const ushort(*full)[4] = proc->imgdata.image;
+    ushort(*shrunk)[4] = alloc_half(proc, hw, hh);
+    if (!shrunk) {
+      log_error("Cannot process the white-light decode: out of memory\n");
+      return false;
+    }
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < hh; ++y) {
+      const int y1 = std::min(2 * y + 1, h - 1);
+      for (int x = 0; x < hw; ++x) {
+        const int x1 = std::min(2 * x + 1, w - 1);
+        const ushort* a = full[(size_t)(2 * y) * w + 2 * x];
+        const ushort* b = full[(size_t)(2 * y) * w + x1];
+        const ushort* c = full[(size_t)y1 * w + 2 * x];
+        const ushort* d = full[(size_t)y1 * w + x1];
+        for (int k = 0; k < 3; ++k)
+          shrunk[(size_t)y * hw + x][k] = (ushort)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
+      }
+    }
+    replace_image(proc, shrunk, hw, hh);
   }
   return true;
 }

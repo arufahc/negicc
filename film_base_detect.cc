@@ -30,6 +30,7 @@ constexpr double kLightChromaGap = 0.8;     // stops of log2(R/B) between film (
 constexpr double kLightHoleArea = 0.005;    // a light part inside the scan at most this fraction: sprocket hole
 constexpr double kLightOfRef = 0.65;        // bare light luminance at least this fraction of the p99.9 luminance
 constexpr double kBasePercentile = 99.5;    // per-channel percentile of film pixels taken as the film base
+constexpr int kCarrierPad = 3;              // dark-carrier dilation radius (px on a 1024-px-wide work image)
 
 // numpy's percentile (method linear) of float32 values with a Python float q: the interpolation runs in float32.
 float percentile_f32(std::vector<float>& a, double q) {
@@ -200,27 +201,26 @@ int label_components(const std::vector<uint8_t>& mask, int w, int h, std::vector
   return n;
 }
 
-// The labels on the image's border, or (when given) bordering the dark carrier.
+// The labels on the image's border, or (when given) bordering the dark carrier (lum < 0.01 * ref, widened by
+// kCarrierPad * w / 1024 px across the blended edge between light and carrier, as in film_frame_detector.cc).
 std::vector<uint8_t> border_labels(const std::vector<int>& labels, int w, int h, int n,
-                                   const std::vector<uint8_t>* outside = nullptr) {
+                                   const std::vector<uint8_t>* near_carrier = nullptr) {
   std::vector<uint8_t> edge(n, 0);
   for (int x = 0; x < w; ++x) edge[labels[x]] = edge[labels[(size_t)(h - 1) * w + x]] = 1;
   for (int y = 0; y < h; ++y) edge[labels[(size_t)y * w]] = edge[labels[(size_t)y * w + w - 1]] = 1;
-  if (outside) {
-    for (size_t i = 0; i < labels.size(); ++i)
-      if ((*outside)[i]) edge[labels[i]] = 1;
-  }
+  for (size_t i = 0; i < labels.size(); ++i)
+    if (near_carrier && (*near_carrier)[i]) edge[labels[i]] = 1;
   return edge;
 }
 
 // auto_crop._light_parts: the 8-connected parts of mask that can be bare light (reaching the border or dark carrier,
 // or as small as a sprocket hole) and are as bright as light through air.
 std::vector<uint8_t> light_parts(const std::vector<uint8_t>& mask, const std::vector<float>& lum, double ref, int w,
-                                 int h, const std::vector<uint8_t>* outside = nullptr) {
+                                 int h, const std::vector<uint8_t>* near_carrier = nullptr) {
   std::vector<int> labels;
   const int n = label_components(mask, w, h, labels);
   if (n <= 1) return mask;
-  const std::vector<uint8_t> edge = border_labels(labels, w, h, n, outside);
+  const std::vector<uint8_t> edge = border_labels(labels, w, h, n, near_carrier);
   std::vector<long> area(n, 0);
   std::vector<double> lum_sum(n, 0.0);
   for (size_t i = 0; i < labels.size(); ++i) {
@@ -323,6 +323,10 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
   std::vector<float> tmp(lum);
   const double ref = (double)percentile_f32(tmp, 99.9);
   const float black_level = (float)(kBlackFraction * ref);
+  std::vector<uint8_t> near_carrier(n);
+  for (size_t i = 0; i < n; ++i) near_carrier[i] = lum[i] < (float)(0.01 * ref);
+  dilate(near_carrier, w, h, std::max(1, (kCarrierPad * w + 512) / 1024));
+  const std::vector<uint8_t>* carrier = white_light ? &near_carrier : nullptr;
   std::vector<uint8_t> black(n), light(n);
   float clip_c[3] = {(float)kClipLevel, (float)kClipLevel, (float)kClipLevel};
   if (white_light) {
@@ -338,67 +342,13 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
       clip_c[c] = plateau ? 0.98f * mx : 65000.0f;
     }
   }
-  // On a white-light scan, bare light seen through a holder's aperture borders the dark carrier rather than the image
-  // border. Build the dilated carrier mask once from border-reaching dark components (>= 1% of the work image and
-  // holding black holder pixels, widened by 2 px on the 512-px work image across the blended edge between light and
-  // carrier), so dense interior picture highlights on a pre-cropped scan are not mistaken for a carrier and the
-  // non-white-light path is unchanged.
-  std::vector<uint8_t> carrier_outside;
-  const std::vector<uint8_t>* outside = nullptr;
-  if (white_light) {
-    std::vector<uint8_t> dark_mask(n, 0);
-    const float dark_level = (float)(0.01 * ref);
-    bool any_black = false;
-    for (size_t i = 0; i < n; ++i) {
-      dark_mask[i] = lum[i] < dark_level;
-      any_black |= lum[i] < black_level;
-    }
-    if (any_black) {
-      std::vector<int> dlabels;
-      const int nd = label_components(dark_mask, w, h, dlabels);
-      if (nd > 1) {
-        const std::vector<uint8_t> dedge = border_labels(dlabels, w, h, nd);
-        std::vector<long> darea(nd, 0);
-        std::vector<uint8_t> has_blk(nd, 0);
-        for (size_t i = 0; i < n; ++i) {
-          darea[dlabels[i]]++;
-          if (lum[i] < black_level) has_blk[dlabels[i]] = 1;
-        }
-        std::vector<uint8_t> dkeep(nd, 0);
-        bool any_carrier = false;
-        for (int l = 1; l < nd; ++l) {
-          if (dedge[l] && has_blk[l] && (double)darea[l] >= 0.01 * (double)n) {
-            dkeep[l] = 1;
-            any_carrier = true;
-          }
-        }
-        if (any_carrier) {
-          carrier_outside.assign(n, 0);
-          for (int y = 0; y < h; ++y) {
-            for (int x = 0; x < w; ++x) {
-              if (!dkeep[dlabels[(size_t)y * w + x]]) continue;
-              for (int dy = -2; dy <= 2; ++dy) {
-                const int yy = y + dy;
-                if (yy < 0 || yy >= h) continue;
-                for (int dx = -2; dx <= 2; ++dx) {
-                  const int xx = x + dx;
-                  if (xx >= 0 && xx < w) carrier_outside[(size_t)yy * w + xx] = 1;
-                }
-              }
-            }
-          }
-          outside = &carrier_outside;
-        }
-      }
-    }
-  }
   bool any_light = false;
   for (size_t i = 0; i < n; ++i) {
     black[i] = lum[i] < black_level;
     light[i] = v[i * 3] >= clip_c[0] || v[i * 3 + 1] >= clip_c[1] || v[i * 3 + 2] >= clip_c[2];
     any_light |= light[i] != 0;
   }
-  if (any_light) light = light_parts(light, lum, ref, w, h, outside);
+  if (any_light) light = light_parts(light, lum, ref, w, h, carrier);
 
   std::vector<float> q(n);
   for (size_t i = 0; i < n; ++i) q[i] = std::log2(v[i * 3] / v[i * 3 + 2]);
@@ -433,7 +383,7 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     }
     if (m_hi - m_lo >= kLightChromaGap && 0.01 <= f_lo && f_lo <= 0.99 && !b_lo.empty() && !b_hi.empty() &&
         median_f32(b_lo) > percentile_f32(b_hi, kBasePercentile)) {
-      const std::vector<uint8_t> parts = light_parts(lo, lum, ref, w, h, outside);
+      const std::vector<uint8_t> parts = light_parts(lo, lum, ref, w, h, carrier);
       for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
     }
   } else if (any_light) {
@@ -444,7 +394,7 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     std::vector<int> labels;
     const int nl = label_components(unclipped, w, h, labels);
     if (nl > 1) {
-      const std::vector<uint8_t> edge = border_labels(labels, w, h, nl, outside);
+      const std::vector<uint8_t> edge = border_labels(labels, w, h, nl, carrier);
       std::vector<uint8_t> keep(nl, 0);
       for (size_t i = 0; i < n; ++i)
         if (light[i]) keep[labels[i]] = 1;
@@ -485,7 +435,7 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
             }
           }
           if (any_neutral) {
-            const std::vector<uint8_t> parts = light_parts(neutral, lum, ref_orange, w, h, outside);
+            const std::vector<uint8_t> parts = light_parts(neutral, lum, ref_orange, w, h, carrier);
             for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
           }
         }
