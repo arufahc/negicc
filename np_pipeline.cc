@@ -27,7 +27,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -929,6 +931,30 @@ int prepare(const Options& o, Setup& s) {
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
         s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
+      }
+      // Experiment (B5 + head anchors): the neutral-patch head on the backbone's tokens, for the joint curve fit's
+      // neutral anchors (input_curves.h, JointCurveModel::set_scene_neutral). NP_NEUTRAL_HEAD=1 runs the built-in
+      // models/neutral_head/neutral_head.bin; any other value except 0 is the path of a neutral_head.bin to run.
+      if (const char* nh = std::getenv("NP_NEUTRAL_HEAD"); nh && nh[0] && std::strcmp(nh, "0") != 0) {
+        std::vector<char> file;
+        const void* data = nullptr;
+        size_t size = 0;
+        std::string name = "[built-in] models/neutral_head/neutral_head.bin";
+        if (std::strcmp(nh, "1") == 0) {
+          const EmbeddedFile* f = find_embedded_file("models/neutral_head/neutral_head.bin");
+          if (!f) throw std::runtime_error("NP_NEUTRAL_HEAD: this neg_process was built without the neutral head");
+          data = f->data;
+          size = f->size;
+        } else {
+          std::ifstream in(nh, std::ios::binary);
+          if (!in) throw std::runtime_error(std::string("NP_NEUTRAL_HEAD: cannot read ") + nh);
+          file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+          data = file.data();
+          size = file.size();
+          name = nh;
+        }
+        s.engine.set_neutral_head(data, size);
+        log_info("Neutral head %s\n", name.c_str());
       }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());

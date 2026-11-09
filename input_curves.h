@@ -252,6 +252,9 @@ struct CurveFrame {
   float film_base[3] = {0.0f, 0.0f, 0.0f};
   const uint16_t* grid = nullptr;
   int n = 0;
+  // Experiment (B5 + head anchors): the neutral-patch head's p per grid cell (n values, neg_process NP_NEUTRAL_HEAD),
+  // or null. With it, fit_input_curves_joint's scene-neutral anchors are the cells with p >= NP_NEUTRAL_P_THR (0.9).
+  const float* neutral_p = nullptr;
 };
 
 // shape's a and k anchored at (e, g, b): ref, u_med and u_lo from the frame there (input_curve_reference).
@@ -1901,8 +1904,9 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
                                             float e_hi = 0.0f, const float* = nullptr) {
   JointCurveModel model(cfg, f, mu, sigma);
+  if (const char* t = std::getenv("NP_NEUTRAL_P_THR")) model.ext_thr_ = std::strtof(t, nullptr);
+  // Experiment hook: p from files keyed by a hash of mu (NP_B5_HEAD_P_DIR/<hash>.txt) overrides the native head's.
   if (const char* pdir = std::getenv("NP_B5_HEAD_P_DIR")) {
-    if (const char* t = std::getenv("NP_NEUTRAL_P_THR")) model.ext_thr_ = std::strtof(t, nullptr);
     const unsigned long long hsh = mu_field_hash(mu, (size_t)f.n * 3);
     char nm[64];
     std::snprintf(nm, sizeof(nm), "/%016llx.txt", hsh);
@@ -1912,7 +1916,14 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       std::fclose(fp);
     }
     if ((int)model.ext_p_.size() != f.n) model.ext_p_.clear();
-    std::fprintf(stderr, "B5_HEAD: %s p for mu %016llx\n", model.ext_p_.empty() ? "no" : "using", hsh);
+    std::fprintf(stderr, "B5_HEAD: %s file p for mu %016llx\n", model.ext_p_.empty() ? "no" : "using", hsh);
+  }
+  if (model.ext_p_.empty() && f.neutral_p) {
+    model.ext_p_.assign(f.neutral_p, f.neutral_p + f.n);
+    int n_sel = 0;
+    for (float p : model.ext_p_) n_sel += p >= model.ext_thr_;
+    std::fprintf(stderr, "B5_HEAD: using native p for mu %016llx, %d of %d cells >= %.2f\n",
+                 mu_field_hash(mu, (size_t)f.n * 3), n_sel, f.n, model.ext_thr_);
   }
   model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;

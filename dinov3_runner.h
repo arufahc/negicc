@@ -35,6 +35,8 @@ struct DinoV3InferenceResult {
     std::vector<float> pooled_tone;   // [1, 3, 768] Tone-stratified ranker features
     std::vector<float> tone_mass;     // [3] Shadows, mid-tones, highlights mass fractions
     std::vector<float> features_3459; // [3459] Contiguous concatenated: pooled + pooled_tone + tone_mass
+    std::vector<float> neutral_p;     // [N] p(neutral grey) per patch, when a neutral head is set (else empty)
+    double neutral_ms = 0.0;          // time of the neutral head, included in duration_ms
     bool has_pooled = false;
     bool has_pooled_tone = false;
     int target_w = 0;

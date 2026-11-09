@@ -775,8 +775,16 @@ class SearchFrame {
     }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
+    last_neutral_p_ = r.neutral_p.size() == n / 3 ? std::move(r.neutral_p) : std::vector<float>();
+    if (!last_neutral_p_.empty()) {
+      std::fprintf(stderr, "NEUTRAL_HEAD: p for mu %016llx (head %.2f ms of %.1f ms inference)\n",
+                   negicc::mu_field_hash(mu.data(), mu.size()), r.neutral_ms, r.duration_ms);
+    }
     return true;
   }
+
+  // The neutral head's p per cell from the last predict() (empty without a neutral head).
+  const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
 
   // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
@@ -835,7 +843,7 @@ class SearchFrame {
     curr.shoulder = shoulder_of(start);
     float prev_err = std::numeric_limits<float>::infinity();
     float cur_q995 = 0.0f, best_q995 = 0.0f;
-    std::vector<float> best_mu, best_sigma;
+    std::vector<float> best_mu, best_sigma, best_p;
     FixedPointStatus status = FixedPointStatus::kMaxIters;
     int steps = 0;
     bool have_best = false;
@@ -855,6 +863,7 @@ class SearchFrame {
         best_q995 = cur_q995;
         best_mu = mu;  // kept for the shoulder guard and for the sidecar's intent field
         best_sigma = sigma;
+        best_p = last_neutral_p_;
       }
       if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
         status = FixedPointStatus::kDiverged;
@@ -901,6 +910,7 @@ class SearchFrame {
     fp.steps = steps;
     fp.mu = std::move(best_mu);
     fp.sigma = std::move(best_sigma);
+    fp.neutral_p = std::move(best_p);
     fp.grid_w = stats_.grid_w;
     fp.grid_h = stats_.grid_h;
     return true;
@@ -1007,6 +1017,7 @@ class SearchFrame {
   float shoulder_fixed_ = 1.0f;
   bool shoulder_auto_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
+  std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1799,6 +1810,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.status = chosen.status;
   out.intent_mu = chosen.mu;
   out.intent_sigma = chosen.sigma;
+  out.intent_neutral_p = chosen.neutral_p;
   out.intent_grid_w = chosen.grid_w;
   out.intent_grid_h = chosen.grid_h;
   out.intent_params = chosen.params;
@@ -1992,6 +2004,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // predicted again from a preview at the search's final parameters on the bracket's own profile, so the fit does not
   // run at one E against a field predicted at another. One DINOv3 inference, only then.
   std::vector<float> mu = res.intent_mu, sigma = res.intent_sigma;
+  std::vector<float> neutral_p = res.intent_neutral_p;  // the neutral head's p of the same preview (NP_NEUTRAL_HEAD)
   {
     const ConversionParams& ip = res.intent_params;  // the search's own units, which are this frame's on white light
     auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
@@ -2000,6 +2013,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       std::vector<uint8_t> preview;
       fr.render_preview(idx, res.params, preview);
       if (!fr.predict(preview, mu, sigma)) return false;
+      neutral_p = fr.last_neutral_p();
       out.intent_repredicted = true;
     }
   }
@@ -2049,6 +2063,12 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       fit_grid = kept_grid.data();
       kept_idx.swap(try_idx);
       filter_intent(mu, sigma);
+      if (neutral_p.size() == n) {
+        std::vector<float> kp;
+        kp.reserve(kept_idx.size());
+        for (size_t i : kept_idx) kp.push_back(neutral_p[i]);
+        neutral_p.swap(kp);
+      }
       cf.grid = fit_grid;
       cf.n = (int)nf;
       if (opts.verbose) {
@@ -2057,6 +2077,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       }
     }
   }
+  if (neutral_p.size() == nf) cf.neutral_p = neutral_p.data();
   ParsedFilmProfile& prof = bundle.targets[idx].film_prof;
   // The export's render of the grid: its encoding and the roll-off it measures (measure_rolloff_x_hi, as neg_process
   // measures every conversion's), which only the sRGB encoding applies, so the median L* the re-meter matches is the

@@ -6,6 +6,7 @@
 #include "dinov3_engine.h"
 #include "dinov3_preprocess.h"
 #include "dinov3_runner.h"
+#include "neutral_head.h"
 
 #include <chrono>
 #include <cmath>
@@ -47,6 +48,21 @@ DinoV3Engine& DinoV3Engine::operator=(DinoV3Engine&&) noexcept = default;
 bool DinoV3Engine::is_loaded() const { return runner_ != nullptr; }
 
 bool DinoV3Engine::needs_adapter() const { return runner_ && runner_->has_tokens(); }
+
+void DinoV3Engine::set_neutral_head(const void* data, size_t size) {
+    if (!data) {
+        neutral_head_.reset();
+        return;
+    }
+    if (runner_ && !runner_->has_tokens()) {
+        throw std::runtime_error("DinoV3Engine: the neutral head reads the backbone's tokens; a fused model has none");
+    }
+    auto head = std::make_unique<NeutralHead>();
+    std::string err;
+    if (!head->load(data, size, err)) throw std::runtime_error("DinoV3Engine: " + err);
+    if (head->in_dim() != 768) throw std::runtime_error("DinoV3Engine: the neutral head does not take 768-D tokens");
+    neutral_head_ = std::move(head);
+}
 
 void DinoV3AdapterRunner::run_device(const void*, int, float*, float*) {
     throw std::runtime_error("this intent adapter runs on the CPU and takes host tokens");
@@ -269,8 +285,9 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     const bool device_adapter = runner_->has_tokens() && adapter_ && adapter_->on_device();
     if (runner_->has_tokens()) {
         if (!adapter_) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
-        // A TensorRT backbone with a TensorRT adapter: the tokens stay on the device.
-        if (!device_adapter) {
+        // A TensorRT backbone with a TensorRT adapter: the tokens stay on the device, unless the neutral head reads
+        // them (one device-to-host copy per inference).
+        if (!device_adapter || neutral_head_) {
             tokens.resize((size_t)res.num_patches * 768);
             outs.tokens = tokens.data();
         }
@@ -299,6 +316,13 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
         adapter_->run_device(runner_->device_tokens(), res.num_patches, res.mu.data(), res.sigma.data());
     } else if (!tokens.empty()) {
         adapter_->run(tokens.data(), res.num_patches, res.mu.data(), res.sigma.data());
+    }
+
+    if (neutral_head_ && !tokens.empty()) {
+        const auto tn0 = std::chrono::high_resolution_clock::now();
+        res.neutral_p.resize((size_t)res.num_patches);
+        neutral_head_->run(tokens.data(), res.num_patches, res.neutral_p.data());
+        res.neutral_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
     }
 
     if (res.has_pooled_tone) {
