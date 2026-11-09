@@ -22,6 +22,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <cstdint>
 #include <vector>
 
@@ -523,8 +526,19 @@ struct JointCurveFit {
   NeutralStats neutral_before, neutral_after;
 };
 
+// FNV-1a over the bytes of a float field (experiment hook: keys external per-cell data to a DINOv3 mu field).
+inline unsigned long long mu_field_hash(const float* v, size_t n) {
+  unsigned long long h = 1469598103934665603ULL;
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(v);
+  for (size_t k = 0; k < n * sizeof(float); ++k) { h ^= p[k]; h *= 1099511628211ULL; }
+  return h;
+}
+
 class JointCurveModel {
  public:
+  // Experiment hook (B5 + head anchors): external neutral-patch probabilities per cell; empty = raw-chroma selection.
+  std::vector<float> ext_p_;
+  float ext_thr_ = 0.9f;
   JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* = nullptr, const float* = nullptr)
       : cfg_(cfg), f_(f), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
     for (int i = 0; i < f.n; ++i) {
@@ -618,17 +632,20 @@ class JointCurveModel {
     if (mid_c.empty()) return;
     // On extreme low-key scenes (>= 75% of cells in B0 and < 8 cells in B3, e.g. a dark tunnel with a small
     // daylight portal), merge B2 and B3 into B3 (L* > 45) so the highlight endpoint is populated.
-    if ((int)bands[0].size() >= 3 * total / 4 && (int)bands[3].size() < 8 &&
+    const bool head_mode = (int)ext_p_.size() == f_.n;
+    if (!head_mode && (int)bands[0].size() >= 3 * total / 4 && (int)bands[3].size() < 8 &&
         (int)(bands[2].size() + bands[3].size()) >= 12) {
       bands[3].insert(bands[3].end(), bands[2].begin(), bands[2].end());
       bands[2].clear();
+      std::fprintf(stderr, "GATE lowkey_merge\n");
     }
     std::vector<float> mc_sorted = mid_c;
     std::sort(mc_sorted.begin(), mc_sorted.end());
     const float c_q15 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.15 * (double)mc_sorted.size()))];
     const float c_q30 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.30 * (double)mc_sorted.size()))];
     const float c_q50 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.50 * (double)mc_sorted.size()))];
-    const bool chart_like = (c_q15 < 6.5f && c_q50 > 15.0f && c_q50 > 2.5f * c_q15);
+    const bool chart_like = !head_mode && (c_q15 < 6.5f && c_q50 > 15.0f && c_q50 > 2.5f * c_q15);
+    if (chart_like) std::fprintf(stderr, "GATE chart_like\n");
     const float c_gate = chart_like ? std::max(5.0f, 1.5f * c_q15) : std::max(15.0f, 1.75f * c_q30);
     const double sel_frac = chart_like ? 0.15 : 0.30;
 
@@ -647,14 +664,20 @@ class JointCurveModel {
       bmed_b[b] = median(vb);
       std::vector<int> ord = bands[b];
       const bool use_cluster = (b == 0 && (int)bands[0].size() >= f_.n / 3 && std::hypot(bmed_a[0], bmed_b[0]) > 12.0);
+      if (use_cluster) std::fprintf(stderr, "GATE shadow_cluster\n");
       std::sort(ord.begin(), ord.end(), [&](int i, int j) {
         const float ci = use_cluster ? std::hypot(lab0[i].a - (float)bmed_a[0], lab0[i].b - (float)bmed_b[0]) : c0[i];
         const float cj = use_cluster ? std::hypot(lab0[j].a - (float)bmed_a[0], lab0[j].b - (float)bmed_b[0]) : c0[j];
         return ci != cj ? ci < cj : i < j;
       });
-      const int mb = std::max(1, (int)std::lround(sel_frac * (double)ord.size()));
-      for (int k = 0; k < mb; ++k) {
-        if (use_cluster || c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
+      if (head_mode) {
+        for (int i : bands[b])
+          if (ext_p_[i] >= ext_thr_) b_sel[b].push_back(i);
+      } else {
+        const int mb = std::max(1, (int)std::lround(sel_frac * (double)ord.size()));
+        for (int k = 0; k < mb; ++k) {
+          if (use_cluster || c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
+        }
       }
       for (int idx_pre : b_sel[b]) neu_pre_gate_idx_.push_back(idx_pre);
       if (!b_sel[b].empty()) {
@@ -673,7 +696,7 @@ class JointCurveModel {
     // Collinearity gate on midtone bands B1, B2 when both shadow B0 (at least 16 cells) and highlight B3 are populated:
     // if a midtone band deviates from the linear L* trajectory between B0 and B3 by > 8.0 Lab units (e.g. blue sky in
     // B1/B2 on 02, or sodium-vapor tunnel wall in B1 on 00), drop that midtone band so B0 and B3 anchor the neutral line.
-    if (b_sel[0].size() >= 16 && !b_sel[3].empty() && b_sel[0].size() + b_sel[3].size() >= 32 && bL[3] - bL[0] > 25.0) {
+    if (!head_mode && b_sel[0].size() >= 16 && !b_sel[3].empty() && b_sel[0].size() + b_sel[3].size() >= 32 && bL[3] - bL[0] > 25.0) {
       for (int b = 1; b <= 2; ++b) {
         if (b_sel[b].empty()) continue;
         const double t = std::clamp((bL[b] - bL[0]) / (bL[3] - bL[0]), 0.0, 1.0);
@@ -684,6 +707,7 @@ class JointCurveModel {
         const double b_hat_sel = bb[0] + t * (bb[3] - bb[0]);
         const double dev_sel = std::hypot(ba[b] - a_hat_sel, bb[b] - b_hat_sel);
         if (std::max(dev_med, dev_sel) > 8.0) {
+          std::fprintf(stderr, "GATE collinearity_drop_B%d\n", b);
           b_sel[b].clear();
         }
       }
@@ -957,6 +981,27 @@ class JointCurveModel {
     const int n_valid = (int)valid_mu_a.size();
     if (n_valid < 8) return;
 
+    // Experiment hook (arm N): neutral-patch probabilities from an external head, keyed by a hash of mu_sel.
+    std::vector<float> ext_p;
+    float ext_thr = 0.9f;
+    if (const char* pdir = std::getenv("NP_NEUTRAL_P_DIR")) {
+      if (const char* t = std::getenv("NP_NEUTRAL_P_THR")) ext_thr = std::strtof(t, nullptr);
+      const unsigned long long hsh = mu_field_hash(mu_sel, (size_t)f_.n * 3);
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "/%016llx.txt", hsh);
+      FILE* fp = std::fopen((std::string(pdir) + nm).c_str(), "r");
+      if (fp) {
+        float v;
+        while (std::fscanf(fp, "%f", &v) == 1) ext_p.push_back(v);
+        std::fclose(fp);
+      }
+      if ((int)ext_p.size() != f_.n) {
+        std::fprintf(stderr, "ARM_N: no p for mu %016llx (got %zu of %d)\n", hsh, ext_p.size(), f_.n);
+        ext_p.clear();
+      } else {
+        std::fprintf(stderr, "ARM_N: using p for mu %016llx thr %.2f\n", hsh, ext_thr);
+      }
+    }
     const float med_a = variant_1b ? median(valid_mu_a) : 0.0f;
     const float med_b = variant_1b ? median(valid_mu_b) : 0.0f;
     const float u_lo_g = zero_c.u_lo[0];
@@ -982,7 +1027,8 @@ class JointCurveModel {
       bands_all[b].push_back(i);
       const float c_mu = std::hypot(mu_sel[3 * i + 1] - med_a, mu_sel[3 * i + 2] - med_b);
       const float s_ab = std::hypot(sigma_sel[3 * i + 1], sigma_sel[3 * i + 2]) / 1.41421356f;
-      if (c_mu + s_ab < c_max) {
+      const bool sel_ok = ext_p.empty() ? (c_mu + s_ab < c_max) : (ext_p[i] >= ext_thr);
+      if (sel_ok) {
         b_sel_all[b].push_back(i);
         neu_pre_gate_idx_.push_back(i);
       }
@@ -1150,6 +1196,13 @@ class JointCurveModel {
       }
       c_a_ = static_cast<float>(oa);
       c_b_ = static_cast<float>(ob);
+    }
+    // Experiment hook: partial-strength target, a fraction s of the anchors' common DINOv3 offset (0 = neutral).
+    if (const char* so = std::getenv("NP_OFFSET_STRENGTH")) {
+      const float s = std::strtof(so, nullptr);
+      c_a_ = static_cast<float>(s * strict_mu_a);
+      c_b_ = static_cast<float>(s * strict_mu_b);
+      std::fprintf(stderr, "ARM_N: offset strength %.2f -> target (%.2f, %.2f)\n", s, c_a_, c_b_);
     }
     // Ensure knots are strictly ordered: 0 > u_knot[ch][0] > u_knot[ch][1] > ...
     for (int ch = 0; ch < 2; ++ch) {
@@ -1848,6 +1901,19 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
                                             float e_hi = 0.0f, const float* = nullptr) {
   JointCurveModel model(cfg, f, mu, sigma);
+  if (const char* pdir = std::getenv("NP_B5_HEAD_P_DIR")) {
+    if (const char* t = std::getenv("NP_NEUTRAL_P_THR")) model.ext_thr_ = std::strtof(t, nullptr);
+    const unsigned long long hsh = mu_field_hash(mu, (size_t)f.n * 3);
+    char nm[64];
+    std::snprintf(nm, sizeof(nm), "/%016llx.txt", hsh);
+    if (FILE* fp = std::fopen((std::string(pdir) + nm).c_str(), "r")) {
+      float v;
+      while (std::fscanf(fp, "%f", &v) == 1) model.ext_p_.push_back(v);
+      std::fclose(fp);
+    }
+    if ((int)model.ext_p_.size() != f.n) model.ext_p_.clear();
+    std::fprintf(stderr, "B5_HEAD: %s p for mu %016llx\n", model.ext_p_.empty() ? "no" : "using", hsh);
+  }
   model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
   if (!(e_hi > e_lo)) e_hi = std::max(e_lo, e0 * 4.0f);
@@ -2122,6 +2188,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       const float med_L_lo = med_vec(l_lo), med_b_lo = med_vec(b_lo_v);
       const float med_a_hi = med_vec(a_hi), med_b_hi = med_vec(b_hi_v);
       if (blo.size() >= 8 && bhi.size() >= 10 && med_b_lo < -1.0f && med_a_hi < -2.5f && (med_b_hi - med_b_lo) > 4.0f) {
+        std::fprintf(stderr, "GATE cliff_condition\n");
         std::vector<int> sel_cyan, sel_warm;
         double sum_L_cyan = 0.0;
         for (int idx : bhi) {
@@ -2188,6 +2255,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
             }
           }
           if (cur_k < 1e17) {
+            std::fprintf(stderr, "GATE cliff_applied k=(%.3f,%.3f,%.3f)\n", pk[0], pk[1], pk[2]);
             out.curves.k_r = pk[0];
             out.curves.a[0] = aG1 - 0.085f * pk[1];
             out.curves.k[0] = pk[1];

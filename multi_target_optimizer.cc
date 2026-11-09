@@ -766,6 +766,13 @@ class SearchFrame {
         return false;
       }
     }
+    if (const char* dd = std::getenv("NP_DUMP_DINO_DIR")) {
+      char nm[64];
+      std::snprintf(nm, sizeof(nm), "/%016llx.ppm", negicc::mu_field_hash(r.mu.data(), r.mu.size()));
+      std::ofstream pf(std::string(dd) + nm, std::ios::binary);
+      pf << "P6\n" << crop_.w << " " << crop_.h << "\n255\n";
+      pf.write(reinterpret_cast<const char*>(preview.data()), (std::streamsize)preview.size());
+    }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     return true;
@@ -1624,6 +1631,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           if (cand_outcome == ClipFallbackOutcome::kTaken &&
               (out.clip_fallback != ClipFallbackOutcome::kTaken ||
                (clears_overshoot ? fp_cand.shoulder_q995 < best_q995 : clip_cand < best_clip))) {
+            std::fprintf(stderr, "GATE clip_fallback_taken%s\n", clears_overshoot ? " overshoot_walk" : "");
             out.clip_fallback = ClipFallbackOutcome::kTaken;
             fp_cand.params = p_cand;
             chosen = fp_cand;
@@ -1670,6 +1678,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (e_pull > params.e) {
         params.e = e_pull;
         out.highlight_pullback = true;
+        std::fprintf(stderr, "GATE highlight_pullback\n");
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
       float chosen_screen_loss = 0.0f;
@@ -1757,6 +1766,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           chosen = fp_res;
           params = p_res;
           out.highlight_pullback = true;
+        std::fprintf(stderr, "GATE highlight_pullback\n");
         }
       }
     }
@@ -2070,6 +2080,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const float toe_max_L =
       (target_L < 25.0f && d_med > 0.0f && d_med < 0.80f) ? std::max(10.0f, 22.0f * d_med) : kIntentMaxL;
   const float fit_target_L = std::min(std::clamp(target_L, kIntentMinL, kIntentMaxL), toe_max_L);
+  if (toe_max_L < std::clamp(target_L, kIntentMinL, kIntentMaxL)) std::fprintf(stderr, "GATE toe_cap %.1f < %.1f\n", toe_max_L, target_L);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
   out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
                                                   fit_grid, (int)nf, mu.data(), sigma.data());
