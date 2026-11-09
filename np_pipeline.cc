@@ -1272,6 +1272,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
+          if (!s.curve_fit.neutral_head) {
+            static bool logged = false;
+            if (!logged) {
+              log_info("Curves: %s; scene-neutral anchors from the lowest-chroma cells\n",
+                       s.neutral_head.empty() ? "no neutral head" : "under 16 cells at the neutral head's p >= 0.9");
+              logged = true;
+            }
+          }
           s.input_curves = s.curve_fit.fit.curves;
           s.input_curves_source = o.fit_curves ? "fit" : "auto";
           scan.has_curve_params = true;

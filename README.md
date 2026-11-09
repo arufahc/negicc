@@ -196,8 +196,12 @@ to 8.7 and a natural daylight balance:
 E, g and b are three gains: they move each channel as a whole. On white light that is not always enough, because a
 lamp and a stock the profile was not measured with change the shape of a channel's response, not only its level, and
 a gain then balances the mid-tones while the shadows or the highlights keep a cast. So, after the search, the green
-and blue input curves of the winning bracket are fitted jointly with g and b against the same target field, with E
-re-solved at every step so the picture's median lightness stays where Auto put it. Each curve is a bend of the
+and blue input curves of the winning bracket are fitted jointly with g and b so that the frame's scene-neutral content
+renders grey, both its average and its trend from shadows to highlights, with E re-solved at every step so the
+picture's median lightness stays where Auto put it. The scene-neutral content is the grid cells, in four lightness
+bands, that a small neutral-patch head on DINOv3's tokens gives p(neutral) of at least 0.9
+([models/neutral_head](models/neutral_head/README.md)); with `--neutral_head off`, or when the head finds fewer than
+16 such cells, it is the lowest-chroma cells of each band. Each curve is a bend of the
 channel's density response of at most ±25 % slope and one stop of departure from the profile's own curve, held to a
 plain offset below the frame's densest cell, and never above the film base; a fit that would take E out of the
 bracket's range, or a curve that fails those bounds, falls back to Auto's plain result. `--fit_curves off` keeps the
@@ -242,6 +246,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
+| `--neutral_head on\|off\|<file>` | The neutral-patch head that picks the curve fit's neutral anchors: the built-in one (default), none (lowest-chroma cells), or another `neutral_head.bin`. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with

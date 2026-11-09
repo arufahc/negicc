@@ -190,7 +190,7 @@ struct CurveFrame {
   const uint16_t* grid = nullptr;
   int n = 0;
   // The neutral-patch head's p(neutral) per grid cell (n values, DinoV3InferenceResult::neutral_p), or null when the
-  // head did not run.
+  // head did not run. The joint fit's scene-neutral anchors come from it (JointCurveModel::set_scene_neutral).
   const float* neutral_p = nullptr;
 };
 
@@ -495,12 +495,18 @@ class JointCurveModel {
     return L_[f_.n / 2];
   }
 
-  // Builds the low-chroma scene-neutral set N directly from the rendered scan cells Lab0(i) at (e0, g0, b0)
-  // across four luma bands ([2, 22], [22, 45], [45, 70], [70, 92]), with collinearity gating on midtone bands
-  // and equalized band weights, and zero dependency on DINOv3's mu.
+  // The p(neutral) at or above which a grid cell is a scene-neutral anchor (CurveFrame::neutral_p).
+  static constexpr float kNeutralHeadThreshold = 0.9f;
+
+  // Builds the scene-neutral set N from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
+  // ([2, 22], [22, 45], [45, 70], [70, 92]) with equalized band weights. The anchors of a band are its cells the
+  // neutral-patch head gives p(neutral) >= kNeutralHeadThreshold (CurveFrame::neutral_p); without the head's p, or
+  // when it gives fewer than 16 anchors over all bands (too few for the neutral term, which needs 16), its
+  // lowest-chroma 30% under a chroma gate.
   void set_scene_neutral(float e0, float g0, float b0, float strength = 0.75f) {
     neu_idx_.clear();
     neu_w_.clear();
+    head_used_ = false;
     conf_ = w_off_ = w_slope_ = w_quad_ = 0.0f;
     c_a_ = c_b_ = 0.0f;
     if (f_.n <= 0) return;
@@ -531,78 +537,40 @@ class JointCurveModel {
       }
     }
     if (total < 8) return;
-    if (mid_c.empty()) {
-      for (int i : bands[0]) mid_c.push_back(c0[i]);
-    }
-    if (mid_c.empty()) return;
-    // On extreme low-key scenes (>= 75% of cells in B0 and < 8 cells in B3, e.g. a dark tunnel with a small
-    // daylight portal), merge B2 and B3 into B3 (L* > 45) so the highlight endpoint is populated.
-    if ((int)bands[0].size() >= 3 * total / 4 && (int)bands[3].size() < 8 &&
-        (int)(bands[2].size() + bands[3].size()) >= 12) {
-      bands[3].insert(bands[3].end(), bands[2].begin(), bands[2].end());
-      bands[2].clear();
-    }
-    std::vector<float> mc_sorted = mid_c;
-    std::sort(mc_sorted.begin(), mc_sorted.end());
-    const float c_q15 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.15 * (double)mc_sorted.size()))];
-    const float c_q30 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.30 * (double)mc_sorted.size()))];
-    const float c_q50 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.50 * (double)mc_sorted.size()))];
-    const bool chart_like = (c_q15 < 6.5f && c_q50 > 15.0f && c_q50 > 2.5f * c_q15);
-    const float c_gate = chart_like ? std::max(5.0f, 1.5f * c_q15) : std::max(15.0f, 1.75f * c_q30);
-    const double sel_frac = chart_like ? 0.15 : 0.30;
 
     std::vector<int> b_sel[4];
-    double bL[4] = {}, ba[4] = {}, bb[4] = {}, bmed_a[4] = {}, bmed_b[4] = {};
-    for (int b = 0; b < 4; ++b) {
-      if (bands[b].empty() || ((int)bands[b].size() < 8 && total >= 64)) continue;
-      std::vector<float> va, vb;
-      va.reserve(bands[b].size());
-      vb.reserve(bands[b].size());
-      for (int i : bands[b]) {
-        va.push_back(lab0[i].a);
-        vb.push_back(lab0[i].b);
+    auto band_ok = [&](int b) { return !bands[b].empty() && !((int)bands[b].size() < 8 && total >= 64); };
+    // The head's anchors: a band's cells at p(neutral) >= kNeutralHeadThreshold, when it gives at least 16 in all.
+    head_used_ = false;
+    if (const float* p = f_.neutral_p) {
+      size_t n_head = 0;
+      for (int b = 0; b < 4; ++b) {
+        if (!band_ok(b)) continue;
+        for (int i : bands[b])
+          if (p[i] >= kNeutralHeadThreshold) b_sel[b].push_back(i);
+        n_head += b_sel[b].size();
       }
-      bmed_a[b] = median(va);
-      bmed_b[b] = median(vb);
-      std::vector<int> ord = bands[b];
-      const bool use_cluster = (b == 0 && (int)bands[0].size() >= f_.n / 3 && std::hypot(bmed_a[0], bmed_b[0]) > 12.0);
-      std::sort(ord.begin(), ord.end(), [&](int i, int j) {
-        const float ci = use_cluster ? std::hypot(lab0[i].a - (float)bmed_a[0], lab0[i].b - (float)bmed_b[0]) : c0[i];
-        const float cj = use_cluster ? std::hypot(lab0[j].a - (float)bmed_a[0], lab0[j].b - (float)bmed_b[0]) : c0[j];
-        return ci != cj ? ci < cj : i < j;
-      });
-      const int mb = std::max(1, (int)std::lround(sel_frac * (double)ord.size()));
-      for (int k = 0; k < mb; ++k) {
-        if (use_cluster || c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
-      }
-      if (!b_sel[b].empty()) {
-        for (int i : b_sel[b]) {
-          bL[b] += lab0[i].L;
-          ba[b] += lab0[i].a;
-          bb[b] += lab0[i].b;
-        }
-        const double inv_nb = 1.0 / (double)b_sel[b].size();
-        bL[b] *= inv_nb;
-        ba[b] *= inv_nb;
-        bb[b] *= inv_nb;
-      }
+      head_used_ = n_head >= 16;
+      if (!head_used_)
+        for (auto& v : b_sel) v.clear();
     }
-
-    // Collinearity gate on midtone bands B1, B2 when both shadow B0 (at least 16 cells) and highlight B3 are populated:
-    // if a midtone band deviates from the linear L* trajectory between B0 and B3 by > 8.0 Lab units (e.g. blue sky in
-    // B1/B2 on 02, or sodium-vapor tunnel wall in B1 on 00), drop that midtone band so B0 and B3 anchor the neutral line.
-    if (b_sel[0].size() >= 16 && !b_sel[3].empty() && b_sel[0].size() + b_sel[3].size() >= 32 && bL[3] - bL[0] > 25.0) {
-      for (int b = 1; b <= 2; ++b) {
-        if (b_sel[b].empty()) continue;
-        const double t = std::clamp((bL[b] - bL[0]) / (bL[3] - bL[0]), 0.0, 1.0);
-        const double a_hat_med = bmed_a[0] + t * (bmed_a[3] - bmed_a[0]);
-        const double b_hat_med = bmed_b[0] + t * (bmed_b[3] - bmed_b[0]);
-        const double dev_med = std::hypot(bmed_a[b] - a_hat_med, bmed_b[b] - b_hat_med);
-        const double a_hat_sel = ba[0] + t * (ba[3] - ba[0]);
-        const double b_hat_sel = bb[0] + t * (bb[3] - bb[0]);
-        const double dev_sel = std::hypot(ba[b] - a_hat_sel, bb[b] - b_hat_sel);
-        if (std::max(dev_med, dev_sel) > 8.0) {
-          b_sel[b].clear();
+    // Else a band's lowest-chroma 30% under the chroma gate (from the 30th percentile of the chroma above L* 20, else
+    // of B0).
+    if (!head_used_) {
+      if (mid_c.empty()) {
+        for (int i : bands[0]) mid_c.push_back(c0[i]);
+      }
+      if (mid_c.empty()) return;
+      std::sort(mid_c.begin(), mid_c.end());
+      const float c_q30 = mid_c[std::min(mid_c.size() - 1, (size_t)(0.30 * (double)mid_c.size()))];
+      const float c_gate = std::max(15.0f, 1.75f * c_q30);
+      for (int b = 0; b < 4; ++b) {
+        if (!band_ok(b)) continue;
+        std::vector<int> ord = bands[b];
+        std::sort(ord.begin(), ord.end(), [&](int i, int j) { return c0[i] != c0[j] ? c0[i] < c0[j] : i < j; });
+        const int mb = std::max(1, (int)std::lround(0.30 * (double)ord.size()));
+        for (int k = 0; k < mb; ++k) {
+          if (c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
         }
       }
     }
@@ -697,9 +665,12 @@ class JointCurveModel {
     c_a_ = (float)(sa - alpha_off * cast_a);
     c_b_ = (float)(sb - alpha_off * cast_b);
     w_off_ = conf_ / 1.5f;
-    w_slope_ = chart_like ? 0.0f : conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
+    w_slope_ = conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
     w_quad_ = (n_bands >= 3) ? conf_ * std::sqrt((float)(vq0 / (vq0 + 0.08))) / 4.0f : 0.0f;
   }
+
+  // set_scene_neutral took the neutral head's anchors (else the lowest-chroma cells).
+  bool head_used() const { return head_used_; }
 
   NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
     const InputCurves c = anchored(shape, e, g, b);
@@ -890,6 +861,7 @@ class JointCurveModel {
   std::vector<float> rows_, L_, ug_, ub_;
   std::vector<int> neu_idx_;
   std::vector<float> neu_w_;
+  bool head_used_ = false;
 };
 
 // 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each

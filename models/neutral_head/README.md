@@ -1,9 +1,12 @@
 # Neutral-patch head
 
 Predicts, for every 16x16 patch of a preview, p(neutral): the probability that the patch should render grey in the
-intended positive, whatever colour cast the current render has. `neg_process` uses it, when enabled, to pick the
-scene-neutral anchors of the joint curve fit (B5 + head anchors) in place of the raw-chroma selection and its
-hand-tuned rules. It does not predict colour; the intent adapter's mu and sigma stay as they are.
+intended positive, whatever colour cast the current render has. `neg_process` uses it to pick the scene-neutral
+anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): the grid cells
+with p >= 0.9 in each of four L* bands, or, when fewer than 16 cells reach 0.9 (too few for the fit's neutral
+term), the lowest-chroma 30% of each band as without the head. It replaced the raw-chroma selection and its four hand-tuned rules (low-key
+band merge, chart-like gate, shadow cluster, collinearity drop). It does not predict colour; the intent adapter's mu
+and sigma stay as they are.
 
 - Input: the [N, 768] patch tokens of the frozen DINOv3 ViT-S/16 backbone (layers 9 and 12, the tokens the intent
   adapters of `../dinov3-small_*` read), standardised with the stored `mean` and `std` (768 each).
@@ -46,18 +49,20 @@ python3 models/neutral_head/export_neutral_head.py --check   # needs torch and n
 
 ## Using it in neg_process
 
-Off by default; with it off, output is byte-identical to a build without it.
+On by default wherever the white-light curve fit runs (`--fit_curves auto` or `on`); the head is not loaded
+otherwise (TriLED, given parameters).
 
 ```bash
-NP_PHASE2_ARM=B5 NP_NEUTRAL_HEAD=1 neg_process ...        # B5 + head anchors, built-in head
-NP_NEUTRAL_HEAD=path/to/neutral_head.bin ...                # another export of the head
-NP_NEUTRAL_P_THR=0.9                                        # anchor threshold (default 0.9)
+neg_process ... --neutral_head on                  # default: the built-in head
+neg_process ... --neutral_head path/to/head.bin    # another export of the head (same NPH1 format)
+neg_process ... --neutral_head off                 # no head: the lowest-chroma 30% of each L* band
 ```
 
-`NP_NEUTRAL_HEAD` adds `neutral_p` to every DINOv3 inference (about 5-8 ms on 8 threads, 25 ms on one, against
+The head adds `neutral_p` to every DINOv3 inference of the search (about 5-8 ms on 8 threads, 25 ms on one, against
 about 250-350 ms for the backbone and adapter). With the backbone and adapter on TensorRT the tokens are copied to the
-host once per inference for the head. `NP_B5_HEAD_P_DIR` (p from text files keyed by a hash of mu) still overrides
-the native p, for experiments.
+host once per inference for it. The sidecar's `input_curves.remeter.neutral.anchors` says which selection ran
+(`head`, or `chroma` without the head or with fewer than 16 cells at p >= 0.9). To try a retrained head, export it with `export_neutral_head.py` and pass the `.bin` with
+`--neutral_head`, or replace `neutral_head.bin` and rebuild.
 
 ## Provenance
 
