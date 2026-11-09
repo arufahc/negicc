@@ -1,0 +1,37 @@
+{
+  "model_name": "neutral_head_pooled_mlp",
+  "backbone": "dinov3-small",
+  "backbone_spec": "dinov3-small_portra400",
+  "features": "tok",
+  "in_dim": 768,
+  "hidden_dim": 256,
+  "parameters": 197121,
+  "architecture": "standardise((tokens - mean) / std) -> Linear(768, 256) -> GELU (erf) -> Dropout(0.1) -> Linear(256, 1) -> sigmoid",
+  "output": "p_neutral per patch",
+  "threshold": 0.9,
+  "training": {
+    "stocks": ["ektar100", "gold200", "portra", "portra160", "portra400", "portra800", "pro160ns", "pro400h"],
+    "images": 10539,
+    "cast_copies": 2,
+    "patches": 4179838,
+    "label": "neutral: C*<4 & pix75 C*<8 & 8<L*<95; non-neutral: C*>10",
+    "loss": "BCE with positive-class weighting",
+    "optimizer": "AdamW, one-cycle",
+    "epochs": 4,
+    "lr": 0.002,
+    "batch": 8192,
+    "source": "negicc-station exp-neutral-head: training scripts 1781969, weights 0ac462b"
+  },
+  "validation": {
+    "image_split_5fold_auroc": 0.906,
+    "photographer_split_5fold_auroc": 0.898,
+    "current_rule_auroc": 0.865,
+    "recall_at_rule_fp_rate": {"rule_fp_rate": 0.043, "head_image_split": 0.50, "head_photographer_split": 0.48, "rule": 0.37},
+    "hard_subset_auroc": {"head": [0.795, 0.806], "rule": 0.752}
+  },
+  "files": {
+    "neutral_head.pt": {"sha256": "f34a6cbcf3e54845c27bb6ccd6183d53acc61fb3ebeae58ef179deec1d9efa74", "bytes": 800637},
+    "neutral_head.bin": {"sha256": "54bae8fa78b51573b115d82a3780f8dd54a5ca3d6cfa0fbe6b9eefd9ea9dfe36", "bytes": 794640,
+                         "format": "NPH1: uint32 in_dim, hidden; float32 mean, std, w1[hidden][in_dim], b1, w2, b2 (little-endian)"}
+  }
+}
