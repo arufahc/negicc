@@ -273,6 +273,11 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
+  parser.add_argument("--neutral_head")
+    .help("Neutral-patch head of the white-light curve fit: on (default, the built-in "
+          "models/neutral_head/neutral_head.bin), off, or the path of another neutral_head.bin. It picks the fit's "
+          "scene-neutral anchors (the cells with p(neutral) >= 0.9); off, the lowest-chroma cells of each L* band.")
+    .default_value(std::string("on"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -454,6 +459,7 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
+  o.neutral_head = parser.get<std::string>("--neutral_head");
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

@@ -189,6 +189,9 @@ struct CurveFrame {
   float film_base[3] = {0.0f, 0.0f, 0.0f};
   const uint16_t* grid = nullptr;
   int n = 0;
+  // The neutral-patch head's p(neutral) per grid cell (n values, DinoV3InferenceResult::neutral_p), or null when the
+  // head did not run.
+  const float* neutral_p = nullptr;
 };
 
 // shape's a and k anchored at (e, g, b): ref, u_med and u_lo from the frame there (input_curve_reference).

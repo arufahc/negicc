@@ -67,6 +67,7 @@ struct Options {
 
   // Parameter search
   std::string dino_adapter;                    // --dino, empty when not given
+  std::string neutral_head = "on";             // --neutral_head: on (built-in), off, or a neutral_head.bin
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;

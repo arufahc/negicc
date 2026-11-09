@@ -161,6 +161,8 @@ struct FixedPointResult {
   // The intent field DINOv3 predicted from the best step's preview (the field that step's parameters were searched
   // against next and its residual was measured with): grid_h x grid_w cells, row-major, [L*, a*, b*] per cell.
   std::vector<float> mu, sigma;
+  // The neutral head's p per cell from the same preview (DinoV3InferenceResult::neutral_p); empty without one.
+  std::vector<float> neutral_p;
   int grid_w = 0, grid_h = 0;
 };
 
@@ -177,6 +179,7 @@ struct ParamSearchResult {
   // The chosen step's intent field (FixedPointResult::mu, sigma, grid_w, grid_h), written to the sidecar's
   // intent_field, and that step's parameters (E in the search's units).
   std::vector<float> intent_mu, intent_sigma;
+  std::vector<float> intent_neutral_p;  // FixedPointResult::neutral_p of that step (empty without a neutral head)
   int intent_grid_w = 0, intent_grid_h = 0;
   ConversionParams intent_params;
 

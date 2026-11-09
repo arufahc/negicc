@@ -99,6 +99,7 @@ struct Setup {
   negicc::FlatFieldPtr flat_field;
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
+  std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
   // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
   // empty (none).

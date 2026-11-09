@@ -27,7 +27,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -233,7 +235,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},
+      {"", "--flat", 1, false},           {"", "--neutral_head", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -929,6 +931,33 @@ int prepare(const Options& o, Setup& s) {
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
         s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
+      }
+      // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
+      // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
+      if ((o.fit_curves || s.fit_curves_auto_active) && o.neutral_head != "off") {
+        std::vector<char> file;
+        const void* data = nullptr;
+        size_t size = 0;
+        std::string name = "[built-in] models/neutral_head/neutral_head.bin";
+        if (o.neutral_head == "on") {
+          const EmbeddedFile* f = find_embedded_file("models/neutral_head/neutral_head.bin");
+          if (f) {
+            data = f->data;
+            size = f->size;
+          }
+        } else {
+          std::ifstream in(o.neutral_head, std::ios::binary);
+          if (!in) throw std::runtime_error("--neutral_head: cannot read " + o.neutral_head);
+          file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+          data = file.data();
+          size = file.size();
+          name = o.neutral_head;
+        }
+        if (data && s.engine.needs_adapter()) {
+          s.engine.set_neutral_head(data, size);
+          s.neutral_head = name;
+          log_info("Neutral head %s\n", name.c_str());
+        }
       }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());

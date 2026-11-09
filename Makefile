@@ -265,7 +265,7 @@ DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3
               bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o bin_out/film_base_detect.o \
               bin_out/profile_bundle.o bin_out/multi_target_optimizer.o $(DINOV3_RUNNER_OBJ)
 
-bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_runner.h dinov3_preprocess.h neutral_head.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_engine.cc -o $@
 
@@ -329,8 +329,11 @@ bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.
 # cannot be loaded. Without the backbone neg_process still builds, but converts only with --gain_g or --gain_b given.
 # USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
+# models/neutral_head/neutral_head.bin is the neutral-patch head (neutral_head.h) of the white-light curve fit's
+# neutral anchors.
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx \
+                                models/neutral_head/neutral_head.bin \
                                 $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
               $(wildcard $(BACKBONE_FILES))
 
