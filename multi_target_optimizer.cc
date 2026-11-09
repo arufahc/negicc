@@ -1638,7 +1638,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
       std::vector<FixedPointResult> res_adaptive;
       if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
-      if (const FixedPointResult* win_res = winner(res_adaptive, true, tourney_score)) {
+      if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
         ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
@@ -1878,7 +1878,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   const uint16_t* fit_grid = stats.grid.data();
   size_t nf = n;
   out.cells_total = (int)n;
-  if (opts.fallback_crop && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
+  if (opts.fallback_crop && opts.film_base_is_rebate && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
     std::vector<float> kept_mu, kept_sigma;
     const float base_lim[2] = {cf.film_base[1] * std::exp2(-kBaseCellStops), cf.film_base[2] * std::exp2(-kBaseCellStops)};
     const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
@@ -1927,10 +1927,11 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                                   fit_grid, (int)nf, mu.data(), sigma.data());
 
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
-  // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
-  // and the curves may not take E further out of the bracket's range than Auto took it; without a range, 2 stops
-  // either side of Auto's E. A result whose E would need to leave them falls back to Auto's (step 2).
-  const float margin = std::exp2(0.1f);
+  // measured) widened to hold Auto's E with a margin that scales with the gain bounds (0.1 + 0.5 * max(s_g, s_b)
+  // stops), so a gain change has E room to hold Auto's median L*; without a range, 2 stops either side of Auto's E.
+  const float s_gain = std::max(fit_opts.g_bound_stops > 0.0f ? fit_opts.g_bound_stops : 0.0f,
+                                fit_opts.b_bound_stops > 0.0f ? fit_opts.b_bound_stops : 0.0f);
+  const float margin = std::exp2(0.1f + 0.5f * s_gain);
   if (res.e_range_lo > 0.0f && res.e_range_hi >= res.e_range_lo) {
     out.e_lo = std::min(res.e_range_lo, e_int / margin);
     out.e_hi = std::max(res.e_range_hi, e_int * margin);

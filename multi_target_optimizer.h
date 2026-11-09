@@ -124,6 +124,7 @@ struct ParamSearchOptions {
   // rebate, bare light or holder. The curve fit then leaves out the grid cells at the film base's level or holder-dark
   // (fit_input_curves_after_search).
   bool fallback_crop = false;
+  bool film_base_is_rebate = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
