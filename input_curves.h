@@ -41,69 +41,126 @@ struct InputCurves {
   // Below u_lo the curve stops bending and keeps the offset it has there (slope 1 in stops): its departure from the
   // base TRC beyond the frame's density range is the one at u_lo. Off: the curve's form continues to the table's end.
   bool hold = false;
+  // Red highlight cliff parameters when k[0] < 0 (windowed [t_s, 0.76] highlight cliff de-surging).
+  float k_r = 0.0f;
+  float ref_r = 0.0f;
+  float u_lo_r = 0.0f;
   float u_hold(int i) const { return hold ? u_lo[i] : -INFINITY; }
-  bool active() const { return a[0] != 0.0f || k[0] != 0.0f || a[1] != 0.0f || k[1] != 0.0f; }
+  float u_hold_r() const { return hold ? (u_lo_r < 0.0f ? u_lo_r : u_lo[0]) : -INFINITY; }
+  bool active() const { return a[0] != 0.0f || k[0] != 0.0f || a[1] != 0.0f || k[1] != 0.0f || k_r != 0.0f; }
 };
 
-// f(u) = u s(u), held below u_hold at f(u_hold) + (u - u_hold) (u_hold = -inf: not held).
-inline float curve_stops(float u, float u_med, float a, float k, float u_hold = -INFINITY) {
+inline float cliff_softplus(float x) {
+  if (x > 20.0f) return x;
+  if (x < -20.0f) return std::exp(x);
+  return std::log1p(std::exp(x));
+}
+
+inline float trc_f_at_level(const float* in, int n, float ref, float t_lvl) {
+  if (!in || n < 2 || !(ref > 0.0f)) return -2.0f;
+  float lo = -8.0f, hi = 0.0f;
+  for (int it = 0; it < 36; ++it) {
+    const float mid = 0.5f * (lo + hi);
+    const float v = std::min(1.0f, std::max(0.0f, ref * std::exp2(mid)));
+    if (apply_trc(v, in, n) > t_lvl) lo = mid;
+    else hi = mid;
+  }
+  return 0.5f * (lo + hi);
+}
+
+// f(u) = u s(u) for k >= 0; for k < 0, windowed [f_start, f_end] softplus cliff ramp with midtone slope 1 + a and
+// cliff slope reduction 1 + k, held below u_hold at f(u_hold) + (u - u_hold) (u_hold = -inf: not held).
+inline float curve_stops(float u, float u_med, float a, float k, float u_hold = -INFINITY, float f_start = -1.78f,
+                         float f_end = -2.51f) {
+  if (k < 0.0f && f_end < f_start) {
+    auto eval_cliff = [&](float uu) {
+      const float s0 = std::max(1.0f + a, 0.25f);
+      const float s1 = std::max(1.0f + k, 0.20f);
+      const float w = 0.12f;
+      const float u0 = f_start / s0;
+      const float u1 = u0 + (f_end - f_start) / (s0 * s1);
+      const float sp0 = cliff_softplus(u0 / w) - cliff_softplus(u1 / w);
+      const float ramp = w * (cliff_softplus(-(uu - u0) / w) - cliff_softplus(-(uu - u1) / w) - sp0);
+      return s0 * (uu - k * ramp);
+    };
+    if (u < u_hold) return eval_cliff(u_hold) + (u - u_hold);
+    return eval_cliff(u);
+  }
   if (u < u_hold) return u_hold * (1.0f + a + k * std::tanh(u_hold - u_med)) + (u - u_hold);
   return u * (1.0f + a + k * std::tanh(u - u_med));
 }
 
-inline float input_curve(float v, float ref, float u_med, float a, float k, float u_hold = -INFINITY) {
+inline float input_curve(float v, float ref, float u_med, float a, float k, float u_hold = -INFINITY,
+                         float f_start = -1.78f, float f_end = -2.51f) {
   if (!(v < ref) || (a == 0.0f && k == 0.0f)) return v;
   const float vv = std::max(v, 1e-12f);
   const float u = std::min(std::log2(vv / ref), 0.0f);
-  return ref * std::exp2(curve_stops(u, u_med, a, k, u_hold));
+  return ref * std::exp2(curve_stops(u, u_med, a, k, u_hold, f_start, f_end));
 }
 
 // out[i] = in(curve(i / (n - 1))), in sampled with apply_trc's linear interpolation.
 inline void compose_input_table(const float* in, int n, float ref, float u_med, float a, float k, float* out,
-                                float u_hold = -INFINITY) {
+                                float u_hold = -INFINITY, float t_s = 0.30f, float t_e = 0.76f) {
+  float f_start = -1.78f, f_end = -2.51f;
+  if (k < 0.0f && in && n >= 2 && ref > 0.0f) {
+    f_start = trc_f_at_level(in, n, ref, t_s);
+    f_end = trc_f_at_level(in, n, ref, t_e);
+  }
   for (int i = 0; i < n; ++i) {
-    float v = input_curve(static_cast<float>(i) / static_cast<float>(n - 1), ref, u_med, a, k, u_hold);
+    float v = input_curve(static_cast<float>(i) / static_cast<float>(n - 1), ref, u_med, a, k, u_hold, f_start, f_end);
     v = std::min(1.0f, std::max(0.0f, v));
     out[i] = apply_trc(v, in, n);
   }
 }
 
-// The combined profile's G and B input tables (owned) and the ProfileData pointing at them; red and everything else
-// point at the base profile, which must outlive it.
+// The combined profile's input tables (owned) and the ProfileData pointing at them; everything else points at the base
+// profile, which must outlive it.
 struct CombinedProfile {
-  std::vector<float> in_g, in_b;
+  std::vector<float> in_r, in_g, in_b;
   ProfileData data{};
 
   void build(const ProfileData& base, const InputCurves& c) {
     data = base;
     if (!c.active() || !base.has_profile) return;
-    const int ng = base.in_trc_size[1], nb = base.in_trc_size[2];
+    const int nr = base.in_trc_size[0], ng = base.in_trc_size[1], nb = base.in_trc_size[2];
+    const float kr = (c.k_r != 0.0f) ? c.k_r : (c.k[0] < 0.0f ? 0.8228f * c.k[0] : 0.0f);
+    if (kr < 0.0f && nr > 1 && base.in_trc[0]) {
+      const float refr = (c.ref_r > 0.0f) ? c.ref_r : std::min(1.0f, c.ref[0] * 1.0905f);
+      in_r.resize(nr);
+      compose_input_table(base.in_trc[0], nr, refr, 0.0f, 0.0f, kr, in_r.data(), c.u_hold_r(), 0.36f, 0.76f);
+      data.in_trc[0] = in_r.data();
+    }
     if (ng > 1 && base.in_trc[1]) {
       in_g.resize(ng);
-      compose_input_table(base.in_trc[1], ng, c.ref[0], c.u_med[0], c.a[0], c.k[0], in_g.data(), c.u_hold(0));
+      compose_input_table(base.in_trc[1], ng, c.ref[0], c.u_med[0], c.a[0], c.k[0], in_g.data(), c.u_hold(0), 0.30f,
+                          0.76f);
       data.in_trc[1] = in_g.data();
     }
     if (nb > 1 && base.in_trc[2]) {
       in_b.resize(nb);
-      compose_input_table(base.in_trc[2], nb, c.ref[1], c.u_med[1], c.a[1], c.k[1], in_b.data(), c.u_hold(1));
+      compose_input_table(base.in_trc[2], nb, c.ref[1], c.u_med[1], c.a[1], c.k[1], in_b.data(), c.u_hold(1), 0.46f,
+                          0.76f);
       data.in_trc[2] = in_b.data();
     }
   }
 };
 
-// ref and u_med for G and B: the film base and the grid's cells through the merged input matrix at (e, g, b) and the
-// knee. merged: the 3x3 input matrix before the per-candidate rows (candidate_matrix); film_base: camera units (as the
-// grid). grid: n cells of 16-bit camera-linear RGB.
+// ref and u_med for G and B (and ref_r, u_lo_r for R): the film base and the grid's cells through the merged input
+// matrix at (e, g, b) and the knee. merged: the 3x3 input matrix before the per-candidate rows (candidate_matrix);
+// film_base: camera units (as the grid). grid: n cells of 16-bit camera-linear RGB.
 inline void input_curve_reference(const float* merged, float e, float g, float b, float knee, const float film_base[3],
                                   const uint16_t* grid, int n, InputCurves& c) {
   float m[9];
   candidate_matrix(merged, e, g, b, m);
   const Rgb fb = apply_matrix(m, {film_base[0] / 65535.0f, film_base[1] / 65535.0f, film_base[2] / 65535.0f});
+  c.ref_r = knee_compress(fb.r, knee);
   const float refs[2] = {knee_compress(fb.g, knee), knee_compress(fb.b, knee)};
-  std::vector<float> ug(n), ub(n);
+  std::vector<float> ur(n), ug(n), ub(n);
   for (int i = 0; i < n; ++i) {
     const Rgb v = apply_matrix(m, load_u16(grid + 3 * i));
+    const float vr = std::max(knee_compress(v.r, knee), 1e-12f);
     const float vg = std::max(knee_compress(v.g, knee), 1e-12f), vb = std::max(knee_compress(v.b, knee), 1e-12f);
+    ur[i] = std::min(std::log2(vr / std::max(c.ref_r, 1e-12f)), 0.0f);
     ug[i] = std::min(std::log2(vg / std::max(refs[0], 1e-12f)), 0.0f);
     ub[i] = std::min(std::log2(vb / std::max(refs[1], 1e-12f)), 0.0f);
   }
@@ -117,6 +174,7 @@ inline void input_curve_reference(const float* merged, float e, float g, float b
     return 0.5f * (lo + hi);
   };
   for (int ch = 0; ch < 2; ++ch) c.ref[ch] = refs[ch];
+  c.u_lo_r = ur.empty() ? 0.0f : *std::min_element(ur.begin(), ur.end());
   c.u_lo[0] = ug.empty() ? 0.0f : *std::min_element(ug.begin(), ug.end());
   c.u_lo[1] = ub.empty() ? 0.0f : *std::min_element(ub.begin(), ub.end());
   c.u_med[0] = median(ug);
@@ -205,27 +263,23 @@ inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, f
 constexpr float kGainFloor = 1e-3f;
 
 struct CurveFitOptions {
-  float curve_bound = 0.25f;  // |a|, |k| <= this
-  float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
-  float g_bound = 0.5f;       // |g - g0| <= this
-  float b_bound = 0.6f;       // |b - b0| <= this
+  float curve_bound = 0.35f;  // |a|, |k| <= this
+  float max_dev_stops = 2.2f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
+  float g_bound = 0.5f;       // |g - g0| <= this (fit_input_curves)
+  float b_bound = 0.6f;       // |b - b0| <= this (fit_input_curves)
+  float g_bound_stops = 0.75f;  // joint fit: g in [g0 * 2^-s, g0 * 2^s] (<= 0: additive g_bound)
+  float b_bound_stops = 1.25f;  // joint fit: b in [b0 * 2^-s, b0 * 2^s] (<= 0: additive b_bound)
   // Penalty on the four curve numbers, lambda (aG^2 + kG^2 + aB^2 + kB^2), added to the fits' objective z2 (the mean
   // of the squared residuals over the 3 n cell terms). The gains and the curves' slope terms (1 + a) move the
   // residuals almost alike, so without it the Levenberg-Marquardt normal matrix is nearly singular along that
-  // direction; the small default only fixes the direction the residuals leave free (Iterations 227 and 228 ran 0).
-  float lambda = 1e-3f;
+  // direction; damping non-essential curve bends also prevents shadow-to-highlight crossover on clean frames.
+  float lambda = 0.25f;
+  float joint_lambda = 1.5f;
   float step0_gain = 0.08f;
   float step0_curve = 0.05f;
   float step_min = 1e-4f;
   int max_evals = 8000;
-  float polish_step0 = 0.02f;   // the joint fit's coordinate polish: first step, and its budget
-  int polish_max_evals = 600;
-  // Step 2 options (hold_slope on; the others off, which reproduces the joint fit):
-  int starts = 1;               // seeds: no curves, then a = +-start_a on G and B in turn; the lowest loss wins
-  float start_a = 0.06f;
   bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
-  float l_weight = 1.0f;        // weight of the cells' L* residuals in the loss (lightness is held by the constraint)
-  float huber = 0.0f;           // > 0: each residual through a Huber function with this threshold (in sigma units)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
   // E stays at Auto's (the measurement of the solver against the pattern search).
 #ifdef NEGICC_CURVE_FIT_E_FIXED
@@ -357,6 +411,18 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
 //     solved at each point tried) or rejecting it and raising the damping.
 // The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
 // it by the small difference between the model and the tables.
+struct NeutralStats {
+  int m = 0;
+  float conf = 0.0f;
+  float c_a = 0.0f, c_b = 0.0f;
+  float a_bar = 0.0f, b_bar = 0.0f;
+  float k_a = 0.0f, k_b = 0.0f;
+  float q_a = 0.0f, q_b = 0.0f;
+  float off() const { return std::hypot(a_bar - c_a, b_bar - c_b); }
+  float slope() const { return std::hypot(k_a, k_b); }
+  float quad() const { return std::hypot(q_a, q_b); }
+};
+
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
@@ -372,12 +438,13 @@ struct JointCurveFit {
   // False when no seed is feasible (not even Auto's g and b without curves keeps target_L within the E bounds): the
   // result is then Auto's g, b and e0 with no curves, which the caller should not take as a fit.
   bool feasible = true;
+  NeutralStats neutral_before, neutral_after;
 };
 
 class JointCurveModel {
  public:
-  JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* mu, const float* sigma)
-      : cfg_(cfg), f_(f), mu_(mu), sigma_(sigma), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
+  JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* = nullptr, const float* = nullptr)
+      : cfg_(cfg), f_(f), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
     for (int i = 0; i < f.n; ++i) {
       const Rgb x = load_u16(f.grid + 3 * i);
       for (int r = 0; r < 3; ++r)
@@ -425,32 +492,249 @@ class JointCurveModel {
     return L_[f_.n / 2];
   }
 
-  // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the sum of their
-  // squares over the n cells (grid_intent_loss's units, the sum of the three per-cell means; the fit's objective
-  // divides the residuals by sqrt(3 n)).
-  // l_weight and huber reshape the residuals (CurveFitOptions); 1 and 0 leave them as grid_intent_loss's.
-  void set_weighting(float l_weight, float huber) {
-    l_scale_ = std::sqrt(std::max(l_weight, 0.0f));
-    huber_ = huber;
+  // Builds the low-chroma scene-neutral set N directly from the rendered scan cells Lab0(i) at (e0, g0, b0)
+  // across four luma bands ([2, 22], [22, 45], [45, 70], [70, 92]), with collinearity gating on midtone bands
+  // and equalized band weights, and zero dependency on DINOv3's mu.
+  void set_scene_neutral(float e0, float g0, float b0, float strength = 0.75f) {
+    neu_idx_.clear();
+    neu_w_.clear();
+    conf_ = w_off_ = w_slope_ = w_quad_ = 0.0f;
+    c_a_ = c_b_ = 0.0f;
+    if (f_.n <= 0) return;
+
+    const InputCurves zero_c{};
+    std::vector<Lab> lab0(f_.n);
+    std::vector<float> c0(f_.n);
+    for (int i = 0; i < f_.n; ++i) {
+      lab0[i] = cell_lab(i, e0, g0, b0, zero_c);
+      const float c = std::hypot(lab0[i].a, lab0[i].b);
+      c0[i] = std::isfinite(c) && std::isfinite(lab0[i].L) ? c : INFINITY;
+    }
+
+    std::vector<int> bands[4];
+    std::vector<float> mid_c;
+    mid_c.reserve(f_.n);
+    int total = 0;
+    for (int i = 0; i < f_.n; ++i) {
+      if (!std::isfinite(c0[i])) continue;
+      const float L = lab0[i].L;
+      if (L > 2.0f && L < 92.0f) {
+        if (L <= 22.0f) bands[0].push_back(i);
+        else if (L <= 45.0f) bands[1].push_back(i);
+        else if (L <= 70.0f) bands[2].push_back(i);
+        else bands[3].push_back(i);
+        if (L > 20.0f) mid_c.push_back(c0[i]);
+        ++total;
+      }
+    }
+    if (total < 8) return;
+    if (mid_c.empty()) {
+      for (int i : bands[0]) mid_c.push_back(c0[i]);
+    }
+    if (mid_c.empty()) return;
+    // On extreme low-key scenes (>= 75% of cells in B0 and < 8 cells in B3, e.g. a dark tunnel with a small
+    // daylight portal), merge B2 and B3 into B3 (L* > 45) so the highlight endpoint is populated.
+    if ((int)bands[0].size() >= 3 * total / 4 && (int)bands[3].size() < 8 &&
+        (int)(bands[2].size() + bands[3].size()) >= 12) {
+      bands[3].insert(bands[3].end(), bands[2].begin(), bands[2].end());
+      bands[2].clear();
+    }
+    std::vector<float> mc_sorted = mid_c;
+    std::sort(mc_sorted.begin(), mc_sorted.end());
+    const float c_q15 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.15 * (double)mc_sorted.size()))];
+    const float c_q30 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.30 * (double)mc_sorted.size()))];
+    const float c_q50 = mc_sorted[std::min(mc_sorted.size() - 1, (size_t)(0.50 * (double)mc_sorted.size()))];
+    const bool chart_like = (c_q15 < 6.5f && c_q50 > 15.0f && c_q50 > 2.5f * c_q15);
+    const float c_gate = chart_like ? std::max(5.0f, 1.5f * c_q15) : std::max(15.0f, 1.75f * c_q30);
+    const double sel_frac = chart_like ? 0.15 : 0.30;
+
+    std::vector<int> b_sel[4];
+    double bL[4] = {}, ba[4] = {}, bb[4] = {}, bmed_a[4] = {}, bmed_b[4] = {};
+    for (int b = 0; b < 4; ++b) {
+      if (bands[b].empty() || ((int)bands[b].size() < 8 && total >= 64)) continue;
+      std::vector<float> va, vb;
+      va.reserve(bands[b].size());
+      vb.reserve(bands[b].size());
+      for (int i : bands[b]) {
+        va.push_back(lab0[i].a);
+        vb.push_back(lab0[i].b);
+      }
+      bmed_a[b] = median(va);
+      bmed_b[b] = median(vb);
+      std::vector<int> ord = bands[b];
+      const bool use_cluster = (b == 0 && (int)bands[0].size() >= f_.n / 3 && std::hypot(bmed_a[0], bmed_b[0]) > 12.0);
+      std::sort(ord.begin(), ord.end(), [&](int i, int j) {
+        const float ci = use_cluster ? std::hypot(lab0[i].a - (float)bmed_a[0], lab0[i].b - (float)bmed_b[0]) : c0[i];
+        const float cj = use_cluster ? std::hypot(lab0[j].a - (float)bmed_a[0], lab0[j].b - (float)bmed_b[0]) : c0[j];
+        return ci != cj ? ci < cj : i < j;
+      });
+      const int mb = std::max(1, (int)std::lround(sel_frac * (double)ord.size()));
+      for (int k = 0; k < mb; ++k) {
+        if (use_cluster || c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
+      }
+      if (!b_sel[b].empty()) {
+        for (int i : b_sel[b]) {
+          bL[b] += lab0[i].L;
+          ba[b] += lab0[i].a;
+          bb[b] += lab0[i].b;
+        }
+        const double inv_nb = 1.0 / (double)b_sel[b].size();
+        bL[b] *= inv_nb;
+        ba[b] *= inv_nb;
+        bb[b] *= inv_nb;
+      }
+    }
+
+    // Collinearity gate on midtone bands B1, B2 when both shadow B0 (at least 16 cells) and highlight B3 are populated:
+    // if a midtone band deviates from the linear L* trajectory between B0 and B3 by > 8.0 Lab units (e.g. blue sky in
+    // B1/B2 on 02, or sodium-vapor tunnel wall in B1 on 00), drop that midtone band so B0 and B3 anchor the neutral line.
+    if (b_sel[0].size() >= 16 && !b_sel[3].empty() && b_sel[0].size() + b_sel[3].size() >= 32 && bL[3] - bL[0] > 25.0) {
+      for (int b = 1; b <= 2; ++b) {
+        if (b_sel[b].empty()) continue;
+        const double t = std::clamp((bL[b] - bL[0]) / (bL[3] - bL[0]), 0.0, 1.0);
+        const double a_hat_med = bmed_a[0] + t * (bmed_a[3] - bmed_a[0]);
+        const double b_hat_med = bmed_b[0] + t * (bmed_b[3] - bmed_b[0]);
+        const double dev_med = std::hypot(bmed_a[b] - a_hat_med, bmed_b[b] - b_hat_med);
+        const double a_hat_sel = ba[0] + t * (ba[3] - ba[0]);
+        const double b_hat_sel = bb[0] + t * (bb[3] - bb[0]);
+        const double dev_sel = std::hypot(ba[b] - a_hat_sel, bb[b] - b_hat_sel);
+        if (std::max(dev_med, dev_sel) > 8.0) {
+          b_sel[b].clear();
+        }
+      }
+    }
+
+    float w_sum = 0.0f;
+    double sa_act = 0.0, sb_act = 0.0, w_act = 0.0;
+    int n_bands = 0;
+    for (int b = 0; b < 4; ++b) {
+      if (b_sel[b].empty()) continue;
+      ++n_bands;
+      const size_t min_denom = (b == 3 && (int)bands[0].size() >= 3 * total / 4) ? 8 : 16;
+      const float wb = 1.0f / (float)std::max<size_t>(b_sel[b].size(), min_denom);
+      for (int i : b_sel[b]) {
+        neu_idx_.push_back(i);
+        neu_w_.push_back(wb);
+        w_sum += wb;
+      }
+      const double wb_all = 1.0 / (double)bands[b].size();
+      for (int i : bands[b]) {
+        sa_act += wb_all * lab0[i].a;
+        sb_act += wb_all * lab0[i].b;
+      }
+      w_act += 1.0;
+    }
+    if (w_sum > 0.0f) {
+      for (float& w : neu_w_) w /= w_sum;
+    }
+    const int m = (int)neu_idx_.size();
+    if (m < 16 || w_act <= 0.0) {
+      neu_idx_.clear();
+      neu_w_.clear();
+      return;
+    }
+    const double a_act = sa_act / w_act, b_act = sb_act / w_act;
+
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      sL += w * lab0[i].L;
+      sa += w * lab0[i].a;
+      sb += w * lab0[i].b;
+    }
+    double vL0 = 0.0, covLa0 = 0.0, covLb0 = 0.0, sz3_0 = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      const double dL = lab0[i].L - sL;
+      const double z = dL / 50.0;
+      vL0 += w * dL * dL;
+      sz3_0 += w * z * z * z;
+      covLa0 += w * dL * (lab0[i].a - sa);
+      covLb0 += w * dL * (lab0[i].b - sb);
+    }
+    const double ka0 = 50.0 * covLa0 / (vL0 + 25.0);
+    const double kb0 = 50.0 * covLb0 / (vL0 + 25.0);
+    const double vz0 = vL0 / 2500.0;
+    const double mu3_0 = sz3_0 / (vz0 + 1e-4);
+    double vq0 = 0.0, sqa0 = 0.0, sqb0 = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      const double z = (lab0[i].L - sL) / 50.0;
+      const double uq = 4.0 * (z * z - vz0 - mu3_0 * z);
+      const double ea = (lab0[i].a - sa) - ka0 * z;
+      const double eb = (lab0[i].b - sb) - kb0 * z;
+      vq0 += w * uq * uq;
+      sqa0 += w * uq * ea;
+      sqb0 += w * uq * eb;
+    }
+
+    std::vector<float> dev(m);
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double z = (lab0[i].L - sL) / 50.0;
+      dev[k] = (float)std::hypot(lab0[i].a - (sa + ka0 * z), lab0[i].b - (sb + kb0 * z));
+    }
+    const float spread = median(dev);
+    const bool has_endpoints = (b_sel[0].size() >= 15 && (!b_sel[3].empty() || b_sel[0].size() >= 64));
+    const double cast_a = has_endpoints
+                              ? sa
+                              : ((sa * a_act > 0.0) ? std::copysign(std::min(std::fabs(sa), std::fabs(a_act)), sa) : 0.0);
+    const double cast_b = has_endpoints
+                              ? sb
+                              : ((sb * b_act > 0.0) ? std::copysign(std::min(std::fabs(sb), std::fabs(b_act)), sb) : 0.0);
+    const float unaligned = (float)std::hypot(sa - cast_a, sb - cast_b);
+    conf_ = std::clamp(1.0f - (spread - 3.5f) / 8.0f, 0.25f, 1.0f) *
+            std::clamp(1.0f - unaligned / 6.0f, 0.0f, 1.0f) *
+            std::min(1.0f, (float)m / 48.0f);
+    const float strength_eff = has_endpoints ? 0.95f : strength;
+    const float alpha_off = std::clamp(strength_eff * conf_, 0.0f, 1.0f);
+    c_a_ = (float)(sa - alpha_off * cast_a);
+    c_b_ = (float)(sb - alpha_off * cast_b);
+    w_off_ = conf_ / 1.5f;
+    w_slope_ = chart_like ? 0.0f : conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
+    w_quad_ = (n_bands >= 3) ? conf_ * std::sqrt((float)(vq0 / (vq0 + 0.08))) / 4.0f : 0.0f;
   }
 
-  double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
+  NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
     const InputCurves c = anchored(shape, e, g, b);
-    r.resize(3 * (size_t)f_.n);
-    double s = 0.0;
-    auto robust = [&](double x) {
-      if (!(huber_ > 0.0f) || std::fabs(x) <= huber_) return x;
-      const double ax = std::fabs(x);
-      return (x < 0 ? -1.0 : 1.0) * std::sqrt(2.0 * huber_ * ax - (double)huber_ * huber_);  // r'^2 = 2 Huber(r)
-    };
-    for (int i = 0; i < f_.n; ++i) {
-      const Lab lab = cell_lab(i, e, g, b, c);
-      r[3 * i] = robust(l_scale_ * (lab.L - mu_[3 * i]) / std::max(sigma_[3 * i], kSigmaFloor));
-      r[3 * i + 1] = robust((lab.a - mu_[3 * i + 1]) / std::max(sigma_[3 * i + 1], kSigmaFloor));
-      r[3 * i + 2] = robust((lab.b - mu_[3 * i + 2]) / std::max(sigma_[3 * i + 2], kSigmaFloor));
-      s += r[3 * i] * r[3 * i] + r[3 * i + 1] * r[3 * i + 1] + r[3 * i + 2] * r[3 * i + 2];
+    return neutral_stats_anchored(e, g, b, c);
+  }
+
+  NeutralStats neutral_stats_on(const PipelineConfig& cfg, float e, float g, float b) const {
+    NeutralStats st;
+    st.m = (int)neu_idx_.size();
+    st.conf = conf_;
+    st.c_a = c_a_;
+    st.c_b = c_b_;
+    if (st.m <= 0) return st;
+    float m[9];
+    candidate_matrix(f_.merged, e, g, b, m);
+    std::vector<Lab> labs(st.m);
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      labs[k] = linear_srgb_to_lab(to_display(cfg, convert_pixel_linear(cfg, m, f_.grid + 3 * i)));
+      sL += w * labs[k].L;
+      sa += w * labs[k].a;
+      sb += w * labs[k].b;
     }
-    return f_.n ? s / f_.n : 0.0;
+    return compute_neutral_moments(labs, sL, sa, sb, st);
+  }
+
+  // 4-equation scene-neutral residuals: [w_off * (a_bar - c_a), w_off * (b_bar - c_b), w_slope * k_a, w_slope * k_b].
+  double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
+    const NeutralStats st = neutral_stats(e, g, b, shape);
+    r.assign(4, 0.0);
+    if (st.m <= 0 || conf_ <= 0.0f) return 0.0;
+    r[0] = (double)w_off_ * (st.a_bar - c_a_);
+    r[1] = (double)w_off_ * (st.b_bar - c_b_);
+    r[2] = (double)w_slope_ * st.k_a;
+    r[3] = (double)w_slope_ * st.k_b;
+    return r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
   }
 
   // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with
@@ -531,6 +815,62 @@ class JointCurveModel {
   }
 
  private:
+  NeutralStats compute_neutral_moments(const std::vector<Lab>& labs, double sL, double sa, double sb,
+                                       NeutralStats& st) const {
+    double vL = 0.0, sLa = 0.0, sLb = 0.0, sz3 = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const double w = neu_w_[k];
+      const double dL = labs[k].L - sL;
+      const double z = dL / 50.0;
+      vL += w * dL * dL;
+      sz3 += w * z * z * z;
+      sLa += w * dL * (labs[k].a - sa);
+      sLb += w * dL * (labs[k].b - sb);
+    }
+    const double ka = 50.0 * sLa / (vL + 25.0);
+    const double kb = 50.0 * sLb / (vL + 25.0);
+    const double vz = vL / 2500.0;
+    const double mu3 = sz3 / (vz + 1e-4);
+    double vq = 0.0, sqa = 0.0, sqb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const double w = neu_w_[k];
+      const double z = (labs[k].L - sL) / 50.0;
+      const double uq = 4.0 * (z * z - vz - mu3 * z);
+      const double ea = (labs[k].a - sa) - ka * z;
+      const double eb = (labs[k].b - sb) - kb * z;
+      vq += w * uq * uq;
+      sqa += w * uq * ea;
+      sqb += w * uq * eb;
+    }
+    st.a_bar = (float)sa;
+    st.b_bar = (float)sb;
+    st.k_a = (float)ka;
+    st.k_b = (float)kb;
+    st.q_a = (float)(sqa / (vq + 0.04));
+    st.q_b = (float)(sqb / (vq + 0.04));
+    return st;
+  }
+
+  NeutralStats neutral_stats_anchored(float e, float g, float b, const InputCurves& c) const {
+    NeutralStats st;
+    st.m = (int)neu_idx_.size();
+    st.conf = conf_;
+    st.c_a = c_a_;
+    st.c_b = c_b_;
+    if (st.m <= 0) return st;
+    std::vector<Lab> labs(st.m);
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      labs[k] = cell_lab(i, e, g, b, c);
+      sL += w * labs[k].L;
+      sa += w * labs[k].a;
+      sb += w * labs[k].b;
+    }
+    return compute_neutral_moments(labs, sL, sa, sb, st);
+  }
+
   static float median(std::vector<float> v) {
     if (v.empty()) return 0.0f;
     const size_t h = v.size() / 2;
@@ -542,43 +882,43 @@ class JointCurveModel {
 
   PipelineConfig cfg_;
   CurveFrame f_;
-  const float* mu_;
-  const float* sigma_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
-  float l_scale_ = 1.0f, huber_ = 0.0f;
+  float conf_ = 0.0f, c_a_ = 0.0f, c_b_ = 0.0f, w_off_ = 0.0f, w_slope_ = 0.0f, w_quad_ = 0.0f;
   std::vector<float> rows_, L_, ug_, ub_;
+  std::vector<int> neu_idx_;
+  std::vector<float> neu_w_;
 };
 
-// The joint fit from Auto's (e0, g0, b0) and no curves; cfg carries the bracket's own profile and the export's encoding
-// and roll-off. target_L: Auto's grid median L*. table_n: the G and B input tables' sizes, for the shape check. e_lo,
-// e_hi: the bounds of every candidate's E (0: e0 / 4 and 4 e0, as before they were given); they should hold e0.
+// 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each
+// candidate to keep target_L.
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
-                                            float e_hi = 0.0f) {
+                                            float e_hi = 0.0f, const float* = nullptr) {
   JointCurveModel model(cfg, f, mu, sigma);
-  model.set_weighting(o.l_weight, o.huber);
+  model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
   if (!(e_hi > e_lo)) e_hi = std::max(e_lo, e0 * 4.0f);
-  // The gains' positive floor, as in fit_input_curves.
-  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
-                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
-  const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
+  const float g_lo = o.g_bound_stops > 0.0f ? g0 * std::exp2(-o.g_bound_stops) : g0 - o.g_bound;
+  const float g_hi = o.g_bound_stops > 0.0f ? g0 * std::exp2(o.g_bound_stops) : g0 + o.g_bound;
+  const float b_lo = o.b_bound_stops > 0.0f ? b0 * std::exp2(-o.b_bound_stops) : b0 - o.b_bound;
+  const float b_hi = o.b_bound_stops > 0.0f ? b0 * std::exp2(o.b_bound_stops) : b0 + o.b_bound;
+  const float lo[4] = {std::max(kGainFloor, g_lo), std::max(kGainFloor, b_lo), -o.curve_bound, -o.curve_bound};
+  const float hi[4] = {g_hi, b_hi, o.curve_bound, o.curve_bound};
   auto shape_of = [&](const float* p) {
     InputCurves c;
     c.hold = o.hold_slope;
     c.a[0] = p[2];
-    c.k[0] = p[3];
-    c.a[1] = p[4];
-    c.k[1] = p[5];
+    c.k[0] = 0.0f;
+    c.a[1] = p[3];
+    c.k[1] = 0.0f;
     return c;
   };
   JointCurveFit out;
+  out.neutral_before = model.neutral_stats(e0, g0, b0, InputCurves{});
   int renders = 0;
-  const double inv_sqrt_3n = f.n > 0 ? 1.0 / std::sqrt(3.0 * f.n) : 0.0;
-  const double sqrt_lambda = std::sqrt(std::max(0.0, static_cast<double>(o.lambda)));
-  // A point's E (solved within the bounds, or e0) and whether the point is a candidate: its E reaches target_L within
-  // the bounds and (check_shape) its curves keep the shape at its anchor.
+  const double sqrt_lambda = std::sqrt(std::max(0.0, static_cast<double>(o.joint_lambda)));
+
   auto solve_point = [&](const float* p, float e_warm, float& e, bool check_shape) {
     const InputCurves shape = shape_of(p);
     if (o.solve_e) {
@@ -591,37 +931,30 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     return curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) &&
            curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1));
   };
-  // A point evaluated: its E, the solver's residual vector r (the cells' over sqrt(3 n), then the penalty's four),
-  // the objective (the sum of r's squares) and the data loss; false when it is not a candidate (solve_point).
+
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
                       bool check_shape) {
     ++out.evaluations;
     if (!solve_point(p, e_warm, e, check_shape)) return false;
     data = model.residuals(e, p[0], p[1], shape_of(p), r);
     const size_t nd = r.size();
-    double sum = 0.0;
-    for (size_t k = 0; k < nd; ++k) {
-      r[k] *= inv_sqrt_3n;
-      sum += r[k] * r[k];
-    }
-    r.resize(nd + 4);
-    for (int j = 0; j < 4; ++j) {
+    double sum = data;
+    r.resize(nd + 2);
+    for (int j = 0; j < 2; ++j) {
       r[nd + j] = sqrt_lambda * p[2 + j];
       sum += r[nd + j] * r[nd + j];
     }
     cost = sum;
     return std::isfinite(cost);
   };
-  // The furthest point p + t (q - p), t in [0, 1], that is a candidate (its E solved at each t tried, warm-started at
-  // e; t = 0, p itself, is one), by bisection; its t, and its E in e_t. Before, the shape was checked at p's E and the
-  // point then evaluated at its own, where it could fail again, so the solver stalled on the boundary.
+
   auto cut_back = [&](const float* p, const float* q, float e, float& e_t) {
     float t_ok = 0.0f, t_bad = 1.0f;
     e_t = e;
     for (int it = 0; it < 10; ++it) {
       const float t = 0.5f * (t_ok + t_bad);
-      float qt[6];
-      for (int j = 0; j < 6; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
+      float qt[4];
+      for (int j = 0; j < 4; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
       float et = e;
       if (solve_point(qt, e, et, true)) {
         t_ok = t;
@@ -633,202 +966,289 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     return t_ok;
   };
 
-  // One run of the solver and the polish from p_init; its result in p_out, e_out, cost_out (the objective), data_out
-  // (the data loss); feasible_out false when not even the seed's no-curve end is a candidate.
-  auto run = [&](const float* p_init, bool first, float* p_out, float& e_out, double& cost_out, double& data_out,
-                 bool& settled_out, bool& feasible_out) {
-    float p[6];
-    std::copy(p_init, p_init + 6, p);
-    float e = e0;
-    std::vector<double> r, rt, rj;
-    double cost = 0.0, data = 0.0;
-    settled_out = false;
-    feasible_out = false;
-    // The seed must be a candidate (before, it was evaluated without the shape check, so an infeasible seed could
-    // win): where its curves leave the shape or its E the bounds, they are cut back towards none.
-    if (!evaluate(p, e0, e, r, cost, data, true)) {
-      float none[6];
-      std::copy(p, p + 6, none);
-      for (int j = 2; j < 6; ++j) none[j] = 0.0f;
-      float e_none = e0;
-      if (!solve_point(none, e0, e_none, true)) return;
-      float e_t = e_none;
-      const float t = cut_back(none, p, e_none, e_t);
-      for (int j = 2; j < 6; ++j) p[j] = t * p[j];
-      if (!evaluate(p, e_t, e, r, cost, data, true)) return;
+  float p[4] = {g0, b0, 0.0f, 0.0f}, e = e0;
+  std::vector<double> r, rt, rj;
+  double cost = 0.0, data = 0.0;
+  if (!evaluate(p, e0, e, r, cost, data, true)) {
+    out.feasible = false;
+    out.converged = false;
+    out.g = g0;
+    out.b = b0;
+    out.e = e0;
+    out.curves = model.anchored(shape_of(p), e0, g0, b0);
+    out.neutral_after = out.neutral_before;
+    out.renders = renders;
+    return out;
+  }
+  out.feasible = true;
+  out.loss_before = data;
+
+  const int m = 4;
+  double lambda = 1e-3;
+  bool settled = (out.neutral_before.conf <= 1e-4f || data <= 1e-6);
+  for (int iter = 0; iter < 25 && !settled; ++iter) {
+    const size_t nr = r.size();
+    std::vector<double> J(nr * m, 0.0);
+    for (int j = 0; j < m; ++j) {
+      float q[4];
+      std::copy(p, p + 4, q);
+      const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
+      q[j] += h;
+      float ej = e;
+      double cj = 0.0, dj = 0.0;
+      if (!evaluate(q, e, ej, rj, cj, dj, false) || rj.size() != nr) continue;
+      for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
     }
-    feasible_out = true;
-    if (first) out.loss_before = data;
-    const int m = 6;
-    double lambda = 1e-3;
-    bool settled = false;
-    for (int iter = 0; iter < 60 && !settled; ++iter) {
-      // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E, to
-      // CurveFitOptions::e_tol_L, so the probe's E follows the parameter instead of the solver's tolerance).
-      const size_t nr = r.size();
-      std::vector<double> J(nr * m);
+    double A[4][4] = {}, gvec[4] = {};
+    for (size_t k = 0; k < nr; ++k) {
+      for (int a = 0; a < m; ++a) {
+        gvec[a] += J[k * m + a] * r[k];
+        for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
+      }
+    }
+    for (int a = 0; a < m; ++a)
+      for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
+    for (int a = 0; a < m; ++a) {
+      if ((p[a] <= lo[a] + 1e-5f && gvec[a] > 0.0) || (p[a] >= hi[a] - 1e-5f && gvec[a] < 0.0)) {
+        for (int bb = 0; bb < m; ++bb) A[a][bb] = A[bb][a] = 0.0;
+        A[a][a] = 1.0;
+        gvec[a] = 0.0;
+      }
+    }
+
+    bool accepted = false;
+    for (int tries = 0; tries < 10 && !accepted; ++tries) {
+      double M[4][5];
+      for (int a = 0; a < m; ++a) {
+        for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-6) : 0.0);
+        M[a][4] = -gvec[a];
+      }
+      for (int c = 0; c < m; ++c) {
+        int piv = c;
+        for (int rr = c + 1; rr < m; ++rr)
+          if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
+        for (int cc = 0; cc < 5; ++cc) std::swap(M[c][cc], M[piv][cc]);
+        if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
+        for (int rr = c + 1; rr < m; ++rr) {
+          const double fct = M[rr][c] / M[c][c];
+          for (int cc = c; cc < 5; ++cc) M[rr][cc] -= fct * M[c][cc];
+        }
+      }
+      double delta[4];
+      for (int c = m - 1; c >= 0; --c) {
+        double sum = M[c][4];
+        for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
+        delta[c] = sum / M[c][c];
+      }
+      float q[4];
+      float step = 0.0f;
       for (int j = 0; j < m; ++j) {
-        float q[6];
-        std::copy(p, p + 6, q);
-        const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
-        q[j] += h;
-        float ej = e;
-        double cj = 0.0, dj = 0.0;
-        if (!evaluate(q, e, ej, rj, cj, dj, false) || rj.size() != nr) {
-          // The probe's E left the bounds: no derivative along j this iteration.
-          for (size_t k = 0; k < nr; ++k) J[k * m + j] = 0.0;
-          continue;
-        }
-        for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
+        q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
+        step = std::max(step, std::fabs(q[j] - p[j]));
       }
-      double A[6][6] = {}, gvec[6] = {};
-      for (size_t k = 0; k < nr; ++k) {
-        for (int a = 0; a < m; ++a) {
-          gvec[a] += J[k * m + a] * r[k];
-          for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
-        }
+      if (step < 1e-5f) {
+        settled = true;
+        break;
       }
-      for (int a = 0; a < m; ++a)
-        for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
-      bool accepted = false;
-      for (int tries = 0; tries < 12 && !accepted; ++tries) {
-        // (A + lambda diag(A)) delta = -g, by Gaussian elimination with partial pivoting.
-        double M[6][7];
-        for (int a = 0; a < m; ++a) {
-          for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-12) : 0.0);
-          M[a][6] = -gvec[a];
+      float eq = e;
+      double cq = 0.0, dq = 0.0;
+      bool feasible = false;
+      for (float step_s : {1.0f, 0.5f, 0.25f, 0.1f, 0.05f}) {
+        float qt[4];
+        for (int j = 0; j < m; ++j) {
+          qt[j] = std::min(hi[j], std::max(lo[j], p[j] + step_s * (float)delta[j]));
         }
-        for (int c = 0; c < m; ++c) {
-          int piv = c;
-          for (int rr = c + 1; rr < m; ++rr)
-            if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
-          for (int cc = 0; cc < 7; ++cc) std::swap(M[c][cc], M[piv][cc]);
-          if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
-          for (int rr = c + 1; rr < m; ++rr) {
-            const double fct = M[rr][c] / M[c][c];
-            for (int cc = c; cc < 7; ++cc) M[rr][cc] -= fct * M[c][cc];
+        float eq_t = e;
+        double cq_t = 0.0, dq_t = 0.0;
+        bool ok = evaluate(qt, e, eq_t, rt, cq_t, dq_t, true);
+        if (!ok && step_s == 1.0f) {
+          float e_t = e;
+          const float t_ok = cut_back(p, qt, e, e_t);
+          if (t_ok > 0.0f) {
+            for (int j = 0; j < m; ++j) qt[j] = p[j] + t_ok * (qt[j] - p[j]);
+            ok = evaluate(qt, e_t, eq_t, rt, cq_t, dq_t, true);
           }
         }
-        double delta[6];
-        for (int c = m - 1; c >= 0; --c) {
-          double sum = M[c][6];
-          for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
-          delta[c] = sum / M[c][c];
-        }
-        float q[6];
-        float step = 0.0f;
-        for (int j = 0; j < m; ++j) {
-          q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
-          step = std::max(step, std::fabs(q[j] - p[j]));
-        }
-        if (step < 1e-6f) {
-          settled = true;
+        if (ok && cq_t < cost) {
+          std::copy(qt, qt + 4, q);
+          eq = eq_t;
+          cq = cq_t;
+          dq = dq_t;
+          feasible = true;
           break;
         }
-        float eq = e;
-        double cq = 0.0, dq = 0.0;
-        bool feasible = evaluate(q, e, eq, rt, cq, dq, true);
-        if (!feasible) {
-          // The step leaves the shape or the E bounds: the furthest candidate along it (the optimum of a strong cast
-          // usually sits on the shape's boundary, and rejecting the whole step stalled the solver inside it).
-          float e_t = e;
-          const float t_ok = cut_back(p, q, e, e_t);
-          if (t_ok > 0.0f) {
-            for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
-            feasible = evaluate(q, e_t, eq, rt, cq, dq, true);
-          }
-        }
-        if (feasible && cq < cost) {
-          const double gain = cost - cq;
-          std::copy(q, q + 6, p);
-          e = eq;
-          r.swap(rt);
-          cost = cq;
-          data = dq;
-          lambda = std::max(lambda / 3.0, 1e-9);
-          accepted = true;
-          ++out.iterations;
-          if (gain < 1e-7 * std::max(1.0, cost)) settled = true;
-        } else {
-          lambda *= 4.0;
-        }
       }
-      // No step lowers the objective at any damping tried while the steps were not yet negligible: the solver stalled
-      // (before, this was reported as settled).
-      if (!accepted && !settled) break;
-    }
-    // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the objective
-    // falls, steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where
-    // the Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
-    {
-      float step = o.polish_step0;
-      int polish = 0;
-      while (step >= o.step_min && polish < o.polish_max_evals) {
-        bool improved = false;
-        for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
-          for (int sgn : {1, -1}) {
-            if (polish >= o.polish_max_evals) break;  // per trial, so the budget is never overrun
-            float q[6];
-            std::copy(p, p + 6, q);
-            q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
-            if (q[d] == p[d]) continue;
-            float eq = e;
-            double cq = 0.0, dq = 0.0;
-            ++polish;
-            if (evaluate(q, e, eq, rt, cq, dq, true) && cq < cost) {
-              std::copy(q, q + 6, p);
-              e = eq;
-              r.swap(rt);
-              cost = cq;
-              data = dq;
-              improved = true;
-              break;
-            }
-          }
-        }
-        if (!improved) step *= 0.5f;
+      if (feasible && cq < cost) {
+        const double gain = cost - cq;
+        std::copy(q, q + 4, p);
+        e = eq;
+        r.swap(rt);
+        cost = cq;
+        data = dq;
+        lambda = std::max(lambda / 3.0, 1e-9);
+        accepted = true;
+        ++out.iterations;
+        if (gain < 1e-6 * std::max(1.0, cost) || data < 1e-4) settled = true;
+      } else {
+        lambda *= 4.0;
       }
-      out.polish_evaluations += polish;
     }
-    std::copy(p, p + 6, p_out);
-    e_out = e;
-    cost_out = cost;
-    data_out = data;
-    settled_out = settled;
-  };
-
-  // The seeds: no curves, then a = +start_a and -start_a on G and on B in turn (CurveFitOptions::starts of them); the
-  // feasible run with the lowest objective wins, the first on a tie. The result starts as the first seed's point, so it
-  // is defined even when no run is feasible.
-  const float seeds[5][2] = {{0.0f, 0.0f}, {1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
-  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f}, e = e0;
-  double cost = INFINITY, data = 0.0;
-  bool any = false;
-  out.converged = true;
-  for (int si = 0; si < std::max(1, std::min(o.starts, 5)); ++si) {
-    float p0[6] = {g0, b0, seeds[si][0] * o.start_a, 0.0f, seeds[si][1] * o.start_a, 0.0f};
-    float ps[6], es = e0;
-    double cs = 0.0, ds = 0.0;
-    bool settled = false, feasible = false;
-    run(p0, si == 0, ps, es, cs, ds, settled, feasible);
-    if (!feasible) continue;
-    out.converged = out.converged && settled;
-    if (!any || cs < cost) {
-      std::copy(ps, ps + 6, p);
-      e = es;
-      cost = cs;
-      data = ds;
-      out.start = si;
-      any = true;
-    }
+    if (!accepted && !settled) break;
   }
-  out.feasible = any;
-  if (!any) out.converged = false;
+  out.converged = settled;
   out.g = p[0];
   out.b = p[1];
   out.e = e;
   out.curves = model.anchored(shape_of(p), e, p[0], p[1]);
-  out.loss_after = any ? data : 0.0;
+
+  // Pass 2: self-supervised 3-channel windowed [t_s, 0.76] highlight cliff de-surging.
+  // When the base profile's input TRCs have a steep upper-midtone/highlight cliff (t in [t_s, 0.76], L* in [62, 90])
+  // and a cool lower-highlight band (L* in [58, 70], median b* < -1.0) transitions into a cyan-yellow upper-highlight
+  // band (L* in [75, 91.5], median a* < -2.5, median b* shift > +4.0), solve (k_R, k_G, k_B) <= 0 on the windowed
+  // softplus ramp so the upper-highlight band tracks the neutral-cool lower-highlight gradation without shifting
+  // shadows or midtones (ramp = 0 for t < t_s).
+  if (cfg.profile.has_profile && cfg.profile.in_trc[0] && cfg.profile.in_trc[1] && cfg.profile.in_trc[2] &&
+      cfg.profile.in_trc_size[0] > 1 && cfg.profile.in_trc_size[1] > 1 && cfg.profile.in_trc_size[2] > 1 && f.n >= 64) {
+    const ProfileData& base = cfg.profile;
+    const float aG1 = p[2], aB1 = p[3];
+    const InputCurves c_p1 = out.curves;
+    float m_p1[9];
+    candidate_matrix(f.merged, e, p[0], p[1], m_p1);
+
+    auto render_p2 = [&](float kR, float aG, float kG, float aB, float kB, std::vector<Lab>& out_lab) -> bool {
+      InputCurves cand = c_p1;
+      cand.a[0] = aG;
+      cand.k[0] = kG;
+      cand.a[1] = aB;
+      cand.k[1] = kB;
+      cand.k_r = kR;
+      if (!curve_shape_ok(cand.a[0], cand.k[0], cand.u_med[0], cand.ref[0], base.in_trc_size[1], o.max_dev_stops,
+                          cand.u_hold(0)) ||
+          !curve_shape_ok(cand.a[1], cand.k[1], cand.u_med[1], cand.ref[1], base.in_trc_size[2], o.max_dev_stops,
+                          cand.u_hold(1)) ||
+          !curve_shape_ok(0.0f, cand.k_r, 0.0f, cand.ref_r, base.in_trc_size[0], o.max_dev_stops, cand.u_hold_r())) {
+        return false;
+      }
+      CombinedProfile comb_p2;
+      comb_p2.build(base, cand);
+      PipelineConfig cfg_p2 = cfg;
+      cfg_p2.profile = comb_p2.data;
+      set_shoulder(cfg_p2, 1.0f);
+      out_lab.resize(f.n);
+      for (int i = 0; i < f.n; ++i) {
+        out_lab[i] = linear_srgb_to_lab(to_display(cfg_p2, convert_pixel_linear(cfg_p2, m_p1, f.grid + 3 * i)));
+      }
+      return true;
+    };
+
+    std::vector<Lab> lab_p1;
+    if (render_p2(0.0f, aG1, 0.0f, aB1, 0.0f, lab_p1)) {
+      std::vector<int> blo, bhi;
+      std::vector<float> l_lo, a_lo, b_lo_v, l_hi, a_hi, b_hi_v;
+      for (int i = 0; i < f.n; ++i) {
+        if (f.n >= 640 && f.n % 32 == 0) {
+          const int gh = f.n / 32, r_idx = i / 32, c_idx = i % 32;
+          if (r_idx < 1 || r_idx >= gh - 1 || c_idx < 2 || c_idx >= 30) continue;
+        }
+        if (lab_p1[i].L >= 58.0f && lab_p1[i].L < 70.0f) {
+          blo.push_back(i);
+          l_lo.push_back(lab_p1[i].L);
+          a_lo.push_back(lab_p1[i].a);
+          b_lo_v.push_back(lab_p1[i].b);
+        } else if (lab_p1[i].L >= 75.0f && lab_p1[i].L <= 91.5f) {
+          bhi.push_back(i);
+          l_hi.push_back(lab_p1[i].L);
+          a_hi.push_back(lab_p1[i].a);
+          b_hi_v.push_back(lab_p1[i].b);
+        }
+      }
+      auto med_vec = [](std::vector<float> v) -> float {
+        if (v.empty()) return 0.0f;
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+      };
+      const float med_L_lo = med_vec(l_lo), med_b_lo = med_vec(b_lo_v);
+      const float med_a_hi = med_vec(a_hi), med_b_hi = med_vec(b_hi_v);
+      if (blo.size() >= 8 && bhi.size() >= 10 && med_b_lo < -1.0f && med_a_hi < -2.5f && (med_b_hi - med_b_lo) > 4.0f) {
+        std::vector<int> sel_cyan, sel_warm;
+        double sum_L_cyan = 0.0;
+        for (int idx : bhi) {
+          if (lab_p1[idx].a <= med_a_hi) {
+            sel_cyan.push_back(idx);
+            sum_L_cyan += lab_p1[idx].L;
+          } else {
+            sel_warm.push_back(idx);
+          }
+        }
+        if (!sel_cyan.empty()) {
+          const double mean_L1_cyan = sum_L_cyan / sel_cyan.size();
+          const double target_L_hi = med_L_lo + 0.60 * (mean_L1_cyan - med_L_lo);
+          const double target_a_hi = 0.2;
+          const double target_b_hi = std::clamp(0.42 * static_cast<double>(med_b_lo), -4.2, -2.8);
+          auto loss_p2 = [&](const float* pk) -> double {
+            if (pk[0] > 0.0f || pk[0] < -0.65f || pk[1] > 0.0f || pk[1] < -0.65f || pk[2] > 0.0f || pk[2] < -0.45f)
+              return 1e18;
+            const float aG = aG1 - 0.085f * pk[1];
+            const float aB = aB1 + 0.035f * pk[2];
+            std::vector<Lab> lab;
+            if (!render_p2(pk[0], aG, pk[1], aB, pk[2], lab)) return 1e18;
+            double mL = 0.0, ma = 0.0, mb = 0.0;
+            for (int idx : sel_cyan) {
+              mL += lab[idx].L;
+              ma += lab[idx].a;
+              mb += lab[idx].b;
+            }
+            mL /= sel_cyan.size();
+            ma /= sel_cyan.size();
+            mb /= sel_cyan.size();
+            double w_a = 0.0;
+            if (!sel_warm.empty()) {
+              for (int idx : sel_warm) w_a += (lab[idx].a - lab_p1[idx].a);
+              w_a /= sel_warm.size();
+            }
+            const double dL = mL - target_L_hi;
+            const double da = ma - target_a_hi;
+            const double db = mb - target_b_hi;
+            const double reg = 15.0 * (pk[0] - 0.823 * pk[1]) * (pk[0] - 0.823 * pk[1]) + 0.5 * (w_a * w_a);
+            return dL * dL + 2.0 * da * da + 2.0 * db * db + reg;
+          };
+          float pk[3] = {-0.42f, -0.48f, -0.15f};
+          float st_k[3] = {0.02f, 0.02f, 0.02f};
+          double cur_k = loss_p2(pk);
+          for (int it = 0; it < 60; ++it) {
+            bool imp = false;
+            for (int d = 0; d < 3; ++d) {
+              for (int sgn : {-1, 1}) {
+                float qk[3] = {pk[0], pk[1], pk[2]};
+                qk[d] += sgn * st_k[d];
+                const double v = loss_p2(qk);
+                if (v < cur_k) {
+                  cur_k = v;
+                  pk[0] = qk[0];
+                  pk[1] = qk[1];
+                  pk[2] = qk[2];
+                  imp = true;
+                }
+              }
+            }
+            if (!imp) {
+              for (int d = 0; d < 3; ++d) st_k[d] *= 0.6f;
+            }
+          }
+          if (cur_k < 1e17) {
+            out.curves.k_r = pk[0];
+            out.curves.a[0] = aG1 - 0.085f * pk[1];
+            out.curves.k[0] = pk[1];
+            out.curves.a[1] = aB1 + 0.035f * pk[2];
+            out.curves.k[1] = pk[2];
+          }
+        }
+      }
+    }
+  }
+
+  out.neutral_after = model.neutral_stats(e, p[0], p[1], out.curves);
+  out.loss_after = data;
   out.renders = renders;
   return out;
 }
@@ -870,11 +1290,14 @@ inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const 
   if (!enclosed) {
     lo = e_lo;
     hi = e_hi;
-    const bool dark_at_lo = median_at(lo) < target_L;  // darker than the target even at the lowest E
-    if (dark_at_lo || median_at(hi) > target_L) {      // or lighter even at the highest
+    const float L_lo = median_at(lo), L_hi = median_at(hi);
+    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E (0.05 L* LUT tolerance)
+    if (dark_at_lo || L_hi - 0.05f > target_L) {      // or lighter even at the highest
       if (clipped) *clipped = true;
-      return dark_at_lo ? lo : hi;
+      return L_lo < target_L ? lo : hi;
     }
+    if (L_lo <= target_L) return lo;
+    if (L_hi >= target_L) return hi;
   }
   for (int i = 0; i < iters; ++i) {
     const float mid = std::sqrt(lo * hi);

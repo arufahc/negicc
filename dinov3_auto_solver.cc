@@ -236,7 +236,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   } else if (initial) {
     for (double d : {-0.04, -0.02, 0.0, 0.02, 0.04}) g_cands_d.push_back(initial->g + d);
   } else if (pullback_search) {
-    g_cands_d = {0.74, 0.80, 0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
+    g_cands_d = {0.68, 0.74, 0.80, 0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   } else {
     g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   }
@@ -245,7 +245,7 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   } else if (initial) {
     for (double d : {-0.06, -0.03, 0.0, 0.03, 0.06}) b_cands_d.push_back(initial->b + d);
   } else if (pullback_search) {
-    b_cands_d = {0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
+    b_cands_d = {0.55, 0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   } else {
     b_cands_d = {0.85, 0.95, 1.05, 1.15, 1.25, 1.35};
   }

@@ -716,13 +716,12 @@ class SearchFrame {
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
 
-  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is
-  // crop_.w x crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
+  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
+  // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
     negicc::candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
-    const ProfileData& prof = bundle_.targets[target_idx].film_prof.data;
     out.resize((size_t)crop_.w * crop_.h * 3);
     negicc::RgbView crop_view = frame_.crop_and_orient(crop_.x0, crop_.y0, crop_.w, crop_.h, 0, false, false);
     negicc::RenderArgs ra{};
@@ -730,7 +729,7 @@ class SearchFrame {
     ra.width = crop_.w;
     ra.height = crop_.h;
     ra.matrix = m;
-    ra.cfg = make_pipeline_config(prof, AUTO_KNEE, shoulder_of(params));
+    ra.cfg = make_pipeline_config(bundle_.targets[target_idx].film_prof.data, AUTO_KNEE, shoulder_of(params));
     ra.out_type = 1;
     ra.out = out.data();
     negicc::cpu_render(ra);
@@ -1561,6 +1560,65 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (out.clip_fallback == ClipFallbackOutcome::kTaken) {
         chosen = fp_adj;
         params = p_adj;
+      } else if (white_light && out.clip_fallback == ClipFallbackOutcome::kClipsTooMuch && clip_0 > 0.02f) {
+        // When severe highlight clipping (>2% white-clipped) is only partially reduced by chosen + 1, continue
+        // walking denser brackets with pullback_search (wide g/b range) to find the deepest bracket that clears
+        // the highlight clipping or highlight overshoot within the lightness and residual gates.
+        float best_clip = clip_adj;
+        float best_q995 = fp_adj.shoulder_q995;
+        const float overshoot_0 = std::max(0.0f, chosen.shoulder_q995 - 1.0f);
+        const float resid_0 = chosen.residual;
+        const int start_idx = chosen.target_idx + 2;
+        for (int t_cand = start_idx; t_cand < (int)bundle.targets.size(); ++t_cand) {
+          const Screened* s_cand = nullptr;
+          for (const auto& s : screening)
+            if (s.result.target_idx == t_cand) s_cand = &s;
+          if (!s_cand || !s_cand->enclosure.admissible) continue;
+          ConversionParams p_start = s_cand->result.params;
+          const float eb_screen[3] = {s_cand->result.e_lo, s_cand->result.e_hi, s_cand->enclosure.e_center};
+          fr.search(t_cand, mu1, sig1, nullptr, eb_screen, p_start, true);
+          Screened s_pb = *s_cand;
+          s_pb.result.params = p_start;
+          float eb[3];
+          trust_bounds(s_pb, eb);
+          FixedPointResult fp_cand;
+          if (verbose) std::cout << "Auto: fixed point on " << name_of(t_cand) << " (clip fallback multi-step)\n";
+          if (!fr.fixed_point(t_cand, p_start, eb, fp_cand, true)) return false;
+          ConversionParams p_cand = fp_cand.params;
+          ClipStats hc_cand = fr.highlight_clip(t_cand, {p_cand}, ceiling_of(t_cand))[0];
+          float dl_cand = hc_cand.median_L - hc0.median_L;
+          if (dl_cand < CLIP_FALLBACK_DL_MIN) {
+            p_cand.e *= std::pow(2.0f, (dl_cand - CLIP_FALLBACK_DL_MIN) * 0.038f);
+            hc_cand = fr.highlight_clip(t_cand, {p_cand}, ceiling_of(t_cand))[0];
+            dl_cand = hc_cand.median_L - hc0.median_L;
+          }
+          const float clip_cand = hc_cand.white_clip / 100.0f;
+          const float overshoot_cand = std::max(0.0f, fp_cand.shoulder_q995 - 1.0f);
+          const bool clears_overshoot =
+              (overshoot_0 > 0.15f && overshoot_cand <= 0.10f * overshoot_0 && clip_cand < 0.70f * clip_0);
+          ClipFallbackOutcome cand_outcome = ClipFallbackOutcome::kTaken;
+          if (clip_cand > CLIP_FALLBACK_CLIP_RATIO * clip_0 && !clears_overshoot)
+            cand_outcome = ClipFallbackOutcome::kClipsTooMuch;
+          else if (!(CLIP_FALLBACK_DL_MIN <= dl_cand && dl_cand <= CLIP_FALLBACK_DL_MAX))
+            cand_outcome = ClipFallbackOutcome::kShiftsLightness;
+          else if (fp_cand.residual > (1.0f + (clears_overshoot ? 0.12f : CLIP_FALLBACK_RESID_TOL)) * resid_0)
+            cand_outcome = ClipFallbackOutcome::kWorseResidual;
+          if (verbose) {
+            std::cout << "Auto: clip fallback: " << name_of(t_cand) << " clips " << fixed(clip_cand * 100.0f, 4)
+                      << "% vs " << fixed(clip_0 * 100.0f, 4) << "%, dL* " << fixed(dl_cand, 2, true) << ", resid "
+                      << fixed(fp_cand.residual, 4) << ": " << to_string(cand_outcome) << "\n";
+          }
+          if (cand_outcome == ClipFallbackOutcome::kTaken &&
+              (out.clip_fallback != ClipFallbackOutcome::kTaken ||
+               (clears_overshoot ? fp_cand.shoulder_q995 < best_q995 : clip_cand < best_clip))) {
+            out.clip_fallback = ClipFallbackOutcome::kTaken;
+            fp_cand.params = p_cand;
+            chosen = fp_cand;
+            params = p_cand;
+            best_clip = clip_cand;
+            best_q995 = fp_cand.shoulder_q995;
+          }
+        }
       }
     }
     if (verbose && (out.clip_fallback == ClipFallbackOutcome::kNotScreened || out.clip_fallback == ClipFallbackOutcome::kNotAdmissible)) {
@@ -1601,28 +1659,51 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
+      float chosen_screen_loss = 0.0f;
+      bool found_chosen_screen = false;
+      bool adj_screen_ok = false;
+      for (const auto& s : screening) {
+        if (s.result.target_idx == chosen.target_idx) {
+          chosen_screen_loss = s.result.intent_loss;
+          found_chosen_screen = true;
+          break;
+        }
+      }
+      if (found_chosen_screen) {
+        for (const auto& s : screening) {
+          if (s.result.target_idx == chosen.target_idx + 1 &&
+              s.result.intent_loss <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen_screen_loss) {
+            adj_screen_ok = true;
+            break;
+          }
+        }
+      }
       // The re-search window of each metered bracket: its calibrated range united with the infeasible window
       // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
-      // so the pullback can reach the darker-than-metered side the first search could not.
+      // so the pullback can reach the darker-than-metered side the first search could not. Only run when the next
+      // bracket (chosen + 1) was competitive in the shared-intent screening pass.
       std::vector<Depth> depths_res;
-      for (const auto& c : pool) {
-        const auto d = std::find_if(depths.begin(), depths.end(),
-                                    [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
-        if (d == depths.end()) continue;
-        const float e_met = d->e_met;
-        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
-        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
-        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
-        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
-        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
-        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
-        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-        float lo = base_lo;
-        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
-        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
-        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
-        if (lo > hi) std::swap(lo, hi);
-        depths_res.push_back(metered(c, e_met, lo, hi));
+      if (adj_screen_ok) {
+        for (const auto& c : pool) {
+          if (c.target_idx < chosen.target_idx || c.target_idx > chosen.target_idx + 1) continue;
+          const auto d = std::find_if(depths.begin(), depths.end(),
+                                      [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
+          if (d == depths.end()) continue;
+          const float e_met = d->e_met;
+          const float u_min = c.e_min * std::pow(2.0f, -1.5f);
+          const float u_max = c.e_max * std::pow(2.0f, 1.2f);
+          const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
+          const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
+          const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
+          const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
+          const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
+          float lo = base_lo;
+          float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+          // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
+          // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
+          if (lo > hi) std::swap(lo, hi);
+          depths_res.push_back(metered(c, e_met, lo, hi));
+        }
       }
       // A new bootstrap field when the deepest bracket or its E changed (else the first one is the same field).
       std::vector<float> mu_res = mu1, sig_res = sig1;
@@ -1637,7 +1718,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         }
       }
       std::vector<FixedPointResult> res_adaptive;
-      if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
+      if (!depths_res.empty() && !tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive))
+        return false;
       if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
@@ -1652,11 +1734,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           dl = hc_res_242.median_L - hc_242.median_L;
         }
         // Taken when it clips no more (at most 0.5 percentage point more of the crop above 242 in the worst channel),
-        // keeps the midtones at L* 48 or within 6 of the first choice's, and actually moves: a later bracket, or E up
-        // by more than 2%.
+        // keeps the midtones at L* 48 or within 6 of the first choice's, stays within the clip fallback's residual
+        // tolerance of chosen, and actually moves: a later bracket, or E up by more than 2%.
         const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
         const float exc_res_242 = max_excess(hc_res_242);
         if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
+            fp_res.residual <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen.residual &&
             (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
           chosen = fp_res;
           params = p_res;
@@ -1712,19 +1795,43 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
   if (!curves.active() || !prof.data.has_profile) return;
+  const float kr = (curves.k_r != 0.0f) ? curves.k_r : (curves.k[0] < 0.0f ? 0.8228f * curves.k[0] : 0.0f);
+  if (kr < 0.0f && prof.in_trc[0].size() >= 2) {
+    std::vector<float>& table = prof.in_trc[0];
+    std::vector<float> composed(table.size());
+    const float refr = (curves.ref_r > 0.0f) ? curves.ref_r : std::min(1.0f, curves.ref[0] * 1.0905f);
+    negicc::compose_input_table(table.data(), (int)table.size(), refr, 0.0f, 0.0f, kr, composed.data(),
+                                curves.u_hold_r(), 0.36f, 0.76f);
+    table.swap(composed);
+  }
+  const float ts_gb[2] = {0.30f, 0.46f};
   for (int ch = 1; ch <= 2; ++ch) {
     std::vector<float>& table = prof.in_trc[ch];
     if (table.size() < 2) continue;
     std::vector<float> composed(table.size());
     const int i = ch - 1;
     negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i));
+                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
     table.swap(composed);
   }
   prof.rebind_pointers();
 }
 
 void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves) {
+  const float kr = (curves.k_r != 0.0f) ? curves.k_r : (curves.k[0] < 0.0f ? 0.8228f * curves.k[0] : 0.0f);
+  {
+    const std::vector<float>& table_r = base.in_trc[0];
+    if (!curves.active() || !(kr < 0.0f) || !base.data.has_profile || table_r.size() < 2) {
+      prof.in_trc[0] = table_r;
+    } else {
+      std::vector<float> composed(table_r.size());
+      const float refr = (curves.ref_r > 0.0f) ? curves.ref_r : std::min(1.0f, curves.ref[0] * 1.0905f);
+      negicc::compose_input_table(table_r.data(), (int)table_r.size(), refr, 0.0f, 0.0f, kr, composed.data(),
+                                  curves.u_hold_r(), 0.36f, 0.76f);
+      prof.in_trc[0].swap(composed);
+    }
+  }
+  const float ts_gb[2] = {0.30f, 0.46f};
   for (int ch = 1; ch <= 2; ++ch) {
     const std::vector<float>& table = base.in_trc[ch];
     if (!curves.active() || !base.data.has_profile || table.size() < 2) {
@@ -1734,7 +1841,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
     std::vector<float> composed(table.size());
     const int i = ch - 1;
     negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i));
+                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
     prof.in_trc[ch].swap(composed);
   }
   prof.rebind_pointers();
@@ -1797,6 +1904,9 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   // u_med carry over exactly where nothing moves.
   const negicc::InputCurves a0 = negicc::anchor_curves(curves, cf, from[0], from[1], from[2]);
   const negicc::InputCurves a1 = negicc::anchor_curves(curves, cf, to[0], to[1], to[2]);
+  if (a0.ref_r > 0.0f && a1.ref_r > 0.0f && curves.ref_r > 0.0f)
+    out.ref_r = curves.ref_r * (a1.ref_r / a0.ref_r);
+  out.u_lo_r = curves.u_lo_r + (a1.u_lo_r - a0.u_lo_r);
   const ProfileData& pd = bundle.targets[target_idx].film_prof.data;
   for (int ch = 0; ch < 2; ++ch) {
     if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
@@ -1810,6 +1920,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
     out.a[ch] *= scale[ch];
     out.k[ch] *= scale[ch];
   }
+  out.k_r *= scale[0];
   return true;
 }
 
@@ -1876,19 +1987,31 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below it.
   constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
   std::vector<uint16_t> kept_grid;
+  std::vector<size_t> kept_idx;
   const uint16_t* fit_grid = stats.grid.data();
   size_t nf = n;
   out.cells_total = (int)n;
+  auto filter_intent = [&](std::vector<float>& m, std::vector<float>& s) {
+    if (kept_idx.empty()) return;
+    std::vector<float> km, ks;
+    km.reserve(kept_idx.size() * 3);
+    ks.reserve(kept_idx.size() * 3);
+    for (size_t i : kept_idx) {
+      km.insert(km.end(), m.begin() + i * 3, m.begin() + i * 3 + 3);
+      ks.insert(ks.end(), s.begin() + i * 3, s.begin() + i * 3 + 3);
+    }
+    m.swap(km);
+    s.swap(ks);
+  };
   if (opts.fallback_crop && cf.film_base[1] > 0.0f && cf.film_base[2] > 0.0f) {
-    std::vector<float> kept_mu, kept_sigma;
+    std::vector<size_t> try_idx;
     const float base_lim[2] = {cf.film_base[1] * std::exp2(-kBaseCellStops), cf.film_base[2] * std::exp2(-kBaseCellStops)};
     const float holder_lim = cf.film_base[1] * std::exp2(-kHolderCellStops);
     for (size_t i = 0; i < n; ++i) {
       const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
       if ((opts.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
       kept_grid.insert(kept_grid.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
-      kept_mu.insert(kept_mu.end(), mu.begin() + i * 3, mu.begin() + i * 3 + 3);
-      kept_sigma.insert(kept_sigma.end(), sigma.begin() + i * 3, sigma.begin() + i * 3 + 3);
+      try_idx.push_back(i);
     }
     // Only with enough picture left (at least 16 cells and a quarter of the grid, enough to constrain the fit's six
     // numbers); else the whole grid.
@@ -1896,8 +2019,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       out.cells_excluded = (int)(n - kept_grid.size() / 3);
       nf = kept_grid.size() / 3;
       fit_grid = kept_grid.data();
-      mu.swap(kept_mu);
-      sigma.swap(kept_sigma);
+      kept_idx.swap(try_idx);
+      filter_intent(mu, sigma);
       cf.grid = fit_grid;
       cf.n = (int)nf;
       if (opts.verbose) {
@@ -1918,20 +2041,28 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   };
   float q995_auto = 0.0f;
   out.x_hi_auto = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
-  const negicc::PipelineConfig cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
+  negicc::PipelineConfig cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
-  // keeps.
+  // keeps. On low-key frames (Auto's target_L < 25 and median green density < 0.80 stops above film base), cap
+  // fit_target_L by the physical toe ceiling so an unexposed night sky near film base is not lifted to kIntentMinL,
+  // while never darkening a bright/flat frame (target_L >= 25).
   const float target_L =
       negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, fit_grid, (int)nf);
+  const float d_med = -negicc::anchor_curves(negicc::InputCurves{}, cf, e_int, res.params.g, res.params.b).u_med[0];
+  const float toe_max_L =
+      (target_L < 25.0f && d_med > 0.0f && d_med < 0.80f) ? std::max(10.0f, 22.0f * d_med) : kIntentMaxL;
+  const float fit_target_L = std::min(std::clamp(target_L, kIntentMinL, kIntentMaxL), toe_max_L);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
   out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
                                                   fit_grid, (int)nf, mu.data(), sigma.data());
+  const int table_n[2] = {prof.data.in_trc_size[1], prof.data.in_trc_size[2]};
 
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
-  // measured) widened to hold Auto's E with a margin of 0.1 stop, so Auto's own result (no curves) always lies inside
-  // and the curves may not take E further out of the bracket's range than Auto took it; without a range, 2 stops
-  // either side of Auto's E. A result whose E would need to leave them falls back to Auto's (step 2).
-  const float margin = std::exp2(0.1f);
+  // measured) widened to hold Auto's E with a margin that scales with the gain bounds (0.1 + 0.5 * max(s_g, s_b)
+  // stops), so a gain change has E room to hold Auto's median L*; without a range, 2 stops either side of Auto's E.
+  const float s_gain = std::max(fit_opts.g_bound_stops > 0.0f ? fit_opts.g_bound_stops : 0.0f,
+                                fit_opts.b_bound_stops > 0.0f ? fit_opts.b_bound_stops : 0.0f);
+  const float margin = std::exp2(0.1f + 0.5f * s_gain);
   if (res.e_range_lo > 0.0f && res.e_range_hi >= res.e_range_lo) {
     out.e_lo = std::min(res.e_range_lo, e_int / margin);
     out.e_hi = std::max(res.e_range_hi, e_int * margin);
@@ -1940,37 +2071,49 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.e_hi = e_int * 4.0f;
   }
 
-  const int table_n[2] = {prof.data.in_trc_size[1], prof.data.in_trc_size[2]};
+  float e_start = e_int;
+  out.intent_lightness_failed = (fit_target_L != target_L);
+  if (out.intent_lightness_failed) {
+    out.fallback_target_L = fit_target_L;
+    out.e_lo = std::min(out.e_lo, e_int * 0.25f);
+    out.e_hi = std::max(out.e_hi, e_int * 4.0f);
+    e_start = negicc::remeter_e_median_in(cfg_auto, cf, negicc::InputCurves{}, e_int, out.e_lo, out.e_hi, res.params.g,
+                                          res.params.b, fit_target_L, &out.fallback_clipped);
+    out.fallback_e_moved = std::fabs(e_start - e_int) > 1e-6f * std::max(1.0f, std::fabs(e_int));
+    out.x_hi_auto = rolloff_at(prof.data, e_start, res.params.g, res.params.b, &q995_auto);
+    cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
+    out.e_lo = std::min(out.e_lo, e_start / margin);
+    out.e_hi = std::max(out.e_hi, e_start * margin);
+  }
+  negicc::JointCurveModel m_neu(cfg_auto, cf, mu.data(), sigma.data());
+  m_neu.set_scene_neutral(e_start, res.params.g, res.params.b);
+  out.neutral_auto = m_neu.neutral_stats_on(cfg_auto, e_start, res.params.g, res.params.b);
+
   negicc::CombinedProfile comb;
-  float x = out.x_hi_auto, q995 = q995_auto, e_new = e_int;
+  float x = out.x_hi_auto, q995 = q995_auto, e_new = e_start;
   constexpr int kMaxPasses = 6;
   bool clipped = false;
   out.remeter_passes = 0;
   // Auto's own result, no curves (the fallback of the steps below).
   auto fall_back = [&](const char* why) {
+    out.fit.curves.k_r = 0.0f;
     for (int ch = 0; ch < 2; ++ch) {
       out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
       out.shape_scale_ch[ch] = 0.0f;
     }
     out.fit.g = res.params.g;
     out.fit.b = res.params.b;
-    e_new = e_int;
+    e_new = e_start;
     x = out.x_hi_auto;
     q995 = q995_auto;
     out.fallback = why;
   };
-  // E re-metered on the real combined tables (the fit solved it on its per-cell model, which composes the curve
-  // analytically instead of through the tables), around the fit's E, the curves anchored at each E it tries;
-  // alternated with the roll-off the export measures at that E on the combined profile, until the roll-off holds
-  // still. After each call x (and q995) is the roll-off measured at e_new on the profile composed at e_new, which is
-  // the profile step 3 builds: the export reuses it instead of measuring it again. remeter_passes counts the passes of
-  // every call; clipped is the last pass's (its target outside the bounds).
   auto remeter = [&](float e_centre) {
     out.remeter_converged = false;
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out.remeter_passes;
       e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
-                                          e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, target_L, &clipped);
+                                          e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, fit_target_L, &clipped);
       comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
       float q = 0.0f;
       const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b, &q);
@@ -1982,11 +2125,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       x = x_new;
     }
   };
-  // The shape (monotonic, within max_dev_stops of the base TRC over the whole table) was checked where the fit anchored
-  // the curves; anchored at the re-metered E, ref moves and the table reaches further below it, so a curve can step
-  // just past the limit (by thousandths of a stop). There that channel's a and k are scaled down by the largest factor
-  // that keeps its shape at the export's anchor (each channel on its own, so a channel that passes keeps its curve),
-  // and E is re-metered again.
   auto shape_scales = [&](const negicc::InputCurves& shape, float e, float t[2]) {
     const negicc::InputCurves c = negicc::anchor_curves(shape, cf, e, out.fit.g, out.fit.b);
     bool all = true;
@@ -2000,26 +2138,20 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     return all;
   };
 
-  // 1. The joint fit: g, b and the curves, each candidate scored at the E that keeps target_L (negicc::
-  //    fit_input_curves_joint), its curves anchored at its own E, g and b; then 2. the re-meter and the shape check.
-  //    The fit renders with a roll-off, which the export measures again at the result on the combined profile: where
-  //    that differs from the one the fit ran with (the first fit runs with Auto's), the fit runs again with it, up to
-  //    two more times, so the curves are fitted under the roll-off the result is exported with.
+  // 1. 4x4 scene-neutral color & crossover solver for (g, b, a_G, a_B) at fit_target_L, then 2. re-meter and shape check.
   constexpr int kMaxFitPasses = 3;
   float x_fit = out.x_hi_auto;
+  const float e_lo_fit = std::min(e_start, out.e_lo * 1.001f);
+  const float e_hi_fit = std::max(e_start, out.e_hi / 1.001f);
   out.fit_passes = 0;
-  // Auto's median L* far outside a picture's lightness: the intent failed (a render nearly black or blown out), and
-  // keeping that lightness would carry the failure into the curves. No fit: no curves, Auto's g and b, and E re-metered
-  // to the nearer end of [kIntentMinL, kIntentMaxL] (below).
-  out.intent_lightness_failed = !(target_L >= kIntentMinL && target_L <= kIntentMaxL);
-  for (int pass = 0; !out.intent_lightness_failed && pass < kMaxFitPasses; ++pass) {
+  for (int pass = 0; pass < kMaxFitPasses; ++pass) {
     ++out.fit_passes;
     out.x_hi_fit = x_fit;
     out.fallback = nullptr;
     const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding);
     const negicc::JointCurveFit jf =
-        negicc::fit_input_curves_joint(cfg, cf, e_int, res.params.g, res.params.b, mu.data(), sigma.data(), target_L,
-                                       table_n, fit_opts, out.e_lo, out.e_hi);
+        negicc::fit_input_curves_joint(cfg, cf, e_start, res.params.g, res.params.b, mu.data(), sigma.data(),
+                                       fit_target_L, table_n, fit_opts, e_lo_fit, e_hi_fit);
     out.fit.curves = jf.curves;
     out.fit.g = jf.g;
     out.fit.b = jf.b;
@@ -2040,11 +2172,11 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                 << fixed((float)out.fit.loss_after, 3) << " (" << jf.iterations << " steps, " << jf.evaluations
                 << " evaluations, " << jf.renders << " renders for E, roll-off " << fixed(x_fit, 3) << ")\n";
     }
-    if (!jf.feasible) {  // not even Auto's g and b keep target_L within the bounds on the model
+    if (!jf.feasible) {
       fall_back("clip");
       break;
     }
-    {  // the loss's parts right after the fit, at its own E, on the real combined tables
+    {
       negicc::CombinedProfile c0;
       c0.build(prof.data, out.fit.curves);
       negicc::PipelineConfig c0cfg = cfg;
@@ -2053,7 +2185,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                                      (int)nf, mu.data(), sigma.data());
     }
 
-    // 2. The re-meter from the roll-off the fit ran with, around the fit's E, and the shape at the re-metered anchor.
     x = x_fit;
     remeter(jf.e);
     out.shape_scale_ch[0] = out.shape_scale_ch[1] = 1.0f;
@@ -2064,7 +2195,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
         shape_ok = true;
         break;
       }
-      if (round == 3) break;  // three rounds of scaling and re-metering did not settle
+      if (round == 3) break;
       for (int ch = 0; ch < 2; ++ch) {
         out.fit.curves.a[ch] *= t[ch];
         out.fit.curves.k[ch] *= t[ch];
@@ -2072,31 +2203,12 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       }
       remeter(e_new);
     }
-    // E outside the bounds on the real tables, or the shape still past the limit: no curves, and Auto's own result
-    // (its E, g and b and its roll-off on the bracket's profile): the fit's g and b were chosen together with the
-    // curves and mean nothing without them.
     if (clipped || !shape_ok) {
       fall_back(clipped ? "clip" : "shape");
       break;
     }
-    if (x == x_fit) break;  // the fit ran with the roll-off the export measures at its result
+    if (x == x_fit) break;
     x_fit = x;
-  }
-  if (out.intent_lightness_failed) {
-    // E re-metered so the grid's median L* is Auto's moved to the nearer end of [kIntentMinL, kIntentMaxL] (no
-    // curves, Auto's g and b), within [e_lo, e_hi]. The nearer end, not L* 50: a night scene's dark render can be
-    // right, and L* 50 would blow it out; the nearer end moves no frame further than the plausible range needs.
-    fall_back("intent_lightness");
-    out.fallback_target_L = std::clamp(target_L, kIntentMinL, kIntentMaxL);
-    e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
-                                        e_int, out.e_lo, out.e_hi, out.fit.g, out.fit.b, out.fallback_target_L,
-                                        &out.fallback_clipped);
-    out.fallback_e_moved = e_new != e_int;
-    if (out.fallback_e_moved) x = rolloff_at(prof.data, e_new, out.fit.g, out.fit.b, &q995);
-    std::cerr << "WARNING: Auto's grid median L* " << fixed(target_L, 1) << " is outside [" << fixed(kIntentMinL, 0)
-              << ", " << fixed(kIntentMaxL, 0) << "]: taken as a failed intent; no curves, E " << fixed(e_int, 4) << " -> "
-              << fixed(e_new, 4) << " re-metered to grid median L* " << fixed(out.fallback_target_L, 0)
-              << (out.fallback_clipped ? " (not reached within the bounds of E)" : "") << "\n";
   }
   out.shape_scale = std::min(out.shape_scale_ch[0], out.shape_scale_ch[1]);
 
@@ -2109,21 +2221,20 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.rolloff_measured = encoding == ENCODE_SRGB;
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
-  out.target_median_L = target_L;
+  out.target_median_L = fit_target_L;
   out.median_L = negicc::grid_median_L(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid, (int)nf);
   out.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged, e_new, out.fit.g, out.fit.b, fit_grid,
                                                     (int)nf, mu.data(), sigma.data());
+  out.neutral_export = m_neu.neutral_stats_on(cfg_comb, e_new, out.fit.g, out.fit.b);
   out.loss_export = out.parts_export.total();
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "
               << fixed(out.median_L, 2) << ", Auto's " << fixed(target_L, 2) << "); g " << fixed(out.params.g, 4)
               << " b " << fixed(out.params.b, 4)
-              << (!out.fallback ? ""
-                  : out.intent_lightness_failed ? "; no curves, Auto's g and b, E re-metered (intent_lightness)"
-                                                : "; no curves, Auto's result (")
-              << (out.fallback && !out.intent_lightness_failed ? out.fallback : "")
-              << (out.fallback && !out.intent_lightness_failed ? ")" : "") << "\n";
+              << (!out.fallback ? "" : "; no curves, Auto's result (")
+              << (out.fallback ? out.fallback : "")
+              << (out.fallback ? ")" : "") << "\n";
   }
   return true;
 }

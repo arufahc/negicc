@@ -305,7 +305,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 
 // The plausible range of Auto's grid median L* (the lightness the curve fit keeps): outside it the intent failed (a
 // render nearly black or blown out, as when the frame holds rebate or holder), and the fit does not chase it.
-constexpr float kIntentMinL = 12.0f;
+constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
 // What fit_input_curves_after_search did.
@@ -353,6 +353,7 @@ struct CurveRefitResult {
   // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, the fit's
   // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
   negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit_e
+  negicc::NeutralStats neutral_auto, neutral_export;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;

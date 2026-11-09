@@ -347,13 +347,13 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["lambda"] = n9(op.lambda);
     j["bound"] = n9(op.curve_bound);
     j["options"] = {{"curve_bound", n9(op.curve_bound)}, {"max_dev_stops", n9(op.max_dev_stops)},
-                    {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)}, {"lambda", n9(op.lambda)},
+                    {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)},
+                    {"g_bound_stops", n9(op.g_bound_stops)}, {"b_bound_stops", n9(op.b_bound_stops)},
+                    {"lambda", n9(op.lambda)},
                     {"step0_gain", n9(op.step0_gain)}, {"step0_curve", n9(op.step0_curve)},
                     {"step_min", n9(op.step_min)}, {"max_evals", op.max_evals},
-                    {"polish_step0", n9(op.polish_step0)}, {"polish_max_evals", op.polish_max_evals},
-                    {"starts", op.starts}, {"start_a", n9(op.start_a)}, {"hold_slope", op.hold_slope},
-                    {"l_weight", n9(op.l_weight)}, {"huber", n9(op.huber)}, {"solve_e", op.solve_e},
-                    {"e_tol_L", n9(op.e_tol_L)}};
+                    {"hold_slope", op.hold_slope},
+                    {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
@@ -386,6 +386,11 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
+                    {"neutral", ordered_json{{"m", f->neutral_export.m}, {"conf", n9(f->neutral_export.conf)},
+                                             {"c_a", n9(f->neutral_export.c_a)}, {"c_b", n9(f->neutral_export.c_b)},
+                                             {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
+                                             {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
+                                             {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)}}},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
   } else {
