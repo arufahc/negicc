@@ -339,10 +339,104 @@ inline ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double
     return c;
 }
 
+// The stage in single precision, for the full image: f(L) from a table on t = sqrt(L / 100) (kToneLutSize + 1
+// entries, linear interpolation; in t the curve is close to linear even where it is steep at the black end), the sRGB
+// decode from a table of every 16-bit code. Pixels at or beyond the gamut's edge (a few per cent at most) go through the
+// double-precision stage (tone_lab_apply, tone_lab_to_rgb_in_gamut), whose output this matches elsewhere to within 1
+// of 65535.
+constexpr int kToneLutSize = 8192;
+class ToneStageFast {
+public:
+    explicit ToneStageFast(const ToneCurve& q) : f_(kToneLutSize + 1) {
+        for (int i = 0; i <= kToneLutSize; ++i) {
+            const double t = (double)i / kToneLutSize;
+            const double L2 = tone_curve_L(100.0 * t * t, q);
+            f_[i] = (float)(L2 < 0 ? 0 : (L2 > 100 ? 100 : L2));
+        }
+        chroma_ = (float)q.chroma;
+        q_ = q;
+    }
+
+    // One 16-bit sRGB pixel through the stage.
+    void apply(const uint16_t in[3], uint16_t out[3]) const {
+        const float* dec = decode_table();
+        const float r = dec[in[0]], g = dec[in[1]], b = dec[in[2]];
+        const float X = 0.412453f * r + 0.357580f * g + 0.180423f * b;
+        const float Y = 0.212671f * r + 0.715160f * g + 0.072169f * b;
+        const float Z = 0.019334f * r + 0.119193f * g + 0.950227f * b;
+        const float fx = lab_f(X / (float)kToneXn), fy = lab_f(Y), fz = lab_f(Z / (float)kToneZn);
+        const float L = 116.0f * fy - 16.0f;
+        float A = 500.0f * (fx - fy), B = 200.0f * (fy - fz);
+        float t = std::sqrt(std::min(std::max(L, 0.0f), 100.0f) / 100.0f) * (float)kToneLutSize;
+        const int i = std::min((int)t, kToneLutSize - 1);
+        t -= (float)i;
+        const float L2 = f_[i] + t * (f_[i + 1] - f_[i]);
+        float u = (std::sqrt(A * A + B * B) - 3.0f) / 5.0f;
+        u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+        const float k = 1.0f + (chroma_ - 1.0f) * u * u * (3.0f - 2.0f * u);
+        A *= k;
+        B *= k;
+        float lin[3];
+        to_linear(L2, A, B, lin);
+        if (std::max({lin[0], lin[1], lin[2]}) > kGamutMargin || std::min({lin[0], lin[1], lin[2]}) < kBlackMargin) {
+            // At or beyond the gamut's edges, where the chroma scale's bisection (top) or the clip to 0 (bottom)
+            // decides by comparisons the rounding of single precision would move: the pixel in double precision, as
+            // tone_lab_apply and tone_lab_to_rgb_in_gamut do it.
+            double lab[3], o[3];
+            const double* dd = decode_table_double();
+            tone_linear_to_lab(dd[in[0]], dd[in[1]], dd[in[2]], lab);
+            tone_lab_apply(lab, q_);
+            tone_lab_to_rgb_in_gamut(lab, o);
+            for (int c = 0; c < 3; ++c) out[c] = (uint16_t)std::lround(o[c] * 65535.0);
+            return;
+        }
+        for (int c = 0; c < 3; ++c) {
+            float v = lin[c] < 0.0f ? 0.0f : (lin[c] > 1.0f ? 1.0f : lin[c]);
+            v = v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+            out[c] = (uint16_t)std::lround(v * 65535.0f);
+        }
+    }
+
+private:
+    static const float* decode_table() {
+        static const std::vector<float> d = [] {
+            std::vector<float> t(65536);
+            for (int v = 0; v < 65536; ++v) t[v] = (float)tone_srgb_decode(v / 65535.0);
+            return t;
+        }();
+        return d.data();
+    }
+    static float lab_f(float t) { return t > 216.0f / 24389.0f ? std::cbrt(t) : (24389.0f / 27.0f * t + 16.0f) / 116.0f; }
+    static float lab_finv(float t) {
+        return t * t * t > 216.0f / 24389.0f ? t * t * t : (116.0f * t - 16.0f) / (24389.0f / 27.0f);
+    }
+    static void to_linear(float L, float A, float B, float lin[3]) {
+        const float fy = (L + 16.0f) / 116.0f, fx = fy + A / 500.0f, fz = fy - B / 200.0f;
+        const float X = lab_finv(fx) * (float)kToneXn, Y = lab_finv(fy), Z = lab_finv(fz) * (float)kToneZn;
+        lin[0] = 3.240479f * X - 1.537150f * Y - 0.498535f * Z;
+        lin[1] = -0.969256f * X + 1.875992f * Y + 0.041556f * Z;
+        lin[2] = 0.055648f * X - 0.204043f * Y + 1.057311f * Z;
+    }
+    static const double* decode_table_double() {
+        static const std::vector<double> d = [] {
+            std::vector<double> t(65536);
+            for (int v = 0; v < 65536; ++v) t[v] = tone_srgb_decode(v / 65535.0);
+            return t;
+        }();
+        return d.data();
+    }
+    static constexpr float kGamutMargin = 0.999f;  // linear: within 0.1 % of the maximum goes the double way,
+    static constexpr float kBlackMargin = 1e-4f;   // and so does a channel this near 0 or below it
+    std::vector<float> f_;
+    float chroma_ = 1.0f;
+    ToneCurve q_;
+};
+
 // The share of a 16-bit sRGB image's pixels (w x h, stride uint16 per pixel, every step-th each way) with a channel
 // at the maximum: as it is (q null), or after the stage with curve q (as apply_tone_stage would write it).
 inline double tone_white_clip_share(const uint16_t* rgb, int w, int h, int stride, int step, const ToneCurve* q) {
     long long n = 0, clipped = 0;
+    const ToneStageFast fast(q ? *q : ToneCurve{});
 #pragma omp parallel for schedule(static) reduction(+ : n, clipped)
     for (int y = 0; y < h; y += step) {
         for (int x = 0; x < w; x += step) {
@@ -352,13 +446,9 @@ inline double tone_white_clip_share(const uint16_t* rgb, int w, int h, int strid
                 clipped += (p[0] == 65535 || p[1] == 65535 || p[2] == 65535);
                 continue;
             }
-            double lab[3], out[3];
-            tone_rgb_to_lab(p[0] / 65535.0, p[1] / 65535.0, p[2] / 65535.0, lab);
-            tone_lab_apply(lab, *q);
-            tone_lab_to_rgb_in_gamut(lab, out);
-            bool c = false;
-            for (int k = 0; k < 3; ++k) c = c || std::lround(out[k] * 65535.0) == 65535;
-            clipped += c;
+            uint16_t o[3];
+            fast.apply(p, o);
+            clipped += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
         }
     }
     return n ? (double)clipped / (double)n : 0.0;
@@ -408,23 +498,15 @@ struct ToneClip {
 
 // rgb: interleaved 16-bit sRGB with `stride` uint16 per pixel (3 or 4), n pixels.
 inline ToneClip apply_tone_stage(uint16_t* rgb, size_t n, int stride, const ToneCurve& q) {
-    // The decoded value of every 16-bit code (the same numbers tone_rgb_to_lab computes, once per code).
-    static const std::vector<double> decode = [] {
-        std::vector<double> d(65536);
-        for (int v = 0; v < 65536; ++v) d[v] = tone_srgb_decode(v / 65535.0);
-        return d;
-    }();
+    const ToneStageFast fast(q);
     long long wb = 0, wa = 0, kb = 0, ka = 0;
 #pragma omp parallel for schedule(static) reduction(+ : wb, wa, kb, ka)
     for (long long i = 0; i < (long long)n; ++i) {
         uint16_t* px = rgb + (size_t)i * stride;
         wb += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
         kb += (px[0] == 0 && px[1] == 0 && px[2] == 0);
-        double lab[3], out[3];
-        tone_linear_to_lab(decode[px[0]], decode[px[1]], decode[px[2]], lab);
-        tone_lab_apply(lab, q);
-        tone_lab_to_rgb_in_gamut(lab, out);
-        for (int c = 0; c < 3; ++c) px[c] = (uint16_t)std::lround(out[c] * 65535.0);
+        const uint16_t in[3] = {px[0], px[1], px[2]};
+        fast.apply(in, px);
         wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
         ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
     }
