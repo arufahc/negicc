@@ -459,7 +459,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
       auto n17 = [](double v) { return num(v, "%.17g"); };
       auto n9 = [](double v) { return num(v, "%.9g"); };
       j["offset"] = {{"applied", true},
-                     {"replayed", true},
+                     {"source", "replay"},
                      {"theta", {n17(ot->theta[0]), n17(ot->theta[1]), n17(ot->theta[2]), n17(ot->theta[3])}},
                      {"piv", {n17(ot->piv[0]), n17(ot->piv[1]), n17(ot->piv[2])}},
                      {"diag", {n9(ot->diag[0]), n9(ot->diag[1]), n9(ot->diag[2])}},
@@ -741,6 +741,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       const ToneCurve& tc = sc.tone_applied && sc.tone_curve ? *sc.tone_curve : tp.curve;
       j["tone_stage"] = {
           {"applied", sc.tone_applied},
+          {"source", "plan"},
           {"features", tp.features},
           {"predicted", pred},
           {"predicted_sd", pred_sd},
@@ -767,7 +768,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     // A replayed curve (a previous run's, or given): the curve and the clipping on this image.
     j["tone_stage"] = {
         {"applied", sc.tone_applied},
-        {"replayed", true},
+        {"source", "replay"},
         {"curve", {{"black", num(q->black, "%.17g")}, {"white", num(q->white, "%.17g")},
                    {"gamma", num(q->gamma, "%.17g")}, {"contrast", num(q->contrast, "%.17g")},
                    {"chroma", num(q->chroma, "%.17g")}}},
@@ -778,6 +779,18 @@ bool write_json_sidecar(const Sidecar& sc) {
                                  : ordered_json(nullptr)}};
   } else {
     j["tone_stage"] = nullptr;
+  }
+
+  // What a replay rendered from recorded values (null when nothing was replayed).
+  if (!sc.replay_source.empty()) {
+    j["replay"] = {{"source", sc.replay_source},
+                   {"offset", !sc.replay_offset_given ? ordered_json(nullptr)
+                              : sc.replay_offset_other_bracket ? ordered_json("not applied: another bracket")
+                                                               : ordered_json("applied")},
+                   {"tone_curve", sc.tone_curve ? ordered_json(sc.tone_applied ? "applied" : "not applied")
+                                                : ordered_json(nullptr)}};
+  } else {
+    j["replay"] = nullptr;
   }
 
   j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};

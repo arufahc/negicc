@@ -120,6 +120,10 @@ struct Setup {
   int offset_target_idx = -1;
   bool offset_composed = false;
   ParsedFilmProfile offset_base_prof;
+  // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise. And
+  // whether a recorded offset was left out because the conversion renders another bracket than the one it was made on.
+  std::string replay_source;
+  bool offset_other_bracket = false;
   bool has_tone = false;
   ToneCurve tone_curve;
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves

@@ -934,6 +934,7 @@ int prepare(const Options& o, Setup& s) {
 
   // A recorded magenta-green offset and tone curve (a sidecar's cli_equivalent) replay a recorded result like the
   // recorded curves: on the --target bracket at the given E, g and b, with nothing searched or predicted.
+  if (o.input_curves_given || o.offset_replay_given || o.tone_replay_given) s.replay_source = "cli";
   if (o.offset_replay_given || o.tone_replay_given) {
     if (!s.is_bundle || !s.white_light || s.has_crosstalk || s.manual_target_idx < 0 || !o.exposure_given ||
         !o.gain_g_given || !o.gain_b_given) {
@@ -979,6 +980,7 @@ int prepare(const Options& o, Setup& s) {
       s.input_curves_source = s.cached_sidecar.curves_source;
     }
     s.fit_curves_auto_active = false;  // the curves (or none) come from the previous run
+    s.replay_source = "knobs";
     if (s.cached_sidecar.has_offset && s.cached_sidecar.target_idx >= 0) {
       s.has_offset = true;
       s.offset = s.cached_sidecar.offset;
@@ -1166,9 +1168,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // A replayed magenta-green offset: composed into the bracket's tables at the base E, g and b (a fit's own run has
     // it there already), before the knobs' grey and the roll-off are measured through them.
     const bool offset_here = s.has_offset && target_idx == s.offset_target_idx;
+    if (s.has_offset && !offset_here) {
+      // Said, not silent: the offset was made on another bracket's tables.
+      s.offset_other_bracket = true;
+      log_warn("the recorded magenta-green offset was made on bracket %d; this conversion renders bracket %d, so it is "
+               "not applied\n", s.offset_target_idx, target_idx);
+    }
     if (offset_here && !s.offset_composed) {
       compose_offset_tables(bundle.targets[target_idx].film_prof, s.offset, base_e, base_g, base_b);
       s.offset_composed = true;
+      log_info("Magenta-green offset replayed on bracket %d at E %.4f g %.4f b %.4f (theta %.5f %.5f %.5f %.5f)\n",
+               target_idx, base_e, base_g, base_b, s.offset.theta[0], s.offset.theta[1], s.offset.theta[2],
+               s.offset.theta[3]);
     }
     if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
       scan.knob_base[0] = base_e;
@@ -2443,7 +2454,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.head_path[i] = s.head_path[i];
     sc.head_fp[i] = s.head_fp[i];
   }
-  sc.offset_tables = s.has_offset ? &s.offset : nullptr;
+  sc.offset_tables = s.has_offset && !s.offset_other_bracket ? &s.offset : nullptr;
+  sc.replay_source = s.replay_source;
+  sc.replay_offset_other_bracket = s.offset_other_bracket;
+  sc.replay_offset_given = s.has_offset;
   sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
   sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
   sc.tone_share = scan.tone_share;

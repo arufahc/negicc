@@ -111,6 +111,10 @@ struct Sidecar {
   // The magenta-green offset and the tone curve the conversion rendered with (curve_fit's, or replayed; null: none),
   // whether the tone curve was applied to the final image, and the clipping it measured.
   const OffsetTables* offset_tables = nullptr;
+  // A replay ("knobs" or "cli", else empty), and what happened to a recorded offset: given, and left out because the
+  // conversion rendered another bracket.
+  std::string replay_source;
+  bool replay_offset_given = false, replay_offset_other_bracket = false;
   const ToneCurve* tone_curve = nullptr;
   const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
   double tone_share = 1.0;
