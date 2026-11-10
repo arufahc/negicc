@@ -2521,6 +2521,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                                    int encoding, bool offset_scan_on, const ToneHead* tone_head,
                                    CurveRefitResult& out) {
+  // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
