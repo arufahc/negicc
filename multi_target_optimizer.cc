@@ -2106,6 +2106,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   m_neu.set_scene_neutral(e_start, res.params.g, res.params.b);
   out.neutral_auto = m_neu.neutral_stats_on(cfg_auto, e_start, res.params.g, res.params.b);
   out.neutral_head = m_neu.head_used();  // as the fit's own selection: the same frame, E, g and b
+  out.neutral_decisions = m_neu.decisions();
 
   negicc::CombinedProfile comb;
   float x = out.x_hi_auto, q995 = q995_auto, e_new = e_start;

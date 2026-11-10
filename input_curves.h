@@ -426,6 +426,16 @@ struct NeutralStats {
   float quad() const { return std::hypot(q_a, q_b); }
 };
 
+// What JointCurveModel::set_scene_neutral decided beyond the anchors themselves, for the sidecar.
+struct NeutralTargetDecisions {
+  int filled = 0;            // lowest-chroma cells the band fill added to empty L* bands (0: it did not run)
+  float span_L = 0.0f;       // the L* standard deviation the slope shrink measured (anchors other than filled ones)
+  float slope_share = 1.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
+  float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto (all anchors, filled ones included)
+  float spread = 0.0f;       // their median distance from the anchors' tone trend at Auto
+  bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread): the offset target took full strength
+};
+
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
@@ -497,18 +507,44 @@ class JointCurveModel {
 
   // The p(neutral) at or above which a grid cell is a scene-neutral anchor (CurveFrame::neutral_p).
   static constexpr float kNeutralHeadThreshold = 0.9f;
+  // Band fill: runs when at least this share of the head's anchors lie in the darkest band (L* <= 22), where they
+  // carry no evidence about the mid-tones and highlights the cast shows in.
+  static constexpr double kBandFillDarkShare = 0.8;
+  // Band fill: an L* band with fewer head anchors than this counts as empty and receives lowest-chroma cells.
+  static constexpr size_t kBandFillMinAnchors = 5;
+  // Slope shrink: s0 of sd^2 / (sd^2 + s0^2), in L*; most of a slope measured over an L* spread well under s0 is kept.
+  static constexpr float kSlopeSpanL = 6.0f;
+  // Offset gate: the anchors' mean |ab| at Auto above which (and above their scatter) their shared offset is a cast.
+  static constexpr float kOffsetGateMinAb = 6.0f;
 
   // Builds the scene-neutral set N from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
   // ([2, 22], [22, 45], [45, 70], [70, 92]) with equalized band weights. The anchors of a band are its cells the
   // neutral-patch head gives p(neutral) >= kNeutralHeadThreshold (CurveFrame::neutral_p); without the head's p, or
   // when it gives fewer than 16 anchors over all bands (too few for the neutral term, which needs 16), its
   // lowest-chroma 30% under a chroma gate.
+  //
+  // Three rules then decide how far the fit follows those anchors:
+  //   - band fill (head anchors only): when at least kBandFillDarkShare of them sit in the darkest band, every other
+  //     band with fewer than kBandFillMinAnchors of them also takes its lowest-chroma 30% under the same chroma gate as
+  //     the no-head selection, so the offset term sees the tones the cast shows in. They then enter every term as
+  //     the head's anchors do, but low chroma is weak evidence of a neutral tone trend, so the slope shrink leaves them
+  //     out of the L* spread it measures: they cannot by themselves license a full slope correction.
+  //   - slope shrink: the slope residuals aim at (1 - f) k0 instead of 0, k0 the anchors' slope at Auto and
+  //     f = sd^2 / (sd^2 + kSlopeSpanL^2), sd the L* standard deviation of the anchors other than the filled ones: a
+  //     slope measured over a narrow tone range is not extrapolated into a bend across the whole range.
+  //   - offset gate: when the anchors' mean |ab| at Auto exceeds max(kOffsetGateMinAb, their scatter about their tone
+  //     trend), the shared offset is a cast rather than scatter, so the offset target removes it at the full strength
+  //     (0.75, 0.95 with endpoints) instead of that strength times conf; conf still weights the terms. Decided last,
+  //     on the full anchor set (filled cells included), because it is a statement about their shared offset.
+  // decisions() records what each rule did.
   void set_scene_neutral(float e0, float g0, float b0, float strength = 0.75f) {
     neu_idx_.clear();
     neu_w_.clear();
     head_used_ = false;
     conf_ = w_off_ = w_slope_ = w_quad_ = 0.0f;
     c_a_ = c_b_ = 0.0f;
+    k_target_a_ = k_target_b_ = 0.0f;
+    decisions_ = NeutralTargetDecisions{};
     if (f_.n <= 0) return;
 
     const InputCurves zero_c{};
@@ -540,6 +576,30 @@ class JointCurveModel {
 
     std::vector<int> b_sel[4];
     auto band_ok = [&](int b) { return !bands[b].empty() && !((int)bands[b].size() < 8 && total >= 64); };
+    // The no-head selection's chroma gate: from the 30th percentile of the chroma above L* 20, else of B0 (NaN when
+    // there is neither).
+    auto chroma_gate = [&]() -> float {
+      std::vector<float> c = mid_c;
+      if (c.empty())
+        for (int i : bands[0]) c.push_back(c0[i]);
+      if (c.empty()) return NAN;
+      std::sort(c.begin(), c.end());
+      const float c_q30 = c[std::min(c.size() - 1, (size_t)(0.30 * (double)c.size()))];
+      return std::max(15.0f, 1.75f * c_q30);
+    };
+    // A band's lowest-chroma 30% (at least one cell), lowest first, kept where its chroma is under c_gate.
+    auto lowest_chroma = [&](int b, float c_gate) {
+      std::vector<int> ord = bands[b];
+      std::sort(ord.begin(), ord.end(), [&](int i, int j) { return c0[i] != c0[j] ? c0[i] < c0[j] : i < j; });
+      const int mb = std::max(1, (int)std::lround(0.30 * (double)ord.size()));
+      std::vector<int> out;
+      for (int k = 0; k < mb; ++k) {
+        if (c0[ord[k]] <= c_gate) out.push_back(ord[k]);
+      }
+      return out;
+    };
+    // The cells the band fill added (left out of the slope shrink's L* spread).
+    std::vector<char> filled(f_.n, 0);
     // The head's anchors: a band's cells at p(neutral) >= kNeutralHeadThreshold, when it gives at least 16 in all.
     head_used_ = false;
     if (const float* p = f_.neutral_p) {
@@ -553,25 +613,30 @@ class JointCurveModel {
       head_used_ = n_head >= 16;
       if (!head_used_)
         for (auto& v : b_sel) v.clear();
-    }
-    // Else a band's lowest-chroma 30% under the chroma gate (from the 30th percentile of the chroma above L* 20, else
-    // of B0).
-    if (!head_used_) {
-      if (mid_c.empty()) {
-        for (int i : bands[0]) mid_c.push_back(c0[i]);
+      // Band fill: head anchors (almost) only in the darkest band; the bands they leave empty take their
+      // lowest-chroma cells, after the head's own.
+      if (head_used_ && (double)b_sel[0].size() >= kBandFillDarkShare * (double)n_head) {
+        const float c_gate = chroma_gate();
+        if (!std::isnan(c_gate)) {
+          for (int b = 0; b < 4; ++b) {
+            if (!band_ok(b) || b_sel[b].size() >= kBandFillMinAnchors) continue;
+            for (int i : lowest_chroma(b, c_gate)) {
+              if (std::find(b_sel[b].begin(), b_sel[b].end(), i) != b_sel[b].end()) continue;
+              b_sel[b].push_back(i);
+              filled[i] = 1;
+              ++decisions_.filled;
+            }
+          }
+        }
       }
-      if (mid_c.empty()) return;
-      std::sort(mid_c.begin(), mid_c.end());
-      const float c_q30 = mid_c[std::min(mid_c.size() - 1, (size_t)(0.30 * (double)mid_c.size()))];
-      const float c_gate = std::max(15.0f, 1.75f * c_q30);
+    }
+    // Else a band's lowest-chroma 30% under the chroma gate.
+    if (!head_used_) {
+      const float c_gate = chroma_gate();
+      if (std::isnan(c_gate)) return;
       for (int b = 0; b < 4; ++b) {
         if (!band_ok(b)) continue;
-        std::vector<int> ord = bands[b];
-        std::sort(ord.begin(), ord.end(), [&](int i, int j) { return c0[i] != c0[j] ? c0[i] < c0[j] : i < j; });
-        const int mb = std::max(1, (int)std::lround(0.30 * (double)ord.size()));
-        for (int k = 0; k < mb; ++k) {
-          if (c0[ord[k]] <= c_gate) b_sel[b].push_back(ord[k]);
-        }
+        b_sel[b] = lowest_chroma(b, c_gate);
       }
     }
 
@@ -660,17 +725,53 @@ class JointCurveModel {
     conf_ = std::clamp(1.0f - (spread - 3.5f) / 8.0f, 0.25f, 1.0f) *
             std::clamp(1.0f - unaligned / 6.0f, 0.0f, 1.0f) *
             std::min(1.0f, (float)m / 48.0f);
-    const float strength_eff = has_endpoints ? 0.95f : strength;
-    const float alpha_off = std::clamp(strength_eff * conf_, 0.0f, 1.0f);
-    c_a_ = (float)(sa - alpha_off * cast_a);
-    c_b_ = (float)(sb - alpha_off * cast_b);
     w_off_ = conf_ / 1.5f;
     w_slope_ = conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
     w_quad_ = (n_bands >= 3) ? conf_ * std::sqrt((float)(vq0 / (vq0 + 0.08))) / 4.0f : 0.0f;
+
+    // Slope shrink: the L* spread of the anchors other than the filled ones, their weights renormalised over them.
+    double w_span = 0.0, L_span = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      if (filled[i]) continue;
+      w_span += neu_w_[k];
+      L_span += neu_w_[k] * lab0[i].L;
+    }
+    double vL_span = vL0;
+    if (w_span > 0.0) {
+      L_span /= w_span;
+      vL_span = 0.0;
+      for (int k = 0; k < m; ++k) {
+        const int i = neu_idx_[k];
+        if (filled[i]) continue;
+        const double dL = lab0[i].L - L_span;
+        vL_span += neu_w_[k] * dL * dL;
+      }
+      vL_span /= w_span;
+    }
+    const double s0_sq = (double)kSlopeSpanL * (double)kSlopeSpanL;
+    const float slope_share = (float)(vL_span / (vL_span + s0_sq));
+    k_target_a_ = (float)((1.0 - slope_share) * ka0);
+    k_target_b_ = (float)((1.0 - slope_share) * kb0);
+    decisions_.span_L = (float)std::sqrt(vL_span);
+    decisions_.slope_share = slope_share;
+
+    // Offset gate, on the full anchor set.
+    const float strength_eff = has_endpoints ? 0.95f : strength;
+    float alpha_off = std::clamp(strength_eff * conf_, 0.0f, 1.0f);
+    const double auto_ab = std::hypot(sa, sb);
+    decisions_.auto_ab = (float)auto_ab;
+    decisions_.spread = spread;
+    decisions_.offset_gate = auto_ab > std::max((double)kOffsetGateMinAb, (double)spread);
+    if (decisions_.offset_gate) alpha_off = std::max(alpha_off, std::clamp(strength_eff, 0.0f, 1.0f));
+    c_a_ = (float)(sa - alpha_off * cast_a);
+    c_b_ = (float)(sb - alpha_off * cast_b);
   }
 
   // set_scene_neutral took the neutral head's anchors (else the lowest-chroma cells).
   bool head_used() const { return head_used_; }
+  // What set_scene_neutral's band fill, slope shrink and offset gate did.
+  const NeutralTargetDecisions& decisions() const { return decisions_; }
 
   NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
     const InputCurves c = anchored(shape, e, g, b);
@@ -699,15 +800,16 @@ class JointCurveModel {
     return compute_neutral_moments(labs, sL, sa, sb, st);
   }
 
-  // 4-equation scene-neutral residuals: [w_off * (a_bar - c_a), w_off * (b_bar - c_b), w_slope * k_a, w_slope * k_b].
+  // 4-equation scene-neutral residuals: [w_off * (a_bar - c_a), w_off * (b_bar - c_b), w_slope * (k_a - kt_a),
+  // w_slope * (k_b - kt_b)], kt the slope target set_scene_neutral's slope shrink left.
   double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
     const NeutralStats st = neutral_stats(e, g, b, shape);
     r.assign(4, 0.0);
     if (st.m <= 0 || conf_ <= 0.0f) return 0.0;
     r[0] = (double)w_off_ * (st.a_bar - c_a_);
     r[1] = (double)w_off_ * (st.b_bar - c_b_);
-    r[2] = (double)w_slope_ * st.k_a;
-    r[3] = (double)w_slope_ * st.k_b;
+    r[2] = (double)w_slope_ * (st.k_a - k_target_a_);
+    r[3] = (double)w_slope_ * (st.k_b - k_target_b_);
     return r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
   }
 
@@ -858,6 +960,8 @@ class JointCurveModel {
   CurveFrame f_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
   float conf_ = 0.0f, c_a_ = 0.0f, c_b_ = 0.0f, w_off_ = 0.0f, w_slope_ = 0.0f, w_quad_ = 0.0f;
+  float k_target_a_ = 0.0f, k_target_b_ = 0.0f;  // the slope residuals' target (slope shrink)
+  NeutralTargetDecisions decisions_;
   std::vector<float> rows_, L_, ug_, ub_;
   std::vector<int> neu_idx_;
   std::vector<float> neu_w_;

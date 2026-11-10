@@ -360,6 +360,8 @@ struct CurveRefitResult {
   // The scene-neutral anchors came from the neutral head's p (else the lowest-chroma cells: no head, or fewer than 16
   // cells at p >= 0.9).
   bool neutral_head = false;
+  // What the band fill, slope shrink and offset gate decided on those anchors (JointCurveModel::decisions).
+  negicc::NeutralTargetDecisions neutral_decisions;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;

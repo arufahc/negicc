@@ -4,7 +4,9 @@ Predicts, for every 16x16 patch of a preview, p(neutral): the probability that t
 intended positive, whatever colour cast the current render has. `neg_process` uses it to pick the scene-neutral
 anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): the grid cells
 with p >= 0.9 in each of four L* bands, or, when fewer than 16 cells reach 0.9 (too few for the fit's neutral
-term), the lowest-chroma 30% of each band as without the head. It replaced the raw-chroma selection and its four hand-tuned rules (low-key
+term), the lowest-chroma 30% of each band as without the head. When the head's cells lie almost all in the darkest
+band, the fit adds the lowest-chroma cells of the bands they leave empty (`set_scene_neutral` describes this band fill
+and the fit's two other rules). It replaced the raw-chroma selection and its four hand-tuned rules (low-key
 band merge, chart-like gate, shadow cluster, collinearity drop). It does not predict colour; the intent adapter's mu
 and sigma stay as they are.
 
