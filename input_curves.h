@@ -533,7 +533,7 @@ class JointCurveModel {
   // a count wherever one is needed: the size term of conf (mass / 48), the endpoints rule (kEndpoints*), and the
   // scatter, which is the p^2-weighted median distance of the anchors from their tone trend.
   //
-  // Without the head's p (--neutral_head off, or no inference), or when every p^2 is 0, there are no anchors: conf
+  // Without the head's p (no head loaded, or no inference), or when every p^2 is 0, there are no anchors: conf
   // is 0, the neutral residuals are 0, and the joint fit stays at its start, Auto's g and b with no G/B bend (E still
   // solved to Auto's median L*; the highlight-cliff pass, the re-meter and the steps after the fit run as on any
   // frame).

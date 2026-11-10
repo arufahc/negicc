@@ -102,6 +102,12 @@ struct Sidecar {
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;
+  // The models the search ran with: the intent adapter, the neutral head and the tone heads ("[built-in] <name>" or
+  // the path --dino gave, with the file's size and CRC-32; empty: not loaded). A run that reused a previous sidecar
+  // keeps that run's record (cached_heads_json_str).
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
+  std::string cached_heads_json_str;
   // The magenta-green offset and the tone curve the conversion rendered with (curve_fit's, or replayed; null: none),
   // whether the tone curve was applied to the final image, and the clipping it measured.
   const OffsetTables* offset_tables = nullptr;
@@ -121,5 +127,7 @@ const char* neg_process_version();
 
 // A file's size and CRC-32 (zlib), as the sidecar records each input (inputs.raw_file_stats). False when unreadable.
 bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
+// The same for bytes in memory (a built-in model).
+FileFingerprint memory_fingerprint(const void* data, size_t size);
 
 bool write_json_sidecar(const Sidecar& sc);

@@ -55,16 +55,16 @@ On by default wherever the white-light curve fit runs (`--fit_curves auto` or `o
 otherwise (TriLED, given parameters).
 
 ```bash
-neg_process ... --neutral_head on                  # default: the built-in head
-neg_process ... --neutral_head path/to/head.bin    # another export of the head (same NPH1 format)
-neg_process ... --neutral_head off                 # no head: no anchors, the fit keeps Auto's colour
+neg_process ...                                    # default: the built-in head
+neg_process ... --dino neutral:path/to/head.bin    # another export of the head (same NPH1 format)
 ```
 
 The head adds `neutral_p` to every DINOv3 inference of the search (about 5-8 ms on 8 threads, 25 ms on one, against
 about 250-350 ms for the backbone and adapter). With the backbone and adapter on TensorRT the tokens are copied to the
 host once per inference for it. The sidecar's `input_curves.remeter.neutral` gives `anchors` (`head`, or `none`
 without the head or without any evidence) and `evidence` (the sum of p^2). To try a retrained head, export it with
-`export_neutral_head.py` and pass the `.bin` with `--neutral_head`, or replace `neutral_head.bin` and rebuild.
+`export_neutral_head.py` and pass the `.bin` with `--dino neutral:<file>`, or replace `neutral_head.bin` and rebuild.
+The sidecar's `heads.neutral` records which file ran, with its size and CRC-32.
 
 ## Provenance
 

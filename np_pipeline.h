@@ -73,6 +73,7 @@ struct CachedSidecar {
   std::string curves_source;
   std::string input_curves_json_str;
   std::string intent_field_json_str;
+  std::string heads_json_str;
   // Its magenta-green offset (input_curves.offset) and tone curve (tone_stage.curve), when it applied them.
   bool has_offset = false;
   OffsetTables offset;
@@ -105,6 +106,10 @@ struct Setup {
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
   std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
+  // The intent adapter, neutral head and tone heads that run ([built-in] <name> or the --dino path) and their files'
+  // size and CRC-32, for the sidecar.
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
   ToneHead tone_head;                    // the white-light tone heads (--tone_stage on, where the fit runs)
   // The magenta-green offset and the tone curve the conversion renders with: this run's curve fit's, a previous run's
   // (the knobs on its sidecar) or given (--offset_scan theta:..., --tone_stage curve:...). Neither is searched or

@@ -462,6 +462,14 @@ static ordered_json input_curves_json(const Sidecar& sc) {
 
 const char* neg_process_version() { return NEGICC_GIT_VERSION; }
 
+FileFingerprint memory_fingerprint(const void* data, size_t size) {
+  FileFingerprint fp;
+  fp.ok = data != nullptr;
+  fp.size = size;
+  fp.crc = fp.ok ? (uint32_t)crc32_z(crc32(0L, Z_NULL, 0), reinterpret_cast<const Bytef*>(data), (z_size_t)size) : 0;
+  return fp;
+}
+
 bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return false;
@@ -639,6 +647,25 @@ bool write_json_sidecar(const Sidecar& sc) {
     j["dino"] = sc.dino ? dino_json(*sc.dino, sc) : ordered_json(nullptr);
   }
   // The intent field Auto converted against; a run that reuses <output>.json (the knobs) keeps the previous run's.
+  // The models: what --dino replaced, or the built-in ones.
+  if (!sc.cached_heads_json_str.empty()) {
+    j["heads"] = ordered_json::parse(sc.cached_heads_json_str);
+  } else {
+    ordered_json h;
+    const char* names[3] = {"intent", "neutral", "tone"};
+    for (int i = 0; i < 3; ++i) {
+      if (sc.head_path[i].empty()) {
+        h[names[i]] = nullptr;
+        continue;
+      }
+      char crc[16];
+      std::snprintf(crc, sizeof(crc), "%08x", sc.head_fp[i].crc);
+      h[names[i]] = {{"path", sc.head_path[i]},
+                     {"bytes", sc.head_fp[i].ok ? ordered_json(sc.head_fp[i].size) : ordered_json(nullptr)},
+                     {"crc32", sc.head_fp[i].ok ? ordered_json(crc) : ordered_json(nullptr)}};
+    }
+    j["heads"] = h;
+  }
   if (!sc.cached_intent_field_json_str.empty())
     j["intent_field"] = ordered_json::parse(sc.cached_intent_field_json_str);
   else if (sc.auto_res)

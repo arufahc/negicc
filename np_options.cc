@@ -267,18 +267,14 @@ int parse_options(int ac, char* av[], Options& o) {
     .required()
     .help("Output file location.");
   parser.add_argument("--dino")
-    .help("Intent adapter for the parameter search in place of the film stock's built-in one: adapter.onnx or a "
-          "directory holding it.");
+    .help("Models in place of the built-in ones, as a comma-separated list of <head>:<path> entries, head one of "
+          "intent (the intent adapter: adapter.onnx or a directory holding it), neutral (a neutral_head.bin) or tone "
+          "(a tone_head.bin); an entry without a head is the intent adapter. Heads not named stay built in. Paths "
+          "cannot contain commas; everything after the head's colon is the path.");
   parser.add_argument("--list_profiles")
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
-  parser.add_argument("--neutral_head")
-    .help("Neutral-patch head of the white-light curve fit: on (default, the built-in "
-          "models/neutral_head/neutral_head.bin), off, or the path of another neutral_head.bin. Its p(neutral) "
-          "weights the fit's scene-neutral anchors (p squared, every cell); off, the fit has no anchors and keeps "
-          "Auto's colour.")
-    .default_value(std::string("on"));
   parser.add_argument("--offset_scan")
     .help("The white-light curve fit's last step: on (default) or off. On, the network judges whether the fitted "
           "picture reads too green or too magenta: a lattice of magenta-green offsets is scored against the intent "
@@ -330,8 +326,25 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
   parser.add_argument("raw_files").nargs(1, 4);
 
+  // --neutral_head was replaced by --dino neutral:<file>. Its default value is still accepted (and ignored), so a
+  // command line or a sidecar's argv from before reads; another value is an error that names the new form.
+  std::vector<char*> args;
+  for (int i = 0; i < ac; ++i) {
+    const std::string a = av[i];
+    if (a == "--neutral_head" || a.compare(0, 15, "--neutral_head=") == 0) {
+      const std::string v = a == "--neutral_head" ? (i + 1 < ac ? av[i + 1] : "") : a.substr(15);
+      if (v != "on") {
+        log_error("--neutral_head is gone: give another neutral head with --dino neutral:<file> (the built-in one "
+                  "runs by default)\n");
+        return 1;
+      }
+      if (a == "--neutral_head") ++i;
+      continue;
+    }
+    args.push_back(av[i]);
+  }
   try {
-    parser.parse_args(ac, av);
+    parser.parse_args((int)args.size(), args.data());
   } catch (const std::exception& err) {
     std::ostringstream help;
     help << parser;
@@ -486,9 +499,58 @@ int parse_options(int ac, char* av[], Options& o) {
       return 1;
     }
   }
-  if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
+  if (parser.is_used("--dino")) {
+    // Comma-separated entries; in each, a known head name before the first colon is the head and the rest the path,
+    // else the whole entry is the intent adapter's path (so "adapter_dir" and drive letters such as "C:\..." keep
+    // their meaning). A word of two or more letters before the colon that is not a head is an error.
+    const std::string v = parser.get<std::string>("--dino");
+    std::stringstream ss(v);
+    std::string entry;
+    bool seen[3] = {false, false, false};
+    const char* heads[3] = {"intent", "neutral", "tone"};
+    std::string* dst[3] = {&o.dino_adapter, &o.neutral_head_file, &o.tone_head_file};
+    bool any = false;
+    while (std::getline(ss, entry, ',')) {
+      any = true;
+      if (entry.empty()) {
+        log_error("--dino: an empty entry in '%s'\n", v.c_str());
+        return 1;
+      }
+      int h = 0;
+      std::string path = entry;
+      const size_t colon = entry.find(':');
+      if (colon != std::string::npos) {
+        const std::string name = entry.substr(0, colon);
+        int k = -1;
+        for (int i = 0; i < 3; ++i)
+          if (name == heads[i]) k = i;
+        bool word = name.size() >= 2;
+        for (char ch : name) word = word && (std::isalpha((unsigned char)ch) || ch == '_');
+        if (k >= 0) {
+          h = k;
+          path = entry.substr(colon + 1);
+        } else if (word) {
+          log_error("--dino: unknown head '%s' in '%s' (heads: intent, neutral, tone)\n", name.c_str(), entry.c_str());
+          return 1;
+        }
+      }
+      if (path.empty()) {
+        log_error("--dino: the entry '%s' has no path\n", entry.c_str());
+        return 1;
+      }
+      if (seen[h]) {
+        log_error("--dino: the %s head is given twice\n", heads[h]);
+        return 1;
+      }
+      seen[h] = true;
+      *dst[h] = path;
+    }
+    if (!any || (!v.empty() && v.back() == ',')) {
+      log_error("--dino: an empty entry in '%s'\n", v.c_str());
+      return 1;
+    }
+  }
   o.dino_backend = parser.get<std::string>("--dino_backend");
-  o.neutral_head = parser.get<std::string>("--neutral_head");
   // on, off, or recorded numbers after a prefix (which keeps a negative first number from reading as an option).
   auto on_off = [&](const char* name, bool& flag, const char* prefix, int count, bool& given, double* out) {
     const std::string v = parser.get<std::string>(name);

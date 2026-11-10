@@ -66,8 +66,9 @@ struct Options {
   bool hflip = false, vflip = false;
 
   // Parameter search
-  std::string dino_adapter;                    // --dino, empty when not given
-  std::string neutral_head = "on";             // --neutral_head: on (built-in), off, or a neutral_head.bin
+  // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
+  // the built-in ones; empty: the built-in one.
+  std::string dino_adapter, neutral_head_file, tone_head_file;
   bool offset_scan = true;                     // --offset_scan on|off: the network's magenta-green offset (white light)
   bool tone_stage = true;                      // --tone_stage on|off: the learned lightness curve (white light, srgb)
   // Recorded values to replay (a sidecar's cli_equivalent), with given values and no search:

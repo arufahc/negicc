@@ -195,8 +195,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the bundle's). |
 | `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
-| `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
-| `--neutral_head on\|off\|<file>` | The neutral-patch head that weights the curve fit's neutral anchors: the built-in one (default), none (no anchors: the fit keeps Auto's colour), or another `neutral_head.bin`. |
+| `--dino <head>:<file>,...` | Your own models in place of the built-in ones. The heads are `intent` (the intent adapter: an `.onnx` or its directory), `neutral` (a `neutral_head.bin`) and `tone` (a `tone_head.bin`); for example `--dino neutral:my_head.bin` or `--dino intent:adapter.onnx,tone:th.bin`. A path without a head name is the intent adapter. Heads you leave out stay built in. Paths cannot contain commas. |
 | `--offset_scan on\|off\|theta:<numbers>` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). Recorded numbers replay it (a sidecar's `cli_equivalent`). |
 | `--tone_stage on\|off\|curve:<numbers>` | The learned lightness curve on the final image (white light with `-P srgb`; default on). Recorded numbers replay it. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |

@@ -235,7 +235,8 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},           {"", "--neutral_head", 1, false},     {"", "--offset_scan", 1, false},
+      // --neutral_head: gone (--dino neutral:<file>); an older sidecar's "--neutral_head on" is the default.
+      {"", "--flat", 1, false},           {"", "--neutral_head", 1, true},      {"", "--offset_scan", 1, false},
       {"", "--tone_stage", 1, false},
   };
   auto is_number = [](const std::string& t) {
@@ -528,6 +529,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
     }
+    if (j.contains("heads") && j["heads"].is_object()) s.cached_sidecar.heads_json_str = j["heads"].dump();
     // The magenta-green offset and the tone curve it applied: replayed as recorded (the knobs act on top).
     auto numbers = [](const nlohmann::ordered_json& a, int n, double* out) {
       if (!a.is_array() || (int)a.size() != n) return false;
@@ -783,7 +785,7 @@ int prepare(const Options& o, Setup& s) {
   s.exposure_given = o.exposure_given;
   s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given;
   s.bundle_search = s.use_dino && s.is_bundle && s.manual_target_idx < 0 && !s.exposure_given;
-  if (!o.dino_adapter.empty() && !s.use_dino) {
+  if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
     log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
                     "--film_profile) without --gain_g or --gain_b\n");
     return 1;
@@ -1007,10 +1009,18 @@ int prepare(const Options& o, Setup& s) {
       if (trt && std::strcmp(s.engine.backend_used(), "gpu") != 0) {
         s.dino_path = std::string("[built-in] ") + onnx->name;
       }
+      // A model's file named by --dino, read whole (an error names the head).
+      auto read_file = [](const std::string& path, const char* head) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error(std::string("--dino ") + head + ": cannot read " + path);
+        return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+      };
       if (!o.dino_adapter.empty()) {
         std::string adapter = o.dino_adapter;
         if (is_directory(adapter)) adapter = (std::filesystem::path(adapter) / "adapter.onnx").string();
         s.engine.load_adapter_file(adapter);
+        s.head_path[0] = adapter;
+        s.head_fp[0].ok = file_fingerprint(adapter, s.head_fp[0].size, s.head_fp[0].crc);
       } else {
         std::string adapter_dir;
         const std::string profile_name = !o.film_stock.empty() ? o.film_stock
@@ -1028,45 +1038,62 @@ int prepare(const Options& o, Setup& s) {
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
         s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
+        s.head_path[0] = std::string("[built-in] ") + a->name;
+        s.head_fp[0] = memory_fingerprint(a->data, a->size);
       }
       // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
       // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
-      if ((o.fit_curves || s.fit_curves_auto_active) && o.neutral_head != "off") {
+      if (o.fit_curves || s.fit_curves_auto_active) {
         std::vector<char> file;
         const void* data = nullptr;
         size_t size = 0;
         std::string name = "[built-in] models/neutral_head/neutral_head.bin";
-        if (o.neutral_head == "on") {
+        if (o.neutral_head_file.empty()) {
           const EmbeddedFile* f = find_embedded_file("models/neutral_head/neutral_head.bin");
           if (f) {
             data = f->data;
             size = f->size;
           }
         } else {
-          std::ifstream in(o.neutral_head, std::ios::binary);
-          if (!in) throw std::runtime_error("--neutral_head: cannot read " + o.neutral_head);
-          file.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+          file = read_file(o.neutral_head_file, "neutral");
           data = file.data();
           size = file.size();
-          name = o.neutral_head;
+          name = o.neutral_head_file;
         }
         if (data && s.engine.needs_adapter()) {
-          s.engine.set_neutral_head(data, size);
+          try {
+            s.engine.set_neutral_head(data, size);
+          } catch (const std::exception& e) {  // not a neutral head file: say which file
+            if (o.neutral_head_file.empty()) throw;
+            throw std::runtime_error("--dino neutral: " + o.neutral_head_file + ": " + e.what());
+          }
           s.neutral_head = name;
+          s.head_path[1] = name;
+          s.head_fp[1] = memory_fingerprint(data, size);
           log_info("Neutral head %s\n", name.c_str());
         }
       }
       // The tone heads read the search's pooled features and the tokens' spread (only where the fit runs; the stage
       // itself needs -P srgb, which the fit checks).
       if ((o.fit_curves || s.fit_curves_auto_active) && o.tone_stage && s.engine.needs_adapter()) {
-        const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
         std::string err;
-        if (!f || !s.tone_head.load(f->data, f->size, err)) {
-          throw std::runtime_error("the built-in tone heads (models/tone_head/tone_head.bin) " +
-                                   (f ? err : std::string("are missing")));
+        if (o.tone_head_file.empty()) {
+          const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
+          if (!f || !s.tone_head.load(f->data, f->size, err)) {
+            throw std::runtime_error("the built-in tone heads (models/tone_head/tone_head.bin) " +
+                                     (f ? err : std::string("are missing")));
+          }
+          s.head_path[2] = "[built-in] models/tone_head/tone_head.bin";
+          s.head_fp[2] = memory_fingerprint(f->data, f->size);
+        } else {
+          const std::vector<char> file = read_file(o.tone_head_file, "tone");
+          if (!s.tone_head.load(file.data(), file.size(), err))
+            throw std::runtime_error("--dino tone: " + o.tone_head_file + ": " + err);
+          s.head_path[2] = o.tone_head_file;
+          s.head_fp[2] = memory_fingerprint(file.data(), file.size());
         }
         s.engine.set_token_spread(true);
-        log_info("Tone heads [built-in] models/tone_head/tone_head.bin\n");
+        log_info("Tone heads %s\n", s.head_path[2].c_str());
       }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());
@@ -2393,6 +2420,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.cached_dino_search_ms = s.cached_sidecar.t_dino_search_ms;
     }
     sc.cached_intent_field_json_str = s.cached_sidecar.intent_field_json_str;
+    sc.cached_heads_json_str = s.cached_sidecar.heads_json_str;
     sc.cached_input_curves_json_str = s.cached_sidecar.input_curves_json_str;
   }
   if (scan.has_knob_res) {
@@ -2411,6 +2439,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
   sc.t_analysis_ms = scan.t_analysis_ms;
+  for (int i = 0; i < 3; ++i) {
+    sc.head_path[i] = s.head_path[i];
+    sc.head_fp[i] = s.head_fp[i];
+  }
   sc.offset_tables = s.has_offset ? &s.offset : nullptr;
   sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
   sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;

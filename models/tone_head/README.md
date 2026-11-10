@@ -70,6 +70,9 @@ of the search's intent preview when that setting did not run, so the stage adds 
 `tone_stage` records which (`features`), the predictions, the final render's descriptors before the stage, the
 targets, the curve and the clipping before and after.
 
+To try retrained heads, export them with `export_tone_head.py` and pass the `.bin` with `--dino tone:<file>`, or
+replace `tone_head.bin` and rebuild. The sidecar's `heads.tone` records which file ran, with its size and CRC-32.
+
 ## Provenance
 
 Trained in the whitelab TONE arm (`tools/extract_corpus.py --K 4`, then `tools/train_heads.py A --kind pool`), with
