@@ -2311,6 +2311,9 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   double m0[4];
   moments(lab0, m0);
   double J[4][4];
+  // The probes and the lattice points are independent renders of the grid model (each solves its own E): run in
+  // parallel, each writing only its own slot, so the result is the same as in order.
+#pragma omp parallel for schedule(dynamic)
   for (int j = 0; j < 4; ++j) {
     double th[4] = {0, 0, 0, 0};
     th[j] = kOffsetProbe[j];
@@ -2415,6 +2418,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   std::vector<double> s_of(K), score(K);
   std::vector<char> kept(K);
   std::vector<std::vector<double>> pred(K);
+#pragma omp parallel for schedule(dynamic)
   for (int k = 0; k < K; ++k) {
     s_of[k] = -kOffsetScanMax + k * kOffsetScanStep;
     double th[4];
