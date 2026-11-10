@@ -2414,8 +2414,8 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
         a += lab[3 * i + 1];
         aw += w2[i] * lab[3 * i + 1];
       }
-    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < a_auto / n_in - tol) return false;
-    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < aw_auto / w_in - tol) return false;
+    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < negicc::green_guard_ref(a_auto / n_in) - tol) return false;
+    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < negicc::green_guard_ref(aw_auto / w_in) - tol) return false;
     return true;
   };
   const int K = (int)std::lround(2.0 * kOffsetScanMax / kOffsetScanStep) + 1;

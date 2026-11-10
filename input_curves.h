@@ -966,6 +966,11 @@ class JointCurveModel {
 // a penalty in the objective rather than a clamp afterwards. A term counts with at least kGreenGuardMinCells cells,
 // the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
 constexpr float kGreenGuardTolAb = 0.5f;
+// Test only, off: the guard's reference is min(Auto's mean a*, 0) instead of Auto's, so a fit may remove Auto's own
+// magenta cast down to neutral but no further toward green (T28: Auto's p^2-weighted a* is +7.0). Off, the reference
+// is Auto's mean a*, as the owner's rule reads.
+constexpr bool kGreenGuardRefCapZero = false;
+inline double green_guard_ref(double auto_a) { return kGreenGuardRefCapZero ? std::min(auto_a, 0.0) : auto_a; }
 constexpr float kGreenGuardWeight = 4.0f;
 constexpr double kGreenGuardMinCells = 8.0;
 constexpr double kGreenGuardMinMass = 2.0;
@@ -1067,7 +1072,8 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       guard_means(p, e, v);
       for (int k = 0; k < 2; ++k) {
         const double h = out.guard.counted[k]
-                             ? (double)kGreenGuardWeight * std::max(0.0, guard_ref[k] - kGreenGuardTolAb - v[k])
+                             ? (double)kGreenGuardWeight *
+                                   std::max(0.0, green_guard_ref(guard_ref[k]) - kGreenGuardTolAb - v[k])
                              : 0.0;
         r.push_back(h);
         sum += h * h;
@@ -1244,7 +1250,8 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     for (int k = 0; k < 2; ++k) {
       out.guard.auto_a[k] = (float)guard_ref[k];
       out.guard.fit_a[k] = (float)v[k];
-      if (out.guard.counted[k] && guard_ref[k] - kGreenGuardTolAb - v[k] > 0.0) out.guard.binding = true;
+      if (out.guard.counted[k] && green_guard_ref(guard_ref[k]) - kGreenGuardTolAb - v[k] > 0.0)
+        out.guard.binding = true;
     }
     // Per band of Auto's render, for the sidecar.
     const InputCurves c_auto = model.anchored(InputCurves{}, e, g0, b0);
