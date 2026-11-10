@@ -198,21 +198,26 @@ lamp and a stock the profile was not measured with change the shape of a channel
 a gain then balances the mid-tones while the shadows or the highlights keep a cast. So, after the search, the green
 and blue input curves of the winning bracket are fitted jointly with g and b so that the frame's scene-neutral content
 renders grey, both its average and its trend from shadows to highlights, with E re-solved at every step so the
-picture's median lightness stays where Auto put it. The scene-neutral content is the grid cells, in four lightness
-bands, that a small neutral-patch head on DINOv3's tokens gives p(neutral) of at least 0.9
-([models/neutral_head](models/neutral_head/README.md)); with `--neutral_head off`, or when the head finds fewer than
-16 such cells, it is the lowest-chroma cells of each band. Three rules set how far the fit follows those anchors.
-When the head's anchors lie almost all (80 %) in the darkest band, the bands they leave empty also take their
-lowest-chroma cells, so the colour balance sees the tones the cast shows in. The shadow-to-highlight trend is only
-partly removed when the anchors span a narrow range of lightness (a trend measured over an L* spread well under 6 is
-mostly kept, not extrapolated into a bend), and the cells added by the fill do not count towards that spread. And
-when the anchors share an offset larger than both 6 (in a\*b\*) and their own scatter, the fit treats it as a cast
-and removes it at full strength rather than scaled down by its confidence in the anchors. Each curve is a bend of the
-channel's density response of at most ±35 % slope and 2.2 stops of departure from the profile's own curve, held to a
-plain offset below the frame's densest cell, and never above the film base; a fit that would take E out of the
-bracket's range, or a curve that fails those bounds, falls back to Auto's plain result. `--fit_curves off` keeps the
-plain result; the sidecar records the curves, and `input_curves.remeter.neutral` the anchors and what each of the
-three rules did (`band_fill_cells`, `span_L`, `slope_share`, `auto_ab`, `spread`, `offset_gate`).
+picture's median lightness stays where Auto put it.
+
+The scene-neutral content comes from a small neutral-patch head on DINOv3's tokens
+([models/neutral_head](models/neutral_head/README.md)), which gives every grid cell a p(neutral). Every cell of four
+lightness bands is an anchor, weighted by p squared: a cell the head is sure of counts fully, an uncertain one a
+little, and there is no threshold and no minimum count. The sum of p squared is the fit's evidence: its confidence in
+the anchors grows with it, and so does the weight of each band. With no evidence (`--neutral_head off`, or a frame
+where the head finds nothing neutral) there are no anchors, and the fit keeps Auto's colour: Auto's g and b, no bend.
+Two rules set how far the fit follows the anchors. The shadow-to-highlight trend is only partly removed when the
+anchors span a narrow range of lightness (a trend measured over an L* spread well under 6 is mostly kept, not
+extrapolated into a bend). And when the anchors share an offset larger than both 6 (in a\*b\*) and their own
+scatter, the fit treats it as a cast and removes it at full strength rather than scaled down by its confidence.
+
+Each curve is a bend of the channel's density response of at most ±35 % slope and 2.2 stops of departure from the
+profile's own curve, held to a plain offset below the frame's densest cell, and never above the film base; a fit that
+would take E out of the bracket's range, or a curve that fails those bounds, falls back to Auto's plain result.
+`--fit_curves off` keeps the plain result.
+
+The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
+rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`).
 
 ## More examples
 
@@ -253,7 +258,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
-| `--neutral_head on\|off\|<file>` | The neutral-patch head that picks the curve fit's neutral anchors: the built-in one (default), none (lowest-chroma cells), or another `neutral_head.bin`. |
+| `--neutral_head on\|off\|<file>` | The neutral-patch head that weights the curve fit's neutral anchors: the built-in one (default), none (no anchors: the fit keeps Auto's colour), or another `neutral_head.bin`. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with

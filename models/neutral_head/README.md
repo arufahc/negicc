@@ -1,19 +1,18 @@
 # Neutral-patch head
 
 Predicts, for every 16x16 patch of a preview, p(neutral): the probability that the patch should render grey in the
-intended positive, whatever colour cast the current render has. `neg_process` uses it to pick the scene-neutral
-anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): the grid cells
-with p >= 0.9 in each of four L* bands, or, when fewer than 16 cells reach 0.9 (too few for the fit's neutral
-term), the lowest-chroma 30% of each band as without the head. When the head's cells lie almost all in the darkest
-band, the fit adds the lowest-chroma cells of the bands they leave empty (`set_scene_neutral` describes this band fill
-and the fit's two other rules). It replaced the raw-chroma selection and its four hand-tuned rules (low-key
-band merge, chart-like gate, shadow cluster, collinearity drop). It does not predict colour; the intent adapter's mu
-and sigma stay as they are.
+intended positive, whatever colour cast the current render has. `neg_process` uses it to weight the scene-neutral
+anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): every grid cell
+of four L* bands is an anchor with weight p^2, with no threshold and no minimum count, and the sum of p^2 is the fit's
+evidence. Without the head there are no anchors and the fit keeps Auto's colour. The head replaced the raw-chroma
+selection and its four hand-tuned rules (low-key band merge, chart-like gate, shadow cluster, collinearity drop). It
+does not predict colour; the intent adapter's mu and sigma stay as they are.
 
 - Input: the [N, 768] patch tokens of the frozen DINOv3 ViT-S/16 backbone (layers 9 and 12, the tokens the intent
   adapters of `../dinov3-small_*` read), standardised with the stored `mean` and `std` (768 each).
 - Model: Linear(768, 256), GELU (exact, erf), Dropout(0.1), Linear(256, 1); p = sigmoid(output). 197,121 parameters.
-- Use: cells with p >= 0.9 are the neutral anchors.
+- Use: every cell is a neutral anchor with weight p^2 (the 0.9 threshold in `metadata.json` is the one it was
+  validated at, not a rule of the fit).
 - Training data: FilmCorpus lab scans of 8 stocks pooled (ektar100, gold200, portra, portra160, portra400,
   portra800, pro160ns, pro400h): 10,539 scans x 2 cast copies, 4.18M labelled patches. Labels from the clean scan:
   neutral when the patch-mean C* < 4, the 75th-percentile pixel C* < 8 and 8 < L* < 95; non-neutral when C* > 10.
@@ -57,14 +56,14 @@ otherwise (TriLED, given parameters).
 ```bash
 neg_process ... --neutral_head on                  # default: the built-in head
 neg_process ... --neutral_head path/to/head.bin    # another export of the head (same NPH1 format)
-neg_process ... --neutral_head off                 # no head: the lowest-chroma 30% of each L* band
+neg_process ... --neutral_head off                 # no head: no anchors, the fit keeps Auto's colour
 ```
 
 The head adds `neutral_p` to every DINOv3 inference of the search (about 5-8 ms on 8 threads, 25 ms on one, against
 about 250-350 ms for the backbone and adapter). With the backbone and adapter on TensorRT the tokens are copied to the
-host once per inference for it. The sidecar's `input_curves.remeter.neutral.anchors` says which selection ran
-(`head`, or `chroma` without the head or with fewer than 16 cells at p >= 0.9). To try a retrained head, export it with `export_neutral_head.py` and pass the `.bin` with
-`--neutral_head`, or replace `neutral_head.bin` and rebuild.
+host once per inference for it. The sidecar's `input_curves.remeter.neutral` gives `anchors` (`head`, or `none`
+without the head or without any evidence) and `evidence` (the sum of p^2). To try a retrained head, export it with
+`export_neutral_head.py` and pass the `.bin` with `--neutral_head`, or replace `neutral_head.bin` and rebuild.
 
 ## Provenance
 

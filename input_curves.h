@@ -428,11 +428,12 @@ struct NeutralStats {
 
 // What JointCurveModel::set_scene_neutral decided beyond the anchors themselves, for the sidecar.
 struct NeutralTargetDecisions {
-  int filled = 0;            // lowest-chroma cells the band fill added to empty L* bands (0: it did not run)
-  float span_L = 0.0f;       // the L* standard deviation the slope shrink measured (anchors other than filled ones)
+  float evidence = 0.0f;     // the anchors' evidence mass, sum of p^2 (0: no anchors, the fit keeps Auto's colour)
+  float span_L = 0.0f;       // the anchors' weighted L* standard deviation the slope shrink measured
   float slope_share = 0.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
-  float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto (all anchors, filled ones included)
-  float spread = 0.0f;       // their median distance from the anchors' tone trend at Auto
+  float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto
+  float spread = 0.0f;       // their weighted median distance from the anchors' tone trend at Auto
+  bool endpoints = false;    // evidence at both ends of the tone range: the offset target took the whole cast
   bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread): the offset target took full strength
 };
 
@@ -505,49 +506,45 @@ class JointCurveModel {
     return L_[f_.n / 2];
   }
 
-  // The p(neutral) at or above which a grid cell is a scene-neutral anchor (CurveFrame::neutral_p).
-  static constexpr float kNeutralHeadThreshold = 0.9f;
-  // Band fill: runs when at least this share of the head's anchors lie in the darkest band (L* <= 22), where they
-  // carry no evidence about the mid-tones and highlights the cast shows in.
-  static constexpr double kBandFillDarkShare = 0.8;
-  // Band fill: an L* band with fewer head anchors than this counts as empty and receives lowest-chroma cells.
-  static constexpr size_t kBandFillMinAnchors = 5;
   // Slope shrink: s0 of sd^2 / (sd^2 + s0^2), in L*; most of a slope measured over an L* spread well under s0 is kept.
   static constexpr float kSlopeSpanL = 6.0f;
   // Offset gate: the anchors' mean |ab| at Auto above which (and above their scatter) their shared offset is a cast.
   static constexpr float kOffsetGateMinAb = 6.0f;
+  // Endpoints: the evidence mass (sum of p^2) in the darkest band (L* <= 22) that, with some mass in the brightest
+  // band (or a darker band this heavy alone), lets the offset target take the anchors' whole cast (see below).
+  static constexpr double kEndpointsDarkMass = 15.0, kEndpointsBrightMass = 1.0, kEndpointsDarkOnlyMass = 64.0;
 
-  // Builds the scene-neutral set N from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
-  // ([2, 22], [22, 45], [45, 70], [70, 92]) with equalized band weights. The anchors of a band are its cells the
-  // neutral-patch head gives p(neutral) >= kNeutralHeadThreshold (CurveFrame::neutral_p); without the head's p, or
-  // when it gives fewer than 16 anchors over all bands (too few for the neutral term, which needs 16), its
-  // lowest-chroma 30% under a chroma gate.
+  // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
+  // ([2, 22], [22, 45], [45, 70], [70, 92]). Every cell of a band is an anchor, weighted by the neutral-patch head's
+  // p(neutral) squared (CurveFrame::neutral_p): a cell the head is sure of counts fully, an uncertain one a little,
+  // with no threshold and no minimum count. Within a band the weights are p^2 / max(sum p^2, 16) (8 for the brightest
+  // band of a frame whose cells are mostly in the darkest one), so a band with little evidence weighs less than a
+  // full one; the weights are then normalised to sum to 1. The evidence mass, sum p^2 over the anchors, stands in for
+  // a count wherever one is needed: the size term of conf (mass / 48), the endpoints rule (kEndpoints*), and the
+  // scatter, which is the p^2-weighted median distance of the anchors from their tone trend.
   //
-  // Three rules then decide how far the fit follows those anchors:
-  //   - band fill (head anchors only): when at least kBandFillDarkShare of them sit in the darkest band, every other
-  //     band with fewer than kBandFillMinAnchors of them also takes its lowest-chroma 30% under the same chroma gate as
-  //     the no-head selection, so the offset term sees the tones the cast shows in. They then enter every term as
-  //     the head's anchors do, but low chroma is weak evidence of a neutral tone trend, so the slope shrink leaves them
-  //     out of the L* spread it measures: they cannot by themselves license a full slope correction.
-  //     With a small spread the slope target then holds the tone difference between the head's band and the filled
-  //     bands near Auto's, so the fill acts mainly through the gains g and b, not through a bend.
+  // Without the head's p (--neutral_head off, or no inference), or when every p^2 is 0, there are no anchors: conf
+  // is 0, the neutral residuals are 0, and the joint fit stays at its start, Auto's g and b with no G/B bend (E still
+  // solved to Auto's median L*; the highlight-cliff pass, the re-meter and the steps after the fit run as on any
+  // frame).
+  //
+  // Two rules then decide how far the fit follows those anchors:
   //   - slope shrink: the slope residuals aim at (1 - f) k0 instead of 0, k0 the anchors' slope at Auto and
-  //     f = sd^2 / (sd^2 + kSlopeSpanL^2), sd the L* standard deviation of the anchors other than the filled ones: a
-  //     slope measured over a narrow tone range is not extrapolated into a bend across the whole range.
+  //     f = sd^2 / (sd^2 + kSlopeSpanL^2), sd the anchors' weighted L* standard deviation: a slope measured over a
+  //     narrow tone range is not extrapolated into a bend across the whole range.
   //   - offset gate: when the anchors' mean |ab| at Auto exceeds max(kOffsetGateMinAb, their scatter about their tone
   //     trend), the shared offset is a cast rather than scatter, so the offset target removes it at the full strength
-  //     (0.75, 0.95 with endpoints) instead of that strength times conf; conf still weights the terms. Decided last,
-  //     on the full anchor set (filled cells included), because it is a statement about their shared offset.
-  // decisions() records what each rule did.
+  //     (0.75, 0.95 with endpoints) instead of that strength times conf; conf still weights the terms.
+  // decisions() records what they did.
   void set_scene_neutral(float e0, float g0, float b0, float strength = 0.75f) {
     neu_idx_.clear();
     neu_w_.clear();
-    head_used_ = false;
+    has_anchors_ = false;
     conf_ = w_off_ = w_slope_ = w_quad_ = 0.0f;
     c_a_ = c_b_ = 0.0f;
     k_target_a_ = k_target_b_ = 0.0f;
     decisions_ = NeutralTargetDecisions{};
-    if (f_.n <= 0) return;
+    if (f_.n <= 0 || !f_.neutral_p) return;
 
     const InputCurves zero_c{};
     std::vector<Lab> lab0(f_.n);
@@ -559,8 +556,6 @@ class JointCurveModel {
     }
 
     std::vector<int> bands[4];
-    std::vector<float> mid_c;
-    mid_c.reserve(f_.n);
     int total = 0;
     for (int i = 0; i < f_.n; ++i) {
       if (!std::isfinite(c0[i])) continue;
@@ -570,77 +565,28 @@ class JointCurveModel {
         else if (L <= 45.0f) bands[1].push_back(i);
         else if (L <= 70.0f) bands[2].push_back(i);
         else bands[3].push_back(i);
-        if (L > 20.0f) mid_c.push_back(c0[i]);
         ++total;
       }
     }
     if (total < 8) return;
 
-    std::vector<int> b_sel[4];
+    // A band of fewer than 8 cells on a grid of 64 or more is left out (too few cells to stand for a tone range).
     auto band_ok = [&](int b) { return !bands[b].empty() && !((int)bands[b].size() < 8 && total >= 64); };
-    // The no-head selection's chroma gate: from the 30th percentile of the chroma above L* 20, else of B0 (NaN when
-    // there is neither).
-    auto chroma_gate = [&]() -> float {
-      std::vector<float> c = mid_c;
-      if (c.empty())
-        for (int i : bands[0]) c.push_back(c0[i]);
-      if (c.empty()) return NAN;
-      std::sort(c.begin(), c.end());
-      const float c_q30 = c[std::min(c.size() - 1, (size_t)(0.30 * (double)c.size()))];
-      return std::max(15.0f, 1.75f * c_q30);
-    };
-    // A band's lowest-chroma 30% (at least one cell), lowest first, kept where its chroma is under c_gate.
-    auto lowest_chroma = [&](int b, float c_gate) {
-      std::vector<int> ord = bands[b];
-      std::sort(ord.begin(), ord.end(), [&](int i, int j) { return c0[i] != c0[j] ? c0[i] < c0[j] : i < j; });
-      const int mb = std::max(1, (int)std::lround(0.30 * (double)ord.size()));
-      std::vector<int> out;
-      for (int k = 0; k < mb; ++k) {
-        if (c0[ord[k]] <= c_gate) out.push_back(ord[k]);
-      }
-      return out;
-    };
-    // The cells the band fill added (left out of the slope shrink's L* spread).
-    std::vector<char> filled(f_.n, 0);
-    // The head's anchors: a band's cells at p(neutral) >= kNeutralHeadThreshold, when it gives at least 16 in all.
-    head_used_ = false;
-    if (const float* p = f_.neutral_p) {
-      size_t n_head = 0;
-      for (int b = 0; b < 4; ++b) {
-        if (!band_ok(b)) continue;
-        for (int i : bands[b])
-          if (p[i] >= kNeutralHeadThreshold) b_sel[b].push_back(i);
-        n_head += b_sel[b].size();
-      }
-      head_used_ = n_head >= 16;
-      if (!head_used_)
-        for (auto& v : b_sel) v.clear();
-      // Band fill: head anchors (almost) only in the darkest band; the bands they leave empty take their
-      // lowest-chroma cells, after the head's own.
-      if (head_used_ && (double)b_sel[0].size() >= kBandFillDarkShare * (double)n_head) {
-        const float c_gate = chroma_gate();
-        if (!std::isnan(c_gate)) {
-          for (int b = 0; b < 4; ++b) {
-            if (!band_ok(b) || b_sel[b].size() >= kBandFillMinAnchors) continue;
-            for (int i : lowest_chroma(b, c_gate)) {
-              if (std::find(b_sel[b].begin(), b_sel[b].end(), i) != b_sel[b].end()) continue;
-              b_sel[b].push_back(i);
-              filled[i] = 1;
-              ++decisions_.filled;
-            }
-          }
+    std::vector<int> b_sel[4];
+    std::vector<float> pw(f_.n, 0.0f);  // p^2 per cell
+    double mass = 0.0;
+    for (int b = 0; b < 4; ++b) {
+      if (!band_ok(b)) continue;
+      for (int i : bands[b]) {
+        const float p = std::clamp(f_.neutral_p[i], 0.0f, 1.0f);
+        pw[i] = p * p;
+        if (pw[i] > 0.0f) {
+          b_sel[b].push_back(i);
+          mass += pw[i];
         }
       }
     }
-    // Else a band's lowest-chroma 30% under the chroma gate.
-    if (!head_used_) {
-      const float c_gate = chroma_gate();
-      if (std::isnan(c_gate)) return;
-      for (int b = 0; b < 4; ++b) {
-        if (!band_ok(b)) continue;
-        b_sel[b] = lowest_chroma(b, c_gate);
-      }
-    }
+    decisions_.evidence = (float)mass;
 
     float w_sum = 0.0f;
     double sa_act = 0.0, sb_act = 0.0, w_act = 0.0;
@@ -649,11 +595,13 @@ class JointCurveModel {
       if (b_sel[b].empty()) continue;
       ++n_bands;
       const size_t min_denom = (b == 3 && (int)bands[0].size() >= 3 * total / 4) ? 8 : 16;
-      const float wb = 1.0f / (float)std::max<size_t>(b_sel[b].size(), min_denom);
+      double band_mass = 0.0;
+      for (int i : b_sel[b]) band_mass += pw[i];
       for (int i : b_sel[b]) {
+        const float w = (float)(pw[i] / std::max(band_mass, (double)min_denom));
         neu_idx_.push_back(i);
-        neu_w_.push_back(wb);
-        w_sum += wb;
+        neu_w_.push_back(w);
+        w_sum += w;
       }
       const double wb_all = 1.0 / (double)bands[b].size();
       for (int i : bands[b]) {
@@ -662,15 +610,14 @@ class JointCurveModel {
       }
       w_act += 1.0;
     }
-    if (w_sum > 0.0f) {
-      for (float& w : neu_w_) w /= w_sum;
-    }
-    const int m = (int)neu_idx_.size();
-    if (m < 16 || w_act <= 0.0) {
+    if (!(w_sum > 0.0f) || w_act <= 0.0) {
       neu_idx_.clear();
       neu_w_.clear();
       return;
     }
+    for (float& w : neu_w_) w /= w_sum;
+    has_anchors_ = true;
+    const int m = (int)neu_idx_.size();
     const double a_act = sa_act / w_act, b_act = sb_act / w_act;
 
     double sL = 0.0, sa = 0.0, sb = 0.0;
@@ -709,16 +656,35 @@ class JointCurveModel {
       sqb0 += w * uq * eb;
     }
 
-    std::vector<float> dev(m);
+    // The scatter: the weighted median distance of the anchors from their tone trend (ties ordered by weight).
+    std::vector<std::pair<float, float>> dev(m);
     for (int k = 0; k < m; ++k) {
       const int i = neu_idx_[k];
       const double z = (lab0[i].L - sL) / 50.0;
-      dev[k] = (float)std::hypot(lab0[i].a - (sa + ka0 * z), lab0[i].b - (sb + kb0 * z));
+      dev[k] = {(float)std::hypot(lab0[i].a - (sa + ka0 * z), lab0[i].b - (sb + kb0 * z)), neu_w_[k]};
     }
-    const float spread = median(dev);
-    // b_sel[3] includes the cells the band fill added: filling the top band turns the endpoints case on (the full
-    // cast at strength 0.95, no alignment check against the frame mean).
-    const bool has_endpoints = (b_sel[0].size() >= 15 && (!b_sel[3].empty() || b_sel[0].size() >= 64));
+    std::sort(dev.begin(), dev.end());
+    float spread = 0.0f;
+    {
+      double half = 0.0, acc = 0.0;
+      for (const auto& d : dev) half += d.second;
+      half *= 0.5;
+      for (const auto& d : dev) {
+        acc += d.second;
+        if (acc >= half) {
+          spread = d.first;
+          break;
+        }
+      }
+    }
+    // Endpoints: enough evidence at the dark end and some at the bright end (or a heavy dark end alone) to trust the
+    // anchors' cast across the whole range; then the offset target takes all of it, without the check against the
+    // frame mean below.
+    double mass_dark = 0.0, mass_bright = 0.0;
+    for (int i : b_sel[0]) mass_dark += pw[i];
+    for (int i : b_sel[3]) mass_bright += pw[i];
+    const bool has_endpoints =
+        mass_dark >= kEndpointsDarkMass && (mass_bright >= kEndpointsBrightMass || mass_dark >= kEndpointsDarkOnlyMass);
     const double cast_a = has_endpoints
                               ? sa
                               : ((sa * a_act > 0.0) ? std::copysign(std::min(std::fabs(sa), std::fabs(a_act)), sa) : 0.0);
@@ -728,31 +694,25 @@ class JointCurveModel {
     const float unaligned = (float)std::hypot(sa - cast_a, sb - cast_b);
     conf_ = std::clamp(1.0f - (spread - 3.5f) / 8.0f, 0.25f, 1.0f) *
             std::clamp(1.0f - unaligned / 6.0f, 0.0f, 1.0f) *
-            std::min(1.0f, (float)m / 48.0f);
+            std::min(1.0f, (float)mass / 48.0f);
     w_off_ = conf_ / 1.5f;
     w_slope_ = conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
     w_quad_ = (n_bands >= 3) ? conf_ * std::sqrt((float)(vq0 / (vq0 + 0.08))) / 4.0f : 0.0f;
 
-    // Slope shrink: the L* spread of the anchors other than the filled ones, their weights renormalised over them.
+    // Slope shrink: the anchors' weighted L* spread (their weights renormalised over them; a separate pass from vL0,
+    // which is centred on a mean summed in another order).
     double w_span = 0.0, L_span = 0.0;
     for (int k = 0; k < m; ++k) {
-      const int i = neu_idx_[k];
-      if (filled[i]) continue;
       w_span += neu_w_[k];
-      L_span += neu_w_[k] * lab0[i].L;
+      L_span += neu_w_[k] * lab0[neu_idx_[k]].L;
     }
-    double vL_span = vL0;
-    if (w_span > 0.0) {
-      L_span /= w_span;
-      vL_span = 0.0;
-      for (int k = 0; k < m; ++k) {
-        const int i = neu_idx_[k];
-        if (filled[i]) continue;
-        const double dL = lab0[i].L - L_span;
-        vL_span += neu_w_[k] * dL * dL;
-      }
-      vL_span /= w_span;
+    L_span /= w_span;
+    double vL_span = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const double dL = lab0[neu_idx_[k]].L - L_span;
+      vL_span += neu_w_[k] * dL * dL;
     }
+    vL_span /= w_span;
     const double s0_sq = (double)kSlopeSpanL * (double)kSlopeSpanL;
     const float slope_share = (float)(vL_span / (vL_span + s0_sq));
     k_target_a_ = (float)((1.0 - slope_share) * ka0);
@@ -760,21 +720,22 @@ class JointCurveModel {
     decisions_.span_L = (float)std::sqrt(vL_span);
     decisions_.slope_share = slope_share;
 
-    // Offset gate, on the full anchor set.
+    // Offset gate.
     const float strength_eff = has_endpoints ? 0.95f : strength;
     float alpha_off = std::clamp(strength_eff * conf_, 0.0f, 1.0f);
     const double auto_ab = std::hypot(sa, sb);
     decisions_.auto_ab = (float)auto_ab;
     decisions_.spread = spread;
+    decisions_.endpoints = has_endpoints;
     decisions_.offset_gate = auto_ab > std::max((double)kOffsetGateMinAb, (double)spread);
     if (decisions_.offset_gate) alpha_off = std::max(alpha_off, std::clamp(strength_eff, 0.0f, 1.0f));
     c_a_ = (float)(sa - alpha_off * cast_a);
     c_b_ = (float)(sb - alpha_off * cast_b);
   }
 
-  // set_scene_neutral took the neutral head's anchors (else the lowest-chroma cells).
-  bool head_used() const { return head_used_; }
-  // What set_scene_neutral's band fill, slope shrink and offset gate did.
+  // set_scene_neutral found anchors (the head's p, with some evidence).
+  bool has_anchors() const { return has_anchors_; }
+  // What set_scene_neutral's slope shrink and offset gate did, and the evidence they had.
   const NeutralTargetDecisions& decisions() const { return decisions_; }
 
   NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
@@ -969,7 +930,7 @@ class JointCurveModel {
   std::vector<float> rows_, L_, ug_, ub_;
   std::vector<int> neu_idx_;
   std::vector<float> neu_w_;
-  bool head_used_ = false;
+  bool has_anchors_ = false;
 };
 
 // 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each

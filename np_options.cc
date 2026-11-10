@@ -275,8 +275,9 @@ int parse_options(int ac, char* av[], Options& o) {
     .implicit_value(true);
   parser.add_argument("--neutral_head")
     .help("Neutral-patch head of the white-light curve fit: on (default, the built-in "
-          "models/neutral_head/neutral_head.bin), off, or the path of another neutral_head.bin. It picks the fit's "
-          "scene-neutral anchors (the cells with p(neutral) >= 0.9); off, the lowest-chroma cells of each L* band.")
+          "models/neutral_head/neutral_head.bin), off, or the path of another neutral_head.bin. Its p(neutral) "
+          "weights the fit's scene-neutral anchors (p squared, every cell); off, the fit has no anchors and keeps "
+          "Auto's colour.")
     .default_value(std::string("on"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")

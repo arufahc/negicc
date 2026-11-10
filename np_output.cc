@@ -386,21 +386,23 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"loss_L", n9(f->parts_export.L)}, {"loss_ab", n9(f->parts_export.ab)},
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
-                    {"neutral", ordered_json{{"anchors", f->neutral_head ? "head" : "chroma"},
+                    {"neutral", ordered_json{{"anchors", f->neutral_anchors ? "head" : "none"},
                                              {"m", f->neutral_export.m}, {"conf", n9(f->neutral_export.conf)},
                                              {"c_a", n9(f->neutral_export.c_a)}, {"c_b", n9(f->neutral_export.c_b)},
                                              {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
-                                             // The band fill's added cells (0: it did not run), the slope shrink's
-                                             // L* spread and the share of Auto's slope the fit removes, and the
-                                             // offset gate's inputs and whether it took the full strength.
-                                             {"band_fill_cells", f->neutral_decisions.filled},
+                                             // The anchors' evidence mass (sum of p^2), the slope shrink's L*
+                                             // spread and the share of Auto's slope the fit removes, whether the
+                                             // anchors had endpoints, and the offset gate's inputs and whether it
+                                             // took the full strength.
+                                             {"evidence", n9(f->neutral_decisions.evidence)},
                                              {"span_L", n9(f->neutral_decisions.span_L)},
                                              {"slope_share", n9(f->neutral_decisions.slope_share)},
                                              {"auto_ab", n9(f->neutral_decisions.auto_ab)},
                                              {"spread", n9(f->neutral_decisions.spread)},
+                                             {"endpoints", f->neutral_decisions.endpoints},
                                              {"offset_gate", f->neutral_decisions.offset_gate}}},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
