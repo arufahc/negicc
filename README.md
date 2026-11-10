@@ -1,15 +1,15 @@
 # negicc
 
-Converts colour negatives photographed with a digital camera into finished positives, with no manual editing. It
-combines film profiles measured on an IT8 target at seven exposures with a vision model (DINOv3) that sets exposure
-and colour balance the way a lab scanner's operator would.
+Turns a photo of a colour negative into a finished picture, with no editing. You point a camera at the negative on
+a light, give `neg_process` the file, and get back a positive that looks like a lab scan.
 
-* **Hands-off.** `neg_process` picks the exposure bracket, the exposure gain and the colour balance by itself. The
-  result is ready to look at; the knobs are there if you want them.
-* **Film-accurate colour.** Balance and exposure are applied in linear, scene-referred space, and the stock's own
-  calibrated tone curves and 3D colour table do the rest. Nothing is stretched or guessed from a histogram.
-* **Three stocks built in:** Kodak Portra 400, Portra 160 and Ektar 100, each profiled at 7 exposures from −3 to
-  +3 EV under both a narrow-band RGB LED and a white D65 LED (42 ICC profiles in total).
+* **Hands-off.** It chooses exposure, colour balance and tone by itself. The result is ready to look at; brightness,
+  tint and warmth knobs are there if you want them.
+* **The film's own colour.** Each film stock was measured on a colour chart at seven exposures, so colour comes from
+  how that film actually behaves, not from stretching a histogram.
+* **A model that looks at the picture.** A vision model (DINOv3) decides how bright the picture should be and what its
+  colours should look like, the way a lab operator would.
+* **Three stocks built in:** Kodak Portra 400, Portra 160 and Ektar 100, for both white and RGB LED light.
 
 ![sample conversion](samples/sample.png)
 
@@ -44,73 +44,57 @@ LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the pinned 
 
 ## How it works
 
-### Capturing
+A colour negative is three dye layers on an orange base. Turning a photo of one into a good positive takes three
+things: a clean reading of each layer, a description of how this particular film responds, and a decision about
+exposure and colour for this particular picture. negicc measures the first two and lets a vision model make the
+third.
 
-Colour negative film stores its picture as dye densities meant to be read with Status M densitometry, not under D50
-light, so the first job is to get a camera response that resembles Status M with good separation between the
-channels (the [guide](https://docs.google.com/document/d/1NsfFPx5c7kxNRUhuGQBKRNnaN0c52SjLsZsyhLCj3OE/edit?usp=sharing)
-above has the background). `neg_process` takes camera RAWs, DNGs and 16-bit linear TIFFs, captured two ways:
+### Photographing the negative
 
-* **Narrow-band RGB LED** (`--light_source tri`). One RAW (or Sony's 4-shot pixel shift), followed by the bundle's
-  3×3 crosstalk matrix that removes the Bayer filters' overlap. Three separate frames under red, green and blue LEDs
-  work too (`-r "1 0 0" -g "0 1 0" -b "0 0 1"`: no crosstalk to remove).
-* **White D65 LED** (`--light_source d65`), any CFA. LibRaw decodes with daylight white balance and the camera's
-  matrix into linear Rec.2020. Before the matrix, the camera's channels are scaled so the scan's film base lands on
-  the profile's (`film_base.balance_gains` in the sidecar): a warmer or cooler lamp is corrected before the channels
-  are mixed, so dense areas do not clip to blue.
+`neg_process` reads camera RAWs, DNGs and 16-bit linear TIFFs, lit one of two ways:
 
-Even with narrow-band light and the crosstalk removed, the channels do not respond linearly to density, and not
-alike: green and blue track each other, red has a different slope. The profiles correct that.
+* **A white LED** (`--light_source d65`). The common case, and it works with any camera. The scan's own film base is
+  used to take the lamp's colour out before anything else happens, so a warmer or cooler light than the one the
+  profiles were made with is fine.
+* **A narrow-band RGB LED** (`--light_source tri`). Red, green and blue light sit on the three dyes, which separates
+  the layers better. One RAW is enough (Sony's 4-shot pixel shift also works, as do three separate frames under red,
+  green and blue).
+
+Even with a clean reading the three layers do not respond in step with each other, which is why a simple inversion
+looks wrong and why the profiles below exist.
 
 ![Characteristic Curves](samples/characteristic_curves.png)
 
-### Demosaicing
-
-* **4-shot Sony pixel shift:** the four frames are merged into full RGB at every pixel. No interpolation.
-* **Single-shot TriLED on a Sony RGGB sensor:** a grain-aware colour-ratio demosaic. Green is interpolated along edges
-  with soft directional weights (hard horizontal/vertical switches turn grain into maze patterns); red and blue as
-  R/G and B/G ratios rather than differences, which keeps the error uniform after the film inversion. Against the
-  pixel-shift ground truth it is +1.22 dB over bilinear on the positive and halves the R−G zippering; +0.53 dB over
-  LibRaw's DCB.
-* **White light and other CFAs:** LibRaw. `-q 0` (bilinear, the default) takes about 1.2 s for a 61 MP RAW; `-q 4`
-  (DCB) is better by +0.69 dB and takes about 6 s.
-
-| Algorithm | Raw MAE ↓ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | R−G zipper ↓ |
-| :--- | :---: | :---: | :---: | :---: |
-| 4-shot pixel shift (ground truth) | 0.00 | ∞ | 0.00 / 0.00 | 142.4 |
-| **Grain-aware colour-ratio** (TriLED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
-| LibRaw DCB (`-q 4`) | 79.60 | 39.85 | 1.76 / 7.21 | 71.7 |
-| LibRaw VNG (`-q 1`) | 80.19 | 39.96 | 1.75 / 7.12 | 58.6 |
-| PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 40.03 | 1.73 / 6.97 | 55.3 (grain maze) |
-| Bilinear (`-q 0`) | 89.15 | 39.16 | 1.90 / 7.87 | 115.0 |
-
-Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positive.
+For single-shot RGB-LED scans on Sony sensors negicc uses its own demosaic, built to keep film grain from turning
+into maze patterns. Against a 4-shot pixel-shift capture of the same frame it is about 1.2 dB better than bilinear
+and half a dB better than LibRaw's DCB. Everything else is decoded by LibRaw (`-q` picks the method).
 
 ![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
 
-### The profiles: seven exposures per stock
+### The film profiles
 
-An IT8.7/2 target (coloraid.de `R190808`) is photographed onto each stock at seven exposures, −3 to +3 EV in 1-stop
-steps, and each capture is scanned under both lights.
+Each stock was profiled by photographing a colour chart onto it at seven exposures, from three stops under to three
+stops over, and scanning every one under both lights.
 
 ![IT8 used for profiling](samples/it8.png)
 
-One target only calibrates the 7.2 stops up to its white patch. Fitting the seven brackets together measures each
-bracket's true exposure offset and traces the film's shoulder, so the set covers 12 to 13 stops of scene range with
-up to 3 stops of calibrated headroom above white. Each bracket becomes an ICC profile: 16-bit tone curves that
-linearise the density response at that exposure, then a 45×45×45 3D colour table into CIE Lab. The brighter
-patches of the over-exposed brackets are blended into each table, so the colour gamut and highlight saturation run
-smoothly to pure white instead of stopping at the chart's L* 89.
+A single chart exposure only describes a narrow slice of what film can hold. Seven of them, fitted together, follow
+the film all the way up its shoulder: the set covers 12 to 13 stops of scene brightness. Each exposure becomes an ICC
+profile, with tone curves that straighten out the film's response and a 3D colour table that untangles the dyes.
 
 ![TRC Curves](samples/trc_curves.png)
 ![ICC profile](samples/icc.png)
 
-This is what sets negicc apart from a single fixed LUT (the Cineon-style workflow) or a histogram stretch: a fixed
-LUT bakes tone and colour together at one exposure, and a frame two stops over lands on the wrong part of the
-film's curves. Here the bracket near the frame's exposure is used, and between brackets the exposure and balance are
-fitted:
+This is the difference from a single fixed LUT or a histogram stretch. A fixed LUT is right at one exposure; a frame
+shot two stops over lands on the wrong part of the film's curves. negicc picks the profile nearest the frame's real
+exposure and fits the remainder.
 
 ![Gamut Volume](samples/gamut_volume.png)
+
+How good are they? On the chart's own patches the profiles are within about 0.5 to 0.8 ΔE₀₀ on average, and on
+patches held out of the fit the typical error is 1.4 to 2.3, around the point where a difference becomes visible. A
+generic curve or 3×3 matrix leaves 5 to 10 on saturated colours. The full tables are in
+[MEASUREMENTS.md](MEASUREMENTS.md).
 
 ## White-light conversions of scans from the web
 
@@ -139,83 +123,39 @@ calibrated with. No copyright is claimed on them: the RAW files and the pictures
 posted them, at the links above. If you are one of them and would rather not have your scan here, open an issue and
 it will be removed.
 
-### How accurate are the profiles
+### Choosing exposure and colour: DINOv3 and three small heads
 
-
-A generic single curve or 3×3 matrix leaves 5–10+ ΔE₀₀ on saturated colours, because it cannot
-untangle the dyes' non-linear coupling. The per-stock tables fit their own patches to a mean of 0.5–0.8 ΔE₀₀ from
-−1 to +3 EV (0.6–1.1 at −2 and −3 EV), and unseen patches, by 2-fold cross-validation on the 264 colour patches, to a
-median of 1.4–2.3 (under 2 is barely visible). The TriLED bundles:
-
-| Bracket | Portra 400 own (median) | held-out | Portra 160 own | held-out | Ektar 100 own | held-out |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| −3 EV | 0.79 (0.50) | 2.70 (1.91) | 1.09 (0.47) | 2.35 (1.61) | 1.11 (0.49) | 3.05 (1.87) |
-| −2 EV | 0.56 (0.41) | 2.04 (1.38) | 0.82 (0.42) | 2.09 (1.55) | 0.61 (0.39) | 2.68 (1.52) |
-| −1 EV | 0.53 (0.40) | 2.38 (1.40) | 0.59 (0.39) | 1.96 (1.40) | 0.51 (0.36) | 2.79 (1.55) |
-| 0 EV | 0.55 (0.42) | 2.62 (1.48) | 0.56 (0.44) | 2.30 (1.37) | 0.62 (0.49) | 3.25 (1.84) |
-| +1 EV | 0.54 (0.40) | 2.75 (1.46) | 0.62 (0.43) | 2.65 (1.58) | 0.63 (0.49) | 3.52 (1.75) |
-| +2 EV | 0.59 (0.43) | 2.92 (1.58) | 0.67 (0.49) | 2.67 (1.62) | 0.72 (0.59) | 4.01 (2.15) |
-| +3 EV | 0.69 (0.54) | 3.08 (1.77) | 0.70 (0.53) | 2.82 (1.78) | 0.83 (0.65) | 3.72 (2.26) |
-
-Mean ΔE₀₀ (median in brackets), from ArgyllCMS `profcheck` on all 288 patches (own) and from the cross-validation
-(held-out). The D65 bundles are at 0.6–1.1 own mean from −1 to +3 EV and 1.3–2.2 held-out median. No profile is
-de-glared: removing the chart's veiling glare before fitting was tried, did not help overall, and the bundles ship
-as measured.
-
-### The parameter search
-
-What Auto solves for a frame are a bracket and three numbers: the exposure gain E and the green and blue gains g, b,
-applied to the scan's linear channels before the bracket's profile. A grey-world rule would balance a sunset to grey;
-instead the target comes from Meta's DINOv3 vision model with a small head trained on Fujifilm Frontier and Noritsu
-lab scans (collected from Flickr and Photohito), which says for each 16×16 patch of the picture what Lab colour it
-should have and how sure it is, for sky, foliage, skin, stone and shadow in context:
-
-![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
-
-The search, in brief:
-
-1. **Frame and film base.** The frame is found on the RAW's mosaic (`--roi auto`, with `--film_format` to say which
-   format, `auto` to try them all); the unexposed film base is read from the rebate next to it, or from the thinnest
-   film when no rebate is in view. On white light the camera's channels are balanced on that base before the matrix.
-2. **Which brackets can hold the scene.** From the frame's density range and each bracket's calibrated range the
-   search knows the exposures at which the scene stays inside a bracket's calibration (its enclosure), and meters a
-   starting E per bracket for a mid-grey median.
-3. **Screening.** Each bracket is rendered at its metered start and scored against the target field; the best two
-   go on.
-4. **Fixed point.** On each of those, E, g and b are searched against the field, the frame re-rendered, the field
-   re-predicted, and the search repeated until the parameters hold still or the residual stops falling. The bracket
-   with the lowest residual wins. Highlights that would clip pull E back or step the bracket up.
-
-On the frame below, the first render has a cyan-green cast and a median patch error of 21.6 ΔE; the search brings it
-to 8.7 and a natural daylight balance:
-
-![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
-
-### After the search: three small heads on the same DINOv3 features
-
-Everything learned in negicc sits on one frozen DINOv3 backbone. Each head is a small network that reads its
-features and answers one question about the picture; the conversion then acts on the answer. On white light, after
-the search:
+The profiles say how the film behaves. They cannot say how bright this picture should be or what its colour balance
+is; a lab operator decides that by looking. negicc looks with Meta's DINOv3 vision model. The model itself is used as
+it comes; on top of it sit three small heads, each trained on lab scans to answer one question about a picture.
 
 | Head | Answers | Used for |
 |---|---|---|
-| Intent (per patch) | What colour should this patch be? | The search above, and a final magenta-green trim |
-| Neutral ([models/neutral_head](models/neutral_head/README.md)) | Is this patch a neutral surface? | Fitting the green and blue curves so neutral content renders grey from shadows to highlights |
-| Tone ([models/tone_head](models/tone_head/README.md)) | How deep, bright and wide should the tones be? | One lightness curve on the final image |
+| Intent | What colour should each part of this picture be? | Picking the profile, exposure and colour balance |
+| Neutral ([models/neutral_head](models/neutral_head/README.md)) | Which parts are neutral surfaces? | Removing casts that change from shadows to highlights |
+| Tone ([models/tone_head](models/tone_head/README.md)) | How deep, bright and wide should the tones be? | Giving flat negatives proper blacks and highlights |
 
-- **Curve fit.** Three gains cannot remove a cast that changes from shadows to highlights, so the green and blue
-  curves of the winning bracket are fitted with g and b, weighting every cell by how neutral the head thinks it is.
-  With nothing neutral in the frame the fit leaves Auto's colour alone, and it never makes the picture greener than
-  Auto. `--fit_curves off` skips it.
-- **Magenta-green trim.** The intent head then picks the small magenta-green offset it prefers for the fitted
-  picture. `--offset_scan off` skips it.
-- **Tone curve.** Many negatives come out flat. The tone head predicts the shadow level, highlight level and tonal
-  range a lab scan of the frame would have, and one lightness curve moves the image toward them; colour is not
-  changed. `--tone_stage off` skips it.
+![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
-The sidecar records what each step decided (`input_curves`, `input_curves.offset`, `tone_stage`), and its
-`cli_equivalent`, or `--brightness`, `--tint` and `--warmth` on a previous output, replay the conversion from those
-numbers without running the network again.
+The conversion runs in that order:
+
+1. **Find the frame and the film base**, and work out which exposure profiles can hold the scene.
+2. **Search.** Try the candidates, render each, and ask the intent head how far the result is from what the picture
+   should look like. Adjust exposure and the green and blue balance, look again, and keep the best. A grey-world rule
+   would turn a sunset grey; this does not, because the target knows what sky, foliage and skin look like.
+3. **Clean up casts** (white light). Balance alone cannot fix a cast that is warm in the shadows and cool in the
+   highlights, so the green and blue curves are bent until the surfaces the neutral head trusts come out grey. With
+   nothing neutral in the frame it leaves the picture alone, and it never pushes a picture toward green.
+4. **Set the tones** (white light). The tone head says where the shadows and highlights of a finished scan of this
+   picture would sit, and one lightness curve moves the image toward that. Colour is not touched.
+
+On the frame below the first render is cyan-green; the search brings it to a natural daylight balance.
+
+![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
+
+Each step can be switched off (`--fit_curves off`, `--offset_scan off`, `--tone_stage off`). Everything the
+conversion decided is written to a sidecar next to the output, and the brightness, tint and warmth knobs replay it
+from there without running the model again.
 
 ## More examples
 
