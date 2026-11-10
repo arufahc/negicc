@@ -430,7 +430,7 @@ struct NeutralStats {
 struct NeutralTargetDecisions {
   int filled = 0;            // lowest-chroma cells the band fill added to empty L* bands (0: it did not run)
   float span_L = 0.0f;       // the L* standard deviation the slope shrink measured (anchors other than filled ones)
-  float slope_share = 1.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
+  float slope_share = 0.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
   float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto (all anchors, filled ones included)
   float spread = 0.0f;       // their median distance from the anchors' tone trend at Auto
   bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread): the offset target took full strength
@@ -529,6 +529,8 @@ class JointCurveModel {
   //     the no-head selection, so the offset term sees the tones the cast shows in. They then enter every term as
   //     the head's anchors do, but low chroma is weak evidence of a neutral tone trend, so the slope shrink leaves them
   //     out of the L* spread it measures: they cannot by themselves license a full slope correction.
+  //     With a small spread the slope target then holds the tone difference between the head's band and the filled
+  //     bands near Auto's, so the fill acts mainly through the gains g and b, not through a bend.
   //   - slope shrink: the slope residuals aim at (1 - f) k0 instead of 0, k0 the anchors' slope at Auto and
   //     f = sd^2 / (sd^2 + kSlopeSpanL^2), sd the L* standard deviation of the anchors other than the filled ones: a
   //     slope measured over a narrow tone range is not extrapolated into a bend across the whole range.
@@ -714,6 +716,8 @@ class JointCurveModel {
       dev[k] = (float)std::hypot(lab0[i].a - (sa + ka0 * z), lab0[i].b - (sb + kb0 * z));
     }
     const float spread = median(dev);
+    // b_sel[3] includes the cells the band fill added: filling the top band turns the endpoints case on (the full
+    // cast at strength 0.95, no alignment check against the frame mean).
     const bool has_endpoints = (b_sel[0].size() >= 15 && (!b_sel[3].empty() || b_sel[0].size() >= 64));
     const double cast_a = has_endpoints
                               ? sa

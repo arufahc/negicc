@@ -391,6 +391,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"c_a", n9(f->neutral_export.c_a)}, {"c_b", n9(f->neutral_export.c_b)},
                                              {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
+                                             {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
                                              // The band fill's added cells (0: it did not run), the slope shrink's
                                              // L* spread and the share of Auto's slope the fit removes, and the

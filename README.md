@@ -208,7 +208,7 @@ partly removed when the anchors span a narrow range of lightness (a trend measur
 mostly kept, not extrapolated into a bend), and the cells added by the fill do not count towards that spread. And
 when the anchors share an offset larger than both 6 (in a\*b\*) and their own scatter, the fit treats it as a cast
 and removes it at full strength rather than scaled down by its confidence in the anchors. Each curve is a bend of the
-channel's density response of at most ±25 % slope and one stop of departure from the profile's own curve, held to a
+channel's density response of at most ±35 % slope and 2.2 stops of departure from the profile's own curve, held to a
 plain offset below the frame's densest cell, and never above the film base; a fit that would take E out of the
 bracket's range, or a curve that fails those bounds, falls back to Auto's plain result. `--fit_curves off` keeps the
 plain result; the sidecar records the curves, and `input_curves.remeter.neutral` the anchors and what each of the
