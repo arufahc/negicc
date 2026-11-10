@@ -16,6 +16,7 @@
 #ifndef MULTI_TARGET_OPTIMIZER_H
 #define MULTI_TARGET_OPTIMIZER_H
 
+#include <array>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -311,6 +312,23 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
+// The magenta-green offset the white-light fit's result takes from the network (fit_input_curves_after_search, step
+// 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
+struct OffsetScanResult {
+  bool ran = false;               // the scan ran and its offset was applied (s may be 0)
+  const char* skipped = nullptr;  // why it did not run: "off", "grid" (the network's grid is not the frame's), "infer"
+  double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
+  double se = 0.0;      // the bootstrap standard error of the residual's minimum
+  double s = 0.0;       // the offset applied: s_min + se (one standard error toward magenta)
+  double theta[4] = {0, 0, 0, 0};  // the density change it is: d_G, d_B (D) and k_G, k_B (contrast about the median)
+  int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
+  float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field
+  // The rendered candidates: s, the residual predicted from the pivot's field, the residual against their own field.
+  std::vector<std::array<float, 3>> candidates;
+  int inferences = 0;   // DINOv3 inferences the scan ran (the pivot and the candidates other than s = 0)
+  double time_ms = 0.0;
+};
+
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
   negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
@@ -363,6 +381,8 @@ struct CurveRefitResult {
   negicc::NeutralTargetDecisions neutral_decisions;
   // The never-greener guard of the last fit pass (negicc::GreenGuard).
   negicc::GreenGuard guard;
+  // Step 4, the network's magenta-green offset.
+  OffsetScanResult offset;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;
@@ -382,7 +402,11 @@ struct CurveRefitResult {
 //      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
 //      own result with no curves (CurveRefitResult::fallback);
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
-//      (apply_input_curves on bundle.targets[res.target_idx]).
+//      (apply_input_curves on bundle.targets[res.target_idx]);
+//   4. with offset_scan, the network's magenta-green offset (OffsetScanResult): a lattice of "pure a*" offsets of the
+//      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
+//      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
+//      roll-off measured again).
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
 // ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
 // parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
@@ -391,6 +415,6 @@ struct CurveRefitResult {
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, CurveRefitResult& out);
+                                   int encoding, bool offset_scan, CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

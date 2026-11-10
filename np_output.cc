@@ -413,6 +413,21 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                            {"binding", f->guard.binding}}},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
+    // Step 4, the network's magenta-green offset (remeter's e and x_hi are after it).
+    const OffsetScanResult& os = f->offset;
+    ordered_json cands = ordered_json::array();
+    for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
+    // s and theta in full (17 digits), so the export's tables can be rebuilt from them exactly.
+    auto n17 = [](double v) { return num(v, "%.17g"); };
+    j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
+                                        {"theta",
+                                         {n17(os.theta[0]), n17(os.theta[1]), n17(os.theta[2]), n17(os.theta[3])}},
+                                        {"lattice", os.lattice}, {"lattice_kept", os.lattice_kept},
+                                        {"residual_pivot", n9(os.residual_pivot)},
+                                        // [s, residual predicted from the pivot's field, residual on its own field]
+                                        {"candidates", cands}, {"inferences", os.inferences},
+                                        {"time_ms", num(os.time_ms, "%.1f")}}
+                         : ordered_json{{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
@@ -422,6 +437,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["max_dev_stops"] = nullptr;
     j["render"] = nullptr;
     j["remeter"] = nullptr;
+    j["offset"] = nullptr;
   }
   return j;
 }

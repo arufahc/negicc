@@ -235,7 +235,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},           {"", "--neutral_head", 1, false},
+      {"", "--flat", 1, false},           {"", "--neutral_head", 1, false},     {"", "--offset_scan", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -1268,7 +1268,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                             scan.auto_res, fit_opts, export_encoding, s.curve_fit)) {
+                                             scan.auto_res, fit_opts, export_encoding, o.offset_scan, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }

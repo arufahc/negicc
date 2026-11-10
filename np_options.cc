@@ -279,6 +279,12 @@ int parse_options(int ac, char* av[], Options& o) {
           "weights the fit's scene-neutral anchors (p squared, every cell); off, the fit has no anchors and keeps "
           "Auto's colour.")
     .default_value(std::string("on"));
+  parser.add_argument("--offset_scan")
+    .help("The white-light curve fit's last step: on (default) or off. On, the network judges whether the fitted "
+          "picture reads too green or too magenta: a lattice of magenta-green offsets is scored against the intent "
+          "field, the best few are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, "
+          "moved one standard error toward magenta and never greener than Auto, is composed into the bracket's tables.")
+    .default_value(std::string("on"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -461,6 +467,16 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
   o.neutral_head = parser.get<std::string>("--neutral_head");
+  auto on_off = [&](const char* name, bool& flag) {
+    const std::string v = parser.get<std::string>(name);
+    if (v != "on" && v != "off") {
+      log_error("%s takes on or off, not '%s'\n", name, v.c_str());
+      return false;
+    }
+    flag = v == "on";
+    return true;
+  };
+  if (!on_off("--offset_scan", o.offset_scan)) return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

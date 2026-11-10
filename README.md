@@ -219,9 +219,25 @@ profile's own curve, held to a plain offset below the frame's densest cell, and 
 would take E out of the bracket's range, or a curve that fails those bounds, falls back to Auto's plain result.
 `--fit_curves off` keeps the plain result.
 
+### The network's magenta-green setting
+
+The fit balances the anchors; whether the whole picture then reads too green or too magenta is a judgement about
+its content, and the intent network makes it. On the fitted state, a lattice of offsets from 8 a\* greener to 8 a\*
+more magenta (in steps of 0.5) is laid along a "pure a\*" direction: a small change of the green and blue layers'
+density and contrast that moves the frame's mean a\* and holds its mean b\* and their trends over lightness. One
+DINOv3 inference on the fitted state gives a field; each lattice point is scored by how far the network's a\* target
+is from it (the cells are predicted from the fitted state's own and the change the grid model gives, since the field
+barely moves with the render). Points that would make the picture greener than Auto are left out. The three best are
+rendered and scored on their own fields, and the best of those, moved one standard error toward magenta (the error
+is a block bootstrap of the score's minimum), is composed into the bracket's tables. It costs up to four inferences
+(three when the fitted state itself is among the best). `--offset_scan off` leaves it out.
+
 The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
 rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`),
-and `input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit).
+`input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit),
+`input_curves.offset` the magenta-green setting (`s` applied, `s_min`, its standard error `se`, the density change
+`theta`, the candidates and the inferences). A replay of a sidecar (`--fit_curves` with recorded numbers, or the
+knobs on a previous run) renders the recorded curves only: the magenta-green setting is not replayed.
 
 ## More examples
 
@@ -263,6 +279,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
 | `--neutral_head on\|off\|<file>` | The neutral-patch head that weights the curve fit's neutral anchors: the built-in one (default), none (no anchors: the fit keeps Auto's colour), or another `neutral_head.bin`. |
+| `--offset_scan on\|off` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with

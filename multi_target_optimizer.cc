@@ -27,6 +27,7 @@
 #include <stdexcept>
 
 #include "dinov3_auto_solver.h"
+#include "dinov3_preprocess.h"
 #include "neg_pipeline.h"
 
 const char* to_string(FixedPointStatus status) {
@@ -771,6 +772,53 @@ class SearchFrame {
 
   // The neutral head's p per cell from the last predict() (empty without a neutral head).
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
+
+  // The inner crop rendered to 8-bit sRGB through the tables pd (a bracket's profile with changed input tables) at
+  // params, then resampled to DINOv3's input size as the engine resamples it (net_w x net_h pixels).
+  void render_net_preview(const ProfileData& pd, const ConversionParams& params, std::vector<uint8_t>& out,
+                          int& net_w, int& net_h) {
+    const Clock::time_point t0 = Clock::now();
+    float m[9];
+    negicc::candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
+    std::vector<uint8_t> full((size_t)crop_.w * crop_.h * 3);
+    negicc::RgbView crop_view = frame_.crop_and_orient(crop_.x0, crop_.y0, crop_.w, crop_.h, 0, false, false);
+    negicc::RenderArgs ra{};
+    ra.in_view = &crop_view;
+    ra.width = crop_.w;
+    ra.height = crop_.h;
+    ra.matrix = m;
+    ra.cfg = make_pipeline_config(pd, AUTO_KNEE, shoulder_of(params));
+    ra.out_type = 1;
+    ra.out = full.data();
+    negicc::cpu_render(ra);
+    const negicc::AspectPreservedShape sh =
+        negicc::compute_aspect_preserved_shape(crop_.w, crop_.h, engine_.max_size(), engine_.patch_size());
+    net_w = sh.target_w;
+    net_h = sh.target_h;
+    out.resize((size_t)net_w * net_h * 3);
+    antialiased_bilinear_resize_rgb(full.data(), crop_.w, crop_.h, crop_.w * 3, out.data(), net_w, net_h);
+    render_time_ += Clock::now() - t0;
+  }
+
+  // The intent field DINOv3 predicts from a preview already at its input size (render_net_preview), on the
+  // statistics' grid. False (reported) when the inference fails or its grid is not the frame's.
+  bool predict_net(const std::vector<uint8_t>& preview, int w, int h, std::vector<float>& mu, std::vector<float>& sigma) {
+    const Clock::time_point t0 = Clock::now();
+    DinoV3InferenceResult r;
+    try {
+      r = engine_.infer(preview.data(), w, h, w * 3);
+    } catch (const std::exception& e) {
+      std::cerr << "ERROR! DINOv3 inference failed: " << e.what() << std::endl;
+      return false;
+    }
+    infer_time_ += Clock::now() - t0;
+    out_.inferences++;
+    const size_t n = stats_.grid.size();
+    if (r.grid_w != stats_.grid_w || r.grid_h != stats_.grid_h || r.mu.size() != n || r.sigma.size() != n) return false;
+    mu = std::move(r.mu);
+    sigma = std::move(r.sigma);
+    return true;
+  }
 
   // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
@@ -1932,12 +1980,497 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
+// ---- Step 4: the network's magenta-green offset on the fitted state ------------------------------------------------
+//
+// The joint fit balances the scene-neutral anchors; whether the whole picture then reads too green or too magenta is
+// a judgement the intent network makes about the content. It barely tracks a re-rendered preview (its field moves
+// little with the render), so one inference on the fitted state gives a field the other offsets can be scored
+// against: each lattice point's cells are predicted as the pivot's cells plus the change the grid model gives, and
+// scored by the a*-only residual S(s) = mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are rendered and
+// scored on their own fields; the best of those, moved one bootstrap standard error of the residual's minimum toward
+// magenta (the owner prefers a frame a little magenta to a little green), is the offset applied. Lattice points that
+// make the grid greener than Auto (the joint fit's guard, read on the export's render) are not candidates.
+constexpr double kOffsetScanMax = 8.0;       // lattice s in [-8, 8] a*,
+constexpr double kOffsetScanStep = 0.5;      // in steps of 0.5 a*
+constexpr int kOffsetScanCandidates = 3;     // lattice points rendered and scored on their own fields
+constexpr double kOffsetScanGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
+constexpr int kOffsetBootstrapResamples = 300;
+constexpr int kOffsetBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
+constexpr double kOffsetReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
+// The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
+// cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
+// and the bounds of the density change.
+constexpr double kOffsetProbe[4] = {0.01, 0.01, 0.05, 0.05};
+constexpr double kOffsetRidge = 1e-2;
+constexpr double kOffsetMaxDensity = 0.3, kOffsetMaxContrast = 0.6;
+
+// The fitted tables with the density change theta = (d_G, d_B, k_G, k_B) composed in front of G and B (R is the
+// reference): a value's density above the film base D becomes D + d + k (D - P), P the frame's median cell density
+// of that channel (piv).
+static void offset_tables(const ProfileData& fitted, const float* merged, float e, float g, float b,
+                          const float* film_base, const double th[4], const double piv[3], std::vector<float> out[3]) {
+  const float gain[3] = {e, e * g, e * b};
+  for (int c = 0; c < 3; ++c) {
+    const int n = fitted.in_trc_size[c];
+    out[c].assign(fitted.in_trc[c], fitted.in_trc[c] + n);
+    if (c == 0 || n < 2) continue;
+    const double d = th[c - 1], k = th[c + 1];
+    if (d == 0.0 && k == 0.0) continue;
+    const double v_base = (double)gain[c] * merged[4 * c] * film_base[c] / 65535.0;
+    if (!(v_base > 0)) continue;
+    for (int j = 0; j < n; ++j) {
+      const double v = (double)j / (n - 1);
+      if (v <= 0.0) continue;
+      const double D = -std::log10(v / v_base);
+      const double dD = d + k * (D - piv[c]);
+      const double v2 = std::min(1.0, std::max(0.0, v * std::pow(10.0, -dD)));
+      out[c][j] = negicc::apply_trc((float)v2, fitted.in_trc[c], n);
+    }
+  }
+}
+
+// The cells' CIELAB as the network's grid sees them: the 16 x 16 pixel block means of an 8-bit preview at DINOv3's
+// input size, sRGB (D65) to Lab in double precision. lab gets 3 values per cell, row-major.
+static void net_cell_lab(const std::vector<uint8_t>& u8, int w, int h, std::vector<double>& lab) {
+  const int gw = w / 16, gh = h / 16;
+  lab.assign((size_t)gw * gh * 3, 0.0);
+  for (int gy = 0; gy < gh; ++gy)
+    for (int gx = 0; gx < gw; ++gx) {
+      double rgb[3] = {0, 0, 0};
+      for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x)
+          for (int c = 0; c < 3; ++c) rgb[c] += u8[((size_t)(gy * 16 + y) * w + gx * 16 + x) * 3 + c];
+      double lin[3];
+      for (int c = 0; c < 3; ++c) {
+        const double v = rgb[c] / 256.0 / 255.0;
+        lin[c] = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+      }
+      const double X = (0.4124564 * lin[0] + 0.3575761 * lin[1] + 0.1804375 * lin[2]) / 0.95047;
+      const double Y = 0.2126729 * lin[0] + 0.7151522 * lin[1] + 0.0721750 * lin[2];
+      const double Z = (0.0193339 * lin[0] + 0.1191920 * lin[1] + 0.9503041 * lin[2]) / 1.08883;
+      auto f = [](double t) { return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0; };
+      double* o = &lab[((size_t)gy * gw + gx) * 3];
+      o[0] = 116.0 * f(Y) - 16.0;
+      o[1] = 500.0 * (f(X) - f(Y));
+      o[2] = 200.0 * (f(Y) - f(Z));
+    }
+}
+
+// The a*-only residual of cells' Lab against a field.
+static double offset_residual(const std::vector<double>& lab, const std::vector<float>& mu,
+                              const std::vector<float>& sigma) {
+  const size_t n = lab.size() / 3;
+  double s = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    const double z = (lab[3 * i + 1] - mu[3 * i + 1]) / sigma[3 * i + 1];
+    s += z * z;
+  }
+  return n ? s / (double)n : 0.0;
+}
+
+// A fixed PCG64 stream (128-bit LCG, XSL-RR output; the state and increment of the reference implementation's seed
+// 0), so the bootstrap and with it the offset are reproducible frame by frame.
+class OffsetBootstrapRng {
+ public:
+  // A uniform integer in [0, n), n >= 1 (Lemire's multiply-shift with rejection on 32-bit draws).
+  uint32_t below(uint32_t n) {
+    uint64_t m = (uint64_t)next32() * n;
+    uint32_t left = (uint32_t)m;
+    if (left < n) {
+      const uint32_t threshold = (UINT32_MAX - (n - 1)) % n;
+      while (left < threshold) {
+        m = (uint64_t)next32() * n;
+        left = (uint32_t)m;
+      }
+    }
+    return (uint32_t)(m >> 32);
+  }
+
+ private:
+  static unsigned __int128 u128(uint64_t hi, uint64_t lo) { return ((unsigned __int128)hi << 64) | lo; }
+  uint32_t next32() {
+    if (has_half_) {
+      has_half_ = false;
+      return half_;
+    }
+    state_ = state_ * u128(0x2360ED051FC65DA4ULL, 0x4385DF649FCCF645ULL) + inc_;
+    const uint64_t x = (uint64_t)(state_ >> 64) ^ (uint64_t)state_;
+    const unsigned rot = (unsigned)(state_ >> 122);
+    const uint64_t out = (x >> rot) | (x << ((64 - rot) & 63));
+    half_ = (uint32_t)(out >> 32);
+    has_half_ = true;
+    return (uint32_t)out;
+  }
+  unsigned __int128 state_ = u128(0x1aa1b5345996452dULL, 0x09585eb7a69561e3ULL);
+  unsigned __int128 inc_ = u128(0x418ddadb3af71a82ULL, 0x588133bc447873a9ULL);
+  uint32_t half_ = 0;
+  bool has_half_ = false;
+};
+
+// The standard error of the residual's minimum over s (sorted ascending; the refinement takes s[1] - s[0] as the
+// step): pred[k] is the predicted cells' Lab at s[k]. Blocks of kOffsetBootstrapBlock^2 grid cells are resampled with
+// replacement; each resample's minimum, when inside the range, is refined by a parabola through it and its two
+// neighbours (by at most one step); the standard error is the population standard deviation of the minima.
+static double offset_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
+                                  const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
+  const int K = (int)s.size();
+  const int bx = (gw + kOffsetBootstrapBlock - 1) / kOffsetBootstrapBlock;
+  const int by = (gh + kOffsetBootstrapBlock - 1) / kOffsetBootstrapBlock;
+  const int nb = bx * by;
+  std::vector<double> blocks((size_t)K * nb, 0.0);
+  std::vector<double> cnt(nb, 0.0);
+  for (int y = 0; y < gh; ++y)
+    for (int x = 0; x < gw; ++x) {
+      const int blk = (y / kOffsetBootstrapBlock) * bx + x / kOffsetBootstrapBlock;
+      const size_t i = (size_t)y * gw + x;
+      cnt[blk] += 1.0;
+      for (int k = 0; k < K; ++k) {
+        const double z = (pred[k][3 * i + 1] - mu[3 * i + 1]) / sigma[3 * i + 1];
+        blocks[(size_t)k * nb + blk] += z * z;
+      }
+    }
+  OffsetBootstrapRng rng;
+  std::vector<int> idx(nb);
+  std::vector<double> mins, curve(K);
+  mins.reserve(kOffsetBootstrapResamples);
+  for (int rep = 0; rep < kOffsetBootstrapResamples; ++rep) {
+    for (int j = 0; j < nb; ++j) idx[j] = (int)rng.below((uint32_t)nb);
+    double n = 0.0;
+    for (int j = 0; j < nb; ++j) n += cnt[idx[j]];
+    int best = 0;
+    for (int k = 0; k < K; ++k) {
+      double v = 0.0;
+      for (int j = 0; j < nb; ++j) v += blocks[(size_t)k * nb + idx[j]];
+      curve[k] = v / n;
+      if (curve[k] < curve[best]) best = k;
+    }
+    double m = s[best];
+    if (best > 0 && best < K - 1) {
+      const double y0 = curve[best - 1], y1 = curve[best], y2 = curve[best + 1], den = y0 - 2 * y1 + y2;
+      const double off = den > 0 ? 0.5 * (y0 - y2) / den : 0.0;
+      m = s[best] + std::clamp(off, -1.0, 1.0) * (s[1] - s[0]);
+    }
+    mins.push_back(m);
+  }
+  double mean = 0.0;
+  for (double m : mins) mean += m;
+  mean /= (double)mins.size();
+  double v = 0.0;
+  for (double m : mins) v += (m - mean) * (m - mean);
+  return std::sqrt(v / (double)mins.size());
+}
+
+// Step 4 on the fitted state (e, g, b, x_hi on entry; prof holds the fitted tables). On return prof's G and B tables
+// carry the offset, and e and x_hi are those it renders at (E re-solved to target_L over fit_grid within [e_lo, e_hi],
+// the roll-off measured again). grid_all is every cell of the network's grid (the fit may have left some out), with
+// p_all the neutral head's p of each (may be empty); auto_pd, e_auto, g_auto, b_auto and x_auto render Auto's result;
+// q995 gets the measured roll-off's 99.5% point.
+template <typename Rolloff>
+static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::CurveFrame& cf, const float* merged,
+                        const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
+                        size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
+                        const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
+                        const std::vector<float>& p_all, float& e, float g, float b, float& x_hi, float& q995,
+                        OffsetScanResult& R) {
+  const Clock::time_point t0 = Clock::now();
+  const int N = (int)nf, NA = (int)(grid_all.size() / 3);
+  const ProfileData fitted = prof.data;
+  double piv[3] = {0, 0, 0};
+  for (int c = 0; c < 3; ++c) {
+    std::vector<double> d(N);
+    for (int i = 0; i < N; ++i) d[i] = -std::log10(std::max(1e-3, (double)fit_grid[3 * i + c]) / cf.film_base[c]);
+    std::nth_element(d.begin(), d.begin() + N / 2, d.end());
+    piv[c] = d[N / 2];
+  }
+  const float x0 = x_hi;
+  struct Tables {
+    std::vector<float> in[3];
+    ProfileData pd;
+  };
+  auto build = [&](const double th[4], float ee, Tables& T) {
+    offset_tables(fitted, merged, ee, g, b, cf.film_base, th, piv, T.in);
+    T.pd = fitted;
+    for (int c = 0; c < 3; ++c) T.pd.in_trc[c] = T.in[c].data();
+  };
+  auto median_L_at = [&](const double th[4], float ee, float xx) {
+    Tables T;
+    build(th, ee, T);
+    return negicc::grid_median_L(make_pipeline_config(T.pd, AUTO_KNEE, xx, encoding), merged, ee, g, b, fit_grid, N);
+  };
+  // E with the grid's median L* at target_L: bisection on log E (the median falls as E rises).
+  auto solve_e = [&](const double th[4], float xx) {
+    double lo = std::log(e_lo), hi = std::log(e_hi);
+    for (int it = 0; it < 40; ++it) {
+      const double mid = 0.5 * (lo + hi);
+      if (median_L_at(th, (float)std::exp(mid), xx) > target_L) lo = mid;
+      else hi = mid;
+    }
+    return (float)std::exp(0.5 * (lo + hi));
+  };
+  auto lab_all = [&](const ProfileData& pd, float ee, float gg, float bb, float xx, std::vector<float>& lab) {
+    const negicc::PipelineConfig cfg = make_pipeline_config(pd, AUTO_KNEE, xx, encoding);
+    float m[9];
+    negicc::candidate_matrix(merged, ee, gg, bb, m);
+    lab.resize(3 * (size_t)NA);
+    for (int i = 0; i < NA; ++i) {
+      const negicc::Lab l = negicc::linear_srgb_to_lab(
+          negicc::to_display(cfg, negicc::convert_pixel_linear(cfg, m, grid_all.data() + 3 * i)));
+      lab[3 * i] = l.L;
+      lab[3 * i + 1] = l.a;
+      lab[3 * i + 2] = l.b;
+    }
+  };
+  // The grid model at theta: E re-solved with the fitted state's roll-off.
+  auto lab_th = [&](const double th[4], std::vector<float>& lab) {
+    const float ee = solve_e(th, x0);
+    Tables T;
+    build(th, ee, T);
+    lab_all(T.pd, ee, g, b, x0, lab);
+  };
+  // The export at theta: E solved, the roll-off measured, E solved again and the roll-off measured again.
+  auto finish = [&](const double th[4], float& ee, float& xx, float* q995 = nullptr) {
+    ee = solve_e(th, x0);
+    Tables T;
+    build(th, ee, T);
+    float q = 0.0f;
+    xx = rolloff_at(T.pd, ee, g, b, &q);
+    ee = solve_e(th, xx);
+    build(th, ee, T);
+    xx = rolloff_at(T.pd, ee, g, b, &q);
+    if (q995) *q995 = q;
+  };
+
+  // The direction on the grid model: mean a*, b* and their slopes over L* (per 50 L*) over the fitted state's cells at
+  // L* 5..95; u solves J u = (1, 0, 0, 0) (mean a* +1, the rest held).
+  std::vector<float> lab0;
+  const double zero[4] = {0, 0, 0, 0};
+  lab_th(zero, lab0);
+  std::vector<int> use;
+  double Lm = 0;
+  for (int i = 0; i < NA; ++i)
+    if (lab0[3 * i] > 5 && lab0[3 * i] < 95) {
+      use.push_back(i);
+      Lm += lab0[3 * i];
+    }
+  if (use.size() < 8) {
+    use.clear();
+    Lm = 0;
+    for (int i = 0; i < NA; ++i) {
+      use.push_back(i);
+      Lm += lab0[3 * i];
+    }
+  }
+  Lm /= use.size();
+  auto moments = [&](const std::vector<float>& lab, double mo[4]) {
+    double sa = 0, sb = 0, sLL = 0, sLa = 0, sLb = 0;
+    for (int i : use) {
+      sa += lab[3 * i + 1];
+      sb += lab[3 * i + 2];
+    }
+    sa /= use.size();
+    sb /= use.size();
+    for (int i : use) {
+      const double z = (lab0[3 * i] - Lm) / 50.0;
+      sLL += z * z;
+      sLa += z * (lab[3 * i + 1] - sa);
+      sLb += z * (lab[3 * i + 2] - sb);
+    }
+    mo[0] = sa;
+    mo[1] = sb;
+    mo[2] = sLa / std::max(sLL, 1e-9);
+    mo[3] = sLb / std::max(sLL, 1e-9);
+  };
+  double m0[4];
+  moments(lab0, m0);
+  double J[4][4];
+  for (int j = 0; j < 4; ++j) {
+    double th[4] = {0, 0, 0, 0};
+    th[j] = kOffsetProbe[j];
+    std::vector<float> l;
+    lab_th(th, l);
+    double mj[4];
+    moments(l, mj);
+    for (int r = 0; r < 4; ++r) J[r][j] = (mj[r] - m0[r]) / kOffsetProbe[j];
+  }
+  double u[4];
+  {
+    const double* h = kOffsetProbe;
+    const double y[4] = {1, 0, 0, 0};
+    double M[4][5];
+    for (int r = 0; r < 4; ++r) {
+      for (int c = 0; c < 4; ++c) {
+        double v = 0;
+        for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * J[k][c] * h[c];
+        M[r][c] = v + (r == c ? kOffsetRidge : 0.0);
+      }
+      double v = 0;
+      for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * y[k];
+      M[r][4] = v;
+    }
+    for (int c = 0; c < 4; ++c) {
+      int pv = c;
+      for (int r = c + 1; r < 4; ++r)
+        if (std::fabs(M[r][c]) > std::fabs(M[pv][c])) pv = r;
+      for (int k = 0; k < 5; ++k) std::swap(M[c][k], M[pv][k]);
+      for (int r = 0; r < 4; ++r) {
+        if (r == c) continue;
+        const double f = M[r][c] / M[c][c];
+        for (int k = 0; k < 5; ++k) M[r][k] -= f * M[c][k];
+      }
+    }
+    for (int k = 0; k < 4; ++k) u[k] = M[k][4] / M[k][k] * h[k];
+  }
+  auto theta_of = [&](double s, double th[4]) {
+    for (int k = 0; k < 4; ++k)
+      th[k] = std::clamp(s * u[k], k < 2 ? -kOffsetMaxDensity : -kOffsetMaxContrast,
+                         k < 2 ? kOffsetMaxDensity : kOffsetMaxContrast);
+  };
+  auto net_preview = [&](double s, std::vector<uint8_t>& pv, int& w, int& h) {
+    double th[4];
+    theta_of(s, th);
+    float ee, xx;
+    finish(th, ee, xx);
+    Tables T;
+    build(th, ee, T);
+    fr.render_net_preview(T.pd, {ee, g, b, xx}, pv, w, h);
+  };
+
+  // The pivot: the fitted state's preview, its field and its cells.
+  std::vector<uint8_t> pv;
+  int pw = 0, ph = 0;
+  net_preview(0.0, pv, pw, ph);
+  std::vector<float> mu0, sg0;
+  if (pw / 16 != grid_w || ph / 16 != grid_h) {
+    R.skipped = "grid";
+  } else if (!fr.predict_net(pv, pw, ph, mu0, sg0)) {
+    R.skipped = "infer";
+  }
+  if (R.skipped) {
+    R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    return;
+  }
+  R.inferences = 1;
+  std::vector<double> x_piv;
+  net_cell_lab(pv, pw, ph, x_piv);
+
+  // The lattice on the grid model, and the guard on each point: Auto's cells at L* 2..92, the mean a* over all of
+  // them and weighted by p^2 not more than kGreenGuardTolAb (+ kOffsetScanGuardSlack) below Auto's.
+  std::vector<float> lab_auto;
+  lab_all(auto_pd, e_auto, g_auto, b_auto, x_auto, lab_auto);
+  std::vector<char> in_band(NA, 0);
+  std::vector<double> w2(NA, 0.0);
+  double n_in = 0.0, w_in = 0.0, a_auto = 0.0, aw_auto = 0.0;
+  for (int i = 0; i < NA; ++i) {
+    if (!(lab_auto[3 * i] > 2.0f && lab_auto[3 * i] <= 92.0f)) continue;
+    in_band[i] = 1;
+    const double p = (size_t)NA == p_all.size() ? std::clamp((double)p_all[i], 0.0, 1.0) : 0.0;
+    w2[i] = p * p;
+    n_in += 1.0;
+    w_in += w2[i];
+    a_auto += lab_auto[3 * i + 1];
+    aw_auto += w2[i] * lab_auto[3 * i + 1];
+  }
+  const double tol = (double)negicc::kGreenGuardTolAb + kOffsetScanGuardSlack;
+  auto guard_ok = [&](const std::vector<float>& lab) {
+    double a = 0.0, aw = 0.0;
+    for (int i = 0; i < NA; ++i)
+      if (in_band[i]) {
+        a += lab[3 * i + 1];
+        aw += w2[i] * lab[3 * i + 1];
+      }
+    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < a_auto / n_in - tol) return false;
+    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < aw_auto / w_in - tol) return false;
+    return true;
+  };
+  const int K = (int)std::lround(2.0 * kOffsetScanMax / kOffsetScanStep) + 1;
+  const int k_zero = K / 2;
+  std::vector<double> s_of(K), score(K);
+  std::vector<char> kept(K);
+  std::vector<std::vector<double>> pred(K);
+  for (int k = 0; k < K; ++k) {
+    s_of[k] = -kOffsetScanMax + k * kOffsetScanStep;
+    double th[4];
+    theta_of(s_of[k], th);
+    std::vector<float> l;
+    lab_th(th, l);
+    pred[k].resize(3 * (size_t)NA);
+    for (int i = 0; i < 3 * NA; ++i) pred[k][i] = x_piv[i] + ((double)l[i] - (double)lab0[i]);
+    score[k] = offset_residual(pred[k], mu0, sg0);
+    kept[k] = guard_ok(l) || k == k_zero;
+  }
+  R.lattice = K;
+  R.residual_pivot = (float)score[k_zero];
+  for (char c : kept) R.lattice_kept += c;
+
+  // The candidates: the kOffsetScanCandidates kept points of lowest predicted residual (ties in lattice order).
+  std::vector<int> order;
+  for (int k = 0; k < K; ++k)
+    if (kept[k]) order.push_back(k);
+  std::stable_sort(order.begin(), order.end(), [&](int i, int j) { return score[i] < score[j]; });
+  if ((int)order.size() > kOffsetScanCandidates) order.resize(kOffsetScanCandidates);
+
+  // The standard error, over the kept points in lattice order.
+  std::vector<std::vector<double>> pk;
+  std::vector<double> sk;
+  for (int k = 0; k < K; ++k)
+    if (kept[k]) {
+      pk.push_back(pred[k]);
+      sk.push_back(s_of[k]);
+    }
+  const double se = sk.size() >= 3 ? offset_bootstrap_se(pk, sk, mu0, sg0, grid_w, grid_h) : 0.0;
+
+  // Each candidate scored on its own field (the pivot's own, for s = 0); the lowest wins, the first on a tie.
+  double best_s = 0.0, best_v = 0.0;
+  bool have = false;
+  for (int k : order) {
+    double v;
+    if (k == k_zero) {
+      v = offset_residual(x_piv, mu0, sg0);
+    } else {
+      std::vector<uint8_t> cpv;
+      int cw = 0, ch = 0;
+      net_preview(s_of[k], cpv, cw, ch);
+      std::vector<float> mu, sg;
+      ++R.inferences;
+      if (!fr.predict_net(cpv, cw, ch, mu, sg)) continue;
+      std::vector<double> xc;
+      net_cell_lab(cpv, cw, ch, xc);
+      v = offset_residual(xc, mu, sg);
+    }
+    R.candidates.push_back({(float)s_of[k], (float)score[k], (float)v});
+    if (!have || v < best_v) {
+      have = true;
+      best_s = s_of[k];
+      best_v = v;
+    }
+  }
+  const double s_final = best_s + kOffsetReadoutSE * se;
+  R.s_min = best_s;
+  R.se = se;
+  R.s = s_final;
+
+  // The export: the offset composed into the fitted tables, at its E and roll-off.
+  double th[4];
+  theta_of(s_final, th);
+  float ee, xx;
+  finish(th, ee, xx, &q995);
+  Tables T;
+  build(th, ee, T);
+  for (int c = 0; c < 3; ++c) prof.in_trc[c] = T.in[c];
+  prof.rebind_pointers();
+  for (int k = 0; k < 4; ++k) R.theta[k] = th[k];
+  e = ee;
+  x_hi = xx;
+  R.ran = true;
+  R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
 // negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, CurveRefitResult& out) {
+                                   int encoding, bool offset_scan_on, CurveRefitResult& out) {
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
@@ -1996,6 +2529,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // base) are not picture: they are left out of the fit, the re-meter and the losses, with their intent cells. Both
   // limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below it.
   constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
+  const std::vector<float> neutral_p_all = neutral_p;  // every cell's, for step 4 (which scores the whole grid)
   std::vector<uint16_t> kept_grid;
   std::vector<size_t> kept_idx;
   const uint16_t* fit_grid = stats.grid.data();
@@ -2235,10 +2769,32 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and the
   //    combined profile built from them in place: every later use of the bracket renders through it.
   out.fit.curves = negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b);
+  ParsedFilmProfile auto_prof = prof;  // the bracket's own tables, which render Auto's result (step 4's guard)
+  auto_prof.rebind_pointers();
   apply_input_curves(prof, out.fit.curves);
   out.x_hi = x;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
   out.x_hi_q995 = q995;
   out.rolloff_measured = encoding == ENCODE_SRGB;
+
+  // 4. The network's magenta-green offset, composed into the same tables (E and the roll-off measured again).
+  if (offset_scan_on) {
+    const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
+    offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
+                e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
+                neutral_p_all, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, out.offset);
+    if (opts.verbose) {
+      if (out.offset.ran) {
+        std::cout << "Offset: a* " << fixed(out.offset.s, 3, true) << " (minimum " << fixed(out.offset.s_min, 2, true)
+                  << " + SE " << fixed(out.offset.se, 3) << "), " << out.offset.lattice_kept << " of "
+                  << out.offset.lattice << " lattice points kept, " << out.offset.inferences << " inferences, E "
+                  << fixed(e_new, 4) << ", roll-off " << fixed(out.x_hi, 3) << "\n";
+      } else {
+        std::cout << "Offset: not run (" << out.offset.skipped << ")\n";
+      }
+    }
+  } else {
+    out.offset.skipped = "off";
+  }
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};
   out.target_median_L = fit_target_L;
