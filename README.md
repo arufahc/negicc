@@ -239,16 +239,18 @@ Many negatives come out flat: lifted blacks, dull highlights. Small tone heads o
 highlight level (L* at 98 %) and the tonal range (L* at 90 % minus 10 %) a lab scan of the frame would have. One
 monotone L* curve then moves the final image all the way to the predicted shadow level and half way to the predicted
 highlight level and range, with the mid-tone (L* at 50 %) held. a\* and b\* are not re-balanced, only scaled by the
-factor that keeps the frame's mean chroma where it was. Above L98 no target says where the curve goes, so a weak term
-holds its rise there to the input's (slope 1 on average), and the curve is solved from several white points with the
-lowest cost kept: without that, two quite different white points fit about equally on some frames and the choice
-flipped with a 1 L* change of the render. The stage limits white clipping at its sources: a colour the curve lifts out of the sRGB gamut
-keeps its tone and hue and loses chroma instead of having channels clipped, and where the curve itself would push more
-than 0.5 % more of the final image's pixels to white than it had, the highlight and range moves are scaled down until
-it does not (the sidecar's `tone_stage.moves.highlight_share`). The heads read the features of the inference the magenta-green
-setting's winner already ran (or, without it, the search's), so the stage adds no inference; the curve is solved on a
-preview of the final render and applied to the final 16-bit image. White light with `-P srgb` only; `--tone_stage off`
-leaves it out.
+factor that keeps the frame's mean chroma where it was. The heads read the features of the inference the
+magenta-green setting's winner already ran (or, without it, the search's), so the stage adds no inference.
+
+Above L98 no target says where the curve goes, so a weak term holds its rise there to the input's (slope 1 on
+average), but not past white, and the curve is solved from several white points with the lowest cost kept: without
+that, two quite different white points fit about equally on some frames, and the choice flipped with a 1 L* change of
+the render. The stage limits white clipping at its sources: a colour the curve lifts out of the sRGB gamut keeps its
+tone and hue and loses chroma instead of having channels clipped, and where the curve itself would push more than
+0.5 % more of the final image's pixels to white than it had, the highlight and range moves are scaled down until it
+does not (`tone_stage.moves.highlight_share` in the sidecar). The curve is solved on a preview of the final render,
+checked against the final 16-bit image (and solved again there when the moves are scaled down), and applied to it in
+single precision with a table for the curve. White light with `-P srgb` only; `--tone_stage off` leaves it out.
 
 The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
 rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`),
