@@ -2267,6 +2267,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     const ToneStagePlan& plan = s.curve_fit.tone;
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
+    const double t_tone_0 = omp_get_wtime();
     if (plan.planned && !plan.preview.empty()) {
       // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
       scan.tone_curve = tone_plan_for_image(plan.render, plan.pred_mean[ToneHead::kL2], plan.pred_mean[ToneHead::kL98],
@@ -2274,12 +2275,14 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                                             plan.preview.size() / 3, rgb, tp->imgdata.sizes.iwidth,
                                             tp->imgdata.sizes.iheight, stride, &scan.tone_targets, &scan.tone_share);
     }
+    const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;
     scan.tone_clip = apply_tone_stage(rgb, npx, stride, q);
     scan.tone_applied = true;
-    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f chroma x%.4f; white clip %.4f%% -> %.4f%%\n",
-             q.black, q.white, q.gamma, q.contrast, q.chroma, 100.0 * scan.tone_clip.white_before,
-             100.0 * scan.tone_clip.white_after);
+    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f chroma x%.4f (highlight share %.3f); white clip "
+             "%.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms applying\n",
+             q.black, q.white, q.gamma, q.contrast, q.chroma, scan.tone_share, 100.0 * scan.tone_clip.white_before,
+             100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (omp_get_wtime() - t_tone_1));
   }
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);

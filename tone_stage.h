@@ -45,8 +45,8 @@ constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // every kToneClipSampleStep-th pixel each way of the final image. When even no highlight move stays within the
 // allowance, the clipping does not come from that move, and the moves stay as designed.
 constexpr double kToneClipAllowance = 0.005;
-constexpr int kToneClipSearchSteps = 10;
-constexpr int kToneClipSampleStep = 4;
+constexpr int kToneClipSearchSteps = 8;
+constexpr int kToneClipSampleStep = 8;
 // The chroma factor that keeps the mean chroma: refined this many times on the preview, within these bounds.
 constexpr int kToneChromaRefinements = 2;
 constexpr double kToneChromaLo = 0.5, kToneChromaHi = 1.6;
@@ -176,17 +176,27 @@ inline ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
 }
 
 // The mean chroma of an 8-bit RGB image after the stage (toned in floating point, not re-quantised).
+// (Summed in a fixed number of chunks, in parallel, then in order: the same result whatever the thread count.)
 inline double tone_mean_chroma_after(const uint8_t* rgb, size_t n, const ToneCurve& q) {
     if (n == 0) return 0.0;
-    double c_sum = 0.0;
-    for (size_t i = 0; i < n; ++i) {
-        double lab[3], out[3];
-        tone_rgb_to_lab(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0, lab);
-        tone_lab_apply(lab, q);
-        tone_lab_to_rgb(lab, out);
-        tone_rgb_to_lab(out[0], out[1], out[2], lab);
-        c_sum += std::hypot(lab[1], lab[2]);
+    constexpr int kChunks = 64;
+    double part[kChunks] = {};
+#pragma omp parallel for schedule(static)
+    for (int ch = 0; ch < kChunks; ++ch) {
+        const size_t i0 = n * ch / kChunks, i1 = n * (ch + 1) / kChunks;
+        double c_sum = 0.0;
+        for (size_t i = i0; i < i1; ++i) {
+            double lab[3], out[3];
+            tone_rgb_to_lab(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0, lab);
+            tone_lab_apply(lab, q);
+            tone_lab_to_rgb(lab, out);
+            tone_rgb_to_lab(out[0], out[1], out[2], lab);
+            c_sum += std::hypot(lab[1], lab[2]);
+        }
+        part[ch] = c_sum;
     }
+    double c_sum = 0.0;
+    for (double v : part) c_sum += v;
     return c_sum / (double)n;
 }
 
@@ -390,11 +400,7 @@ public:
             for (int c = 0; c < 3; ++c) out[c] = (uint16_t)std::lround(o[c] * 65535.0);
             return;
         }
-        for (int c = 0; c < 3; ++c) {
-            float v = lin[c] < 0.0f ? 0.0f : (lin[c] > 1.0f ? 1.0f : lin[c]);
-            v = v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
-            out[c] = (uint16_t)std::lround(v * 65535.0f);
-        }
+        for (int c = 0; c < 3; ++c) out[c] = (uint16_t)std::lround(encode(lin[c]) * 65535.0f);
     }
 
 private:
@@ -406,7 +412,51 @@ private:
         }();
         return d.data();
     }
-    static float lab_f(float t) { return t > 216.0f / 24389.0f ? std::cbrt(t) : (24389.0f / 27.0f * t + 16.0f) / 116.0f; }
+    // A table on sqrt(x), linearly interpolated: in sqrt(x) both the sRGB encode and the cube root are close to linear
+    // (the steep start of each is its linear segment, computed directly).
+    struct SqrtTable {
+        std::vector<float> v;
+        float top = 1.0f;
+        float at(float x) const {
+            float t = std::sqrt(std::min(std::max(x, 0.0f), top) / top) * (float)(v.size() - 1);
+            const int i = std::min((int)t, (int)v.size() - 2);
+            t -= (float)i;
+            return v[i] + t * (v[i + 1] - v[i]);
+        }
+    };
+    static const SqrtTable& encode_table() {
+        static const SqrtTable e = [] {
+            SqrtTable t;
+            t.v.resize(4097);
+            for (size_t i = 0; i < t.v.size(); ++i) {
+                const double s = (double)i / (t.v.size() - 1);
+                t.v[i] = (float)tone_srgb_encode(s * s);
+            }
+            return t;
+        }();
+        return e;
+    }
+    static const SqrtTable& cbrt_table() {
+        static const SqrtTable c = [] {
+            SqrtTable t;
+            t.top = 1.25f;
+            t.v.resize(8193);
+            for (size_t i = 0; i < t.v.size(); ++i) {
+                const double s = (double)i / (t.v.size() - 1);
+                t.v[i] = (float)std::cbrt(s * s * 1.25);
+            }
+            return t;
+        }();
+        return c;
+    }
+    static float encode(float v) {
+        v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        return v <= 0.0031308f ? 12.92f * v : encode_table().at(v);
+    }
+    static float lab_f(float t) {
+        if (t <= 216.0f / 24389.0f) return (24389.0f / 27.0f * t + 16.0f) / 116.0f;
+        return t < 1.25f ? cbrt_table().at(t) : std::cbrt(t);
+    }
     static float lab_finv(float t) {
         return t * t * t > 216.0f / 24389.0f ? t * t * t : (116.0f * t - 16.0f) / (24389.0f / 27.0f);
     }
