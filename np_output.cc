@@ -698,20 +698,24 @@ bool write_json_sidecar(const Sidecar& sc) {
                             {"L50", n9((float)d.L50)}, {"L75", n9((float)d.L75)}, {"L90", n9((float)d.L90)},
                             {"L98", n9((float)d.L98)}, {"R9010", n9((float)d.range())}, {"Cmean", n9((float)d.Cmean)}};
       };
+      // As applied (capped on the final image), else as planned.
+      const ToneTargets& tt = sc.tone_targets ? *sc.tone_targets : tp.targets;
+      const ToneCurve& tc = sc.tone_applied && sc.tone_curve ? *sc.tone_curve : tp.curve;
       j["tone_stage"] = {
           {"applied", sc.tone_applied},
           {"features", tp.features},
           {"predicted", pred},
           {"predicted_sd", pred_sd},
           {"render", desc(tp.render)},
-          {"targets", {{"L2", n9((float)tp.targets.L2)}, {"L50", n9((float)tp.targets.L50)},
-                       {"L98", n9((float)tp.targets.L98)}, {"R9010", n9((float)tp.targets.range)}}},
+          {"targets", {{"L2", n9((float)tt.L2)}, {"L50", n9((float)tt.L50)}, {"L98", n9((float)tt.L98)},
+                       {"R9010", n9((float)tt.range)}}},
+          // The share of the highlight and range moves kept: 1, or less where they would clip the final image.
           {"moves", {{"shadow", n9((float)kToneShadowMove)}, {"highlight", n9((float)kToneHighlightMove)},
-                     {"range", n9((float)kToneRangeMove)}}},
+                     {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)}}},
           // In full (17 digits): the curve the image went through, exactly.
-          {"curve", {{"black", num(tp.curve.black, "%.17g")}, {"white", num(tp.curve.white, "%.17g")},
-                     {"gamma", num(tp.curve.gamma, "%.17g")}, {"contrast", num(tp.curve.contrast, "%.17g")},
-                     {"chroma", num(tp.curve.chroma, "%.17g")}}},
+          {"curve", {{"black", num(tc.black, "%.17g")}, {"white", num(tc.white, "%.17g")},
+                     {"gamma", num(tc.gamma, "%.17g")}, {"contrast", num(tc.contrast, "%.17g")},
+                     {"chroma", num(tc.chroma, "%.17g")}}},
           {"chroma_after", n9((float)tp.chroma_after)},
           {"clip", sc.tone_applied ? ordered_json{{"white_before", num(sc.tone_clip.white_before, "%.6f")},
                                                   {"white_after", num(sc.tone_clip.white_after, "%.6f")},

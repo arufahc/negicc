@@ -2262,9 +2262,20 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   if (s.has_tone && out.encoding == ENCODE_SRGB) {
     LibRaw* tp = scan.proc.get();
     const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
-    const ToneCurve& q = s.tone_curve;
-    scan.tone_clip = !scan.rgb3.empty() ? apply_tone_stage(scan.rgb3.data(), npx, 3, q)
-                                        : apply_tone_stage(&tp->imgdata.image[0][0], npx, 4, q);
+    uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
+    const int stride = !scan.rgb3.empty() ? 3 : 4;
+    const ToneStagePlan& plan = s.curve_fit.tone;
+    scan.tone_curve = s.tone_curve;
+    scan.tone_share = 1.0;
+    if (plan.planned && !plan.preview.empty()) {
+      // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
+      scan.tone_curve = tone_plan_for_image(plan.render, plan.pred_mean[ToneHead::kL2], plan.pred_mean[ToneHead::kL98],
+                                            plan.pred_mean[ToneHead::kR9010], plan.preview.data(),
+                                            plan.preview.size() / 3, rgb, tp->imgdata.sizes.iwidth,
+                                            tp->imgdata.sizes.iheight, stride, &scan.tone_targets, &scan.tone_share);
+    }
+    const ToneCurve& q = scan.tone_curve;
+    scan.tone_clip = apply_tone_stage(rgb, npx, stride, q);
     scan.tone_applied = true;
     log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f chroma x%.4f; white clip %.4f%% -> %.4f%%\n",
              q.black, q.white, q.gamma, q.contrast, q.chroma, 100.0 * scan.tone_clip.white_before,
@@ -2398,7 +2409,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_auto_ms = scan.t_auto_ms;
   sc.t_analysis_ms = scan.t_analysis_ms;
   sc.offset_tables = s.has_offset ? &s.offset : nullptr;
-  sc.tone_curve = s.has_tone ? &s.tone_curve : nullptr;
+  sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
+  sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
+  sc.tone_share = scan.tone_share;
   sc.tone_applied = scan.tone_applied;
   sc.tone_clip = scan.tone_clip;
   if (!s.input_curves_source.empty()) {

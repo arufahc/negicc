@@ -106,6 +106,8 @@ struct Sidecar {
   // whether the tone curve was applied to the final image, and the clipping it measured.
   const OffsetTables* offset_tables = nullptr;
   const ToneCurve* tone_curve = nullptr;
+  const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
+  double tone_share = 1.0;
   bool tone_applied = false;
   ToneClip tone_clip;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);

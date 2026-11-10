@@ -364,6 +364,9 @@ struct ToneStagePlan {
   ToneTargets targets;            // the descriptors the curve aims at
   ToneCurve curve;                // the curve and the chroma factor
   double chroma_after = 0.0;      // the preview's mean chroma with the curve and that factor (aim: render.Cmean)
+  // The preview (8-bit RGB at DINOv3's size), kept for the conversion, which caps the highlight move on the final
+  // image where it would clip (tone_plan_for_image) and solves the curve again there.
+  std::vector<uint8_t> preview;
 };
 
 // What fit_input_curves_after_search did.

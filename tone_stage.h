@@ -38,6 +38,15 @@ constexpr double kTonePrior = 0.02;
 // depend on which basin a single start falls into.
 constexpr double kToneTopSlope = 0.07;
 constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
+// White clipping, at its two sources. A colour the curve lifts out of the sRGB gamut has its chroma scaled toward
+// neutral at its L* (tone_lab_to_rgb_in_gamut) instead of its brightest channels clipped. Where the curve lifts L*
+// itself to white on more than kToneClipAllowance more of the final image's pixels than the image had clipped, the
+// highlight and range moves are scaled down (bisection, kToneClipSearchSteps steps) until it does not, measured on
+// every kToneClipSampleStep-th pixel each way of the final image. When even no highlight move stays within the
+// allowance, the clipping does not come from that move, and the moves stay as designed.
+constexpr double kToneClipAllowance = 0.005;
+constexpr int kToneClipSearchSteps = 10;
+constexpr int kToneClipSampleStep = 4;
 // The chroma factor that keeps the mean chroma: refined this many times on the preview, within these bounds.
 constexpr int kToneChromaRefinements = 2;
 constexpr double kToneChromaLo = 0.5, kToneChromaHi = 1.6;
@@ -63,6 +72,8 @@ inline double tone_lab_finv(double t) {
     return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
 }
 constexpr double kToneXn = 0.950456, kToneZn = 1.088754;
+// The bisection steps of the in-gamut chroma scale (tone_lab_to_rgb_in_gamut): 2^-14 of the chroma.
+constexpr int kToneGamutSteps = 14;
 
 // Linear r, g, b -> L*, a*, b*.
 inline void tone_linear_to_lab(double r, double g, double b, double lab[3]) {
@@ -87,6 +98,31 @@ inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
     rgb[0] = tone_srgb_encode(3.240479 * X - 1.537150 * Y - 0.498535 * Z);
     rgb[1] = tone_srgb_encode(-0.969256 * X + 1.875992 * Y + 0.041556 * Z);
     rgb[2] = tone_srgb_encode(0.055648 * X - 0.204043 * Y + 1.057311 * Z);
+}
+
+// L*, a*, b* -> r, g, b in 0..1, the chroma scaled toward neutral at the same L* (hue kept) as far as needed to keep
+// every channel at or below the maximum: a colour the curve lifts past the sRGB gamut keeps its tone and hue instead
+// of having its brightest channels clipped. Below the maximum it is tone_lab_to_rgb.
+inline void tone_lab_to_rgb_in_gamut(const double lab[3], double rgb[3]) {
+    auto linear_max = [](const double l[3]) {
+        const double fy = (l[0] + 16.0) / 116.0, fx = fy + l[1] / 500.0, fz = fy - l[2] / 200.0;
+        const double X = tone_lab_finv(fx) * kToneXn, Y = tone_lab_finv(fy), Z = tone_lab_finv(fz) * kToneZn;
+        return std::max({3.240479 * X - 1.537150 * Y - 0.498535 * Z, -0.969256 * X + 1.875992 * Y + 0.041556 * Z,
+                         0.055648 * X - 0.204043 * Y + 1.057311 * Z});
+    };
+    if (linear_max(lab) <= 1.0) {
+        tone_lab_to_rgb(lab, rgb);
+        return;
+    }
+    double lo = 0.0, hi = 1.0;
+    for (int it = 0; it < kToneGamutSteps; ++it) {
+        const double mid = 0.5 * (lo + hi);
+        const double l[3] = {lab[0], lab[1] * mid, lab[2] * mid};
+        if (linear_max(l) <= 1.0) lo = mid;
+        else hi = mid;
+    }
+    const double l[3] = {lab[0], lab[1] * lo, lab[2] * lo};
+    tone_lab_to_rgb(l, rgb);
 }
 
 // f(L) without the final clamp to 0..100.
@@ -159,12 +195,14 @@ struct ToneTargets {
     double L2 = 0, L50 = 0, L98 = 0, range = 0;
 };
 
-inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L2, double pred_L98, double pred_range) {
+// highlight_share scales the highlight and range moves (1: as designed; less where they would clip, see above).
+inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L2, double pred_L98, double pred_range,
+                                double highlight_share = 1.0) {
     ToneTargets t;
     t.L2 = cur.L2 + kToneShadowMove * (pred_L2 - cur.L2);
-    t.L98 = cur.L98 + kToneHighlightMove * (pred_L98 - cur.L98);
+    t.L98 = cur.L98 + highlight_share * kToneHighlightMove * (pred_L98 - cur.L98);
     t.L50 = cur.L50;
-    t.range = cur.range() + kToneRangeMove * (pred_range - cur.range());
+    t.range = cur.range() + highlight_share * kToneRangeMove * (pred_range - cur.range());
     return t;
 }
 
@@ -284,6 +322,84 @@ inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
     return curve_of(best_q);
 }
 
+// The plan at a highlight share: the targets, the curve solved for them, and the chroma factor that keeps the
+// preview's (8-bit RGB, n pixels) mean chroma at the render's.
+inline ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                           const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets) {
+    const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share);
+    ToneCurve c = tone_solve(render, t);
+    double chroma = 1.0;
+    for (int it = 0; it < kToneChromaRefinements; ++it) {
+        c.chroma = chroma;
+        const double got = tone_mean_chroma_after(preview, n, c);
+        chroma = std::clamp(chroma * (render.Cmean / std::max(got, 1e-3)), kToneChromaLo, kToneChromaHi);
+    }
+    c.chroma = chroma;
+    if (targets) *targets = t;
+    return c;
+}
+
+// The share of a 16-bit sRGB image's pixels (w x h, stride uint16 per pixel, every step-th each way) with a channel
+// at the maximum: as it is (q null), or after the stage with curve q (as apply_tone_stage would write it).
+inline double tone_white_clip_share(const uint16_t* rgb, int w, int h, int stride, int step, const ToneCurve* q) {
+    long long n = 0, clipped = 0;
+#pragma omp parallel for schedule(static) reduction(+ : n, clipped)
+    for (int y = 0; y < h; y += step) {
+        for (int x = 0; x < w; x += step) {
+            const uint16_t* p = rgb + ((size_t)y * w + x) * stride;
+            ++n;
+            if (!q) {
+                clipped += (p[0] == 65535 || p[1] == 65535 || p[2] == 65535);
+                continue;
+            }
+            double lab[3], out[3];
+            tone_rgb_to_lab(p[0] / 65535.0, p[1] / 65535.0, p[2] / 65535.0, lab);
+            tone_lab_apply(lab, *q);
+            tone_lab_to_rgb_in_gamut(lab, out);
+            bool c = false;
+            for (int k = 0; k < 3; ++k) c = c || std::lround(out[k] * 65535.0) == 65535;
+            clipped += c;
+        }
+    }
+    return n ? (double)clipped / (double)n : 0.0;
+}
+
+// The plan's curve for a final image: the designed moves, or, where they would clip more than kToneClipAllowance
+// beyond the image's own clipping, the largest share of the highlight and range moves that does not (see above).
+// share gets the share kept.
+inline ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                                     const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
+                                     ToneTargets* targets, double* share) {
+    const double before = tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, nullptr);
+    ToneTargets t1;
+    const ToneCurve c1 = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, 1.0, &t1);
+    *share = 1.0;
+    *targets = t1;
+    auto ok = [&](const ToneCurve& c) {
+        return tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, &c) <= before + kToneClipAllowance;
+    };
+    if (ok(c1)) return c1;
+    ToneTargets t_lo;
+    ToneCurve c_lo = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, 0.0, &t_lo);
+    if (!ok(c_lo)) return c1;  // the clipping is not the highlight move's
+    double lo = 0.0, hi = 1.0;
+    for (int it = 0; it < kToneClipSearchSteps; ++it) {
+        const double mid = 0.5 * (lo + hi);
+        ToneTargets t;
+        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, mid, &t);
+        if (ok(c)) {
+            lo = mid;
+            t_lo = t;
+            c_lo = c;
+        } else {
+            hi = mid;
+        }
+    }
+    *share = lo;
+    *targets = t_lo;
+    return c_lo;
+}
+
 // What applying the stage to the full image did: the share of pixels clipped white (a channel at the maximum) and
 // black (every channel 0), before and after.
 struct ToneClip {
@@ -307,7 +423,7 @@ inline ToneClip apply_tone_stage(uint16_t* rgb, size_t n, int stride, const Tone
         double lab[3], out[3];
         tone_linear_to_lab(decode[px[0]], decode[px[1]], decode[px[2]], lab);
         tone_lab_apply(lab, q);
-        tone_lab_to_rgb(lab, out);
+        tone_lab_to_rgb_in_gamut(lab, out);
         for (int c = 0; c < 3; ++c) px[c] = (uint16_t)std::lround(out[c] * 65535.0);
         wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
         ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);

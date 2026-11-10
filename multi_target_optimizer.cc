@@ -2870,17 +2870,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     fr.render_net_preview(prof.data, out.params, pv, pw, ph);
     const size_t npx = (size_t)pw * ph;
     tp.render = tone_descriptors(pv.data(), npx);
-    tp.targets = tone_targets(tp.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
-                              tp.pred_mean[ToneHead::kR9010]);
-    tp.curve = tone_solve(tp.render, tp.targets);
-    double chroma = 1.0;
-    for (int it = 0; it < kToneChromaRefinements; ++it) {
-      tp.curve.chroma = chroma;
-      const double got = tone_mean_chroma_after(pv.data(), npx, tp.curve);
-      chroma = std::clamp(chroma * (tp.render.Cmean / std::max(got, 1e-3)), kToneChromaLo, kToneChromaHi);
-    }
-    tp.curve.chroma = chroma;
+    tp.curve = tone_plan(tp.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
+                         tp.pred_mean[ToneHead::kR9010], pv.data(), npx, 1.0, &tp.targets);
     tp.chroma_after = tone_mean_chroma_after(pv.data(), npx, tp.curve);
+    tp.preview.swap(pv);
     tp.planned = true;
     if (opts.verbose) {
       std::cout << "Tone: L2 " << fixed((float)tp.render.L2, 1) << " -> " << fixed((float)tp.targets.L2, 1) << ", L98 "

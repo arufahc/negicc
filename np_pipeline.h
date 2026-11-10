@@ -243,6 +243,9 @@ struct Scan {
   // The white-light tone stage as convert applied it to the final image (CurveRefitResult::tone has the plan).
   bool tone_applied = false;
   ToneClip tone_clip;
+  ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)
+  ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
+  double tone_share = 1.0;         // and the share of the highlight and range moves kept
   std::vector<uint16_t> rolloff_frame;
   int rolloff_frame_w = 0, rolloff_frame_h = 0;
   double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;
