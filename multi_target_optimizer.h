@@ -357,7 +357,8 @@ struct OffsetScanResult {
 struct ToneStagePlan {
   bool planned = false;           // a curve was solved and the conversion applies it
   const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
-  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate) or "search" (the intent preview).
+  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate) or "final" (the final state's preview,
+  // one inference, when the scan did not run); "search" (the intent preview) only if that inference failed.
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
   ToneDescriptors render;         // the final render's preview before the stage

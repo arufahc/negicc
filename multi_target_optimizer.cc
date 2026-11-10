@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -2862,6 +2863,21 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   //    state closest to the export, else from the search's intent preview), the descriptors of the final render's
   //    preview, the curve between them and the chroma factor that keeps the mean chroma.
   ToneStagePlan& tp = out.tone;
+  // The heads read the image the stage will be applied to: the offset's winning candidate when the scan ran (it differs
+  // from the export by the standard error only); otherwise the final state's preview, rendered below for the
+  // descriptors anyway, costs one inference (the search's intent preview has the pre-fit colour).
+  std::vector<uint8_t> pv;
+  int pw = 0, ph = 0;
+  if (tone_head && encoding == ENCODE_SRGB) {
+    fr.render_net_preview(prof.data, out.params, pv, pw, ph);
+    if (std::strcmp(tp.features, "offset") != 0) {
+      std::vector<float> mu_f, sg_f, tf;
+      if (fr.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
+        tone_features.swap(tf);
+        tp.features = "final";
+      }
+    }
+  }
   if (!tone_head) {
     tp.skipped = "off";
   } else if (encoding != ENCODE_SRGB) {
@@ -2870,9 +2886,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
              !tone_head->run(tone_features.data(), tp.pred_mean, tp.pred_sd)) {
     tp.skipped = "features";
   } else {
-    std::vector<uint8_t> pv;
-    int pw = 0, ph = 0;
-    fr.render_net_preview(prof.data, out.params, pv, pw, ph);
     const size_t npx = (size_t)pw * ph;
     tp.render = tone_descriptors(pv.data(), npx);
     tp.curve = tone_plan(tp.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
