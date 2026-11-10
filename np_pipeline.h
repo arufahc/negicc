@@ -73,6 +73,11 @@ struct CachedSidecar {
   std::string curves_source;
   std::string input_curves_json_str;
   std::string intent_field_json_str;
+  // Its magenta-green offset (input_curves.offset) and tone curve (tone_stage.curve), when it applied them.
+  bool has_offset = false;
+  OffsetTables offset;
+  bool has_tone = false;
+  ToneCurve tone_curve;
 };
 
 // What the profile and the options decide before the scan is read.
@@ -101,6 +106,17 @@ struct Setup {
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
   std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
   ToneHead tone_head;                    // the white-light tone heads (--tone_stage on, where the fit runs)
+  // The magenta-green offset and the tone curve the conversion renders with: this run's curve fit's, a previous run's
+  // (the knobs on its sidecar) or given (--offset_scan theta:..., --tone_stage curve:...). Neither is searched or
+  // predicted again on a replay. The offset belongs to bracket offset_target_idx; offset_base_prof is that bracket's
+  // profile without it (curves composed, when there are curves), and offset_composed says its tables carry it.
+  bool has_offset = false;
+  OffsetTables offset;
+  int offset_target_idx = -1;
+  bool offset_composed = false;
+  ParsedFilmProfile offset_base_prof;
+  bool has_tone = false;
+  ToneCurve tone_curve;
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
   // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
   // empty (none).

@@ -284,14 +284,16 @@ int parse_options(int ac, char* av[], Options& o) {
           "picture reads too green or too magenta: a lattice of magenta-green offsets is scored against the intent "
           "field, the best few are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, "
           "moved one standard error toward magenta, is composed into the bracket's tables. Offsets that would make the "
-          "picture greener than Auto are not candidates.")
+          "picture greener than Auto are not candidates. theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a "
+          "sidecar's cli_equivalent) replays a recorded offset with --target, -E, --gain_g and --gain_b.")
     .default_value(std::string("on"));
   parser.add_argument("--tone_stage")
     .help("The white-light tone stage: on (default) or off. On, tone heads on DINOv3 features the fit already "
           "computed predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, "
           "and one monotone L* curve moves the final sRGB image all the way to the predicted shadow level and half "
           "way to the highlight level and range, holding the mid-tones and the mean chroma. Runs where the curve fit "
-          "runs, with -P srgb.")
+          "runs, with -P srgb. curve:black,white,gamma,contrast,chroma (a sidecar's cli_equivalent) replays a recorded "
+          "curve with --target, -E, --gain_g and --gain_b.")
     .default_value(std::string("on"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
@@ -307,7 +309,8 @@ int parse_options(int ac, char* av[], Options& o) {
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
-          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
+          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo; then kR,refR,u_loR for the "
+          "red highlight-cliff curve when the fit bent R). auto: as on wherever on "
           "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
           "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
           "and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket it chose, each "
@@ -437,9 +440,10 @@ int parse_options(int ac, char* av[], Options& o) {
     if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on";
       o.fit_curves_auto = fc[0] == "auto";
-    } else if (fc.size() == 8 || fc.size() == 10) {
-      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB.
-      float v[10];
+    } else if (fc.size() == 8 || fc.size() == 10 || (ref_first && (fc.size() == 11 || fc.size() == 13))) {
+      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB. Eleven or thirteen (the ref: form
+      // only): the red highlight-cliff curve's kR, refR and u_loR appended (the fit's cliff pass bends R too).
+      float v[13];
       for (size_t i = 0; i < fc.size(); ++i) {
         char* end = nullptr;
         v[i] = std::strtof(fc[i].c_str(), &end);
@@ -459,10 +463,20 @@ int parse_options(int ac, char* av[], Options& o) {
         o.input_curves.k[i] = v[at_ak + i * 2 + 1];
         o.input_curves.ref[i] = v[at_ref + i];
         o.input_curves.u_med[i] = v[at_u_med + i];
-        if (fc.size() == 10) o.input_curves.u_lo[i] = v[8 + i];
-        o.input_curves.hold = fc.size() == 10;
+        if (fc.size() == 10 || fc.size() == 13) o.input_curves.u_lo[i] = v[8 + i];
+        o.input_curves.hold = fc.size() == 10 || fc.size() == 13;
         if (!(o.input_curves.ref[i] > 0.0f)) {
           log_error("--fit_curves: refG and refB must be positive\n");
+          return 1;
+        }
+      }
+      if (fc.size() == 11 || fc.size() == 13) {
+        const size_t at_r = fc.size() - 3;
+        o.input_curves.k_r = v[at_r];
+        o.input_curves.ref_r = v[at_r + 1];
+        o.input_curves.u_lo_r = v[at_r + 2];
+        if (!(o.input_curves.ref_r > 0.0f)) {
+          log_error("--fit_curves: refR must be positive\n");
           return 1;
         }
       }
@@ -475,16 +489,40 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
   o.dino_backend = parser.get<std::string>("--dino_backend");
   o.neutral_head = parser.get<std::string>("--neutral_head");
-  auto on_off = [&](const char* name, bool& flag) {
+  // on, off, or recorded numbers after a prefix (which keeps a negative first number from reading as an option).
+  auto on_off = [&](const char* name, bool& flag, const char* prefix, int count, bool& given, double* out) {
     const std::string v = parser.get<std::string>(name);
-    if (v != "on" && v != "off") {
-      log_error("%s takes on or off, not '%s'\n", name, v.c_str());
-      return false;
+    if (v == "on" || v == "off") {
+      flag = v == "on";
+      return true;
     }
-    flag = v == "on";
-    return true;
+    const std::string pre = prefix;
+    if (v.compare(0, pre.size(), pre) == 0) {
+      std::stringstream ss(v.substr(pre.size()));
+      std::string item;
+      int k = 0;
+      while (std::getline(ss, item, ',')) {
+        char* end = nullptr;
+        const double x = std::strtod(item.c_str(), &end);
+        if (k >= count || item.empty() || !end || *end != '\0' || !std::isfinite(x)) {
+          k = -1;
+          break;
+        }
+        out[k++] = x;
+      }
+      if (k == count) {
+        flag = false;  // nothing is searched or predicted: the recorded values are replayed
+        given = true;
+        return true;
+      }
+    }
+    log_error("%s takes on, off or %s followed by %d comma-separated numbers, not '%s'\n", name, prefix, count,
+              v.c_str());
+    return false;
   };
-  if (!on_off("--offset_scan", o.offset_scan) || !on_off("--tone_stage", o.tone_stage)) return 1;
+  if (!on_off("--offset_scan", o.offset_scan, "theta:", 10, o.offset_replay_given, o.offset_replay) ||
+      !on_off("--tone_stage", o.tone_stage, "curve:", 5, o.tone_replay_given, o.tone_replay))
+    return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

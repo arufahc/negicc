@@ -505,6 +505,16 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       }
       c.hold = ic.value("hold", false);
       if (c.hold && !(ic["channels"]["G"].contains("u_lo") && ic["channels"]["B"].contains("u_lo"))) ok = false;
+      if (ok && ic["channels"].contains("R")) {  // the red highlight-cliff curve
+        const auto& r = ic["channels"]["R"];
+        ok = r.is_object() && r.contains("k") && r.contains("ref") && r.contains("u_lo");
+        if (ok) {
+          c.k_r = r["k"].get<float>();
+          c.ref_r = r["ref"].get<float>();
+          c.u_lo_r = r["u_lo"].get<float>();
+          ok = std::isfinite(c.k_r) && c.ref_r > 0.0f && std::isfinite(c.u_lo_r);
+        }
+      }
       for (int i = 0; ok && i < 2; ++i) {
         ok = std::isfinite(c.a[i]) && std::isfinite(c.k[i]) && std::isfinite(c.u_med[i]) && std::isfinite(c.u_lo[i]);
       }
@@ -517,6 +527,51 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     }
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
+    }
+    // The magenta-green offset and the tone curve it applied: replayed as recorded (the knobs act on top).
+    auto numbers = [](const nlohmann::ordered_json& a, int n, double* out) {
+      if (!a.is_array() || (int)a.size() != n) return false;
+      for (int i = 0; i < n; ++i) {
+        if (!a[i].is_number()) return false;
+        out[i] = a[i].get<double>();
+      }
+      return true;
+    };
+    if (j.contains("input_curves") && j["input_curves"].is_object()) {
+      const auto& ic = j["input_curves"];
+      if (ic.contains("offset") && ic["offset"].is_object() && ic["offset"].value("applied", false)) {
+        const auto& of = ic["offset"];
+        OffsetTables& t = s.cached_sidecar.offset;
+        double d[3], fb[3];
+        if (!numbers(of.value("theta", nlohmann::ordered_json()), 4, t.theta) ||
+            !numbers(of.value("piv", nlohmann::ordered_json()), 3, t.piv) ||
+            !numbers(of.value("diag", nlohmann::ordered_json()), 3, d) ||
+            !numbers(of.value("film_base", nlohmann::ordered_json()), 3, fb))
+          return why = "its magenta-green offset is not valid", false;
+        for (int c = 0; c < 3; ++c) {
+          t.diag[c] = (float)d[c];
+          t.film_base[c] = (float)fb[c];
+        }
+        s.cached_sidecar.has_offset = true;
+      }
+    }
+    if (j.contains("tone_stage") && j["tone_stage"].is_object() && j["tone_stage"].value("applied", false)) {
+      const auto& cv = j["tone_stage"].value("curve", nlohmann::ordered_json());
+      double q[5];
+      const char* keys[5] = {"black", "white", "gamma", "contrast", "chroma"};
+      bool ok = cv.is_object();
+      for (int i = 0; ok && i < 5; ++i) {
+        ok = cv.contains(keys[i]) && cv[keys[i]].is_number();
+        if (ok) q[i] = cv[keys[i]].get<double>();
+      }
+      if (!ok) return why = "its tone curve is not valid", false;
+      ToneCurve& tc = s.cached_sidecar.tone_curve;
+      tc.black = q[0];
+      tc.white = q[1];
+      tc.gamma = q[2];
+      tc.contrast = q[3];
+      tc.chroma = q[4];
+      s.cached_sidecar.has_tone = true;
     }
     return true;
   }
@@ -875,6 +930,36 @@ int prepare(const Options& o, Setup& s) {
     s.input_curves_source = "cli";
   }
 
+  // A recorded magenta-green offset and tone curve (a sidecar's cli_equivalent) replay a recorded result like the
+  // recorded curves: on the --target bracket at the given E, g and b, with nothing searched or predicted.
+  if (o.offset_replay_given || o.tone_replay_given) {
+    if (!s.is_bundle || !s.white_light || s.has_crosstalk || s.manual_target_idx < 0 || !o.exposure_given ||
+        !o.gain_g_given || !o.gain_b_given) {
+      log_error("--offset_scan theta:... and --tone_stage curve:... replay a white-light result: they need a d65 "
+                "bundle, --target, -E, --gain_g and --gain_b (the sidecar's cli_equivalent gives all of them)\n");
+      return 1;
+    }
+    if (o.offset_replay_given) {
+      const double* v = o.offset_replay;
+      OffsetTables& t = s.offset;
+      for (int k = 0; k < 4; ++k) t.theta[k] = v[k];
+      for (int c = 1; c < 3; ++c) {
+        t.piv[c] = v[3 + c];
+        t.diag[c] = (float)v[5 + c];
+        t.film_base[c] = (float)v[7 + c];
+      }
+      s.has_offset = true;
+      s.offset_target_idx = s.manual_target_idx;
+      s.offset_base_prof = bundle.targets[s.offset_target_idx].film_prof;  // the recorded curves already composed
+      s.offset_base_prof.rebind_pointers();
+    }
+    if (o.tone_replay_given) {
+      const double* q = o.tone_replay;
+      s.tone_curve = {q[0], q[1], q[2], q[3], q[4]};
+      s.has_tone = true;
+    }
+  }
+
   // --brightness, --tint and --warmth on a previous run's output (<output>.json): its Auto or DINOv3 result is the
   // base the knobs move, so neither the backbone nor the search runs again; its fitted curves are replayed on its
   // bracket.
@@ -892,6 +977,17 @@ int prepare(const Options& o, Setup& s) {
       s.input_curves_source = s.cached_sidecar.curves_source;
     }
     s.fit_curves_auto_active = false;  // the curves (or none) come from the previous run
+    if (s.cached_sidecar.has_offset && s.cached_sidecar.target_idx >= 0) {
+      s.has_offset = true;
+      s.offset = s.cached_sidecar.offset;
+      s.offset_target_idx = s.cached_sidecar.target_idx;
+      s.offset_base_prof = bundle.targets[s.offset_target_idx].film_prof;
+      s.offset_base_prof.rebind_pointers();
+    }
+    if (s.cached_sidecar.has_tone) {
+      s.has_tone = true;
+      s.tone_curve = s.cached_sidecar.tone_curve;
+    }
   } else if (s.use_dino) {
     const EmbeddedFile* trt = find_embedded_backbone(true);
     const EmbeddedFile* onnx = find_embedded_backbone(false);
@@ -1040,6 +1136,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
+    // A replayed magenta-green offset: composed into the bracket's tables at the base E, g and b (a fit's own run has
+    // it there already), before the knobs' grey and the roll-off are measured through them.
+    const bool offset_here = s.has_offset && target_idx == s.offset_target_idx;
+    if (offset_here && !s.offset_composed) {
+      compose_offset_tables(bundle.targets[target_idx].film_prof, s.offset, base_e, base_g, base_b);
+      s.offset_composed = true;
+    }
     if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
@@ -1063,7 +1166,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // gains hold still (each within kKnobTol of the previous pass, at most kMaxKnobPasses): the knobs solved on the
       // re-anchored profile for the same grey (the one the base's profile renders as neutral L* 50), and the curves
       // re-anchored at that result. Each pass cuts the miss about fourfold.
-      if (target_idx == s.curves_base_idx && s.input_curves.active()) {
+      //
+      // The magenta-green offset is a density change on the film, so the knobs rebuild its tables at their E, g and b
+      // the same way, in the same passes.
+      const bool curves_here = target_idx == s.curves_base_idx && s.input_curves.active();
+      if (curves_here || offset_here) {
         constexpr int kMaxKnobPasses = 8;
         constexpr float kKnobTol = 1e-4f;
         ParsedFilmProfile& prof = bundle.targets[target_idx].film_prof;
@@ -1075,12 +1182,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
         auto reanchor_at = [&](const float to[3]) {
-          if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
-                                     s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
-                                     scan.knob_curves, scale)) {
-            return false;
+          if (curves_here) {
+            if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
+                                       s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
+                                       scan.knob_curves, scale)) {
+              return false;
+            }
+            apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
+          } else {
+            prof = s.offset_base_prof;
+            prof.rebind_pointers();
           }
-          apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
+          if (offset_here) compose_offset_tables(prof, s.offset, to[0], to[1], to[2]);
           return true;
         };
         const float to1[3] = {e, g, b};
@@ -1107,12 +1220,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         e = k2.e;
         g = k2.g;
         b = k2.b;
-        scan.has_knob_curves = true;
-        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey L* %.3f "
+        scan.has_knob_curves = curves_here;
+        log_info("Input tables re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s%s); the grey L* %.3f "
                  "a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, %+.4f "
                  "stop, before them)\n",
                  e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
-                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "", k2.grey_lab[0],
+                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "",
+                 offset_here ? ", magenta-green offset rebuilt" : "", k2.grey_lab[0],
                  k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
@@ -1292,6 +1406,20 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           }
           s.input_curves = s.curve_fit.fit.curves;
           s.input_curves_source = o.fit_curves ? "fit" : "auto";
+          // The fit composed its magenta-green offset into the bracket's tables already; the knobs rebuild them at
+          // their own E, g and b (from the curves, else from the bracket's own tables).
+          if (s.curve_fit.offset.ran) {
+            s.has_offset = true;
+            s.offset = s.curve_fit.offset.tables;
+            s.offset_target_idx = scan.auto_res.target_idx;
+            s.offset_composed = true;
+            s.offset_base_prof = s.curves_base_prof;
+            s.offset_base_prof.rebind_pointers();
+          }
+          if (s.curve_fit.tone.planned) {
+            s.has_tone = true;
+            s.tone_curve = s.curve_fit.tone.curve;
+          }
           scan.has_curve_params = true;
           scan.curve_params = s.curve_fit.params;
         }
@@ -2126,12 +2254,15 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
   backend.convert(out, export_pc, c.merged_matrix, scan.image());
-  // The white-light tone stage (tone_stage.h), as the curve fit planned it, on the final sRGB image.
+  // The white-light tone stage (tone_stage.h) on the final sRGB image: the curve fit's plan, or the recorded curve on a
+  // replay. Under the knobs the recorded curve is applied after them, as recorded: a fixed monotone map on top of the
+  // knobbed render (zero knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against
+  // the knobbed render, which would pull the shadow level back to the prediction and undo the knob.
   scan.tone_applied = false;
-  if (s.curve_fit.tone.planned && out.encoding == ENCODE_SRGB && !s.has_cached_sidecar) {
+  if (s.has_tone && out.encoding == ENCODE_SRGB) {
     LibRaw* tp = scan.proc.get();
     const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
-    const ToneCurve& q = s.curve_fit.tone.curve;
+    const ToneCurve& q = s.tone_curve;
     scan.tone_clip = !scan.rgb3.empty() ? apply_tone_stage(scan.rgb3.data(), npx, 3, q)
                                         : apply_tone_stage(&tp->imgdata.image[0][0], npx, 4, q);
     scan.tone_applied = true;
@@ -2266,14 +2397,16 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
   sc.t_analysis_ms = scan.t_analysis_ms;
+  sc.offset_tables = s.has_offset ? &s.offset : nullptr;
+  sc.tone_curve = s.has_tone ? &s.tone_curve : nullptr;
+  sc.tone_applied = scan.tone_applied;
+  sc.tone_clip = scan.tone_clip;
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
     sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
-    sc.tone_applied = scan.tone_applied;
-    sc.tone_clip = scan.tone_clip;
   }
   write_json_sidecar(sc);
   return 0;

@@ -249,9 +249,18 @@ rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`
 `input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit),
 `input_curves.offset` the magenta-green setting (`s` applied, `s_min`, its standard error `se`, the density change
 `theta`, the candidates and the inferences), and `tone_stage` the heads' predictions, the render's descriptors before
-the stage, the targets, the curve and the clipping before and after. A replay of a sidecar (`--fit_curves` with
-recorded numbers, or the knobs on a previous run) renders the recorded curves only: the magenta-green setting and the
-tone stage are not replayed.
+the stage, the targets, the curve and the clipping before and after.
+
+A replay renders all of it from the recorded numbers, with nothing searched, fitted or predicted again: the
+sidecar's `cli_equivalent` carries the curves (`--fit_curves ref:...`, with the red highlight-cliff curve when the fit
+bent R), the magenta-green offset (`--offset_scan theta:...`: the density change, and per channel the median density
+and the film base's place on the input table) and the tone curve (`--tone_stage curve:...`), and `--brightness`,
+`--tint` and `--warmth` on a previous run's output read the same numbers from its sidecar. Without knobs both give the
+export back exactly. The knobs move E, g and b; the curves and the offset are density changes on the film, so their
+tables are rebuilt at the knobs' E, g and b, and the knobs' grey is solved through them. The tone curve is applied
+after the knobs, as recorded: a fixed monotone map on the knobbed image, so a brighter knob gives a brighter result,
+rather than a curve re-solved against the knobbed render, which would pull the shadow level back to the prediction
+and undo the knob.
 
 ## More examples
 
@@ -293,8 +302,8 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
 | `--neutral_head on\|off\|<file>` | The neutral-patch head that weights the curve fit's neutral anchors: the built-in one (default), none (no anchors: the fit keeps Auto's colour), or another `neutral_head.bin`. |
-| `--offset_scan on\|off` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). |
-| `--tone_stage on\|off` | The learned lightness curve on the final image (white light with `-P srgb`; default on). |
+| `--offset_scan on\|off\|theta:<numbers>` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). Recorded numbers replay it (a sidecar's `cli_equivalent`). |
+| `--tone_stage on\|off\|curve:<numbers>` | The learned lightness curve on the final image (white light with `-P srgb`; default on). Recorded numbers replay it. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with

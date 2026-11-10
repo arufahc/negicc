@@ -102,7 +102,10 @@ struct Sidecar {
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;
-  // Whether the conversion applied curve_fit's tone stage plan to the final image, and the clipping it measured.
+  // The magenta-green offset and the tone curve the conversion rendered with (curve_fit's, or replayed; null: none),
+  // whether the tone curve was applied to the final image, and the clipping it measured.
+  const OffsetTables* offset_tables = nullptr;
+  const ToneCurve* tone_curve = nullptr;
   bool tone_applied = false;
   ToneClip tone_clip;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);

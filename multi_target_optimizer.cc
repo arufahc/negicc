@@ -2022,11 +2022,12 @@ constexpr double kOffsetProbe[4] = {0.01, 0.01, 0.05, 0.05};
 constexpr double kOffsetRidge = 1e-2;
 constexpr double kOffsetMaxDensity = 0.3, kOffsetMaxContrast = 0.6;
 
-// The fitted tables with the density change theta = (d_G, d_B, k_G, k_B) composed in front of G and B (R is the
-// reference): a value's density above the film base D becomes D + d + k (D - P), P the frame's median cell density
-// of that channel (piv).
-static void offset_tables(const ProfileData& fitted, const float* merged, float e, float g, float b,
-                          const float* film_base, const double th[4], const double piv[3], std::vector<float> out[3]) {
+// The fitted tables with t's density change composed in front of G and B (R is the reference): a value's density
+// above the film base D becomes D + d + k (D - P), P the frame's median cell density of that channel (piv).
+static void offset_tables(const ProfileData& fitted, const OffsetTables& t, float e, float g, float b,
+                          std::vector<float> out[3]) {
+  const double* th = t.theta;
+  const double* piv = t.piv;
   const float gain[3] = {e, e * g, e * b};
   for (int c = 0; c < 3; ++c) {
     const int n = fitted.in_trc_size[c];
@@ -2034,7 +2035,7 @@ static void offset_tables(const ProfileData& fitted, const float* merged, float 
     if (c == 0 || n < 2) continue;
     const double d = th[c - 1], k = th[c + 1];
     if (d == 0.0 && k == 0.0) continue;
-    const double v_base = (double)gain[c] * merged[4 * c] * film_base[c] / 65535.0;
+    const double v_base = (double)gain[c] * t.diag[c] * t.film_base[c] / 65535.0;
     if (!(v_base > 0)) continue;
     for (int j = 0; j < n; ++j) {
       const double v = (double)j / (n - 1);
@@ -2201,13 +2202,21 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     std::nth_element(d.begin(), d.begin() + N / 2, d.end());
     piv[c] = d[N / 2];
   }
+  OffsetTables frame_t;  // the frame's part; theta varies
+  for (int c = 0; c < 3; ++c) {
+    frame_t.piv[c] = piv[c];
+    frame_t.diag[c] = merged[4 * c];
+    frame_t.film_base[c] = cf.film_base[c];
+  }
   const float x0 = x_hi;
   struct Tables {
     std::vector<float> in[3];
     ProfileData pd;
   };
   auto build = [&](const double th[4], float ee, Tables& T) {
-    offset_tables(fitted, merged, ee, g, b, cf.film_base, th, piv, T.in);
+    OffsetTables t = frame_t;
+    for (int k = 0; k < 4; ++k) t.theta[k] = th[k];
+    offset_tables(fitted, t, ee, g, b, T.in);
     T.pd = fitted;
     for (int c = 0; c < 3; ++c) T.pd.in_trc[c] = T.in[c].data();
   };
@@ -2481,11 +2490,19 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   build(th, ee, T);
   for (int c = 0; c < 3; ++c) prof.in_trc[c] = T.in[c];
   prof.rebind_pointers();
-  for (int k = 0; k < 4; ++k) R.theta[k] = th[k];
+  R.tables = frame_t;
+  for (int k = 0; k < 4; ++k) R.tables.theta[k] = th[k];
   e = ee;
   x_hi = xx;
   R.ran = true;
   R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+
+void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float e, float g, float b) {
+  std::vector<float> in[3];
+  offset_tables(prof.data, t, e, g, b, in);
+  for (int c = 0; c < 3; ++c) prof.in_trc[c] = in[c];
+  prof.rebind_pointers();
 }
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and

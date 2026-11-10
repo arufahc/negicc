@@ -318,6 +318,22 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
+// What the magenta-green offset's tables are made from: the density change theta = (d_G, d_B, k_G, k_B) and, per
+// channel, the frame's median cell density above the film base (piv) and the two factors that place the film base on
+// the input table (v_base = gain x diag x film_base / 65535, gain the channel's E, E g or E b). A value's density
+// above the film base, D = -log10(v / v_base), does not depend on the gains, so the same numbers rebuild the export's
+// tables at the E, g and b a replay or the knobs render at. R is the reference and is not changed.
+struct OffsetTables {
+  double theta[4] = {0, 0, 0, 0};
+  double piv[3] = {0, 0, 0};
+  float diag[3] = {0, 0, 0};       // the diagonal of the search's input matrix (merged[0], merged[4], merged[8])
+  float film_base[3] = {0, 0, 0};  // the film base the curves are anchored on (CurveFrame::film_base)
+};
+
+// prof's G and B input tables (its current ones: the bracket's, composed with any curves) with t's density change
+// composed in front, at E, g and b, in place.
+void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float e, float g, float b);
+
 // The magenta-green offset the white-light fit's result takes from the network (fit_input_curves_after_search, step
 // 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
 struct OffsetScanResult {
@@ -326,7 +342,7 @@ struct OffsetScanResult {
   double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
   double se = 0.0;      // the bootstrap standard error of the residual's minimum
   double s = 0.0;       // the offset applied: s_min + se (one standard error toward magenta)
-  double theta[4] = {0, 0, 0, 0};  // the density change it is: d_G, d_B (D) and k_G, k_B (contrast about the median)
+  OffsetTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
   int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
   float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field
   // The rendered candidates: s, the residual predicted from the pivot's field, the residual against their own field.

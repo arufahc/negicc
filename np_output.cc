@@ -331,6 +331,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
     if (u_lo_known) ch[names[i]]["u_lo"] = n9(c.u_lo[i]);
   }
+  // The red highlight-cliff curve (the fit's cliff pass): without it a replay derived R's from G's and missed it.
+  if (c.k_r != 0.0f) ch["R"] = {{"k", n9(c.k_r)}, {"ref", n9(c.ref_r)}, {"u_lo", n9(c.u_lo_r)}};
   // Whether the export renders through curves. Not when the fit fell back (fallback: clip, shape or
   // intent_lightness, as remeter.fallback): the bracket's own tables, so no channels and no hold. Before, the fallback's
   // identity curves were written as channels (a = k = 0, with an anchor) and replayed as recorded curves.
@@ -419,9 +421,13 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
     // s and theta in full (17 digits), so the export's tables can be rebuilt from them exactly.
     auto n17 = [](double v) { return num(v, "%.17g"); };
+    const OffsetTables& ot = os.tables;
     j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
                                         {"theta",
-                                         {n17(os.theta[0]), n17(os.theta[1]), n17(os.theta[2]), n17(os.theta[3])}},
+                                         {n17(ot.theta[0]), n17(ot.theta[1]), n17(ot.theta[2]), n17(ot.theta[3])}},
+                                        {"piv", {n17(ot.piv[0]), n17(ot.piv[1]), n17(ot.piv[2])}},
+                                        {"diag", {n9(ot.diag[0]), n9(ot.diag[1]), n9(ot.diag[2])}},
+                                        {"film_base", {n9(ot.film_base[0]), n9(ot.film_base[1]), n9(ot.film_base[2])}},
                                         {"lattice", os.lattice}, {"lattice_kept", os.lattice_kept},
                                         {"residual_pivot", n9(os.residual_pivot)},
                                         // [s, residual predicted from the pivot's field, residual on its own field]
@@ -437,7 +443,19 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["max_dev_stops"] = nullptr;
     j["render"] = nullptr;
     j["remeter"] = nullptr;
-    j["offset"] = nullptr;
+    // A replayed offset (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
+    if (const OffsetTables* ot = sc.offset_tables) {
+      auto n17 = [](double v) { return num(v, "%.17g"); };
+      auto n9 = [](double v) { return num(v, "%.9g"); };
+      j["offset"] = {{"applied", true},
+                     {"replayed", true},
+                     {"theta", {n17(ot->theta[0]), n17(ot->theta[1]), n17(ot->theta[2]), n17(ot->theta[3])}},
+                     {"piv", {n17(ot->piv[0]), n17(ot->piv[1]), n17(ot->piv[2])}},
+                     {"diag", {n9(ot->diag[0]), n9(ot->diag[1]), n9(ot->diag[2])}},
+                     {"film_base", {n9(ot->film_base[0]), n9(ot->film_base[1]), n9(ot->film_base[2])}}};
+    } else {
+      j["offset"] = nullptr;
+    }
   }
   return j;
 }
@@ -587,7 +605,25 @@ bool write_json_sidecar(const Sidecar& sc) {
     for (float v : {c.ref[0], c.ref[1], c.u_med[0], c.u_med[1], c.a[0], c.k[0], c.a[1], c.k[1]})
       v8 += (v8.size() > 4 ? "," : "") + num_str(v, "%.9g");
     if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
+    if (c.k_r != 0.0f)  // the red highlight-cliff curve
+      v8 += "," + num_str(c.k_r, "%.9g") + "," + num_str(c.ref_r, "%.9g") + "," + num_str(c.u_lo_r, "%.9g");
     cli.push_back(v8);
+  }
+  // The magenta-green offset's tables and the tone curve, replayed as recorded (G and B numbers of OffsetTables;
+  // theta and piv in full).
+  if (const OffsetTables* ot = sc.offset_tables) {
+    std::string v = "theta:";
+    for (double x : {ot->theta[0], ot->theta[1], ot->theta[2], ot->theta[3], ot->piv[1], ot->piv[2]})
+      v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
+    for (float x : {ot->diag[1], ot->diag[2], ot->film_base[1], ot->film_base[2]}) v += "," + num_str(x, "%.9g");
+    cli.insert(cli.end(), {"--offset_scan", v});
+  }
+  if (sc.tone_curve && sc.tone_applied) {
+    const ToneCurve& q = *sc.tone_curve;
+    std::string v = "curve:";
+    for (double x : {q.black, q.white, q.gamma, q.contrast, q.chroma})
+      v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
+    cli.insert(cli.end(), {"--tone_stage", v});
   }
   j["cli_equivalent"] = cli;
 
@@ -685,6 +721,19 @@ bool write_json_sidecar(const Sidecar& sc) {
     } else {
       j["tone_stage"] = {{"applied", false}, {"skipped", tp.skipped ? tp.skipped : ""}};
     }
+  } else if (const ToneCurve* q = sc.tone_curve) {
+    // A replayed curve (a previous run's, or given): the curve and the clipping on this image.
+    j["tone_stage"] = {
+        {"applied", sc.tone_applied},
+        {"replayed", true},
+        {"curve", {{"black", num(q->black, "%.17g")}, {"white", num(q->white, "%.17g")},
+                   {"gamma", num(q->gamma, "%.17g")}, {"contrast", num(q->contrast, "%.17g")},
+                   {"chroma", num(q->chroma, "%.17g")}}},
+        {"clip", sc.tone_applied ? ordered_json{{"white_before", num(sc.tone_clip.white_before, "%.6f")},
+                                                {"white_after", num(sc.tone_clip.white_after, "%.6f")},
+                                                {"black_before", num(sc.tone_clip.black_before, "%.6f")},
+                                                {"black_after", num(sc.tone_clip.black_after, "%.6f")}}
+                                 : ordered_json(nullptr)}};
   } else {
     j["tone_stage"] = nullptr;
   }
