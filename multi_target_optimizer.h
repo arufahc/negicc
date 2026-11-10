@@ -343,6 +343,9 @@ struct OffsetScanResult {
   double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
   double se = 0.0;      // the bootstrap standard error of the residual's minimum
   double s = 0.0;       // the offset applied: s_min + se (one standard error toward magenta)
+  bool trim_capped = false;  // kOffsetTrimCap shortened s from s_uncapped (anchors' confidence trim_conf)
+  double s_uncapped = 0.0;
+  double trim_conf = 0.0;
   OffsetTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
   int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
   float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field

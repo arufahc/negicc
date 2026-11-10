@@ -2023,12 +2023,13 @@ constexpr double kOffsetReadoutSE = 1.0;     // the pick moves this many standar
 // Test only, off: no scan when the joint fit settled for lack of neutral evidence (the neutral head's conf at or below
 // 1e-4, the fit's own settle test), e.g. a blank or near-uniform frame, where the field alone would set the trim.
 constexpr bool kOffsetScanNeedsEvidence = false;
-// Test only, off: the trim may not move confident neutrals away from neutral. The neutral cells' p^2-weighted mean a*
-// on the grid model (cells Auto renders at L* 2..92) may end at most kOffsetTrimCapTol / ((conf - 0.5) / 0.5) further
-// from 0 than at the fitted state (1 a* at conf 1, 2 at 0.75; no cap at conf 0.5 or below, or below
-// kGreenGuardMinMass of evidence); a larger trim is shortened toward 0 until it does.
-constexpr bool kOffsetTrimCap = false;
+// The trim may not move confident neutrals away from neutral. With c = the neutral head's conf x min(1, evidence /
+// kOffsetTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
+// end at most kOffsetTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
+// c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
+constexpr bool kOffsetTrimCap = true;
 constexpr double kOffsetTrimCapTol = 1.0;
+constexpr double kOffsetTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
 // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
 // cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
 // and the bounds of the density change.
@@ -2521,7 +2522,11 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       }
       s_final = s_ok;
     }
-    std::cout << "Offset trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
+    R.trim_capped = s_final != s_uncapped;
+    R.s_uncapped = s_uncapped;
+    R.trim_conf = anchor_conf;
+    if (R.trim_capped)
+      std::cout << "Offset trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
                 << " at the fit, " << fixed(anchor_at(s_uncapped), 2, true) << " at s " << fixed(s_uncapped, 2, true)
                 << ", limit " << fixed(lim, 2) << ": s " << fixed(s_final, 2, true) << " (anchors "
                 << fixed(anchor_at(s_final), 2, true) << ")\n";
@@ -2877,11 +2882,13 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.offset.skipped = "evidence";
     if (opts.verbose) std::cout << "Offset: not run (evidence)\n";
   } else if (offset_scan_on) {
+    const float trim_conf =
+        out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kOffsetTrimCapMass);
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
     offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
                 e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
-                neutral_p_all, out.neutral_auto.conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995,
-                scan_features, out.offset);
+                neutral_p_all, trim_conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features,
+                out.offset);
     if (out.offset.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
       tone_features.swap(scan_features);
       out.tone.features = "offset";

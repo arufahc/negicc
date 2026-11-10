@@ -434,6 +434,9 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     auto n17 = [](double v) { return num(v, "%.17g"); };
     const OffsetTables& ot = os.tables;
     j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
+                                        {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
+                                                                                  {"conf", n9(os.trim_conf)}}
+                                                                    : ordered_json(nullptr)},
                                         {"theta",
                                          {n17(ot.theta[0]), n17(ot.theta[1]), n17(ot.theta[2]), n17(ot.theta[3])}},
                                         {"piv", {n17(ot.piv[0]), n17(ot.piv[1]), n17(ot.piv[2])}},
