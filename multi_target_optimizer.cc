@@ -858,6 +858,7 @@ class SearchFrame {
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
+    cfg.wide_pullback_grids = !bundle_.has_crosstalk;
     if (pullback_search) {
       Enclosure enc;
       const float g_scale = bundle_.has_crosstalk ? 1.0f : e_norm_;
@@ -1732,17 +1733,20 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
+      // On white light the re-search runs only when the next bracket (chosen + 1) was competitive in the shared-intent
+      // screening pass, over chosen and chosen + 1 alone, and its result must keep the clip fallback's residual
+      // tolerance of chosen (the B5 port). TriLED keeps the station's re-search over every metered bracket, for parity.
       float chosen_screen_loss = 0.0f;
       bool found_chosen_screen = false;
-      bool adj_screen_ok = false;
-      for (const auto& s : screening) {
+      bool adj_screen_ok = !white_light;
+      if (white_light) for (const auto& s : screening) {
         if (s.result.target_idx == chosen.target_idx) {
           chosen_screen_loss = s.result.intent_loss;
           found_chosen_screen = true;
           break;
         }
       }
-      if (found_chosen_screen) {
+      if (white_light && found_chosen_screen) {
         for (const auto& s : screening) {
           if (s.result.target_idx == chosen.target_idx + 1 &&
               s.result.intent_loss <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen_screen_loss) {
@@ -1753,12 +1757,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
       // The re-search window of each metered bracket: its calibrated range united with the infeasible window
       // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
-      // so the pullback can reach the darker-than-metered side the first search could not. Only run when the next
-      // bracket (chosen + 1) was competitive in the shared-intent screening pass.
+      // so the pullback can reach the darker-than-metered side the first search could not.
       std::vector<Depth> depths_res;
       if (adj_screen_ok) {
         for (const auto& c : pool) {
-          if (c.target_idx < chosen.target_idx || c.target_idx > chosen.target_idx + 1) continue;
+          if (white_light && (c.target_idx < chosen.target_idx || c.target_idx > chosen.target_idx + 1)) continue;
           const auto d = std::find_if(depths.begin(), depths.end(),
                                       [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
           if (d == depths.end()) continue;
@@ -1791,7 +1794,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         }
       }
       std::vector<FixedPointResult> res_adaptive;
-      if (!depths_res.empty() && !tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive))
+      if ((!white_light || !depths_res.empty()) &&
+          !tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive))
         return false;
       if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
@@ -1812,7 +1816,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
         const float exc_res_242 = max_excess(hc_res_242);
         if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
-            fp_res.residual <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen.residual &&
+            (!white_light || fp_res.residual <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen.residual) &&
             (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
           chosen = fp_res;
           params = p_res;
