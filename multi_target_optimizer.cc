@@ -2560,6 +2560,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       neutral_p = fr.last_neutral_p();
       tone_features = fr.last_tone_features();
       out.intent_repredicted = true;
+      out.guard_p_source = "refit";
     }
   }
 

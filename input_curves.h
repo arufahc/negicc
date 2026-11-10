@@ -444,6 +444,11 @@ struct GreenGuard {
   float auto_a[2] = {0.0f, 0.0f};    // Auto's mean a* (g0, b0, no curves, E solved)
   float fit_a[2] = {0.0f, 0.0f};     // the fit's mean a* at its result (before the highlight-cliff pass)
   bool binding = false;              // a counted term ended more than the tolerance greener than Auto: the hinge pulled
+  // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ([2, 22],
+  // (22, 45], (45, 70], (70, 92)), the band's cells and evidence mass. A band with no cells has zeros.
+  int band_cells[4] = {0, 0, 0, 0};
+  float band_mass[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float band_auto_a[4][2] = {}, band_fit_a[4][2] = {};
 };
 
 struct JointCurveFit {
@@ -1226,6 +1231,34 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       out.guard.auto_a[k] = (float)guard_ref[k];
       out.guard.fit_a[k] = (float)v[k];
       if (out.guard.counted[k] && guard_ref[k] - kGreenGuardTolAb - v[k] > 0.0) out.guard.binding = true;
+    }
+    // Per band of Auto's render, for the sidecar.
+    const InputCurves c_auto = model.anchored(InputCurves{}, e, g0, b0);
+    const InputCurves c_fit = model.anchored(shape_of(p), e, p[0], p[1]);
+    double s[4][4] = {}, n[4] = {}, w[4] = {};
+    for (int i = 0; i < f.n; ++i) {
+      if (!guard_in[i]) continue;
+      const Lab la = model.cell_lab(i, e, g0, b0, c_auto), lf = model.cell_lab(i, e, p[0], p[1], c_fit);
+      if (!std::isfinite(la.a) || !std::isfinite(lf.a)) continue;
+      const int bd = la.L <= 22.0f ? 0 : la.L <= 45.0f ? 1 : la.L <= 70.0f ? 2 : 3;
+      n[bd] += 1.0;
+      w[bd] += guard_pw[i];
+      s[bd][0] += la.a;
+      s[bd][1] += guard_pw[i] * la.a;
+      s[bd][2] += lf.a;
+      s[bd][3] += guard_pw[i] * lf.a;
+    }
+    for (int bd = 0; bd < 4; ++bd) {
+      out.guard.band_cells[bd] = (int)n[bd];
+      out.guard.band_mass[bd] = (float)w[bd];
+      if (n[bd] > 0) {
+        out.guard.band_auto_a[bd][0] = (float)(s[bd][0] / n[bd]);
+        out.guard.band_fit_a[bd][0] = (float)(s[bd][2] / n[bd]);
+      }
+      if (w[bd] > 0) {
+        out.guard.band_auto_a[bd][1] = (float)(s[bd][1] / w[bd]);
+        out.guard.band_fit_a[bd][1] = (float)(s[bd][3] / w[bd]);
+      }
     }
   }
 

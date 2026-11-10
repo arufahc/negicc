@@ -419,8 +419,10 @@ struct CurveRefitResult {
   bool neutral_anchors = false;
   // What the slope shrink and offset gate decided on those anchors (JointCurveModel::decisions).
   negicc::NeutralTargetDecisions neutral_decisions;
-  // The never-greener guard of the last fit pass (negicc::GreenGuard).
+  // The never-greener guard of the last fit pass (negicc::GreenGuard), and whose p it weighted by: "search" (the
+  // search's chosen preview) or "refit" (predicted again at the search's final parameters, intent_repredicted).
   negicc::GreenGuard guard;
+  const char* guard_p_source = "search";
   // Step 4, the network's magenta-green offset, and the tone stage's plan.
   OffsetScanResult offset;
   ToneStagePlan tone;

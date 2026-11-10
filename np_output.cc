@@ -408,11 +408,22 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"offset_gate", f->neutral_decisions.offset_gate}}},
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
-                    {"guard", ordered_json{{"tol", n9(negicc::kGreenGuardTolAb)},
-                                           {"counted", {f->guard.counted[0], f->guard.counted[1]}},
-                                           {"auto_a", {n9(f->guard.auto_a[0]), n9(f->guard.auto_a[1])}},
-                                           {"fit_a", {n9(f->guard.fit_a[0]), n9(f->guard.fit_a[1])}},
-                                           {"binding", f->guard.binding}}},
+                    {"guard", [&] {
+                       const negicc::GreenGuard& gd = f->guard;
+                       ordered_json bands = ordered_json::array();
+                       for (int bd = 0; bd < 4; ++bd)
+                         bands.push_back({{"cells", gd.band_cells[bd]}, {"mass", n9(gd.band_mass[bd])},
+                                          {"auto_a", {n9(gd.band_auto_a[bd][0]), n9(gd.band_auto_a[bd][1])}},
+                                          {"fit_a", {n9(gd.band_fit_a[bd][0]), n9(gd.band_fit_a[bd][1])}}});
+                       return ordered_json{{"tol", n9(negicc::kGreenGuardTolAb)},
+                                           {"counted", {gd.counted[0], gd.counted[1]}},
+                                           {"auto_a", {n9(gd.auto_a[0]), n9(gd.auto_a[1])}},
+                                           {"fit_a", {n9(gd.fit_a[0]), n9(gd.fit_a[1])}},
+                                           {"binding", gd.binding},
+                                           {"p_source", f->guard_p_source},
+                                           // Per L* band of Auto's render (diagnostic): [2,22], 45, 70, 92.
+                                           {"bands", bands}};
+                     }()},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
     // Step 4, the network's magenta-green offset (remeter's e and x_hi are after it).
