@@ -528,6 +528,11 @@ class JointCurveModel {
   // Endpoints: the evidence mass (sum of p^2) in the darkest band (L* <= 22) that, with some mass in the brightest
   // band (or a darker band this heavy alone), lets the offset target take the anchors' whole cast (see below).
   static constexpr double kEndpointsDarkMass = 15.0, kEndpointsBrightMass = 1.0, kEndpointsDarkOnlyMass = 64.0;
+  // Test only, off: weigh each band by the evidence of its confident cells (p >= kConfidentP), mass_c / max(mass_c, 16),
+  // spread over the band's cells by p^2 as before, so a band made only of moderately neutral cells cannot carry the fit
+  // (a reviewer's candidate for T28 and T06). Off, a band weighs by all its mass, mass / max(mass, 16).
+  static constexpr bool kBandWeightFromConfidentMass = false;
+  static constexpr float kConfidentP = 0.9f;
 
   // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
   // ([2, 22], [22, 45], [45, 70], [70, 92]). Every cell of a band is an anchor, weighted by the neutral-patch head's
@@ -610,10 +615,15 @@ class JointCurveModel {
       if (b_sel[b].empty()) continue;
       ++n_bands;
       const size_t min_denom = (b == 3 && (int)bands[0].size() >= 3 * total / 4) ? 8 : 16;
-      double band_mass = 0.0;
-      for (int i : b_sel[b]) band_mass += pw[i];
+      double band_mass = 0.0, confident_mass = 0.0;
       for (int i : b_sel[b]) {
-        const float w = (float)(pw[i] / std::max(band_mass, (double)min_denom));
+        band_mass += pw[i];
+        if (f_.neutral_p[i] >= kConfidentP) confident_mass += pw[i];
+      }
+      for (int i : b_sel[b]) {
+        const float w = kBandWeightFromConfidentMass
+                            ? (float)(pw[i] / std::max(band_mass, 1e-12) * (confident_mass / std::max(confident_mass, (double)min_denom)))
+                            : (float)(pw[i] / std::max(band_mass, (double)min_denom));
         neu_idx_.push_back(i);
         neu_w_.push_back(w);
         w_sum += w;
