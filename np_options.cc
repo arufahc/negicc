@@ -283,7 +283,15 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("The white-light curve fit's last step: on (default) or off. On, the network judges whether the fitted "
           "picture reads too green or too magenta: a lattice of magenta-green offsets is scored against the intent "
           "field, the best few are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, "
-          "moved one standard error toward magenta and never greener than Auto, is composed into the bracket's tables.")
+          "moved one standard error toward magenta, is composed into the bracket's tables. Offsets that would make the "
+          "picture greener than Auto are not candidates.")
+    .default_value(std::string("on"));
+  parser.add_argument("--tone_stage")
+    .help("The white-light tone stage: on (default) or off. On, tone heads on DINOv3 features the fit already "
+          "computed predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, "
+          "and one monotone L* curve moves the final sRGB image all the way to the predicted shadow level and half "
+          "way to the highlight level and range, holding the mid-tones and the mean chroma. Runs where the curve fit "
+          "runs, with -P srgb.")
     .default_value(std::string("on"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
@@ -476,7 +484,7 @@ int parse_options(int ac, char* av[], Options& o) {
     flag = v == "on";
     return true;
   };
-  if (!on_off("--offset_scan", o.offset_scan)) return 1;
+  if (!on_off("--offset_scan", o.offset_scan) || !on_off("--tone_stage", o.tone_stage)) return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

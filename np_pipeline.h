@@ -100,6 +100,7 @@ struct Setup {
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
   std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
+  ToneHead tone_head;                    // the white-light tone heads (--tone_stage on, where the fit runs)
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
   // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
   // empty (none).
@@ -223,6 +224,9 @@ struct Scan {
   // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  // The white-light tone stage as convert applied it to the final image (CurveRefitResult::tone has the plan).
+  bool tone_applied = false;
+  ToneClip tone_clip;
   std::vector<uint16_t> rolloff_frame;
   int rolloff_frame_w = 0, rolloff_frame_h = 0;
   double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;

@@ -767,11 +767,18 @@ class SearchFrame {
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     last_neutral_p_ = r.neutral_p.size() == n / 3 ? std::move(r.neutral_p) : std::vector<float>();
+    last_tone_features_.clear();
+    if (r.pooled.size() == 1152 && r.token_sd.size() == 768) {
+      last_tone_features_ = r.pooled;
+      last_tone_features_.insert(last_tone_features_.end(), r.token_sd.begin(), r.token_sd.end());
+    }
     return true;
   }
 
   // The neutral head's p per cell from the last predict() (empty without a neutral head).
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
+  // The tone heads' input from the last predict() (FixedPointResult::tone_features; empty without the token spread).
+  const std::vector<float>& last_tone_features() const { return last_tone_features_; }
 
   // The inner crop rendered to 8-bit sRGB through the tables pd (a bracket's profile with changed input tables) at
   // params, then resampled to DINOv3's input size as the engine resamples it (net_w x net_h pixels).
@@ -801,8 +808,10 @@ class SearchFrame {
   }
 
   // The intent field DINOv3 predicts from a preview already at its input size (render_net_preview), on the
-  // statistics' grid. False (reported) when the inference fails or its grid is not the frame's.
-  bool predict_net(const std::vector<uint8_t>& preview, int w, int h, std::vector<float>& mu, std::vector<float>& sigma) {
+  // statistics' grid, and the tone heads' input from the same inference (empty without the token spread). False
+  // (reported) when the inference fails or its grid is not the frame's.
+  bool predict_net(const std::vector<uint8_t>& preview, int w, int h, std::vector<float>& mu, std::vector<float>& sigma,
+                   std::vector<float>& tone_features) {
     const Clock::time_point t0 = Clock::now();
     DinoV3InferenceResult r;
     try {
@@ -817,6 +826,11 @@ class SearchFrame {
     if (r.grid_w != stats_.grid_w || r.grid_h != stats_.grid_h || r.mu.size() != n || r.sigma.size() != n) return false;
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
+    tone_features.clear();
+    if (r.pooled.size() == 1152 && r.token_sd.size() == 768) {
+      tone_features = r.pooled;
+      tone_features.insert(tone_features.end(), r.token_sd.begin(), r.token_sd.end());
+    }
     return true;
   }
 
@@ -877,7 +891,7 @@ class SearchFrame {
     curr.shoulder = shoulder_of(start);
     float prev_err = std::numeric_limits<float>::infinity();
     float cur_q995 = 0.0f, best_q995 = 0.0f;
-    std::vector<float> best_mu, best_sigma, best_p;
+    std::vector<float> best_mu, best_sigma, best_p, best_tone;
     FixedPointStatus status = FixedPointStatus::kMaxIters;
     int steps = 0;
     bool have_best = false;
@@ -898,6 +912,7 @@ class SearchFrame {
         best_mu = mu;  // kept for the shoulder guard and for the sidecar's intent field
         best_sigma = sigma;
         best_p = last_neutral_p_;
+        best_tone = last_tone_features_;
       }
       if (it > 0 && err > prev_err * 1.25f && (err - prev_err) > 1.5f) {
         status = FixedPointStatus::kDiverged;
@@ -945,6 +960,7 @@ class SearchFrame {
     fp.mu = std::move(best_mu);
     fp.sigma = std::move(best_sigma);
     fp.neutral_p = std::move(best_p);
+    fp.tone_features = std::move(best_tone);
     fp.grid_w = stats_.grid_w;
     fp.grid_h = stats_.grid_h;
     return true;
@@ -1052,6 +1068,7 @@ class SearchFrame {
   bool shoulder_auto_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
+  std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1832,6 +1849,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.intent_mu = chosen.mu;
   out.intent_sigma = chosen.sigma;
   out.intent_neutral_p = chosen.neutral_p;
+  out.intent_tone_features = chosen.tone_features;
   out.intent_grid_w = chosen.grid_w;
   out.intent_grid_h = chosen.grid_h;
   out.intent_params = chosen.params;
@@ -2164,14 +2182,15 @@ static double offset_bootstrap_se(const std::vector<std::vector<double>>& pred, 
 // carry the offset, and e and x_hi are those it renders at (E re-solved to target_L over fit_grid within [e_lo, e_hi],
 // the roll-off measured again). grid_all is every cell of the network's grid (the fit may have left some out), with
 // p_all the neutral head's p of each (may be empty); auto_pd, e_auto, g_auto, b_auto and x_auto render Auto's result;
-// q995 gets the measured roll-off's 99.5% point.
+// q995 gets the measured roll-off's 99.5% point, and tone_features the tone heads' input from the inference of the
+// winning candidate (the state closest to the export: it differs by the standard error), for step 5.
 template <typename Rolloff>
 static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::CurveFrame& cf, const float* merged,
                         const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
                         size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
                         const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
                         const std::vector<float>& p_all, float& e, float g, float b, float& x_hi, float& q995,
-                        OffsetScanResult& R) {
+                        std::vector<float>& tone_features, OffsetScanResult& R) {
   const Clock::time_point t0 = Clock::now();
   const int N = (int)nf, NA = (int)(grid_all.size() / 3);
   const ProfileData fitted = prof.data;
@@ -2339,10 +2358,10 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   std::vector<uint8_t> pv;
   int pw = 0, ph = 0;
   net_preview(0.0, pv, pw, ph);
-  std::vector<float> mu0, sg0;
+  std::vector<float> mu0, sg0, tf0;
   if (pw / 16 != grid_w || ph / 16 != grid_h) {
     R.skipped = "grid";
-  } else if (!fr.predict_net(pv, pw, ph, mu0, sg0)) {
+  } else if (!fr.predict_net(pv, pw, ph, mu0, sg0, tf0)) {
     R.skipped = "infer";
   }
   if (R.skipped) {
@@ -2422,17 +2441,20 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   // Each candidate scored on its own field (the pivot's own, for s = 0); the lowest wins, the first on a tie.
   double best_s = 0.0, best_v = 0.0;
   bool have = false;
+  tone_features = tf0;
   for (int k : order) {
     double v;
+    std::vector<float> tf;
     if (k == k_zero) {
       v = offset_residual(x_piv, mu0, sg0);
+      tf = tf0;
     } else {
       std::vector<uint8_t> cpv;
       int cw = 0, ch = 0;
       net_preview(s_of[k], cpv, cw, ch);
       std::vector<float> mu, sg;
       ++R.inferences;
-      if (!fr.predict_net(cpv, cw, ch, mu, sg)) continue;
+      if (!fr.predict_net(cpv, cw, ch, mu, sg, tf)) continue;
       std::vector<double> xc;
       net_cell_lab(cpv, cw, ch, xc);
       v = offset_residual(xc, mu, sg);
@@ -2442,6 +2464,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       have = true;
       best_s = s_of[k];
       best_v = v;
+      tone_features = std::move(tf);
     }
   }
   const double s_final = best_s + kOffsetReadoutSE * se;
@@ -2470,7 +2493,8 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, bool offset_scan_on, CurveRefitResult& out) {
+                                   int encoding, bool offset_scan_on, const ToneHead* tone_head,
+                                   CurveRefitResult& out) {
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
                  "not mark the dark end of every channel" << std::endl;
@@ -2507,6 +2531,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // run at one E against a field predicted at another. One DINOv3 inference, only then.
   std::vector<float> mu = res.intent_mu, sigma = res.intent_sigma;
   std::vector<float> neutral_p = res.intent_neutral_p;  // the neutral head's p of the same preview, if it ran
+  std::vector<float> tone_features = res.intent_tone_features;  // the tone heads' input from it, if given
   {
     const ConversionParams& ip = res.intent_params;  // the search's own units, which are this frame's on white light
     auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
@@ -2516,6 +2541,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
       fr.render_preview(idx, res.params, preview);
       if (!fr.predict(preview, mu, sigma)) return false;
       neutral_p = fr.last_neutral_p();
+      tone_features = fr.last_tone_features();
       out.intent_repredicted = true;
     }
   }
@@ -2777,11 +2803,17 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.rolloff_measured = encoding == ENCODE_SRGB;
 
   // 4. The network's magenta-green offset, composed into the same tables (E and the roll-off measured again).
+  std::vector<float> scan_features;
+  out.tone.features = "search";
   if (offset_scan_on) {
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
     offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
                 e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
-                neutral_p_all, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, out.offset);
+                neutral_p_all, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features, out.offset);
+    if (out.offset.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
+      tone_features.swap(scan_features);
+      out.tone.features = "offset";
+    }
     if (opts.verbose) {
       if (out.offset.ran) {
         std::cout << "Offset: a* " << fixed(out.offset.s, 3, true) << " (minimum " << fixed(out.offset.s_min, 2, true)
@@ -2803,6 +2835,45 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                                                     (int)nf, mu.data(), sigma.data());
   out.neutral_export = m_neu.neutral_stats_on(cfg_comb, e_new, out.fit.g, out.fit.b);
   out.loss_export = out.parts_export.total();
+
+  // 5. The tone stage's plan: the heads' predictions (no inference of its own: from the offset's winning candidate, the
+  //    state closest to the export, else from the search's intent preview), the descriptors of the final render's
+  //    preview, the curve between them and the chroma factor that keeps the mean chroma.
+  ToneStagePlan& tp = out.tone;
+  if (!tone_head) {
+    tp.skipped = "off";
+  } else if (encoding != ENCODE_SRGB) {
+    tp.skipped = "encoding";
+  } else if (tone_features.size() != (size_t)ToneHead::kInDim ||
+             !tone_head->run(tone_features.data(), tp.pred_mean, tp.pred_sd)) {
+    tp.skipped = "features";
+  } else {
+    std::vector<uint8_t> pv;
+    int pw = 0, ph = 0;
+    fr.render_net_preview(prof.data, out.params, pv, pw, ph);
+    const size_t npx = (size_t)pw * ph;
+    tp.render = tone_descriptors(pv.data(), npx);
+    tp.targets = tone_targets(tp.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
+                              tp.pred_mean[ToneHead::kR9010]);
+    tp.curve = tone_solve(tp.render, tp.targets);
+    double chroma = 1.0;
+    for (int it = 0; it < kToneChromaRefinements; ++it) {
+      tp.curve.chroma = chroma;
+      const double got = tone_mean_chroma_after(pv.data(), npx, tp.curve);
+      chroma = std::clamp(chroma * (tp.render.Cmean / std::max(got, 1e-3)), kToneChromaLo, kToneChromaHi);
+    }
+    tp.curve.chroma = chroma;
+    tp.chroma_after = tone_mean_chroma_after(pv.data(), npx, tp.curve);
+    tp.planned = true;
+    if (opts.verbose) {
+      std::cout << "Tone: L2 " << fixed((float)tp.render.L2, 1) << " -> " << fixed((float)tp.targets.L2, 1) << ", L98 "
+                << fixed((float)tp.render.L98, 1) << " -> " << fixed((float)tp.targets.L98, 1) << ", L90-L10 "
+                << fixed((float)tp.render.range(), 1) << " -> " << fixed((float)tp.targets.range, 1) << "; curve black "
+                << fixed((float)tp.curve.black, 2) << " white " << fixed((float)tp.curve.white, 2) << " gamma "
+                << fixed((float)tp.curve.gamma, 3) << " contrast " << fixed((float)tp.curve.contrast, 3) << " chroma x"
+                << fixed((float)tp.curve.chroma, 4) << "\n";
+    }
+  }
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {
     std::cout << "Curves: E re-metered " << fixed(e_int, 4) << " -> " << fixed(e_new, 4) << " (grid median L* "

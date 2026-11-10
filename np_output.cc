@@ -646,6 +646,49 @@ bool write_json_sidecar(const Sidecar& sc) {
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
                {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
 
+  // The white-light tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
+  // curve and chroma factor, and the clipping before and after on the full image.
+  if (const CurveRefitResult* f = sc.curve_fit) {
+    auto n9 = [](double v) { return num(v, "%.9g"); };
+    const ToneStagePlan& tp = f->tone;
+    if (tp.planned) {
+      ordered_json pred, pred_sd;
+      for (int t = 0; t < ToneHead::kTargets; ++t) {
+        pred[ToneHead::target_name(t)] = n9((float)tp.pred_mean[t]);
+        pred_sd[ToneHead::target_name(t)] = n9((float)tp.pred_sd[t]);
+      }
+      auto desc = [&](const ToneDescriptors& d) {
+        return ordered_json{{"L2", n9((float)d.L2)},   {"L10", n9((float)d.L10)}, {"L25", n9((float)d.L25)},
+                            {"L50", n9((float)d.L50)}, {"L75", n9((float)d.L75)}, {"L90", n9((float)d.L90)},
+                            {"L98", n9((float)d.L98)}, {"R9010", n9((float)d.range())}, {"Cmean", n9((float)d.Cmean)}};
+      };
+      j["tone_stage"] = {
+          {"applied", sc.tone_applied},
+          {"features", tp.features},
+          {"predicted", pred},
+          {"predicted_sd", pred_sd},
+          {"render", desc(tp.render)},
+          {"targets", {{"L2", n9((float)tp.targets.L2)}, {"L50", n9((float)tp.targets.L50)},
+                       {"L98", n9((float)tp.targets.L98)}, {"R9010", n9((float)tp.targets.range)}}},
+          {"moves", {{"shadow", n9((float)kToneShadowMove)}, {"highlight", n9((float)kToneHighlightMove)},
+                     {"range", n9((float)kToneRangeMove)}}},
+          // In full (17 digits): the curve the image went through, exactly.
+          {"curve", {{"black", num(tp.curve.black, "%.17g")}, {"white", num(tp.curve.white, "%.17g")},
+                     {"gamma", num(tp.curve.gamma, "%.17g")}, {"contrast", num(tp.curve.contrast, "%.17g")},
+                     {"chroma", num(tp.curve.chroma, "%.17g")}}},
+          {"chroma_after", n9((float)tp.chroma_after)},
+          {"clip", sc.tone_applied ? ordered_json{{"white_before", num(sc.tone_clip.white_before, "%.6f")},
+                                                  {"white_after", num(sc.tone_clip.white_after, "%.6f")},
+                                                  {"black_before", num(sc.tone_clip.black_before, "%.6f")},
+                                                  {"black_after", num(sc.tone_clip.black_after, "%.6f")}}
+                                   : ordered_json(nullptr)}};
+    } else {
+      j["tone_stage"] = {{"applied", false}, {"skipped", tp.skipped ? tp.skipped : ""}};
+    }
+  } else {
+    j["tone_stage"] = nullptr;
+  }
+
   j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
 
   ordered_json t;

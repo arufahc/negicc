@@ -25,6 +25,8 @@
 #include "dinov3_engine.h"
 #include "input_curves.h"
 #include "profile_bundle.h"
+#include "tone_head.h"
+#include "tone_stage.h"
 
 // Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
 struct RgbImage {
@@ -164,6 +166,9 @@ struct FixedPointResult {
   std::vector<float> mu, sigma;
   // The neutral head's p per cell from the same preview (DinoV3InferenceResult::neutral_p); empty without one.
   std::vector<float> neutral_p;
+  // The tone heads' input from the same preview: the backbone's pooled features and the tokens' spread (1920 values,
+  // ToneHead); empty unless the engine gives the spread (DinoV3Engine::set_token_spread).
+  std::vector<float> tone_features;
   int grid_w = 0, grid_h = 0;
 };
 
@@ -181,6 +186,7 @@ struct ParamSearchResult {
   // intent_field, and that step's parameters (E in the search's units).
   std::vector<float> intent_mu, intent_sigma;
   std::vector<float> intent_neutral_p;  // FixedPointResult::neutral_p of that step (empty without a neutral head)
+  std::vector<float> intent_tone_features;  // FixedPointResult::tone_features of that step (may be empty)
   int intent_grid_w = 0, intent_grid_h = 0;
   ConversionParams intent_params;
 
@@ -329,6 +335,21 @@ struct OffsetScanResult {
   double time_ms = 0.0;
 };
 
+// The white-light tone stage's plan (tone_stage.h): the tone heads' predictions (tone_head.h, on features an inference
+// of the fit already produced), the descriptors of the final render's preview and the curve between them; the
+// conversion applies it to the final image.
+struct ToneStagePlan {
+  bool planned = false;           // a curve was solved and the conversion applies it
+  const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
+  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate) or "search" (the intent preview).
+  const char* features = "search";
+  double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
+  ToneDescriptors render;         // the final render's preview before the stage
+  ToneTargets targets;            // the descriptors the curve aims at
+  ToneCurve curve;                // the curve and the chroma factor
+  double chroma_after = 0.0;      // the preview's mean chroma with the curve and that factor (aim: render.Cmean)
+};
+
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
   negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
@@ -381,8 +402,9 @@ struct CurveRefitResult {
   negicc::NeutralTargetDecisions neutral_decisions;
   // The never-greener guard of the last fit pass (negicc::GreenGuard).
   negicc::GreenGuard guard;
-  // Step 4, the network's magenta-green offset.
+  // Step 4, the network's magenta-green offset, and the tone stage's plan.
   OffsetScanResult offset;
+  ToneStagePlan tone;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;
@@ -406,7 +428,8 @@ struct CurveRefitResult {
 //   4. with offset_scan, the network's magenta-green offset (OffsetScanResult): a lattice of "pure a*" offsets of the
 //      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
 //      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
-//      roll-off measured again).
+//      roll-off measured again);
+//   5. with tone_head, the tone stage's plan (ToneStagePlan) for the conversion to apply to the final image.
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
 // ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
 // parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
@@ -415,6 +438,6 @@ struct CurveRefitResult {
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, bool offset_scan, CurveRefitResult& out);
+                                   int encoding, bool offset_scan, const ToneHead* tone_head, CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

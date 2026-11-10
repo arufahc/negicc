@@ -236,6 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--neutral_head", 1, false},     {"", "--offset_scan", 1, false},
+      {"", "--tone_stage", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -959,6 +960,18 @@ int prepare(const Options& o, Setup& s) {
           log_info("Neutral head %s\n", name.c_str());
         }
       }
+      // The tone heads read the search's pooled features and the tokens' spread (only where the fit runs; the stage
+      // itself needs -P srgb, which the fit checks).
+      if ((o.fit_curves || s.fit_curves_auto_active) && o.tone_stage && s.engine.needs_adapter()) {
+        const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
+        std::string err;
+        if (!f || !s.tone_head.load(f->data, f->size, err)) {
+          throw std::runtime_error("the built-in tone heads (models/tone_head/tone_head.bin) " +
+                                   (f ? err : std::string("are missing")));
+        }
+        s.engine.set_token_spread(true);
+        log_info("Tone heads [built-in] models/tone_head/tone_head.bin\n");
+      }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());
       return 1;
@@ -1268,7 +1281,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                             scan.auto_res, fit_opts, export_encoding, o.offset_scan, s.curve_fit)) {
+                                             scan.auto_res, fit_opts, export_encoding, o.offset_scan,
+                                             s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
@@ -2112,6 +2126,19 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
   backend.convert(out, export_pc, c.merged_matrix, scan.image());
+  // The white-light tone stage (tone_stage.h), as the curve fit planned it, on the final sRGB image.
+  scan.tone_applied = false;
+  if (s.curve_fit.tone.planned && out.encoding == ENCODE_SRGB && !s.has_cached_sidecar) {
+    LibRaw* tp = scan.proc.get();
+    const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
+    const ToneCurve& q = s.curve_fit.tone.curve;
+    scan.tone_clip = !scan.rgb3.empty() ? apply_tone_stage(scan.rgb3.data(), npx, 3, q)
+                                        : apply_tone_stage(&tp->imgdata.image[0][0], npx, 4, q);
+    scan.tone_applied = true;
+    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f chroma x%.4f; white clip %.4f%% -> %.4f%%\n",
+             q.black, q.white, q.gamma, q.contrast, q.chroma, 100.0 * scan.tone_clip.white_before,
+             100.0 * scan.tone_clip.white_after);
+  }
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);
     cmsCloseProfile(out.custom);
@@ -2245,6 +2272,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
     sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
+    sc.tone_applied = scan.tone_applied;
+    sc.tone_clip = scan.tone_clip;
   }
   write_json_sidecar(sc);
   return 0;

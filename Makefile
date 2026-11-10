@@ -301,7 +301,7 @@ bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h colo
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h dinov3_preprocess.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h tone_head.h tone_stage.h dinov3_preprocess.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -330,10 +330,10 @@ bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.
 # USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
 # models/neutral_head/neutral_head.bin is the neutral-patch head (neutral_head.h) of the white-light curve fit's
-# neutral anchors.
+# neutral anchors; models/tone_head/tone_head.bin the tone heads (tone_head.h) of the white-light tone stage.
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx \
-                                models/neutral_head/neutral_head.bin \
+                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
                                 $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
               $(wildcard $(BACKBONE_FILES))
 
@@ -413,7 +413,7 @@ NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_raw.cc np_geometry.cc np
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
-          multi_target_optimizer.h input_curves.h embedded_data.h 3rd_party/tiff_head.h
+          multi_target_optimizer.h input_curves.h tone_head.h tone_stage.h embedded_data.h 3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out

@@ -102,6 +102,9 @@ struct Sidecar {
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const CurveRefitResult* curve_fit = nullptr;
+  // Whether the conversion applied curve_fit's tone stage plan to the final image, and the clipping it measured.
+  bool tone_applied = false;
+  ToneClip tone_clip;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
   const negicc::InputCurves* cli_input_curves = nullptr;

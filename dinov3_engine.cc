@@ -285,9 +285,9 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     const bool device_adapter = runner_->has_tokens() && adapter_ && adapter_->on_device();
     if (runner_->has_tokens()) {
         if (!adapter_) throw std::runtime_error("DinoV3Engine::infer: the backbone model needs an adapter");
-        // A TensorRT backbone with a TensorRT adapter: the tokens stay on the device, unless the neutral head reads
-        // them (one device-to-host copy per inference).
-        if (!device_adapter || neutral_head_) {
+        // A TensorRT backbone with a TensorRT adapter: the tokens stay on the device, unless the neutral head or the
+        // token spread reads them (one device-to-host copy per inference).
+        if (!device_adapter || neutral_head_ || token_spread_) {
             tokens.resize((size_t)res.num_patches * 768);
             outs.tokens = tokens.data();
         }
@@ -323,6 +323,22 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
         res.neutral_p.resize((size_t)res.num_patches);
         neutral_head_->run(tokens.data(), res.num_patches, res.neutral_p.data());
         res.neutral_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
+    }
+
+    if (token_spread_ && !tokens.empty() && res.num_patches > 1) {
+        const int n = res.num_patches;
+        res.token_sd.resize(768);
+        for (int d = 0; d < 768; ++d) {
+            double s = 0.0;
+            for (int i = 0; i < n; ++i) s += tokens[(size_t)i * 768 + d];
+            const double mean = s / n;
+            double v = 0.0;
+            for (int i = 0; i < n; ++i) {
+                const double x = tokens[(size_t)i * 768 + d] - mean;
+                v += x * x;
+            }
+            res.token_sd[d] = (float)std::sqrt(v / (n - 1));
+        }
     }
 
     if (res.has_pooled_tone) {

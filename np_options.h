@@ -69,6 +69,7 @@ struct Options {
   std::string dino_adapter;                    // --dino, empty when not given
   std::string neutral_head = "on";             // --neutral_head: on (built-in), off, or a neutral_head.bin
   bool offset_scan = true;                     // --offset_scan on|off: the network's magenta-green offset (white light)
+  bool tone_stage = true;                      // --tone_stage on|off: the learned lightness curve (white light, srgb)
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;

@@ -232,12 +232,26 @@ rendered and scored on their own fields, and the best of those, moved one standa
 is a block bootstrap of the score's minimum), is composed into the bracket's tables. It costs up to four inferences
 (three when the fitted state itself is among the best). `--offset_scan off` leaves it out.
 
+### The tone stage
+
+Many negatives come out flat: lifted blacks, dull highlights. Small tone heads on the same DINOv3 features
+([models/tone_head](models/tone_head/README.md)), trained on lab scans, predict the shadow level (L* at 2 %), the
+highlight level (L* at 98 %) and the tonal range (L* at 90 % minus 10 %) a lab scan of the frame would have. One
+monotone L* curve then moves the final image all the way to the predicted shadow level and half way to the predicted
+highlight level and range, with the mid-tone (L* at 50 %) held. a\* and b\* are not re-balanced, only scaled by the
+factor that keeps the frame's mean chroma where it was. The heads read the features of the inference the magenta-green
+setting's winner already ran (or, without it, the search's), so the stage adds no inference; the curve is solved on a
+preview of the final render and applied to the final 16-bit image. White light with `-P srgb` only; `--tone_stage off`
+leaves it out.
+
 The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
 rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`),
 `input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit),
 `input_curves.offset` the magenta-green setting (`s` applied, `s_min`, its standard error `se`, the density change
-`theta`, the candidates and the inferences). A replay of a sidecar (`--fit_curves` with recorded numbers, or the
-knobs on a previous run) renders the recorded curves only: the magenta-green setting is not replayed.
+`theta`, the candidates and the inferences), and `tone_stage` the heads' predictions, the render's descriptors before
+the stage, the targets, the curve and the clipping before and after. A replay of a sidecar (`--fit_curves` with
+recorded numbers, or the knobs on a previous run) renders the recorded curves only: the magenta-green setting and the
+tone stage are not replayed.
 
 ## More examples
 
@@ -280,6 +294,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `--dino` | An intent adapter (`.onnx` or its directory) instead of the built-in one for the stock. |
 | `--neutral_head on\|off\|<file>` | The neutral-patch head that weights the curve fit's neutral anchors: the built-in one (default), none (no anchors: the fit keeps Auto's colour), or another `neutral_head.bin`. |
 | `--offset_scan on\|off` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). |
+| `--tone_stage on\|off` | The learned lightness curve on the final image (white light with `-P srgb`; default on). |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with
