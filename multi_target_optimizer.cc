@@ -2020,6 +2020,9 @@ constexpr double kOffsetScanGuardSlack = 0.1;  // a*: the scan's guard allows th
 constexpr int kOffsetBootstrapResamples = 300;
 constexpr int kOffsetBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
 constexpr double kOffsetReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
+// Test only, off: no scan when the joint fit settled for lack of neutral evidence (the neutral head's conf at or below
+// 1e-4, the fit's own settle test), e.g. a blank or near-uniform frame, where the field alone would set the trim.
+constexpr bool kOffsetScanNeedsEvidence = false;
 // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
 // cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
 // and the bounds of the density change.
@@ -2833,7 +2836,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // 4. The network's magenta-green offset, composed into the same tables (E and the roll-off measured again).
   std::vector<float> scan_features;
   out.tone.features = "search";
-  if (offset_scan_on) {
+  if (offset_scan_on && kOffsetScanNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
+    out.offset.skipped = "evidence";
+    if (opts.verbose) std::cout << "Offset: not run (evidence)\n";
+  } else if (offset_scan_on) {
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
     offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
                 e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,

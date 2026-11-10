@@ -339,6 +339,7 @@ void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float
 struct OffsetScanResult {
   bool ran = false;               // the scan ran and its offset was applied (s may be 0)
   const char* skipped = nullptr;  // why it did not run: "off", "grid" (the network's grid is not the frame's), "infer"
+                                  // (inference failed), "evidence" (no neutral evidence; kOffsetScanNeedsEvidence)
   double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
   double se = 0.0;      // the bootstrap standard error of the residual's minimum
   double s = 0.0;       // the offset applied: s_min + se (one standard error toward magenta)
