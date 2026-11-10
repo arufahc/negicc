@@ -1007,6 +1007,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   // Auto's E is solved (guard_init), before which evaluate adds no guard residuals.
   std::vector<char> guard_in(f.n, 0);
   std::vector<double> guard_pw(f.n, 0.0);
+  std::vector<double> guard_auto_a(f.n, 0.0);  // Auto's a* per cell, for a candidate that renders a cell non-finite
   double guard_ref[2] = {0.0, 0.0};
   bool guard_ready = false;
   auto guard_means = [&](const float* q, float eq, double v[2]) {
@@ -1014,8 +1015,10 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     double sa = 0.0, na = 0.0, sp = 0.0, wp = 0.0;
     for (int i = 0; i < f.n; ++i) {
       if (!guard_in[i]) continue;
-      const double a = model.cell_lab(i, eq, q[0], q[1], c).a;
-      if (!std::isfinite(a)) continue;
+      // The same cells for every candidate (the ones guard_init counted): a cell a candidate renders non-finite counts
+      // at Auto's a*, so the two means never compare different populations.
+      double a = model.cell_lab(i, eq, q[0], q[1], c).a;
+      if (!std::isfinite(a)) a = guard_auto_a[i];
       sa += a;
       na += 1.0;
       sp += guard_pw[i] * a;
@@ -1031,6 +1034,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       const Lab l = model.cell_lab(i, eq, g0, b0, c);
       if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
       guard_in[i] = 1;
+      guard_auto_a[i] = l.a;
       const double p = f.neutral_p ? std::clamp((double)f.neutral_p[i], 0.0, 1.0) : 0.0;
       guard_pw[i] = p * p;
       na += 1.0;
