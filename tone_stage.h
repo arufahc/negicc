@@ -41,11 +41,11 @@ constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // White clipping, at its two sources. A colour the curve lifts out of the sRGB gamut has its chroma scaled toward
 // neutral at its L* (tone_lab_to_rgb_in_gamut) instead of its brightest channels clipped. Where the curve lifts L*
 // itself to white on more than kToneClipAllowance more of the final image's pixels than the image had clipped, the
-// highlight and range moves are scaled down (bisection, kToneClipSearchSteps steps) until it does not, measured on
-// every kToneClipSampleStep-th pixel each way of the final image. When even no highlight move stays within the
-// allowance, the clipping does not come from that move, and the moves stay as designed.
+// highlight and range moves are scaled down to the largest of kToneClipShares that keeps it within the allowance,
+// measured on every kToneClipSampleStep-th pixel each way of the final image. When none does, the clipping does not
+// come from that move, and the moves stay as designed.
 constexpr double kToneClipAllowance = 0.005;
-constexpr int kToneClipSearchSteps = 8;
+constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
 constexpr int kToneClipSampleStep = 8;
 // The chroma factor that keeps the mean chroma: refined this many times on the preview, within these bounds.
 constexpr int kToneChromaRefinements = 2;
@@ -519,25 +519,18 @@ inline ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_
         return tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, &c) <= before + kToneClipAllowance;
     };
     if (ok(c1)) return c1;
-    ToneTargets t_lo;
-    ToneCurve c_lo = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, 0.0, &t_lo);
-    if (!ok(c_lo)) return c1;  // the clipping is not the highlight move's
-    double lo = 0.0, hi = 1.0;
-    for (int it = 0; it < kToneClipSearchSteps; ++it) {
-        const double mid = 0.5 * (lo + hi);
+    // The largest of the fixed shares that passes; none: the clipping is not the highlight move's, keep 1. Fixed shares
+    // need no monotone clipping (a bisection does) and cost at most four more curves.
+    for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
         ToneTargets t;
-        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, mid, &t);
+        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, kToneClipShares[k], &t);
         if (ok(c)) {
-            lo = mid;
-            t_lo = t;
-            c_lo = c;
-        } else {
-            hi = mid;
+            *share = kToneClipShares[k];
+            *targets = t;
+            return c;
         }
     }
-    *share = lo;
-    *targets = t_lo;
-    return c_lo;
+    return c1;
 }
 
 // What applying the stage to the full image did: the share of pixels clipped white (a channel at the maximum) and
