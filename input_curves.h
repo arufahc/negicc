@@ -437,6 +437,15 @@ struct NeutralTargetDecisions {
   bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread): the offset target took full strength
 };
 
+// The joint fit's never-greener guard (fit_input_curves_joint): the grid's mean a* at Auto and at the fit's result,
+// over all cells and weighted by the neutral head's p^2, for the sidecar.
+struct GreenGuard {
+  bool counted[2] = {false, false};  // [all cells, p^2-weighted]: the term had enough cells / evidence to count
+  float auto_a[2] = {0.0f, 0.0f};    // Auto's mean a* (g0, b0, no curves, E solved)
+  float fit_a[2] = {0.0f, 0.0f};     // the fit's mean a* at its result (before the highlight-cliff pass)
+  bool binding = false;              // a counted term ended more than the tolerance greener than Auto: the hinge pulled
+};
+
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
@@ -453,6 +462,7 @@ struct JointCurveFit {
   // result is then Auto's g, b and e0 with no curves, which the caller should not take as a fit.
   bool feasible = true;
   NeutralStats neutral_before, neutral_after;
+  GreenGuard guard;
 };
 
 class JointCurveModel {
@@ -933,8 +943,20 @@ class JointCurveModel {
   bool has_anchors_ = false;
 };
 
+// The never-greener guard: the joint fit may move the grid's colour anywhere the neutral term asks, except greener
+// than Auto. Over the grid cells Auto renders at L* 2..92 (one band: the whole tone range), the candidate's mean a*
+// over all cells, and its mean a* weighted by the neutral head's p^2, may not fall more than kGreenGuardTolAb below
+// Auto's; each excess joins the Levenberg-Marquardt residuals as kGreenGuardWeight x max(0, a*_Auto - tol - a*). The
+// residuals are 0 at Auto and wherever the fit is not greener, so the guard acts only on a move toward green, and as
+// a penalty in the objective rather than a clamp afterwards. A term counts with at least kGreenGuardMinCells cells,
+// the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
+constexpr float kGreenGuardTolAb = 0.5f;
+constexpr float kGreenGuardWeight = 4.0f;
+constexpr double kGreenGuardMinCells = 8.0;
+constexpr double kGreenGuardMinMass = 2.0;
+
 // 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each
-// candidate to keep target_L.
+// candidate to keep target_L, under the never-greener guard (kGreenGuard*).
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
@@ -976,13 +998,63 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
            curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1));
   };
 
+  // The guard's cells (Auto's render at L* 2..92), their p^2, Auto's two means and which of them count; set once
+  // Auto's E is solved (guard_init), before which evaluate adds no guard residuals.
+  std::vector<char> guard_in(f.n, 0);
+  std::vector<double> guard_pw(f.n, 0.0);
+  double guard_ref[2] = {0.0, 0.0};
+  bool guard_ready = false;
+  auto guard_means = [&](const float* q, float eq, double v[2]) {
+    const InputCurves c = model.anchored(shape_of(q), eq, q[0], q[1]);
+    double sa = 0.0, na = 0.0, sp = 0.0, wp = 0.0;
+    for (int i = 0; i < f.n; ++i) {
+      if (!guard_in[i]) continue;
+      const double a = model.cell_lab(i, eq, q[0], q[1], c).a;
+      if (!std::isfinite(a)) continue;
+      sa += a;
+      na += 1.0;
+      sp += guard_pw[i] * a;
+      wp += guard_pw[i];
+    }
+    v[0] = na > 0 ? sa / na : 0.0;
+    v[1] = wp > 0 ? sp / wp : 0.0;
+  };
+  auto guard_init = [&](float eq) {
+    const InputCurves c = model.anchored(InputCurves{}, eq, g0, b0);
+    double na = 0.0, wp = 0.0;
+    for (int i = 0; i < f.n; ++i) {
+      const Lab l = model.cell_lab(i, eq, g0, b0, c);
+      if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
+      guard_in[i] = 1;
+      const double p = f.neutral_p ? std::clamp((double)f.neutral_p[i], 0.0, 1.0) : 0.0;
+      guard_pw[i] = p * p;
+      na += 1.0;
+      wp += guard_pw[i];
+    }
+    const float p0[4] = {g0, b0, 0.0f, 0.0f};
+    guard_means(p0, eq, guard_ref);
+    out.guard.counted[0] = na >= kGreenGuardMinCells;
+    out.guard.counted[1] = wp >= kGreenGuardMinMass;
+    guard_ready = true;
+  };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
                       bool check_shape) {
     ++out.evaluations;
     if (!solve_point(p, e_warm, e, check_shape)) return false;
     data = model.residuals(e, p[0], p[1], shape_of(p), r);
-    const size_t nd = r.size();
     double sum = data;
+    if (guard_ready) {
+      double v[2];
+      guard_means(p, e, v);
+      for (int k = 0; k < 2; ++k) {
+        const double h = out.guard.counted[k]
+                             ? (double)kGreenGuardWeight * std::max(0.0, guard_ref[k] - kGreenGuardTolAb - v[k])
+                             : 0.0;
+        r.push_back(h);
+        sum += h * h;
+      }
+    }
+    const size_t nd = r.size();
     r.resize(nd + 2);
     for (int j = 0; j < 2; ++j) {
       r[nd + j] = sqrt_lambda * p[2 + j];
@@ -1026,6 +1098,9 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   }
   out.feasible = true;
   out.loss_before = data;
+  // The guard's reference is Auto at its solved E; Auto's point again with the guard's residuals (all 0 there).
+  guard_init(e);
+  evaluate(p, e, e, r, cost, data, true);
 
   const int m = 4;
   double lambda = 1e-3;
@@ -1144,6 +1219,15 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   out.b = p[1];
   out.e = e;
   out.curves = model.anchored(shape_of(p), e, p[0], p[1]);
+  {
+    double v[2];
+    guard_means(p, e, v);
+    for (int k = 0; k < 2; ++k) {
+      out.guard.auto_a[k] = (float)guard_ref[k];
+      out.guard.fit_a[k] = (float)v[k];
+      if (out.guard.counted[k] && guard_ref[k] - kGreenGuardTolAb - v[k] > 0.0) out.guard.binding = true;
+    }
+  }
 
   // Pass 2: self-supervised 3-channel windowed [t_s, 0.76] highlight cliff de-surging.
   // When the base profile's input TRCs have a steep upper-midtone/highlight cliff (t in [t_s, 0.76], L* in [62, 90])

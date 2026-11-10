@@ -211,13 +211,17 @@ anchors span a narrow range of lightness (a trend measured over an L* spread wel
 extrapolated into a bend). And when the anchors share an offset larger than both 6 (in a\*b\*) and their own
 scatter, the fit treats it as a cast and removes it at full strength rather than scaled down by its confidence.
 
-Each curve is a bend of the channel's density response of at most ±35 % slope and 2.2 stops of departure from the
+The fit may move the colour anywhere the anchors ask, except greener than Auto: over the grid cells Auto renders at
+L* 2 to 92, the fit's mean a\* over all cells, and its mean a\* weighted by the head's p squared, may not fall more
+than 0.5 below Auto's. The excess is a penalty inside the fit, so the guard acts only on a move toward green. Each
+curve is a bend of the channel's density response of at most ±35 % slope and 2.2 stops of departure from the
 profile's own curve, held to a plain offset below the frame's densest cell, and never above the film base; a fit that
 would take E out of the bracket's range, or a curve that fails those bounds, falls back to Auto's plain result.
 `--fit_curves off` keeps the plain result.
 
 The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
-rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`).
+rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`),
+and `input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit).
 
 ## More examples
 

@@ -4,9 +4,10 @@ Predicts, for every 16x16 patch of a preview, p(neutral): the probability that t
 intended positive, whatever colour cast the current render has. `neg_process` uses it to weight the scene-neutral
 anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): every grid cell
 of four L* bands is an anchor with weight p^2, with no threshold and no minimum count, and the sum of p^2 is the fit's
-evidence. Without the head there are no anchors and the fit keeps Auto's colour. The head replaced the raw-chroma
-selection and its four hand-tuned rules (low-key band merge, chart-like gate, shadow cluster, collinearity drop). It
-does not predict colour; the intent adapter's mu and sigma stay as they are.
+evidence. Without the head there are no anchors and the fit keeps Auto's colour. The fit's never-greener guard also
+weights its mean a* by p^2. The head replaced the raw-chroma selection and its four hand-tuned rules (low-key band
+merge, chart-like gate, shadow cluster, collinearity drop). It does not predict colour; the intent adapter's mu and
+sigma stay as they are.
 
 - Input: the [N, 768] patch tokens of the frozen DINOv3 ViT-S/16 backbone (layers 9 and 12, the tokens the intent
   adapters of `../dinov3-small_*` read), standardised with the stored `mean` and `std` (768 each).

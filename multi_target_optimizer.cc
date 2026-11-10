@@ -2183,6 +2183,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.fit_converged = jf.converged;
     out.fit_polish = jf.polish_evaluations;
     out.fit_start = jf.start;
+    out.guard = jf.guard;
     if (opts.verbose) {
       const negicc::InputCurves& c = out.fit.curves;
       std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)

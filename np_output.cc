@@ -404,6 +404,13 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"spread", n9(f->neutral_decisions.spread)},
                                              {"endpoints", f->neutral_decisions.endpoints},
                                              {"offset_gate", f->neutral_decisions.offset_gate}}},
+                    // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
+                    // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
+                    {"guard", ordered_json{{"tol", n9(negicc::kGreenGuardTolAb)},
+                                           {"counted", {f->guard.counted[0], f->guard.counted[1]}},
+                                           {"auto_a", {n9(f->guard.auto_a[0]), n9(f->guard.auto_a[1])}},
+                                           {"fit_a", {n9(f->guard.fit_a[0]), n9(f->guard.fit_a[1])}},
+                                           {"binding", f->guard.binding}}},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
   } else {

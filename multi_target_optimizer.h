@@ -361,6 +361,8 @@ struct CurveRefitResult {
   bool neutral_anchors = false;
   // What the slope shrink and offset gate decided on those anchors (JointCurveModel::decisions).
   negicc::NeutralTargetDecisions neutral_decisions;
+  // The never-greener guard of the last fit pass (negicc::GreenGuard).
+  negicc::GreenGuard guard;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
   float fit_e = 1.0f;
