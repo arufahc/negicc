@@ -2023,6 +2023,12 @@ constexpr double kOffsetReadoutSE = 1.0;     // the pick moves this many standar
 // Test only, off: no scan when the joint fit settled for lack of neutral evidence (the neutral head's conf at or below
 // 1e-4, the fit's own settle test), e.g. a blank or near-uniform frame, where the field alone would set the trim.
 constexpr bool kOffsetScanNeedsEvidence = false;
+// Test only, off: the trim may not move confident neutrals away from neutral. The neutral cells' p^2-weighted mean a*
+// on the grid model (cells Auto renders at L* 2..92) may end at most kOffsetTrimCapTol / ((conf - 0.5) / 0.5) further
+// from 0 than at the fitted state (1 a* at conf 1, 2 at 0.75; no cap at conf 0.5 or below, or below
+// kGreenGuardMinMass of evidence); a larger trim is shortened toward 0 until it does.
+constexpr bool kOffsetTrimCap = false;
+constexpr double kOffsetTrimCapTol = 1.0;
 // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
 // cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
 // and the bounds of the density change.
@@ -2198,8 +2204,8 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
                         const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
                         size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
                         const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
-                        const std::vector<float>& p_all, float& e, float g, float b, float& x_hi, float& q995,
-                        std::vector<float>& tone_features, OffsetScanResult& R) {
+                        const std::vector<float>& p_all, float anchor_conf, float& e, float g, float b, float& x_hi,
+                        float& q995, std::vector<float>& tone_features, OffsetScanResult& R) {
   const Clock::time_point t0 = Clock::now();
   const int N = (int)nf, NA = (int)(grid_all.size() / 3);
   const ProfileData fitted = prof.data;
@@ -2426,6 +2432,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   std::vector<double> s_of(K), score(K);
   std::vector<char> kept(K);
   std::vector<std::vector<double>> pred(K);
+  std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (kOffsetTrimCap)
 #pragma omp parallel for schedule(dynamic)
   for (int k = 0; k < K; ++k) {
     s_of[k] = -kOffsetScanMax + k * kOffsetScanStep;
@@ -2433,6 +2440,12 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     theta_of(s_of[k], th);
     std::vector<float> l;
     lab_th(th, l);
+    if (kOffsetTrimCap && w_in > 0.0) {
+      double aw = 0.0;
+      for (int i = 0; i < NA; ++i)
+        if (in_band[i]) aw += w2[i] * l[3 * i + 1];
+      anchor_a[k] = aw / w_in;
+    }
     pred[k].resize(3 * (size_t)NA);
     for (int i = 0; i < 3 * NA; ++i) pred[k][i] = x_piv[i] + ((double)l[i] - (double)lab0[i]);
     score[k] = offset_residual(pred[k], mu0, sg0);
@@ -2488,7 +2501,31 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       tone_features = std::move(tf);
     }
   }
-  const double s_final = best_s + kOffsetReadoutSE * se;
+  double s_final = best_s + kOffsetReadoutSE * se;
+  if (kOffsetTrimCap && anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
+    auto anchor_at = [&](double s) {  // linear between lattice points
+      const double u = std::clamp((s + kOffsetScanMax) / kOffsetScanStep, 0.0, (double)(K - 1));
+      const int k0 = std::min((int)u, K - 2);
+      return anchor_a[k0] + (u - k0) * (anchor_a[k0 + 1] - anchor_a[k0]);
+    };
+    const double a0 = anchor_a[k_zero];
+    const double lim = std::fabs(a0) + kOffsetTrimCapTol / ((anchor_conf - 0.5) / 0.5);
+    const double s_uncapped = s_final;
+    if (std::fabs(anchor_at(s_final)) > lim) {
+      const int steps = 200;
+      double s_ok = 0.0;
+      for (int j = 1; j <= steps; ++j) {
+        const double sj = s_uncapped * j / steps;
+        if (std::fabs(anchor_at(sj)) > lim) break;
+        s_ok = sj;
+      }
+      s_final = s_ok;
+    }
+    std::cout << "Offset trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
+                << " at the fit, " << fixed(anchor_at(s_uncapped), 2, true) << " at s " << fixed(s_uncapped, 2, true)
+                << ", limit " << fixed(lim, 2) << ": s " << fixed(s_final, 2, true) << " (anchors "
+                << fixed(anchor_at(s_final), 2, true) << ")\n";
+  }
   R.s_min = best_s;
   R.se = se;
   R.s = s_final;
@@ -2843,7 +2880,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
     offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
                 e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
-                neutral_p_all, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features, out.offset);
+                neutral_p_all, out.neutral_auto.conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995,
+                scan_features, out.offset);
     if (out.offset.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
       tone_features.swap(scan_features);
       out.tone.features = "offset";
