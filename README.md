@@ -191,84 +191,31 @@ to 8.7 and a natural daylight balance:
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
-### The fitted curves on top of E, g, b
+### After the search: three small heads on the same DINOv3 features
 
-E, g and b are three gains: they move each channel as a whole. On white light that is not always enough, because a
-lamp and a stock the profile was not measured with change the shape of a channel's response, not only its level, and
-a gain then balances the mid-tones while the shadows or the highlights keep a cast. So, after the search, the green
-and blue input curves of the winning bracket are fitted jointly with g and b so that the frame's scene-neutral content
-renders grey, both its average and its trend from shadows to highlights, with E re-solved at every step so the
-picture's median lightness stays where Auto put it.
+Everything learned in negicc sits on one frozen DINOv3 backbone. Each head is a small network that reads its
+features and answers one question about the picture; the conversion then acts on the answer. On white light, after
+the search:
 
-The scene-neutral content comes from a small neutral-patch head on DINOv3's tokens
-([models/neutral_head](models/neutral_head/README.md)), which gives every grid cell a p(neutral). Every cell of four
-lightness bands is an anchor, weighted by p squared: a cell the head is sure of counts fully, an uncertain one a
-little, and there is no threshold and no minimum count. The sum of p squared is the fit's evidence: its confidence in
-the anchors grows with it, and so does the weight of each band. With no evidence (`--neutral_head off`, or a frame
-where the head finds nothing neutral) there are no anchors, and the fit keeps Auto's colour: Auto's g and b, no bend.
-Two rules set how far the fit follows the anchors. The shadow-to-highlight trend is only partly removed when the
-anchors span a narrow range of lightness (a trend measured over an L* spread well under 6 is mostly kept, not
-extrapolated into a bend). And when the anchors share an offset larger than both 6 (in a\*b\*) and their own
-scatter, the fit treats it as a cast and removes it at full strength rather than scaled down by its confidence.
+| Head | Answers | Used for |
+|---|---|---|
+| Intent (per patch) | What colour should this patch be? | The search above, and a final magenta-green trim |
+| Neutral ([models/neutral_head](models/neutral_head/README.md)) | Is this patch a neutral surface? | Fitting the green and blue curves so neutral content renders grey from shadows to highlights |
+| Tone ([models/tone_head](models/tone_head/README.md)) | How deep, bright and wide should the tones be? | One lightness curve on the final image |
 
-The fit may move the colour anywhere the anchors ask, except greener than Auto: over the grid cells Auto renders at
-L* 2 to 92, the fit's mean a\* over all cells, and its mean a\* weighted by the head's p squared, may not fall more
-than 0.5 below Auto's. The excess is a penalty inside the fit, so the guard acts only on a move toward green. Each
-curve is a bend of the channel's density response of at most ±35 % slope and 2.2 stops of departure from the
-profile's own curve, held to a plain offset below the frame's densest cell, and never above the film base; a fit that
-would take E out of the bracket's range, or a curve that fails those bounds, falls back to Auto's plain result.
-`--fit_curves off` keeps the plain result.
+- **Curve fit.** Three gains cannot remove a cast that changes from shadows to highlights, so the green and blue
+  curves of the winning bracket are fitted with g and b, weighting every cell by how neutral the head thinks it is.
+  With nothing neutral in the frame the fit leaves Auto's colour alone, and it never makes the picture greener than
+  Auto. `--fit_curves off` skips it.
+- **Magenta-green trim.** The intent head then picks the small magenta-green offset it prefers for the fitted
+  picture. `--offset_scan off` skips it.
+- **Tone curve.** Many negatives come out flat. The tone head predicts the shadow level, highlight level and tonal
+  range a lab scan of the frame would have, and one lightness curve moves the image toward them; colour is not
+  changed. `--tone_stage off` skips it.
 
-### The network's magenta-green setting
-
-The fit balances the anchors; whether the whole picture then reads too green or too magenta is a judgement about
-its content, and the intent network makes it. On the fitted state, a lattice of offsets from 8 a\* greener to 8 a\*
-more magenta (in steps of 0.5) is laid along a "pure a\*" direction: a small change of the green and blue layers'
-density and contrast that moves the frame's mean a\* and holds its mean b\* and their trends over lightness. One
-DINOv3 inference on the fitted state gives a field; each lattice point is scored by how far the network's a\* target
-is from it (the cells are predicted from the fitted state's own and the change the grid model gives, since the field
-barely moves with the render). Points that would make the picture greener than Auto are left out. The three best are
-rendered and scored on their own fields, and the best of those, moved one standard error toward magenta (the error
-is a block bootstrap of the score's minimum), is composed into the bracket's tables. It costs up to four inferences
-(three when the fitted state itself is among the best). `--offset_scan off` leaves it out.
-
-### The tone stage
-
-Many negatives come out flat: lifted blacks, dull highlights. Small tone heads on the same DINOv3 features
-([models/tone_head](models/tone_head/README.md)), trained on lab scans, predict the shadow level (L* at 2 %), the
-highlight level (L* at 98 %) and the tonal range (L* at 90 % minus 10 %) a lab scan of the frame would have. One
-monotone L* curve then moves the final image all the way to the predicted shadow level and half way to the predicted
-highlight level and range, with the mid-tone (L* at 50 %) held. a\* and b\* are not re-balanced, only scaled by the
-factor that keeps the frame's mean chroma where it was. The heads read the features of the inference the
-magenta-green setting's winner already ran (or, without it, the search's), so the stage adds no inference.
-
-Above L98 no target says where the curve goes, so a weak term holds its rise there to the input's (slope 1 on
-average), but not past white, and the curve is solved from several white points with the lowest cost kept: without
-that, two quite different white points fit about equally on some frames, and the choice flipped with a 1 L* change of
-the render. The stage limits white clipping at its sources: a colour the curve lifts out of the sRGB gamut keeps its
-tone and hue and loses chroma instead of having channels clipped, and where the curve itself would push more than
-0.5 % more of the final image's pixels to white than it had, the highlight and range moves are scaled down until it
-does not (`tone_stage.moves.highlight_share` in the sidecar). The curve is solved on a preview of the final render,
-checked against the final 16-bit image (and solved again there when the moves are scaled down), and applied to it in
-single precision with a table for the curve. White light with `-P srgb` only; `--tone_stage off` leaves it out.
-
-The sidecar's `input_curves` records the curves, `input_curves.remeter.neutral` the anchors' evidence and what the two
-rules did (`evidence`, `span_L`, `slope_share`, `endpoints`, `auto_ab`, `spread`, `offset_gate`),
-`input_curves.remeter.guard` the guard (Auto's and the fit's mean a\*, and whether it pulled the fit),
-`input_curves.offset` the magenta-green setting (`s` applied, `s_min`, its standard error `se`, the density change
-`theta`, the candidates and the inferences), and `tone_stage` the heads' predictions, the render's descriptors before
-the stage, the targets, the curve and the clipping before and after.
-
-A replay renders all of it from the recorded numbers, with nothing searched, fitted or predicted again: the
-sidecar's `cli_equivalent` carries the curves (`--fit_curves ref:...`, with the red highlight-cliff curve when the fit
-bent R), the magenta-green offset (`--offset_scan theta:...`: the density change, and per channel the median density
-and the film base's place on the input table) and the tone curve (`--tone_stage curve:...`), and `--brightness`,
-`--tint` and `--warmth` on a previous run's output read the same numbers from its sidecar. Without knobs both give the
-export back exactly. The knobs move E, g and b; the curves and the offset are density changes on the film, so their
-tables are rebuilt at the knobs' E, g and b, and the knobs' grey is solved through them. The tone curve is applied
-after the knobs, as recorded: a fixed monotone map on the knobbed image, so a brighter knob gives a brighter result,
-rather than a curve re-solved against the knobbed render, which would pull the shadow level back to the prediction
-and undo the knob.
+The sidecar records what each step decided (`input_curves`, `input_curves.offset`, `tone_stage`), and its
+`cli_equivalent`, or `--brightness`, `--tint` and `--warmth` on a previous output, replay the conversion from those
+numbers without running the network again.
 
 ## More examples
 
