@@ -30,6 +30,14 @@ constexpr double kToneLo[4] = {-15.0, 80.0, 0.7, 0.7};
 constexpr double kToneHi[4] = {15.0, 110.0, 1.45, 1.5};
 // The prior's weight, and its scales: 5 L* for the black and white points, 0.1 in log for gamma and contrast.
 constexpr double kTonePrior = 0.02;
+// Above the render's L98 no target says where the curve goes, and two quite different white points can fit the four
+// targets about equally (on a night frame, 89 or 110): which one won flipped with a 1 L* change of the render. This
+// weight holds the curve's rise above L98 to the input's, f(100) = f(L98) + (100 - L98) (slope 1 on average there),
+// but never above white, f(100) <= 100, so a lifted L98 does not push the top past white into clipping. That makes
+// the solution unique, and the solve starts from several white points and keeps the lowest cost, so it does not
+// depend on which basin a single start falls into.
+constexpr double kToneTopSlope = 0.07;
+constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // The chroma factor that keeps the mean chroma: refined this many times on the preview, within these bounds.
 constexpr int kToneChromaRefinements = 2;
 constexpr double kToneChromaLo = 0.5, kToneChromaHi = 1.6;
@@ -182,8 +190,12 @@ inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
         r[5] = kTonePrior * ((q[1] - 100.0) / 5.0);
         r[6] = kTonePrior * (std::log(q[2]) / 0.1);
         r[7] = kTonePrior * (std::log(q[3]) / 0.1);
+        {
+            const double f98 = tone_curve_L(cur.L98, c);
+            r[8] = kToneTopSlope * (tone_curve_L(100.0, c) - std::min(100.0, f98 + (100.0 - cur.L98)));
+        }
     };
-    constexpr int kR = 8, kP = 4;
+    constexpr int kR = 9, kP = 4;
     auto cost_of = [&](const double* q) {
         double r[kR];
         resid(q, r);
@@ -191,7 +203,9 @@ inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
         for (double v : r) s += v * v;
         return s;
     };
-    double q[kP] = {0.0, 100.0, 1.0, 1.0};
+    double best_q[kP] = {0.0, 100.0, 1.0, 1.0}, best_cost = INFINITY;
+    for (double white0 : kToneWhiteStarts) {
+    double q[kP] = {0.0, white0, 1.0, 1.0};
     double cost = cost_of(q), lambda = 1e-3;
     for (int iter = 0; iter < 200; ++iter) {
         double r[kR], J[kR][kP];
@@ -262,7 +276,12 @@ inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
         }
         if (!improved || step < 1e-12) break;
     }
-    return curve_of(q);
+    if (cost < best_cost) {
+        best_cost = cost;
+        std::copy(q, q + kP, best_q);
+    }
+    }
+    return curve_of(best_q);
 }
 
 // What applying the stage to the full image did: the share of pixels clipped white (a channel at the maximum) and
