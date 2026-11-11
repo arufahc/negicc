@@ -1317,6 +1317,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       (double)scan_shutter_s, (double)scan_iso, opts, out);
 }
 
+// Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
+// profile bundle, the intent engine, the scan and its exposure; screens the brackets against the intent field, runs
+// the best through a fixed-point tournament (predicting the field again as the render changes), moves to a denser
+// bracket or pulls E back where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket,
+// (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
+// white-light stages (run_white_light_fit).
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s_in, double scan_iso_in, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
@@ -1782,7 +1788,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   return true;
 }
 
-// ---- Fitted G/B input curves ---------------------------------------------------------------------------------
+// ---- Stage 4, the profile tables: the fitted G/B input curves --------------------------------------------------
+//
+// The curves and the tint trim (compose_tint_trim_tables) live in the bracket's input tables, composed at an E, g and
+// b: the fit's, a replay's, or the knobs', which compose them again from the bracket's own tables (np_pipeline.cc).
+// Every render after that, on the CPU or the GPU, reads one ordinary profile.
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
   // In place: the profile is its own base (each table is composed into a temporary before it replaces the old one).
@@ -1897,16 +1907,18 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
-// ---- Step 4: the tint trim on the fitted state ------------------------------------------------
+// ---- Stage 3, the tint trim on the fitted state ----------------------------------------------
 //
-// The joint fit balances the scene-neutral anchors; whether the whole picture then reads too green or too magenta is
-// a judgement the intent network makes about the content. It barely tracks a re-rendered preview (its field moves
-// little with the render), so one inference on the fitted state gives a field the other offsets can be scored
-// against: each lattice point's cells are predicted as the pivot's cells plus the change the grid model gives, and
-// scored by the a*-only residual S(s) = mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are rendered and
-// scored on their own fields; the best of those, moved one bootstrap standard error of the residual's minimum toward
-// magenta (a slightly magenta frame is preferred to a slightly green one), is the trim applied. Lattice points that
-// make the grid greener than Auto (the joint fit's guard, read on the export's render) are not candidates.
+// It takes the curved profile, the fitted (E, g, b, x_hi), Auto's render and the neutral head's weights, and hands on
+// the trim's tables (composed into the bracket's), the E and roll-off measured again, and the winning candidate's
+// features for the tone heads. The joint fit balances the scene-neutral anchors; whether the whole picture then reads
+// too green or too magenta is a judgement the intent network makes about the content. It barely tracks a re-rendered
+// preview (its field moves little with the render), so one inference on the fitted state gives a field the other
+// offsets can be scored against: each lattice point's cells are predicted as the pivot's cells plus the change the grid
+// model gives, and scored by the a*-only residual S(s) = mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are
+// rendered and scored on their own fields; the best of those, moved one bootstrap standard error of the residual's
+// minimum toward magenta (a slightly magenta frame is preferred to a slightly green one), is the trim applied. Lattice
+// points that make the grid greener than Auto (the joint fit's guard, read on the export's render) are not candidates.
 constexpr double kTintTrimMax = 8.0;       // lattice s in [-8, 8] a*,
 constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*
 constexpr int kTintTrimCandidates = 3;     // lattice points rendered and scored on their own fields

@@ -43,7 +43,13 @@
 #include "np_output.h"
 #include "np_profile.h"
 
-// ---- The white-light tone stage (np_pipeline.h) ----
+// ---- Stage 5, the white-light tone stage (np_pipeline.h) ----
+//
+// One monotone L* curve on the finished 16-bit sRGB image, holding the mid-tones and the mean chroma. It takes the
+// tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were made on; the
+// conversion solves the curve after the fit (tone_plan), scales the highlight and range moves down where the curve
+// would clip the final image (tone_plan_for_image) and applies it (apply_tone_stage).
+//
 // sRGB (D65) <-> CIELAB in double precision, with the white point and matrices of the stage's design.
 static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);

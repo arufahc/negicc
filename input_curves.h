@@ -1430,9 +1430,13 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   return out;
 }
 
-// 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each
-// candidate to keep target_L, under the never-greener guard (kGreenGuard*): the fit without the guard, kept when
-// its result keeps the bound, else the fit again with it. evaluations and renders count both passes.
+// Stage 2, the curve fit: removes what is left of the colour cast, and its change from shadows to highlights, on the
+// bracket Auto chose. It takes the grid cells, the film base, Auto's (E, g, b) and the neutral head's probabilities,
+// builds p^2-weighted neutral anchors (JointCurveModel) and solves p = (g, b, a_G, a_B) by Levenberg-Marquardt, E
+// solved at each candidate to keep target_L. The fit runs first without the never-greener guard (kGreenGuard*); when
+// its result is greener than Auto's (deep shadows exempt) it runs again with it. A last pass bends the highlights
+// where they surge. It hands on the curves and the fitted (E, g, b), which run_white_light_fit re-meters on the
+// combined profile. evaluations and renders count both passes.
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
