@@ -15,6 +15,7 @@
 
 #include "np_log.h"
 #include "np_output.h"
+#include "np_pipeline.h"
 
 #include <lcms2.h>
 #include <zlib.h>
@@ -729,10 +730,17 @@ bool write_json_sidecar(const Sidecar& sc) {
 
   // The white-light tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
   // curve and chroma factor, and the clipping before and after on the full image.
+  auto clip_json = [&]() {
+    if (!sc.tone_applied || !sc.tone_clip) return ordered_json(nullptr);
+    const ToneClip& k = *sc.tone_clip;
+    return ordered_json{{"white_before", num(k.white_before, "%.6f")}, {"white_after", num(k.white_after, "%.6f")},
+                        {"black_before", num(k.black_before, "%.6f")}, {"black_after", num(k.black_after, "%.6f")}};
+  };
   if (const CurveRefitResult* f = sc.curve_fit) {
     auto n9 = [](double v) { return num(v, "%.9g"); };
     const ToneStagePlan& tp = f->tone;
-    if (tp.planned) {
+    if (tp.planned && sc.tone_plan) {
+      const TonePlanCurve& pl = *sc.tone_plan;
       ordered_json pred, pred_sd;
       for (int t = 0; t < ToneHead::kTargets; ++t) {
         pred[ToneHead::target_name(t)] = n9((float)tp.pred_mean[t]);
@@ -744,15 +752,15 @@ bool write_json_sidecar(const Sidecar& sc) {
                             {"L98", n9((float)d.L98)}, {"R9010", n9((float)d.range())}, {"Cmean", n9((float)d.Cmean)}};
       };
       // As applied (capped on the final image), else as planned.
-      const ToneTargets& tt = sc.tone_targets ? *sc.tone_targets : tp.targets;
-      const ToneCurve& tc = sc.tone_applied && sc.tone_curve ? *sc.tone_curve : tp.curve;
+      const ToneTargets& tt = sc.tone_targets ? *sc.tone_targets : pl.targets;
+      const ToneCurve& tc = sc.tone_applied && sc.tone_curve ? *sc.tone_curve : pl.curve;
       j["tone_stage"] = {
           {"applied", sc.tone_applied},
           {"source", "plan"},
           {"features", tp.features},
           {"predicted", pred},
           {"predicted_sd", pred_sd},
-          {"render", desc(tp.render)},
+          {"render", desc(pl.render)},
           {"targets", {{"L2", n9((float)tt.L2)}, {"L50", n9((float)tt.L50)}, {"L98", n9((float)tt.L98)},
                        {"R9010", n9((float)tt.range)}}},
           // The share of the highlight and range moves kept: 1, or less where they would clip the final image.
@@ -762,12 +770,8 @@ bool write_json_sidecar(const Sidecar& sc) {
           {"curve", {{"black", num(tc.black, "%.17g")}, {"white", num(tc.white, "%.17g")},
                      {"gamma", num(tc.gamma, "%.17g")}, {"contrast", num(tc.contrast, "%.17g")},
                      {"chroma", num(tc.chroma, "%.17g")}}},
-          {"chroma_after", n9((float)tp.chroma_after)},
-          {"clip", sc.tone_applied ? ordered_json{{"white_before", num(sc.tone_clip.white_before, "%.6f")},
-                                                  {"white_after", num(sc.tone_clip.white_after, "%.6f")},
-                                                  {"black_before", num(sc.tone_clip.black_before, "%.6f")},
-                                                  {"black_after", num(sc.tone_clip.black_after, "%.6f")}}
-                                   : ordered_json(nullptr)}};
+          {"chroma_after", n9((float)pl.chroma_after)},
+          {"clip", clip_json()}};
     } else {
       j["tone_stage"] = {{"applied", false}, {"skipped", tp.skipped ? tp.skipped : ""}};
     }
@@ -779,11 +783,7 @@ bool write_json_sidecar(const Sidecar& sc) {
         {"curve", {{"black", num(q->black, "%.17g")}, {"white", num(q->white, "%.17g")},
                    {"gamma", num(q->gamma, "%.17g")}, {"contrast", num(q->contrast, "%.17g")},
                    {"chroma", num(q->chroma, "%.17g")}}},
-        {"clip", sc.tone_applied ? ordered_json{{"white_before", num(sc.tone_clip.white_before, "%.6f")},
-                                                {"white_after", num(sc.tone_clip.white_after, "%.6f")},
-                                                {"black_before", num(sc.tone_clip.black_before, "%.6f")},
-                                                {"black_after", num(sc.tone_clip.black_after, "%.6f")}}
-                                 : ordered_json(nullptr)}};
+        {"clip", clip_json()}};
   } else {
     j["tone_stage"] = nullptr;
   }

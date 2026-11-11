@@ -2829,8 +2829,8 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.loss_export = out.parts_export.total();
 
   // 5. The tone stage's plan: the heads' predictions (no inference of its own: from the offset's winning candidate, the
-  //    state closest to the export, else from the search's intent preview), the descriptors of the final render's
-  //    preview, the curve between them and the chroma factor that keeps the mean chroma.
+  //    state closest to the export, else from the search's intent preview) and the final render's preview, on which
+  //    the conversion solves the curve between them (np_pipeline.cc).
   ToneStagePlan& tp = out.tone;
   // The heads read the image the stage will be applied to: the offset's winning candidate when the scan ran (it differs
   // from the export by the standard error only); otherwise the final state's preview, rendered below for the
@@ -2855,21 +2855,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
              !tone_head->run(tone_features.data(), tp.pred_mean, tp.pred_sd)) {
     tp.skipped = "features";
   } else {
-    const size_t npx = (size_t)pw * ph;
-    tp.render = tone_descriptors(pv.data(), npx);
-    tp.curve = tone_plan(tp.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
-                         tp.pred_mean[ToneHead::kR9010], pv.data(), npx, 1.0, &tp.targets);
-    tp.chroma_after = tone_mean_chroma_after(pv.data(), npx, tp.curve);
     tp.preview.swap(pv);
-    tp.planned = true;
-    if (opts.verbose) {
-      std::cout << "Tone: L2 " << fixed((float)tp.render.L2, 1) << " -> " << fixed((float)tp.targets.L2, 1) << ", L98 "
-                << fixed((float)tp.render.L98, 1) << " -> " << fixed((float)tp.targets.L98, 1) << ", L90-L10 "
-                << fixed((float)tp.render.range(), 1) << " -> " << fixed((float)tp.targets.range, 1) << "; curve black "
-                << fixed((float)tp.curve.black, 2) << " white " << fixed((float)tp.curve.white, 2) << " gamma "
-                << fixed((float)tp.curve.gamma, 3) << " contrast " << fixed((float)tp.curve.contrast, 3) << " chroma x"
-                << fixed((float)tp.curve.chroma, 4) << "\n";
-    }
   }
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
   if (opts.verbose) {

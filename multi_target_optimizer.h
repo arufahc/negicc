@@ -26,7 +26,6 @@
 #include "input_curves.h"
 #include "profile_bundle.h"
 #include "intent_head.h"
-#include "tone_stage.h"
 
 // Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
 struct RgbImage {
@@ -355,22 +354,18 @@ struct OffsetScanResult {
   double time_ms = 0.0;
 };
 
-// The white-light tone stage's plan (tone_stage.h): the tone heads' predictions (intent_head.h, on features an inference
-// of the fit already produced), the descriptors of the final render's preview and the curve between them; the
-// conversion applies it to the final image.
+// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (intent_head.h, on features an
+// inference of the fit already produced) and the final render's preview; the conversion solves the curve between the
+// preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {
-  bool planned = false;           // a curve was solved and the conversion applies it
+  bool planned = false;           // a curve was solved (by the conversion) and the conversion applies it
   const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
   // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate) or "final" (the final state's preview,
   // one inference, when the scan did not run); "search" (the intent preview) only if that inference failed.
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
-  ToneDescriptors render;         // the final render's preview before the stage
-  ToneTargets targets;            // the descriptors the curve aims at
-  ToneCurve curve;                // the curve and the chroma factor
-  double chroma_after = 0.0;      // the preview's mean chroma with the curve and that factor (aim: render.Cmean)
-  // The preview (8-bit RGB at DINOv3's size), kept for the conversion, which caps the highlight move on the final
-  // image where it would clip (tone_plan_for_image) and solves the curve again there.
+  // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the
+  // highlight move on the final image where it would clip (tone_plan_for_image) and solves the curve again there.
   std::vector<uint8_t> preview;
 };
 
@@ -455,7 +450,8 @@ struct CurveRefitResult {
 //      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
 //      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
 //      roll-off measured again);
-//   5. with tone_head, the tone stage's plan (ToneStagePlan) for the conversion to apply to the final image.
+//   5. with tone_head, the tone stage's plan (ToneStagePlan: the heads' predictions and the final render's preview)
+//      for the conversion to solve and apply to the final image.
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
 // ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
 // parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and

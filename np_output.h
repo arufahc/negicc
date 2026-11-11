@@ -37,6 +37,12 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
+// The white-light tone stage's types (np_pipeline.h), which the sidecar refers to.
+struct ToneCurve;
+struct ToneTargets;
+struct ToneClip;
+struct TonePlanCurve;
+
 struct FileFingerprint {
   bool ok = false;
   uintmax_t size = 0;
@@ -117,9 +123,10 @@ struct Sidecar {
   bool replay_offset_given = false, replay_offset_other_bracket = false;
   const ToneCurve* tone_curve = nullptr;
   const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
+  const TonePlanCurve* tone_plan = nullptr;   // with curve_fit: the tone stage's plan the conversion solved from it
   double tone_share = 1.0;
   bool tone_applied = false;
-  ToneClip tone_clip;
+  const ToneClip* tone_clip = nullptr;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
   const negicc::InputCurves* cli_input_curves = nullptr;

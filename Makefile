@@ -301,7 +301,7 @@ bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h colo
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h intent_head.h tone_stage.h dinov3_preprocess.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h intent_head.h dinov3_preprocess.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -414,7 +414,7 @@ NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_raw.cc np_geometry.cc np
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_input.h neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h flat_sample.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
-          multi_target_optimizer.h input_curves.h intent_head.h tone_stage.h embedded_data.h 3rd_party/tiff_head.h
+          multi_target_optimizer.h input_curves.h intent_head.h embedded_data.h 3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
