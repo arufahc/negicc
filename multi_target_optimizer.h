@@ -366,7 +366,7 @@ struct ToneStagePlan {
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
   // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the
-  // highlight move on the final image where it would clip (tone_plan_for_image) and solves the curve again there.
+  // highlight move on the final image where it would clip (tone_plan_for_image), solving it again at a smaller share.
   std::vector<uint8_t> preview;
 };
 

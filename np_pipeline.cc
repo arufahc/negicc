@@ -484,12 +484,12 @@ static inline double tone_white_clip_share(const uint16_t* rgb, int w, int h, in
 
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
-                              ToneTargets* targets, double* share) {
+                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
+                              double* share) {
     const double before = tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, nullptr);
-    ToneTargets t1;
-    const ToneCurve c1 = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, 1.0, &t1);
+    const ToneCurve& c1 = designed;
     *share = 1.0;
-    *targets = t1;
+    *targets = designed_targets;
     auto ok = [&](const ToneCurve& c) {
         return tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, &c) <= before + kToneClipAllowance;
     };
@@ -2828,7 +2828,8 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                                             plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
                                             plan.preview.data(),
                                             plan.preview.size() / 3, rgb, tp->imgdata.sizes.iwidth,
-                                            tp->imgdata.sizes.iheight, stride, &scan.tone_targets, &scan.tone_share);
+                                            tp->imgdata.sizes.iheight, stride, s.tone_plan.curve, s.tone_plan.targets,
+                                            &scan.tone_targets, &scan.tone_share);
     }
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;

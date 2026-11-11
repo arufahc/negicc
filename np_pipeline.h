@@ -133,12 +133,13 @@ double tone_mean_chroma_after(const uint8_t* rgb, size_t n, const ToneCurve& q);
 ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                     const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets);
 
-// The plan's curve for a final image: the designed moves, or, where they would clip more than kToneClipAllowance
-// beyond the image's own clipping, the largest share of the highlight and range moves that does not (see above).
-// share gets the share kept.
+// The plan's curve for a final image: the designed moves (designed, solved for designed_targets by tone_plan at
+// share 1), or, where they would clip more than kToneClipAllowance beyond the image's own clipping, the largest share
+// of the highlight and range moves that does not (see above). share gets the share kept.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
-                              ToneTargets* targets, double* share);
+                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
+                              double* share);
 
 // rgb: interleaved 16-bit sRGB with `stride` uint16 per pixel (3 or 4), n pixels.
 ToneClip apply_tone_stage(uint16_t* rgb, size_t n, int stride, const ToneCurve& q);
