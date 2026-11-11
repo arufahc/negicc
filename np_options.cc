@@ -26,6 +26,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 #include "argparse/argparse.hpp"
 #include "embedded_data.h"
@@ -95,6 +96,26 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
 }
 
 // --roi: 'auto [h|v]', or x y w h [rot_cw [hflip [vflip]]]. False with the error reported.
+// The items of a comma-separated value, empty ones included ("1,,2" has three).
+static std::vector<std::string> split_csv(const std::string& v) {
+  std::vector<std::string> items;
+  for (size_t p0 = 0;;) {
+    const size_t p1 = v.find(',', p0);
+    items.push_back(v.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
+    if (p1 == std::string::npos) return items;
+    p0 = p1 + 1;
+  }
+}
+
+// One item of a recorded-numbers value: the whole item a finite number (strtof for float, strtod for double).
+template <typename T>
+static bool parse_number(const std::string& item, T& x) {
+  char* end = nullptr;
+  if constexpr (std::is_same_v<T, float>) x = std::strtof(item.c_str(), &end);
+  else x = std::strtod(item.c_str(), &end);
+  return !item.empty() && end && *end == '\0' && std::isfinite(x);
+}
+
 static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
   if (roi_tokens.empty()) {
     log_error("--roi requires arguments\n");
@@ -426,13 +447,7 @@ int parse_options(int ac, char* av[], Options& o) {
     std::string fcv = parser.get<std::string>("--fit_curves");
     const bool ref_first = fcv.compare(0, 4, "ref:") == 0;
     if (ref_first) fcv.erase(0, 4);
-    std::vector<std::string> fc;
-    for (size_t p0 = 0;;) {
-      const size_t p1 = fcv.find(',', p0);
-      fc.push_back(fcv.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
-      if (p1 == std::string::npos) break;
-      p0 = p1 + 1;
-    }
+    const std::vector<std::string> fc = split_csv(fcv);
     if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on" ? Options::kFitCurvesOn : fc[0] == "off" ? Options::kFitCurvesOff
                                                                            : Options::kFitCurvesAuto;
@@ -441,9 +456,7 @@ int parse_options(int ac, char* av[], Options& o) {
       // only): the red highlight-cliff curve's kR, refR and u_loR appended (the fit's cliff pass bends R too).
       float v[13];
       for (size_t i = 0; i < fc.size(); ++i) {
-        char* end = nullptr;
-        v[i] = std::strtof(fc[i].c_str(), &end);
-        if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
+        if (!parse_number(fc[i], v[i])) {
           log_error("--fit_curves: '%s' is not a number (give off, auto, on, or "
                     "ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB with u_loG,u_loB appended for a held curve)\n",
                     fc[i].c_str());
@@ -541,19 +554,10 @@ int parse_options(int ac, char* av[], Options& o) {
     const std::string v = parser.get<std::string>(name);
     const std::string pre = prefix;
     if (v.compare(0, pre.size(), pre) == 0) {
-      std::stringstream ss(v.substr(pre.size()));
-      std::string item;
-      int k = 0;
-      while (std::getline(ss, item, ',')) {
-        char* end = nullptr;
-        const double x = std::strtod(item.c_str(), &end);
-        if (k >= count || item.empty() || !end || *end != '\0' || !std::isfinite(x)) {
-          k = -1;
-          break;
-        }
-        out[k++] = x;
-      }
-      if (k == count) {
+      const std::vector<std::string> items = split_csv(v.substr(pre.size()));
+      bool ok = (int)items.size() == count;
+      for (int k = 0; ok && k < count; ++k) ok = parse_number(items[k], out[k]);
+      if (ok) {
         given = true;  // nothing is searched or predicted: the recorded values are replayed
         return true;
       }
