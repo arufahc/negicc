@@ -125,6 +125,23 @@ static std::string num_str(double val, const char* fmt) {
   return buf;
 }
 
+// The tint trim's tables in the sidecar, added to j: theta and the pivots in full (17 digits), so the export's
+// tables can be rebuilt from them exactly.
+static void put_tint_trim_tables(ordered_json& j, const TintTrimTables& t) {
+  auto n17 = [](double v) { return num(v, "%.17g"); };
+  auto n9 = [](double v) { return num(v, "%.9g"); };
+  j["theta"] = {n17(t.theta[0]), n17(t.theta[1]), n17(t.theta[2]), n17(t.theta[3])};
+  j["piv"] = {n17(t.piv[0]), n17(t.piv[1]), n17(t.piv[2])};
+  j["diag"] = {n9(t.diag[0]), n9(t.diag[1]), n9(t.diag[2])};
+  j["film_base"] = {n9(t.film_base[0]), n9(t.film_base[1]), n9(t.film_base[2])};
+}
+
+// A tone curve in full (17 digits): the curve the image went through, exactly.
+static ordered_json tone_curve_json(const ToneCurve& q) {
+  return {{"black", num(q.black, "%.17g")}, {"white", num(q.white, "%.17g")}, {"gamma", num(q.gamma, "%.17g")},
+          {"contrast", num(q.contrast, "%.17g")}, {"chroma", num(q.chroma, "%.17g")}};
+}
+
 static ordered_json rect_json(const FilmRect& r) {
   return {{"cx", num(r.cx, "%.1f")}, {"cy", num(r.cy, "%.1f")}, {"w", num(r.w, "%.1f")}, {"h", num(r.h, "%.1f")},
           {"angle_deg", num(r.angle_deg, "%.3f")}};
@@ -436,25 +453,23 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     const TintTrimResult& os = f->tint_trim;
     ordered_json cands = ordered_json::array();
     for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
-    // s and theta in full (17 digits), so the export's tables can be rebuilt from them exactly.
-    auto n17 = [](double v) { return num(v, "%.17g"); };
-    const TintTrimTables& ot = os.tables;
-    j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)},
-                                        {"se", n9(os.se)},
-                                        {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
-                                                                                  {"conf", n9(os.trim_conf)}}
-                                                                    : ordered_json(nullptr)},
-                                        {"theta",
-                                         {n17(ot.theta[0]), n17(ot.theta[1]), n17(ot.theta[2]), n17(ot.theta[3])}},
-                                        {"piv", {n17(ot.piv[0]), n17(ot.piv[1]), n17(ot.piv[2])}},
-                                        {"diag", {n9(ot.diag[0]), n9(ot.diag[1]), n9(ot.diag[2])}},
-                                        {"film_base", {n9(ot.film_base[0]), n9(ot.film_base[1]), n9(ot.film_base[2])}},
-                                        {"lattice", os.lattice}, {"lattice_kept", os.lattice_kept},
-                                        {"residual_pivot", n9(os.residual_pivot)},
-                                        // [s, residual predicted from the pivot's field, residual on its own field]
-                                        {"candidates", cands}, {"inferences", os.inferences},
-                                        {"time_ms", num(os.time_ms, "%.1f")}}
-                         : ordered_json{{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
+    // s in full (17 digits), with the tables, so the export's tables can be rebuilt from them exactly.
+    if (os.ran) {
+      ordered_json o = {{"applied", true}, {"s", num(os.s, "%.17g")}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
+                        {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
+                                                                   {"conf", n9(os.trim_conf)}}
+                                                    : ordered_json(nullptr)}};
+      put_tint_trim_tables(o, os.tables);
+      o["lattice"] = os.lattice;
+      o["lattice_kept"] = os.lattice_kept;
+      o["residual_pivot"] = n9(os.residual_pivot);
+      o["candidates"] = cands;  // [s, residual predicted from the pivot's field, residual on its own field]
+      o["inferences"] = os.inferences;
+      o["time_ms"] = num(os.time_ms, "%.1f");
+      j["offset"] = o;
+    } else {
+      j["offset"] = {{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
+    }
   } else {
     j["lambda"] = nullptr;
     j["bound"] = nullptr;
@@ -466,14 +481,9 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["remeter"] = nullptr;
     // A replayed tint trim (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
     if (const TintTrimTables* ot = sc.tint_trim_tables) {
-      auto n17 = [](double v) { return num(v, "%.17g"); };
-      auto n9 = [](double v) { return num(v, "%.9g"); };
-      j["offset"] = {{"applied", true},
-                     {"source", "replay"},
-                     {"theta", {n17(ot->theta[0]), n17(ot->theta[1]), n17(ot->theta[2]), n17(ot->theta[3])}},
-                     {"piv", {n17(ot->piv[0]), n17(ot->piv[1]), n17(ot->piv[2])}},
-                     {"diag", {n9(ot->diag[0]), n9(ot->diag[1]), n9(ot->diag[2])}},
-                     {"film_base", {n9(ot->film_base[0]), n9(ot->film_base[1]), n9(ot->film_base[2])}}};
+      ordered_json o = {{"applied", true}, {"source", "replay"}};
+      put_tint_trim_tables(o, *ot);
+      j["offset"] = o;
     } else {
       j["offset"] = nullptr;
     }
@@ -769,9 +779,7 @@ bool write_json_sidecar(const Sidecar& sc) {
           {"moves", {{"shadow", n9((float)kToneShadowMove)}, {"highlight", n9((float)kToneHighlightMove)},
                      {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)}}},
           // In full (17 digits): the curve the image went through, exactly.
-          {"curve", {{"black", num(tc.black, "%.17g")}, {"white", num(tc.white, "%.17g")},
-                     {"gamma", num(tc.gamma, "%.17g")}, {"contrast", num(tc.contrast, "%.17g")},
-                     {"chroma", num(tc.chroma, "%.17g")}}},
+          {"curve", tone_curve_json(tc)},
           {"chroma_after", n9((float)pl.chroma_after)},
           {"clip", clip_json()}};
     } else {
@@ -782,9 +790,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     j["tone_stage"] = {
         {"applied", sc.tone_applied},
         {"source", "replay"},
-        {"curve", {{"black", num(q->black, "%.17g")}, {"white", num(q->white, "%.17g")},
-                   {"gamma", num(q->gamma, "%.17g")}, {"contrast", num(q->contrast, "%.17g")},
-                   {"chroma", num(q->chroma, "%.17g")}}},
+        {"curve", tone_curve_json(*q)},
         {"clip", clip_json()}};
   } else {
     j["tone_stage"] = nullptr;
