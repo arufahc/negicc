@@ -1923,7 +1923,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 // against: each lattice point's cells are predicted as the pivot's cells plus the change the grid model gives, and
 // scored by the a*-only residual S(s) = mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are rendered and
 // scored on their own fields; the best of those, moved one bootstrap standard error of the residual's minimum toward
-// magenta (the owner prefers a frame a little magenta to a little green), is the trim applied. Lattice points that
+// magenta (a slightly magenta frame is preferred to a slightly green one), is the trim applied. Lattice points that
 // make the grid greener than Auto (the joint fit's guard, read on the export's render) are not candidates.
 constexpr double kTintTrimMax = 8.0;       // lattice s in [-8, 8] a*,
 constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*

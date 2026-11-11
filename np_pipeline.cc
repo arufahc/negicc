@@ -1355,14 +1355,13 @@ int prepare(const Options& o, Setup& s) {
   const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
   if (fit_on || o.input_curves_given) {
     const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
-    // TODO: extending the fitted curves and the tone stage to single-shot tri-LED is deferred. A one-frame experiment
-    // showed it works after five changes: (1) let the fit run on a single-shot crosstalk bundle (other tri-LED cases
-    // unchanged); (2) call the fit on the CFA path, which Sony raws take and which has no fit call; (3) drop
-    // the crosstalk rejection in fit_input_curves_after_search; (4) run the fit on M_frame so its E is in the
-    // export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor the curves at the film base in
-    // camera RGB, since the detector returns the base already crosstalk-corrected and M_frame would apply the matrix
-    // a second time. Open before enabling: on that frame the fit lowered the mean chroma by about a fifth, and only
-    // that one frame was checked (no three-shot, no other stocks).
+    // TODO: the fitted curves and the tone stage on single-shot tri-LED. They need five changes: (1) let the fit run on
+    // a single-shot crosstalk bundle (other tri-LED cases unchanged); (2) call the fit on the CFA path, which Sony raws
+    // take and which has no fit call; (3) drop the crosstalk rejection in fit_input_curves_after_search; (4) run the
+    // fit on M_frame so its E is in the export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor
+    // the curves at the film base in camera RGB, since the detector returns the base already crosstalk-corrected and
+    // M_frame would apply the matrix a second time. Open before enabling: the fit lowers the mean chroma (by about a
+    // fifth where tried), and three-shot scans and other stocks are untested.
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
       log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: with a crosstalk matrix the film base "
                 "does not mark the dark end of every channel\n", opt);

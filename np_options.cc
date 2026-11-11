@@ -419,7 +419,7 @@ int parse_options(int ac, char* av[], Options& o) {
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
   if (parser.is_used("--fit_curves")) {
-    // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves <value> in.ARW").
+    // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves on in.ARW").
     // Recorded curves lead with "ref:" and the refs (refG,refB,u_medG,u_medB,aG,kG,aB,kB[,u_loG,u_loB]): the older
     // order led with aG, and a negative aG made the value start with '-', which argparse rejects as an unknown option
     // (with "--fit_curves=" too), so a sidecar's cli_equivalent did not parse. The older order is still read.

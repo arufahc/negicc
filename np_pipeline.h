@@ -80,12 +80,11 @@ constexpr double kToneLo[4] = {-15.0, 80.0, 0.7, 0.7};
 constexpr double kToneHi[4] = {15.0, 110.0, 1.45, 1.5};
 // The prior's weight, and its scales: 5 L* for the black and white points, 0.1 in log for gamma and contrast.
 constexpr double kTonePrior = 0.02;
-// Above the render's L98 no target says where the curve goes, and two quite different white points can fit the four
-// targets about equally (on a night frame, 89 or 110): which one won flipped with a 1 L* change of the render. This
-// weight holds the curve's rise above L98 to the input's, f(100) = f(L98) + (100 - L98) (slope 1 on average there),
-// but never above white, f(100) <= 100, so a lifted L98 does not push the top past white into clipping. That makes
-// the solution unique, and the solve starts from several white points and keeps the lowest cost, so it does not
-// depend on which basin a single start falls into.
+// Above the render's L98 no target says where the curve goes, and quite different white points can fit the four targets
+// about equally, so a small change of the render could switch between them. This weight holds the curve's rise above
+// L98 to the input's, f(100) = f(L98) + (100 - L98) (slope 1 on average there), but never above white, f(100) <= 100,
+// so a lifted L98 does not push the top past white into clipping. That makes the solution unique, and the solve starts
+// from several white points and keeps the lowest cost, so it does not depend on which basin a single start falls into.
 constexpr double kToneTopSlope = 0.07;
 constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // White clipping, at its two sources. A colour the curve lifts out of the sRGB gamut has its chroma scaled toward
