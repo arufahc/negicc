@@ -464,8 +464,6 @@ struct JointCurveFit {
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
   int renders = 0;      // grid median renders spent solving E (the evaluations' and the cut-backs')
   int iterations = 0;   // accepted Levenberg-Marquardt steps
-  int polish_evaluations = 0;  // of the evaluations, the coordinate polish's (counted the same way)
-  int start = 0;               // the seed that won (CurveFitOptions::starts)
   bool converged = false;      // every feasible run settled (a step or gain below tolerance), none stalled
   // False when no seed is feasible (not even Auto's g and b without curves keeps target_L within the E bounds): the
   // result is then Auto's g, b and e0 with no curves, which the caller should not take as a fit.
@@ -559,7 +557,7 @@ class JointCurveModel {
     neu_idx_.clear();
     neu_w_.clear();
     has_anchors_ = false;
-    conf_ = w_off_ = w_slope_ = w_quad_ = 0.0f;
+    conf_ = w_off_ = w_slope_ = 0.0f;
     c_a_ = c_b_ = 0.0f;
     k_target_a_ = k_target_b_ = 0.0f;
     decisions_ = NeutralTargetDecisions{};
@@ -609,10 +607,8 @@ class JointCurveModel {
 
     float w_sum = 0.0f;
     double sa_act = 0.0, sb_act = 0.0, w_act = 0.0;
-    int n_bands = 0;
     for (int b = 0; b < 4; ++b) {
       if (b_sel[b].empty()) continue;
-      ++n_bands;
       const size_t min_denom = (b == 3 && (int)bands[0].size() >= 3 * total / 4) ? 8 : 16;
       double band_mass = 0.0;
       for (int i : b_sel[b]) band_mass += pw[i];
@@ -647,33 +643,17 @@ class JointCurveModel {
       sa += w * lab0[i].a;
       sb += w * lab0[i].b;
     }
-    double vL0 = 0.0, covLa0 = 0.0, covLb0 = 0.0, sz3_0 = 0.0;
+    double vL0 = 0.0, covLa0 = 0.0, covLb0 = 0.0;
     for (int k = 0; k < m; ++k) {
       const int i = neu_idx_[k];
       const double w = neu_w_[k];
       const double dL = lab0[i].L - sL;
-      const double z = dL / 50.0;
       vL0 += w * dL * dL;
-      sz3_0 += w * z * z * z;
       covLa0 += w * dL * (lab0[i].a - sa);
       covLb0 += w * dL * (lab0[i].b - sb);
     }
     const double ka0 = 50.0 * covLa0 / (vL0 + 25.0);
     const double kb0 = 50.0 * covLb0 / (vL0 + 25.0);
-    const double vz0 = vL0 / 2500.0;
-    const double mu3_0 = sz3_0 / (vz0 + 1e-4);
-    double vq0 = 0.0, sqa0 = 0.0, sqb0 = 0.0;
-    for (int k = 0; k < m; ++k) {
-      const int i = neu_idx_[k];
-      const double w = neu_w_[k];
-      const double z = (lab0[i].L - sL) / 50.0;
-      const double uq = 4.0 * (z * z - vz0 - mu3_0 * z);
-      const double ea = (lab0[i].a - sa) - ka0 * z;
-      const double eb = (lab0[i].b - sb) - kb0 * z;
-      vq0 += w * uq * uq;
-      sqa0 += w * uq * ea;
-      sqb0 += w * uq * eb;
-    }
 
     // The scatter: the weighted median distance of the anchors from their tone trend (ties ordered by weight).
     std::vector<std::pair<float, float>> dev(m);
@@ -716,7 +696,6 @@ class JointCurveModel {
             std::min(1.0f, (float)mass / 48.0f);
     w_off_ = conf_ / 1.5f;
     w_slope_ = conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
-    w_quad_ = (n_bands >= 3) ? conf_ * std::sqrt((float)(vq0 / (vq0 + 0.08))) / 4.0f : 0.0f;
 
     // Slope shrink: the anchors' weighted L* spread (their weights renormalised over them; a separate pass from vL0,
     // which is centred on a mean summed in another order).
@@ -943,7 +922,7 @@ class JointCurveModel {
   PipelineConfig cfg_;
   CurveFrame f_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
-  float conf_ = 0.0f, c_a_ = 0.0f, c_b_ = 0.0f, w_off_ = 0.0f, w_slope_ = 0.0f, w_quad_ = 0.0f;
+  float conf_ = 0.0f, c_a_ = 0.0f, c_b_ = 0.0f, w_off_ = 0.0f, w_slope_ = 0.0f;
   float k_target_a_ = 0.0f, k_target_b_ = 0.0f;  // the slope residuals' target (slope shrink)
   NeutralTargetDecisions decisions_;
   std::vector<float> rows_, L_, ug_, ub_;
@@ -1457,7 +1436,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
-                                            float e_hi = 0.0f, const float* = nullptr) {
+                                            float e_hi = 0.0f) {
   const JointCurveFit free_fit =
       fit_input_curves_joint_pass(cfg, f, e0, g0, b0, mu, sigma, target_L, table_n, o, e_lo, e_hi, false);
   JointCurveFit out = free_fit;

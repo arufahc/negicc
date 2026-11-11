@@ -359,9 +359,10 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
-                {"solver", "joint"}, {"e", n9(f->fit_e)}, {"renders", f->fit_renders},
-                {"iterations", f->fit_iterations}, {"converged", f->fit_converged},
-                {"polish_evaluations", f->fit_polish}, {"start", f->fit_start}, {"passes", f->fit_passes},
+                {"solver", "joint"}, {"e", n9(f->fit.e)}, {"renders", f->fit.renders},
+                {"iterations", f->fit.iterations}, {"converged", f->fit.converged},
+                // No longer varied (the coordinate polish and multiple seeds are gone); kept for readers.
+                {"polish_evaluations", 0}, {"start", 0}, {"passes", f->fit_passes},
                 {"intent_repredicted", f->intent_repredicted}};
     j["params_before"] = {{"e", n9(f->params_before.e)}, {"g", n9(f->params_before.g)}, {"b", n9(f->params_before.b)},
                           {"x_hi", n9(f->params_before.shoulder)}};
@@ -410,7 +411,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
                     {"guard", [&] {
-                       const negicc::GreenGuard& gd = f->guard;
+                       const negicc::GreenGuard& gd = f->fit.guard;
                        ordered_json bands = ordered_json::array();
                        for (int bd = 0; bd < 4; ++bd)
                          bands.push_back({{"cells", gd.band_cells[bd]}, {"mass", n9(gd.band_mass[bd])},

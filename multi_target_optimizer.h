@@ -372,7 +372,9 @@ struct ToneStagePlan {
 
 // What fit_input_curves_after_search did.
 struct CurveRefitResult {
-  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
+  // The joint fit of the last pass: its curves (with ref and u_med), g, b and E, its data losses, evaluations, grid
+  // renders for E and steps, whether it settled, and its never-greener guard.
+  negicc::JointCurveFit fit;
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
   ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
   float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target), on the export's render at Auto's
@@ -414,24 +416,19 @@ struct CurveRefitResult {
   negicc::CurveFitOptions options;
   // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, the fit's
   // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
-  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit_e
+  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit.e
   negicc::NeutralStats neutral_auto, neutral_export;
   // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them it kept Auto's colour.
   bool neutral_anchors = false;
   // What the slope shrink and offset gate decided on those anchors (JointCurveModel::decisions).
   negicc::NeutralTargetDecisions neutral_decisions;
-  // The never-greener guard of the last fit pass (negicc::GreenGuard), and whose p it weighted by: "search" (the
-  // search's chosen preview) or "refit" (predicted again at the search's final parameters, intent_repredicted).
-  negicc::GreenGuard guard;
+  // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
+  // the search's final parameters, intent_repredicted).
   const char* guard_p_source = "search";
   // Step 4, the tint trim, and the tone stage's plan.
   TintTrimResult tint_trim;
   ToneStagePlan tone;
   double time_ms = 0.0;
-  // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
-  float fit_e = 1.0f;
-  int fit_renders = 0, fit_iterations = 0, fit_polish = 0, fit_start = 0;
-  bool fit_converged = false;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light

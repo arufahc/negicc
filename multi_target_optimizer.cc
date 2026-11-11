@@ -2709,22 +2709,9 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.x_hi_fit = x_fit;
     out.fallback = nullptr;
     const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding);
-    const negicc::JointCurveFit jf =
-        negicc::fit_input_curves_joint(cfg, cf, e_start, res.params.g, res.params.b, mu.data(), sigma.data(),
-                                       fit_target_L, table_n, fit_opts, e_lo_fit, e_hi_fit);
-    out.fit.curves = jf.curves;
-    out.fit.g = jf.g;
-    out.fit.b = jf.b;
-    out.fit.loss_before = jf.loss_before;
-    out.fit.loss_after = jf.loss_after;
-    out.fit.evaluations = jf.evaluations;
-    out.fit_e = jf.e;
-    out.fit_renders = jf.renders;
-    out.fit_iterations = jf.iterations;
-    out.fit_converged = jf.converged;
-    out.fit_polish = jf.polish_evaluations;
-    out.fit_start = jf.start;
-    out.guard = jf.guard;
+    out.fit = negicc::fit_input_curves_joint(cfg, cf, e_start, res.params.g, res.params.b, mu.data(), sigma.data(),
+                                             fit_target_L, table_n, fit_opts, e_lo_fit, e_hi_fit);
+    const negicc::JointCurveFit& jf = out.fit;
     if (opts.verbose) {
       const negicc::InputCurves& c = out.fit.curves;
       std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
