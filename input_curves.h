@@ -1111,8 +1111,10 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     data = model.residuals(e, p[0], p[1], shape_of(p), r);
     double sum = data;
     if (guard_ready) {
-      double v[2];
-      guard_means(p, e, v);
+      // The hinges are 0 on the unguarded pass (the guard is measured at its result only), so the means are needed
+      // only on the guarded one; the residual vector keeps its two guard entries either way.
+      double v[2] = {0.0, 0.0};
+      if (guard_path) guard_means(p, e, v);
       for (int k = 0; k < 2; ++k) {
         const double h = guard_path && out.guard.counted[k]
                              ? (double)kGreenGuardWeight *
