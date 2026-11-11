@@ -1471,8 +1471,8 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
 // over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. It is used
 // instead of a fixed point on E, g and b after the fit, which would follow its own darker render.
 inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
-                                 float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
-                                 int iters = 40) {
+                                  float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
+                                  int iters = 40) {
   const ProfileData base = cfg.profile;
   CombinedProfile comb;
   auto median_at = [&](float e) {

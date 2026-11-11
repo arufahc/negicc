@@ -1949,8 +1949,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
           if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                             scan.auto_res, fit_opts, export_encoding,
-                                             s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
+                                   scan.auto_res, fit_opts, export_encoding,
+                                   s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }

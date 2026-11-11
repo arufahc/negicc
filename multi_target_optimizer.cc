@@ -2464,10 +2464,10 @@ void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
 // negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
 bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
-                                   double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                                   const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, const ToneHead* tone_head,
-                                   WhiteLightFitResult& out) {
+                         double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                         const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
+                         int encoding, const ToneHead* tone_head,
+                         WhiteLightFitResult& out) {
   // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
@@ -2630,7 +2630,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
     out.e_lo = std::min(out.e_lo, e_int * 0.25f);
     out.e_hi = std::max(out.e_hi, e_int * 4.0f);
     e_start = negicc::solve_e_for_median_L(cfg_auto, cf, negicc::InputCurves{}, e_int, out.e_lo, out.e_hi, res.params.g,
-                                          res.params.b, fit_target_L, &out.fallback_clipped);
+                                           res.params.b, fit_target_L, &out.fallback_clipped);
     out.fallback_e_moved = std::fabs(e_start - e_int) > 1e-6f * std::max(1.0f, std::fabs(e_int));
     out.x_hi_auto = rolloff_at(prof.data, e_start, res.params.g, res.params.b, &q995_auto);
     cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
@@ -2667,7 +2667,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out.remeter_passes;
       e_new = negicc::solve_e_for_median_L(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
-                                          e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, fit_target_L, &clipped);
+                                           e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, fit_target_L, &clipped);
       comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
       float q = 0.0f;
       const float x_new = rolloff_at(comb.data, e_new, out.fit.g, out.fit.b, &q);

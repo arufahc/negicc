@@ -456,8 +456,8 @@ struct WhiteLightFitResult {
 // the fit run again (up to twice) when that roll-off differs from the one it ran with.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
-                                   double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                                   const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
+                         double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                         const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
+                         int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H
