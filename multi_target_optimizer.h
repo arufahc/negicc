@@ -124,7 +124,7 @@ struct ParamSearchOptions {
   bool verbose = true;
   // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
   // rebate, bare light or holder. The curve fit then leaves out the grid cells that are holder-dark, and (when
-  // film_base_is_rebate is true) those at the film base's level (fit_input_curves_after_search). When the film base
+  // film_base_is_rebate is true) those at the film base's level (run_white_light_fit). When the film base
   // came from the scan's statistics (the 99.5th percentile of the film itself), its level is the thinnest picture
   // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;
@@ -303,7 +303,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
 // curves (anchored at from = {E, g, b}) re-anchored at to = {E, g, b} on frame, for the knobs, which move E, g and b
 // after the curves were fitted or recorded: ref, u_med and u_lo moved by what the frame's film base and grid move
 // between anchor_curves at from and at to, so with to == from the result is curves unchanged, bit for bit. frame,
-// scan_shutter_s, scan_iso and opts (its film base and crop) as fit_input_curves_after_search took them; engine gives
+// scan_shutter_s, scan_iso and opts (its film base and crop) as run_white_light_fit took them; engine gives
 // the grid's size only (it need not be loaded). Where the re-anchored curves leave the shape over the bracket's input
 // table (curve_shape_ok at max_dev_stops), each channel's a and k are scaled down by the largest factor that keeps it
 // (scale[0], scale[1]; 1: not needed). False (reported) on a bundle with a crosstalk matrix or a bad bracket.
@@ -333,7 +333,7 @@ struct TintTrimTables {
 // composed in front, at E, g and b, in place.
 void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, float e, float g, float b);
 
-// The tint trim the white-light fit's result takes from the network (fit_input_curves_after_search, step
+// The tint trim the white-light fit's result takes from the network (run_white_light_fit, step
 // 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
 struct TintTrimResult {
   bool ran = false;               // the trim ran and was applied (s may be 0)
@@ -370,8 +370,8 @@ struct ToneStagePlan {
   std::vector<uint8_t> preview;
 };
 
-// What fit_input_curves_after_search did.
-struct CurveRefitResult {
+// What run_white_light_fit did.
+struct WhiteLightFitResult {
   // The joint fit of the last pass: its curves (with ref and u_med), g, b and E, its data losses, evaluations, grid
   // renders for E and steps, whether it settled, and its never-greener guard.
   negicc::JointCurveFit fit;
@@ -441,7 +441,7 @@ struct CurveRefitResult {
 //   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
 //      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its
 //      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
-//      own result with no curves (CurveRefitResult::fallback);
+//      own result with no curves (WhiteLightFitResult::fallback);
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
 //      (apply_input_curves on bundle.targets[res.target_idx]);
 //   4. the tint trim (TintTrimResult): a lattice of "pure a*" offsets of the
@@ -455,9 +455,9 @@ struct CurveRefitResult {
 // parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
 // the fit run again (up to twice) when that roll-off differs from the one it ran with.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
-bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, const ToneHead* tone_head, CurveRefitResult& out);
+                                   int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

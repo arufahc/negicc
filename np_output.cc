@@ -355,13 +355,13 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   // intent_lightness, as remeter.fallback): the bracket's own tables, so no channels and no hold. Before, the fallback's
   // identity curves were written as channels (a = k = 0, with an anchor) and replayed as recorded curves.
   const bool applied = c.active();
-  const CurveRefitResult* fr = sc.curve_fit;
+  const WhiteLightFitResult* fr = sc.curve_fit;
   j["applied"] = applied;
   j["fallback"] = fr && fr->fallback ? ordered_json(fr->fallback) : ordered_json(nullptr);
   j["channels"] = applied ? ch : ordered_json(nullptr);
   // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
   j["hold"] = applied ? ordered_json(c.hold) : ordered_json(nullptr);
-  if (const CurveRefitResult* f = sc.curve_fit) {
+  if (const WhiteLightFitResult* f = sc.curve_fit) {
     // The options the fit ran with (before, the defaults were written whatever ran, and half of them were missing).
     const negicc::CurveFitOptions& op = f->options;
     j["lambda"] = n9(op.lambda);
@@ -748,7 +748,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     return ordered_json{{"white_before", num(k.white_before, "%.6f")}, {"white_after", num(k.white_after, "%.6f")},
                         {"black_before", num(k.black_before, "%.6f")}, {"black_after", num(k.black_after, "%.6f")}};
   };
-  if (const CurveRefitResult* f = sc.curve_fit) {
+  if (const WhiteLightFitResult* f = sc.curve_fit) {
     auto n9 = [](double v) { return num(v, "%.9g"); };
     const ToneStagePlan& tp = f->tone;
     if (tp.planned && sc.tone_plan) {

@@ -230,7 +230,7 @@ struct Setup {
   // empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
-  CurveRefitResult curve_fit;
+  WhiteLightFitResult curve_fit;
   TonePlanCurve tone_plan;  // the tone stage's plan solved from curve_fit.tone (when curve_fit.tone.planned)
   // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
   // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
@@ -349,7 +349,7 @@ struct Scan {
   // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
-  // The white-light tone stage as convert applied it to the final image (CurveRefitResult::tone has the plan).
+  // The white-light tone stage as convert applied it to the final image (WhiteLightFitResult::tone has the plan).
   bool tone_applied = false;
   ToneClip tone_clip;
   ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)

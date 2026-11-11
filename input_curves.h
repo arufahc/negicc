@@ -1472,7 +1472,7 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
 // unreachable target returned a bound as if it were the answer.
 // negicc-station Iteration 230's F6L, which replaces the E/g/b fixed point after the curve fit (the fixed point
 // followed its own darker render).
-inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
+inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
                                  float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
                                  int iters = 40) {
   const ProfileData base = cfg.profile;
@@ -1508,7 +1508,7 @@ inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const 
 // The same around e0 over [e0 / 4, 4 e0] (the bounds before they were given).
 inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
                               float b, float target_L, int iters = 40) {
-  return remeter_e_median_in(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
+  return solve_e_for_median_L(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
 }
 
 }  // namespace negicc

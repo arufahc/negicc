@@ -2256,14 +2256,14 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
     }
     for (int k = 0; k < 4; ++k) u[k] = M[k][4] / M[k][k] * h[k];
   }
-  auto theta_of = [&](double s, double th[4]) {
+  auto theta_of = [&](double shift_a, double th[4]) {
     for (int k = 0; k < 4; ++k)
-      th[k] = std::clamp(s * u[k], k < 2 ? -kTintTrimMaxDensity : -kTintTrimMaxContrast,
+      th[k] = std::clamp(shift_a * u[k], k < 2 ? -kTintTrimMaxDensity : -kTintTrimMaxContrast,
                          k < 2 ? kTintTrimMaxDensity : kTintTrimMaxContrast);
   };
-  auto net_preview = [&](double s, std::vector<uint8_t>& pv, int& w, int& h) {
+  auto net_preview = [&](double shift_a, std::vector<uint8_t>& pv, int& w, int& h) {
     double th[4];
-    theta_of(s, th);
+    theta_of(shift_a, th);
     float ee, xx;
     finish(th, ee, xx);
     Tables T;
@@ -2320,15 +2320,15 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
   };
   const int K = (int)std::lround(2.0 * kTintTrimMax / kTintTrimStep) + 1;
   const int k_zero = K / 2;
-  std::vector<double> s_of(K), score(K);
+  std::vector<double> shift_a_of(K), score(K);
   std::vector<char> kept(K);
   std::vector<std::vector<double>> pred(K);
   std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (the trim cap)
 #pragma omp parallel for schedule(dynamic)
   for (int k = 0; k < K; ++k) {
-    s_of[k] = -kTintTrimMax + k * kTintTrimStep;
+    shift_a_of[k] = -kTintTrimMax + k * kTintTrimStep;
     double th[4];
-    theta_of(s_of[k], th);
+    theta_of(shift_a_of[k], th);
     std::vector<float> l;
     lab_th(th, l);
     if (w_in > 0.0) {
@@ -2359,12 +2359,12 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
   for (int k = 0; k < K; ++k)
     if (kept[k]) {
       pk.push_back(pred[k]);
-      sk.push_back(s_of[k]);
+      sk.push_back(shift_a_of[k]);
     }
   const double se = sk.size() >= 3 ? tint_trim_bootstrap_se(pk, sk, mu0, sg0, grid_w, grid_h) : 0.0;
 
   // Each candidate scored on its own field (the pivot's own, for s = 0); the lowest wins, the first on a tie.
-  double best_s = 0.0, best_v = 0.0;
+  double best_shift_a = 0.0, best_v = 0.0;
   bool have = false;
   tone_features = tf0;
   for (int k : order) {
@@ -2376,7 +2376,7 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
     } else {
       std::vector<uint8_t> cpv;
       int cw = 0, ch = 0;
-      net_preview(s_of[k], cpv, cw, ch);
+      net_preview(shift_a_of[k], cpv, cw, ch);
       std::vector<float> mu, sg;
       ++R.inferences;
       if (!fr.predict_net(cpv, cw, ch, mu, sg, tf)) continue;
@@ -2384,50 +2384,50 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
       net_cell_lab(cpv, cw, ch, xc);
       v = tint_trim_residual(xc, mu, sg);
     }
-    R.candidates.push_back({(float)s_of[k], (float)score[k], (float)v});
+    R.candidates.push_back({(float)shift_a_of[k], (float)score[k], (float)v});
     if (!have || v < best_v) {
       have = true;
-      best_s = s_of[k];
+      best_shift_a = shift_a_of[k];
       best_v = v;
       tone_features = std::move(tf);
     }
   }
-  double s_final = best_s + kTintTrimReadoutSE * se;
+  double shift_a_final = best_shift_a + kTintTrimReadoutSE * se;
   if (anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
-    auto anchor_at = [&](double s) {  // linear between lattice points
-      const double u = std::clamp((s + kTintTrimMax) / kTintTrimStep, 0.0, (double)(K - 1));
+    auto anchor_at = [&](double shift_a) {  // linear between lattice points
+      const double u = std::clamp((shift_a + kTintTrimMax) / kTintTrimStep, 0.0, (double)(K - 1));
       const int k0 = std::min((int)u, K - 2);
       return anchor_a[k0] + (u - k0) * (anchor_a[k0 + 1] - anchor_a[k0]);
     };
     const double a0 = anchor_a[k_zero];
     const double lim = std::fabs(a0) + kTintTrimCapTol / ((anchor_conf - 0.5) / 0.5);
-    const double s_uncapped = s_final;
-    if (std::fabs(anchor_at(s_final)) > lim) {
+    const double shift_a_uncapped = shift_a_final;
+    if (std::fabs(anchor_at(shift_a_final)) > lim) {
       const int steps = 200;
-      double s_ok = 0.0;
+      double shift_a_ok = 0.0;
       for (int j = 1; j <= steps; ++j) {
-        const double sj = s_uncapped * j / steps;
-        if (std::fabs(anchor_at(sj)) > lim) break;
-        s_ok = sj;
+        const double shift_a_j = shift_a_uncapped * j / steps;
+        if (std::fabs(anchor_at(shift_a_j)) > lim) break;
+        shift_a_ok = shift_a_j;
       }
-      s_final = s_ok;
+      shift_a_final = shift_a_ok;
     }
-    R.trim_capped = s_final != s_uncapped;
-    R.s_uncapped = s_uncapped;
+    R.trim_capped = shift_a_final != shift_a_uncapped;
+    R.s_uncapped = shift_a_uncapped;
     R.trim_conf = anchor_conf;
     if (R.trim_capped)
       std::cout << "Tint trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
-                << " at the fit, " << fixed(anchor_at(s_uncapped), 2, true) << " at s " << fixed(s_uncapped, 2, true)
-                << ", limit " << fixed(lim, 2) << ": s " << fixed(s_final, 2, true) << " (anchors "
-                << fixed(anchor_at(s_final), 2, true) << ")\n";
+                << " at the fit, " << fixed(anchor_at(shift_a_uncapped), 2, true) << " at s "
+                << fixed(shift_a_uncapped, 2, true) << ", limit " << fixed(lim, 2) << ": s "
+                << fixed(shift_a_final, 2, true) << " (anchors " << fixed(anchor_at(shift_a_final), 2, true) << ")\n";
   }
-  R.s_min = best_s;
+  R.s_min = best_shift_a;
   R.se = se;
-  R.s = s_final;
+  R.s = shift_a_final;
 
   // The export: the trim composed into the fitted tables, at its E and roll-off.
   double th[4];
-  theta_of(s_final, th);
+  theta_of(shift_a_final, th);
   float ee, xx;
   finish(th, ee, xx, &q995);
   Tables T;
@@ -2451,11 +2451,11 @@ void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, 
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
 // negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
-bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                                    int encoding, const ToneHead* tone_head,
-                                   CurveRefitResult& out) {
+                                   WhiteLightFitResult& out) {
   // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
   if (bundle.has_crosstalk) {
     std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base does "
@@ -2617,7 +2617,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.fallback_target_L = fit_target_L;
     out.e_lo = std::min(out.e_lo, e_int * 0.25f);
     out.e_hi = std::max(out.e_hi, e_int * 4.0f);
-    e_start = negicc::remeter_e_median_in(cfg_auto, cf, negicc::InputCurves{}, e_int, out.e_lo, out.e_hi, res.params.g,
+    e_start = negicc::solve_e_for_median_L(cfg_auto, cf, negicc::InputCurves{}, e_int, out.e_lo, out.e_hi, res.params.g,
                                           res.params.b, fit_target_L, &out.fallback_clipped);
     out.fallback_e_moved = std::fabs(e_start - e_int) > 1e-6f * std::max(1.0f, std::fabs(e_int));
     out.x_hi_auto = rolloff_at(prof.data, e_start, res.params.g, res.params.b, &q995_auto);
@@ -2654,7 +2654,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
     out.remeter_converged = false;
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out.remeter_passes;
-      e_new = negicc::remeter_e_median_in(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
+      e_new = negicc::solve_e_for_median_L(make_pipeline_config(prof.data, AUTO_KNEE, x, encoding), cf, out.fit.curves,
                                           e_centre, out.e_lo, out.e_hi, out.fit.g, out.fit.b, fit_target_L, &clipped);
       comb.build(prof.data, negicc::anchor_curves(out.fit.curves, cf, e_new, out.fit.g, out.fit.b));
       float q = 0.0f;

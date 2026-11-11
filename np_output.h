@@ -107,7 +107,7 @@ struct Sidecar {
   // curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
-  const CurveRefitResult* curve_fit = nullptr;
+  const WhiteLightFitResult* curve_fit = nullptr;
   // The models the search ran with: the intent adapter, the neutral head and the tone heads ("[built-in] <name>" or
   // the path --dino gave, with the file's size and CRC-32; empty: not loaded). A run that reused a previous sidecar
   // keeps that run's record (cached_heads_json_str).

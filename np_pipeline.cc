@@ -1379,7 +1379,7 @@ int prepare(const Options& o, Setup& s) {
     const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
     // TODO: the fitted curves and the tone stage on single-shot tri-LED. They need five changes: (1) let the fit run on
     // a single-shot crosstalk bundle (other tri-LED cases unchanged); (2) call the fit on the CFA path, which Sony raws
-    // take and which has no fit call; (3) drop the crosstalk rejection in fit_input_curves_after_search; (4) run the
+    // take and which has no fit call; (3) drop the crosstalk rejection in run_white_light_fit; (4) run the
     // fit on M_frame so its E is in the export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor
     // the curves at the film base in camera RGB, since the detector returns the base already crosstalk-corrected and
     // M_frame would apply the matrix a second time. Open before enabling: the fit lowers the mean chroma (by about a
@@ -1950,7 +1950,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           ParamSearchOptions fit_search_opts = opts;
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
-          if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
+          if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
                                              scan.auto_res, fit_opts, export_encoding,
                                              s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
