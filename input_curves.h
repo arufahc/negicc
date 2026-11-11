@@ -532,11 +532,6 @@ class JointCurveModel {
   // Endpoints: the evidence mass (sum of p^2) in the darkest band (L* <= 22) that, with some mass in the brightest
   // band (or a darker band this heavy alone), lets the offset target take the anchors' whole cast (see below).
   static constexpr double kEndpointsDarkMass = 15.0, kEndpointsBrightMass = 1.0, kEndpointsDarkOnlyMass = 64.0;
-  // Test only, off: weigh each band by the evidence of its confident cells (p >= kConfidentP), mass_c / max(mass_c, 16),
-  // spread over the band's cells by p^2 as before, so a band made only of moderately neutral cells cannot carry the fit
-  // (a reviewer's candidate for T28 and T06). Off, a band weighs by all its mass, mass / max(mass, 16).
-  static constexpr bool kBandWeightFromConfidentMass = false;
-  static constexpr float kConfidentP = 0.9f;
 
   // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0) across four L* bands
   // ([2, 22], [22, 45], [45, 70], [70, 92]). Every cell of a band is an anchor, weighted by the neutral-patch head's
@@ -619,15 +614,10 @@ class JointCurveModel {
       if (b_sel[b].empty()) continue;
       ++n_bands;
       const size_t min_denom = (b == 3 && (int)bands[0].size() >= 3 * total / 4) ? 8 : 16;
-      double band_mass = 0.0, confident_mass = 0.0;
+      double band_mass = 0.0;
+      for (int i : b_sel[b]) band_mass += pw[i];
       for (int i : b_sel[b]) {
-        band_mass += pw[i];
-        if (f_.neutral_p[i] >= kConfidentP) confident_mass += pw[i];
-      }
-      for (int i : b_sel[b]) {
-        const float w = kBandWeightFromConfidentMass
-                            ? (float)(pw[i] / std::max(band_mass, 1e-12) * (confident_mass / std::max(confident_mass, (double)min_denom)))
-                            : (float)(pw[i] / std::max(band_mass, (double)min_denom));
+        const float w = (float)(pw[i] / std::max(band_mass, (double)min_denom));
         neu_idx_.push_back(i);
         neu_w_.push_back(w);
         w_sum += w;
@@ -977,24 +967,6 @@ class JointCurveModel {
 // magenta keeps its credit, and mid-tones and highlights count as they are. The tint trim's guard check is not
 // affected.
 constexpr float kGreenGuardTolAb = 0.5f;
-// Test only, off: the guard's reference is min(Auto's mean a*, 0) instead of Auto's, so a fit may remove Auto's own
-// magenta cast down to neutral but no further toward green (T28: Auto's p^2-weighted a* is +7.0). Off, the reference
-// is Auto's mean a*, as the owner's rule reads.
-constexpr bool kGreenGuardRefCapZero = false;
-// Test only, off: the same, for both terms, only where the confident neutrals themselves are magenta under Auto: with
-// Auto's p^2-weighted mean a* (counted) at or below kGreenGuardMagentaLo the reference is Auto's, at or above
-// kGreenGuardMagentaHi it is min(Auto's, 0), linearly in between (Lo == Hi: a step).
-constexpr bool kGreenGuardMagentaAnchors = false;
-constexpr double kGreenGuardMagentaLo = 2.0, kGreenGuardMagentaHi = 6.0;
-// The share of a positive reference the guard drops (0: Auto's, 1: neutral), from Auto's weighted mean a*.
-inline double green_guard_lift(double auto_weighted_a, bool weighted_counted) {
-  if (kGreenGuardRefCapZero) return 1.0;
-  if (!kGreenGuardMagentaAnchors || !weighted_counted) return 0.0;
-  const double lo = kGreenGuardMagentaLo, hi = kGreenGuardMagentaHi;
-  if (hi <= lo) return auto_weighted_a > lo ? 1.0 : 0.0;
-  return std::clamp((auto_weighted_a - lo) / (hi - lo), 0.0, 1.0);
-}
-inline double green_guard_ref(double auto_a, double lift) { return auto_a - lift * std::max(auto_a, 0.0); }
 // The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
 // 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
 constexpr double kGreenGuardShadowL0 = 15.0;
@@ -1063,7 +1035,6 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   std::vector<double> guard_auto_a(f.n, 0.0);  // Auto's a* per cell, for a candidate that renders a cell non-finite
   std::vector<double> guard_auto_L(f.n, 0.0);  // Auto's L* per cell, for the shadow exemption (green_guard_cell_a)
   double guard_ref[2] = {0.0, 0.0};
-  double guard_lift = 0.0;  // green_guard_lift of Auto's weighted mean
   bool guard_ready = false;
   auto guard_means = [&](const float* q, float eq, double v[2]) {
     const InputCurves c = model.anchored(shape_of(q), eq, q[0], q[1]);
@@ -1101,7 +1072,6 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     guard_means(p0, eq, guard_ref);
     out.guard.counted[0] = na >= kGreenGuardMinCells;
     out.guard.counted[1] = wp >= kGreenGuardMinMass;
-    guard_lift = green_guard_lift(guard_ref[1], out.guard.counted[1]);
     guard_ready = true;
   };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
@@ -1118,7 +1088,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
       for (int k = 0; k < 2; ++k) {
         const double h = guard_path && out.guard.counted[k]
                              ? (double)kGreenGuardWeight *
-                                   std::max(0.0, green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k])
+                                   std::max(0.0, guard_ref[k] - kGreenGuardTolAb - v[k])
                              : 0.0;
         r.push_back(h);
         sum += h * h;
@@ -1295,7 +1265,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     for (int k = 0; k < 2; ++k) {
       out.guard.auto_a[k] = (float)guard_ref[k];
       out.guard.fit_a[k] = (float)v[k];
-      if (out.guard.counted[k] && green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k] > 0.0)
+      if (out.guard.counted[k] && guard_ref[k] - kGreenGuardTolAb - v[k] > 0.0)
         out.guard.binding = true;
     }
     // Per band of Auto's render, for the sidecar: Auto's cells as guard_init rendered them (at Auto's E, as auto_a),

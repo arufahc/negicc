@@ -337,12 +337,12 @@ void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, 
 // 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
 struct TintTrimResult {
   bool ran = false;               // the trim ran and was applied (s may be 0)
-  const char* skipped = nullptr;  // why it did not run: "grid" (the network's grid is not the frame's), "infer"
-                                  // (inference failed), "evidence" (no neutral evidence; kTintTrimNeedsEvidence)
+  const char* skipped = nullptr;  // why it did not run: "grid" (the network's grid is not the frame's) or "infer"
+                                  // (inference failed)
   double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
   double se = 0.0;      // the bootstrap standard error of the residual's minimum
   double s = 0.0;       // the trim applied: s_min + se (one standard error toward magenta)
-  bool trim_capped = false;  // kTintTrimCap shortened s from s_uncapped (anchors' confidence trim_conf)
+  bool trim_capped = false;  // the trim cap shortened s from s_uncapped (anchors' confidence trim_conf)
   double s_uncapped = 0.0;
   double trim_conf = 0.0;
   TintTrimTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need

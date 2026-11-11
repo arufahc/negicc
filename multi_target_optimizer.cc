@@ -1932,14 +1932,10 @@ constexpr double kTintTrimGuardSlack = 0.1;  // a*: the scan's guard allows this
 constexpr int kTintTrimBootstrapResamples = 300;
 constexpr int kTintTrimBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
 constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
-// Test only, off: no scan when the joint fit settled for lack of neutral evidence (the neutral head's conf at or below
-// 1e-4, the fit's own settle test), e.g. a blank or near-uniform frame, where the field alone would set the trim.
-constexpr bool kTintTrimNeedsEvidence = false;
 // The trim may not move confident neutrals away from neutral. With c = the neutral head's conf x min(1, evidence /
 // kTintTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
 // end at most kTintTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
 // c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
-constexpr bool kTintTrimCap = true;
 constexpr double kTintTrimCapTol = 1.0;
 constexpr double kTintTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
 // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
@@ -2329,7 +2325,6 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
     aw_auto += w2[i] * lab_auto[3 * i + 1];
   }
   const double tol = (double)negicc::kGreenGuardTolAb + kTintTrimGuardSlack;
-  const double lift = negicc::green_guard_lift(w_in > 0.0 ? aw_auto / w_in : 0.0, w_in >= negicc::kGreenGuardMinMass);
   auto guard_ok = [&](const std::vector<float>& lab) {
     double a = 0.0, aw = 0.0;
     for (int i = 0; i < NA; ++i)
@@ -2337,8 +2332,8 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
         a += lab[3 * i + 1];
         aw += w2[i] * lab[3 * i + 1];
       }
-    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < negicc::green_guard_ref(a_auto / n_in, lift) - tol) return false;
-    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < negicc::green_guard_ref(aw_auto / w_in, lift) - tol) return false;
+    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < a_auto / n_in - tol) return false;
+    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < aw_auto / w_in - tol) return false;
     return true;
   };
   const int K = (int)std::lround(2.0 * kTintTrimMax / kTintTrimStep) + 1;
@@ -2346,7 +2341,7 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
   std::vector<double> s_of(K), score(K);
   std::vector<char> kept(K);
   std::vector<std::vector<double>> pred(K);
-  std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (kTintTrimCap)
+  std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (the trim cap)
 #pragma omp parallel for schedule(dynamic)
   for (int k = 0; k < K; ++k) {
     s_of[k] = -kTintTrimMax + k * kTintTrimStep;
@@ -2354,7 +2349,7 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
     theta_of(s_of[k], th);
     std::vector<float> l;
     lab_th(th, l);
-    if (kTintTrimCap && w_in > 0.0) {
+    if (w_in > 0.0) {
       double aw = 0.0;
       for (int i = 0; i < NA; ++i)
         if (in_band[i]) aw += w2[i] * l[3 * i + 1];
@@ -2416,7 +2411,7 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
     }
   }
   double s_final = best_s + kTintTrimReadoutSE * se;
-  if (kTintTrimCap && anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
+  if (anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
     auto anchor_at = [&](double s) {  // linear between lattice points
       const double u = std::clamp((s + kTintTrimMax) / kTintTrimStep, 0.0, (double)(K - 1));
       const int k0 = std::min((int)u, K - 2);
@@ -2791,31 +2786,26 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // 4. The tint trim, composed into the same tables (E and the roll-off measured again).
   std::vector<float> scan_features;
   out.tone.features = "search";
-  if (kTintTrimNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
-    out.tint_trim.skipped = "evidence";
-    if (opts.verbose) std::cout << "Tint trim: not run (evidence)\n";
-  } else {
-    const float trim_conf =
-        out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kTintTrimCapMass);
-    const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
-    tint_trim(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
-                e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
-                neutral_p_all, trim_conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features,
-                out.tint_trim);
-    if (out.tint_trim.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
-      tone_features.swap(scan_features);
-      out.tone.features = "offset";
-    }
-    if (opts.verbose) {
-      if (out.tint_trim.ran) {
-        std::cout << "Tint trim: a* " << fixed(out.tint_trim.s, 3, true) << " (minimum "
-                  << fixed(out.tint_trim.s_min, 2, true)
-                  << " + SE " << fixed(out.tint_trim.se, 3) << "), " << out.tint_trim.lattice_kept << " of "
-                  << out.tint_trim.lattice << " lattice points kept, " << out.tint_trim.inferences << " inferences, E "
-                  << fixed(e_new, 4) << ", roll-off " << fixed(out.x_hi, 3) << "\n";
-      } else {
-        std::cout << "Tint trim: not run (" << out.tint_trim.skipped << ")\n";
-      }
+  const float trim_conf =
+      out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kTintTrimCapMass);
+  const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
+  tint_trim(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
+            e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
+            neutral_p_all, trim_conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features,
+            out.tint_trim);
+  if (out.tint_trim.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
+    tone_features.swap(scan_features);
+    out.tone.features = "offset";
+  }
+  if (opts.verbose) {
+    if (out.tint_trim.ran) {
+      std::cout << "Tint trim: a* " << fixed(out.tint_trim.s, 3, true) << " (minimum "
+                << fixed(out.tint_trim.s_min, 2, true)
+                << " + SE " << fixed(out.tint_trim.se, 3) << "), " << out.tint_trim.lattice_kept << " of "
+                << out.tint_trim.lattice << " lattice points kept, " << out.tint_trim.inferences << " inferences, E "
+                << fixed(e_new, 4) << ", roll-off " << fixed(out.x_hi, 3) << "\n";
+    } else {
+      std::cout << "Tint trim: not run (" << out.tint_trim.skipped << ")\n";
     }
   }
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
