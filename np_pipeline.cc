@@ -59,14 +59,20 @@ static inline double tone_lab_finv(double t) {
     return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
 }
 constexpr double kToneXn = 0.950456, kToneZn = 1.088754;
+// Linear sRGB (D65) <-> XYZ, row-major; ToneStageFast uses the same numbers in single precision.
+constexpr double kToneRgbToXyz[9] = {0.412453, 0.357580, 0.180423, 0.212671, 0.715160,
+                                     0.072169, 0.019334, 0.119193, 0.950227};
+constexpr double kToneXyzToRgb[9] = {3.240479, -1.537150, -0.498535, -0.969256, 1.875992,
+                                     0.041556, 0.055648,  -0.204043, 1.057311};
 // The bisection steps of the in-gamut chroma scale (tone_lab_to_rgb_in_gamut): 2^-14 of the chroma.
 constexpr int kToneGamutSteps = 14;
 
 // Linear r, g, b -> L*, a*, b*.
 static inline void tone_linear_to_lab(double r, double g, double b, double lab[3]) {
-    const double X = 0.412453 * r + 0.357580 * g + 0.180423 * b;
-    const double Y = 0.212671 * r + 0.715160 * g + 0.072169 * b;
-    const double Z = 0.019334 * r + 0.119193 * g + 0.950227 * b;
+    const double* m = kToneRgbToXyz;
+    const double X = m[0] * r + m[1] * g + m[2] * b;
+    const double Y = m[3] * r + m[4] * g + m[5] * b;
+    const double Z = m[6] * r + m[7] * g + m[8] * b;
     const double fx = tone_lab_f(X / kToneXn), fy = tone_lab_f(Y), fz = tone_lab_f(Z / kToneZn);
     lab[0] = 116.0 * fy - 16.0;
     lab[1] = 500.0 * (fx - fy);
@@ -78,13 +84,21 @@ static inline void tone_rgb_to_lab(double r, double g, double b, double lab[3]) 
     tone_linear_to_lab(tone_srgb_decode(r), tone_srgb_decode(g), tone_srgb_decode(b), lab);
 }
 
-// L*, a*, b* -> r, g, b in 0..1 (clipped).
-static inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
+// L*, a*, b* -> linear r, g, b (unclipped).
+static inline void tone_lab_to_linear_rgb(const double lab[3], double lin[3]) {
     const double fy = (lab[0] + 16.0) / 116.0, fx = fy + lab[1] / 500.0, fz = fy - lab[2] / 200.0;
     const double X = tone_lab_finv(fx) * kToneXn, Y = tone_lab_finv(fy), Z = tone_lab_finv(fz) * kToneZn;
-    rgb[0] = tone_srgb_encode(3.240479 * X - 1.537150 * Y - 0.498535 * Z);
-    rgb[1] = tone_srgb_encode(-0.969256 * X + 1.875992 * Y + 0.041556 * Z);
-    rgb[2] = tone_srgb_encode(0.055648 * X - 0.204043 * Y + 1.057311 * Z);
+    const double* m = kToneXyzToRgb;
+    lin[0] = m[0] * X + m[1] * Y + m[2] * Z;
+    lin[1] = m[3] * X + m[4] * Y + m[5] * Z;
+    lin[2] = m[6] * X + m[7] * Y + m[8] * Z;
+}
+
+// L*, a*, b* -> r, g, b in 0..1 (clipped).
+static inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
+    double lin[3];
+    tone_lab_to_linear_rgb(lab, lin);
+    for (int c = 0; c < 3; ++c) rgb[c] = tone_srgb_encode(lin[c]);
 }
 
 // L*, a*, b* -> r, g, b in 0..1, the chroma scaled toward neutral at the same L* (hue kept) as far as needed to keep
@@ -92,10 +106,9 @@ static inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
 // of having its brightest channels clipped. Below the maximum it is tone_lab_to_rgb.
 static inline void tone_lab_to_rgb_in_gamut(const double lab[3], double rgb[3]) {
     auto linear_max = [](const double l[3]) {
-        const double fy = (l[0] + 16.0) / 116.0, fx = fy + l[1] / 500.0, fz = fy - l[2] / 200.0;
-        const double X = tone_lab_finv(fx) * kToneXn, Y = tone_lab_finv(fy), Z = tone_lab_finv(fz) * kToneZn;
-        return std::max({3.240479 * X - 1.537150 * Y - 0.498535 * Z, -0.969256 * X + 1.875992 * Y + 0.041556 * Z,
-                         0.055648 * X - 0.204043 * Y + 1.057311 * Z});
+        double lin[3];
+        tone_lab_to_linear_rgb(l, lin);
+        return std::max({lin[0], lin[1], lin[2]});
     };
     if (linear_max(lab) <= 1.0) {
         tone_lab_to_rgb(lab, rgb);
@@ -334,6 +347,13 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 constexpr int kToneLutSize = 8192;
 class ToneStageFast {
 public:
+    // kToneRgbToXyz and kToneXyzToRgb in single precision.
+    static constexpr float kM[9] = {(float)kToneRgbToXyz[0], (float)kToneRgbToXyz[1], (float)kToneRgbToXyz[2],
+                                    (float)kToneRgbToXyz[3], (float)kToneRgbToXyz[4], (float)kToneRgbToXyz[5],
+                                    (float)kToneRgbToXyz[6], (float)kToneRgbToXyz[7], (float)kToneRgbToXyz[8]};
+    static constexpr float kMinv[9] = {(float)kToneXyzToRgb[0], (float)kToneXyzToRgb[1], (float)kToneXyzToRgb[2],
+                                       (float)kToneXyzToRgb[3], (float)kToneXyzToRgb[4], (float)kToneXyzToRgb[5],
+                                       (float)kToneXyzToRgb[6], (float)kToneXyzToRgb[7], (float)kToneXyzToRgb[8]};
     explicit ToneStageFast(const ToneCurve& q) : f_(kToneLutSize + 1) {
         for (int i = 0; i <= kToneLutSize; ++i) {
             const double t = (double)i / kToneLutSize;
@@ -348,9 +368,10 @@ public:
     void apply(const uint16_t in[3], uint16_t out[3]) const {
         const float* dec = decode_table();
         const float r = dec[in[0]], g = dec[in[1]], b = dec[in[2]];
-        const float X = 0.412453f * r + 0.357580f * g + 0.180423f * b;
-        const float Y = 0.212671f * r + 0.715160f * g + 0.072169f * b;
-        const float Z = 0.019334f * r + 0.119193f * g + 0.950227f * b;
+        const float* m = kM;
+        const float X = m[0] * r + m[1] * g + m[2] * b;
+        const float Y = m[3] * r + m[4] * g + m[5] * b;
+        const float Z = m[6] * r + m[7] * g + m[8] * b;
         const float fx = lab_f(X / (float)kToneXn), fy = lab_f(Y), fz = lab_f(Z / (float)kToneZn);
         const float L = 116.0f * fy - 16.0f;
         float A = 500.0f * (fx - fy), B = 200.0f * (fy - fz);
@@ -440,9 +461,10 @@ private:
     static void to_linear(float L, float A, float B, float lin[3]) {
         const float fy = (L + 16.0f) / 116.0f, fx = fy + A / 500.0f, fz = fy - B / 200.0f;
         const float X = lab_finv(fx) * (float)kToneXn, Y = lab_finv(fy), Z = lab_finv(fz) * (float)kToneZn;
-        lin[0] = 3.240479f * X - 1.537150f * Y - 0.498535f * Z;
-        lin[1] = -0.969256f * X + 1.875992f * Y + 0.041556f * Z;
-        lin[2] = 0.055648f * X - 0.204043f * Y + 1.057311f * Z;
+        const float* m = kMinv;
+        lin[0] = m[0] * X + m[1] * Y + m[2] * Z;
+        lin[1] = m[3] * X + m[4] * Y + m[5] * Z;
+        lin[2] = m[6] * X + m[7] * Y + m[8] * Z;
     }
     static const double* decode_table_double() {
         static const std::vector<double> d = [] {
