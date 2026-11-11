@@ -1923,8 +1923,6 @@ constexpr double kTintTrimMax = 8.0;       // lattice s in [-8, 8] a*,
 constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*
 constexpr int kTintTrimCandidates = 3;     // lattice points rendered and scored on their own fields
 constexpr double kTintTrimGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
-constexpr int kTintTrimBootstrapResamples = 300;
-constexpr int kTintTrimBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
 constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
 // The trim may not move confident neutrals away from neutral. With c = the neutral head's conf x min(1, evidence /
 // kTintTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
@@ -1932,12 +1930,6 @@ constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many stand
 // c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
 constexpr double kTintTrimCapTol = 1.0;
 constexpr double kTintTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
-// The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
-// cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
-// and the bounds of the density change.
-constexpr double kTintTrimProbe[4] = {0.01, 0.01, 0.05, 0.05};
-constexpr double kTintTrimRidge = 1e-2;
-constexpr double kTintTrimMaxDensity = 0.3, kTintTrimMaxContrast = 0.6;
 
 // The fitted tables with t's density change composed in front of G and B (R is the reference): a value's density
 // above the film base D becomes D + d + k (D - P), P the frame's median cell density of that channel (piv).
@@ -2049,6 +2041,8 @@ class TintTrimBootstrapRng {
 // neighbours (by at most one step); the standard error is the population standard deviation of the minima.
 static double tint_trim_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
                                   const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
+  static constexpr int kTintTrimBootstrapResamples = 300;
+  static constexpr int kTintTrimBootstrapBlock = 4;  // cells: blocks of 4 x 4 grid cells are resampled together
   const int K = (int)s.size();
   const int bx = (gw + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
   const int by = (gh + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
@@ -2227,6 +2221,12 @@ static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::Cu
   };
   double m0[4];
   moments(lab0, m0);
+  // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
+  // cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
+  // and the bounds of the density change.
+  static constexpr double kTintTrimProbe[4] = {0.01, 0.01, 0.05, 0.05};
+  static constexpr double kTintTrimRidge = 1e-2;
+  static constexpr double kTintTrimMaxDensity = 0.3, kTintTrimMaxContrast = 0.6;
   double J[4][4];
   // The probes and the lattice points are independent renders of the grid model (each solves its own E): run in
   // parallel, each writing only its own slot, so the result is the same as in order.

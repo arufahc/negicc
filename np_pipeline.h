@@ -95,9 +95,7 @@ constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // come from that move, and the moves stay as designed.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
-constexpr int kToneClipSampleStep = 8;
-// The chroma factor that keeps the mean chroma: refined this many times on the preview, within these bounds.
-constexpr int kToneChromaRefinements = 2;
+// The chroma factor that keeps the mean chroma stays within these bounds.
 constexpr double kToneChromaLo = 0.5, kToneChromaHi = 1.6;
 
 struct ToneCurve {

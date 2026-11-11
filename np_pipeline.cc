@@ -70,8 +70,6 @@ constexpr double kToneRgbToXyz[9] = {0.412453, 0.357580, 0.180423, 0.212671, 0.7
                                      0.072169, 0.019334, 0.119193, 0.950227};
 constexpr double kToneXyzToRgb[9] = {3.240479, -1.537150, -0.498535, -0.969256, 1.875992,
                                      0.041556, 0.055648,  -0.204043, 1.057311};
-// The bisection steps of the in-gamut chroma scale (tone_lab_to_rgb_in_gamut): 2^-14 of the chroma.
-constexpr int kToneGamutSteps = 14;
 
 // Linear r, g, b -> L*, a*, b*.
 static inline void tone_linear_to_lab(double r, double g, double b, double lab[3]) {
@@ -111,6 +109,7 @@ static inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
 // every channel at or below the maximum: a colour the curve lifts past the sRGB gamut keeps its tone and hue instead
 // of having its brightest channels clipped. Below the maximum it is tone_lab_to_rgb.
 static inline void tone_lab_to_rgb_in_gamut(const double lab[3], double rgb[3]) {
+    static constexpr int kToneGamutSteps = 14;  // the bisection's steps: 2^-14 of the chroma
     auto linear_max = [](const double l[3]) {
         double lin[3];
         tone_lab_to_linear_rgb(l, lin);
@@ -334,6 +333,7 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
                     const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets) {
     const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share);
     ToneCurve c = tone_solve(render, t);
+    static constexpr int kToneChromaRefinements = 2;  // the chroma factor is refined this many times on the preview
     double chroma = 1.0;
     for (int it = 0; it < kToneChromaRefinements; ++it) {
         c.chroma = chroma;
@@ -350,9 +350,9 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 // decode from a table of every 16-bit code. Pixels at or beyond the gamut's edge (a few per cent at most) go through the
 // double-precision stage (tone_lab_apply, tone_lab_to_rgb_in_gamut), whose output this matches elsewhere to within 1
 // of 65535.
-constexpr int kToneLutSize = 8192;
 class ToneStageFast {
 public:
+    static constexpr int kToneLutSize = 8192;
     // kToneRgbToXyz and kToneXyzToRgb in single precision.
     static constexpr float kM[9] = {(float)kToneRgbToXyz[0], (float)kToneRgbToXyz[1], (float)kToneRgbToXyz[2],
                                     (float)kToneRgbToXyz[3], (float)kToneRgbToXyz[4], (float)kToneRgbToXyz[5],
@@ -514,6 +514,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                               const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share) {
+    static constexpr int kToneClipSampleStep = 8;  // the clipping is measured on every 8th pixel each way
     const double before = tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, nullptr);
     const ToneCurve& c1 = designed;
     *share = 1.0;
