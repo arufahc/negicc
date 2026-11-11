@@ -69,9 +69,9 @@ struct Options {
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
   // the built-in ones; empty: the built-in one.
   std::string dino_adapter, neutral_head_file, tone_head_file;
-  bool offset_scan = true;                     // --offset_scan on|off: the network's magenta-green offset (white light)
-  bool tone_stage = true;                      // --tone_stage on|off: the learned lightness curve (white light, srgb)
-  // Recorded values to replay (a sidecar's cli_equivalent), with given values and no search:
+  // The white-light curve fit, its magenta-green offset and the tone stage always run where they apply (a white-light
+  // bundle search with -P srgb or srgb-g10); their flags only replay recorded values (a sidecar's cli_equivalent),
+  // with given values and no search:
   // --offset_scan theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (OffsetTables' G and B numbers) and
   // --tone_stage curve:black,white,gamma,contrast,chroma (ToneCurve).
   bool offset_replay_given = false;
@@ -82,12 +82,8 @@ struct Options {
   int dino_iters = 4;
   bool dino_iters_given = false;
 
-  // Fitted G/B input curves (input_curves.h)
-  bool fit_curves = false;                     // --fit_curves on
-  // --fit_curves auto, the default: the curves on every white-light bundle search with -P srgb or srgb-g10, nothing
-  // elsewhere (TriLED, another or no -P, given parameters). --fit_curves off turns it off.
-  bool fit_curves_auto = true;
-  bool input_curves_given = false;             // --input_curves (replayed, not fitted)
+  // Fitted G/B input curves (input_curves.h): recorded curves given to --fit_curves (replayed, not fitted)
+  bool input_curves_given = false;
   negicc::InputCurves input_curves;
 
   // Output

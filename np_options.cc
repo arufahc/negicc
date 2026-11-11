@@ -276,21 +276,20 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--offset_scan")
-    .help("The white-light curve fit's last step: on (default) or off. On, the network judges whether the fitted "
-          "picture reads too green or too magenta: a lattice of magenta-green offsets is scored against the intent "
-          "field, the best few are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, "
-          "moved one standard error toward magenta, is composed into the bracket's tables. Offsets that would make the "
-          "picture greener than Auto are not candidates. theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a "
-          "sidecar's cli_equivalent) replays a recorded offset with --target, -E, --gain_g and --gain_b.")
-    .default_value(std::string("on"));
+    .help("Replays a recorded magenta-green offset: theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a sidecar's "
+          "cli_equivalent), with --target, -E, --gain_g and --gain_b. The offset itself always runs as the "
+          "white-light curve fit's last step: the network judges whether the fitted picture reads too green or too "
+          "magenta, a lattice of magenta-green offsets is scored against the intent field, the best few are rendered "
+          "and scored again (up to 4 extra DINOv3 inferences), and the best one, moved one standard error toward "
+          "magenta, is composed into the bracket's tables. Offsets that would make the picture greener than Auto are "
+          "not candidates.");
   parser.add_argument("--tone_stage")
-    .help("The white-light tone stage: on (default) or off. On, tone heads on DINOv3 features the fit already "
-          "computed predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, "
-          "and one monotone L* curve moves the final sRGB image all the way to the predicted shadow level and half "
-          "way to the highlight level and range, holding the mid-tones and the mean chroma. Runs where the curve fit "
-          "runs, with -P srgb. curve:black,white,gamma,contrast,chroma (a sidecar's cli_equivalent) replays a recorded "
-          "curve with --target, -E, --gain_g and --gain_b.")
-    .default_value(std::string("on"));
+    .help("Replays a recorded tone curve: curve:black,white,gamma,contrast,chroma (a sidecar's cli_equivalent), with "
+          "--target, -E, --gain_g and --gain_b. The tone stage itself always runs where the curve fit runs, with -P "
+          "srgb: tone heads on DINOv3 features the fit already computed predict the frame's shadow level, highlight "
+          "level and tonal range as a lab scan would have them, and one monotone L* curve moves the final sRGB image "
+          "all the way to the predicted shadow level and half way to the highlight level and range, holding the "
+          "mid-tones and the mean chroma.");
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -304,47 +303,27 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
-    .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
-          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo; then kR,refR,u_loR for the "
-          "red highlight-cliff curve when the fit bent R). auto: as on wherever on "
-          "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
-          "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
-          "and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket it chose, each "
-          "candidate at the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
-          "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
-          "needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P srgb or srgb-g10. Recorded curves: "
-          "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
-          "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
-          "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "
-          "are positive, because the parser takes a value starting with '-' for an option. The older order "
-          "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
-          "White-light (d65) bundles and -P only.")
-    .default_value(std::string("auto"));
+    .help("Replays recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-separated; ten "
+          "numbers, with u_loG,u_loB appended, for a curve held below u_lo; then kR,refR,u_loR for the red "
+          "highlight-cliff curve when the fit bent R): converts through the --target bracket's combined profile with "
+          "them at the given -E, --gain_g and --gain_b, without fitting or searching (a sidecar's input_curves; its "
+          "cli_equivalent writes them in this form with the bracket, E, g and b); needs --target, -E, --gain_g and "
+          "--gain_b. The form leads with the refs, which are positive, because the parser takes a value starting with "
+          "'-' for an option. The older order aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still "
+          "read when aG is not negative. The curve fit itself always runs on a white-light bundle search with -P srgb "
+          "or srgb-g10 (nothing elsewhere: TriLED, another or no -P, given parameters): after the bundle search it "
+          "fits g, b and G and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket "
+          "it chose, each candidate at the E that keeps Auto's grid median L*, then re-meters E on that bracket's "
+          "profile with its input tables composed with the curves (the combined profile). White-light (d65) bundles "
+          "and -P only.");
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
   parser.add_argument("raw_files").nargs(1, 4);
 
-  // --neutral_head was replaced by --dino neutral:<file>. Its default value is still accepted (and ignored), so a
-  // command line or a sidecar's argv from before reads; another value is an error that names the new form.
-  std::vector<char*> args;
-  for (int i = 0; i < ac; ++i) {
-    const std::string a = av[i];
-    if (a == "--neutral_head" || a.compare(0, 15, "--neutral_head=") == 0) {
-      const std::string v = a == "--neutral_head" ? (i + 1 < ac ? av[i + 1] : "") : a.substr(15);
-      if (v != "on") {
-        log_error("--neutral_head is gone: give another neutral head with --dino neutral:<file> (the built-in one "
-                  "runs by default)\n");
-        return 1;
-      }
-      if (a == "--neutral_head") ++i;
-      continue;
-    }
-    args.push_back(av[i]);
-  }
   try {
-    parser.parse_args((int)args.size(), args.data());
+    parser.parse_args(ac, av);
   } catch (const std::exception& err) {
     std::ostringstream help;
     help << parser;
@@ -435,8 +414,8 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
-  {
-    // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves on in.ARW").
+  if (parser.is_used("--fit_curves")) {
+    // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves <value> in.ARW").
     // Recorded curves lead with "ref:" and the refs (refG,refB,u_medG,u_medB,aG,kG,aB,kB[,u_loG,u_loB]): the older
     // order led with aG, and a negative aG made the value start with '-', which argparse rejects as an unknown option
     // (with "--fit_curves=" too), so a sidecar's cli_equivalent did not parse. The older order is still read.
@@ -450,10 +429,7 @@ int parse_options(int ac, char* av[], Options& o) {
       if (p1 == std::string::npos) break;
       p0 = p1 + 1;
     }
-    if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
-      o.fit_curves = fc[0] == "on";
-      o.fit_curves_auto = fc[0] == "auto";
-    } else if (fc.size() == 8 || fc.size() == 10 || (ref_first && (fc.size() == 11 || fc.size() == 13))) {
+    if (fc.size() == 8 || fc.size() == 10 || (ref_first && (fc.size() == 11 || fc.size() == 13))) {
       // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB. Eleven or thirteen (the ref: form
       // only): the red highlight-cliff curve's kR, refR and u_loR appended (the fit's cliff pass bends R too).
       float v[13];
@@ -461,7 +437,7 @@ int parse_options(int ac, char* av[], Options& o) {
         char* end = nullptr;
         v[i] = std::strtof(fc[i].c_str(), &end);
         if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
-          log_error("--fit_curves: '%s' is not a number (give off, auto, on, or "
+          log_error("--fit_curves: '%s' is not a number (give recorded curves, "
                     "ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB with u_loG,u_loB appended for a held curve)\n",
                     fc[i].c_str());
           return 1;
@@ -494,8 +470,9 @@ int parse_options(int ac, char* av[], Options& o) {
         }
       }
     } else {
-      log_error("--fit_curves takes off, auto, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (eight "
-                "comma-separated numbers), ten for a held curve (and u_loG,u_loB)\n");
+      log_error("--fit_curves takes recorded curves only (the curve fit always runs where it applies): "
+                "ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (eight comma-separated numbers), ten for a held curve (and "
+                "u_loG,u_loB), eleven or thirteen with the red curve (kR,refR,u_loR)\n");
       return 1;
     }
   }
@@ -552,12 +529,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   o.dino_backend = parser.get<std::string>("--dino_backend");
   // on, off, or recorded numbers after a prefix (which keeps a negative first number from reading as an option).
-  auto on_off = [&](const char* name, bool& flag, const char* prefix, int count, bool& given, double* out) {
+  // --offset_scan and --tone_stage replay recorded values only (the steps themselves always run where they apply).
+  auto replay = [&](const char* name, const char* prefix, int count, bool& given, double* out) {
+    if (!parser.is_used(name)) return true;
     const std::string v = parser.get<std::string>(name);
-    if (v == "on" || v == "off") {
-      flag = v == "on";
-      return true;
-    }
     const std::string pre = prefix;
     if (v.compare(0, pre.size(), pre) == 0) {
       std::stringstream ss(v.substr(pre.size()));
@@ -573,17 +548,16 @@ int parse_options(int ac, char* av[], Options& o) {
         out[k++] = x;
       }
       if (k == count) {
-        flag = false;  // nothing is searched or predicted: the recorded values are replayed
-        given = true;
+        given = true;  // nothing is searched or predicted: the recorded values are replayed
         return true;
       }
     }
-    log_error("%s takes on, off or %s followed by %d comma-separated numbers, not '%s'\n", name, prefix, count,
-              v.c_str());
+    log_error("%s takes recorded values only (the step always runs where it applies): %s followed by %d "
+              "comma-separated numbers, not '%s'\n", name, prefix, count, v.c_str());
     return false;
   };
-  if (!on_off("--offset_scan", o.offset_scan, "theta:", 10, o.offset_replay_given, o.offset_replay) ||
-      !on_off("--tone_stage", o.tone_stage, "curve:", 5, o.tone_replay_given, o.tone_replay))
+  if (!replay("--offset_scan", "theta:", 10, o.offset_replay_given, o.offset_replay) ||
+      !replay("--tone_stage", "curve:", 5, o.tone_replay_given, o.tone_replay))
     return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");

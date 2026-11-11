@@ -723,9 +723,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      // --neutral_head: gone (--dino neutral:<file>); an older sidecar's "--neutral_head on" is the default.
-      {"", "--flat", 1, false},           {"", "--neutral_head", 1, true},      {"", "--offset_scan", 1, false},
-      {"", "--tone_stage", 1, false},
+      {"", "--flat", 1, false},           {"", "--offset_scan", 1, false},      {"", "--tone_stage", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -956,7 +954,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.cached_sidecar.auto_json_str = a.dump();
     s.dino_path = a.value("model", "");
     s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
-    // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
+    // Fitted G/B input curves of the previous run (the curve fit's): the knobs act on its result (the
     // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
     // A fit that fell back (applied false, channels null) has no curves to replay, but its re-metered values are the
     // base all the same.
@@ -1353,11 +1351,11 @@ int prepare(const Options& o, Setup& s) {
   // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
-  if (o.fit_curves || o.input_curves_given) {
-    const char* opt = o.fit_curves ? "--fit_curves on" : "--fit_curves with recorded curves";
+  if (o.input_curves_given) {
+    const char* opt = "--fit_curves with recorded curves";
     // TODO: extending the fitted curves and the tone stage to single-shot tri-LED is deferred. A one-frame experiment
-    // showed it works after five changes: (1) accept --fit_curves on for a single-shot crosstalk bundle (auto stays
-    // white-light only); (2) call the fit on the CFA path, which Sony raws take and which has no fit call; (3) drop
+    // showed it works after five changes: (1) let the fit run on a single-shot crosstalk bundle (other tri-LED cases
+    // unchanged); (2) call the fit on the CFA path, which Sony raws take and which has no fit call; (3) drop
     // the crosstalk rejection in fit_input_curves_after_search; (4) run the fit on M_frame so its E is in the
     // export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor the curves at the film base in
     // camera RGB, since the detector returns the base already crosstalk-corrected and M_frame would apply the matrix
@@ -1379,19 +1377,8 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
-  if (o.fit_curves && !fit_encoding_ok) {
-    log_error("--fit_curves on needs -P srgb or -P srgb-g10: the fit scores the frame through linear sRGB, not "
-              "through a custom output profile\n");
-    return 1;
-  }
-  // --fit_curves auto: on wherever on applies, nothing elsewhere.
-  s.fit_curves_auto_active = o.fit_curves_auto && s.is_bundle && s.white_light && !s.has_crosstalk &&
-                             fit_encoding_ok && s.bundle_search;
-  if (o.fit_curves && !s.bundle_search) {
-    log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
-              "(--fit_curves with recorded curves, ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, replays them)\n");
-    return 1;
-  }
+  // The curve fit (with its magenta-green offset and the tone stage) runs wherever it applies, nothing elsewhere.
+  s.fit_curves_active = s.is_bundle && s.white_light && !s.has_crosstalk && fit_encoding_ok && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
     // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
@@ -1475,7 +1462,7 @@ int prepare(const Options& o, Setup& s) {
       s.input_curves = s.cached_sidecar.curves;
       s.input_curves_source = s.cached_sidecar.curves_source;
     }
-    s.fit_curves_auto_active = false;  // the curves (or none) come from the previous run
+    s.fit_curves_active = false;  // the curves (or none) come from the previous run
     s.replay_source = "knobs";
     if (s.cached_sidecar.has_offset && s.cached_sidecar.target_idx >= 0) {
       s.has_offset = true;
@@ -1541,7 +1528,7 @@ int prepare(const Options& o, Setup& s) {
       }
       // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
       // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
-      if (o.fit_curves || s.fit_curves_auto_active) {
+      if (s.fit_curves_active) {
         std::vector<char> file;
         const void* data = nullptr;
         size_t size = 0;
@@ -1573,7 +1560,7 @@ int prepare(const Options& o, Setup& s) {
       }
       // The tone heads read the search's pooled features and the tokens' spread (only where the fit runs; the stage
       // itself needs -P srgb, which the fit checks).
-      if ((o.fit_curves || s.fit_curves_auto_active) && o.tone_stage && s.engine.needs_adapter()) {
+      if (s.fit_curves_active && s.engine.needs_adapter()) {
         std::string err;
         if (o.tone_head_file.empty()) {
           const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
@@ -1914,7 +1901,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
-        if (o.fit_curves || s.fit_curves_auto_active) {
+        if (s.fit_curves_active) {
           // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
           // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
           // white-light bundle search.
@@ -1929,7 +1916,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
           if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                             scan.auto_res, fit_opts, export_encoding, o.offset_scan,
+                                             scan.auto_res, fit_opts, export_encoding,
                                              s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
@@ -1959,7 +1946,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                      s.neutral_head.empty() ? "no neutral head" : "no neutral evidence from the head");
           }
           s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = o.fit_curves ? "fit" : "auto";
+          s.input_curves_source = "fit";
           // The fit composed its magenta-green offset into the bracket's tables already; the knobs rebuild them at
           // their own E, g and b (from the curves, else from the bracket's own tables).
           if (s.curve_fit.offset.ran) {
@@ -2490,7 +2477,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.bundle_target_name = res.target_name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The search's E, g and b (after the curve fit's re-meter with --fit_curves on or auto), moved by the knobs when
+    // The search's E, g and b (after the curve fit's re-meter where the fit runs), moved by the knobs when
     // given, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
     const ConversionParams& p = scan.params();
     const float fe = scan.has_knob_res ? scan.knob_res.e : p.e;
@@ -2984,7 +2971,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
-    sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
+    sc.curve_fit = s.input_curves_source == "fit" && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
     sc.tone_plan = sc.curve_fit ? &s.tone_plan : nullptr;
   }

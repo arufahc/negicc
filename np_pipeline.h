@@ -192,7 +192,7 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
-  bool fit_curves_auto_active = false;   // --fit_curves auto in effect (a white-light bundle search with -P)
+  bool fit_curves_active = false;        // the curve fit runs (a white-light bundle search with -P srgb or srgb-g10)
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
@@ -208,7 +208,7 @@ struct Setup {
   // size and CRC-32, for the sidecar.
   std::string head_path[3];
   FileFingerprint head_fp[3];
-  ToneHead tone_head;                    // the white-light tone heads (--tone_stage on, where the fit runs)
+  ToneHead tone_head;                    // the white-light tone heads (where the fit runs)
   // The magenta-green offset and the tone curve the conversion renders with: this run's curve fit's, a previous run's
   // (the knobs on its sidecar) or given (--offset_scan theta:..., --tone_stage curve:...). Neither is searched or
   // predicted again on a replay. The offset belongs to bracket offset_target_idx; offset_base_prof is that bracket's
@@ -224,9 +224,9 @@ struct Setup {
   bool offset_other_bracket = false;
   bool has_tone = false;
   ToneCurve tone_curve;
-  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
-  // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
-  // empty (none).
+  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (the curve fit
+  // ran: curve_fit has it), "cli" (recorded curves given to --fit_curves), a previous run's source on a knob re-run,
+  // or empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   CurveRefitResult curve_fit;
@@ -328,7 +328,7 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
-  // With --fit_curves on or auto: the curve fit's re-metered E and fitted g and b on the combined profile, which the
+  // Where the fit runs: the curve fit's re-metered E and fitted g and b on the combined profile, which the
   // conversion takes in place of the search's (auto_res keeps the search's own).
   bool has_curve_params = false;
   ConversionParams curve_params;

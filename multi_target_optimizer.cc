@@ -2477,7 +2477,7 @@ void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, bool offset_scan_on, const ToneHead* tone_head,
+                                   int encoding, const ToneHead* tone_head,
                                    CurveRefitResult& out) {
   // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
   if (bundle.has_crosstalk) {
@@ -2791,10 +2791,10 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   // 4. The network's magenta-green offset, composed into the same tables (E and the roll-off measured again).
   std::vector<float> scan_features;
   out.tone.features = "search";
-  if (offset_scan_on && kOffsetScanNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
+  if (kOffsetScanNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
     out.offset.skipped = "evidence";
     if (opts.verbose) std::cout << "Offset: not run (evidence)\n";
-  } else if (offset_scan_on) {
+  } else {
     const float trim_conf =
         out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kOffsetTrimCapMass);
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
@@ -2816,8 +2816,6 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
         std::cout << "Offset: not run (" << out.offset.skipped << ")\n";
       }
     }
-  } else {
-    out.offset.skipped = "off";
   }
   const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi, encoding);
   out.params = {e_new, out.fit.g, out.fit.b, out.x_hi};

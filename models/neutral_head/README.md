@@ -51,8 +51,8 @@ python3 models/neutral_head/export_neutral_head.py --check   # needs torch and n
 
 ## Using it in neg_process
 
-On by default wherever the white-light curve fit runs (`--fit_curves auto` or `on`); the head is not loaded
-otherwise (TriLED, given parameters).
+Runs wherever the white-light curve fit runs (always, on a white-light bundle search with `-P srgb` or `srgb-g10`);
+the head is not loaded otherwise (TriLED, given parameters).
 
 ```bash
 neg_process ...                                    # default: the built-in head

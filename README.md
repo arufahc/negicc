@@ -112,7 +112,8 @@ the camera matrix, so the lamp's colour is taken out, and Auto does the rest. Th
 ![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
 
 *Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
-DanielE, 2026-07-11. Converted with `--fit_curves off`: Auto's bracket, exposure and balance alone.
+DanielE, 2026-07-11. Converted with Auto's bracket, exposure and balance alone (before the curve fit, which now
+always runs on white light).
 
 ![Fête du Travail](samples/web_d216d498d5.jpg)
 
@@ -153,9 +154,9 @@ On the frame below the first render is cyan-green; the search brings it to a nat
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
-Each step can be switched off (`--fit_curves off`, `--offset_scan off`, `--tone_stage off`). Everything the
-conversion decided is written to a sidecar next to the output, and the brightness, tint and warmth knobs replay it
-from there without running the model again.
+These steps always run on a white-light scan with `-P srgb` (or `srgb-g10`); their flags only replay recorded
+numbers. Everything the conversion decided is written to a sidecar next to the output, and the brightness, tint and
+warmth knobs replay it from there without running the model again.
 
 ## More examples
 
@@ -187,7 +188,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-E`, `--exposure_comp` | The exposure gain. With a bundle and given gains it defaults to the centre of the bracket's range; with an ICC profile, to 1. Given alone, the search keeps it. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). Either given turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Grey-point knobs after the search (or on given values); reuse `<output>.json` from the same inputs. |
-| `--fit_curves auto\|off\|on\|<numbers>` | G/B input curves (white light, `-P srgb` or `srgb-g10`). `auto` (default): on where it applies. `off`: none. `on`: an error where it does not apply. Eight or ten numbers: replay a sidecar's curves, with `--target`, `-E`, `--gain_g` and `--gain_b`. |
+| `--fit_curves ref:<numbers>` | Replays a sidecar's G/B input curves (8, 10, 11 or 13 numbers), with `--target`, `-E`, `--gain_g` and `--gain_b`. The curve fit itself always runs on white light with `-P srgb` or `srgb-g10`. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm); with a given frame, the format the film base is read around (default: every format). |
 | `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
@@ -196,8 +197,8 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Your own models in place of the built-in ones. The heads are `intent` (the intent adapter: an `.onnx` or its directory), `neutral` (a `neutral_head.bin`) and `tone` (a `tone_head.bin`); for example `--dino neutral:my_head.bin` or `--dino intent:adapter.onnx,tone:th.bin`. A path without a head name is the intent adapter. Heads you leave out stay built in. Paths cannot contain commas. |
-| `--offset_scan on\|off\|theta:<numbers>` | The network's magenta-green setting after the curve fit (white light; default on, up to four extra inferences). Recorded numbers replay it (a sidecar's `cli_equivalent`). |
-| `--tone_stage on\|off\|curve:<numbers>` | The learned lightness curve on the final image (white light with `-P srgb`; default on). Recorded numbers replay it. |
+| `--offset_scan theta:<numbers>` | Replays a sidecar's magenta-green setting (10 numbers, from its `cli_equivalent`). The setting itself always runs after the curve fit on white light (up to four extra inferences). |
+| `--tone_stage curve:<numbers>` | Replays a sidecar's lightness curve (5 numbers). The tone stage itself always runs on the final image on white light with `-P srgb`. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with

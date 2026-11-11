@@ -63,12 +63,12 @@ python3 models/tone_head/export_tone_head.py --check   # needs torch and numpy
 
 ## Using it in neg_process
 
-On by default wherever the white-light curve fit runs with `-P srgb` (`--tone_stage off` turns it off; TriLED never
-runs it). The engine then also gives the tokens' spread with every inference of the search (`set_token_spread`); the
-heads run once, on the features of the magenta-green setting's winning candidate (the state closest to the export), or
-of the search's intent preview when that setting did not run, so the stage adds no inference. The sidecar's
-`tone_stage` records which (`features`), the predictions, the final render's descriptors before the stage, the
-targets, the curve and the clipping before and after.
+Runs wherever the white-light curve fit runs with `-P srgb` (always; `--tone_stage` only replays a recorded curve;
+TriLED never runs it). The engine then also gives the tokens' spread with every inference of the search
+(`set_token_spread`); the heads run once, on the features of the magenta-green setting's winning candidate (the state
+closest to the export), or of the search's intent preview when that setting did not run, so the stage adds no
+inference. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's descriptors
+before the stage, the targets, the curve and the clipping before and after.
 
 To try retrained heads, export them with `export_tone_head.py` and pass the `.bin` with `--dino tone:<file>`, or
 replace `tone_head.bin` and rebuild. The sidecar's `heads.tone` records which file ran, with its size and CRC-32.

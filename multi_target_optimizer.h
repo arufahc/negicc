@@ -446,7 +446,7 @@ struct CurveRefitResult {
 //      own result with no curves (CurveRefitResult::fallback);
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
 //      (apply_input_curves on bundle.targets[res.target_idx]);
-//   4. with offset_scan, the network's magenta-green offset (OffsetScanResult): a lattice of "pure a*" offsets of the
+//   4. the network's magenta-green offset (OffsetScanResult): a lattice of "pure a*" offsets of the
 //      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
 //      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
 //      roll-off measured again);
@@ -460,6 +460,6 @@ struct CurveRefitResult {
 bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                                    double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                                    const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, bool offset_scan, const ToneHead* tone_head, CurveRefitResult& out);
+                                   int encoding, const ToneHead* tone_head, CurveRefitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H
