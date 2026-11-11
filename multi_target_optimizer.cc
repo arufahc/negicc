@@ -1934,7 +1934,7 @@ constexpr double kTintTrimCapMass = 100.0;  // evidence (sum p^2) at which the a
 // The fitted tables with t's density change composed in front of G and B (R is the reference): a value's density
 // above the film base D becomes D + d + k (D - P), P the frame's median cell density of that channel (piv).
 static void tint_trim_tables(const ProfileData& fitted, const TintTrimTables& t, float e, float g, float b,
-                          std::vector<float> out[3]) {
+                             std::vector<float> out[3]) {
   const double* th = t.theta;
   const double* piv = t.piv;
   const float gain[3] = {e, e * g, e * b};
@@ -1986,7 +1986,7 @@ static void net_cell_lab(const std::vector<uint8_t>& u8, int w, int h, std::vect
 
 // The a*-only residual of cells' Lab against a field.
 static double tint_trim_residual(const std::vector<double>& lab, const std::vector<float>& mu,
-                              const std::vector<float>& sigma) {
+                                 const std::vector<float>& sigma) {
   const size_t n = lab.size() / 3;
   double s = 0.0;
   for (size_t i = 0; i < n; ++i) {
@@ -2040,7 +2040,7 @@ class TintTrimBootstrapRng {
 // replacement; each resample's minimum, when inside the range, is refined by a parabola through it and its two
 // neighbours (by at most one step); the standard error is the population standard deviation of the minima.
 static double tint_trim_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
-                                  const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
+                                     const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
   static constexpr int kTintTrimBootstrapResamples = 300;
   static constexpr int kTintTrimBootstrapBlock = 4;  // cells: blocks of 4 x 4 grid cells are resampled together
   const int K = (int)s.size();
@@ -2098,11 +2098,11 @@ static double tint_trim_bootstrap_se(const std::vector<std::vector<double>>& pre
 // winning candidate (the state closest to the export: it differs by the standard error), for step 5.
 template <typename Rolloff>
 static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::CurveFrame& cf, const float* merged,
-                        const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
-                        size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
-                        const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
-                        const std::vector<float>& p_all, float anchor_conf, float& e, float g, float b, float& x_hi,
-                        float& q995, std::vector<float>& tone_features, TintTrimResult& R) {
+                      const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
+                      size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
+                      const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
+                      const std::vector<float>& p_all, float anchor_conf, float& e, float g, float b, float& x_hi,
+                      float& q995, std::vector<float>& tone_features, TintTrimResult& R) {
   const Clock::time_point t0 = Clock::now();
   const int N = (int)nf, NA = (int)(grid_all.size() / 3);
   const ProfileData fitted = prof.data;
