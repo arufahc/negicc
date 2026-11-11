@@ -444,6 +444,10 @@ struct GreenGuard {
   float auto_a[2] = {0.0f, 0.0f};    // Auto's mean a* (g0, b0, no curves, E solved)
   float fit_a[2] = {0.0f, 0.0f};     // the fit's mean a* at its result (before the highlight-cliff pass)
   bool binding = false;              // a counted term ended more than the tolerance greener than Auto: the hinge pulled
+  // The fit runs first without the guard's residuals; refit: its result broke the bound, so this is the guarded re-run.
+  // free_fit_a: the unguarded result's two means (equal to fit_a when it was kept).
+  bool refit = false;
+  float free_fit_a[2] = {0.0f, 0.0f};
   // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ([2, 22],
   // (22, 45], (45, 70], (70, 92)), the band's cells and evidence mass. A band with no cells has zeros.
   int band_cells[4] = {0, 0, 0, 0};
@@ -961,10 +965,13 @@ class JointCurveModel {
 // The never-greener guard: the joint fit may move the grid's colour anywhere the neutral term asks, except greener
 // than Auto. Over the grid cells Auto renders at L* 2..92 (one band: the whole tone range), the candidate's mean a*
 // over all cells, and its mean a* weighted by the neutral head's p^2, may not fall more than kGreenGuardTolAb below
-// Auto's; each excess joins the Levenberg-Marquardt residuals as kGreenGuardWeight x max(0, a*_Auto - tol - a*). The
-// residuals are 0 at Auto and wherever the fit is not greener, so the guard acts only on a move toward green, and as
-// a penalty in the objective rather than a clamp afterwards. A term counts with at least kGreenGuardMinCells cells,
-// the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
+// Auto's. The bound applies to the result, not to the solver's path: the fit runs first without the guard, and that
+// result stands when neither counted mean ends more than the tolerance greener than Auto's. Otherwise the fit runs
+// again from the same start with each excess in the Levenberg-Marquardt residuals as kGreenGuardWeight x
+// max(0, a*_Auto - tol - a*), 0 at Auto and wherever the candidate is not greener: a penalty in the objective rather
+// than a clamp afterwards. (A hinge on every evaluation also blocked steps that pass through a slightly greener point
+// on the way to a less green result, stalling the fit at its start.) A term counts with at least kGreenGuardMinCells
+// cells, the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
 constexpr float kGreenGuardTolAb = 0.5f;
 // Test only, off: the guard's reference is min(Auto's mean a*, 0) instead of Auto's, so a fit may remove Auto's own
 // magenta cast down to neutral but no further toward green (T28: Auto's p^2-weighted a* is +7.0). Off, the reference
@@ -988,12 +995,12 @@ constexpr float kGreenGuardWeight = 4.0f;
 constexpr double kGreenGuardMinCells = 8.0;
 constexpr double kGreenGuardMinMass = 2.0;
 
-// 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each
-// candidate to keep target_L, under the never-greener guard (kGreenGuard*).
-inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
-                                            const float* mu, const float* sigma, float target_L, const int table_n[2],
-                                            const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
-                                            float e_hi = 0.0f, const float* = nullptr) {
+// One pass of the joint fit (fit_input_curves_joint); guard_path: the guard's hinge joins the residuals at every
+// evaluation. Off, the hinge residuals are 0 (same residual count) and the guard is only measured at the result.
+inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0,
+                                                 float b0, const float* mu, const float* sigma, float target_L,
+                                                 const int table_n[2], const CurveFitOptions& o, float e_lo, float e_hi,
+                                                 bool guard_path) {
   JointCurveModel model(cfg, f, mu, sigma);
   model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
@@ -1086,7 +1093,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       double v[2];
       guard_means(p, e, v);
       for (int k = 0; k < 2; ++k) {
-        const double h = out.guard.counted[k]
+        const double h = guard_path && out.guard.counted[k]
                              ? (double)kGreenGuardWeight *
                                    std::max(0.0, green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k])
                              : 0.0;
@@ -1447,6 +1454,27 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   out.neutral_after = model.neutral_stats(e, p[0], p[1], out.curves);
   out.loss_after = data;
   out.renders = renders;
+  return out;
+}
+
+// 4x4 scene-neutral color & crossover solver for p = (g, b, a_G, a_B) with k_G = k_B = 0, E solved at each
+// candidate to keep target_L, under the never-greener guard (kGreenGuard*): the fit without the guard, kept when
+// its result keeps the bound, else the fit again with it. evaluations and renders count both passes.
+inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
+                                            const float* mu, const float* sigma, float target_L, const int table_n[2],
+                                            const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
+                                            float e_hi = 0.0f, const float* = nullptr) {
+  const JointCurveFit free_fit =
+      fit_input_curves_joint_pass(cfg, f, e0, g0, b0, mu, sigma, target_L, table_n, o, e_lo, e_hi, false);
+  JointCurveFit out = free_fit;
+  if (free_fit.guard.binding) {
+    out = fit_input_curves_joint_pass(cfg, f, e0, g0, b0, mu, sigma, target_L, table_n, o, e_lo, e_hi, true);
+    out.guard.refit = true;
+    out.evaluations += free_fit.evaluations;
+    out.renders += free_fit.renders;
+  }
+  out.guard.free_fit_a[0] = free_fit.guard.fit_a[0];
+  out.guard.free_fit_a[1] = free_fit.guard.fit_a[1];
   return out;
 }
 

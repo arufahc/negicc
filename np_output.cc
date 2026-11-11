@@ -420,6 +420,10 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                            {"auto_a", {n9(gd.auto_a[0]), n9(gd.auto_a[1])}},
                                            {"fit_a", {n9(gd.fit_a[0]), n9(gd.fit_a[1])}},
                                            {"binding", gd.binding},
+                                           // The fit ran first without the guard; refit: that result broke
+                                           // the bound and this is the guarded re-run.
+                                           {"refit", gd.refit},
+                                           {"free_fit_a", {n9(gd.free_fit_a[0]), n9(gd.free_fit_a[1])}},
                                            {"p_source", f->guard_p_source},
                                            // Per L* band of Auto's render (diagnostic): [2,22], 45, 70, 92.
                                            {"bands", bands}};
