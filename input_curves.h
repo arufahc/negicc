@@ -972,6 +972,10 @@ class JointCurveModel {
 // than a clamp afterwards. (A hinge on every evaluation also blocked steps that pass through a slightly greener point
 // on the way to a less green result, stalling the fit at its start.) A term counts with at least kGreenGuardMinCells
 // cells, the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
+// Shadows carry no debit (green_guard_cell_a): in both means, a cell Auto renders in the deep shadows that ends greener
+// than at Auto counts at Auto's a*, so the fit may correct a shadow cast toward green; a shadow cell that ends more
+// magenta keeps its credit, and mid-tones and highlights count as they are. The offset scan's guard check is not
+// affected.
 constexpr float kGreenGuardTolAb = 0.5f;
 // Test only, off: the guard's reference is min(Auto's mean a*, 0) instead of Auto's, so a fit may remove Auto's own
 // magenta cast down to neutral but no further toward green (T28: Auto's p^2-weighted a* is +7.0). Off, the reference
@@ -991,6 +995,20 @@ inline double green_guard_lift(double auto_weighted_a, bool weighted_counted) {
   return std::clamp((auto_weighted_a - lo) / (hi - lo), 0.0, 1.0);
 }
 inline double green_guard_ref(double auto_a, double lift) { return auto_a - lift * std::max(auto_a, 0.0); }
+// The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
+// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
+constexpr double kGreenGuardShadowL0 = 15.0;
+constexpr double kGreenGuardShadowWidth = 10.0;
+// A cell's a* as the guard's means count it: a_Auto + d, d = a - a_Auto, with a negative d (the cell greener than at
+// Auto) scaled by 1 - w_s, w_s the shadow weight of the cell's L* at Auto.
+inline double green_guard_cell_a(double a, double a_auto, double L_auto) {
+  if (!std::isfinite(a) || !std::isfinite(a_auto)) return a;
+  const double d = a - a_auto;
+  if (d >= 0.0) return a;
+  const double x = std::clamp((L_auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5, 0.0, 1.0);
+  const double ws = 1.0 - x * x * (3.0 - 2.0 * x);
+  return a_auto + (1.0 - ws) * d;
+}
 constexpr float kGreenGuardWeight = 4.0f;
 constexpr double kGreenGuardMinCells = 8.0;
 constexpr double kGreenGuardMinMass = 2.0;
@@ -1043,6 +1061,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   std::vector<char> guard_in(f.n, 0);
   std::vector<double> guard_pw(f.n, 0.0);
   std::vector<double> guard_auto_a(f.n, 0.0);  // Auto's a* per cell, for a candidate that renders a cell non-finite
+  std::vector<double> guard_auto_L(f.n, 0.0);  // Auto's L* per cell, for the shadow exemption (green_guard_cell_a)
   double guard_ref[2] = {0.0, 0.0};
   double guard_lift = 0.0;  // green_guard_lift of Auto's weighted mean
   bool guard_ready = false;
@@ -1055,6 +1074,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
       // at Auto's a*, so the two means never compare different populations.
       double a = model.cell_lab(i, eq, q[0], q[1], c).a;
       if (!std::isfinite(a)) a = guard_auto_a[i];
+      a = green_guard_cell_a(a, guard_auto_a[i], guard_auto_L[i]);
       sa += a;
       na += 1.0;
       sp += guard_pw[i] * a;
@@ -1071,6 +1091,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
       if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
       guard_in[i] = 1;
       guard_auto_a[i] = l.a;
+      guard_auto_L[i] = l.L;
       const double p = f.neutral_p ? std::clamp((double)f.neutral_p[i], 0.0, 1.0) : 0.0;
       guard_pw[i] = p * p;
       na += 1.0;
