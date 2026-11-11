@@ -2417,6 +2417,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     aw_auto += w2[i] * lab_auto[3 * i + 1];
   }
   const double tol = (double)negicc::kGreenGuardTolAb + kOffsetScanGuardSlack;
+  const double lift = negicc::green_guard_lift(w_in > 0.0 ? aw_auto / w_in : 0.0, w_in >= negicc::kGreenGuardMinMass);
   auto guard_ok = [&](const std::vector<float>& lab) {
     double a = 0.0, aw = 0.0;
     for (int i = 0; i < NA; ++i)
@@ -2424,8 +2425,8 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
         a += lab[3 * i + 1];
         aw += w2[i] * lab[3 * i + 1];
       }
-    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < negicc::green_guard_ref(a_auto / n_in) - tol) return false;
-    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < negicc::green_guard_ref(aw_auto / w_in) - tol) return false;
+    if (n_in >= negicc::kGreenGuardMinCells && a / n_in < negicc::green_guard_ref(a_auto / n_in, lift) - tol) return false;
+    if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < negicc::green_guard_ref(aw_auto / w_in, lift) - tol) return false;
     return true;
   };
   const int K = (int)std::lround(2.0 * kOffsetScanMax / kOffsetScanStep) + 1;

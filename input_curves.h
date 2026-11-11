@@ -970,7 +970,20 @@ constexpr float kGreenGuardTolAb = 0.5f;
 // magenta cast down to neutral but no further toward green (T28: Auto's p^2-weighted a* is +7.0). Off, the reference
 // is Auto's mean a*, as the owner's rule reads.
 constexpr bool kGreenGuardRefCapZero = false;
-inline double green_guard_ref(double auto_a) { return kGreenGuardRefCapZero ? std::min(auto_a, 0.0) : auto_a; }
+// Test only, off: the same, for both terms, only where the confident neutrals themselves are magenta under Auto: with
+// Auto's p^2-weighted mean a* (counted) at or below kGreenGuardMagentaLo the reference is Auto's, at or above
+// kGreenGuardMagentaHi it is min(Auto's, 0), linearly in between (Lo == Hi: a step).
+constexpr bool kGreenGuardMagentaAnchors = false;
+constexpr double kGreenGuardMagentaLo = 2.0, kGreenGuardMagentaHi = 6.0;
+// The share of a positive reference the guard drops (0: Auto's, 1: neutral), from Auto's weighted mean a*.
+inline double green_guard_lift(double auto_weighted_a, bool weighted_counted) {
+  if (kGreenGuardRefCapZero) return 1.0;
+  if (!kGreenGuardMagentaAnchors || !weighted_counted) return 0.0;
+  const double lo = kGreenGuardMagentaLo, hi = kGreenGuardMagentaHi;
+  if (hi <= lo) return auto_weighted_a > lo ? 1.0 : 0.0;
+  return std::clamp((auto_weighted_a - lo) / (hi - lo), 0.0, 1.0);
+}
+inline double green_guard_ref(double auto_a, double lift) { return auto_a - lift * std::max(auto_a, 0.0); }
 constexpr float kGreenGuardWeight = 4.0f;
 constexpr double kGreenGuardMinCells = 8.0;
 constexpr double kGreenGuardMinMass = 2.0;
@@ -1024,6 +1037,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   std::vector<double> guard_pw(f.n, 0.0);
   std::vector<double> guard_auto_a(f.n, 0.0);  // Auto's a* per cell, for a candidate that renders a cell non-finite
   double guard_ref[2] = {0.0, 0.0};
+  double guard_lift = 0.0;  // green_guard_lift of Auto's weighted mean
   bool guard_ready = false;
   auto guard_means = [&](const float* q, float eq, double v[2]) {
     const InputCurves c = model.anchored(shape_of(q), eq, q[0], q[1]);
@@ -1059,6 +1073,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     guard_means(p0, eq, guard_ref);
     out.guard.counted[0] = na >= kGreenGuardMinCells;
     out.guard.counted[1] = wp >= kGreenGuardMinMass;
+    guard_lift = green_guard_lift(guard_ref[1], out.guard.counted[1]);
     guard_ready = true;
   };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
@@ -1073,7 +1088,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       for (int k = 0; k < 2; ++k) {
         const double h = out.guard.counted[k]
                              ? (double)kGreenGuardWeight *
-                                   std::max(0.0, green_guard_ref(guard_ref[k]) - kGreenGuardTolAb - v[k])
+                                   std::max(0.0, green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k])
                              : 0.0;
         r.push_back(h);
         sum += h * h;
@@ -1250,7 +1265,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     for (int k = 0; k < 2; ++k) {
       out.guard.auto_a[k] = (float)guard_ref[k];
       out.guard.fit_a[k] = (float)v[k];
-      if (out.guard.counted[k] && green_guard_ref(guard_ref[k]) - kGreenGuardTolAb - v[k] > 0.0)
+      if (out.guard.counted[k] && green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k] > 0.0)
         out.guard.binding = true;
     }
     // Per band of Auto's render, for the sidecar.
