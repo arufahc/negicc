@@ -360,8 +360,9 @@ struct TintTrimResult {
 struct ToneStagePlan {
   bool planned = false;           // a curve was solved (by the conversion) and the conversion applies it
   const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
-  // Whose DINOv3 features the heads read: "tint_trim" (step 4's winning candidate) or "final" (the final state's
-  // preview, one inference, when the scan did not run); "search" (the intent preview) only if that inference failed.
+  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate, the tint trim's) or "final" (the final
+  // state's preview, one inference, when the scan did not run); "search" (the intent preview) only if that inference
+  // failed.
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
   // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the

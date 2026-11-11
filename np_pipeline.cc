@@ -1027,10 +1027,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     };
     if (j.contains("input_curves") && j["input_curves"].is_object()) {
       const auto& ic = j["input_curves"];
-      // "tint_trim", or "offset" in a sidecar written before the step was renamed.
-      const char* tk = ic.contains("tint_trim") ? "tint_trim" : "offset";
-      if (ic.contains(tk) && ic[tk].is_object() && ic[tk].value("applied", false)) {
-        const auto& of = ic[tk];
+      // The sidecar records the tint trim under "offset".
+      if (ic.contains("offset") && ic["offset"].is_object() && ic["offset"].value("applied", false)) {
+        const auto& of = ic["offset"];
         TintTrimTables& t = s.cached_sidecar.tint_trim;
         double d[3], fb[3];
         if (!numbers(of.value("theta", nlohmann::ordered_json()), 4, t.theta) ||
@@ -1353,8 +1352,9 @@ int prepare(const Options& o, Setup& s) {
   // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
-  if (o.input_curves_given) {
-    const char* opt = "--fit_curves with recorded curves";
+  const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
+  if (fit_on || o.input_curves_given) {
+    const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
     // TODO: extending the fitted curves and the tone stage to single-shot tri-LED is deferred. A one-frame experiment
     // showed it works after five changes: (1) let the fit run on a single-shot crosstalk bundle (other tri-LED cases
     // unchanged); (2) call the fit on the CFA path, which Sony raws take and which has no fit call; (3) drop
@@ -1379,8 +1379,20 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
-  // The curve fit (with its tint trim and the tone stage) runs wherever it applies, nothing elsewhere.
-  s.fit_curves_active = s.is_bundle && s.white_light && !s.has_crosstalk && fit_encoding_ok && s.bundle_search;
+  if (fit_on && !fit_encoding_ok) {
+    log_error("--fit_curves on needs -P srgb or -P srgb-g10: the fit scores the frame through linear sRGB, not "
+              "through a custom output profile\n");
+    return 1;
+  }
+  if (fit_on && !s.bundle_search) {
+    log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
+              "(--fit_curves with recorded curves, ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, replays them)\n");
+    return 1;
+  }
+  // --fit_curves auto or on: the curve fit (with its tint trim and the tone stage) wherever it applies (on has
+  // checked above that it does), nothing elsewhere; off: none.
+  s.fit_curves_active = o.fit_curves != Options::kFitCurvesOff && s.is_bundle && s.white_light && !s.has_crosstalk &&
+                        fit_encoding_ok && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
     // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
@@ -1948,7 +1960,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                      s.neutral_head.empty() ? "no neutral head" : "no neutral evidence from the head");
           }
           s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = "fit";
+          s.input_curves_source = o.fit_curves == Options::kFitCurvesOn ? "fit" : "auto";
           // The fit composed its tint trim into the bracket's tables already; the knobs rebuild them at
           // their own E, g and b (from the curves, else from the bracket's own tables).
           if (s.curve_fit.tint_trim.ran) {
@@ -2973,7 +2985,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
-    sc.curve_fit = s.input_curves_source == "fit" && !s.has_cached_sidecar
+    sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
     sc.tone_plan = sc.curve_fit ? &s.tone_plan : nullptr;
   }

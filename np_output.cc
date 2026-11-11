@@ -438,7 +438,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     // s and theta in full (17 digits), so the export's tables can be rebuilt from them exactly.
     auto n17 = [](double v) { return num(v, "%.17g"); };
     const TintTrimTables& ot = os.tables;
-    j["tint_trim"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)},
+    j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)},
                                         {"se", n9(os.se)},
                                         {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
                                                                                   {"conf", n9(os.trim_conf)}}
@@ -467,14 +467,14 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     if (const TintTrimTables* ot = sc.tint_trim_tables) {
       auto n17 = [](double v) { return num(v, "%.17g"); };
       auto n9 = [](double v) { return num(v, "%.9g"); };
-      j["tint_trim"] = {{"applied", true},
+      j["offset"] = {{"applied", true},
                      {"source", "replay"},
                      {"theta", {n17(ot->theta[0]), n17(ot->theta[1]), n17(ot->theta[2]), n17(ot->theta[3])}},
                      {"piv", {n17(ot->piv[0]), n17(ot->piv[1]), n17(ot->piv[2])}},
                      {"diag", {n9(ot->diag[0]), n9(ot->diag[1]), n9(ot->diag[2])}},
                      {"film_base", {n9(ot->film_base[0]), n9(ot->film_base[1]), n9(ot->film_base[2])}}};
     } else {
-      j["tint_trim"] = nullptr;
+      j["offset"] = nullptr;
     }
   }
   return j;
@@ -792,7 +792,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   // What a replay rendered from recorded values (null when nothing was replayed).
   if (!sc.replay_source.empty()) {
     j["replay"] = {{"source", sc.replay_source},
-                   {"tint_trim", !sc.replay_tint_trim_given ? ordered_json(nullptr)
+                   {"offset", !sc.replay_tint_trim_given ? ordered_json(nullptr)
                               : sc.replay_tint_trim_other_bracket ? ordered_json("not applied: another bracket")
                                                                : ordered_json("applied")},
                    {"tone_curve", sc.tone_curve ? ordered_json(sc.tone_applied ? "applied" : "not applied")

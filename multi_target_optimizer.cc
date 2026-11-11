@@ -2804,7 +2804,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
                 out.tint_trim);
     if (out.tint_trim.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
       tone_features.swap(scan_features);
-      out.tone.features = "tint_trim";
+      out.tone.features = "offset";
     }
     if (opts.verbose) {
       if (out.tint_trim.ran) {
@@ -2838,7 +2838,7 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   int pw = 0, ph = 0;
   if (tone_head && encoding == ENCODE_SRGB) {
     fr.render_net_preview(prof.data, out.params, pv, pw, ph);
-    if (std::strcmp(tp.features, "tint_trim") != 0) {
+    if (std::strcmp(tp.features, "offset") != 0) {
       std::vector<float> mu_f, sg_f, tf;
       if (fr.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
         tone_features.swap(tf);

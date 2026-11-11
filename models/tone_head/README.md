@@ -63,9 +63,9 @@ python3 models/tone_head/export_tone_head.py --check   # needs torch and numpy
 
 ## Using it in neg_process
 
-Runs wherever the white-light curve fit runs with `-P srgb` (always; `--tone_stage` only replays a recorded curve;
-TriLED never runs it). The engine then also gives the tokens' spread with every inference of the search
-(`set_token_spread`); the heads run once, on the features of the tint trim's winning candidate (the state
+Runs wherever the white-light curve fit runs with `-P srgb` (`--fit_curves off` leaves it out; `--tone_stage` only
+replays a recorded curve; TriLED never runs it). The engine then also gives the tokens' spread with every inference of
+the search (`set_token_spread`); the heads run once, on the features of the tint trim's winning candidate (the state
 closest to the export), or of the search's intent preview when that setting did not run, so the stage adds no
 inference. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's descriptors
 before the stage, the targets, the curve and the clipping before and after.

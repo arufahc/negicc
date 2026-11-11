@@ -69,9 +69,8 @@ struct Options {
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
   // the built-in ones; empty: the built-in one.
   std::string dino_adapter, neutral_head_file, tone_head_file;
-  // The white-light curve fit, its tint trim and the tone stage always run where they apply (a white-light
-  // bundle search with -P srgb or srgb-g10); their flags only replay recorded values (a sidecar's cli_equivalent),
-  // with given values and no search:
+  // The tint trim and the tone stage run wherever the white-light curve fit runs; their flags only replay recorded
+  // values (a sidecar's cli_equivalent), with given values and no search:
   // --tint_trim theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (TintTrimTables' G and B numbers) and
   // --tone_stage curve:black,white,gamma,contrast,chroma (ToneCurve).
   bool tint_trim_replay_given = false;
@@ -82,8 +81,12 @@ struct Options {
   int dino_iters = 4;
   bool dino_iters_given = false;
 
-  // Fitted G/B input curves (input_curves.h): recorded curves given to --fit_curves (replayed, not fitted)
-  bool input_curves_given = false;
+  // Fitted G/B input curves (input_curves.h). --fit_curves auto (the default) fits them on every white-light bundle
+  // search with -P srgb or srgb-g10 and nowhere else (TriLED, another or no -P, given parameters); on does the same
+  // and is an error where it does not apply; off turns the fit (with its tint trim and tone stage) off.
+  enum FitCurvesMode { kFitCurvesAuto, kFitCurvesOn, kFitCurvesOff };
+  FitCurvesMode fit_curves = kFitCurvesAuto;
+  bool input_curves_given = false;             // recorded curves given to --fit_curves (replayed, not fitted)
   negicc::InputCurves input_curves;
 
   // Output

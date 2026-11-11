@@ -192,7 +192,7 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
-  bool fit_curves_active = false;        // the curve fit runs (a white-light bundle search with -P srgb or srgb-g10)
+  bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
@@ -225,9 +225,9 @@ struct Setup {
   bool tint_trim_other_bracket = false;
   bool has_tone = false;
   ToneCurve tone_curve;
-  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (the curve fit
-  // ran: curve_fit has it), "cli" (recorded curves given to --fit_curves), a previous run's source on a knob re-run,
-  // or empty (none).
+  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
+  // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
+  // empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   CurveRefitResult curve_fit;
