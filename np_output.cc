@@ -351,9 +351,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   }
   // The red highlight-cliff curve (the fit's cliff pass): without it a replay derived R's from G's and missed it.
   if (c.k_r != 0.0f) ch["R"] = {{"k", n9(c.k_r)}, {"ref", n9(c.ref_r)}, {"u_lo", n9(c.u_lo_r)}};
-  // Whether the export renders through curves. Not when the fit fell back (fallback: clip, shape or
-  // intent_lightness, as remeter.fallback): the bracket's own tables, so no channels and no hold. Before, the fallback's
-  // identity curves were written as channels (a = k = 0, with an anchor) and replayed as recorded curves.
+  // Whether the export renders through curves. Not when the fit fell back (fallback: clip, shape or intent_lightness,
+  // as remeter.fallback): the bracket's own tables, so no channels and no hold.
   const bool applied = c.active();
   const WhiteLightFitResult* fr = sc.curve_fit;
   j["applied"] = applied;
@@ -362,7 +361,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   // below u_lo the curve keeps its offset (InputCurves::hold); replay needs u_lo then
   j["hold"] = applied ? ordered_json(c.hold) : ordered_json(nullptr);
   if (const WhiteLightFitResult* f = sc.curve_fit) {
-    // The options the fit ran with (before, the defaults were written whatever ran, and half of them were missing).
+    // The options the fit ran with, all of them.
     const negicc::CurveFitOptions& op = f->options;
     j["lambda"] = n9(op.lambda);
     j["bound"] = n9(op.curve_bound);

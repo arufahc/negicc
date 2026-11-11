@@ -201,12 +201,11 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
   return c;
 }
 
-// One channel's curve over the whole input table it is composed into (compose_input_table): at every entry
-// v = i / (n - 1) below ref, u = log2(v / ref), the curve is monotonic (denser film never renders lighter in this
-// channel) and within max_dev stops of the base TRC (|u s(u) - u|). Before, this was checked only over the frame's
-// density range [u_lo, 0] (the densest grid cell), while the table carries the curve down to 1 / (n - 1), where
-// pixels denser than any grid cell land: there the curve could fold over or move arbitrarily far from the TRC. The
-// identity (a = k = 0) always passes.
+// One channel's curve over the whole input table it is composed into (compose_input_table): at every entry v = i / (n -
+// 1) below ref, u = log2(v / ref), the curve is monotonic (denser film never renders lighter in this channel) and
+// within max_dev stops of the base TRC (|u s(u) - u|). The whole table is checked, not only the frame's density range
+// [u_lo, 0] (the densest grid cell): pixels denser than any grid cell land below it, where the curve could otherwise
+// fold over or move arbitrarily far from the TRC. The identity (a = k = 0) always passes.
 inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev,
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
@@ -291,9 +290,9 @@ struct CurveFitOptions {
   bool solve_e = true;
 #endif
   // The tolerance, in L*, of each candidate's E solve (JointCurveModel::solve_e). The Jacobian's probes move a
-  // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 (before) left the probe's E
-  // either unchanged or moved by up to the tolerance, so the derivative through E was noise. 2e-5 is a few float steps
-  // of L* near 50.
+  // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 would leave the probe's E
+  // either unchanged or moved by up to the tolerance, so the derivative through E would be noise. 2e-5 is a few float
+  // steps of L* near 50.
   float e_tol_L = 2e-5f;
 };
 
@@ -321,7 +320,7 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
   CombinedProfile comb;
   auto curves_of = [&](const float* p) {
     InputCurves t;
-    t.hold = o.hold_slope;  // as the joint fit's curves (before, this fit ignored hold_slope)
+    t.hold = o.hold_slope;  // as the joint fit's curves
     t.a[0] = p[2];
     t.k[0] = p[3];
     t.a[1] = p[4];
@@ -776,14 +775,12 @@ class JointCurveModel {
     return r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
   }
 
-  // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with
-  // log E, each cell's L* does). Secant steps on log E from e_warm (clamped into the bounds), each new point kept in a
+  // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with log
+  // E, each cell's L* does). Secant steps on log E from e_warm (clamped into the bounds), each new point kept in a
   // bracket of the two nearest points either side of the target; where the secant leaves the bracket or stalls, the
   // bounds the bracket lacks are tested and the bracket bisected. False when the target lies outside the bounds (the
   // median at one bound is already past it): e is that bound, and the point is not one the export can render at
-  // target_L. Before, a warm start at a bound was stepped outward and clamped back onto itself (the secant then saw
-  // two equal points and gave up), the fallback bisected [e0 / 4, 4 e0] without testing its ends, and an unreachable
-  // target returned a bound as if it were the answer.
+  // target_L.
   bool solve_e(float g, float b, const InputCurves& shape, float target_L, float e_warm, float e_lo, float e_hi,
                float tol, int& renders, float& e) {
     const float lo_t = std::log(e_lo), hi_t = std::log(e_hi);
@@ -1471,11 +1468,8 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
 // bisection in log E (a larger E renders darker), the curves (shape's a and k) anchored at each E it tries, so the
 // profile it measures is the one the export renders at that E. cfg carries the bracket's own profile. The bisection
 // runs over [e_centre / 2, 2 e_centre] within [e_lo, e_hi] when the target lies there (both ends tested first), else
-// over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. Before,
-// it bisected [e0 / 4, 4 e0] around Auto's E whatever E the fit had solved, without testing the ends, and an
-// unreachable target returned a bound as if it were the answer.
-// negicc-station Iteration 230's F6L, which replaces the E/g/b fixed point after the curve fit (the fixed point
-// followed its own darker render).
+// over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. It is used
+// instead of a fixed point on E, g and b after the fit, which would follow its own darker render.
 inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
                                  float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
                                  int iters = 40) {

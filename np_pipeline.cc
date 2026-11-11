@@ -824,12 +824,11 @@ static bool same_number(const std::string& a, const std::string& b) {
          std::isfinite(vb) && va == vb;
 }
 
-// Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and
-// the knobs: the same normalised arguments (result_args), a number also matching the same number written otherwise
-// (1 and 1.0) and a path the same existing file. Any
-// option that changes the result (the profile, the flat field, -r/-g/-b, -E, --target, the gains, --roi,
-// --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must therefore be the same. Before, only
-// --flat and -r/-g/-b were compared, and a sidecar without an argv array matched anything.
+// Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and the
+// knobs: the same normalised arguments (result_args), a number also matching the same number written otherwise (1 and
+// 1.0) and a path the same existing file. Any option that changes the result (the profile, the flat field, -r/-g/-b,
+// -E, --target, the gains, --roi, --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must
+// therefore be the same. A sidecar without an argv array matches nothing.
 static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, const Options& o, std::string& why) {
   if (!argv_json.is_array()) {
     why = "it records no argv";
@@ -1095,9 +1094,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
 
   if (!s.bundle_search && j.contains("dino") && j["dino"].is_object()) {
     const auto& d = j["dino"];
-    // The bracket the previous run converted on (its sidecar's): with --target it must be that one. Before, the
-    // bracket was picked here with select_bundle_target_without_dino, before any exposure range was measured, so it
-    // was always the first admissible bracket and a run without --target was reused only when that happened to match.
+    // The bracket the previous run converted on (its sidecar's): with --target it must be that one.
     int expected_idx = -1;
     if (s.is_bundle) {
       const std::string recorded = prof.value("bundle_target", "");
@@ -1632,9 +1629,7 @@ int prepare(const Options& o, Setup& s) {
 }
 
 // The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
-// meters it (Scan::bracket_exposure, meter_bracket_exposures). Before, the bundle's e_center over the first row's
-// scale: the whole frame's statistics without e_norm (and on TriLED without the bracket's exposure ratio), which put
-// it up to a few stops from the E Auto meters for the same bracket.
+// meters it (Scan::bracket_exposure, meter_bracket_exposures).
 static float given_station_e(const Options& o, const Scan& scan, int target_idx) {
   if (o.exposure_given || target_idx < 0 || target_idx >= (int)scan.bracket_exposure.size() ||
       !scan.bracket_exposure[target_idx].valid) {
@@ -1719,9 +1714,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       g = scan.knob_res.g;
       b = scan.knob_res.b;
       // The knobs moved E, g and b off the anchor of the curves the bracket renders through (fitted, recorded or a
-      // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones,
-      // so the curves stay on the film densities they were fitted to. Before, the tables kept the base's anchor, so
-      // a brightness knob slid the curves along the table.
+      // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones, so
+      // the curves stay on the film densities they were fitted to.
       //
       // The knobs were solved on the profile at the base's anchor, and the re-anchored curves change it: the grey then
       // missed its target (on two white-LED frames up to 0.08 stop and 5 a* for a 0.5 stop brightness). So, until the
@@ -1856,8 +1850,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   int det_sensor_w = 0, det_sensor_h = 0;
   // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
   // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
-  // Before, only the bundle search and given gains built it, so -E and --target there converted with the bundle's film
-  // base instead of the scan's, unlike the same scan on the CFA path or with the search.
   // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
   auto take_detected_frame = [&](int full_w, int full_h) {
     if (scan.frame_det.conf < kLowFrameConfidence) {
@@ -2558,10 +2550,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
     if (!s.has_cached_sidecar && s.is_bundle) {
       // With a bundle the search runs on the station's merged matrix (the crosstalk with each row normalised by the
-      // film base, station_base), in the station's E, g and b, as the bundle search and given values do: it starts
-      // from -E (or 1) and g = b = 1, the film base rendered neutral. Before, only a pinned -E started there; --target
-      // alone searched on the bare crosstalk from absolute g = b = 1, which on a negative is far from neutral (the
-      // orange mask), with the bracket's exposure range in those units.
+      // film base, station_base), in the station's E, g and b, as the bundle search and given values do: it starts from
+      // -E (or 1) and g = b = 1, the film base rendered neutral.
       const float e0 = (c.pin_mask & PIN_E) ? o.exposure_comp : 1.0f;
       negicc::candidate_matrix(station_base, e0, 1.0f, 1.0f, c.merged_matrix);
       user_gains = {e0, 1.0f, 1.0f};
@@ -2579,11 +2569,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.film_prof = tgt.film_prof;
       c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
-      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (Step 2, the
-      // E its bootstrap starts the bracket from) and searches the bracket's range as the bundle search does, so
-      // --target without -E starts where Auto would on that bracket. Before, the bundle's e_center over the first
-      // row's scale, up to a few stops off (a black render, or one stop dark on TriLED). The bounds are ratios to the
-      // centre.
+      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (Step 2, the E
+      // its bootstrap starts the bracket from) and searches the bracket's range as the bundle search does, so --target
+      // without -E starts where Auto would on that bracket. The bounds are ratios to the centre.
       const int ti = c.bundle_target_idx;
       if (ti < (int)scan.bracket_exposure.size() && scan.bracket_exposure[ti].valid) {
         const BracketExposure& be = scan.bracket_exposure[ti];
@@ -2752,8 +2740,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     }
   } else if (o.knobs_given) {
     // A single ICC profile with given gains: the knobs move the given (absolute) E, g and b through that profile, as
-    // they move the solver's result above. Before, they were accepted and never solved, and the sidecar recorded a
-    // zeroed knobs block.
+    // they move the solver's result above.
     if (!c.film_prof.data.has_profile) {
       log_error("--brightness, --tint and --warmth need the film profile to solve the grey point\n");
       return 1;
