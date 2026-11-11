@@ -349,8 +349,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     ch[names[i]] = {{"a", n9(c.a[i])}, {"k", n9(c.k[i])}, {"ref", n9(c.ref[i])}, {"u_med", n9(c.u_med[i])}};
     if (u_lo_known) ch[names[i]]["u_lo"] = n9(c.u_lo[i]);
   }
-  // The red highlight-cliff curve (the fit's cliff pass): without it a replay derived R's from G's and missed it.
-  if (c.k_r != 0.0f) ch["R"] = {{"k", n9(c.k_r)}, {"ref", n9(c.ref_r)}, {"u_lo", n9(c.u_lo_r)}};
   // Whether the export renders through curves. Not when the fit fell back (fallback: clip, shape or intent_lightness,
   // as remeter.fallback): the bracket's own tables, so no channels and no hold.
   const bool applied = c.active();
@@ -408,21 +406,18 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
                     {"neutral", ordered_json{{"anchors", f->neutral_anchors ? "head" : "none"},
                                              {"m", f->neutral_export.m}, {"conf", n9(f->neutral_export.conf)},
-                                             {"c_a", n9(f->neutral_export.c_a)}, {"c_b", n9(f->neutral_export.c_b)},
                                              {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
                                              // The anchors' evidence mass (sum of p^2), the slope shrink's L*
-                                             // spread and the share of Auto's slope the fit removes, whether the
-                                             // anchors had endpoints, and the offset gate's inputs and whether it
-                                             // took the full strength.
+                                             // spread and the share of Auto's slope the fit removes, and the
+                                             // anchors' mean |ab|, scatter and the offset gate's decision.
                                              {"evidence", n9(f->neutral_decisions.evidence)},
                                              {"span_L", n9(f->neutral_decisions.span_L)},
                                              {"slope_share", n9(f->neutral_decisions.slope_share)},
                                              {"auto_ab", n9(f->neutral_decisions.auto_ab)},
                                              {"spread", n9(f->neutral_decisions.spread)},
-                                             {"endpoints", f->neutral_decisions.endpoints},
                                              {"offset_gate", f->neutral_decisions.offset_gate}}},
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
@@ -643,8 +638,6 @@ bool write_json_sidecar(const Sidecar& sc) {
     for (float v : {c.ref[0], c.ref[1], c.u_med[0], c.u_med[1], c.a[0], c.k[0], c.a[1], c.k[1]})
       v8 += (v8.size() > 4 ? "," : "") + num_str(v, "%.9g");
     if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
-    if (c.k_r != 0.0f)  // the red highlight-cliff curve
-      v8 += "," + num_str(c.k_r, "%.9g") + "," + num_str(c.ref_r, "%.9g") + "," + num_str(c.u_lo_r, "%.9g");
     cli.push_back(v8);
   }
   // The tint trim's tables and the tone curve, replayed as recorded (G and B numbers of TintTrimTables;

@@ -1020,16 +1020,6 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       }
       c.hold = ic.value("hold", false);
       if (c.hold && !(ic["channels"]["G"].contains("u_lo") && ic["channels"]["B"].contains("u_lo"))) ok = false;
-      if (ok && ic["channels"].contains("R")) {  // the red highlight-cliff curve
-        const auto& r = ic["channels"]["R"];
-        ok = r.is_object() && r.contains("k") && r.contains("ref") && r.contains("u_lo");
-        if (ok) {
-          c.k_r = r["k"].get<float>();
-          c.ref_r = r["ref"].get<float>();
-          c.u_lo_r = r["u_lo"].get<float>();
-          ok = std::isfinite(c.k_r) && c.ref_r > 0.0f && std::isfinite(c.u_lo_r);
-        }
-      }
       for (int i = 0; ok && i < 2; ++i) {
         ok = std::isfinite(c.a[i]) && std::isfinite(c.k[i]) && std::isfinite(c.u_med[i]) && std::isfinite(c.u_lo[i]);
       }

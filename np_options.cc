@@ -325,8 +325,7 @@ int parse_options(int ac, char* av[], Options& o) {
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
-          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo; then kR,refR,u_loR for the "
-          "red highlight-cliff curve when the fit bent R). auto: as on wherever on "
+          "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
           "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
           "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
           "and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket it chose, each "
@@ -449,10 +448,9 @@ int parse_options(int ac, char* av[], Options& o) {
     if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
       o.fit_curves = fc[0] == "on" ? Options::kFitCurvesOn : fc[0] == "off" ? Options::kFitCurvesOff
                                                                            : Options::kFitCurvesAuto;
-    } else if (fc.size() == 8 || fc.size() == 10 || (ref_first && (fc.size() == 11 || fc.size() == 13))) {
-      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB. Eleven or thirteen (the ref: form
-      // only): the red highlight-cliff curve's kR, refR and u_loR appended (the fit's cliff pass bends R too).
-      float v[13];
+    } else if (fc.size() == 8 || fc.size() == 10) {
+      // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB.
+      float v[10];
       for (size_t i = 0; i < fc.size(); ++i) {
         if (!parse_number(fc[i], v[i])) {
           log_error("--fit_curves: '%s' is not a number (give off, auto, on, or "
@@ -470,20 +468,10 @@ int parse_options(int ac, char* av[], Options& o) {
         o.input_curves.k[i] = v[at_ak + i * 2 + 1];
         o.input_curves.ref[i] = v[at_ref + i];
         o.input_curves.u_med[i] = v[at_u_med + i];
-        if (fc.size() == 10 || fc.size() == 13) o.input_curves.u_lo[i] = v[8 + i];
-        o.input_curves.hold = fc.size() == 10 || fc.size() == 13;
+        if (fc.size() == 10) o.input_curves.u_lo[i] = v[8 + i];
+        o.input_curves.hold = fc.size() == 10;
         if (!(o.input_curves.ref[i] > 0.0f)) {
           log_error("--fit_curves: refG and refB must be positive\n");
-          return 1;
-        }
-      }
-      if (fc.size() == 11 || fc.size() == 13) {
-        const size_t at_r = fc.size() - 3;
-        o.input_curves.k_r = v[at_r];
-        o.input_curves.ref_r = v[at_r + 1];
-        o.input_curves.u_lo_r = v[at_r + 2];
-        if (!(o.input_curves.ref_r > 0.0f)) {
-          log_error("--fit_curves: refR must be positive\n");
           return 1;
         }
       }

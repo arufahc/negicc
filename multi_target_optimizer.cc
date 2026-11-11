@@ -1801,20 +1801,6 @@ void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curv
 }
 
 void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves) {
-  const float kr = (curves.k_r != 0.0f) ? curves.k_r : (curves.k[0] < 0.0f ? 0.8228f * curves.k[0] : 0.0f);
-  {
-    const std::vector<float>& table_r = base.in_trc[0];
-    if (!curves.active() || !(kr < 0.0f) || !base.data.has_profile || table_r.size() < 2) {
-      prof.in_trc[0] = table_r;
-    } else {
-      std::vector<float> composed(table_r.size());
-      const float refr = (curves.ref_r > 0.0f) ? curves.ref_r : std::min(1.0f, curves.ref[0] * 1.0905f);
-      negicc::compose_input_table(table_r.data(), (int)table_r.size(), refr, 0.0f, 0.0f, kr, composed.data(),
-                                  curves.u_hold_r(), 0.36f, 0.76f);
-      prof.in_trc[0].swap(composed);
-    }
-  }
-  const float ts_gb[2] = {0.30f, 0.46f};
   for (int ch = 1; ch <= 2; ++ch) {
     const std::vector<float>& table = base.in_trc[ch];
     if (!curves.active() || !base.data.has_profile || table.size() < 2) {
@@ -1824,7 +1810,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
     std::vector<float> composed(table.size());
     const int i = ch - 1;
     negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
+                                curves.k[i], composed.data(), curves.u_hold(i));
     prof.in_trc[ch].swap(composed);
   }
   prof.rebind_pointers();
@@ -1887,9 +1873,6 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   // u_med carry over exactly where nothing moves.
   const negicc::InputCurves a0 = negicc::anchor_curves(curves, cf, from[0], from[1], from[2]);
   const negicc::InputCurves a1 = negicc::anchor_curves(curves, cf, to[0], to[1], to[2]);
-  if (a0.ref_r > 0.0f && a1.ref_r > 0.0f && curves.ref_r > 0.0f)
-    out.ref_r = curves.ref_r * (a1.ref_r / a0.ref_r);
-  out.u_lo_r = curves.u_lo_r + (a1.u_lo_r - a0.u_lo_r);
   const ProfileData& pd = bundle.targets[target_idx].film_prof.data;
   for (int ch = 0; ch < 2; ++ch) {
     if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
@@ -1903,7 +1886,6 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
     out.a[ch] *= scale[ch];
     out.k[ch] *= scale[ch];
   }
-  out.k_r *= scale[0];
   return true;
 }
 
@@ -2595,15 +2577,10 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
   out.x_hi_auto = rolloff_at(prof.data, e_int, res.params.g, res.params.b, &q995_auto);
   negicc::PipelineConfig cfg_auto = make_pipeline_config(prof.data, AUTO_KNEE, out.x_hi_auto, encoding);
   // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
-  // keeps. On low-key frames (Auto's target_L < 25 and median green density < 0.80 stops above film base), cap
-  // fit_target_L by the physical toe ceiling so an unexposed night sky near film base is not lifted to kIntentMinL,
-  // while never darkening a bright/flat frame (target_L >= 25).
+  // keeps (within kIntentMinL..kIntentMaxL).
   const float target_L =
       negicc::grid_median_L(cfg_auto, merged, e_int, res.params.g, res.params.b, fit_grid, (int)nf);
-  const float d_med = -negicc::anchor_curves(negicc::InputCurves{}, cf, e_int, res.params.g, res.params.b).u_med[0];
-  const float toe_max_L =
-      (target_L < 25.0f && d_med > 0.0f && d_med < 0.80f) ? std::max(10.0f, 22.0f * d_med) : kIntentMaxL;
-  const float fit_target_L = std::min(std::clamp(target_L, kIntentMinL, kIntentMaxL), toe_max_L);
+  const float fit_target_L = std::clamp(target_L, kIntentMinL, kIntentMaxL);
   // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
   out.parts_auto = negicc::grid_intent_loss_parts(cfg_auto, merged, e_int, res.params.g, res.params.b,
                                                   fit_grid, (int)nf, mu.data(), sigma.data());
@@ -2650,7 +2627,6 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
   out.remeter_passes = 0;
   // Auto's own result, no curves (the fallback of the steps below).
   auto fall_back = [&](const char* why) {
-    out.fit.curves.k_r = 0.0f;
     for (int ch = 0; ch < 2; ++ch) {
       out.fit.curves.a[ch] = out.fit.curves.k[ch] = 0.0f;
       out.shape_scale_ch[ch] = 0.0f;
