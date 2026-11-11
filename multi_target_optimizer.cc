@@ -1785,27 +1785,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // ---- Fitted G/B input curves ---------------------------------------------------------------------------------
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
+  // In place: the profile is its own base (each table is composed into a temporary before it replaces the old one).
   if (!curves.active() || !prof.data.has_profile) return;
-  const float kr = (curves.k_r != 0.0f) ? curves.k_r : (curves.k[0] < 0.0f ? 0.8228f * curves.k[0] : 0.0f);
-  if (kr < 0.0f && prof.in_trc[0].size() >= 2) {
-    std::vector<float>& table = prof.in_trc[0];
-    std::vector<float> composed(table.size());
-    const float refr = (curves.ref_r > 0.0f) ? curves.ref_r : std::min(1.0f, curves.ref[0] * 1.0905f);
-    negicc::compose_input_table(table.data(), (int)table.size(), refr, 0.0f, 0.0f, kr, composed.data(),
-                                curves.u_hold_r(), 0.36f, 0.76f);
-    table.swap(composed);
-  }
-  const float ts_gb[2] = {0.30f, 0.46f};
-  for (int ch = 1; ch <= 2; ++ch) {
-    std::vector<float>& table = prof.in_trc[ch];
-    if (table.size() < 2) continue;
-    std::vector<float> composed(table.size());
-    const int i = ch - 1;
-    negicc::compose_input_table(table.data(), (int)table.size(), curves.ref[i], curves.u_med[i], curves.a[i],
-                                curves.k[i], composed.data(), curves.u_hold(i), ts_gb[i], 0.76f);
-    table.swap(composed);
-  }
-  prof.rebind_pointers();
+  apply_input_curves(prof, prof, curves);
 }
 
 void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves& curves) {
