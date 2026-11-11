@@ -25,7 +25,7 @@
 #include "dinov3_engine.h"
 #include "input_curves.h"
 #include "profile_bundle.h"
-#include "tone_head.h"
+#include "intent_head.h"
 #include "tone_stage.h"
 
 // Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
@@ -355,7 +355,7 @@ struct OffsetScanResult {
   double time_ms = 0.0;
 };
 
-// The white-light tone stage's plan (tone_stage.h): the tone heads' predictions (tone_head.h, on features an inference
+// The white-light tone stage's plan (tone_stage.h): the tone heads' predictions (intent_head.h, on features an inference
 // of the fit already produced), the descriptors of the final render's preview and the curve between them; the
 // conversion applies it to the final image.
 struct ToneStagePlan {

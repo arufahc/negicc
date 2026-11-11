@@ -6,7 +6,7 @@
 #include "dinov3_engine.h"
 #include "dinov3_preprocess.h"
 #include "dinov3_runner.h"
-#include "neutral_head.h"
+#include "intent_head.h"
 
 #include <chrono>
 #include <cmath>

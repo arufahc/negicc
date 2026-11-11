@@ -61,14 +61,14 @@ public:
     // The loaded model is a backbone and needs an adapter.
     bool needs_adapter() const;
 
-    // The neutral-patch head (neutral_head.h) from a neutral_head.bin held in memory: with it, infer() also gives
+    // The neutral-patch head (intent_head.h) from a neutral_head.bin held in memory: with it, infer() also gives
     // DinoV3InferenceResult::neutral_p from the backbone's tokens. When the backbone and adapter run on the GPU the
     // tokens are copied to the host once per inference for it. Null data clears it. Throws std::runtime_error on
     // a bad file or a fused model (no tokens to read).
     void set_neutral_head(const void* data, size_t size);
     bool has_neutral_head() const { return neutral_head_ != nullptr; }
     // With it on, infer() also gives DinoV3InferenceResult::token_sd, the spread of the backbone's tokens over the
-    // patches: with the pooled features, the input of the white-light tone heads (tone_head.h). Like the neutral head
+    // patches: with the pooled features, the input of the white-light tone heads (intent_head.h). Like the neutral head
     // it needs the tokens on the host (one copy per inference when the backbone and adapter run on the GPU).
     void set_token_spread(bool on) { token_spread_ = on; }
 
