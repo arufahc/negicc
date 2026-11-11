@@ -55,9 +55,6 @@ struct SolverConfig {
   float custom_e_center = 0.0f;
   float enc_e_min = 0.0f;
   float enc_e_max = 0.0f;
-  // The pullback re-search's g and b grids reach one step lower (g 0.68, b 0.55) on white-light bundles; TriLED keeps
-  // the station's grids.
-  bool wide_pullback_grids = false;
 };
 
 struct ShoulderResult {

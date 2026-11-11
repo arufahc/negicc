@@ -858,7 +858,6 @@ class SearchFrame {
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
-    cfg.wide_pullback_grids = !bundle_.has_crosstalk;
     if (pullback_search) {
       Enclosure enc;
       const float g_scale = bundle_.has_crosstalk ? 1.0f : e_norm_;
@@ -1634,65 +1633,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (out.clip_fallback == ClipFallbackOutcome::kTaken) {
         chosen = fp_adj;
         params = p_adj;
-      } else if (white_light && out.clip_fallback == ClipFallbackOutcome::kClipsTooMuch && clip_0 > 0.02f) {
-        // When severe highlight clipping (>2% white-clipped) is only partially reduced by chosen + 1, continue
-        // walking denser brackets with pullback_search (wide g/b range) to find the deepest bracket that clears
-        // the highlight clipping or highlight overshoot within the lightness and residual gates.
-        float best_clip = clip_adj;
-        float best_q995 = fp_adj.shoulder_q995;
-        const float overshoot_0 = std::max(0.0f, chosen.shoulder_q995 - 1.0f);
-        const float resid_0 = chosen.residual;
-        const int start_idx = chosen.target_idx + 2;
-        for (int t_cand = start_idx; t_cand < (int)bundle.targets.size(); ++t_cand) {
-          const Screened* s_cand = nullptr;
-          for (const auto& s : screening)
-            if (s.result.target_idx == t_cand) s_cand = &s;
-          if (!s_cand || !s_cand->enclosure.admissible) continue;
-          ConversionParams p_start = s_cand->result.params;
-          const float eb_screen[3] = {s_cand->result.e_lo, s_cand->result.e_hi, s_cand->enclosure.e_center};
-          fr.search(t_cand, mu1, sig1, nullptr, eb_screen, p_start, true);
-          Screened s_pb = *s_cand;
-          s_pb.result.params = p_start;
-          float eb[3];
-          trust_bounds(s_pb, eb);
-          FixedPointResult fp_cand;
-          if (verbose) std::cout << "Auto: fixed point on " << name_of(t_cand) << " (clip fallback multi-step)\n";
-          if (!fr.fixed_point(t_cand, p_start, eb, fp_cand, true)) return false;
-          ConversionParams p_cand = fp_cand.params;
-          ClipStats hc_cand = fr.highlight_clip(t_cand, {p_cand}, ceiling_of(t_cand))[0];
-          float dl_cand = hc_cand.median_L - hc0.median_L;
-          if (dl_cand < CLIP_FALLBACK_DL_MIN) {
-            p_cand.e *= std::pow(2.0f, (dl_cand - CLIP_FALLBACK_DL_MIN) * 0.038f);
-            hc_cand = fr.highlight_clip(t_cand, {p_cand}, ceiling_of(t_cand))[0];
-            dl_cand = hc_cand.median_L - hc0.median_L;
-          }
-          const float clip_cand = hc_cand.white_clip / 100.0f;
-          const float overshoot_cand = std::max(0.0f, fp_cand.shoulder_q995 - 1.0f);
-          const bool clears_overshoot =
-              (overshoot_0 > 0.15f && overshoot_cand <= 0.10f * overshoot_0 && clip_cand < 0.70f * clip_0);
-          ClipFallbackOutcome cand_outcome = ClipFallbackOutcome::kTaken;
-          if (clip_cand > CLIP_FALLBACK_CLIP_RATIO * clip_0 && !clears_overshoot)
-            cand_outcome = ClipFallbackOutcome::kClipsTooMuch;
-          else if (!(CLIP_FALLBACK_DL_MIN <= dl_cand && dl_cand <= CLIP_FALLBACK_DL_MAX))
-            cand_outcome = ClipFallbackOutcome::kShiftsLightness;
-          else if (fp_cand.residual > (1.0f + (clears_overshoot ? 0.12f : CLIP_FALLBACK_RESID_TOL)) * resid_0)
-            cand_outcome = ClipFallbackOutcome::kWorseResidual;
-          if (verbose) {
-            std::cout << "Auto: clip fallback: " << name_of(t_cand) << " clips " << fixed(clip_cand * 100.0f, 4)
-                      << "% vs " << fixed(clip_0 * 100.0f, 4) << "%, dL* " << fixed(dl_cand, 2, true) << ", resid "
-                      << fixed(fp_cand.residual, 4) << ": " << to_string(cand_outcome) << "\n";
-          }
-          if (cand_outcome == ClipFallbackOutcome::kTaken &&
-              (out.clip_fallback != ClipFallbackOutcome::kTaken ||
-               (clears_overshoot ? fp_cand.shoulder_q995 < best_q995 : clip_cand < best_clip))) {
-            out.clip_fallback = ClipFallbackOutcome::kTaken;
-            fp_cand.params = p_cand;
-            chosen = fp_cand;
-            params = p_cand;
-            best_clip = clip_cand;
-            best_q995 = fp_cand.shoulder_q995;
-          }
-        }
       }
     }
     if (verbose && (out.clip_fallback == ClipFallbackOutcome::kNotScreened || out.clip_fallback == ClipFallbackOutcome::kNotAdmissible)) {
@@ -1733,53 +1673,28 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
-      // On white light the re-search runs only when the next bracket (chosen + 1) was competitive in the shared-intent
-      // screening pass, over chosen and chosen + 1 alone, and its result must keep the clip fallback's residual
-      // tolerance of chosen (the B5 port). TriLED keeps the station's re-search over every metered bracket, for parity.
-      float chosen_screen_loss = 0.0f;
-      bool found_chosen_screen = false;
-      bool adj_screen_ok = !white_light;
-      if (white_light) for (const auto& s : screening) {
-        if (s.result.target_idx == chosen.target_idx) {
-          chosen_screen_loss = s.result.intent_loss;
-          found_chosen_screen = true;
-          break;
-        }
-      }
-      if (white_light && found_chosen_screen) {
-        for (const auto& s : screening) {
-          if (s.result.target_idx == chosen.target_idx + 1 &&
-              s.result.intent_loss <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen_screen_loss) {
-            adj_screen_ok = true;
-            break;
-          }
-        }
-      }
       // The re-search window of each metered bracket: its calibrated range united with the infeasible window
       // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
       // so the pullback can reach the darker-than-metered side the first search could not.
       std::vector<Depth> depths_res;
-      if (adj_screen_ok) {
-        for (const auto& c : pool) {
-          if (white_light && (c.target_idx < chosen.target_idx || c.target_idx > chosen.target_idx + 1)) continue;
-          const auto d = std::find_if(depths.begin(), depths.end(),
-                                      [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
-          if (d == depths.end()) continue;
-          const float e_met = d->e_met;
-          const float u_min = c.e_min * std::pow(2.0f, -1.5f);
-          const float u_max = c.e_max * std::pow(2.0f, 1.2f);
-          const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
-          const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
-          const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
-          const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
-          const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-          float lo = base_lo;
-          float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
-          // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
-          // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
-          if (lo > hi) std::swap(lo, hi);
-          depths_res.push_back(metered(c, e_met, lo, hi));
-        }
+      for (const auto& c : pool) {
+        const auto d = std::find_if(depths.begin(), depths.end(),
+                                    [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
+        if (d == depths.end()) continue;
+        const float e_met = d->e_met;
+        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
+        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
+        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
+        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
+        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
+        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
+        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
+        float lo = base_lo;
+        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
+        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
+        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
+        if (lo > hi) std::swap(lo, hi);
+        depths_res.push_back(metered(c, e_met, lo, hi));
       }
       // A new bootstrap field when the deepest bracket or its E changed (else the first one is the same field).
       std::vector<float> mu_res = mu1, sig_res = sig1;
@@ -1794,9 +1709,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         }
       }
       std::vector<FixedPointResult> res_adaptive;
-      if ((!white_light || !depths_res.empty()) &&
-          !tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive))
-        return false;
+      if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
       if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
@@ -1811,12 +1724,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           dl = hc_res_242.median_L - hc_242.median_L;
         }
         // Taken when it clips no more (at most 0.5 percentage point more of the crop above 242 in the worst channel),
-        // keeps the midtones at L* 48 or within 6 of the first choice's, stays within the clip fallback's residual
-        // tolerance of chosen, and actually moves: a later bracket, or E up by more than 2%.
+        // keeps the midtones at L* 48 or within 6 of the first choice's, and actually moves: a later bracket, or E up
+        // by more than 2%.
         const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
         const float exc_res_242 = max_excess(hc_res_242);
         if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&
-            (!white_light || fp_res.residual <= (1.0f + CLIP_FALLBACK_RESID_TOL) * chosen.residual) &&
             (fp_res.target_idx > chosen.target_idx || p_res.e > params.e * 1.02f)) {
           chosen = fp_res;
           params = p_res;
