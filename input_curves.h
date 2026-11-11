@@ -1298,19 +1298,20 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
       if (out.guard.counted[k] && green_guard_ref(guard_ref[k], guard_lift) - kGreenGuardTolAb - v[k] > 0.0)
         out.guard.binding = true;
     }
-    // Per band of Auto's render, for the sidecar.
-    const InputCurves c_auto = model.anchored(InputCurves{}, e, g0, b0);
+    // Per band of Auto's render, for the sidecar: Auto's cells as guard_init rendered them (at Auto's E, as auto_a),
+    // the fit's at its result.
     const InputCurves c_fit = model.anchored(shape_of(p), e, p[0], p[1]);
     double s[4][4] = {}, n[4] = {}, w[4] = {};
     for (int i = 0; i < f.n; ++i) {
       if (!guard_in[i]) continue;
-      const Lab la = model.cell_lab(i, e, g0, b0, c_auto), lf = model.cell_lab(i, e, p[0], p[1], c_fit);
-      if (!std::isfinite(la.a) || !std::isfinite(lf.a)) continue;
-      const int bd = la.L <= 22.0f ? 0 : la.L <= 45.0f ? 1 : la.L <= 70.0f ? 2 : 3;
+      const Lab lf = model.cell_lab(i, e, p[0], p[1], c_fit);
+      if (!std::isfinite(lf.a)) continue;
+      const double la_a = guard_auto_a[i], la_L = guard_auto_L[i];
+      const int bd = la_L <= 22.0 ? 0 : la_L <= 45.0 ? 1 : la_L <= 70.0 ? 2 : 3;
       n[bd] += 1.0;
       w[bd] += guard_pw[i];
-      s[bd][0] += la.a;
-      s[bd][1] += guard_pw[i] * la.a;
+      s[bd][0] += la_a;
+      s[bd][1] += guard_pw[i] * la_a;
       s[bd][2] += lf.a;
       s[bd][3] += guard_pw[i] * lf.a;
     }
