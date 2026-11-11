@@ -48,14 +48,14 @@
 static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
 }
-                                      static inline double tone_srgb_encode(double c) {
+static inline double tone_srgb_encode(double c) {
     c = c < 0 ? 0 : (c > 1 ? 1 : c);
     return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055;
 }
 static inline double tone_lab_f(double t) {
     return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
 }
-                                static inline double tone_lab_finv(double t) {
+static inline double tone_lab_finv(double t) {
     return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
 }
 constexpr double kToneXn = 0.950456, kToneZn = 1.088754;
