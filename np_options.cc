@@ -275,11 +275,11 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
-  parser.add_argument("--offset_scan")
-    .help("Replays a recorded magenta-green offset: theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a sidecar's "
-          "cli_equivalent), with --target, -E, --gain_g and --gain_b. The offset itself always runs as the "
+  parser.add_argument("--tint_trim")
+    .help("Replays a recorded tint trim: theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a sidecar's "
+          "cli_equivalent), with --target, -E, --gain_g and --gain_b. The trim itself always runs as the "
           "white-light curve fit's last step: the network judges whether the fitted picture reads too green or too "
-          "magenta, a lattice of magenta-green offsets is scored against the intent field, the best few are rendered "
+          "magenta, a lattice of tint trims is scored against the intent field, the best few are rendered "
           "and scored again (up to 4 extra DINOv3 inferences), and the best one, moved one standard error toward "
           "magenta, is composed into the bracket's tables. Offsets that would make the picture greener than Auto are "
           "not candidates.");
@@ -529,7 +529,7 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   o.dino_backend = parser.get<std::string>("--dino_backend");
   // on, off, or recorded numbers after a prefix (which keeps a negative first number from reading as an option).
-  // --offset_scan and --tone_stage replay recorded values only (the steps themselves always run where they apply).
+  // --tint_trim and --tone_stage replay recorded values only (the steps themselves always run where they apply).
   auto replay = [&](const char* name, const char* prefix, int count, bool& given, double* out) {
     if (!parser.is_used(name)) return true;
     const std::string v = parser.get<std::string>(name);
@@ -556,7 +556,7 @@ int parse_options(int ac, char* av[], Options& o) {
               "comma-separated numbers, not '%s'\n", name, prefix, count, v.c_str());
     return false;
   };
-  if (!replay("--offset_scan", "theta:", 10, o.offset_replay_given, o.offset_replay) ||
+  if (!replay("--tint_trim", "theta:", 10, o.tint_trim_replay_given, o.tint_trim_replay) ||
       !replay("--tone_stage", "curve:", 5, o.tone_replay_given, o.tone_replay))
     return 1;
   o.quality = parser.get<int>("--quality");

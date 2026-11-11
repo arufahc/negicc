@@ -317,12 +317,12 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// What the magenta-green offset's tables are made from: the density change theta = (d_G, d_B, k_G, k_B) and, per
+// What the tint trim's tables are made from: the density change theta = (d_G, d_B, k_G, k_B) and, per
 // channel, the frame's median cell density above the film base (piv) and the two factors that place the film base on
 // the input table (v_base = gain x diag x film_base / 65535, gain the channel's E, E g or E b). A value's density
 // above the film base, D = -log10(v / v_base), does not depend on the gains, so the same numbers rebuild the export's
 // tables at the E, g and b a replay or the knobs render at. R is the reference and is not changed.
-struct OffsetTables {
+struct TintTrimTables {
   double theta[4] = {0, 0, 0, 0};
   double piv[3] = {0, 0, 0};
   float diag[3] = {0, 0, 0};       // the diagonal of the search's input matrix (merged[0], merged[4], merged[8])
@@ -331,21 +331,21 @@ struct OffsetTables {
 
 // prof's G and B input tables (its current ones: the bracket's, composed with any curves) with t's density change
 // composed in front, at E, g and b, in place.
-void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float e, float g, float b);
+void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, float e, float g, float b);
 
-// The magenta-green offset the white-light fit's result takes from the network (fit_input_curves_after_search, step
+// The tint trim the white-light fit's result takes from the network (fit_input_curves_after_search, step
 // 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
-struct OffsetScanResult {
-  bool ran = false;               // the scan ran and its offset was applied (s may be 0)
-  const char* skipped = nullptr;  // why it did not run: "off", "grid" (the network's grid is not the frame's), "infer"
-                                  // (inference failed), "evidence" (no neutral evidence; kOffsetScanNeedsEvidence)
+struct TintTrimResult {
+  bool ran = false;               // the trim ran and was applied (s may be 0)
+  const char* skipped = nullptr;  // why it did not run: "grid" (the network's grid is not the frame's), "infer"
+                                  // (inference failed), "evidence" (no neutral evidence; kTintTrimNeedsEvidence)
   double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
   double se = 0.0;      // the bootstrap standard error of the residual's minimum
-  double s = 0.0;       // the offset applied: s_min + se (one standard error toward magenta)
-  bool trim_capped = false;  // kOffsetTrimCap shortened s from s_uncapped (anchors' confidence trim_conf)
+  double s = 0.0;       // the trim applied: s_min + se (one standard error toward magenta)
+  bool trim_capped = false;  // kTintTrimCap shortened s from s_uncapped (anchors' confidence trim_conf)
   double s_uncapped = 0.0;
   double trim_conf = 0.0;
-  OffsetTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
+  TintTrimTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
   int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
   float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field
   // The rendered candidates: s, the residual predicted from the pivot's field, the residual against their own field.
@@ -360,8 +360,8 @@ struct OffsetScanResult {
 struct ToneStagePlan {
   bool planned = false;           // a curve was solved (by the conversion) and the conversion applies it
   const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
-  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate) or "final" (the final state's preview,
-  // one inference, when the scan did not run); "search" (the intent preview) only if that inference failed.
+  // Whose DINOv3 features the heads read: "tint_trim" (step 4's winning candidate) or "final" (the final state's
+  // preview, one inference, when the scan did not run); "search" (the intent preview) only if that inference failed.
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
   // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the
@@ -423,8 +423,8 @@ struct CurveRefitResult {
   // search's chosen preview) or "refit" (predicted again at the search's final parameters, intent_repredicted).
   negicc::GreenGuard guard;
   const char* guard_p_source = "search";
-  // Step 4, the network's magenta-green offset, and the tone stage's plan.
-  OffsetScanResult offset;
+  // Step 4, the tint trim, and the tone stage's plan.
+  TintTrimResult tint_trim;
   ToneStagePlan tone;
   double time_ms = 0.0;
   // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
@@ -446,7 +446,7 @@ struct CurveRefitResult {
 //      own result with no curves (CurveRefitResult::fallback);
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
 //      (apply_input_curves on bundle.targets[res.target_idx]);
-//   4. the network's magenta-green offset (OffsetScanResult): a lattice of "pure a*" offsets of the
+//   4. the tint trim (TintTrimResult): a lattice of "pure a*" offsets of the
 //      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
 //      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
 //      roll-off measured again);

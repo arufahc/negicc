@@ -197,7 +197,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `-C`, `--no_crop` | Keep the RAW's full area instead of its default crop. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Your own models in place of the built-in ones. The heads are `intent` (the intent adapter: an `.onnx` or its directory), `neutral` (a `neutral_head.bin`) and `tone` (a `tone_head.bin`); for example `--dino neutral:my_head.bin` or `--dino intent:adapter.onnx,tone:th.bin`. A path without a head name is the intent adapter. Heads you leave out stay built in. Paths cannot contain commas. |
-| `--offset_scan theta:<numbers>` | Replays a sidecar's magenta-green setting (10 numbers, from its `cli_equivalent`). The setting itself always runs after the curve fit on white light (up to four extra inferences). |
+| `--tint_trim theta:<numbers>` | Replays a sidecar's tint trim (10 numbers, from its `cli_equivalent`). The tint trim, the network's setting on the magenta–green axis, itself always runs after the curve fit on white light (up to four extra inferences). |
 | `--tone_stage curve:<numbers>` | Replays a sidecar's lightness curve (5 numbers). The tone stage itself always runs on the final image on white light with `-P srgb`. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 

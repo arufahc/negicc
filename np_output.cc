@@ -431,14 +431,15 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                      }()},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
-    // Step 4, the network's magenta-green offset (remeter's e and x_hi are after it).
-    const OffsetScanResult& os = f->offset;
+    // Step 4, the tint trim (remeter's e and x_hi are after it).
+    const TintTrimResult& os = f->tint_trim;
     ordered_json cands = ordered_json::array();
     for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
     // s and theta in full (17 digits), so the export's tables can be rebuilt from them exactly.
     auto n17 = [](double v) { return num(v, "%.17g"); };
-    const OffsetTables& ot = os.tables;
-    j["offset"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
+    const TintTrimTables& ot = os.tables;
+    j["tint_trim"] = os.ran ? ordered_json{{"applied", true}, {"s", n17(os.s)}, {"s_min", n9(os.s_min)},
+                                        {"se", n9(os.se)},
                                         {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
                                                                                   {"conf", n9(os.trim_conf)}}
                                                                     : ordered_json(nullptr)},
@@ -462,18 +463,18 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["max_dev_stops"] = nullptr;
     j["render"] = nullptr;
     j["remeter"] = nullptr;
-    // A replayed offset (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
-    if (const OffsetTables* ot = sc.offset_tables) {
+    // A replayed tint trim (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
+    if (const TintTrimTables* ot = sc.tint_trim_tables) {
       auto n17 = [](double v) { return num(v, "%.17g"); };
       auto n9 = [](double v) { return num(v, "%.9g"); };
-      j["offset"] = {{"applied", true},
+      j["tint_trim"] = {{"applied", true},
                      {"source", "replay"},
                      {"theta", {n17(ot->theta[0]), n17(ot->theta[1]), n17(ot->theta[2]), n17(ot->theta[3])}},
                      {"piv", {n17(ot->piv[0]), n17(ot->piv[1]), n17(ot->piv[2])}},
                      {"diag", {n9(ot->diag[0]), n9(ot->diag[1]), n9(ot->diag[2])}},
                      {"film_base", {n9(ot->film_base[0]), n9(ot->film_base[1]), n9(ot->film_base[2])}}};
     } else {
-      j["offset"] = nullptr;
+      j["tint_trim"] = nullptr;
     }
   }
   return j;
@@ -636,14 +637,14 @@ bool write_json_sidecar(const Sidecar& sc) {
       v8 += "," + num_str(c.k_r, "%.9g") + "," + num_str(c.ref_r, "%.9g") + "," + num_str(c.u_lo_r, "%.9g");
     cli.push_back(v8);
   }
-  // The magenta-green offset's tables and the tone curve, replayed as recorded (G and B numbers of OffsetTables;
+  // The tint trim's tables and the tone curve, replayed as recorded (G and B numbers of TintTrimTables;
   // theta and piv in full).
-  if (const OffsetTables* ot = sc.offset_tables) {
+  if (const TintTrimTables* ot = sc.tint_trim_tables) {
     std::string v = "theta:";
     for (double x : {ot->theta[0], ot->theta[1], ot->theta[2], ot->theta[3], ot->piv[1], ot->piv[2]})
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     for (float x : {ot->diag[1], ot->diag[2], ot->film_base[1], ot->film_base[2]}) v += "," + num_str(x, "%.9g");
-    cli.insert(cli.end(), {"--offset_scan", v});
+    cli.insert(cli.end(), {"--tint_trim", v});
   }
   if (sc.tone_curve && sc.tone_applied) {
     const ToneCurve& q = *sc.tone_curve;
@@ -791,8 +792,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   // What a replay rendered from recorded values (null when nothing was replayed).
   if (!sc.replay_source.empty()) {
     j["replay"] = {{"source", sc.replay_source},
-                   {"offset", !sc.replay_offset_given ? ordered_json(nullptr)
-                              : sc.replay_offset_other_bracket ? ordered_json("not applied: another bracket")
+                   {"tint_trim", !sc.replay_tint_trim_given ? ordered_json(nullptr)
+                              : sc.replay_tint_trim_other_bracket ? ordered_json("not applied: another bracket")
                                                                : ordered_json("applied")},
                    {"tone_curve", sc.tone_curve ? ordered_json(sc.tone_applied ? "applied" : "not applied")
                                                 : ordered_json(nullptr)}};

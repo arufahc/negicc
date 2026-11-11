@@ -1915,7 +1915,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
-// ---- Step 4: the network's magenta-green offset on the fitted state ------------------------------------------------
+// ---- Step 4: the tint trim on the fitted state ------------------------------------------------
 //
 // The joint fit balances the scene-neutral anchors; whether the whole picture then reads too green or too magenta is
 // a judgement the intent network makes about the content. It barely tracks a re-rendered preview (its field moves
@@ -1923,35 +1923,35 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 // against: each lattice point's cells are predicted as the pivot's cells plus the change the grid model gives, and
 // scored by the a*-only residual S(s) = mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are rendered and
 // scored on their own fields; the best of those, moved one bootstrap standard error of the residual's minimum toward
-// magenta (the owner prefers a frame a little magenta to a little green), is the offset applied. Lattice points that
+// magenta (the owner prefers a frame a little magenta to a little green), is the trim applied. Lattice points that
 // make the grid greener than Auto (the joint fit's guard, read on the export's render) are not candidates.
-constexpr double kOffsetScanMax = 8.0;       // lattice s in [-8, 8] a*,
-constexpr double kOffsetScanStep = 0.5;      // in steps of 0.5 a*
-constexpr int kOffsetScanCandidates = 3;     // lattice points rendered and scored on their own fields
-constexpr double kOffsetScanGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
-constexpr int kOffsetBootstrapResamples = 300;
-constexpr int kOffsetBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
-constexpr double kOffsetReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
+constexpr double kTintTrimMax = 8.0;       // lattice s in [-8, 8] a*,
+constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*
+constexpr int kTintTrimCandidates = 3;     // lattice points rendered and scored on their own fields
+constexpr double kTintTrimGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
+constexpr int kTintTrimBootstrapResamples = 300;
+constexpr int kTintTrimBootstrapBlock = 4;     // cells: blocks of 4 x 4 grid cells are resampled together
+constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
 // Test only, off: no scan when the joint fit settled for lack of neutral evidence (the neutral head's conf at or below
 // 1e-4, the fit's own settle test), e.g. a blank or near-uniform frame, where the field alone would set the trim.
-constexpr bool kOffsetScanNeedsEvidence = false;
+constexpr bool kTintTrimNeedsEvidence = false;
 // The trim may not move confident neutrals away from neutral. With c = the neutral head's conf x min(1, evidence /
-// kOffsetTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
-// end at most kOffsetTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
+// kTintTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
+// end at most kTintTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
 // c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
-constexpr bool kOffsetTrimCap = true;
-constexpr double kOffsetTrimCapTol = 1.0;
-constexpr double kOffsetTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
+constexpr bool kTintTrimCap = true;
+constexpr double kTintTrimCapTol = 1.0;
+constexpr double kTintTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
 // The direction solve: probe steps of (d_G, d_B, k_G, k_B), the ridge on the step-scaled columns (a layer the grid
 // cannot move, e.g. a blue floor, would otherwise ask for an offset and a contrast change that cancel at many D),
 // and the bounds of the density change.
-constexpr double kOffsetProbe[4] = {0.01, 0.01, 0.05, 0.05};
-constexpr double kOffsetRidge = 1e-2;
-constexpr double kOffsetMaxDensity = 0.3, kOffsetMaxContrast = 0.6;
+constexpr double kTintTrimProbe[4] = {0.01, 0.01, 0.05, 0.05};
+constexpr double kTintTrimRidge = 1e-2;
+constexpr double kTintTrimMaxDensity = 0.3, kTintTrimMaxContrast = 0.6;
 
 // The fitted tables with t's density change composed in front of G and B (R is the reference): a value's density
 // above the film base D becomes D + d + k (D - P), P the frame's median cell density of that channel (piv).
-static void offset_tables(const ProfileData& fitted, const OffsetTables& t, float e, float g, float b,
+static void tint_trim_tables(const ProfileData& fitted, const TintTrimTables& t, float e, float g, float b,
                           std::vector<float> out[3]) {
   const double* th = t.theta;
   const double* piv = t.piv;
@@ -2003,7 +2003,7 @@ static void net_cell_lab(const std::vector<uint8_t>& u8, int w, int h, std::vect
 }
 
 // The a*-only residual of cells' Lab against a field.
-static double offset_residual(const std::vector<double>& lab, const std::vector<float>& mu,
+static double tint_trim_residual(const std::vector<double>& lab, const std::vector<float>& mu,
                               const std::vector<float>& sigma) {
   const size_t n = lab.size() / 3;
   double s = 0.0;
@@ -2015,8 +2015,8 @@ static double offset_residual(const std::vector<double>& lab, const std::vector<
 }
 
 // A fixed PCG64 stream (128-bit LCG, XSL-RR output; the state and increment of the reference implementation's seed
-// 0), so the bootstrap and with it the offset are reproducible frame by frame.
-class OffsetBootstrapRng {
+// 0), so the bootstrap and with it the trim are reproducible frame by frame.
+class TintTrimBootstrapRng {
  public:
   // A uniform integer in [0, n), n >= 1 (Lemire's multiply-shift with rejection on 32-bit draws).
   uint32_t below(uint32_t n) {
@@ -2054,20 +2054,20 @@ class OffsetBootstrapRng {
 };
 
 // The standard error of the residual's minimum over s (sorted ascending; the refinement takes s[1] - s[0] as the
-// step): pred[k] is the predicted cells' Lab at s[k]. Blocks of kOffsetBootstrapBlock^2 grid cells are resampled with
+// step): pred[k] is the predicted cells' Lab at s[k]. Blocks of kTintTrimBootstrapBlock^2 grid cells are resampled with
 // replacement; each resample's minimum, when inside the range, is refined by a parabola through it and its two
 // neighbours (by at most one step); the standard error is the population standard deviation of the minima.
-static double offset_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
+static double tint_trim_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
                                   const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
   const int K = (int)s.size();
-  const int bx = (gw + kOffsetBootstrapBlock - 1) / kOffsetBootstrapBlock;
-  const int by = (gh + kOffsetBootstrapBlock - 1) / kOffsetBootstrapBlock;
+  const int bx = (gw + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
+  const int by = (gh + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
   const int nb = bx * by;
   std::vector<double> blocks((size_t)K * nb, 0.0);
   std::vector<double> cnt(nb, 0.0);
   for (int y = 0; y < gh; ++y)
     for (int x = 0; x < gw; ++x) {
-      const int blk = (y / kOffsetBootstrapBlock) * bx + x / kOffsetBootstrapBlock;
+      const int blk = (y / kTintTrimBootstrapBlock) * bx + x / kTintTrimBootstrapBlock;
       const size_t i = (size_t)y * gw + x;
       cnt[blk] += 1.0;
       for (int k = 0; k < K; ++k) {
@@ -2075,11 +2075,11 @@ static double offset_bootstrap_se(const std::vector<std::vector<double>>& pred, 
         blocks[(size_t)k * nb + blk] += z * z;
       }
     }
-  OffsetBootstrapRng rng;
+  TintTrimBootstrapRng rng;
   std::vector<int> idx(nb);
   std::vector<double> mins, curve(K);
-  mins.reserve(kOffsetBootstrapResamples);
-  for (int rep = 0; rep < kOffsetBootstrapResamples; ++rep) {
+  mins.reserve(kTintTrimBootstrapResamples);
+  for (int rep = 0; rep < kTintTrimBootstrapResamples; ++rep) {
     for (int j = 0; j < nb; ++j) idx[j] = (int)rng.below((uint32_t)nb);
     double n = 0.0;
     for (int j = 0; j < nb; ++j) n += cnt[idx[j]];
@@ -2107,18 +2107,18 @@ static double offset_bootstrap_se(const std::vector<std::vector<double>>& pred, 
 }
 
 // Step 4 on the fitted state (e, g, b, x_hi on entry; prof holds the fitted tables). On return prof's G and B tables
-// carry the offset, and e and x_hi are those it renders at (E re-solved to target_L over fit_grid within [e_lo, e_hi],
+// carry the trim, and e and x_hi are those it renders at (E re-solved to target_L over fit_grid within [e_lo, e_hi],
 // the roll-off measured again). grid_all is every cell of the network's grid (the fit may have left some out), with
 // p_all the neutral head's p of each (may be empty); auto_pd, e_auto, g_auto, b_auto and x_auto render Auto's result;
 // q995 gets the measured roll-off's 99.5% point, and tone_features the tone heads' input from the inference of the
 // winning candidate (the state closest to the export: it differs by the standard error), for step 5.
 template <typename Rolloff>
-static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::CurveFrame& cf, const float* merged,
+static void tint_trim(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::CurveFrame& cf, const float* merged,
                         const std::vector<uint16_t>& grid_all, int grid_w, int grid_h, const uint16_t* fit_grid,
                         size_t nf, int encoding, float target_L, float e_lo, float e_hi, Rolloff rolloff_at,
                         const ProfileData& auto_pd, float e_auto, float g_auto, float b_auto, float x_auto,
                         const std::vector<float>& p_all, float anchor_conf, float& e, float g, float b, float& x_hi,
-                        float& q995, std::vector<float>& tone_features, OffsetScanResult& R) {
+                        float& q995, std::vector<float>& tone_features, TintTrimResult& R) {
   const Clock::time_point t0 = Clock::now();
   const int N = (int)nf, NA = (int)(grid_all.size() / 3);
   const ProfileData fitted = prof.data;
@@ -2129,7 +2129,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     std::nth_element(d.begin(), d.begin() + N / 2, d.end());
     piv[c] = d[N / 2];
   }
-  OffsetTables frame_t;  // the frame's part; theta varies
+  TintTrimTables frame_t;  // the frame's part; theta varies
   for (int c = 0; c < 3; ++c) {
     frame_t.piv[c] = piv[c];
     frame_t.diag[c] = merged[4 * c];
@@ -2141,9 +2141,9 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     ProfileData pd;
   };
   auto build = [&](const double th[4], float ee, Tables& T) {
-    OffsetTables t = frame_t;
+    TintTrimTables t = frame_t;
     for (int k = 0; k < 4; ++k) t.theta[k] = th[k];
-    offset_tables(fitted, t, ee, g, b, T.in);
+    tint_trim_tables(fitted, t, ee, g, b, T.in);
     T.pd = fitted;
     for (int c = 0; c < 3; ++c) T.pd.in_trc[c] = T.in[c].data();
   };
@@ -2243,23 +2243,23 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
 #pragma omp parallel for schedule(dynamic)
   for (int j = 0; j < 4; ++j) {
     double th[4] = {0, 0, 0, 0};
-    th[j] = kOffsetProbe[j];
+    th[j] = kTintTrimProbe[j];
     std::vector<float> l;
     lab_th(th, l);
     double mj[4];
     moments(l, mj);
-    for (int r = 0; r < 4; ++r) J[r][j] = (mj[r] - m0[r]) / kOffsetProbe[j];
+    for (int r = 0; r < 4; ++r) J[r][j] = (mj[r] - m0[r]) / kTintTrimProbe[j];
   }
   double u[4];
   {
-    const double* h = kOffsetProbe;
+    const double* h = kTintTrimProbe;
     const double y[4] = {1, 0, 0, 0};
     double M[4][5];
     for (int r = 0; r < 4; ++r) {
       for (int c = 0; c < 4; ++c) {
         double v = 0;
         for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * J[k][c] * h[c];
-        M[r][c] = v + (r == c ? kOffsetRidge : 0.0);
+        M[r][c] = v + (r == c ? kTintTrimRidge : 0.0);
       }
       double v = 0;
       for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * y[k];
@@ -2280,8 +2280,8 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   }
   auto theta_of = [&](double s, double th[4]) {
     for (int k = 0; k < 4; ++k)
-      th[k] = std::clamp(s * u[k], k < 2 ? -kOffsetMaxDensity : -kOffsetMaxContrast,
-                         k < 2 ? kOffsetMaxDensity : kOffsetMaxContrast);
+      th[k] = std::clamp(s * u[k], k < 2 ? -kTintTrimMaxDensity : -kTintTrimMaxContrast,
+                         k < 2 ? kTintTrimMaxDensity : kTintTrimMaxContrast);
   };
   auto net_preview = [&](double s, std::vector<uint8_t>& pv, int& w, int& h) {
     double th[4];
@@ -2312,7 +2312,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   net_cell_lab(pv, pw, ph, x_piv);
 
   // The lattice on the grid model, and the guard on each point: Auto's cells at L* 2..92, the mean a* over all of
-  // them and weighted by p^2 not more than kGreenGuardTolAb (+ kOffsetScanGuardSlack) below Auto's.
+  // them and weighted by p^2 not more than kGreenGuardTolAb (+ kTintTrimGuardSlack) below Auto's.
   std::vector<float> lab_auto;
   lab_all(auto_pd, e_auto, g_auto, b_auto, x_auto, lab_auto);
   std::vector<char> in_band(NA, 0);
@@ -2328,7 +2328,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     a_auto += lab_auto[3 * i + 1];
     aw_auto += w2[i] * lab_auto[3 * i + 1];
   }
-  const double tol = (double)negicc::kGreenGuardTolAb + kOffsetScanGuardSlack;
+  const double tol = (double)negicc::kGreenGuardTolAb + kTintTrimGuardSlack;
   const double lift = negicc::green_guard_lift(w_in > 0.0 ? aw_auto / w_in : 0.0, w_in >= negicc::kGreenGuardMinMass);
   auto guard_ok = [&](const std::vector<float>& lab) {
     double a = 0.0, aw = 0.0;
@@ -2341,20 +2341,20 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     if (w_in >= negicc::kGreenGuardMinMass && aw / w_in < negicc::green_guard_ref(aw_auto / w_in, lift) - tol) return false;
     return true;
   };
-  const int K = (int)std::lround(2.0 * kOffsetScanMax / kOffsetScanStep) + 1;
+  const int K = (int)std::lround(2.0 * kTintTrimMax / kTintTrimStep) + 1;
   const int k_zero = K / 2;
   std::vector<double> s_of(K), score(K);
   std::vector<char> kept(K);
   std::vector<std::vector<double>> pred(K);
-  std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (kOffsetTrimCap)
+  std::vector<double> anchor_a(K, 0.0);  // the neutral cells' p^2-weighted mean a* at each point (kTintTrimCap)
 #pragma omp parallel for schedule(dynamic)
   for (int k = 0; k < K; ++k) {
-    s_of[k] = -kOffsetScanMax + k * kOffsetScanStep;
+    s_of[k] = -kTintTrimMax + k * kTintTrimStep;
     double th[4];
     theta_of(s_of[k], th);
     std::vector<float> l;
     lab_th(th, l);
-    if (kOffsetTrimCap && w_in > 0.0) {
+    if (kTintTrimCap && w_in > 0.0) {
       double aw = 0.0;
       for (int i = 0; i < NA; ++i)
         if (in_band[i]) aw += w2[i] * l[3 * i + 1];
@@ -2362,19 +2362,19 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     }
     pred[k].resize(3 * (size_t)NA);
     for (int i = 0; i < 3 * NA; ++i) pred[k][i] = x_piv[i] + ((double)l[i] - (double)lab0[i]);
-    score[k] = offset_residual(pred[k], mu0, sg0);
+    score[k] = tint_trim_residual(pred[k], mu0, sg0);
     kept[k] = guard_ok(l) || k == k_zero;
   }
   R.lattice = K;
   R.residual_pivot = (float)score[k_zero];
   for (char c : kept) R.lattice_kept += c;
 
-  // The candidates: the kOffsetScanCandidates kept points of lowest predicted residual (ties in lattice order).
+  // The candidates: the kTintTrimCandidates kept points of lowest predicted residual (ties in lattice order).
   std::vector<int> order;
   for (int k = 0; k < K; ++k)
     if (kept[k]) order.push_back(k);
   std::stable_sort(order.begin(), order.end(), [&](int i, int j) { return score[i] < score[j]; });
-  if ((int)order.size() > kOffsetScanCandidates) order.resize(kOffsetScanCandidates);
+  if ((int)order.size() > kTintTrimCandidates) order.resize(kTintTrimCandidates);
 
   // The standard error, over the kept points in lattice order.
   std::vector<std::vector<double>> pk;
@@ -2384,7 +2384,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       pk.push_back(pred[k]);
       sk.push_back(s_of[k]);
     }
-  const double se = sk.size() >= 3 ? offset_bootstrap_se(pk, sk, mu0, sg0, grid_w, grid_h) : 0.0;
+  const double se = sk.size() >= 3 ? tint_trim_bootstrap_se(pk, sk, mu0, sg0, grid_w, grid_h) : 0.0;
 
   // Each candidate scored on its own field (the pivot's own, for s = 0); the lowest wins, the first on a tie.
   double best_s = 0.0, best_v = 0.0;
@@ -2394,7 +2394,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     double v;
     std::vector<float> tf;
     if (k == k_zero) {
-      v = offset_residual(x_piv, mu0, sg0);
+      v = tint_trim_residual(x_piv, mu0, sg0);
       tf = tf0;
     } else {
       std::vector<uint8_t> cpv;
@@ -2405,7 +2405,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       if (!fr.predict_net(cpv, cw, ch, mu, sg, tf)) continue;
       std::vector<double> xc;
       net_cell_lab(cpv, cw, ch, xc);
-      v = offset_residual(xc, mu, sg);
+      v = tint_trim_residual(xc, mu, sg);
     }
     R.candidates.push_back({(float)s_of[k], (float)score[k], (float)v});
     if (!have || v < best_v) {
@@ -2415,15 +2415,15 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
       tone_features = std::move(tf);
     }
   }
-  double s_final = best_s + kOffsetReadoutSE * se;
-  if (kOffsetTrimCap && anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
+  double s_final = best_s + kTintTrimReadoutSE * se;
+  if (kTintTrimCap && anchor_conf > 0.5f && w_in >= negicc::kGreenGuardMinMass) {
     auto anchor_at = [&](double s) {  // linear between lattice points
-      const double u = std::clamp((s + kOffsetScanMax) / kOffsetScanStep, 0.0, (double)(K - 1));
+      const double u = std::clamp((s + kTintTrimMax) / kTintTrimStep, 0.0, (double)(K - 1));
       const int k0 = std::min((int)u, K - 2);
       return anchor_a[k0] + (u - k0) * (anchor_a[k0 + 1] - anchor_a[k0]);
     };
     const double a0 = anchor_a[k_zero];
-    const double lim = std::fabs(a0) + kOffsetTrimCapTol / ((anchor_conf - 0.5) / 0.5);
+    const double lim = std::fabs(a0) + kTintTrimCapTol / ((anchor_conf - 0.5) / 0.5);
     const double s_uncapped = s_final;
     if (std::fabs(anchor_at(s_final)) > lim) {
       const int steps = 200;
@@ -2439,7 +2439,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
     R.s_uncapped = s_uncapped;
     R.trim_conf = anchor_conf;
     if (R.trim_capped)
-      std::cout << "Offset trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
+      std::cout << "Tint trim cap: conf " << fixed(anchor_conf, 3) << ", anchors a* " << fixed(a0, 2, true)
                 << " at the fit, " << fixed(anchor_at(s_uncapped), 2, true) << " at s " << fixed(s_uncapped, 2, true)
                 << ", limit " << fixed(lim, 2) << ": s " << fixed(s_final, 2, true) << " (anchors "
                 << fixed(anchor_at(s_final), 2, true) << ")\n";
@@ -2448,7 +2448,7 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   R.se = se;
   R.s = s_final;
 
-  // The export: the offset composed into the fitted tables, at its E and roll-off.
+  // The export: the trim composed into the fitted tables, at its E and roll-off.
   double th[4];
   theta_of(s_final, th);
   float ee, xx;
@@ -2465,9 +2465,9 @@ static void offset_scan(SearchFrame& fr, ParsedFilmProfile& prof, const negicc::
   R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
-void compose_offset_tables(ParsedFilmProfile& prof, const OffsetTables& t, float e, float g, float b) {
+void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, float e, float g, float b) {
   std::vector<float> in[3];
-  offset_tables(prof.data, t, e, g, b, in);
+  tint_trim_tables(prof.data, t, e, g, b, in);
   for (int c = 0; c < 3; ++c) prof.in_trc[c] = in[c];
   prof.rebind_pointers();
 }
@@ -2788,32 +2788,33 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.x_hi_q995 = q995;
   out.rolloff_measured = encoding == ENCODE_SRGB;
 
-  // 4. The network's magenta-green offset, composed into the same tables (E and the roll-off measured again).
+  // 4. The tint trim, composed into the same tables (E and the roll-off measured again).
   std::vector<float> scan_features;
   out.tone.features = "search";
-  if (kOffsetScanNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
-    out.offset.skipped = "evidence";
-    if (opts.verbose) std::cout << "Offset: not run (evidence)\n";
+  if (kTintTrimNeedsEvidence && !(out.neutral_auto.conf > 1e-4f)) {
+    out.tint_trim.skipped = "evidence";
+    if (opts.verbose) std::cout << "Tint trim: not run (evidence)\n";
   } else {
     const float trim_conf =
-        out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kOffsetTrimCapMass);
+        out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kTintTrimCapMass);
     const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
-    offset_scan(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
+    tint_trim(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
                 e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,
                 neutral_p_all, trim_conf, e_new, out.fit.g, out.fit.b, out.x_hi, out.x_hi_q995, scan_features,
-                out.offset);
-    if (out.offset.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
+                out.tint_trim);
+    if (out.tint_trim.ran && scan_features.size() == (size_t)ToneHead::kInDim) {
       tone_features.swap(scan_features);
-      out.tone.features = "offset";
+      out.tone.features = "tint_trim";
     }
     if (opts.verbose) {
-      if (out.offset.ran) {
-        std::cout << "Offset: a* " << fixed(out.offset.s, 3, true) << " (minimum " << fixed(out.offset.s_min, 2, true)
-                  << " + SE " << fixed(out.offset.se, 3) << "), " << out.offset.lattice_kept << " of "
-                  << out.offset.lattice << " lattice points kept, " << out.offset.inferences << " inferences, E "
+      if (out.tint_trim.ran) {
+        std::cout << "Tint trim: a* " << fixed(out.tint_trim.s, 3, true) << " (minimum "
+                  << fixed(out.tint_trim.s_min, 2, true)
+                  << " + SE " << fixed(out.tint_trim.se, 3) << "), " << out.tint_trim.lattice_kept << " of "
+                  << out.tint_trim.lattice << " lattice points kept, " << out.tint_trim.inferences << " inferences, E "
                   << fixed(e_new, 4) << ", roll-off " << fixed(out.x_hi, 3) << "\n";
       } else {
-        std::cout << "Offset: not run (" << out.offset.skipped << ")\n";
+        std::cout << "Tint trim: not run (" << out.tint_trim.skipped << ")\n";
       }
     }
   }
@@ -2826,18 +2827,18 @@ bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, 
   out.neutral_export = m_neu.neutral_stats_on(cfg_comb, e_new, out.fit.g, out.fit.b);
   out.loss_export = out.parts_export.total();
 
-  // 5. The tone stage's plan: the heads' predictions (no inference of its own: from the offset's winning candidate, the
-  //    state closest to the export, else from the search's intent preview) and the final render's preview, on which
-  //    the conversion solves the curve between them (np_pipeline.cc).
+  // 5. The tone stage's plan: the heads' predictions (no inference of its own: from the tint trim's winning candidate,
+  // the state closest to the export, else from the search's intent preview) and the final render's preview, on which
+  // the conversion solves the curve between them (np_pipeline.cc).
   ToneStagePlan& tp = out.tone;
-  // The heads read the image the stage will be applied to: the offset's winning candidate when the scan ran (it differs
-  // from the export by the standard error only); otherwise the final state's preview, rendered below for the
+  // The heads read the image the stage will be applied to: the tint trim's winning candidate when the trim ran (it
+  // differs from the export by the standard error only); otherwise the final state's preview, rendered below for the
   // descriptors anyway, costs one inference (the search's intent preview has the pre-fit colour).
   std::vector<uint8_t> pv;
   int pw = 0, ph = 0;
   if (tone_head && encoding == ENCODE_SRGB) {
     fr.render_net_preview(prof.data, out.params, pv, pw, ph);
-    if (std::strcmp(tp.features, "offset") != 0) {
+    if (std::strcmp(tp.features, "tint_trim") != 0) {
       std::vector<float> mu_f, sg_f, tf;
       if (fr.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
         tone_features.swap(tf);

@@ -5,7 +5,7 @@ intended positive, whatever colour cast the current render has. `neg_process` us
 anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): every grid cell
 of four L* bands is an anchor with weight p^2, with no threshold and no minimum count, and the sum of p^2 is the fit's
 evidence. Without the head there are no anchors and the fit keeps Auto's colour. The fit's never-greener guard and
-the magenta-green setting after it (`multi_target_optimizer.cc`) also weight their mean a* by p^2. The head replaced
+the tint trim after it (`multi_target_optimizer.cc`) also weight their mean a* by p^2. The head replaced
 the raw-chroma selection and its four hand-tuned rules (low-key band merge, chart-like gate, shadow cluster,
 collinearity drop). It does not predict colour; the intent adapter's mu and sigma stay as they are.
 

@@ -974,7 +974,7 @@ class JointCurveModel {
 // cells, the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
 // Shadows carry no debit (green_guard_cell_a): in both means, a cell Auto renders in the deep shadows that ends greener
 // than at Auto counts at Auto's a*, so the fit may correct a shadow cast toward green; a shadow cell that ends more
-// magenta keeps its credit, and mid-tones and highlights count as they are. The offset scan's guard check is not
+// magenta keeps its credit, and mid-tones and highlights count as they are. The tint trim's guard check is not
 // affected.
 constexpr float kGreenGuardTolAb = 0.5f;
 // Test only, off: the guard's reference is min(Auto's mean a*, 0) instead of Auto's, so a fit may remove Auto's own

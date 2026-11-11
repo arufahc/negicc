@@ -69,13 +69,13 @@ struct Options {
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
   // the built-in ones; empty: the built-in one.
   std::string dino_adapter, neutral_head_file, tone_head_file;
-  // The white-light curve fit, its magenta-green offset and the tone stage always run where they apply (a white-light
+  // The white-light curve fit, its tint trim and the tone stage always run where they apply (a white-light
   // bundle search with -P srgb or srgb-g10); their flags only replay recorded values (a sidecar's cli_equivalent),
   // with given values and no search:
-  // --offset_scan theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (OffsetTables' G and B numbers) and
+  // --tint_trim theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (TintTrimTables' G and B numbers) and
   // --tone_stage curve:black,white,gamma,contrast,chroma (ToneCurve).
-  bool offset_replay_given = false;
-  double offset_replay[10] = {};
+  bool tint_trim_replay_given = false;
+  double tint_trim_replay[10] = {};
   bool tone_replay_given = false;
   double tone_replay[5] = {};
   std::string dino_backend = "auto";

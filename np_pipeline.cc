@@ -723,7 +723,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},           {"", "--offset_scan", 1, false},      {"", "--tone_stage", 1, false},
+      {"", "--flat", 1, false},           {"", "--tint_trim", 1, false},      {"", "--tone_stage", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -1016,7 +1016,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
     }
     if (j.contains("heads") && j["heads"].is_object()) s.cached_sidecar.heads_json_str = j["heads"].dump();
-    // The magenta-green offset and the tone curve it applied: replayed as recorded (the knobs act on top).
+    // The tint trim and the tone curve it applied: replayed as recorded (the knobs act on top).
     auto numbers = [](const nlohmann::ordered_json& a, int n, double* out) {
       if (!a.is_array() || (int)a.size() != n) return false;
       for (int i = 0; i < n; ++i) {
@@ -1027,20 +1027,22 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     };
     if (j.contains("input_curves") && j["input_curves"].is_object()) {
       const auto& ic = j["input_curves"];
-      if (ic.contains("offset") && ic["offset"].is_object() && ic["offset"].value("applied", false)) {
-        const auto& of = ic["offset"];
-        OffsetTables& t = s.cached_sidecar.offset;
+      // "tint_trim", or "offset" in a sidecar written before the step was renamed.
+      const char* tk = ic.contains("tint_trim") ? "tint_trim" : "offset";
+      if (ic.contains(tk) && ic[tk].is_object() && ic[tk].value("applied", false)) {
+        const auto& of = ic[tk];
+        TintTrimTables& t = s.cached_sidecar.tint_trim;
         double d[3], fb[3];
         if (!numbers(of.value("theta", nlohmann::ordered_json()), 4, t.theta) ||
             !numbers(of.value("piv", nlohmann::ordered_json()), 3, t.piv) ||
             !numbers(of.value("diag", nlohmann::ordered_json()), 3, d) ||
             !numbers(of.value("film_base", nlohmann::ordered_json()), 3, fb))
-          return why = "its magenta-green offset is not valid", false;
+          return why = "its tint trim is not valid", false;
         for (int c = 0; c < 3; ++c) {
           t.diag[c] = (float)d[c];
           t.film_base[c] = (float)fb[c];
         }
-        s.cached_sidecar.has_offset = true;
+        s.cached_sidecar.has_tint_trim = true;
       }
     }
     if (j.contains("tone_stage") && j["tone_stage"].is_object() && j["tone_stage"].value("applied", false)) {
@@ -1377,7 +1379,7 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
-  // The curve fit (with its magenta-green offset and the tone stage) runs wherever it applies, nothing elsewhere.
+  // The curve fit (with its tint trim and the tone stage) runs wherever it applies, nothing elsewhere.
   s.fit_curves_active = s.is_bundle && s.white_light && !s.has_crosstalk && fit_encoding_ok && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
@@ -1415,29 +1417,29 @@ int prepare(const Options& o, Setup& s) {
     s.input_curves_source = "cli";
   }
 
-  // A recorded magenta-green offset and tone curve (a sidecar's cli_equivalent) replay a recorded result like the
+  // A recorded tint trim and tone curve (a sidecar's cli_equivalent) replay a recorded result like the
   // recorded curves: on the --target bracket at the given E, g and b, with nothing searched or predicted.
-  if (o.input_curves_given || o.offset_replay_given || o.tone_replay_given) s.replay_source = "cli";
-  if (o.offset_replay_given || o.tone_replay_given) {
+  if (o.input_curves_given || o.tint_trim_replay_given || o.tone_replay_given) s.replay_source = "cli";
+  if (o.tint_trim_replay_given || o.tone_replay_given) {
     if (!s.is_bundle || !s.white_light || s.has_crosstalk || s.manual_target_idx < 0 || !o.exposure_given ||
         !o.gain_g_given || !o.gain_b_given) {
-      log_error("--offset_scan theta:... and --tone_stage curve:... replay a white-light result: they need a d65 "
+      log_error("--tint_trim theta:... and --tone_stage curve:... replay a white-light result: they need a d65 "
                 "bundle, --target, -E, --gain_g and --gain_b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
-    if (o.offset_replay_given) {
-      const double* v = o.offset_replay;
-      OffsetTables& t = s.offset;
+    if (o.tint_trim_replay_given) {
+      const double* v = o.tint_trim_replay;
+      TintTrimTables& t = s.tint_trim;
       for (int k = 0; k < 4; ++k) t.theta[k] = v[k];
       for (int c = 1; c < 3; ++c) {
         t.piv[c] = v[3 + c];
         t.diag[c] = (float)v[5 + c];
         t.film_base[c] = (float)v[7 + c];
       }
-      s.has_offset = true;
-      s.offset_target_idx = s.manual_target_idx;
-      s.offset_base_prof = bundle.targets[s.offset_target_idx].film_prof;  // the recorded curves already composed
-      s.offset_base_prof.rebind_pointers();
+      s.has_tint_trim = true;
+      s.tint_trim_target_idx = s.manual_target_idx;
+      s.tint_trim_base_prof = bundle.targets[s.tint_trim_target_idx].film_prof;  // the recorded curves already composed
+      s.tint_trim_base_prof.rebind_pointers();
     }
     if (o.tone_replay_given) {
       const double* q = o.tone_replay;
@@ -1464,12 +1466,12 @@ int prepare(const Options& o, Setup& s) {
     }
     s.fit_curves_active = false;  // the curves (or none) come from the previous run
     s.replay_source = "knobs";
-    if (s.cached_sidecar.has_offset && s.cached_sidecar.target_idx >= 0) {
-      s.has_offset = true;
-      s.offset = s.cached_sidecar.offset;
-      s.offset_target_idx = s.cached_sidecar.target_idx;
-      s.offset_base_prof = bundle.targets[s.offset_target_idx].film_prof;
-      s.offset_base_prof.rebind_pointers();
+    if (s.cached_sidecar.has_tint_trim && s.cached_sidecar.target_idx >= 0) {
+      s.has_tint_trim = true;
+      s.tint_trim = s.cached_sidecar.tint_trim;
+      s.tint_trim_target_idx = s.cached_sidecar.target_idx;
+      s.tint_trim_base_prof = bundle.targets[s.tint_trim_target_idx].film_prof;
+      s.tint_trim_base_prof.rebind_pointers();
     }
     if (s.cached_sidecar.has_tone) {
       s.has_tone = true;
@@ -1648,21 +1650,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
-    // A replayed magenta-green offset: composed into the bracket's tables at the base E, g and b (a fit's own run has
+    // A replayed tint trim: composed into the bracket's tables at the base E, g and b (a fit's own run has
     // it there already), before the knobs' grey and the roll-off are measured through them.
-    const bool offset_here = s.has_offset && target_idx == s.offset_target_idx;
-    if (s.has_offset && !offset_here) {
-      // Said, not silent: the offset was made on another bracket's tables.
-      s.offset_other_bracket = true;
-      log_warn("the recorded magenta-green offset was made on bracket %d; this conversion renders bracket %d, so it is "
-               "not applied\n", s.offset_target_idx, target_idx);
+    const bool tint_trim_here = s.has_tint_trim && target_idx == s.tint_trim_target_idx;
+    if (s.has_tint_trim && !tint_trim_here) {
+      // Said, not silent: the trim was made on another bracket's tables.
+      s.tint_trim_other_bracket = true;
+      log_warn("the recorded tint trim was made on bracket %d; this conversion renders bracket %d, so it is "
+               "not applied\n", s.tint_trim_target_idx, target_idx);
     }
-    if (offset_here && !s.offset_composed) {
-      compose_offset_tables(bundle.targets[target_idx].film_prof, s.offset, base_e, base_g, base_b);
-      s.offset_composed = true;
-      log_info("Magenta-green offset replayed on bracket %d at E %.4f g %.4f b %.4f (theta %.5f %.5f %.5f %.5f)\n",
-               target_idx, base_e, base_g, base_b, s.offset.theta[0], s.offset.theta[1], s.offset.theta[2],
-               s.offset.theta[3]);
+    if (tint_trim_here && !s.tint_trim_composed) {
+      compose_tint_trim_tables(bundle.targets[target_idx].film_prof, s.tint_trim, base_e, base_g, base_b);
+      s.tint_trim_composed = true;
+      log_info("Tint trim replayed on bracket %d at E %.4f g %.4f b %.4f (theta %.5f %.5f %.5f %.5f)\n",
+               target_idx, base_e, base_g, base_b, s.tint_trim.theta[0], s.tint_trim.theta[1], s.tint_trim.theta[2],
+               s.tint_trim.theta[3]);
     }
     if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
       scan.knob_base[0] = base_e;
@@ -1688,10 +1690,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // re-anchored profile for the same grey (the one the base's profile renders as neutral L* 50), and the curves
       // re-anchored at that result. Each pass cuts the miss about fourfold.
       //
-      // The magenta-green offset is a density change on the film, so the knobs rebuild its tables at their E, g and b
+      // The tint trim is a density change on the film, so the knobs rebuild its tables at their E, g and b
       // the same way, in the same passes.
       const bool curves_here = target_idx == s.curves_base_idx && s.input_curves.active();
-      if (curves_here || offset_here) {
+      if (curves_here || tint_trim_here) {
         constexpr int kMaxKnobPasses = 8;
         constexpr float kKnobTol = 1e-4f;
         ParsedFilmProfile& prof = bundle.targets[target_idx].film_prof;
@@ -1711,10 +1713,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
             }
             apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
           } else {
-            prof = s.offset_base_prof;
+            prof = s.tint_trim_base_prof;
             prof.rebind_pointers();
           }
-          if (offset_here) compose_offset_tables(prof, s.offset, to[0], to[1], to[2]);
+          if (tint_trim_here) compose_tint_trim_tables(prof, s.tint_trim, to[0], to[1], to[2]);
           return true;
         };
         const float to1[3] = {e, g, b};
@@ -1747,7 +1749,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  "stop, before them)\n",
                  e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
                  scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "",
-                 offset_here ? ", magenta-green offset rebuilt" : "", k2.grey_lab[0],
+                 tint_trim_here ? ", tint trim rebuilt" : "", k2.grey_lab[0],
                  k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
@@ -1947,15 +1949,15 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           }
           s.input_curves = s.curve_fit.fit.curves;
           s.input_curves_source = "fit";
-          // The fit composed its magenta-green offset into the bracket's tables already; the knobs rebuild them at
+          // The fit composed its tint trim into the bracket's tables already; the knobs rebuild them at
           // their own E, g and b (from the curves, else from the bracket's own tables).
-          if (s.curve_fit.offset.ran) {
-            s.has_offset = true;
-            s.offset = s.curve_fit.offset.tables;
-            s.offset_target_idx = scan.auto_res.target_idx;
-            s.offset_composed = true;
-            s.offset_base_prof = s.curves_base_prof;
-            s.offset_base_prof.rebind_pointers();
+          if (s.curve_fit.tint_trim.ran) {
+            s.has_tint_trim = true;
+            s.tint_trim = s.curve_fit.tint_trim.tables;
+            s.tint_trim_target_idx = scan.auto_res.target_idx;
+            s.tint_trim_composed = true;
+            s.tint_trim_base_prof = s.curves_base_prof;
+            s.tint_trim_base_prof.rebind_pointers();
           }
           if (s.curve_fit.tone.planned) {
             s.has_tone = true;
@@ -2958,10 +2960,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.head_path[i] = s.head_path[i];
     sc.head_fp[i] = s.head_fp[i];
   }
-  sc.offset_tables = s.has_offset && !s.offset_other_bracket ? &s.offset : nullptr;
+  sc.tint_trim_tables = s.has_tint_trim && !s.tint_trim_other_bracket ? &s.tint_trim : nullptr;
   sc.replay_source = s.replay_source;
-  sc.replay_offset_other_bracket = s.offset_other_bracket;
-  sc.replay_offset_given = s.has_offset;
+  sc.replay_tint_trim_other_bracket = s.tint_trim_other_bracket;
+  sc.replay_tint_trim_given = s.has_tint_trim;
   sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
   sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
   sc.tone_share = scan.tone_share;
