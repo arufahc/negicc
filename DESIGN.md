@@ -14,6 +14,73 @@ choice it makes along the way. Tri-LED scans and `--fit_curves off` run stage 1 
 
 Every pixel goes through the conversion once. No stage converts finished pixels to another colour space and back.
 
+## How the estimates work
+
+**The intent field.** The search renders a small preview and the intent network predicts, for each cell i of a grid
+over it, what a finished scan would show there: a mean mu_i = (mu_L, mu_a, mu_b) and an uncertainty sigma_i per
+channel (small sigma: confident). A render with Lab values (L_i, a_i, b_i) is scored per channel:
+
+```
+z_L,i = (L_i - mu_L,i) / sigma_L,i        (likewise z_a, z_b)
+loss_L = mean_i z_L,i^2                  (likewise loss_a, loss_b)
+residual = (loss_L + loss_a + loss_b) / 3 + clip penalty + exposure penalty
+```
+
+Under a Gaussian model per cell this is the negative log-likelihood: uncertain cells count for little. The penalties
+grow with white clipping above 2.5 % and with exposure off the bracket's range. Within a step, exposure is chosen on
+loss_L plus the penalties, the green gain on loss_a, the blue gain on loss_b; the residual ranks steps and brackets.
+
+```
+render at (E, g, b) -> network predicts mu, sigma -> search (E, g, b) against them -> repeat
+stop when |dE| + |dg| + |db| <= 0.02, or once the residual has passed its minimum (the best step is kept)
+```
+
+**The neutral prediction.** A second head gives each cell p_i in [0, 1], the probability that it shows a neutral
+surface. The anchors are the cells Auto renders with 2 < L\* < 92; each is weighted by p squared:
+
+```
+m = sum_i p_i^2                 w_i = p_i^2 / m    (plus 10^-3 spread evenly, so m = 0 is defined)
+a_bar = sum_i w_i a_i           b_bar = sum_i w_i b_i
+k_a = 50 cov_w(L, a) / (var_w(L) + 25)          (likewise k_b)
+```
+
+Squaring sets no threshold but makes p = 0.9 count 81 times p = 0.1; m is the frame's neutral evidence. Neutral
+surfaces have a\* = b\* = 0 at every lightness: the gains move the means, the curve slopes the trend (k, per 50 L\*).
+
+**Trust.** The pull toward neutral grows with the evidence:
+
+```
+w = m / (m + 12)
+target a_bar = (1 - w) a_bar_Auto          target b_bar = (1 - w) b_bar_Auto
+target k_a = (1 - w s) k_a_Auto,  s = var_w(L) / (var_w(L) + 36)         (likewise k_b)
+```
+
+With no evidence the anchors hold Auto's colour; s keeps a trend measured over a narrow lightness range from being
+extrapolated.
+
+**Pooling the two estimates of the overall a\*.** The intent field gives a second estimate:
+
+```
+alpha_i = (1 / sigma_a,i^2) / sum_j (1 / sigma_a,j^2)        over every fit cell
+s = sum_i alpha_i (a_i - mu_a,i)
+intent term = (s - (k_a - target k_a) dL - SE) / sqrt(SE^2 + 1)
+anchor term = (a_bar - target a_bar) / sigma_anc,     sigma_anc^2 = (144 + m) / (m + 12)
+```
+
+SE is the standard error of s from sums over 4 x 4 blocks of cells (neighbouring cells are not independent),
+detrended in L\*. dL, the gap between the field's and the anchors' mean lightness per 50 L\*, keeps a slope change
+from reading as a shift in a\*. Each term is divided by its own uncertainty (and both, like the b\* term, by 1.5), so
+the solve is a precision-weighted compromise: with much neutral evidence the two count about equally and a
+disagreement is split; with little, the intent field decides. The 1 under the root, and the limit 1 of sigma_anc as m
+grows, are each estimate's systematic error in a\*.
+
+| What rests on what | Basis |
+|---|---|
+| The z-score loss and the inverse-variance weights | maximum likelihood under a Gaussian model per cell |
+| mu, sigma and p | learned networks, checked on held-out data and by blind comparison |
+| p² weighting | a choice |
+| 12, the 1 a\* systematic error, the one-standard-error lean | stated values, not derived |
+
 ## Reading the tables
 
 Each table lists the **choices** a stage makes: numbers that decide how the picture looks or how far an estimate is
@@ -47,14 +114,9 @@ starts.
 
 ## Stage 2: Curve fit
 
-One least-squares solve. Every grid cell Auto renders between L\* 2 and 92 is an anchor, weighted by the square of
-the neutral head's probability that it shows a neutral surface. The fit moves the green and blue gains and the
-slope of the green and blue input curves until the anchors' colour, and its trend from shadows to highlights, is
-neutral, pulled at strength m / (m + 12), where m is the neutral evidence in the frame. In the same solve, the
-overall magenta-green balance is pulled toward what the search's intent field says, so the two estimates are pooled:
-the anchors count for more the more evidence there is, but never past each one's systematic error. The intent term
-leans one of its standard errors toward magenta. Exposure is re-solved at every step so the median lightness stays
-where Auto put it.
+One least-squares solve over the green and blue gains and the slopes of the green and blue input curves, on the
+anchor and intent terms of "How the estimates work". Exposure is re-solved at every step so the median lightness
+stays where Auto put it.
 
 | Choice | Value | What it does | Effect |
 |---|---|---|---|
