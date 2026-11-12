@@ -14,7 +14,7 @@ tone_head.bin, little-endian:
   float32  w2[hidden2][hidden1], b2[hidden2]
   float32  w3[2 * targets][hidden2], b3[2 * targets]
   float32  ym[targets], ys[targets]
-The targets are, in this order: L2 L5 L10 L50 L90 L95 L98 IQR R9010 Cmean C90 (ToneHead in intent_head.h).
+The targets are, in this order: L2 L5 L10 L50 L90 L95 L98 IQR R9010 Cmean C90 (ToneHead in dinov3_engine.h).
 
 usage: export_tone_head.py [tone_head.pt] [tone_head.bin] [--check]
 --check also runs the heads on random features with PyTorch and with numpy reading the .bin back, and prints the

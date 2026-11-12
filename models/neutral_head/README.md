@@ -42,7 +42,7 @@ rules (low-key merge, collinearity drop, chart-like gate, shadow cluster) ties B
 - `neutral_head.pt`: the trained PyTorch dict `{features: "tok", kind: "mlp", state, mean, std}` (the same file as
   negicc-station's `models/neutral_head/neutral_head_pooled_mlp.pt`; sha256 in `metadata.json`).
 - `neutral_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs
-  it in plain C++ (`NeutralHead` in `intent_head.h`) on the tokens the backbone already produced. Format in
+  it in plain C++ (`NeutralHead` in `dinov3_engine.h`) on the tokens the backbone already produced. Format in
   `export_neutral_head.py`.
 - `export_neutral_head.py`: writes `neutral_head.bin` from `neutral_head.pt`; `--check` compares PyTorch with the
   exported weights on random tokens.

@@ -34,7 +34,7 @@
 //   crosstalk correction for a tri bundle, the DNG's colour data to linear Rec.2020 for a d65 bundle. A fourth
 //   sample per pixel (a scanner's infrared) is left out.
 // - An RGB TIFF (8 or 16 bits) or JPEG, with a d65 bundle: converted to linear Rec.2020 through its embedded ICC
-//   profile (rgb_input.h); without one, 8-bit data is taken as sRGB and 16-bit data as linear Rec.2020.
+//   profile (np_input.h); without one, 8-bit data is taken as sRGB and 16-bit data as linear Rec.2020.
 // - Three images, each captured under one of the red, green and blue lights (RAWs, DNGs or TIFFs, the same size):
 //     neg_process --film_stock portra400 --light_source tri -o out.tif red.ARW green.ARW blue.ARW
 //   R comes from the first, G from the second and B from the third (a grey TIFF gives its one channel), each scaled
