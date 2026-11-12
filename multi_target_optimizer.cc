@@ -2699,8 +2699,7 @@ class WhiteLightFit {
     // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
     // measured) widened to hold Auto's E with a margin that scales with the gain bounds (0.1 + 0.5 * max(s_g, s_b)
     // stops), so a gain change has E room to hold Auto's median L*; without a range, 2 stops either side of Auto's E.
-    const float s_gain = std::max(fit_opts_.g_bound_stops > 0.0f ? fit_opts_.g_bound_stops : 0.0f,
-                                  fit_opts_.b_bound_stops > 0.0f ? fit_opts_.b_bound_stops : 0.0f);
+    const float s_gain = std::max(fit_opts_.g_bound_stops, fit_opts_.b_bound_stops);
     const float margin = std::exp2(0.1f + 0.5f * s_gain);
     if (res_.e_range_lo > 0.0f && res_.e_range_hi >= res_.e_range_lo) {
       out_.e_lo = std::min(res_.e_range_lo, e_int_ / margin);

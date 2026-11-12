@@ -198,20 +198,20 @@ inline LossParts grid_intent_loss_parts(const PipelineConfig& cfg, const float* 
   return s;
 }
 
-// The lowest g or b a fit may reach (CurveFitOptions::g_bound, b_bound below g0, b0 are floored here).
+// The lowest g or b a fit may reach (the gain bounds below g0, b0 are floored here).
 constexpr float kGainFloor = 1e-3f;
 
 struct CurveFitOptions {
-  float curve_bound = 0.35f;  // |a|, |k| <= this
-  float max_dev_stops = 2.2f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
-  float g_bound = 0.5f;       // |g - g0| <= this (joint fit, when g_bound_stops <= 0)
-  float b_bound = 0.6f;       // |b - b0| <= this (joint fit, when b_bound_stops <= 0)
-  float g_bound_stops = 0.75f;  // joint fit: g in [g0 * 2^-s, g0 * 2^s] (<= 0: additive g_bound)
-  float b_bound_stops = 1.25f;  // joint fit: b in [b0 * 2^-s, b0 * 2^s] (<= 0: additive b_bound)
-  // Penalty on the curve numbers, joint_lambda (a_G^2 + a_B^2), added to the joint fit's objective. The gains and the
-  // curves' slope terms (1 + a) move the residuals almost alike, so without it the Levenberg-Marquardt normal matrix
-  // is nearly singular along that direction; damping non-essential curve bends also prevents shadow-to-highlight
-  // crossover on clean frames.
+  // Safety limits, which act only where a fit runs away: the largest per-channel slope change |a|, the largest
+  // departure of each curve from the base TRC over the whole table (curve_shape_ok), and the gains' range around
+  // Auto's, g in [g0 * 2^-s, g0 * 2^s] and the same for b.
+  float curve_bound = 0.35f;
+  float max_dev_stops = 2.2f;
+  float g_bound_stops = 0.75f;
+  float b_bound_stops = 1.25f;
+  // Penalty on the curve numbers, joint_lambda (a_G^2 + a_B^2), added to the joint fit's objective. A numerical
+  // constant, not a tuning knob: the gains and the curves' slope terms (1 + a) move the residuals almost alike, so
+  // without it the Levenberg-Marquardt normal matrix is nearly singular along that direction.
   float joint_lambda = 1.5f;
   bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
@@ -785,10 +785,8 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
   if (!(e_hi > e_lo)) e_hi = std::max(e_lo, e0 * 4.0f);
-  const float g_lo = o.g_bound_stops > 0.0f ? g0 * std::exp2(-o.g_bound_stops) : g0 - o.g_bound;
-  const float g_hi = o.g_bound_stops > 0.0f ? g0 * std::exp2(o.g_bound_stops) : g0 + o.g_bound;
-  const float b_lo = o.b_bound_stops > 0.0f ? b0 * std::exp2(-o.b_bound_stops) : b0 - o.b_bound;
-  const float b_hi = o.b_bound_stops > 0.0f ? b0 * std::exp2(o.b_bound_stops) : b0 + o.b_bound;
+  const float g_lo = g0 * std::exp2(-o.g_bound_stops), g_hi = g0 * std::exp2(o.g_bound_stops);
+  const float b_lo = b0 * std::exp2(-o.b_bound_stops), b_hi = b0 * std::exp2(o.b_bound_stops);
   const float lo[4] = {std::max(kGainFloor, g_lo), std::max(kGainFloor, b_lo), -o.curve_bound, -o.curve_bound};
   const float hi[4] = {g_hi, b_hi, o.curve_bound, o.curve_bound};
   auto shape_of = [&](const float* p) {

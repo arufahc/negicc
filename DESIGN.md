@@ -59,14 +59,14 @@ fits in all) if the highlight roll-off measured there differs from the one it ra
 | Anchor range | L\* 2 to 92 at Auto | Policy | The cells that can be anchors; also the guard's cells. Clipped blacks and whites say nothing about the cast. | — |
 | Slope span | 6 L\* | Policy | A tone slope measured over anchors that span little lightness is shrunk, sd² / (sd² + 6²), so a narrow range is not extrapolated across the whole curve. The principle is stated; the 6 is not derived. | 34 |
 | Slope hold | on | Policy | Beyond the frame's densest cell the fitted curve stops bending and keeps the offset it has there, instead of extrapolating its bend to the end of the table. | 38 |
-| Curve bound | 0.35 | Safety limit | Limit on each curve's slope term. | 4 when doubled, 32 when halved |
-| Maximum deviation | 2.2 stops | Safety limit | The fitted curve may not leave the profile's own curve by more than this anywhere. | 0 when doubled, 21 when halved |
-| Green gain bound | 0.75 stops | Safety limit | Range of the green gain around Auto's. | 0 when doubled, 2 when halved |
-| Blue gain bound | 1.25 stops | Safety limit | Range of the blue gain around Auto's. | 2 when doubled, 16 when halved |
+| Curve bound | 0.35 | Safety limit | The largest per-channel slope change. It binds on a few frames. | 32 at half, 4 at double |
+| Maximum deviation | 2.2 stops | Safety limit | A safety net: the fitted curve may not leave the profile's own curve by more than this anywhere. Effectively non-binding. | 21 at half, 0 at double |
+| Green gain bound | 0.75 stops | Safety limit | Range of the green gain around Auto's (multiplicative). Effectively inactive. | 2 at half, 0 at double |
+| Blue gain bound | 1.25 stops | Safety limit | Range of the blue gain around Auto's (multiplicative). It binds on a handful of frames with large blue gains. | 16 at half, 2 at double |
 | Plausible lightness | L\* 18 to 85 | Safety limit | If Auto's grid median L\* is outside this range, the search failed (a nearly black or blown-out render, as when the frame holds rebate or holder), and the fit holds the nearest end instead. | — |
 | Fallback-crop cells | within 0.25 stop of the film base, or more than 9 stops below it | Safety limit | On a fallback crop these cells are rebate, gaps, bare light or holder, not picture, and are left out (only while at least 16 cells and a quarter of the grid remain). | — |
 | Minimum anchors | 8 cells in range | Safety limit | Fewer cells in the anchor range and the fit keeps Auto's colour. | — |
-| Curve damping | 1.5 | Numerical detail with a visible effect | Penalty on the curves' slope terms in the solve; without it the gains and the slope terms are nearly interchangeable. | 2 at half, 3 at double |
+| Curve damping | 1.5 | Numerical detail with a visible effect | Penalty on the curves' slope terms in the solve. A numerical constant, not a tuning knob: without it the gains and the slope terms are nearly interchangeable. It moves every frame slightly. | 2 at half, 3 at double |
 
 Four policy knobs, seven safety limits.
 

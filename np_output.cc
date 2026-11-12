@@ -363,7 +363,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     const negicc::CurveFitOptions& op = f->options;
     j["bound"] = n9(op.curve_bound);
     j["options"] = {{"curve_bound", n9(op.curve_bound)}, {"max_dev_stops", n9(op.max_dev_stops)},
-                    {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)},
                     {"g_bound_stops", n9(op.g_bound_stops)}, {"b_bound_stops", n9(op.b_bound_stops)},
                     {"joint_lambda", n9(op.joint_lambda)},
                     {"hold_slope", op.hold_slope},
