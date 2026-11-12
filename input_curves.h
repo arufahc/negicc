@@ -839,6 +839,14 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     out.guard.counted[1] = guard.counted[1];
     guard.ready = true;
   };
+  // The evidence hand-over of a solver point p: (ln g, ln b, a_G, a_B) moved from Auto's (g0, b0, 0, 0) by w.
+  const double w_hand = JointCurveModel::hand_over_weight(model.decisions().evidence);
+  auto hand_over = [&](const float* p, float q[4]) {
+    q[0] = (float)(g0 * std::pow((double)p[0] / g0, w_hand));
+    q[1] = (float)(b0 * std::pow((double)p[1] / b0, w_hand));
+    q[2] = (float)(w_hand * p[2]);
+    q[3] = (float)(w_hand * p[3]);
+  };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
                       bool check_shape) {
     ++out.evaluations;
@@ -847,9 +855,15 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     double sum = data;
     if (guard.ready) {
       // The hinges are 0 on the unguarded pass (the guard is measured at its result only), so the means are needed
-      // only on the guarded one; the residual vector keeps its two guard entries either way.
+      // only on the guarded one; the residual vector keeps its two guard entries either way. The guarded pass measures
+      // the means where the result will be: at p's evidence hand-over, its E solved there (p's own E if that fails).
       double v[2] = {0.0, 0.0};
-      if (guard_path) guard_means(p, e, v);
+      if (guard_path) {
+        float q[4], eq = e;
+        hand_over(p, q);
+        if (solve_point(q, e, eq, false)) guard_means(q, eq, v);
+        else guard_means(p, e, v);
+      }
       for (int k = 0; k < 2; ++k) {
         const double h = guard_path ? guard.hinge(k, v) : 0.0;
         r.push_back(h);
@@ -1019,10 +1033,8 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   // The evidence hand-over: the solved (ln g, ln b, a_G, a_B) moves from Auto's (g0, b0, 0, 0) by w, E solved there
   // again (the result stays at the solved point if that E cannot be found). The guard below measures this result.
   {
-    const double w = JointCurveModel::hand_over_weight(model.decisions().evidence);
-    float q[4] = {(float)(g0 * std::pow((double)p[0] / g0, w)), (float)(b0 * std::pow((double)p[1] / b0, w)),
-                  (float)(w * p[2]), (float)(w * p[3])};
-    float eq = e;
+    float q[4], eq = e;
+    hand_over(p, q);
     if (solve_point(q, e, eq, false)) {
       std::copy(q, q + 4, p);
       e = eq;
