@@ -280,11 +280,6 @@ struct GreenGuard {
   // free_fit_a: the unguarded result's two means (equal to fit_a when it was kept).
   bool refit = false;
   float free_fit_a[2] = {0.0f, 0.0f};
-  // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ((2, 22],
-  // (22, 45], (45, 70], (70, 92)), the band's cells and evidence mass. A band with no cells has zeros.
-  int band_cells[4] = {0, 0, 0, 0};
-  float band_mass[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  float band_auto_a[4][2] = {}, band_fit_a[4][2] = {};
 };
 
 struct JointCurveFit {

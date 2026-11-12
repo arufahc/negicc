@@ -410,11 +410,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
                     {"guard", [&] {
                        const negicc::GreenGuard& gd = f->fit.guard;
-                       ordered_json bands = ordered_json::array();
-                       for (int bd = 0; bd < 4; ++bd)
-                         bands.push_back({{"cells", gd.band_cells[bd]}, {"mass", n9(gd.band_mass[bd])},
-                                          {"auto_a", {n9(gd.band_auto_a[bd][0]), n9(gd.band_auto_a[bd][1])}},
-                                          {"fit_a", {n9(gd.band_fit_a[bd][0]), n9(gd.band_fit_a[bd][1])}}});
                        return ordered_json{{"tol", n9(negicc::kGreenGuardTolAb)},
                                            {"counted", {gd.counted[0], gd.counted[1]}},
                                            {"auto_a", {n9(gd.auto_a[0]), n9(gd.auto_a[1])}},
@@ -424,9 +419,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                            // the bound and this is the guarded re-run.
                                            {"refit", gd.refit},
                                            {"free_fit_a", {n9(gd.free_fit_a[0]), n9(gd.free_fit_a[1])}},
-                                           {"p_source", f->guard_p_source},
-                                           // Per L* band of Auto's render (diagnostic): (2, 22], (22, 45], (45, 70], (70, 92).
-                                           {"bands", bands}};
+                                           {"p_source", f->guard_p_source}};
                      }()},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
