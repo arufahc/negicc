@@ -997,50 +997,60 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   const double sig_anc = std::sqrt((h * h + m) / (m + h)) * kHeadSystematicSd;
   const double kt_a = (1.0 - w * slope_share) * M0.ka, kt_b = (1.0 - w * slope_share) * M0.kb;
 
-  // The intent field's precision weights (1 / sigma_a^2) over every fit cell, normalised.
-  std::vector<double> al(n);
+  // The intent field's precision weights (1 / sigma_a^2) over every fit cell, normalised. Without a field (no mu or
+  // sigma, or block indices that do not cover the cells) or with no precision at all, the fifth residual is absent
+  // and the fit is the four-residual fit.
+  bool intent = fi.mu && fi.sigma && fi.nbx > 0 && (int)fi.bx.size() == n && (int)fi.by.size() == n;
+  std::vector<double> al(n, 0.0);
   double asum = 0;
-  for (int i = 0; i < n; ++i) {
-    const double s = std::max((double)fi.sigma[3 * i + 1], 1e-3);
-    al[i] = 1.0 / (s * s);
-    if (!std::isfinite(lab0[i].a)) al[i] = 0.0;
-    asum += al[i];
+  if (intent) {
+    for (int i = 0; i < n; ++i) {
+      const double s = std::max((double)fi.sigma[3 * i + 1], 1e-3);
+      al[i] = 1.0 / (s * s);
+      if (!std::isfinite(lab0[i].a)) al[i] = 0.0;
+      asum += al[i];
+    }
+    intent = asum > 0.0;
   }
-  for (double& v : al) v /= asum;
-  double La = 0;
-  for (int i = 0; i < n; ++i) La += al[i] * lab0[i].L;
-  // The standard error of the field's mean a* residual at Auto: block sums over 4 x 4 cell blocks of the residual,
-  // linearly detrended in L*.
-  std::vector<double> d0(n);
-  double dbar = 0;
-  for (int i = 0; i < n; ++i) {
-    d0[i] = al[i] > 0 ? fi.mu[3 * i + 1] - lab0[i].a : 0.0;
-    dbar += al[i] * d0[i];
+  double se = 0.0, dL50 = 0.0;
+  if (intent) {
+    for (double& v : al) v /= asum;
+    double La = 0;
+    for (int i = 0; i < n; ++i) La += al[i] * lab0[i].L;
+    // The standard error of the field's mean a* residual at Auto: block sums over 4 x 4 cell blocks of the residual,
+    // linearly detrended in L*.
+    std::vector<double> d0(n);
+    double dbar = 0;
+    for (int i = 0; i < n; ++i) {
+      d0[i] = al[i] > 0 ? fi.mu[3 * i + 1] - lab0[i].a : 0.0;
+      dbar += al[i] * d0[i];
+    }
+    double szz = 0, szd = 0;
+    for (int i = 0; i < n; ++i) {
+      const double z = (lab0[i].L - La) / 50.0;
+      szz += al[i] * z * z;
+      szd += al[i] * z * (d0[i] - dbar);
+    }
+    const double kd = szz > 0 ? szd / szz : 0.0;
+    std::vector<double> bs(fi.nbx * (1 + *std::max_element(fi.by.begin(), fi.by.end())), 0.0);
+    for (int i = 0; i < n; ++i) {
+      const double dt = (d0[i] - dbar) - kd * (lab0[i].L - La) / 50.0;
+      bs[fi.by[i] * fi.nbx + fi.bx[i]] += al[i] * dt;
+    }
+    double se2 = 0;
+    for (double v : bs) se2 += v * v;
+    se = std::sqrt(se2);
+    // The lever arm: the field's weighted mean L* sits away from the anchors', so a slope change moves the field's
+    // mean a*; (k_a - kt_a) dL50 removes that share, dL50 = (L_field - L_anchors) / 50 x (vL + 25) / vL (k_a is the
+    // slope damped by vL / (vL + 25)).
+    dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 1.0);
   }
-  double szz = 0, szd = 0;
-  for (int i = 0; i < n; ++i) {
-    const double z = (lab0[i].L - La) / 50.0;
-    szz += al[i] * z * z;
-    szd += al[i] * z * (d0[i] - dbar);
-  }
-  const double kd = szz > 0 ? szd / szz : 0.0;
-  std::vector<double> bs(fi.nbx * (1 + *std::max_element(fi.by.begin(), fi.by.end())), 0.0);
-  for (int i = 0; i < n; ++i) {
-    const double dt = (d0[i] - dbar) - kd * (lab0[i].L - La) / 50.0;
-    bs[fi.by[i] * fi.nbx + fi.bx[i]] += al[i] * dt;
-  }
-  double se2 = 0;
-  for (double v : bs) se2 += v * v;
-  const double se = std::sqrt(se2);
-  // The lever arm: the field's weighted mean L* sits away from the anchors', so a slope change moves the field's mean
-  // a*; (k_a - kt_a) dL50 removes that share, dL50 = (L_field - L_anchors) / 50 x (vL + 25) / vL (k_a is the slope
-  // damped by vL / (vL + 25)).
-  const double dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 1.0);
   constexpr double c_res = 1.0 / 1.5;
   const double r4_scale = c_res / std::sqrt(se * se + kHeadSystematicSd * kHeadSystematicSd);
   bool guard_path = false;
   std::vector<Lab> labs;
   auto r4_of = [&](const std::vector<Lab>& L, const JointMoments& Mp) {
+    if (!intent) return 0.0;
     double s = 0;
     for (int i = 0; i < n; ++i)
       if (al[i] > 0 && std::isfinite(L[i].a)) s += al[i] * (L[i].a - fi.mu[3 * i + 1]);
