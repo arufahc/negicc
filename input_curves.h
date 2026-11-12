@@ -291,8 +291,9 @@ struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
   // The data loss (the sum of the four squared scene-neutral residuals, JointCurveModel::residuals, without the guard
-  // and the penalty) at Auto's g and b with no curves (E solved) and at the result.
-  double loss_before = 0.0, loss_after = 0.0;
+  // and the penalty): at Auto's g and b with no curves (E solved), at the solver's point before the evidence hand-over
+  // (loss_solved), and at the result after it (loss_after).
+  double loss_before = 0.0, loss_solved = 0.0, loss_after = 0.0;
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
   int renders = 0;      // grid median renders spent solving E (the evaluations' and the cut-backs')
   int iterations = 0;   // accepted Levenberg-Marquardt steps
@@ -1066,7 +1067,11 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
   }
 
   out.neutral_after = model.neutral_stats(e, p[0], p[1], out.curves);
-  out.loss_after = data;
+  out.loss_solved = data;
+  {
+    std::vector<double> r_after;
+    out.loss_after = model.residuals(e, p[0], p[1], shape_of(p), r_after);
+  }
   out.renders = renders;
   return out;
 }

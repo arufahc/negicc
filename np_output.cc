@@ -367,7 +367,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"joint_lambda", n9(op.joint_lambda)},
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
-    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
+    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_solved", n9(f->fit.loss_solved)},
+                {"loss_after", n9(f->fit.loss_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit.e)}, {"renders", f->fit.renders},
                 {"iterations", f->fit.iterations}, {"converged", f->fit.converged},
