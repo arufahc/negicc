@@ -357,7 +357,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
-                // The fifth residual: the intent field's standard error and the residual at Auto and at the result.
+                // The fifth residual: the intent field's standard error (a*) and the scaled residual r4
+                // (dimensionless, as the losses) at Auto and at the result.
                 {"intent_se", n9(f->fit.intent_se)}, {"intent_auto", n9(f->fit.intent_auto)},
                 {"intent_after", n9(f->fit.intent_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},

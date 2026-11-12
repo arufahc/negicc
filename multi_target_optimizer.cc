@@ -1789,7 +1789,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   return true;
 }
 
-// ---- Stage 4, the profile tables: the fitted G/B input curves --------------------------------------------------
+// ---- Stage 3, the profile tables: the fitted G/B input curves --------------------------------------------------
 //
 // The curves live in the bracket's input tables, composed at an E, g and b (apply_input_curves): the fit's, a
 // replay's, or the knobs', which compose them again from the bracket's own tables (np_pipeline.cc). Every render after

@@ -380,7 +380,8 @@ struct WhiteLightFitResult {
   // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
   negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit.e
   negicc::NeutralStats neutral_auto, neutral_export;
-  // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them it kept Auto's colour.
+  // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them the anchors hold Auto's
+  // colour and only the intent field moves the overall a*.
   bool neutral_anchors = false;
   // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
   // the search's final parameters, intent_repredicted).

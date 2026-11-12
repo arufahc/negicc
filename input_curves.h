@@ -291,7 +291,8 @@ struct JointCurveFit {
   double loss_before = 0.0, loss_after = 0.0;
   // What the residuals were built from: the evidence m (sum of p^2 over the cells in range), the shrink weight
   // w = m / (m + kEvidenceHalfMass), the slope shrink's share and the anchors' L* spread, the anchors' mean a*'s
-  // standard deviation, the intent field's standard error, and the intent residual at Auto and at the result.
+  // standard deviation, the intent field's standard error (in a*), and the intent residual at Auto and at the result
+  // (the scaled residual r4, dimensionless like the losses).
   float evidence = 0.0f, shrink = 0.0f, slope_share = 0.0f, span_L = 0.0f, anchor_sd = 0.0f, intent_se = 0.0f;
   float intent_auto = 0.0f, intent_after = 0.0f;
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)

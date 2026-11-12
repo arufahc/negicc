@@ -43,7 +43,7 @@
 #include "np_output.h"
 #include "np_profile.h"
 
-// ---- Stage 5, the white-light tone stage (np_pipeline.h) ----
+// ---- Stage 4, the white-light tone stage (np_pipeline.h) ----
 //
 // One monotone L* curve applied in the conversion kernel (color_pipeline.h apply_tone), holding the mid-tones. It
 // takes the tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were

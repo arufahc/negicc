@@ -34,7 +34,7 @@ and searches exposure and gains for the closest match. Shared with tri-LED.
 | Tournament | best 2 | The two best-ranked brackets get the full search; the lower residual wins. |
 | Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | How far a scene may exceed a bracket's calibrated range. |
 | Exposure trust region | ±0.5 stop | The search refines the metered exposure instead of leaving it. |
-| Search start | gains 1.22, 1.15 | Where the search over exposure and gains begins. |
+| Search start | gains 1.22, 1.15 | Where each search over exposure and gains begins (the first, bootstrap render uses 1.10, 1.15). |
 | Search penalties | clipping above 2.5 %; exposure far from the bracket's centre | Added to the intent residual. |
 | Scene range | 0.5 % to 99.5 % | The tails ignored when measuring the scene's range. |
 | Clip fallback | several thresholds | Moves to the next denser bracket when highlights clip. |
@@ -93,7 +93,7 @@ value inside the conversion: the pixel's brightness follows the curve and its co
 | Highlight move | 0.5 | Half way to the predicted highlight level. | 16 to 30 |
 | Range move | 0.5 | Half way to the predicted tonal range. | 38 to 61 |
 | Clip allowance | 0.5 % of pixels | Scales the highlight and range moves back if the curve would clip more white. | 14 |
-| Curve limits | black ±15, white 80 to 110 | How far the curve may go. It sits on a limit on most frames. | — |
+| Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | How far the curve may go. It sits on a limit on most frames. | — |
 
 ## Count
 
@@ -116,6 +116,9 @@ value inside the conversion: the pixel's brightness follows the curve and its co
   derived. Folding the overall balance into the fit costs a little where the true colour is known: on the emulated
   scans the grey a\* error is 8.03 against 7.62 with the separate trim stage. The guard is a penalty, not an exact
   bound: results end up to 0.18 a\* past it on 39 of 140 frames (with the trim stage, up to 0.75 on 18).
+- **The intent term's cells.** Its weights run over every fit cell, including those Auto renders above L\* 92, which
+  carry up to 42 % of its precision on one upload. That is the form that was blind-checked; restricting it to the
+  anchor range is not done.
 - **The guard.** It costs accuracy where the true colour is known, because Auto's render can itself be magenta. It
   stays because guarded renders were preferred on real frames.
 - **Tone-dependent error.** The fit removes most of the uniform cast and little of the difference between shadows
