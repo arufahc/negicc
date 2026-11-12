@@ -204,7 +204,11 @@ $(ORT_STATIC_LIB):
 	    -Donnxruntime_BUILD_UNIT_TESTS=OFF \
 	    -Donnxruntime_ENABLE_PYTHON=OFF \
 	    -Wno-dev
-	$(CMAKE) --build $(ORT_BUILD_DIR) --config Release --target $(ORT_CMAKE_TARGETS) --parallel
+	# --parallel needs a number: without one CMake's make runs with unlimited jobs and leaves the outer make's
+	# jobserver ("-j0 forced in submake"), which ran the CI runner out of memory (exit 143). One job per core, or
+	# CMAKE_BUILD_PARALLEL_LEVEL.
+	$(CMAKE) --build $(ORT_BUILD_DIR) --config Release --target $(ORT_CMAKE_TARGETS) \
+	    --parallel $${CMAKE_BUILD_PARALLEL_LEVEL:-$$(nproc)}
 	rm -f $@
 	{ echo "CREATE $@"; \
 	  find $(ORT_BUILD_DIR) -name '*.a' ! -name 'libprotobuf.a' ! -name 'libprotoc.a' | sort | \
