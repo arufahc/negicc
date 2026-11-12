@@ -501,40 +501,47 @@ private:
     ToneCurve q_;
 };
 
-// The share of a 16-bit sRGB image's pixels (w x h, stride uint16 per pixel, every step-th each way) with a channel
-// at the maximum: as it is (q null), or after the stage with curve q (as apply_tone_stage would write it).
-static inline double tone_white_clip_share(const uint16_t* rgb, int w, int h, int stride, int step,
-                                           const ToneCurve* q) {
-    long long n = 0, clipped = 0;
-    const ToneStageFast fast(q ? *q : ToneCurve{});
-#pragma omp parallel for schedule(static) reduction(+ : n, clipped)
-    for (int y = 0; y < h; y += step) {
-        for (int x = 0; x < w; x += step) {
-            const uint16_t* p = rgb + ((size_t)y * w + x) * stride;
+// The share of the conversion's pixels clipped white (a channel at the maximum) and black (every channel 0) on a sparse
+// sample of the unconverted image (every kToneClipSampleStep-th pixel each way), converted through the kernel as the
+// export converts them: with pc as it is (no tone), or with curve q's table.
+static void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
+                             int stride, const ToneCurve* q, double* white, double* black) {
+    static constexpr int kToneClipSampleStep = 8;
+    negicc::PipelineConfig c = pc;
+    std::vector<float> lut;
+    if (q) {
+        lut = tone_table(*q);
+        c.tone.lut = lut.data();
+        c.tone.n = kToneTableSize;
+        c.tone.top = 1.0f;
+    }
+    long long n = 0, wc = 0, kc = 0;
+#pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
+    for (int y = 0; y < h; y += kToneClipSampleStep) {
+        for (int x = 0; x < w; x += kToneClipSampleStep) {
+            const Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
+            const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
             ++n;
-            if (!q) {
-                clipped += (p[0] == 65535 || p[1] == 65535 || p[2] == 65535);
-                continue;
-            }
-            uint16_t o[3];
-            fast.apply(p, o);
-            clipped += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
+            wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
+            kc += (o[0] == 0 && o[1] == 0 && o[2] == 0);
         }
     }
-    return n ? (double)clipped / (double)n : 0.0;
+    *white = n ? (double)wc / (double)n : 0.0;
+    if (black) *black = n ? (double)kc / (double)n : 0.0;
 }
 
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
+                              const uint8_t* preview, size_t n, const negicc::PipelineConfig& pc, const float* matrix,
+                              const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share) {
-    static constexpr int kToneClipSampleStep = 8;  // the clipping is measured on every 8th pixel each way
-    const double before = tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, nullptr);
     const ToneCurve& c1 = designed;
     *share = 1.0;
     *targets = designed_targets;
     auto ok = [&](const ToneCurve& c) {
-        return tone_white_clip_share(rgb, w, h, stride, kToneClipSampleStep, &c) <= before + kToneClipAllowance;
+        double after = 0.0;
+        tone_clip_sample(pc, matrix, img, w, h, stride, &c, &after, nullptr);
+        return after <= white_before + kToneClipAllowance;
     };
     if (ok(c1)) return c1;
     // The largest of the fixed shares that passes; none: the clipping is not the highlight move's, keep 1. Fixed shares
@@ -2838,32 +2845,24 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
   uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
   const int stride = !scan.rgb3.empty() ? 3 : 4;
-  std::vector<uint16_t> tone_input;
   const ToneStagePlan& plan = s.curve_fit.tone;
   const bool tone_plan_here = tone_here && plan.planned && !plan.preview.empty();
-  if (tone_here) tone_input.assign(rgb, rgb + npx * stride);
-  backend.convert(out, export_pc, c.merged_matrix, scan.image());
+  const int iw = tp->imgdata.sizes.iwidth, ih = tp->imgdata.sizes.iheight;
   if (tone_here) {
+    // The clip check on a sparse sample of the input through the kernel, before the one full conversion.
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
     const double t_tone_0 = omp_get_wtime();
-    long long wb = 0, kb = 0;
-#pragma omp parallel for schedule(static) reduction(+ : wb, kb)
-    for (long long i = 0; i < (long long)npx; ++i) {
-      const uint16_t* px = rgb + (size_t)i * stride;
-      wb += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
-      kb += (px[0] == 0 && px[1] == 0 && px[2] == 0);
-    }
+    tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride, nullptr, &scan.tone_clip.white_before,
+                     &scan.tone_clip.black_before);
     if (tone_plan_here) {
       // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
       scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
                                             plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
-                                            plan.preview.data(),
-                                            plan.preview.size() / 3, rgb, tp->imgdata.sizes.iwidth,
-                                            tp->imgdata.sizes.iheight, stride, s.tone_plan.curve, s.tone_plan.targets,
-                                            &scan.tone_targets, &scan.tone_share);
+                                            plan.preview.data(), plan.preview.size() / 3, export_pc, c.merged_matrix,
+                                            rgb, iw, ih, stride, scan.tone_clip.white_before, s.tone_plan.curve,
+                                            s.tone_plan.targets, &scan.tone_targets, &scan.tone_share);
     }
-    std::copy(tone_input.begin(), tone_input.end(), rgb);
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;
     const std::vector<float> lut = tone_table(q);
@@ -2872,6 +2871,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     tone_pc.tone.n = kToneTableSize;
     tone_pc.tone.top = 1.0f;
     backend.convert(out, tone_pc, c.merged_matrix, scan.image());
+    const double t_tone_2 = omp_get_wtime();
     long long wa = 0, ka = 0;
 #pragma omp parallel for schedule(static) reduction(+ : wa, ka)
     for (long long i = 0; i < (long long)npx; ++i) {
@@ -2880,8 +2880,6 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
       ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
     }
     if (npx) {
-      scan.tone_clip.white_before = (double)wb / npx;
-      scan.tone_clip.black_before = (double)kb / npx;
       scan.tone_clip.white_after = (double)wa / npx;
       scan.tone_clip.black_after = (double)ka / npx;
     }
@@ -2889,7 +2887,9 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); white clip %.4f%% -> "
              "%.4f%%; %.0f ms checking the clipping, %.0f ms converting with the curve\n",
              q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
-             100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (omp_get_wtime() - t_tone_1));
+             100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
+  } else {
+    backend.convert(out, export_pc, c.merged_matrix, scan.image());
   }
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);

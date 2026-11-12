@@ -131,11 +131,14 @@ double tone_mean_chroma_after(const uint8_t* rgb, size_t n, const ToneCurve& q);
 ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                     const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets);
 
-// The plan's curve for a final image: the designed moves (designed, solved for designed_targets by tone_plan at
-// share 1), or, where they would clip more than kToneClipAllowance beyond the image's own clipping, the largest share
-// of the highlight and range moves that does not (see above). share gets the share kept.
+// The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
+// pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1), or, where the
+// curve would clip more than kToneClipAllowance beyond the conversion's own clipping (white_before), the largest
+// share of the highlight and range moves that does not. The clipping is measured on a sparse sample of img converted
+// through the kernel with each curve. share gets the share kept.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const uint8_t* preview, size_t n, const uint16_t* rgb, int w, int h, int stride,
+                              const uint8_t* preview, size_t n, const negicc::PipelineConfig& pc, const float* matrix,
+                              const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share);
 
