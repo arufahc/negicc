@@ -62,6 +62,16 @@ struct ProfileData {
 };
 
 // Everything a conversion needs apart from the per-candidate 3x3 input matrix.
+// The white-light tone stage's curve on display linear sRGB luminance (np_pipeline.h): lut holds Y' = f(Y) at
+// Y = top * (i / n)^2, i = 0..n (n + 1 entries, linear interpolation in sqrt(Y / top)); above top Y' / Y stays at its
+// value at top. lut null: no tone stage. The table lives in the memory of the code that runs the kernel (host memory
+// on the CPU; device code needs a device copy, uploaded once per frame).
+struct ToneTable {
+    const float* lut = nullptr;
+    int n = 0;
+    float top = 1.0f;
+};
+
 struct PipelineConfig {
     ProfileData profile;
     float knee;              // soft-knee threshold in [0,1]; >= 1 disables the knee
@@ -76,6 +86,9 @@ struct PipelineConfig {
     float shoulder_s_k = 1.0f;  // encoded sRGB value at the knee
     float shoulder_c = 1.0f;    // encoded sRGB ceiling C reached at x_hi (shoulder_ceiling(x_hi), set_shoulder())
     float shoulder_y_c = 1.0f;  // linear value of the ceiling
+    // The tone stage (sRGB export only; null everywhere else: the search, the statistics and the shoulder measurement
+    // never set it).
+    ToneTable tone;
 };
 
 constexpr float kShoulderOff = 1.0001f;       // x_hi at or below this is "off"
@@ -298,9 +311,39 @@ NEGICC_HD Rgb convert_pixel_display(const PipelineConfig& cfg, const float* matr
     return to_display(cfg, convert_pixel_linear(cfg, matrix, px));
 }
 
-// Returns the encoded output in [0,1] for one camera-linear pixel and one 3x3 input matrix.
+// ---- Stage: tone (white-light export only) ------------------------------------------------------------------
+// The derivative of CIE Lab's f (the cube root above the linear segment).
+NEGICC_HD float tone_lab_fprime(float t) {
+    return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;
+}
+
+// Y' = f(Y) from the table.
+NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
+    const float y = fminf(fmaxf(Y, 0.0f), tt.top);
+    float t = sqrtf(y / tt.top) * (float)tt.n;
+    int i = (int)t;
+    if (i > tt.n - 1) i = tt.n - 1;
+    t -= (float)i;
+    const float yp = tt.lut[i] + t * (tt.lut[i + 1] - tt.lut[i]);
+    return Y > tt.top ? yp * (Y / tt.top) : yp;
+}
+
+// The tone curve on one display linear sRGB pixel v: its luminance Y moves to Y' on the white point's neutral, and its
+// colour difference from that neutral, v - Y (white 1, 1, 1), is added back scaled by f'(Y) / f'(Y') (at most 8), which
+// holds its a* and b* to first order: out = Y' + (v - Y) f'(Y) / f'(Y'). No Lab conversion of the pixel.
+NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
+    const float y0 = 0.2126729f * v.r + 0.7151522f * v.g + 0.0721750f * v.b;
+    const float y1 = tone_table_Y(tt, y0);
+    const float sc = fminf(tone_lab_fprime(fmaxf(y0, 0.0f)) / tone_lab_fprime(fmaxf(y1, 1e-9f)), 8.0f);
+    return { y1 + sc * (v.r - y0), y1 + sc * (v.g - y0), y1 + sc * (v.b - y0) };
+}
+
+// Returns the encoded output in [0,1] for one camera-linear pixel and one 3x3 input matrix (with cfg.tone, the tone
+// curve between the display value and the encoding).
 NEGICC_HD Rgb convert_pixel(const PipelineConfig& cfg, const float* matrix, const uint16_t* px) {
-    return encode_output(convert_pixel_display(cfg, matrix, px), cfg.encoding);
+    Rgb v = convert_pixel_display(cfg, matrix, px);
+    if (cfg.tone.lut) v = apply_tone(cfg.tone, v);
+    return encode_output(v, cfg.encoding);
 }
 
 // ---- Output quantisation -----------------------------------------------------------------------------------

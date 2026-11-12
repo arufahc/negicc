@@ -139,6 +139,20 @@ static inline double tone_curve_L(double L, const ToneCurve& q) {
     return q.black + (q.white - q.black) * xc / (xc + yc);
 }
 
+// The kernel's table of the curve (color_pipeline.h ToneTable) on the display's linear luminance Y (white 1):
+// Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
+static constexpr int kToneTableSize = 8192;
+static std::vector<float> tone_table(const ToneCurve& q) {
+    std::vector<float> lut(kToneTableSize + 1);
+    for (int i = 0; i <= kToneTableSize; ++i) {
+        const double t = (double)i / kToneTableSize;
+        double L2 = tone_curve_L(116.0 * tone_lab_f(t * t) - 16.0, q);
+        L2 = L2 < 0 ? 0 : (L2 > 100 ? 100 : L2);
+        lut[i] = (float)tone_lab_finv((L2 + 16.0) / 116.0);
+    }
+    return lut;
+}
+
 // One pixel's Lab through the curve and the chroma factor.
 static inline void tone_lab_apply(double lab[3], const ToneCurve& q) {
     double L2 = tone_curve_L(lab[0], q);
@@ -2813,22 +2827,34 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
-  backend.convert(out, export_pc, c.merged_matrix, scan.image());
-  // The white-light tone stage (np_pipeline.h) on the final sRGB image: the curve fit's plan, or the recorded curve on
-  // a replay. Under the knobs the recorded curve is applied after them, as recorded: a fixed monotone map on top of the
-  // knobbed render (zero knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against
-  // the knobbed render, which would pull the shadow level back to the prediction and undo the knob.
+  // The white-light tone stage (np_pipeline.h): the curve fit's plan, or the recorded curve on a replay, applied in the
+  // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
+  // the recorded curve is applied after them, as recorded: a fixed monotone map on top of the knobbed render (zero
+  // knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against the knobbed render,
+  // which would pull the shadow level back to the prediction and undo the knob.
   scan.tone_applied = false;
-  if (s.has_tone && out.encoding == ENCODE_SRGB) {
-    LibRaw* tp = scan.proc.get();
-    const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
-    uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
-    const int stride = !scan.rgb3.empty() ? 3 : 4;
-    const ToneStagePlan& plan = s.curve_fit.tone;
+  const bool tone_here = s.has_tone && out.encoding == ENCODE_SRGB;
+  LibRaw* tp = scan.proc.get();
+  const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
+  uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
+  const int stride = !scan.rgb3.empty() ? 3 : 4;
+  std::vector<uint16_t> tone_input;
+  const ToneStagePlan& plan = s.curve_fit.tone;
+  const bool tone_plan_here = tone_here && plan.planned && !plan.preview.empty();
+  if (tone_here) tone_input.assign(rgb, rgb + npx * stride);
+  backend.convert(out, export_pc, c.merged_matrix, scan.image());
+  if (tone_here) {
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
     const double t_tone_0 = omp_get_wtime();
-    if (plan.planned && !plan.preview.empty()) {
+    long long wb = 0, kb = 0;
+#pragma omp parallel for schedule(static) reduction(+ : wb, kb)
+    for (long long i = 0; i < (long long)npx; ++i) {
+      const uint16_t* px = rgb + (size_t)i * stride;
+      wb += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
+      kb += (px[0] == 0 && px[1] == 0 && px[2] == 0);
+    }
+    if (tone_plan_here) {
       // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
       scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
                                             plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
@@ -2837,13 +2863,32 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                                             tp->imgdata.sizes.iheight, stride, s.tone_plan.curve, s.tone_plan.targets,
                                             &scan.tone_targets, &scan.tone_share);
     }
+    std::copy(tone_input.begin(), tone_input.end(), rgb);
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;
-    scan.tone_clip = apply_tone_stage(rgb, npx, stride, q);
+    const std::vector<float> lut = tone_table(q);
+    negicc::PipelineConfig tone_pc = export_pc;
+    tone_pc.tone.lut = lut.data();
+    tone_pc.tone.n = kToneTableSize;
+    tone_pc.tone.top = 1.0f;
+    backend.convert(out, tone_pc, c.merged_matrix, scan.image());
+    long long wa = 0, ka = 0;
+#pragma omp parallel for schedule(static) reduction(+ : wa, ka)
+    for (long long i = 0; i < (long long)npx; ++i) {
+      const uint16_t* px = rgb + (size_t)i * stride;
+      wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
+      ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
+    }
+    if (npx) {
+      scan.tone_clip.white_before = (double)wb / npx;
+      scan.tone_clip.black_before = (double)kb / npx;
+      scan.tone_clip.white_after = (double)wa / npx;
+      scan.tone_clip.black_after = (double)ka / npx;
+    }
     scan.tone_applied = true;
-    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f chroma x%.4f (highlight share %.3f); white clip "
-             "%.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms applying\n",
-             q.black, q.white, q.gamma, q.contrast, q.chroma, scan.tone_share, 100.0 * scan.tone_clip.white_before,
+    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); white clip %.4f%% -> "
+             "%.4f%%; %.0f ms checking the clipping, %.0f ms converting with the curve\n",
+             q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
              100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (omp_get_wtime() - t_tone_1));
   }
   if (out.encoding == ENCODE_CUSTOM) {
