@@ -1041,9 +1041,10 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     for (double v : bs) se2 += v * v;
     se = std::sqrt(se2);
     // The lever arm: the field's weighted mean L* sits away from the anchors', so a slope change moves the field's
-    // mean a*; (k_a - kt_a) dL50 removes that share, dL50 = (L_field - L_anchors) / 50 x (vL + 25) / vL (k_a is the
-    // slope damped by vL / (vL + 25)).
-    dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 1.0);
+    // mean a*; (k_a - kt_a) dL50 removes that share, dL50 = (L_field - L_anchors) / 50 x (vL + 25) / max(vL, 25)
+    // (k_a is the slope damped by vL / (vL + 25); below vL = 25, anchors on one object of nearly one lightness, the
+    // undamping stops at 2 so a slope measured over a narrow span is not amplified).
+    dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 25.0);
   }
   constexpr double c_res = 1.0 / 1.5;
   const double r4_scale = c_res / std::sqrt(se * se + kHeadSystematicSd * kHeadSystematicSd);
