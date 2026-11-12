@@ -168,6 +168,11 @@ value inside the conversion: the pixel's brightness follows the curve and its co
 | 4 Tone stage | 5 |
 | **White light, stages 2 to 4** | **14** |
 
+Not counted as choices: the solver's constants, which set how the terms are scaled and solved rather than what they
+aim at — the guard's penalty weight 4 and counting minimums, the 4 x 4 blocks of the standard error, the slope weight
+and the slope moment's 25, the residual scale 1/1.5, the slope ridge 1.5 and the lever factor. They live in
+`input_curves.h`; "How the estimates work" shows where most of them enter.
+
 ## What is not principled yet
 
 - **Evidence half-mass (12).** A stated value, not a derived one. To do: re-check it on the scans that arrive

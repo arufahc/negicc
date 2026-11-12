@@ -146,7 +146,8 @@ The conversion runs in that order:
 3. **Clean up casts** (white light). Balance alone cannot fix a cast that is warm in the shadows and cool in the
    highlights, so the green and blue curves are bent until the surfaces the neutral head trusts come out grey. The
    same solve also sets the overall magenta-green balance from the search's intent field, trusting the neutral
-   surfaces more the more of them there are. It never pushes a picture toward green.
+   surfaces more the more of them there are. It may not end greener than Auto's render by more than 0.5 a\* (deep
+   shadows exempt); the limit is a penalty, so a little more, up to about 0.2 a\*, can get through.
 4. **Set the tones** (white light). The tone head says where the shadows and highlights of a finished scan of this
    picture would sit, and one lightness curve moves the image toward that, applied inside the one conversion of the
    image (no second colour conversion of the finished pixels). Colour is not touched.
