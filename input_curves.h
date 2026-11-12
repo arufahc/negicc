@@ -818,6 +818,66 @@ constexpr float kGreenGuardWeight = 4.0f;
 constexpr double kGreenGuardMinCells = 8.0;
 constexpr double kGreenGuardMinMass = 2.0;
 
+// The never-greener guard on one pass of the joint fit: its cells (Auto's render at L* 2..92), their p^2, Auto's a*
+// and L* per cell, Auto's two means (ref) and which of them count. set_cells() takes the cells from Auto's render once
+// Auto's E is solved; means() gives a candidate's two means; hinge() a mean's excess as the residual the guarded pass
+// adds; binds() whether a result breaks the bound. (The tint trim's guard check differs in its tolerance, its L* edge,
+// the shadow exemption and how it compares the means, so it keeps its own.)
+struct JointFitGuard {
+  std::vector<char> in;
+  std::vector<double> pw, auto_a, auto_L;  // p^2; Auto's a* (a cell a candidate renders non-finite counts at it) and L*
+  double ref[2] = {0.0, 0.0};
+  bool counted[2] = {false, false};
+  bool ready = false;  // set_cells() and ref done: the residuals carry the guard's entries from then on
+
+  // lab_auto(i): cell i's Lab on Auto's render; neutral_p: the head's p per cell, or null.
+  template <typename AutoLab>
+  void set_cells(int n, AutoLab lab_auto, const float* neutral_p) {
+    in.assign(n, 0);
+    pw.assign(n, 0.0);
+    auto_a.assign(n, 0.0);
+    auto_L.assign(n, 0.0);
+    double na = 0.0, wp = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const Lab l = lab_auto(i);
+      if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
+      in[i] = 1;
+      auto_a[i] = l.a;
+      auto_L[i] = l.L;
+      const double p = neutral_p ? std::clamp((double)neutral_p[i], 0.0, 1.0) : 0.0;
+      pw[i] = p * p;
+      na += 1.0;
+      wp += pw[i];
+    }
+    counted[0] = na >= kGreenGuardMinCells;
+    counted[1] = wp >= kGreenGuardMinMass;
+  }
+  // a_of(i): the candidate's a* of cell i. v: the mean over the guard's cells and the p^2-weighted mean, each cell's
+  // a* as green_guard_cell_a counts it.
+  template <typename CellA>
+  void means(CellA a_of, double v[2]) const {
+    double sa = 0.0, na = 0.0, sp = 0.0, wp = 0.0;
+    for (int i = 0; i < (int)in.size(); ++i) {
+      if (!in[i]) continue;
+      // The same cells for every candidate (the ones set_cells counted): a cell a candidate renders non-finite counts
+      // at Auto's a*, so the two means never compare different populations.
+      double a = a_of(i);
+      if (!std::isfinite(a)) a = auto_a[i];
+      a = green_guard_cell_a(a, auto_a[i], auto_L[i]);
+      sa += a;
+      na += 1.0;
+      sp += pw[i] * a;
+      wp += pw[i];
+    }
+    v[0] = na > 0 ? sa / na : 0.0;
+    v[1] = wp > 0 ? sp / wp : 0.0;
+  }
+  double hinge(int k, const double v[2]) const {
+    return counted[k] ? (double)kGreenGuardWeight * std::max(0.0, ref[k] - kGreenGuardTolAb - v[k]) : 0.0;
+  }
+  bool binds(int k, const double v[2]) const { return counted[k] && ref[k] - kGreenGuardTolAb - v[k] > 0.0; }
+};
+
 // One pass of the joint fit (fit_input_curves_joint); guard_path: the guard's hinge joins the residuals at every
 // evaluation. Off, the hinge residuals are 0 (same residual count) and the guard is only measured at the result.
 inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0,
@@ -861,51 +921,21 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
            curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1));
   };
 
-  // The guard's cells (Auto's render at L* 2..92), their p^2, Auto's two means and which of them count; set once
-  // Auto's E is solved (guard_init), before which evaluate adds no guard residuals.
-  std::vector<char> guard_in(f.n, 0);
-  std::vector<double> guard_pw(f.n, 0.0);
-  std::vector<double> guard_auto_a(f.n, 0.0);  // Auto's a* per cell, for a candidate that renders a cell non-finite
-  std::vector<double> guard_auto_L(f.n, 0.0);  // Auto's L* per cell, for the shadow exemption (green_guard_cell_a)
-  double guard_ref[2] = {0.0, 0.0};
-  bool guard_ready = false;
+  // The guard (JointFitGuard), set once Auto's E is solved (guard_init), before which evaluate adds no guard
+  // residuals.
+  JointFitGuard guard;
   auto guard_means = [&](const float* q, float eq, double v[2]) {
     const InputCurves c = model.anchored(shape_of(q), eq, q[0], q[1]);
-    double sa = 0.0, na = 0.0, sp = 0.0, wp = 0.0;
-    for (int i = 0; i < f.n; ++i) {
-      if (!guard_in[i]) continue;
-      // The same cells for every candidate (the ones guard_init counted): a cell a candidate renders non-finite counts
-      // at Auto's a*, so the two means never compare different populations.
-      double a = model.cell_lab(i, eq, q[0], q[1], c).a;
-      if (!std::isfinite(a)) a = guard_auto_a[i];
-      a = green_guard_cell_a(a, guard_auto_a[i], guard_auto_L[i]);
-      sa += a;
-      na += 1.0;
-      sp += guard_pw[i] * a;
-      wp += guard_pw[i];
-    }
-    v[0] = na > 0 ? sa / na : 0.0;
-    v[1] = wp > 0 ? sp / wp : 0.0;
+    guard.means([&](int i) { return (double)model.cell_lab(i, eq, q[0], q[1], c).a; }, v);
   };
   auto guard_init = [&](float eq) {
     const InputCurves c = model.anchored(InputCurves{}, eq, g0, b0);
-    double na = 0.0, wp = 0.0;
-    for (int i = 0; i < f.n; ++i) {
-      const Lab l = model.cell_lab(i, eq, g0, b0, c);
-      if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
-      guard_in[i] = 1;
-      guard_auto_a[i] = l.a;
-      guard_auto_L[i] = l.L;
-      const double p = f.neutral_p ? std::clamp((double)f.neutral_p[i], 0.0, 1.0) : 0.0;
-      guard_pw[i] = p * p;
-      na += 1.0;
-      wp += guard_pw[i];
-    }
+    guard.set_cells(f.n, [&](int i) { return model.cell_lab(i, eq, g0, b0, c); }, f.neutral_p);
     const float p0[4] = {g0, b0, 0.0f, 0.0f};
-    guard_means(p0, eq, guard_ref);
-    out.guard.counted[0] = na >= kGreenGuardMinCells;
-    out.guard.counted[1] = wp >= kGreenGuardMinMass;
-    guard_ready = true;
+    guard_means(p0, eq, guard.ref);
+    out.guard.counted[0] = guard.counted[0];
+    out.guard.counted[1] = guard.counted[1];
+    guard.ready = true;
   };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
                       bool check_shape) {
@@ -913,16 +943,13 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     if (!solve_point(p, e_warm, e, check_shape)) return false;
     data = model.residuals(e, p[0], p[1], shape_of(p), r);
     double sum = data;
-    if (guard_ready) {
+    if (guard.ready) {
       // The hinges are 0 on the unguarded pass (the guard is measured at its result only), so the means are needed
       // only on the guarded one; the residual vector keeps its two guard entries either way.
       double v[2] = {0.0, 0.0};
       if (guard_path) guard_means(p, e, v);
       for (int k = 0; k < 2; ++k) {
-        const double h = guard_path && out.guard.counted[k]
-                             ? (double)kGreenGuardWeight *
-                                   std::max(0.0, guard_ref[k] - kGreenGuardTolAb - v[k])
-                             : 0.0;
+        const double h = guard_path ? guard.hinge(k, v) : 0.0;
         r.push_back(h);
         sum += h * h;
       }
@@ -1108,27 +1135,26 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
     double v[2];
     guard_means(p, e, v);
     for (int k = 0; k < 2; ++k) {
-      out.guard.auto_a[k] = (float)guard_ref[k];
+      out.guard.auto_a[k] = (float)guard.ref[k];
       out.guard.fit_a[k] = (float)v[k];
-      if (out.guard.counted[k] && guard_ref[k] - kGreenGuardTolAb - v[k] > 0.0)
-        out.guard.binding = true;
+      if (guard.binds(k, v)) out.guard.binding = true;
     }
     // Per band of Auto's render, for the sidecar: Auto's cells as guard_init rendered them (at Auto's E, as auto_a),
     // the fit's at its result.
     const InputCurves c_fit = model.anchored(shape_of(p), e, p[0], p[1]);
     double s[4][4] = {}, n[4] = {}, w[4] = {};
     for (int i = 0; i < f.n; ++i) {
-      if (!guard_in[i]) continue;
+      if (!guard.in[i]) continue;
       const Lab lf = model.cell_lab(i, e, p[0], p[1], c_fit);
       if (!std::isfinite(lf.a)) continue;
-      const double la_a = guard_auto_a[i], la_L = guard_auto_L[i];
+      const double la_a = guard.auto_a[i], la_L = guard.auto_L[i], pw = guard.pw[i];
       const int bd = la_L <= 22.0 ? 0 : la_L <= 45.0 ? 1 : la_L <= 70.0 ? 2 : 3;
       n[bd] += 1.0;
-      w[bd] += guard_pw[i];
+      w[bd] += pw;
       s[bd][0] += la_a;
-      s[bd][1] += guard_pw[i] * la_a;
+      s[bd][1] += pw * la_a;
       s[bd][2] += lf.a;
-      s[bd][3] += guard_pw[i] * lf.a;
+      s[bd][3] += pw * lf.a;
     }
     for (int bd = 0; bd < 4; ++bd) {
       out.guard.band_cells[bd] = (int)n[bd];
