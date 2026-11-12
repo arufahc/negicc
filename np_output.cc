@@ -367,8 +367,10 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"joint_lambda", n9(op.joint_lambda)},
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
-    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_solved", n9(f->fit.loss_solved)},
-                {"loss_after", n9(f->fit.loss_after)},
+    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
+                // The fifth residual: the intent field's standard error and the residual at Auto and at the result.
+                {"intent_se", n9(f->fit.intent_se)}, {"intent_auto", n9(f->fit.intent_auto)},
+                {"intent_after", n9(f->fit.intent_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit.e)}, {"renders", f->fit.renders},
                 {"iterations", f->fit.iterations}, {"converged", f->fit.converged},
@@ -407,13 +409,14 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
-                                             // The anchors' evidence mass (sum of p^2) and the share of the
-                                             // fitted correction the hand-over kept, the slope shrink's L*
-                                             // spread and the share of Auto's slope the fit removes.
-                                             {"evidence", n9(f->neutral_decisions.evidence)},
-                                             {"hand_over", n9(f->neutral_decisions.hand_over)},
-                                             {"span_L", n9(f->neutral_decisions.span_L)},
-                                             {"slope_share", n9(f->neutral_decisions.slope_share)}}},
+                                             // The evidence mass (sum of p^2 over the cells in range), the
+                                             // shrink weight m / (m + 12) inside the residuals, the anchors' L*
+                                             // spread and slope share, and their mean a*'s standard deviation.
+                                             {"evidence", n9(f->fit.evidence)},
+                                             {"shrink", n9(f->fit.shrink)},
+                                             {"span_L", n9(f->fit.span_L)},
+                                             {"slope_share", n9(f->fit.slope_share)},
+                                             {"anchor_sd", n9(f->fit.anchor_sd)}}},
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
                     {"guard", [&] {

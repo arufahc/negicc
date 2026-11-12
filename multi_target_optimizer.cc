@@ -2560,7 +2560,6 @@ class WhiteLightFit {
     if (!prepare()) return false;
     fit_and_remeter();
     compose_curves();
-    tint_trim();
     record();
     return true;
   }
@@ -2678,6 +2677,17 @@ class WhiteLightFit {
     }
     neutral_p_ = neutral_p;
     if (neutral_p_.size() == nf_) cf_.neutral_p = neutral_p_.data();
+    // The intent field over the fit's cells for the fit's fifth residual, and each cell's 4 x 4 block of the grid.
+    field_.mu = mu_.data();
+    field_.sigma = sigma_.data();
+    field_.bx.clear();
+    field_.by.clear();
+    for (size_t k = 0; k < nf_; ++k) {
+      const size_t i = kept_idx.empty() ? k : kept_idx[k];
+      field_.bx.push_back((int)(i % stats.grid_w) / 4);
+      field_.by.push_back((int)(i / stats.grid_w) / 4);
+    }
+    field_.nbx = (stats.grid_w + 3) / 4;
     prof_ = &bundle_.targets[idx_].film_prof;
     const ParsedFilmProfile& prof = *prof_;
     // The export's render of the grid: its encoding and the roll-off it measures, which only the sRGB encoding
@@ -2727,7 +2737,6 @@ class WhiteLightFit {
     m_neu_->set_scene_neutral(e_start_, res_.params.g, res_.params.b);
     out_.neutral_auto = m_neu_->neutral_stats_on(cfg_auto_, e_start_, res_.params.g, res_.params.b);
     out_.neutral_anchors = m_neu_->has_anchors();  // as the fit's own selection: the same frame, E, g and b
-    out_.neutral_decisions = m_neu_->decisions();
     x_ = out_.x_hi_auto;
     q995_ = q995_auto_;
     e_new_ = e_start_;
@@ -2774,8 +2783,17 @@ class WhiteLightFit {
     const float e_lo_fit = std::min(e_start_, out_.e_lo * 1.001f);
     const float e_hi_fit = std::max(e_start_, out_.e_hi / 1.001f);
     const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding_);
-    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, e_start_, res_.params.g, res_.params.b, mu_.data(),
-                                              sigma_.data(), fit_target_L_, table_n_, fit_opts_, e_lo_fit, e_hi_fit);
+    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, field_, e_start_, res_.params.g, res_.params.b,
+                                              fit_target_L_, table_n_, fit_opts_, e_lo_fit, e_hi_fit);
+    if (!out_.fit.ok) {
+      // Fewer than 8 cells in range, or no feasible start: Auto's colour (its g and b, no curves).
+      negicc::JointCurveModel mdl(cfg, cf_);
+      out_.fit.curves = mdl.anchored(negicc::InputCurves{}, e_start_, res_.params.g, res_.params.b);
+      out_.fit.g = res_.params.g;
+      out_.fit.b = res_.params.b;
+      out_.fit.e = e_start_;
+      out_.fit.feasible = true;
+    }
     const negicc::JointCurveFit& jf = out_.fit;
     if (opts_.verbose) {
       const negicc::InputCurves& c = out_.fit.curves;
@@ -2882,7 +2900,7 @@ class WhiteLightFit {
   void tint_trim() {
     out_.tone.features = "search";
     const float trim_conf =
-        out_.neutral_anchors ? (float)std::min(1.0, (double)out_.neutral_decisions.evidence / kTintTrimCapMass)
+        out_.neutral_anchors ? (float)std::min(1.0, (double)out_.fit.evidence / kTintTrimCapMass)
                              : 0.0f;
     const FrameStats& stats = fr_.stats();
     TintTrimInput ti;
@@ -3020,6 +3038,7 @@ class WhiteLightFit {
   float x_ = 1.0f, q995_ = 0.0f, e_new_ = 0.0f;  // the re-metered roll-off, its q995 and E
   bool clipped_ = false;
   negicc::CombinedProfile comb_;  // the re-meter's combined tables
+  negicc::JointFitField field_;   // the intent field the fit's fifth residual reads
 };
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and

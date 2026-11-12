@@ -423,8 +423,6 @@ struct WhiteLightFitResult {
   negicc::NeutralStats neutral_auto, neutral_export;
   // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them it kept Auto's colour.
   bool neutral_anchors = false;
-  // The anchors' evidence, hand-over weight and slope shrink (JointCurveModel::decisions).
-  negicc::NeutralTargetDecisions neutral_decisions;
   // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
   // the search's final parameters, intent_repredicted).
   const char* guard_p_source = "search";
@@ -440,10 +438,11 @@ struct WhiteLightFitResult {
 //      clip fallback moved them after its preview), the cells the fit uses (a fallback crop leaves out cells at the
 //      film base's level or holder-dark), Auto's render and grid median L*, E's bounds (the bracket's calibrated range
 //      widened to hold Auto's E) and the scene-neutral anchors (JointCurveModel::set_scene_neutral);
-//   1. the joint fit (negicc::fit_input_curves_joint): g, b, a_G and a_B by Levenberg-Marquardt so the anchors render
-//      grey, each candidate at the E that keeps Auto's grid median L*, the correction handed over by evidence, and
-//      the never-greener guard checked on the result; its curves anchored (ref, u_med) on the film base (the one opts
-//      gives, else the brightest grid cell per channel) at its own E, g, b;
+//   1. the joint fit (negicc::fit_input_curves_joint): g, b, a_G and a_B in one Levenberg-Marquardt solve on the
+//      anchors' balance and the intent field's overall a* (the evidence shrinkage inside the residuals), each
+//      candidate at the E that keeps Auto's grid median L*, and the never-greener guard checked on the result; its
+//      curves anchored (ref, u_med) on the film base (the one opts gives, else the brightest grid cell per channel) at
+//      its own E, g, b;
 //   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
 //      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its shape fails at the re-metered
 //      anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's own result with no curves
