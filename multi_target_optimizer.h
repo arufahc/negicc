@@ -329,9 +329,12 @@ struct TintTrimTables {
   float film_base[3] = {0, 0, 0};  // the film base the curves are anchored on (CurveFrame::film_base)
 };
 
-// prof's G and B input tables (its current ones: the bracket's, composed with any curves) with t's density change
-// composed in front, at E, g and b, in place.
-void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, float e, float g, float b);
+// The bracket's input tables composed in one place (Stage 4): prof's tables become base's, with curves composed into G
+// and B when given, then the tint trim's density change (when given) composed in front at at = (E, g, b). Used by the
+// fit after the trim, by a replayed trim, and by the knobs, which compose the tables again at the E, g and b they move
+// to. prof may be base (curves and trim then compose on its current tables).
+void compose_bracket_tables(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves* curves,
+                            const TintTrimTables* trim, const float at[3]);
 
 // The tint trim the white-light fit's result takes from the network (run_white_light_fit, step
 // 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).

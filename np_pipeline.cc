@@ -1685,7 +1685,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                "not applied\n", s.tint_trim_target_idx, target_idx);
     }
     if (tint_trim_here && !s.tint_trim_composed) {
-      compose_tint_trim_tables(bundle.targets[target_idx].film_prof, s.tint_trim, base_e, base_g, base_b);
+      const float at[3] = {base_e, base_g, base_b};
+      ParsedFilmProfile& tp = bundle.targets[target_idx].film_prof;
+      compose_bracket_tables(tp, tp, nullptr, &s.tint_trim, at);
       s.tint_trim_composed = true;
       log_info("Tint trim replayed on bracket %d at E %.4f g %.4f b %.4f (theta %.5f %.5f %.5f %.5f)\n",
                target_idx, base_e, base_g, base_b, s.tint_trim.theta[0], s.tint_trim.theta[1], s.tint_trim.theta[2],
@@ -1735,12 +1737,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                                        scan.knob_curves, scale)) {
               return false;
             }
-            apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
-          } else {
-            prof = s.tint_trim_base_prof;
-            prof.rebind_pointers();
           }
-          if (tint_trim_here) compose_tint_trim_tables(prof, s.tint_trim, to[0], to[1], to[2]);
+          compose_bracket_tables(prof, curves_here ? s.curves_base_prof : s.tint_trim_base_prof,
+                                 curves_here ? &scan.knob_curves : nullptr,
+                                 tint_trim_here ? &s.tint_trim : nullptr, to);
           return true;
         };
         const float to1[3] = {e, g, b};
