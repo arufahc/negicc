@@ -705,7 +705,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
   if (saved_pin_e != s.exposure_given) return false;
 
   // Match either a previous bundle Auto run ("auto") or a previous single-target DINOv3 run ("dino").
-  if (s.is_bundle && !s.exposure_given && j.contains("auto") && j["auto"].is_object()) {
+  if (s.is_bundle && (!s.exposure_given || s.pinned_search) && j.contains("auto") && j["auto"].is_object()) {
     const auto& a = j["auto"];
     if (!a.contains("target_idx") || !a["target_idx"].is_number_integer()) return false;
     const int tgt_idx = a["target_idx"].get<int>();
@@ -1004,18 +1004,7 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
-  // The parameter search runs with a profile unless --gain_g or --gain_b is given. On a bundle it is
-  // negicc-station's conversion parameter search (multi_target_optimizer.h), which picks the bracket, the exposure
-  // and the gains; with --target or -E (and on a single ICC profile) it solves the gains, and the exposure unless -E
-  // gives it, on one profile.
   s.exposure_given = o.exposure_given;
-  s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given;
-  s.bundle_search = s.use_dino && s.is_bundle && s.manual_target_idx < 0 && !s.exposure_given;
-  if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
-    log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
-                    "--film_profile) without --gain_g or --gain_b\n");
-    return 1;
-  }
 
   // The crosstalk correction: the bundle's, with any rows -r, -g and -b give in place of its own (for the search too).
   s.r_coeff = o.r_coeff;
@@ -1117,14 +1106,43 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
+
+  // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
+  // which picks the bracket, the exposure and the gains.
+  //
+  // White light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the rest
+  // (pinned_search), followed by the curve fit and the tone stage as after an unpinned search, unless --fit_curves off.
+  // With all four given there is nothing to search: the search then runs only where the curve fit runs (it needs the
+  // search's intent field), and --fit_curves off, another -P, or recorded curves or a recorded tone curve (a
+  // sidecar's cli_equivalent) convert with the given values alone.
+  //
+  // TriLED and a single ICC profile: the search runs unless --gain_g or --gain_b is given; with --target or -E (and on
+  // a single ICC profile) the single-bracket solver solves the gains, and the exposure unless -E gives it.
+  {
+    const bool gains_given = o.gain_g_given || o.gain_b_given;
+    const bool any_pin = s.manual_target_idx >= 0 || o.exposure_given || gains_given;
+    const bool all_pinned = s.manual_target_idx >= 0 && o.exposure_given && o.gain_g_given && o.gain_b_given;
+    const bool replay = o.input_curves_given || o.tone_replay_given;
+    const bool fit_wanted = o.fit_curves != Options::kFitCurvesOff && fit_encoding_ok;
+    s.pinned_search = s.is_bundle && s.white_light && !s.has_crosstalk && any_pin && !replay &&
+                      (!all_pinned || fit_wanted);
+    s.use_dino = s.has_profile && (!gains_given || s.pinned_search);
+    s.bundle_search = s.use_dino && s.is_bundle &&
+                      (s.pinned_search || (s.manual_target_idx < 0 && !s.exposure_given));
+  }
+  if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
+    log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
+                    "--film_profile) without --gain_g or --gain_b (on a white-light bundle they may be given, unless "
+                    "--target, -E and both gains are given with --fit_curves off or recorded values)\n");
+    return 1;
+  }
   if (fit_on && !fit_encoding_ok) {
     log_error("--fit_curves on needs -P srgb or -P srgb-g10: the fit scores the frame through linear sRGB, not "
               "through a custom output profile\n");
     return 1;
   }
   if (fit_on && !s.bundle_search) {
-    log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
-              "(--fit_curves with recorded curves, ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, replays them)\n");
+    log_error("--fit_curves on fits after the bundle search, which did not run for these arguments\n");
     return 1;
   }
   // --fit_curves auto or on: the curve fit (with the tone stage) wherever it applies (on has
@@ -1594,6 +1612,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+        if (s.pinned_search) {
+          // --target, -E, --gain_g and --gain_b: held by the search and the curve fit, which solve the rest.
+          opts.pin_target = s.manual_target_idx;
+          if (o.exposure_given) opts.pin_mask |= PIN_E;
+          if (o.gain_g_given) opts.pin_mask |= PIN_G;
+          if (o.gain_b_given) opts.pin_mask |= PIN_B;
+          opts.pin_e = o.exposure_comp;
+          opts.pin_g = o.gain_g;
+          opts.pin_b = o.gain_b;
+        }
         if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
           log_error("The conversion parameter search failed\n");
           return false;

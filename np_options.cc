@@ -207,9 +207,12 @@ int parse_options(int ac, char* av[], Options& o) {
           "cli_equivalent: auto.e, the search's own; with fitted curves, input_curves.remeter.e, re-metered on the "
           "combined profile; after the knobs, knobs.egb.e): "
           "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
-          "corrected RGB. Given, the parameter search keeps it and solves only the gains, on the bracket --target "
-          "picks (or the bundle's default). Not given with given gains: with a bundle, the centre of the bracket's "
-          "exposure range as the bundle search meters it; with an ICC profile, 1.")
+          "corrected RGB. Given with a white-light (d65) bundle, the bundle search holds it and solves the rest (the "
+          "bracket unless --target gives it, the gains unless given), and the curve fit and the tone stage run on "
+          "the result as after an unpinned search, without re-metering E. Given with a TriLED bundle or an ICC "
+          "profile, the single-bracket solver keeps it and solves only the gains, on the bracket --target picks (or "
+          "the bundle's default). Not given with given gains on TriLED: the centre of the bracket's exposure range "
+          "as the bundle search meters it; with an ICC profile, 1. --brightness moves the result, a given E too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--no-metadata")
@@ -218,18 +221,23 @@ int parse_options(int ac, char* av[], Options& o) {
     .implicit_value(true);
   parser.add_argument("--gain_g")
     .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
-          "neutral). Defaults to 1.0. Given, it turns the parameter search off.")
+          "neutral). Defaults to 1.0. Given with a white-light (d65) bundle, the bundle search and the curve fit "
+          "hold it and solve the rest; with -E, --target and --gain_b given too there is nothing to search, and the "
+          "search runs only for the curve fit and the tone stage (--fit_curves off converts with the given values "
+          "alone). Given with a TriLED bundle or an ICC profile, it turns the parameter search off. --tint and "
+          "--warmth move the result, a given gain too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
     .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
-          "neutral). Defaults to 1.0. Given, it turns the parameter search off.")
+          "neutral). Defaults to 1.0. Given, as --gain_g.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--brightness")
-    .help("Brightness offset after the parameter search, in stops of the reference grey's luminance (as in "
-          "negicc-station). Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input "
-          "files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
+    .help("Brightness offset after the parameter search and the curve fit, in stops of the reference grey's "
+          "luminance (as in negicc-station). It moves the result, whether searched or given (-E sets what it starts "
+          "from, not the final exposure), and the tone curve is applied on top unchanged. Reuses the Auto or DINOv3 "
+          "result in <output>.json when this build wrote it from the same input files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")
@@ -316,20 +324,27 @@ int parse_options(int ac, char* av[], Options& o) {
     .scan<'i', int>()
     .default_value(4);
   parser.add_argument("--target", "--bundle_target")
-    .help("Target index (0-based) or target name in JSON profile bundle.")
+    .help("Target index (0-based) or target name in JSON profile bundle. With a white-light (d65) bundle the bundle "
+          "search runs on that bracket alone and everything else is as without --target: E and the gains are solved "
+          "(unless given), and the curve fit and the tone stage run. The clip fallback, which only changes the "
+          "bracket, is left out. With a TriLED bundle the single-bracket solver runs on it.")
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
-          "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
-          "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
+          "applies (a white-light bundle search with -P srgb or srgb-g10, whether or not --target, -E, --gain_g or "
+          "--gain_b pin part of it), and nothing elsewhere (TriLED, another or no -P), so it can be passed for every "
+          "scan. on: after the bundle search, fit g, b and G "
           "and B input curves jointly (Levenberg-Marquardt) so the cells the neutral head finds neutral (weighted by "
           "p^2) render grey, pulled at m / (m + 12) of full strength (m the evidence, sum of p^2), and the overall "
           "magenta-green balance agrees with the search's intent field, on the bracket it chose, each candidate at "
           "the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
           "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
-          "needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P srgb or srgb-g10. Recorded curves: "
+          "needs a white-light bundle and -P srgb or srgb-g10. A given g or b is held by the fit and a given E is "
+          "not re-metered; with --target, -E, --gain_g and --gain_b all given only the curves are fitted. off: "
+          "no fit and no tone stage; a sidecar's cli_equivalent carries it when neither ran, so its given values "
+          "replay as recorded. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
           "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
           "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "

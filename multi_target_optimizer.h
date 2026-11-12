@@ -128,6 +128,15 @@ struct ParamSearchOptions {
   // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;
   bool film_base_is_rebate = false;
+  // Pins (neg_process's --target, -E, --gain_g and --gain_b on a white-light bundle): the search and the curve fit run
+  // as without them, with the bracket restricted to pin_target (when >= 0) and E, g or b (pin_mask: PIN_E, PIN_G and
+  // PIN_B of dinov3_auto_solver.h) held at pin_e, pin_g and pin_b (E in ParamSearchResult::params' units). A pinned
+  // bracket leaves out the clip fallback, which only changes the bracket; a pinned E leaves out the highlight
+  // pullback, which only moves E or the bracket. The curve fit (run_white_light_fit) holds the pinned g and b at the
+  // search's and does not re-meter a pinned E.
+  int pin_target = -1;
+  unsigned pin_mask = 0;
+  float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.

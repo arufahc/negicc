@@ -55,6 +55,9 @@ struct SolverConfig {
   float custom_e_center = 0.0f;
   float enc_e_min = 0.0f;
   float enc_e_max = 0.0f;
+  // The values pinned parameters (pin_mask) take in optimize_target_for_intent when it is given no start; with a
+  // start they stay at the start's.
+  float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
 };
 
 struct ShoulderResult {

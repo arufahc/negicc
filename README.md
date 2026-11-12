@@ -45,9 +45,16 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 # 6x7 on a white LED, with LibRaw's DCB demosaic.
 bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
 
-# Set the bracket, exposure and gains yourself. Giving a gain turns the automatic search off.
+# Set the bracket, exposure and gains yourself. On RGB-LED scans, giving a gain turns the automatic search off.
 bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
+
+# White LED: fix only the bracket. Everything else is found as usual, on that bracket.
+bin_out/neg_process --film_stock portra400 --light_source d65 --target 4 -P srgb -o out.tif scan.ARW
 ```
+
+On white-LED scans, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
+search, the curve fit and the contrast step still run, holding what you gave. Add `--fit_curves off` to convert with
+the given values and nothing else.
 
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
@@ -162,11 +169,11 @@ If one of them is yours and you want it removed, open an issue.
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. |
-| `--target N` | The exposure bracket, by index (from 0) or name. Without `-E` and the gains, the search runs on that bracket only. |
-| `-E`, `--exposure_comp` | Exposure gain. Given alone, the search keeps it. |
-| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). Giving either turns the search off. |
-| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search. They reuse `<output>.json` from the same inputs. |
-| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it and the contrast step. `on` is an error where it does not apply. Eight or ten numbers replay the curves recorded in a sidecar. |
+| `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
+| `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
+| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
+| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. |
+| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it and the contrast step; a sidecar's replay command carries it when neither ran. `on` is an error where it does not apply. Eight or ten numbers replay the curves recorded in a sidecar. |
 | `--tone_stage curve:<numbers>` | Replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). |
