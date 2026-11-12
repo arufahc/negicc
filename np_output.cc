@@ -410,10 +410,12 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
-                                             // The anchors' evidence mass (sum of p^2), the slope shrink's L*
+                                             // The anchors' evidence mass (sum of p^2) and the share of the
+                                             // fitted correction the hand-over kept, the slope shrink's L*
                                              // spread and the share of Auto's slope the fit removes, and the
                                              // anchors' mean |ab|, scatter and the offset gate's decision.
                                              {"evidence", n9(f->neutral_decisions.evidence)},
+                                             {"hand_over", n9(f->neutral_decisions.hand_over)},
                                              {"span_L", n9(f->neutral_decisions.span_L)},
                                              {"slope_share", n9(f->neutral_decisions.slope_share)},
                                              {"auto_ab", n9(f->neutral_decisions.auto_ab)},

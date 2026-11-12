@@ -353,6 +353,8 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
 //     curve numbers, with a forward-difference Jacobian, box bounds by projection and the shape (curve_shape_ok over
 //     the whole table, at each candidate's anchor) by cutting a step back to the furthest point that keeps it (its E
 //     solved at each point tried) or rejecting it and raising the damping.
+// The solved correction is then handed over by evidence: its displacement from Auto in (ln g, ln b, a_G, a_B) is
+// scaled by w = m / (m + JointCurveModel::kEvidenceHalfMass), m the anchors' evidence mass, and E solved there again.
 // The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
 // it by the small difference between the model and the tables.
 struct NeutralStats {
@@ -371,6 +373,7 @@ struct NeutralTargetDecisions {
   float evidence = 0.0f;     // the anchors' evidence mass, sum of p^2 (0: no anchors, the fit keeps Auto's colour)
   float span_L = 0.0f;       // the anchors' weighted L* standard deviation the slope shrink measured
   float slope_share = 0.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
+  float hand_over = 0.0f;    // the share of the fitted correction kept: evidence / (evidence + kEvidenceHalfMass)
   float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto
   float spread = 0.0f;       // their weighted median distance from the anchors' tone trend at Auto
   bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread) (recorded; the cast is removed in full anyway)
@@ -464,6 +467,11 @@ class JointCurveModel {
 
   // Slope shrink: s0 of sd^2 / (sd^2 + s0^2), in L*; most of a slope measured over an L* spread well under s0 is kept.
   static constexpr float kSlopeSpanL = 6.0f;
+  // Evidence hand-over: the evidence mass (sum of p^2) at which the fit's correction is applied at half strength
+  // (w = m / (m + this)), so that a correction resting on very little neutral evidence is not trusted. A policy
+  // value, not derived.
+  static constexpr double kEvidenceHalfMass = 12.0;
+  static double hand_over_weight(double evidence) { return evidence / (evidence + kEvidenceHalfMass); }
   // Offset gate: the anchors' mean |ab| at Auto above which (and above their scatter) their shared offset is a cast.
   static constexpr float kOffsetGateMinAb = 6.0f;
 
@@ -527,6 +535,7 @@ class JointCurveModel {
       }
     }
     decisions_.evidence = (float)mass;
+    decisions_.hand_over = (float)hand_over_weight(decisions_.evidence);
 
     float w_sum = 0.0f;
     for (int b = 0; b < 4; ++b) {
@@ -1113,6 +1122,18 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
       }
     }
     if (!accepted && !settled) break;
+  }
+  // The evidence hand-over: the solved (ln g, ln b, a_G, a_B) moves from Auto's (g0, b0, 0, 0) by w, E solved there
+  // again (the result stays at the solved point if that E cannot be found). The guard below measures this result.
+  {
+    const double w = JointCurveModel::hand_over_weight(model.decisions().evidence);
+    float q[4] = {(float)(g0 * std::pow((double)p[0] / g0, w)), (float)(b0 * std::pow((double)p[1] / b0, w)),
+                  (float)(w * p[2]), (float)(w * p[3])};
+    float eq = e;
+    if (solve_point(q, e, eq, false)) {
+      std::copy(q, q + 4, p);
+      e = eq;
+    }
   }
   out.converged = settled;
   out.g = p[0];
