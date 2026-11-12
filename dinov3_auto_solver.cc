@@ -152,15 +152,16 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
                             const GainsD* initial, const double* e_bounds,
                             unsigned pin_mask, GainsD& out) {
   const int n_cells = gw * gh;
-  // A pinned gain stays at its start value (relative 1 without initial), never at the reference's free defaults.
-  double curr_g = initial ? initial->g : ((pin_mask & PIN_G) ? 1.0 : 1.22);
-  double curr_b = initial ? initial->b : ((pin_mask & PIN_B) ? 1.0 : 1.15);
+  // A pinned gain stays at its start value (cfg.pin_g and pin_b without initial, relative 1 by default), never at the
+  // reference's free defaults.
+  double curr_g = initial ? initial->g : ((pin_mask & PIN_G) ? (double)cfg.pin_g : 1.22);
+  double curr_b = initial ? initial->b : ((pin_mask & PIN_B) ? (double)cfg.pin_b : 1.15);
 
   double e_min, e_max, e_center;
   std::vector<double> e_cands_d;
 
   if (pin_mask & PIN_E) {
-    const double fixed_e = initial ? initial->e : 1.0;
+    const double fixed_e = initial ? initial->e : (double)cfg.pin_e;
     e_cands_d.push_back(fixed_e);
     e_min = e_max = e_center = fixed_e;
   } else if (e_bounds != nullptr) {

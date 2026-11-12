@@ -46,8 +46,11 @@
 // thinnest film on the scan; the bundle's when neither gives one. The sidecar's film_base records which.
 //
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
-// whenever a profile is given, unless --gain_g or --gain_b is; then the conversion takes the values as given. -E
-// keeps the exposure as given and solves only the gains, on the bracket --target picks (or the bundle's default).
+// whenever a profile is given. With a white-light (d65) bundle, --target, -E, --gain_g and --gain_b pin what they give
+// and the same search solves the rest, with the curve fit and the tone stage after it (--fit_curves off leaves those
+// out; with all four given and --fit_curves off the conversion takes the values as given). With a TriLED bundle or an
+// ICC profile, --gain_g or --gain_b turns the search off, and -E keeps the exposure as given and solves only the
+// gains, on the bracket --target picks (or the bundle's default).
 // The search sees the frame --roi gives or --roi auto finds, on the half-size image.
 //
 // --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in

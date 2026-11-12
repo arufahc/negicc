@@ -712,6 +712,13 @@ class SearchFrame {
     shoulder_auto_ = automatic;
   }
   float shoulder_of(const ConversionParams& p) const { return shoulder_auto_ ? p.shoulder : shoulder_fixed_; }
+  // The parameters every search() holds (ParamSearchOptions::pin_mask), E in the search's units.
+  void set_pins(unsigned pin_mask, float e, float g, float b) {
+    pin_mask_ = pin_mask;
+    pin_e_ = e;
+    pin_g_ = g;
+    pin_b_ = b;
+  }
 
   const InnerCrop& inner_crop() const { return crop_; }
   const FrameStats& stats() const { return stats_; }
@@ -869,11 +876,17 @@ class SearchFrame {
         cfg.enc_e_max = enc.e_max;
       }
     }
+    cfg.pin_e = pin_e_;
+    cfg.pin_g = pin_g_;
+    cfg.pin_b = pin_b_;
     IntentGains init, res;
-    if (initial) init = {initial->e, initial->g, initial->b};
+    if (initial) {
+      init = {(pin_mask_ & PIN_E) ? pin_e_ : initial->e, (pin_mask_ & PIN_G) ? pin_g_ : initial->g,
+              (pin_mask_ & PIN_B) ? pin_b_ : initial->b};
+    }
     const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
                                                   stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
-                                                  e_bounds, 0, res);
+                                                  e_bounds, pin_mask_, res);
     out = {res.e, res.g, res.b, cfg.shoulder};
     search_time_ += Clock::now() - t0;
     return loss;
@@ -1067,6 +1080,8 @@ class SearchFrame {
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
   float shoulder_fixed_ = 1.0f;
+  unsigned pin_mask_ = 0;
+  float pin_e_ = 1.0f, pin_g_ = 1.0f, pin_b_ = 1.0f;
   bool shoulder_auto_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
@@ -1365,16 +1380,45 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   out.g_lo = g_lo;
   out.g_hi = g_hi;
   out.scene_ev = std::log2(g_hi / g_lo);
+  // The pins (ParamSearchOptions): the bracket, and E (in the search's units), g and b.
+  const bool pin_target = opts.pin_target >= 0;
+  const bool pin_e = (opts.pin_mask & PIN_E) != 0;
+  const float boot_g = (opts.pin_mask & PIN_G) ? opts.pin_g : BOOTSTRAP_G;
+  const float boot_b = (opts.pin_mask & PIN_B) ? opts.pin_b : BOOTSTRAP_B;
+  const float pin_e_search = white_light ? opts.pin_e : opts.pin_e * e_norm;
+  fr.set_pins(opts.pin_mask, pin_e_search, opts.pin_g, opts.pin_b);
+  if (pin_target && opts.pin_target >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! The pinned bracket " << opts.pin_target << " is not in the bundle" << std::endl;
+    return false;
+  }
   std::vector<Enclosure> enclosure;
-  for (int i : filter_admissible_targets(bundle)) {
+  if (pin_target) {
+    // The pinned bracket alone, admissible or not: it is the only one metered, screened and searched.
     Enclosure r;
-    if (bracket_enclosure(bundle.targets[i], i, g_lo_ref, g_hi_ref, r)) {
+    if (bracket_enclosure(bundle.targets[opts.pin_target], opts.pin_target, g_lo_ref, g_hi_ref, r)) {
       enclosure.push_back(r);
+    }
+  } else {
+    for (int i : filter_admissible_targets(bundle)) {
+      Enclosure r;
+      if (bracket_enclosure(bundle.targets[i], i, g_lo_ref, g_hi_ref, r)) {
+        enclosure.push_back(r);
+      }
     }
   }
   if (enclosure.empty()) {
-    std::cerr << "ERROR! No bracket of the bundle has patch readings" << std::endl;
+    std::cerr << (pin_target ? "ERROR! The pinned bracket has no patch readings"
+                             : "ERROR! No bracket of the bundle has patch readings") << std::endl;
     return false;
+  }
+  if (verbose && (pin_target || opts.pin_mask)) {
+    std::ostringstream os;
+    os << "Auto: pinned:";
+    if (pin_target) os << " " << name_of(opts.pin_target);
+    if (pin_e) os << " E " << general(opts.pin_e, 6);
+    if (opts.pin_mask & PIN_G) os << " g " << general(opts.pin_g, 6);
+    if (opts.pin_mask & PIN_B) os << " b " << general(opts.pin_b, 6);
+    std::cout << os.str() << "\n";
   }
 
   if (verbose) {
@@ -1441,7 +1485,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": no neutral L* 50 in this bracket, not metered\n";
       continue;
     }
-    if (!exposure_for_lightness(gp, p_scene, BOOTSTRAP_G, BOOTSTRAP_B, e_met)) {
+    if (!exposure_for_lightness(gp, p_scene, boot_g, boot_b, e_met)) {
       if (verbose) std::cout << "  " << name_of(c.target_idx) << ": metering did not converge\n";
       continue;
     }
@@ -1457,6 +1501,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     cand1 = best_fit;
     e1_init = cand1.e_center;
   }
+  if (pin_e) e1_init = pin_e_search;
   if (verbose) {
     std::ostringstream os;
     for (const auto& d : depths) {
@@ -1469,7 +1514,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
-  fr.render_preview(cand1.target_idx, {e1_init, BOOTSTRAP_G, BOOTSTRAP_B}, preview);
+  fr.render_preview(cand1.target_idx, {e1_init, boot_g, boot_b}, preview);
   if (!fr.predict(preview, mu1, sig1)) return false;
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
@@ -1601,7 +1646,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   const float clip_0 = hc0.white_clip / 100.0f;
   out.clip_fallback_white_clip = clip_0;
   out.clip_fallback = ClipFallbackOutcome::kNotNeeded;
-  if (clip_0 > CLIP_FALLBACK_CLIP_TAU) {
+  if (clip_0 > CLIP_FALLBACK_CLIP_TAU && !pin_target) {  // a pinned bracket stays
     const int t_adj = chosen.target_idx + 1;
     const Screened* s_adj = nullptr;
     for (const auto& s : screening)
@@ -1661,7 +1706,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // TriLED, and the result is taken only if it clips no more, does not darken the midtones past what the scene allows,
   // and moves to a later bracket or raises E by more than 2%.
   // The thresholds are negicc-station's, ported unchanged so both pick the same result.
-  if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1) {
+  // A pinned E stays: the pullback only moves E or the bracket.
+  if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1 && !pin_e) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
     const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
     const ClipStats hc_242 = fr.highlight_clip(chosen.target_idx, {params}, ceil_242)[0];
@@ -1711,7 +1757,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         const float e_res_init = std::clamp(depths_res[0].e_met, depths_res[0].lo, depths_res[0].hi);
         if (cand_res.target_idx != cand1.target_idx || std::fabs(e_res_init - e1_init) > 1e-4f) {
           std::vector<uint8_t> preview_res;
-          fr.render_preview(cand_res.target_idx, {e_res_init, BOOTSTRAP_G, BOOTSTRAP_B}, preview_res);
+          fr.render_preview(cand_res.target_idx, {e_res_init, boot_g, boot_b}, preview_res);
           if (!fr.predict(preview_res, mu_res, sig_res)) return false;
         }
       }
@@ -1913,6 +1959,11 @@ class WhiteLightFit {
       std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
       return false;
     }
+    // Pinned parameters (ParamSearchOptions): g and b stay at the search's, which held them, and E is neither solved
+    // per candidate nor re-metered.
+    if (opts_.pin_mask & PIN_G) fit_opts_.g_bound_stops = 0.0f;
+    if (opts_.pin_mask & PIN_B) fit_opts_.b_bound_stops = 0.0f;
+    if (pin_e()) fit_opts_.solve_e = false;
     t_fit0_ = Clock::now();
     if (!prepare()) return false;
     fit_and_remeter();
@@ -1922,6 +1973,8 @@ class WhiteLightFit {
   }
 
  private:
+  bool pin_e() const { return (opts_.pin_mask & PIN_E) != 0; }
+
   // The export's roll-off on profile p at (e, g, b), as neg_process measures every conversion's (sRGB only).
   float rolloff_at(const negicc::ProfileData& p, float e, float g, float b, float* q995) const {
     if (encoding_ != ENCODE_SRGB) return 1.0f;
@@ -2055,7 +2108,8 @@ class WhiteLightFit {
     // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
     // keeps (within kIntentMinL..kIntentMaxL).
     target_L_ = negicc::grid_median_L(cfg_auto_, merged_, e_int_, res_.params.g, res_.params.b, fit_grid_, (int)nf_);
-    fit_target_L_ = std::clamp(target_L_, kIntentMinL, kIntentMaxL);
+    // A pinned E keeps its own lightness, whatever it is.
+    fit_target_L_ = pin_e() ? target_L_ : std::clamp(target_L_, kIntentMinL, kIntentMaxL);
     // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
     out_.parts_auto = negicc::grid_intent_loss_parts(cfg_auto_, merged_, e_int_, res_.params.g, res_.params.b,
                                                      fit_grid_, (int)nf_, mu_.data(), sigma_.data());
@@ -2182,9 +2236,14 @@ class WhiteLightFit {
     out_.remeter_converged = false;
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out_.remeter_passes;
-      e_new_ = negicc::solve_e_for_median_L(make_pipeline_config(prof.data, AUTO_KNEE, x_, encoding_), cf_,
-                                            out_.fit.curves, e_centre, out_.e_lo, out_.e_hi, out_.fit.g, out_.fit.b,
-                                            fit_target_L_, &clipped_);
+      if (pin_e()) {
+        e_new_ = e_centre;  // held: only the roll-off is measured on the combined tables
+        clipped_ = false;
+      } else {
+        e_new_ = negicc::solve_e_for_median_L(make_pipeline_config(prof.data, AUTO_KNEE, x_, encoding_), cf_,
+                                              out_.fit.curves, e_centre, out_.e_lo, out_.e_hi, out_.fit.g, out_.fit.b,
+                                              fit_target_L_, &clipped_);
+      }
       comb_.build(prof.data, negicc::anchor_curves(out_.fit.curves, cf_, e_new_, out_.fit.g, out_.fit.b));
       float q = 0.0f;
       const float x_new = rolloff_at(comb_.data, e_new_, out_.fit.g, out_.fit.b, &q);
@@ -2305,7 +2364,7 @@ class WhiteLightFit {
   const double scan_shutter_s_, scan_iso_;
   const ParamSearchOptions& opts_;
   const ParamSearchResult& res_;
-  const negicc::CurveFitOptions& fit_opts_;
+  negicc::CurveFitOptions fit_opts_;  // the caller's, with the pins applied (run)
   const int encoding_;
   const ToneHead* tone_head_;
   WhiteLightFitResult& out_;

@@ -599,6 +599,14 @@ bool write_json_sidecar(const Sidecar& sc) {
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     cli.insert(cli.end(), {"--tone_stage", v});
   }
+  // A white-light bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone
+  // render these pixels, and --fit_curves off keeps the curve fit and the tone stage, which run after given values
+  // too, from running on the replay.
+  if (sc.is_bundle && sc.input_space == InputSpace::kRec2020Linear && cli.size() >= 2 &&
+      std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
+      std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
+    cli.insert(cli.end(), {"--fit_curves", "off"});
+  }
   j["cli_equivalent"] = cli;
 
   // auto: the conversion parameter search (multi_target_optimizer.h)
