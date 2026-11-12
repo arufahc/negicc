@@ -1906,8 +1906,8 @@ constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*
 constexpr int kTintTrimCandidates = 3;     // lattice points rendered and scored on their own fields
 constexpr double kTintTrimGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
 constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
-// The trim may not move confident neutrals away from neutral. With c = the neutral head's conf x min(1, evidence /
-// kTintTrimCapMass), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
+// The trim may not move confident neutrals away from neutral. With c = min(1, evidence / kTintTrimCapMass) (0 without
+// anchors), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
 // end at most kTintTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
 // c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
 constexpr double kTintTrimCapTol = 1.0;
@@ -2744,7 +2744,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
   std::vector<float> scan_features;
   out.tone.features = "search";
   const float trim_conf =
-      out.neutral_auto.conf * (float)std::min(1.0, (double)out.neutral_decisions.evidence / kTintTrimCapMass);
+      out.neutral_anchors ? (float)std::min(1.0, (double)out.neutral_decisions.evidence / kTintTrimCapMass) : 0.0f;
   const float e_lo_s = std::min(e_new, out.e_lo * 1.001f), e_hi_s = std::max(e_new, out.e_hi / 1.001f);
   tint_trim(fr, prof, cf, merged, stats.grid, stats.grid_w, stats.grid_h, fit_grid, nf, encoding, fit_target_L,
             e_lo_s, e_hi_s, rolloff_at, auto_prof.data, e_start, res.params.g, res.params.b, out.x_hi_auto,

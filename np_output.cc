@@ -405,22 +405,18 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"auto_loss_L", n9(f->parts_auto.L)}, {"auto_loss_ab", n9(f->parts_auto.ab)},
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
                     {"neutral", ordered_json{{"anchors", f->neutral_anchors ? "head" : "none"},
-                                             {"m", f->neutral_export.m}, {"conf", n9(f->neutral_export.conf)},
+                                             {"m", f->neutral_export.m},
                                              {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
                                              // The anchors' evidence mass (sum of p^2) and the share of the
                                              // fitted correction the hand-over kept, the slope shrink's L*
-                                             // spread and the share of Auto's slope the fit removes, and the
-                                             // anchors' mean |ab|, scatter and the offset gate's decision.
+                                             // spread and the share of Auto's slope the fit removes.
                                              {"evidence", n9(f->neutral_decisions.evidence)},
                                              {"hand_over", n9(f->neutral_decisions.hand_over)},
                                              {"span_L", n9(f->neutral_decisions.span_L)},
-                                             {"slope_share", n9(f->neutral_decisions.slope_share)},
-                                             {"auto_ab", n9(f->neutral_decisions.auto_ab)},
-                                             {"spread", n9(f->neutral_decisions.spread)},
-                                             {"offset_gate", f->neutral_decisions.offset_gate}}},
+                                             {"slope_share", n9(f->neutral_decisions.slope_share)}}},
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
                     {"guard", [&] {

@@ -359,7 +359,6 @@ inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, 
 // it by the small difference between the model and the tables.
 struct NeutralStats {
   int m = 0;
-  float conf = 0.0f;
   float a_bar = 0.0f, b_bar = 0.0f;
   float k_a = 0.0f, k_b = 0.0f;
   float q_a = 0.0f, q_b = 0.0f;
@@ -374,9 +373,6 @@ struct NeutralTargetDecisions {
   float span_L = 0.0f;       // the anchors' weighted L* standard deviation the slope shrink measured
   float slope_share = 0.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
   float hand_over = 0.0f;    // the share of the fitted correction kept: evidence / (evidence + kEvidenceHalfMass)
-  float auto_ab = 0.0f;      // the anchors' weighted mean |ab| at Auto
-  float spread = 0.0f;       // their weighted median distance from the anchors' tone trend at Auto
-  bool offset_gate = false;  // auto_ab > max(kOffsetGateMinAb, spread) (recorded; the cast is removed in full anyway)
 };
 
 // The joint fit's never-greener guard (fit_input_curves_joint): the grid's mean a* at Auto and at the fit's result,
@@ -472,8 +468,6 @@ class JointCurveModel {
   // value, not derived.
   static constexpr double kEvidenceHalfMass = 12.0;
   static double hand_over_weight(double evidence) { return evidence / (evidence + kEvidenceHalfMass); }
-  // Offset gate: the anchors' mean |ab| at Auto above which (and above their scatter) their shared offset is a cast.
-  static constexpr float kOffsetGateMinAb = 6.0f;
 
   // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0): every cell Auto renders at
   // L* 2..92 is an anchor, weighted by the neutral-patch head's p(neutral) squared (CurveFrame::neutral_p), with no
@@ -483,16 +477,15 @@ class JointCurveModel {
   // kSlopeSpanL^2), sd the anchors' weighted L* standard deviation (the slope shrink: a slope measured over a narrow
   // tone range is not extrapolated into a bend across the whole range).
   //
-  // Without the head's p (no head loaded, or no inference), or when every p^2 is 0, there are no anchors: conf is 0,
-  // the neutral residuals are 0, and the joint fit stays at its start, Auto's g and b with no G/B bend (E still
-  // solved to Auto's median L*; the re-meter and the steps after the fit run as on any frame). With anchors conf is 1.
-  // decisions() records the evidence, the slope shrink, the anchors' scatter (the p^2-weighted median distance from
-  // their tone trend) and whether their mean |ab| exceeded max(kOffsetGateMinAb, scatter).
+  // Without the head's p (no head loaded, or no inference), or when every p^2 is 0, there are no anchors
+  // (has_anchors() false): the neutral residuals are 0, and the joint fit stays at its start, Auto's g and b with no
+  // G/B bend (E still solved to Auto's median L*; the re-meter and the steps after the fit run as on any frame).
+  // decisions() records the evidence, the hand-over weight and the slope shrink.
   void set_scene_neutral(float e0, float g0, float b0) {
     neu_idx_.clear();
     neu_w_.clear();
     has_anchors_ = false;
-    conf_ = w_off_ = w_slope_ = 0.0f;
+    w_off_ = w_slope_ = 0.0f;
     k_target_a_ = k_target_b_ = 0.0f;
     decisions_ = NeutralTargetDecisions{};
     if (f_.n <= 0 || !f_.neutral_p) return;
@@ -574,30 +567,8 @@ class JointCurveModel {
     const double ka0 = 50.0 * covLa0 / (vL0 + 25.0);
     const double kb0 = 50.0 * covLb0 / (vL0 + 25.0);
 
-    // The scatter: the weighted median distance of the anchors from their tone trend (ties ordered by weight).
-    std::vector<std::pair<float, float>> dev(m);
-    for (int k = 0; k < m; ++k) {
-      const int i = neu_idx_[k];
-      const double z = (lab0[i].L - sL) / 50.0;
-      dev[k] = {(float)std::hypot(lab0[i].a - (sa + ka0 * z), lab0[i].b - (sb + kb0 * z)), neu_w_[k]};
-    }
-    std::sort(dev.begin(), dev.end());
-    float spread = 0.0f;
-    {
-      double half = 0.0, acc = 0.0;
-      for (const auto& d : dev) half += d.second;
-      half *= 0.5;
-      for (const auto& d : dev) {
-        acc += d.second;
-        if (acc >= half) {
-          spread = d.first;
-          break;
-        }
-      }
-    }
-    conf_ = 1.0f;
-    w_off_ = conf_ / 1.5f;
-    w_slope_ = conf_ * std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
+    w_off_ = 1.0f / 1.5f;
+    w_slope_ = std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
 
     // Slope shrink: the anchors' weighted L* spread (their weights renormalised over them; a separate pass from vL0,
     // which is centred on a mean summed in another order).
@@ -620,11 +591,6 @@ class JointCurveModel {
     decisions_.span_L = (float)std::sqrt(vL_span);
     decisions_.slope_share = slope_share;
 
-    // The offset gate's inputs and decision, for the sidecar.
-    const double auto_ab = std::hypot(sa, sb);
-    decisions_.auto_ab = (float)auto_ab;
-    decisions_.spread = spread;
-    decisions_.offset_gate = auto_ab > std::max((double)kOffsetGateMinAb, (double)spread);
   }
 
   // set_scene_neutral found anchors (the head's p, with some evidence).
@@ -640,7 +606,6 @@ class JointCurveModel {
   NeutralStats neutral_stats_on(const PipelineConfig& cfg, float e, float g, float b) const {
     NeutralStats st;
     st.m = (int)neu_idx_.size();
-    st.conf = conf_;
     if (st.m <= 0) return st;
     float m[9];
     candidate_matrix(f_.merged, e, g, b, m);
@@ -662,7 +627,7 @@ class JointCurveModel {
   double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
     const NeutralStats st = neutral_stats(e, g, b, shape);
     r.assign(4, 0.0);
-    if (st.m <= 0 || conf_ <= 0.0f) return 0.0;
+    if (st.m <= 0 || !has_anchors_) return 0.0;
     r[0] = (double)w_off_ * st.a_bar;
     r[1] = (double)w_off_ * st.b_bar;
     r[2] = (double)w_slope_ * (st.k_a - k_target_a_);
@@ -785,7 +750,6 @@ class JointCurveModel {
   NeutralStats neutral_stats_anchored(float e, float g, float b, const InputCurves& c) const {
     NeutralStats st;
     st.m = (int)neu_idx_.size();
-    st.conf = conf_;
     if (st.m <= 0) return st;
     std::vector<Lab> labs(st.m);
     double sL = 0.0, sa = 0.0, sb = 0.0;
@@ -812,7 +776,7 @@ class JointCurveModel {
   PipelineConfig cfg_;
   CurveFrame f_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
-  float conf_ = 0.0f, w_off_ = 0.0f, w_slope_ = 0.0f;
+  float w_off_ = 0.0f, w_slope_ = 0.0f;
   float k_target_a_ = 0.0f, k_target_b_ = 0.0f;  // the slope residuals' target (slope shrink)
   NeutralTargetDecisions decisions_;
   std::vector<float> rows_, L_, ug_, ub_;
@@ -1013,7 +977,7 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
 
   const int m = 4;
   double lambda = 1e-3;
-  bool settled = (out.neutral_before.conf <= 1e-4f || data <= 1e-6);
+  bool settled = (!model.has_anchors() || data <= 1e-6);
   for (int iter = 0; iter < 25 && !settled; ++iter) {
     const size_t nr = r.size();
     std::vector<double> J(nr * m, 0.0);
