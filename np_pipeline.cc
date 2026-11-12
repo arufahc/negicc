@@ -257,7 +257,6 @@ static void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matr
         lut = tone_table(*q);
         c.tone.lut = lut.data();
         c.tone.n = kToneTableSize;
-        c.tone.top = 1.0f;
     }
     long long n = 0, wc = 0, kc = 0;
 #pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
@@ -2587,7 +2586,6 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     negicc::PipelineConfig tone_pc = export_pc;
     tone_pc.tone.lut = lut.data();
     tone_pc.tone.n = kToneTableSize;
-    tone_pc.tone.top = 1.0f;
     backend.convert(out, tone_pc, c.merged_matrix, scan.image());
     const double t_tone_2 = omp_get_wtime();
     long long wa = 0, ka = 0;

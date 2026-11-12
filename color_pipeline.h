@@ -14,6 +14,7 @@
 //      convert_pixel_linear: the pre-shoulder value (the clip statistics and the x_hi histogram read it)
 //   -> highlight shoulder (identity when cfg.shoulder_x_hi <= kShoulderOff) -> clamp to [0, 1]
 //      convert_pixel_display: the display value (render and Lab read it)
+//   -> tone curve (apply_tone; only with cfg.tone on an sRGB export: the white-light tone stage)
 //   -> encode (sRGB curve or linear), clamp
 //      convert_pixel: the output code value in [0, 1]
 //
@@ -63,13 +64,12 @@ struct ProfileData {
 
 // Everything a conversion needs apart from the per-candidate 3x3 input matrix.
 // The white-light tone stage's curve on display linear sRGB luminance (np_pipeline.h): lut holds Y' = f(Y) at
-// Y = top * (i / n)^2, i = 0..n (n + 1 entries, linear interpolation in sqrt(Y / top)); above top Y' / Y stays at its
-// value at top. lut null: no tone stage. The table lives in the memory of the code that runs the kernel (host memory
-// on the CPU; device code needs a device copy, uploaded once per frame).
+// Y = (i / n)^2, i = 0..n (n + 1 entries, linear interpolation in sqrt(Y)); above 1 Y' / Y stays at its value at 1.
+// lut null or n < 1: no tone stage. The table lives in the memory of the code that runs the kernel (host memory on the
+// CPU; device code needs a device copy, uploaded once per frame). A zero-initialised ToneTable is "no tone stage".
 struct ToneTable {
     const float* lut = nullptr;
     int n = 0;
-    float top = 1.0f;
 };
 
 struct PipelineConfig {
@@ -317,15 +317,16 @@ NEGICC_HD float tone_lab_fprime(float t) {
     return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;
 }
 
-// Y' = f(Y) from the table.
+// Y' = f(Y) from the table (tt.n >= 1). Y is clamped to [0, 1] for the lookup (a NaN reads as 0), so the index is in
+// [0, n - 1].
 NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
-    const float y = fminf(fmaxf(Y, 0.0f), tt.top);
-    float t = sqrtf(y / tt.top) * (float)tt.n;
+    const float y = fminf(fmaxf(Y, 0.0f), 1.0f);
+    float t = sqrtf(y) * (float)tt.n;
     int i = (int)t;
     if (i > tt.n - 1) i = tt.n - 1;
     t -= (float)i;
     const float yp = tt.lut[i] + t * (tt.lut[i + 1] - tt.lut[i]);
-    return Y > tt.top ? yp * (Y / tt.top) : yp;
+    return Y > 1.0f ? yp * Y : yp;
 }
 
 // The tone curve on one display linear sRGB pixel v: its luminance Y moves to Y' on the white point's neutral, and its
@@ -338,11 +339,11 @@ NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
     return { y1 + sc * (v.r - y0), y1 + sc * (v.g - y0), y1 + sc * (v.b - y0) };
 }
 
-// Returns the encoded output in [0,1] for one camera-linear pixel and one 3x3 input matrix (with cfg.tone, the tone
-// curve between the display value and the encoding).
+// Returns the encoded output in [0,1] for one camera-linear pixel and one 3x3 input matrix (with cfg.tone on an sRGB
+// export, the tone curve between the display value and the encoding; any other encoding ignores it).
 NEGICC_HD Rgb convert_pixel(const PipelineConfig& cfg, const float* matrix, const uint16_t* px) {
     Rgb v = convert_pixel_display(cfg, matrix, px);
-    if (cfg.tone.lut) v = apply_tone(cfg.tone, v);
+    if (cfg.encoding == ENCODE_SRGB && cfg.tone.lut && cfg.tone.n > 0) v = apply_tone(cfg.tone, v);
     return encode_output(v, cfg.encoding);
 }
 
