@@ -72,11 +72,11 @@ struct Options {
   // The tint trim and the tone stage run wherever the white-light curve fit runs; their flags only replay recorded
   // values (a sidecar's cli_equivalent), with given values and no search:
   // --tint_trim theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (TintTrimTables' G and B numbers) and
-  // --tone_stage curve:black,white,gamma,contrast,chroma (ToneCurve).
+  // --tone_stage curve:black,white,gamma,contrast (ToneCurve).
   bool tint_trim_replay_given = false;
   double tint_trim_replay[10] = {};
   bool tone_replay_given = false;
-  double tone_replay[5] = {};
+  double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;

@@ -45,18 +45,16 @@
 
 // ---- Stage 5, the white-light tone stage (np_pipeline.h) ----
 //
-// One monotone L* curve on the finished 16-bit sRGB image, holding the mid-tones and the mean chroma. It takes the
-// tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were made on; the
-// conversion solves the curve after the fit (tone_plan), scales the highlight and range moves down where the curve
-// would clip the final image (tone_plan_for_image) and applies it (apply_tone_stage).
+// One monotone L* curve applied in the conversion kernel (color_pipeline.h apply_tone), holding the mid-tones. It
+// takes the tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were
+// made on; the conversion solves the curve after the fit (tone_plan), scales the highlight and range moves down where
+// the curve would clip the export (tone_plan_for_image, on a sample through the kernel) and converts the image once
+// with the curve's table (tone_table).
 //
-// sRGB (D65) <-> CIELAB in double precision, with the white point and matrices of the stage's design.
+// The preview's L* (sRGB D65, in double precision): the descriptors the curve is solved from. Only the small preview is
+// measured this way; no output pixel goes through Lab.
 static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-}
-static inline double tone_srgb_encode(double c) {
-    c = c < 0 ? 0 : (c > 1 ? 1 : c);
-    return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055;
 }
 static inline double tone_lab_f(double t) {
     return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
@@ -64,70 +62,11 @@ static inline double tone_lab_f(double t) {
 static inline double tone_lab_finv(double t) {
     return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
 }
-constexpr double kToneXn = 0.950456, kToneZn = 1.088754;
-// Linear sRGB (D65) <-> XYZ, row-major; ToneStageFast uses the same numbers in single precision.
-constexpr double kToneRgbToXyz[9] = {0.412453, 0.357580, 0.180423, 0.212671, 0.715160,
-                                     0.072169, 0.019334, 0.119193, 0.950227};
-constexpr double kToneXyzToRgb[9] = {3.240479, -1.537150, -0.498535, -0.969256, 1.875992,
-                                     0.041556, 0.055648,  -0.204043, 1.057311};
 
-// Linear r, g, b -> L*, a*, b*.
-static inline void tone_linear_to_lab(double r, double g, double b, double lab[3]) {
-    const double* m = kToneRgbToXyz;
-    const double X = m[0] * r + m[1] * g + m[2] * b;
-    const double Y = m[3] * r + m[4] * g + m[5] * b;
-    const double Z = m[6] * r + m[7] * g + m[8] * b;
-    const double fx = tone_lab_f(X / kToneXn), fy = tone_lab_f(Y), fz = tone_lab_f(Z / kToneZn);
-    lab[0] = 116.0 * fy - 16.0;
-    lab[1] = 500.0 * (fx - fy);
-    lab[2] = 200.0 * (fy - fz);
-}
-
-// sRGB-encoded r, g, b in 0..1 -> L*, a*, b*.
-static inline void tone_rgb_to_lab(double r, double g, double b, double lab[3]) {
-    tone_linear_to_lab(tone_srgb_decode(r), tone_srgb_decode(g), tone_srgb_decode(b), lab);
-}
-
-// L*, a*, b* -> linear r, g, b (unclipped).
-static inline void tone_lab_to_linear_rgb(const double lab[3], double lin[3]) {
-    const double fy = (lab[0] + 16.0) / 116.0, fx = fy + lab[1] / 500.0, fz = fy - lab[2] / 200.0;
-    const double X = tone_lab_finv(fx) * kToneXn, Y = tone_lab_finv(fy), Z = tone_lab_finv(fz) * kToneZn;
-    const double* m = kToneXyzToRgb;
-    lin[0] = m[0] * X + m[1] * Y + m[2] * Z;
-    lin[1] = m[3] * X + m[4] * Y + m[5] * Z;
-    lin[2] = m[6] * X + m[7] * Y + m[8] * Z;
-}
-
-// L*, a*, b* -> r, g, b in 0..1 (clipped).
-static inline void tone_lab_to_rgb(const double lab[3], double rgb[3]) {
-    double lin[3];
-    tone_lab_to_linear_rgb(lab, lin);
-    for (int c = 0; c < 3; ++c) rgb[c] = tone_srgb_encode(lin[c]);
-}
-
-// L*, a*, b* -> r, g, b in 0..1, the chroma scaled toward neutral at the same L* (hue kept) as far as needed to keep
-// every channel at or below the maximum: a colour the curve lifts past the sRGB gamut keeps its tone and hue instead
-// of having its brightest channels clipped. Below the maximum it is tone_lab_to_rgb.
-static inline void tone_lab_to_rgb_in_gamut(const double lab[3], double rgb[3]) {
-    static constexpr int kToneGamutSteps = 14;  // the bisection's steps: 2^-14 of the chroma
-    auto linear_max = [](const double l[3]) {
-        double lin[3];
-        tone_lab_to_linear_rgb(l, lin);
-        return std::max({lin[0], lin[1], lin[2]});
-    };
-    if (linear_max(lab) <= 1.0) {
-        tone_lab_to_rgb(lab, rgb);
-        return;
-    }
-    double lo = 0.0, hi = 1.0;
-    for (int it = 0; it < kToneGamutSteps; ++it) {
-        const double mid = 0.5 * (lo + hi);
-        const double l[3] = {lab[0], lab[1] * mid, lab[2] * mid};
-        if (linear_max(l) <= 1.0) lo = mid;
-        else hi = mid;
-    }
-    const double l[3] = {lab[0], lab[1] * lo, lab[2] * lo};
-    tone_lab_to_rgb(l, rgb);
+// sRGB-encoded r, g, b in 0..1 -> L* (the luminance row of linear sRGB D65 -> XYZ).
+static inline double tone_rgb_to_L(double r, double g, double b) {
+    const double Y = 0.212671 * tone_srgb_decode(r) + 0.715160 * tone_srgb_decode(g) + 0.072169 * tone_srgb_decode(b);
+    return 116.0 * tone_lab_f(Y) - 16.0;
 }
 
 // f(L) without the final clamp to 0..100.
@@ -139,10 +78,8 @@ static inline double tone_curve_L(double L, const ToneCurve& q) {
     return q.black + (q.white - q.black) * xc / (xc + yc);
 }
 
-// The kernel's table of the curve (color_pipeline.h ToneTable) on the display's linear luminance Y (white 1):
-// Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
-static constexpr int kToneTableSize = 8192;
-static std::vector<float> tone_table(const ToneCurve& q) {
+// The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
+std::vector<float> tone_table(const ToneCurve& q) {
     std::vector<float> lut(kToneTableSize + 1);
     for (int i = 0; i <= kToneTableSize; ++i) {
         const double t = (double)i / kToneTableSize;
@@ -153,29 +90,11 @@ static std::vector<float> tone_table(const ToneCurve& q) {
     return lut;
 }
 
-// One pixel's Lab through the curve and the chroma factor.
-static inline void tone_lab_apply(double lab[3], const ToneCurve& q) {
-    double L2 = tone_curve_L(lab[0], q);
-    lab[0] = L2 < 0 ? 0 : (L2 > 100 ? 100 : L2);
-    const double C = std::hypot(lab[1], lab[2]);
-    double t = (C - 3.0) / 5.0;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    const double k = 1.0 + (q.chroma - 1.0) * t * t * (3 - 2 * t);
-    lab[1] *= k;
-    lab[2] *= k;
-}
-
 ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     ToneDescriptors d;
     if (n == 0) return d;
     std::vector<double> L(n);
-    double c_sum = 0.0;
-    for (size_t i = 0; i < n; ++i) {
-        double lab[3];
-        tone_rgb_to_lab(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0, lab);
-        L[i] = lab[0];
-        c_sum += std::hypot(lab[1], lab[2]);
-    }
+    for (size_t i = 0; i < n; ++i) L[i] = tone_rgb_to_L(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0);
     std::sort(L.begin(), L.end());
     auto pct = [&](double p) {
         const double r = p / 100.0 * (double)(n - 1);
@@ -189,31 +108,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     d.L75 = pct(75);
     d.L90 = pct(90);
     d.L98 = pct(98);
-    d.Cmean = c_sum / (double)n;
     return d;
-}
-
-double tone_mean_chroma_after(const uint8_t* rgb, size_t n, const ToneCurve& q) {
-    if (n == 0) return 0.0;
-    constexpr int kChunks = 64;
-    double part[kChunks] = {};
-#pragma omp parallel for schedule(static)
-    for (int ch = 0; ch < kChunks; ++ch) {
-        const size_t i0 = n * ch / kChunks, i1 = n * (ch + 1) / kChunks;
-        double c_sum = 0.0;
-        for (size_t i = i0; i < i1; ++i) {
-            double lab[3], out[3];
-            tone_rgb_to_lab(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0, lab);
-            tone_lab_apply(lab, q);
-            tone_lab_to_rgb(lab, out);
-            tone_rgb_to_lab(out[0], out[1], out[2], lab);
-            c_sum += std::hypot(lab[1], lab[2]);
-        }
-        part[ch] = c_sum;
-    }
-    double c_sum = 0.0;
-    for (double v : part) c_sum += v;
-    return c_sum / (double)n;
 }
 
 // highlight_share scales the highlight and range moves (1: as designed; less where they would clip, see above).
@@ -229,7 +124,7 @@ static inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L
 
 // The curve (black, white, gamma, contrast) that brings cur to t: bounded least squares on the four target residuals
 // and the identity prior, by Levenberg-Marquardt with the bounds held by projection (a parameter at a bound that the
-// gradient pushes outward is held there). Returns the curve with chroma 1.
+// gradient pushes outward is held there). Returns the curve.
 static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
     auto curve_of = [](const double* q) {
         ToneCurve c;
@@ -344,162 +239,11 @@ static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets
 }
 
 ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                    const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets) {
+                    double highlight_share, ToneTargets* targets) {
     const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share);
-    ToneCurve c = tone_solve(render, t);
-    static constexpr int kToneChromaRefinements = 2;  // the chroma factor is refined this many times on the preview
-    double chroma = 1.0;
-    for (int it = 0; it < kToneChromaRefinements; ++it) {
-        c.chroma = chroma;
-        const double got = tone_mean_chroma_after(preview, n, c);
-        chroma = std::clamp(chroma * (render.Cmean / std::max(got, 1e-3)), kToneChromaLo, kToneChromaHi);
-    }
-    c.chroma = chroma;
     if (targets) *targets = t;
-    return c;
+    return tone_solve(render, t);
 }
-
-// The stage in single precision, for the full image: f(L) from a table on t = sqrt(L / 100) (kToneLutSize + 1
-// entries, linear interpolation; in t the curve is close to linear even where it is steep at the black end), the sRGB
-// decode from a table of every 16-bit code. Pixels at or beyond the gamut's edge (a few per cent at most) go through the
-// double-precision stage (tone_lab_apply, tone_lab_to_rgb_in_gamut), whose output this matches elsewhere to within 1
-// of 65535.
-class ToneStageFast {
-public:
-    static constexpr int kToneLutSize = 8192;
-    // kToneRgbToXyz and kToneXyzToRgb in single precision.
-    static constexpr float kM[9] = {(float)kToneRgbToXyz[0], (float)kToneRgbToXyz[1], (float)kToneRgbToXyz[2],
-                                    (float)kToneRgbToXyz[3], (float)kToneRgbToXyz[4], (float)kToneRgbToXyz[5],
-                                    (float)kToneRgbToXyz[6], (float)kToneRgbToXyz[7], (float)kToneRgbToXyz[8]};
-    static constexpr float kMinv[9] = {(float)kToneXyzToRgb[0], (float)kToneXyzToRgb[1], (float)kToneXyzToRgb[2],
-                                       (float)kToneXyzToRgb[3], (float)kToneXyzToRgb[4], (float)kToneXyzToRgb[5],
-                                       (float)kToneXyzToRgb[6], (float)kToneXyzToRgb[7], (float)kToneXyzToRgb[8]};
-    explicit ToneStageFast(const ToneCurve& q) : f_(kToneLutSize + 1) {
-        for (int i = 0; i <= kToneLutSize; ++i) {
-            const double t = (double)i / kToneLutSize;
-            const double L2 = tone_curve_L(100.0 * t * t, q);
-            f_[i] = (float)(L2 < 0 ? 0 : (L2 > 100 ? 100 : L2));
-        }
-        chroma_ = (float)q.chroma;
-        q_ = q;
-    }
-
-    // One 16-bit sRGB pixel through the stage.
-    void apply(const uint16_t in[3], uint16_t out[3]) const {
-        const float* dec = decode_table();
-        const float r = dec[in[0]], g = dec[in[1]], b = dec[in[2]];
-        const float* m = kM;
-        const float X = m[0] * r + m[1] * g + m[2] * b;
-        const float Y = m[3] * r + m[4] * g + m[5] * b;
-        const float Z = m[6] * r + m[7] * g + m[8] * b;
-        const float fx = lab_f(X / (float)kToneXn), fy = lab_f(Y), fz = lab_f(Z / (float)kToneZn);
-        const float L = 116.0f * fy - 16.0f;
-        float A = 500.0f * (fx - fy), B = 200.0f * (fy - fz);
-        float t = std::sqrt(std::min(std::max(L, 0.0f), 100.0f) / 100.0f) * (float)kToneLutSize;
-        const int i = std::min((int)t, kToneLutSize - 1);
-        t -= (float)i;
-        const float L2 = f_[i] + t * (f_[i + 1] - f_[i]);
-        float u = (std::sqrt(A * A + B * B) - 3.0f) / 5.0f;
-        u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
-        const float k = 1.0f + (chroma_ - 1.0f) * u * u * (3.0f - 2.0f * u);
-        A *= k;
-        B *= k;
-        float lin[3];
-        to_linear(L2, A, B, lin);
-        if (std::max({lin[0], lin[1], lin[2]}) > kGamutMargin || std::min({lin[0], lin[1], lin[2]}) < kBlackMargin) {
-            // At or beyond the gamut's edges, where the chroma scale's bisection (top) or the clip to 0 (bottom)
-            // decides by comparisons the rounding of single precision would move: the pixel in double precision, as
-            // tone_lab_apply and tone_lab_to_rgb_in_gamut do it.
-            double lab[3], o[3];
-            const double* dd = decode_table_double();
-            tone_linear_to_lab(dd[in[0]], dd[in[1]], dd[in[2]], lab);
-            tone_lab_apply(lab, q_);
-            tone_lab_to_rgb_in_gamut(lab, o);
-            for (int c = 0; c < 3; ++c) out[c] = (uint16_t)std::lround(o[c] * 65535.0);
-            return;
-        }
-        for (int c = 0; c < 3; ++c) out[c] = (uint16_t)std::lround(encode(lin[c]) * 65535.0f);
-    }
-
-private:
-    static const float* decode_table() {
-        static const std::vector<float> d = [] {
-            std::vector<float> t(65536);
-            for (int v = 0; v < 65536; ++v) t[v] = (float)tone_srgb_decode(v / 65535.0);
-            return t;
-        }();
-        return d.data();
-    }
-    // A table on sqrt(x), linearly interpolated: in sqrt(x) both the sRGB encode and the cube root are close to linear
-    // (the steep start of each is its linear segment, computed directly).
-    struct SqrtTable {
-        std::vector<float> v;
-        float top = 1.0f;
-        float at(float x) const {
-            float t = std::sqrt(std::min(std::max(x, 0.0f), top) / top) * (float)(v.size() - 1);
-            const int i = std::min((int)t, (int)v.size() - 2);
-            t -= (float)i;
-            return v[i] + t * (v[i + 1] - v[i]);
-        }
-    };
-    static const SqrtTable& encode_table() {
-        static const SqrtTable e = [] {
-            SqrtTable t;
-            t.v.resize(4097);
-            for (size_t i = 0; i < t.v.size(); ++i) {
-                const double s = (double)i / (t.v.size() - 1);
-                t.v[i] = (float)tone_srgb_encode(s * s);
-            }
-            return t;
-        }();
-        return e;
-    }
-    static const SqrtTable& cbrt_table() {
-        static const SqrtTable c = [] {
-            SqrtTable t;
-            t.top = 1.25f;
-            t.v.resize(8193);
-            for (size_t i = 0; i < t.v.size(); ++i) {
-                const double s = (double)i / (t.v.size() - 1);
-                t.v[i] = (float)std::cbrt(s * s * 1.25);
-            }
-            return t;
-        }();
-        return c;
-    }
-    static float encode(float v) {
-        v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-        return v <= 0.0031308f ? 12.92f * v : encode_table().at(v);
-    }
-    static float lab_f(float t) {
-        if (t <= 216.0f / 24389.0f) return (24389.0f / 27.0f * t + 16.0f) / 116.0f;
-        return t < 1.25f ? cbrt_table().at(t) : std::cbrt(t);
-    }
-    static float lab_finv(float t) {
-        return t * t * t > 216.0f / 24389.0f ? t * t * t : (116.0f * t - 16.0f) / (24389.0f / 27.0f);
-    }
-    static void to_linear(float L, float A, float B, float lin[3]) {
-        const float fy = (L + 16.0f) / 116.0f, fx = fy + A / 500.0f, fz = fy - B / 200.0f;
-        const float X = lab_finv(fx) * (float)kToneXn, Y = lab_finv(fy), Z = lab_finv(fz) * (float)kToneZn;
-        const float* m = kMinv;
-        lin[0] = m[0] * X + m[1] * Y + m[2] * Z;
-        lin[1] = m[3] * X + m[4] * Y + m[5] * Z;
-        lin[2] = m[6] * X + m[7] * Y + m[8] * Z;
-    }
-    static const double* decode_table_double() {
-        static const std::vector<double> d = [] {
-            std::vector<double> t(65536);
-            for (int v = 0; v < 65536; ++v) t[v] = tone_srgb_decode(v / 65535.0);
-            return t;
-        }();
-        return d.data();
-    }
-    static constexpr float kGamutMargin = 0.999f;  // linear: within 0.1 % of the maximum goes the double way,
-    static constexpr float kBlackMargin = 1e-4f;   // and so does a channel this near 0 or below it
-    std::vector<float> f_;
-    float chroma_ = 1.0f;
-    ToneCurve q_;
-};
 
 // The share of the conversion's pixels clipped white (a channel at the maximum) and black (every channel 0) on a sparse
 // sample of the unconverted image (every kToneClipSampleStep-th pixel each way), converted through the kernel as the
@@ -531,7 +275,7 @@ static void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matr
 }
 
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const uint8_t* preview, size_t n, const negicc::PipelineConfig& pc, const float* matrix,
+                              const negicc::PipelineConfig& pc, const float* matrix,
                               const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share) {
@@ -548,7 +292,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
     // need no monotone clipping (a bisection does) and cost at most four more curves.
     for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
         ToneTargets t;
-        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, preview, n, kToneClipShares[k], &t);
+        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[k], &t);
         if (ok(c)) {
             *share = kToneClipShares[k];
             *targets = t;
@@ -556,29 +300,6 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
         }
     }
     return c1;
-}
-
-ToneClip apply_tone_stage(uint16_t* rgb, size_t n, int stride, const ToneCurve& q) {
-    const ToneStageFast fast(q);
-    long long wb = 0, wa = 0, kb = 0, ka = 0;
-#pragma omp parallel for schedule(static) reduction(+ : wb, wa, kb, ka)
-    for (long long i = 0; i < (long long)n; ++i) {
-        uint16_t* px = rgb + (size_t)i * stride;
-        wb += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
-        kb += (px[0] == 0 && px[1] == 0 && px[2] == 0);
-        const uint16_t in[3] = {px[0], px[1], px[2]};
-        fast.apply(in, px);
-        wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
-        ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
-    }
-    ToneClip c;
-    if (n) {
-        c.white_before = (double)wb / (double)n;
-        c.white_after = (double)wa / (double)n;
-        c.black_before = (double)kb / (double)n;
-        c.black_after = (double)ka / (double)n;
-    }
-    return c;
 }
 
 void LibRawDeleter::operator()(LibRaw* p) const {
@@ -1085,10 +806,10 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     }
     if (j.contains("tone_stage") && j["tone_stage"].is_object() && j["tone_stage"].value("applied", false)) {
       const auto& cv = j["tone_stage"].value("curve", nlohmann::ordered_json());
-      double q[5];
-      const char* keys[5] = {"black", "white", "gamma", "contrast", "chroma"};
+      double q[4];
+      const char* keys[4] = {"black", "white", "gamma", "contrast"};
       bool ok = cv.is_object();
-      for (int i = 0; ok && i < 5; ++i) {
+      for (int i = 0; ok && i < 4; ++i) {
         ok = cv.contains(keys[i]) && cv[keys[i]].is_number();
         if (ok) q[i] = cv[keys[i]].get<double>();
       }
@@ -1098,7 +819,6 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       tc.white = q[1];
       tc.gamma = q[2];
       tc.contrast = q[3];
-      tc.chroma = q[4];
       s.cached_sidecar.has_tone = true;
     }
     return true;
@@ -1491,7 +1211,7 @@ int prepare(const Options& o, Setup& s) {
     }
     if (o.tone_replay_given) {
       const double* q = o.tone_replay;
-      s.tone_curve = {q[0], q[1], q[2], q[3], q[4]};
+      s.tone_curve = {q[0], q[1], q[2], q[3]};
       s.has_tone = true;
     }
   }
@@ -1967,23 +1687,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
             return false;
           }
           // The tone stage's plan from the fit's: the descriptors of the final render's preview, the curve between
-          // them and the heads' predictions, and the chroma factor that keeps the mean chroma.
+          // them and the heads' predictions.
           s.tone_plan = TonePlanCurve{};
           if (ToneStagePlan& tp = s.curve_fit.tone; !tp.skipped && !tp.preview.empty()) {
             const size_t npx = tp.preview.size() / 3;
             s.tone_plan.render = tone_descriptors(tp.preview.data(), npx);
             s.tone_plan.curve = tone_plan(s.tone_plan.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
-                                          tp.pred_mean[ToneHead::kR9010], tp.preview.data(), npx, 1.0,
-                                          &s.tone_plan.targets);
-            s.tone_plan.chroma_after = tone_mean_chroma_after(tp.preview.data(), npx, s.tone_plan.curve);
+                                          tp.pred_mean[ToneHead::kR9010], 1.0, &s.tone_plan.targets);
             tp.planned = true;
             if (fit_search_opts.verbose) {
               const TonePlanCurve& t = s.tone_plan;
               log_info("Tone: L2 %.1f -> %.1f, L98 %.1f -> %.1f, L90-L10 %.1f -> %.1f; curve black %.2f white %.2f "
-                       "gamma %.3f contrast %.3f chroma x%.4f\n",
+                       "gamma %.3f contrast %.3f\n",
                        (float)t.render.L2, (float)t.targets.L2, (float)t.render.L98, (float)t.targets.L98,
                        (float)t.render.range(), (float)t.targets.range, (float)t.curve.black, (float)t.curve.white,
-                       (float)t.curve.gamma, (float)t.curve.contrast, (float)t.curve.chroma);
+                       (float)t.curve.gamma, (float)t.curve.contrast);
             }
           }
           if (!s.curve_fit.neutral_anchors) {
@@ -2859,7 +2577,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
       // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
       scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
                                             plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
-                                            plan.preview.data(), plan.preview.size() / 3, export_pc, c.merged_matrix,
+                                            export_pc, c.merged_matrix,
                                             rgb, iw, ih, stride, scan.tone_clip.white_before, s.tone_plan.curve,
                                             s.tone_plan.targets, &scan.tone_targets, &scan.tone_share);
     }

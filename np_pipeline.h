@@ -57,11 +57,12 @@
 
 // ---- The white-light tone stage (np_pipeline.cc) ----
 // The white-light tone stage: one monotone lightness curve on CIE L* (D65), set per frame from the tone heads
-// (ToneHead, intent_head.h), applied to the final 16-bit sRGB image. Colour is not re-balanced: a* and b* are only
-// scaled, by a factor chosen so the frame's mean chroma stays what it was before the curve.
+// (ToneHead, intent_head.h), applied in the conversion kernel to each pixel's display linear sRGB value
+// (color_pipeline.h apply_tone): its luminance Y goes to Y' = Y(f(L*(Y))) on the white point's neutral, and its colour
+// difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
+// not re-balanced, and no pixel is converted to Lab.
 //
 //   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,  h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
-//   a*, b* scaled by 1 + (chroma - 1) * smoothstep(3, 8, C*): near-neutral colours keep their balance, hue is kept.
 //
 // The four curve numbers are solved so the render's own descriptors move toward the heads' predictions: since f is
 // monotone, the toned render's percentiles are f of the render's, so L2' = f(L2), L50' = f(L50), L98' = f(L98) and
@@ -87,24 +88,20 @@ constexpr double kTonePrior = 0.02;
 // from several white points and keeps the lowest cost, so it does not depend on which basin a single start falls into.
 constexpr double kToneTopSlope = 0.07;
 constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
-// White clipping, at its two sources. A colour the curve lifts out of the sRGB gamut has its chroma scaled toward
-// neutral at its L* (tone_lab_to_rgb_in_gamut) instead of its brightest channels clipped. Where the curve lifts L*
-// itself to white on more than kToneClipAllowance more of the final image's pixels than the image had clipped, the
-// highlight and range moves are scaled down to the largest of kToneClipShares that keeps it within the allowance,
-// measured on every kToneClipSampleStep-th pixel each way of the final image. When none does, the clipping does not
-// come from that move, and the moves stay as designed.
+// White clipping: where the curve would clip more than kToneClipAllowance more of the export's pixels white than the
+// conversion without it, the highlight and range moves are scaled down to the largest of kToneClipShares that keeps
+// it within the allowance, measured on every 8th pixel each way of the unconverted image through the kernel. When none
+// does, the clipping does not come from that move, and the moves stay as designed.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
-// The chroma factor that keeps the mean chroma stays within these bounds.
-constexpr double kToneChromaLo = 0.5, kToneChromaHi = 1.6;
 
 struct ToneCurve {
-    double black = 0.0, white = 100.0, gamma = 1.0, contrast = 1.0, chroma = 1.0;
+    double black = 0.0, white = 100.0, gamma = 1.0, contrast = 1.0;
 };
 
-// The render's descriptors the curve is solved from: pixel L* percentiles and the mean chroma C*ab.
+// The render's descriptors the curve is solved from: pixel L* percentiles.
 struct ToneDescriptors {
-    double L2 = 0, L10 = 0, L25 = 0, L50 = 0, L75 = 0, L90 = 0, L98 = 0, Cmean = 0;
+    double L2 = 0, L10 = 0, L25 = 0, L50 = 0, L75 = 0, L90 = 0, L98 = 0;
     double range() const { return L90 - L10; }
 };
 
@@ -113,8 +110,8 @@ struct ToneTargets {
     double L2 = 0, L50 = 0, L98 = 0, range = 0;
 };
 
-// What applying the stage to the full image did: the share of pixels clipped white (a channel at the maximum) and
-// black (every channel 0), before and after.
+// The share of the export's pixels clipped white (a channel at the maximum) and black (every channel 0): before the
+// stage on the clip check's sample of the conversion without the curve, after it on the whole export.
 struct ToneClip {
     double white_before = 0, white_after = 0, black_before = 0, black_after = 0;
 };
@@ -122,14 +119,13 @@ struct ToneClip {
 // The descriptors of an 8-bit RGB image (n pixels, 3 bytes each); percentiles interpolate linearly between ranks.
 ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n);
 
-// The mean chroma of an 8-bit RGB image after the stage (toned in floating point, not re-quantised).
-// (Summed in a fixed number of chunks, in parallel, then in order: the same result whatever the thread count.)
-double tone_mean_chroma_after(const uint8_t* rgb, size_t n, const ToneCurve& q);
-
-// The plan at a highlight share: the targets, the curve solved for them, and the chroma factor that keeps the
-// preview's (8-bit RGB, n pixels) mean chroma at the render's.
+// The plan at a highlight share: the targets and the curve solved for them.
 ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                    const uint8_t* preview, size_t n, double highlight_share, ToneTargets* targets);
+                    double highlight_share, ToneTargets* targets);
+
+// The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
+constexpr int kToneTableSize = 8192;
+std::vector<float> tone_table(const ToneCurve& q);
 
 // The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
 // pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1), or, where the
@@ -137,21 +133,17 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 // share of the highlight and range moves that does not. The clipping is measured on a sparse sample of img converted
 // through the kernel with each curve. share gets the share kept.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const uint8_t* preview, size_t n, const negicc::PipelineConfig& pc, const float* matrix,
+                              const negicc::PipelineConfig& pc, const float* matrix,
                               const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share);
 
-// rgb: interleaved 16-bit sRGB with `stride` uint16 per pixel (3 or 4), n pixels.
-ToneClip apply_tone_stage(uint16_t* rgb, size_t n, int stride, const ToneCurve& q);
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
-// predictions and the final render's preview): the preview's descriptors, the targets, the curve between them and the
-// chroma factor that keeps the mean chroma.
+// predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.
 struct TonePlanCurve {
   ToneDescriptors render;         // the final render's preview before the stage
   ToneTargets targets;            // the descriptors the curve aims at
-  ToneCurve curve;                // the curve and the chroma factor
-  double chroma_after = 0.0;      // the preview's mean chroma with the curve and that factor (aim: render.Cmean)
+  ToneCurve curve;                // the curve
 };
 
 // Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.

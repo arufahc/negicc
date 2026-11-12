@@ -305,12 +305,12 @@ int parse_options(int ac, char* av[], Options& o) {
           "error toward magenta, is composed into the bracket's tables. Trims that would make the picture greener "
           "than Auto are not candidates. The sidecar records the tint trim under \"offset\".");
   parser.add_argument("--tone_stage")
-    .help("Replays a recorded tone curve: curve:black,white,gamma,contrast,chroma (a sidecar's cli_equivalent), with "
+    .help("Replays a recorded tone curve: curve:black,white,gamma,contrast (a sidecar's cli_equivalent), with "
           "--target, -E, --gain_g and --gain_b. The tone stage itself runs wherever the curve fit runs, with -P "
-          "srgb: tone heads on DINOv3 features the fit already computed predict the frame's shadow level, highlight "
-          "level and tonal range as a lab scan would have them, and one monotone L* curve moves the final sRGB image "
-          "all the way to the predicted shadow level and half way to the highlight level and range, holding the "
-          "mid-tones and the mean chroma.");
+          "srgb: tone heads on DINOv3 features of the final render's preview predict the frame's shadow level, "
+          "highlight level and tonal range as a lab scan would have them, and one monotone L* curve, applied in the "
+          "conversion itself, moves the image all the way to the predicted shadow level and half way to the "
+          "highlight level and range, holding the mid-tones and each colour's a* and b*.");
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -553,7 +553,7 @@ int parse_options(int ac, char* av[], Options& o) {
     return false;
   };
   if (!replay("--tint_trim", "theta:", 10, o.tint_trim_replay_given, o.tint_trim_replay) ||
-      !replay("--tone_stage", "curve:", 5, o.tone_replay_given, o.tone_replay))
+      !replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay))
     return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");

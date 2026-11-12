@@ -139,7 +139,7 @@ static void put_tint_trim_tables(ordered_json& j, const TintTrimTables& t) {
 // A tone curve in full (17 digits): the curve the image went through, exactly.
 static ordered_json tone_curve_json(const ToneCurve& q) {
   return {{"black", num(q.black, "%.17g")}, {"white", num(q.white, "%.17g")}, {"gamma", num(q.gamma, "%.17g")},
-          {"contrast", num(q.contrast, "%.17g")}, {"chroma", num(q.chroma, "%.17g")}};
+          {"contrast", num(q.contrast, "%.17g")}};
 }
 
 static ordered_json rect_json(const FilmRect& r) {
@@ -645,7 +645,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (sc.tone_curve && sc.tone_applied) {
     const ToneCurve& q = *sc.tone_curve;
     std::string v = "curve:";
-    for (double x : {q.black, q.white, q.gamma, q.contrast, q.chroma})
+    for (double x : {q.black, q.white, q.gamma, q.contrast})
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     cli.insert(cli.end(), {"--tone_stage", v});
   }
@@ -726,7 +726,7 @@ bool write_json_sidecar(const Sidecar& sc) {
                {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
 
   // The white-light tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
-  // curve and chroma factor, and the clipping before and after on the full image.
+  // curve, and the clipping before (the clip check's sample) and after (the whole export).
   auto clip_json = [&]() {
     if (!sc.tone_applied || !sc.tone_clip) return ordered_json(nullptr);
     const ToneClip& k = *sc.tone_clip;
@@ -746,7 +746,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       auto desc = [&](const ToneDescriptors& d) {
         return ordered_json{{"L2", n9((float)d.L2)},   {"L10", n9((float)d.L10)}, {"L25", n9((float)d.L25)},
                             {"L50", n9((float)d.L50)}, {"L75", n9((float)d.L75)}, {"L90", n9((float)d.L90)},
-                            {"L98", n9((float)d.L98)}, {"R9010", n9((float)d.range())}, {"Cmean", n9((float)d.Cmean)}};
+                            {"L98", n9((float)d.L98)}, {"R9010", n9((float)d.range())}};
       };
       // As applied (capped on the final image), else as planned.
       const ToneTargets& tt = sc.tone_targets ? *sc.tone_targets : pl.targets;
@@ -765,7 +765,6 @@ bool write_json_sidecar(const Sidecar& sc) {
                      {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)}}},
           // In full (17 digits): the curve the image went through, exactly.
           {"curve", tone_curve_json(tc)},
-          {"chroma_after", n9((float)pl.chroma_after)},
           {"clip", clip_json()}};
     } else {
       j["tone_stage"] = {{"applied", false}, {"skipped", tp.skipped ? tp.skipped : ""}};
