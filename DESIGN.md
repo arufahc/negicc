@@ -109,8 +109,8 @@ tolerance plus the slack below and no shadow exemption.
 | Guard slack | 0.1 a\* | Policy | Extra tolerance of the guard inside this stage. | 0 |
 | Density change bounds | offset ±0.3 D, contrast ±0.6 | Safety limit | The limits on the green and blue density offset and contrast change one offset may ask for. | — |
 
-Seven policy knobs, one safety limit. The read-out, the candidate count and the guard slack are small uniform effects
-and are candidates for removal; the cap evidence is close to a plain literal. With the evidence hand-over in place,
+Seven policy knobs, one safety limit. The read-out, the candidate count and the guard slack are small uniform effects,
+to be revisited after the merge; the cap evidence is close to a plain literal. With the evidence hand-over in place,
 removing the read-out and the candidate count together moves 22 of the 140 frames by a mean ΔE above 0.5, and 6
 above 1 (at most 1.8).
 
@@ -182,8 +182,8 @@ for them. Their ablation is not complete.
   arrive through the web portal as they accumulate (their evidence distribution, and the corrections of the scans
   with little evidence at 6, 12, 24 and 48).
 - **The slope span (6 L\*)** and **the guard's penalty weight (4)** have a stated purpose but no derived value.
-- **The tint trim's read-out, candidate count and guard slack** make small uniform changes. A uniform offset can be set
-  after conversion, so they add code without fixing anything only the conversion can fix.
+- **The tint trim's small uniform effects** (its read-out, candidate count and guard slack, and the stage itself) are
+  to be revisited after the merge.
 - **The tone moves (1.0, 0.5, 0.5)** come from blind comparison.
 - **The shadow end.** The neutral head finds few neutral surfaces in deep shadows, so the fit has little to anchor
   them, and a dark neutral object can end a few a\* off while brighter neutrals are right.
