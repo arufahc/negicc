@@ -620,8 +620,7 @@ class JointCurveModel {
 // cells, the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
 // Shadows carry no debit (green_guard_cell_a): in both means, a cell Auto renders in the deep shadows that ends greener
 // than at Auto counts at Auto's a*, so the fit may correct a shadow cast toward green; a shadow cell that ends more
-// magenta keeps its credit, and mid-tones and highlights count as they are. The tint trim's guard check is not
-// affected.
+// magenta keeps its credit, and mid-tones and highlights count as they are.
 constexpr float kGreenGuardTolAb = 0.5f;
 // The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
 // 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
@@ -644,8 +643,7 @@ constexpr double kGreenGuardMinMass = 2.0;
 // The never-greener guard on one pass of the joint fit: its cells (Auto's render at L* 2..92), their p^2, Auto's a*
 // and L* per cell, Auto's two means (ref) and which of them count. set_cells() takes the cells from Auto's render once
 // Auto's E is solved; means() gives a candidate's two means; hinge() a mean's excess as the residual the guarded pass
-// adds; binds() whether a result breaks the bound. (The tint trim's guard check differs in its tolerance, its L* edge,
-// the shadow exemption and how it compares the means, so it keeps its own.)
+// adds; binds() whether a result breaks the bound.
 struct JointFitGuard {
   std::vector<char> in;
   std::vector<double> pw, auto_a, auto_L;  // p^2; Auto's a* (a cell a candidate renders non-finite counts at it) and L*

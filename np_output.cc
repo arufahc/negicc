@@ -125,17 +125,6 @@ static std::string num_str(double val, const char* fmt) {
   return buf;
 }
 
-// The tint trim's tables in the sidecar, added to j: theta and the pivots in full (17 digits), so the export's
-// tables can be rebuilt from them exactly.
-static void put_tint_trim_tables(ordered_json& j, const TintTrimTables& t) {
-  auto n17 = [](double v) { return num(v, "%.17g"); };
-  auto n9 = [](double v) { return num(v, "%.9g"); };
-  j["theta"] = {n17(t.theta[0]), n17(t.theta[1]), n17(t.theta[2]), n17(t.theta[3])};
-  j["piv"] = {n17(t.piv[0]), n17(t.piv[1]), n17(t.piv[2])};
-  j["diag"] = {n9(t.diag[0]), n9(t.diag[1]), n9(t.diag[2])};
-  j["film_base"] = {n9(t.film_base[0]), n9(t.film_base[1]), n9(t.film_base[2])};
-}
-
 // A tone curve in full (17 digits): the curve the image went through, exactly.
 static ordered_json tone_curve_json(const ToneCurve& q) {
   return {{"black", num(q.black, "%.17g")}, {"white", num(q.white, "%.17g")}, {"gamma", num(q.gamma, "%.17g")},
@@ -441,27 +430,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                      }()},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
-    // Step 4, the tint trim (remeter's e and x_hi are after it).
-    const TintTrimResult& os = f->tint_trim;
-    ordered_json cands = ordered_json::array();
-    for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
-    // s in full (17 digits), with the tables, so the export's tables can be rebuilt from them exactly.
-    if (os.ran) {
-      ordered_json o = {{"applied", true}, {"s", num(os.s, "%.17g")}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
-                        {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
-                                                                   {"conf", n9(os.trim_conf)}}
-                                                    : ordered_json(nullptr)}};
-      put_tint_trim_tables(o, os.tables);
-      o["lattice"] = os.lattice;
-      o["lattice_kept"] = os.lattice_kept;
-      o["residual_pivot"] = n9(os.residual_pivot);
-      o["candidates"] = cands;  // [s, residual predicted from the pivot's field, residual on its own field]
-      o["inferences"] = os.inferences;
-      o["time_ms"] = num(os.time_ms, "%.1f");
-      j["offset"] = o;
-    } else {
-      j["offset"] = {{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
-    }
   } else {
     j["bound"] = nullptr;
     j["options"] = nullptr;
@@ -470,14 +438,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["max_dev_stops"] = nullptr;
     j["render"] = nullptr;
     j["remeter"] = nullptr;
-    // A replayed tint trim (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
-    if (const TintTrimTables* ot = sc.tint_trim_tables) {
-      ordered_json o = {{"applied", true}, {"source", "replay"}};
-      put_tint_trim_tables(o, *ot);
-      j["offset"] = o;
-    } else {
-      j["offset"] = nullptr;
-    }
   }
   return j;
 }
@@ -637,15 +597,6 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
     cli.push_back(v8);
   }
-  // The tint trim's tables and the tone curve, replayed as recorded (G and B numbers of TintTrimTables;
-  // theta and piv in full).
-  if (const TintTrimTables* ot = sc.tint_trim_tables) {
-    std::string v = "theta:";
-    for (double x : {ot->theta[0], ot->theta[1], ot->theta[2], ot->theta[3], ot->piv[1], ot->piv[2]})
-      v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
-    for (float x : {ot->diag[1], ot->diag[2], ot->film_base[1], ot->film_base[2]}) v += "," + num_str(x, "%.9g");
-    cli.insert(cli.end(), {"--tint_trim", v});
-  }
   if (sc.tone_curve && sc.tone_applied) {
     const ToneCurve& q = *sc.tone_curve;
     std::string v = "curve:";
@@ -787,9 +738,6 @@ bool write_json_sidecar(const Sidecar& sc) {
   // What a replay rendered from recorded values (null when nothing was replayed).
   if (!sc.replay_source.empty()) {
     j["replay"] = {{"source", sc.replay_source},
-                   {"offset", !sc.replay_tint_trim_given ? ordered_json(nullptr)
-                              : sc.replay_tint_trim_other_bracket ? ordered_json("not applied: another bracket")
-                                                               : ordered_json("applied")},
                    {"tone_curve", sc.tone_curve ? ordered_json(sc.tone_applied ? "applied" : "not applied")
                                                 : ordered_json(nullptr)}};
   } else {

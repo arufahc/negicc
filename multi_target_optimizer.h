@@ -317,55 +317,14 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// What the tint trim's tables are made from: the density change theta = (d_G, d_B, k_G, k_B) and, per
-// channel, the frame's median cell density above the film base (piv) and the two factors that place the film base on
-// the input table (v_base = gain x diag x film_base / 65535, gain the channel's E, E g or E b). A value's density
-// above the film base, D = -log10(v / v_base), does not depend on the gains, so the same numbers rebuild the export's
-// tables at the E, g and b a replay or the knobs render at. R is the reference and is not changed.
-struct TintTrimTables {
-  double theta[4] = {0, 0, 0, 0};
-  double piv[3] = {0, 0, 0};
-  float diag[3] = {0, 0, 0};       // the diagonal of the search's input matrix (merged[0], merged[4], merged[8])
-  float film_base[3] = {0, 0, 0};  // the film base the curves are anchored on (CurveFrame::film_base)
-};
-
-// The bracket's input tables composed in one place (Stage 4): prof's tables become base's, with curves composed into G
-// and B when given, then the tint trim's density change (when given) composed in front at at = (E, g, b). Used by the
-// fit after the trim, by a replayed trim, and by the knobs, which compose the tables again at the E, g and b they move
-// to. prof may be base (curves and trim then compose on its current tables).
-void compose_bracket_tables(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves* curves,
-                            const TintTrimTables* trim, const float at[3]);
-
-// The tint trim the white-light fit's result takes from the network (run_white_light_fit, step
-// 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
-struct TintTrimResult {
-  bool ran = false;               // the trim ran and was applied (s may be 0)
-  const char* skipped = nullptr;  // why it did not run: "grid" (the network's grid is not the frame's) or "infer"
-                                  // (inference failed)
-  double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
-  double se = 0.0;      // the bootstrap standard error of the residual's minimum
-  double s = 0.0;       // the trim applied: s_min + se (one standard error toward magenta)
-  bool trim_capped = false;  // the trim cap shortened s from s_uncapped (anchors' confidence trim_conf)
-  double s_uncapped = 0.0;
-  double trim_conf = 0.0;
-  TintTrimTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
-  int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
-  float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field
-  // The rendered candidates: s, the residual predicted from the pivot's field, the residual against their own field.
-  std::vector<std::array<float, 3>> candidates;
-  int inferences = 0;   // DINOv3 inferences the scan ran (the pivot and the candidates other than s = 0)
-  double time_ms = 0.0;
-};
-
-// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (intent_head.h, on features an
-// inference of the fit already produced) and the final render's preview; the conversion solves the curve between the
+// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (intent_head.h, on the features of
+// one inference on the final render's preview) and that preview; the conversion solves the curve between the
 // preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {
   bool planned = false;           // a curve was solved (by the conversion) and the conversion applies it
   const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
-  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate, the tint trim's) or "final" (the final
-  // state's preview, one inference, when the scan did not run); "search" (the intent preview) only if that inference
-  // failed.
+  // Whose DINOv3 features the heads read: "final" (the final state's preview, one inference); "search" (the intent
+  // preview) only if that inference failed.
   const char* features = "search";
   double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
   // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the
@@ -426,8 +385,7 @@ struct WhiteLightFitResult {
   // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
   // the search's final parameters, intent_repredicted).
   const char* guard_p_source = "search";
-  // Step 4, the tint trim, and the tone stage's plan.
-  TintTrimResult tint_trim;
+  // The tone stage's plan.
   ToneStagePlan tone;
   double time_ms = 0.0;
 };
@@ -449,12 +407,8 @@ struct WhiteLightFitResult {
 //      (WhiteLightFitResult::fallback). Steps 1 and 2 repeat (up to three fits) while the re-metered roll-off differs
 //      from the one the fit ran with;
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
-//      (compose_bracket_tables on bundle.targets[res.target_idx]);
-//   4. the tint trim (TintTrim): a lattice of "pure a*" offsets of the fitted state, scored by the network's a*
-//      residual, the best candidates rendered and scored on their own fields, the pick moved one bootstrap standard
-//      error toward magenta and capped on the neutrals, composed into the same tables (E re-solved and the roll-off
-//      measured again);
-//   5. record: the export's parameters, losses and neutral statistics, and with tone_head the tone stage's plan
+//      (apply_input_curves on bundle.targets[res.target_idx]);
+//   4. record: the export's parameters, losses and neutral statistics, and with tone_head the tone stage's plan
 //      (ToneStagePlan: the heads' predictions and the final render's preview) for the conversion to solve and apply
 //      to the final image.
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or

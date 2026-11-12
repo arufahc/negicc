@@ -114,13 +114,10 @@ struct Sidecar {
   std::string head_path[3];
   FileFingerprint head_fp[3];
   std::string cached_heads_json_str;
-  // The tint trim and the tone curve the conversion rendered with (curve_fit's, or replayed; null: none),
-  // whether the tone curve was applied to the final image, and the clipping it measured.
-  const TintTrimTables* tint_trim_tables = nullptr;
-  // A replay ("knobs" or "cli", else empty), and what happened to a recorded tint trim: given, and left out because the
-  // conversion rendered another bracket.
+  // The tone curve the conversion rendered with (curve_fit's, or replayed; null: none), whether it was applied to the
+  // final image, and the clipping it measured.
+  // A replay ("knobs" or "cli", else empty).
   std::string replay_source;
-  bool replay_tint_trim_given = false, replay_tint_trim_other_bracket = false;
   const ToneCurve* tone_curve = nullptr;
   const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
   const TonePlanCurve* tone_plan = nullptr;   // with curve_fit: the tone stage's plan the conversion solved from it

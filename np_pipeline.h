@@ -166,9 +166,7 @@ struct CachedSidecar {
   std::string input_curves_json_str;
   std::string intent_field_json_str;
   std::string heads_json_str;
-  // Its tint trim (input_curves.offset) and tone curve (tone_stage.curve), when it applied them.
-  bool has_tint_trim = false;
-  TintTrimTables tint_trim;
+  // Its tone curve (tone_stage.curve), when it applied one.
   bool has_tone = false;
   ToneCurve tone_curve;
 };
@@ -203,20 +201,10 @@ struct Setup {
   std::string head_path[3];
   FileFingerprint head_fp[3];
   ToneHead tone_head;                    // the white-light tone heads (where the fit runs)
-  // The tint trim and the tone curve the conversion renders with: this run's curve fit's, a previous run's (the knobs
-  // on its sidecar) or given (--tint_trim theta:..., --tone_stage curve:...). Neither is searched or predicted again on
-  // a replay. The trim belongs to bracket tint_trim_target_idx; tint_trim_base_prof is that bracket's profile without
-  // it (curves composed, when there are curves), and tint_trim_composed says its tables carry it.
-  bool has_tint_trim = false;
-  TintTrimTables tint_trim;
-  int tint_trim_target_idx = -1;
-  bool tint_trim_composed = false;
-  ParsedFilmProfile tint_trim_base_prof;
-  // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise. And
-  // whether a recorded tint trim was left out because the conversion renders another bracket than the one it was made
-  // on.
+  // The tone curve the conversion renders with: this run's tone stage's, a previous run's (the knobs on its sidecar) or
+  // given (--tone_stage curve:...); not predicted again on a replay.
+  // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise.
   std::string replay_source;
-  bool tint_trim_other_bracket = false;
   bool has_tone = false;
   ToneCurve tone_curve;
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
