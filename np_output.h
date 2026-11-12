@@ -26,7 +26,7 @@
 #include "film_frame_detector.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
-#include "np_conversion.h"
+#include "np_profile.h"
 #include "profile_bundle.h"
 
 // Writes proc's image (or rgb3, 3 samples a pixel, in its place) as a 16-bit TIFF to output with the ICC profile

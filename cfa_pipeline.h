@@ -22,7 +22,6 @@
 #include "color_pipeline.h"
 #include "film_frame_detector.h"
 #include "flat_field.h"
-#include "flat_sample.h"
 
 namespace negicc {
 

@@ -37,8 +37,6 @@
 #include "color_pipeline.h"
 #include "embedded_data.h"
 #include "nlohmann/json.hpp"
-#include "np_conversion.h"
-#include "np_geometry.h"
 #include "np_input.h"
 #include "np_output.h"
 #include "np_profile.h"

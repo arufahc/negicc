@@ -23,8 +23,8 @@
 
 #include "film_frame_detector.h"
 #include "input_curves.h"
-#include "np_conversion.h"
 #include "np_input.h"
+#include "np_profile.h"
 
 struct Options {
   int argc = 0;

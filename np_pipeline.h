@@ -46,18 +46,16 @@
 #include "dinov3_engine.h"
 #include "film_base_detect.h"
 #include "flat_field.h"
-#include "flat_sample.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
 #include "neg_pipeline.h"
 #include "np_options.h"
 #include "np_output.h"
-#include "np_raw.h"
 #include "profile_bundle.h"
 
 // ---- The white-light tone stage (np_pipeline.cc) ----
 // The white-light tone stage: one monotone lightness curve on CIE L* (D65), set per frame from the tone heads
-// (ToneHead, intent_head.h), applied in the conversion kernel to each pixel's display linear sRGB value
+// (ToneHead, dinov3_engine.h), applied in the conversion kernel to each pixel's display linear sRGB value
 // (color_pipeline.h apply_tone): its luminance Y goes to Y' = Y(f(L*(Y))) on the white point's neutral, and its colour
 // difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
 // not re-balanced, and no pixel is converted to Lab.

@@ -12,7 +12,7 @@
   `zlib/LICENSE`), built into `bin_out/libz.a` like Little-CMS; LibRaw is compiled against it.
 - `libtiff/`: [libtiff](https://gitlab.com/libtiff/libtiff), a git submodule pinned to release 4.7.2 (libtiff
   licence, see `libtiff/LICENSE.md`), built into `bin_out/libtiff.a` with Deflate (the pinned zlib), LZW, PackBits,
-  JPEG (libjpeg-turbo) and the other built-in codecs; neg_process reads TIFF input with it (`rgb_input.cc`).
+  JPEG (libjpeg-turbo) and the other built-in codecs; neg_process reads TIFF input with it (`np_input.cc`).
 - `libjpeg-turbo/`: [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo), a git submodule pinned to
   release 3.2.1 (IJG and BSD licences, see `libjpeg-turbo/LICENSE.md`), built into `bin_out/libjpeg.a` without SIMD;
   neg_process reads JPEG input with it, and libtiff JPEG-compressed TIFFs.

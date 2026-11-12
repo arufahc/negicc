@@ -32,7 +32,7 @@
 #include "embedded_data.h"
 #include "libraw/libraw.h"
 #include "pixel_shift_group.h"
-#include "rgb_input.h"
+#include "np_input.h"
 
 // Four files of a 4-shot pixel shift: distinct, one group of four in shot order by the camera's group tags or, without
 // them, by their file counters. False with the error reported otherwise.

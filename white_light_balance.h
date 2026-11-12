@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // The film-base balance of the white-light decode: gains on the camera's own channels, applied to the mosaic before
-// the camera matrix. Header-only, so that neg_process (np_raw.cc, load_raw) and negicc-station (its CapturedImage
+// the camera matrix. Header-only, so that neg_process (np_input.cc, load_raw) and negicc-station (its CapturedImage
 // decode) compile the same code and balance a scan the same way.
 
 #ifndef NEGICC_WHITE_LIGHT_BALANCE_H
@@ -69,7 +69,7 @@ inline void film_base_balance_gains(const LibRaw& proc, const double base[3], co
   for (int c = 0; c < 3; ++c) k[c] = (float)(gain[c] / largest);
 }
 
-// Multiplies the white-light mosaic (black-subtracted and white-balanced in place, as np_raw.cc's
+// Multiplies the white-light mosaic (black-subtracted and white-balanced in place, as np_input.cc's
 // prepare_white_light_mosaic leaves it) by k, per camera channel. A CFA mosaic holds one sample a
 // photosite, of the photosite's colour; a linear DNG holds three or four a pixel, R, G and B first.
 inline void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {

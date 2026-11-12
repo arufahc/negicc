@@ -1,10 +1,16 @@
-// TensorRT runners (USE_CUDA=1 builds only): the DINOv3 backbone (backbone.engine) or a fused intent model
-// (model.engine), and the per-stock adapter (adapter.engine), all strict-FP32 engines `make dinov3_engine` builds on
-// the device. A backbone keeps its tokens on the device; the adapter binds that buffer as its input, so only the
-// intent field and the ranker features come back to the host.
+// TensorRT runners (USE_CUDA=1 builds, which define NEGICC_USE_CUDA): the DINOv3 backbone (backbone.engine) or a
+// fused intent model (model.engine), and the per-stock adapter (adapter.engine), all strict-FP32 engines
+// `make dinov3_engine` builds on the device. A backbone keeps its tokens on the device; the adapter binds that buffer
+// as its input, so only the intent field and the ranker features come back to the host.
 //
 // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (TensorRTPhotographicIntentModel)
-#include "dinov3_runner.h"
+//
+// A USE_CUDA=0 build compiles the stubs at the end of this file instead: no CUDA device, and runners that throw.
+#include "dinov3_engine.h"
+
+#include <stdexcept>
+
+#ifdef NEGICC_USE_CUDA
 
 #include <cstring>
 #include <fstream>
@@ -266,3 +272,23 @@ bool cuda_device_available() {
     });
     return available;
 }
+
+#else  // !NEGICC_USE_CUDA
+
+bool cuda_device_available() {
+    return false;
+}
+
+std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& /*engine_path*/) {
+    throw std::runtime_error("TensorRT runner is unavailable in CPU-only build (USE_CUDA=0)");
+}
+
+std::unique_ptr<DinoV3Runner> make_trt_runner(const void* /*engine_data*/, size_t /*engine_size*/) {
+    throw std::runtime_error("TensorRT runner is unavailable in CPU-only build (USE_CUDA=0)");
+}
+
+std::unique_ptr<DinoV3AdapterRunner> make_trt_adapter(const void* /*engine_data*/, size_t /*engine_size*/) {
+    throw std::runtime_error("TensorRT adapter is unavailable in CPU-only build (USE_CUDA=0)");
+}
+
+#endif  // NEGICC_USE_CUDA
