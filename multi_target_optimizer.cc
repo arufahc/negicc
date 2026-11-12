@@ -2149,6 +2149,8 @@ class WhiteLightFit {
       out_.fit.b = res_.params.b;
       out_.fit.e = e_start_;
       out_.fit.feasible = true;
+      out_.fallback = out_.fit.skipped;  // reported only: the re-meter still runs on Auto's values
+      if (opts_.verbose) std::cout << "Curves: no fit (" << out_.fit.skipped << "): Auto's g and b, no curves\n";
     }
     const negicc::JointCurveFit& jf = out_.fit;
     if (opts_.verbose) {

@@ -284,6 +284,9 @@ struct GreenGuard {
 
 struct JointCurveFit {
   bool ok = false;  // a fit ran (8 or more cells in range and a feasible start); else the caller keeps Auto's colour
+  // Why no fit ran (ok false): "start" (Auto's g and b with no curves cannot keep target_L within the E bounds) or
+  // "cells" (fewer than 8 cells in range); null when it ran.
+  const char* skipped = nullptr;
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
   // The data loss (the sum of the five squared residuals, without the guard and the damping) at Auto's g and b with no
@@ -291,8 +294,8 @@ struct JointCurveFit {
   double loss_before = 0.0, loss_after = 0.0;
   // What the residuals were built from: the evidence m (sum of p^2 over the cells in range), the shrink weight
   // w = m / (m + kEvidenceHalfMass), the slope shrink's share and the anchors' L* spread, the anchors' mean a*'s
-  // standard deviation, the intent field's standard error (in a*), and the intent residual at Auto and at the result
-  // (the scaled residual r4, dimensionless like the losses).
+  // standard deviation, the intent field's standard error, and the intent field's mean a* residual at Auto and at the
+  // result less the lever share and the lean (r4 with its scale divided out); all three in a*.
   float evidence = 0.0f, shrink = 0.0f, slope_share = 0.0f, span_L = 0.0f, anchor_sd = 0.0f, intent_se = 0.0f;
   float intent_auto = 0.0f, intent_after = 0.0f;
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
@@ -950,7 +953,10 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   // Auto: E solved, its cells; the cells in range (2 < L* < 92 at Auto) and their p^2, whose sum is the evidence m.
   const float p0[4] = {g0, b0, 0.0f, 0.0f};
   float eA = e0;
-  if (!lm.solve_point(p0, e0, eA, true)) return out;
+  if (!lm.solve_point(p0, e0, eA, true)) {
+    out.skipped = "start";
+    return out;
+  }
   std::vector<Lab> lab0;
   labs_at(p0, eA, lab0);
   std::vector<int> B;
@@ -965,7 +971,10 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     m += p * p;
   }
   out.evidence = (float)m;
-  if ((int)B.size() < 8) return out;
+  if ((int)B.size() < 8) {
+    out.skipped = "cells";
+    return out;
+  }
 
   JointFitGuard guard;
   auto guard_means = [&](const float* p, float e, double v[2]) {
@@ -1053,6 +1062,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   std::vector<Lab> labs;
   auto r4_of = [&](const std::vector<Lab>& L, const JointMoments& Mp) {
     if (!intent) return 0.0;
+    // A cell the candidate renders non-finite is skipped without renormalising the weights (the sum shrinks a little).
     double s = 0;
     for (int i = 0; i < n; ++i)
       if (al[i] > 0 && std::isfinite(L[i].a)) s += al[i] * (L[i].a - fi.mu[3 * i + 1]);
@@ -1088,13 +1098,13 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   out.span_L = (float)std::sqrt(M0.vL);
   out.anchor_sd = (float)sig_anc;
   out.intent_se = (float)se;
-  out.intent_auto = (float)r4_of(lab0, M0);
+  out.intent_auto = intent ? (float)(r4_of(lab0, M0) / r4_scale) : 0.0f;
   out.loss_before = loss_at(p0, eA);
 
   float p[4];
   float e = eA;
   std::copy(p0, p0 + 4, p);
-  lm.run(R, p, e);
+  lm.run(R, p, e);  // cannot fail here: its start, Auto's point, was solved above
   {
     double v[2];
     guard_means(p, e, v);
@@ -1118,7 +1128,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   }
   guard_path = false;
   labs_at(p, e, labs);
-  out.intent_after = (float)r4_of(labs, joint_moments(labs, B, om));
+  out.intent_after = intent ? (float)(r4_of(labs, joint_moments(labs, B, om)) / r4_scale) : 0.0f;
   out.loss_after = loss_at(p, e);
   out.ok = true;
   out.feasible = true;

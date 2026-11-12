@@ -357,8 +357,8 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
-                // The fifth residual: the intent field's standard error (a*) and the scaled residual r4
-                // (dimensionless, as the losses) at Auto and at the result.
+                // The fifth residual, in a*: the intent field's standard error, and its mean a* residual less
+                // the lever share and the lean, at Auto and at the result (zero when there was no fit).
                 {"intent_se", n9(f->fit.intent_se)}, {"intent_auto", n9(f->fit.intent_auto)},
                 {"intent_after", n9(f->fit.intent_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
@@ -399,9 +399,11 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
-                                             // The evidence mass (sum of p^2 over the cells in range), the
-                                             // shrink weight m / (m + 12) inside the residuals, the anchors' L*
-                                             // spread and slope share, and their mean a*'s standard deviation.
+                                             // The evidence mass (sum of p^2 over the cells in range, as the
+                                             // last fit pass saw them at its roll-off; earlier builds wrote it at
+                                             // Auto's roll-off, up to 2 % apart), the shrink weight
+                                             // m / (m + 12) inside the residuals, the anchors' L* spread and
+                                             // slope share, and their mean a*'s standard deviation.
                                              {"evidence", n9(f->fit.evidence)},
                                              {"shrink", n9(f->fit.shrink)},
                                              {"span_L", n9(f->fit.span_L)},

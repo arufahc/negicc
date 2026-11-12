@@ -357,8 +357,10 @@ struct WhiteLightFitResult {
   // smaller of the two.
   float shape_scale_ch[2] = {1.0f, 1.0f};
   float shape_scale = 1.0f;
-  // Why the fit fell back to Auto's result with no curves, or null when it did not: "shape" (still past the shape
-  // after three rounds of scaling), "clip" (E would leave [e_lo, e_hi] to keep Auto's median L*), or
+  // Why the fit fell back to Auto's result with no curves, or null when it did not: "cells" (fewer than 8 grid cells in
+  // range, so no fit ran), "start" (Auto's start could not keep target_L within the E bounds, so no fit ran; the
+  // re-meter still runs on Auto's values), "shape" (still past the shape after three rounds of scaling), "clip" (E
+  // would leave [e_lo, e_hi] to keep Auto's median L*), or
   // "intent_lightness" (Auto's grid median L* outside [kIntentMinL, kIntentMaxL]: the intent failed, and E is re-metered
   // so the grid's median L* is the nearer end of that range instead of kept at Auto's).
   const char* fallback = nullptr;
