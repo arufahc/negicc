@@ -8,13 +8,13 @@ Tri-LED scans run stage 1 only; stages 2 to 5 are white-light only. `--fit_curve
 
 ## The stages
 
-| # | Stage | Takes | Decides | Hands on |
-|---|---|---|---|---|
-| 1 | Auto search | the half-size scan, the film stock's profile bundle (one profile per exposure bracket), the film-base reading | which bracket's profile to use, and the exposure E and green and blue gains g, b that bring the render closest to the intent network's prediction of the picture | the bracket, (E, g, b), the highlight shoulder, and the network's outputs for the chosen render: the intent field, the neutral-surface probability p of each grid cell, the backbone features |
-| 2 | Curve fit | stage 1's result and p | a correction of the gains and of the tone slope of the green and blue input curves that removes the colour of the surfaces the network reads as neutral | fitted curves and (E, g, b) |
-| 3 | Tint trim | the fitted render | one uniform magenta-green offset, chosen by scoring candidate offsets against the intent network | the offset |
-| 4 | Profile tables | the bracket's profile, the fitted curves, the offset | nothing: composes them into the profile's input tables, so the pixel pipeline is unchanged | one ordinary profile |
-| 5 | Tone stage | the finished sRGB image and the backbone features | one monotone lightness curve toward the shadow level, highlight level and tonal range the tone head predicts for the frame | the final image |
+| # | Stage | Takes | Decides | Hands on | Space its pixel path works in |
+|---|---|---|---|---|---|
+| 1 | Auto search | the half-size scan, the film stock's profile bundle (one profile per exposure bracket), the film-base reading | which bracket's profile to use, and the exposure E and green and blue gains g, b that bring the render closest to the intent network's prediction of the picture | the bracket, (E, g, b), the highlight shoulder, and the network's outputs for the chosen render: the intent field, the neutral-surface probability p of each grid cell, the backbone features | none of its own: it renders grid cells and previews through the export's kernel (camera RGB, input matrix and knee, film profile to XYZ D50, linear sRGB D65, shoulder, sRGB encoding) and scores them |
+| 2 | Curve fit | stage 1's result and p | a correction of the gains and of the tone slope of the green and blue input curves that removes the colour of the surfaces the network reads as neutral | fitted curves and (E, g, b) | the profile's green and blue input tables, in camera-linear values before the profile (the fit evaluates cells; no image pixel) |
+| 3 | Tint trim | the fitted render | one uniform magenta-green offset, chosen by scoring candidate offsets against the intent network | the offset | a density change on the same input tables (film density above the base) |
+| 4 | Profile tables | the bracket's profile, the fitted curves, the offset | nothing: composes them into the profile's input tables, so the pixel pipeline is unchanged | one ordinary profile | the input tables; every pixel then goes once through the kernel |
+| 5 | Tone stage | the backbone features of the final render's preview, and the kernel's display values | one monotone lightness curve toward the shadow level, highlight level and tonal range the tone head predicts for the frame | the final image | display linear sRGB, inside the kernel between the shoulder and the sRGB encoding; no second conversion of finished pixels |
 
 What each stage is for, in one sentence:
 
@@ -120,24 +120,29 @@ does not act at a confidence of 0.5 or less; that is part of its tolerance formu
 
 ## Stage 5: tone stage
 
-Tone heads on the backbone features predict, for the frame, the shadow level L2, the highlight level L98 and the tonal
-range L90 − L10 a lab scan would have. One monotone L\* curve moves the image toward them while holding the mid-tone
-and the mean chroma.
+Tone heads on the backbone features of the final render's preview predict, for the frame, the shadow level L2, the
+highlight level L98 and the tonal range L90 − L10 a lab scan would have. The curve f on L\* (black, white, gamma,
+contrast) is solved so the preview's own L\* percentiles move toward them while the mid-tone holds. It is applied in
+the conversion kernel, on each pixel's display linear sRGB value: the luminance Y goes to Y′ = Y(f(L\*(Y))), read
+from a table, on the white point's neutral, and the pixel's colour difference from that neutral is added back scaled
+by f′(Y) / f′(Y′), where f is Lab's cube-root function. That holds each colour's a\* and b\* to first order without
+converting the pixel to Lab. The image is converted once, with the curve.
 
 | Knob | Value | Kind | What it does | Effect |
 |---|---|---|---|---|
 | Shadow move | 1.0 | Policy | The image moves all the way to the predicted shadow level. | 60 at half |
 | Highlight move | 0.5 | Policy | Half way to the predicted highlight level. | 16 to 30 |
 | Range move | 0.5 | Policy | Half way to the predicted tonal range. | 38 to 61 |
-| Clip allowance | 0.5 % of pixels | Policy | If the curve would clip more white than this, the highlight and range moves are scaled back through 0.75, 0.5, 0.25, 0. | 14 |
+| Clip allowance | 0.5 % of pixels | Policy | If the curve would clip more white than this, the highlight and range moves are scaled back through 0.75, 0.5, 0.25, 0. Measured on every 8th pixel each way of the unconverted image, run through the kernel with each candidate curve. | 14 |
 | Curve bounds | black −15 to 15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | Safety limit | The range of the lightness curve's four parameters. | — |
+| Colour-hold cap | 8 | Safety limit | The largest factor f′(Y) / f′(Y′) the colour difference is scaled by, near black where the curve lifts a very dark pixel. | — |
 | Top slope and white starts | 0.07; 100, 110, 85 | Numerical detail with a visible effect | A floor on the curve's slope at the top, and three starting points for the solve. | 3 |
 | Prior | 0.02 | Numerical detail | Regularises the solve. | 0 |
-| Chroma limits | 0.5 to 1.6 | Safety limit | Range of the chroma factor; it stays between 1.00 and 1.03 on every test frame. | 0 |
-| Neutral chroma ramp | C\* 3 to 8 | Policy | Colours below C\* 3 keep their a\* and b\* as they are, those above 8 take the whole chroma factor, with a smooth step between, so near-neutral colours keep their balance. | — |
 
-Five policy knobs, two safety limits. The three moves are the stage's real policy: the full shadow move and the half
-moves were chosen by blind comparison, not derived.
+Four policy knobs, two safety limits. The three moves are the stage's real policy: the full shadow move and the half
+moves were chosen by blind comparison, not derived. The effects were measured with the earlier pixel path, which
+converted the finished image to Lab and back; the curve and its solve are unchanged, and the in-kernel path is within
+ΔE 1 of it on 139 of the 140 frames. The table has 8193 entries on √Y: a numerical detail.
 
 ## Stage 1: Auto search
 
@@ -171,8 +176,8 @@ for them. Their ablation is not complete.
 | Guard | 3 | 1 | plus the penalty weight, which has no derivation |
 | 3 Tint trim | 7 | 1 | three are small uniform effects |
 | 4 Profile tables | 0 | 0 | |
-| 5 Tone stage | 5 | 2 | plus two numerical details with a small visible effect |
-| **White light, stages 2 to 5** | **19** | **11** | |
+| 5 Tone stage | 4 | 2 | plus two numerical details with a small visible effect |
+| **White light, stages 2 to 5** | **18** | **11** | |
 
 ## What is not principled yet
 

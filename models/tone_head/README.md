@@ -3,9 +3,9 @@
 Predict, from a preview's frozen DINOv3 features, the tone a lab scan of the frame would have: 11 descriptors of its
 pixels at network size, each with a mean and a standard deviation. `neg_process` uses three of them for the white-light
 tone stage (`np_pipeline.cc`): the shadow level L2 (L* at 2 %), the highlight level L98 (L* at 98 %) and the tonal range
-R9010 (L* at 90 % minus L* at 10 %). One monotone L* curve then moves the final image all the way to the predicted L2
-and half way to the predicted L98 and R9010, holding L50 and the mean chroma. The heads predict tone only; colour is
-the curve fit's.
+R9010 (L* at 90 % minus L* at 10 %). One monotone L* curve then moves the image all the way to the predicted L2 and
+half way to the predicted L98 and R9010, holding L50; it is applied in the conversion kernel on display linear sRGB,
+holding each colour's a* and b* to first order. The heads predict tone only; colour is the curve fit's.
 
 - Input: 1920 features, the backbone's pooled output (the CLS token of layer 12, the mean patch token of layer 9 and
   of layer 12: 1152) and the patch tokens' standard deviation over the patches (layers 9 and 12: 768;
@@ -68,7 +68,7 @@ replays a recorded curve; TriLED never runs it). The engine then also gives the 
 the search (`set_token_spread`); the heads run once, on the features of the tint trim's winning candidate (the state
 closest to the export), or of the search's intent preview when that setting did not run, so the stage adds no
 inference. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's descriptors
-before the stage, the targets, the curve and the clipping before and after.
+before the stage, the targets, the curve (four numbers) and the clipping before (on the clip check's sample) and after.
 
 To try retrained heads, export them with `export_tone_head.py` and pass the `.bin` with `--dino tone:<file>`, or
 replace `tone_head.bin` and rebuild. The sidecar's `heads.tone` records which file ran, with its size and CRC-32.

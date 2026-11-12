@@ -147,7 +147,8 @@ The conversion runs in that order:
    highlights, so the green and blue curves are bent until the surfaces the neutral head trusts come out grey. With
    nothing neutral in the frame it leaves the picture alone, and it never pushes a picture toward green.
 4. **Set the tones** (white light). The tone head says where the shadows and highlights of a finished scan of this
-   picture would sit, and one lightness curve moves the image toward that. Colour is not touched.
+   picture would sit, and one lightness curve moves the image toward that, applied inside the one conversion of the
+   image (no second colour conversion of the finished pixels). Colour is not touched.
 
 [DESIGN.md](DESIGN.md) lists the white-light stages and every tunable number each one carries, with what it does.
 
@@ -200,7 +201,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Your own models in place of the built-in ones. The heads are `intent` (the intent adapter: an `.onnx` or its directory), `neutral` (a `neutral_head.bin`) and `tone` (a `tone_head.bin`); for example `--dino neutral:my_head.bin` or `--dino intent:adapter.onnx,tone:th.bin`. A path without a head name is the intent adapter. Heads you leave out stay built in. Paths cannot contain commas. |
 | `--tint_trim theta:<numbers>` | Replays a sidecar's tint trim (10 numbers, from its `cli_equivalent`; the sidecar records it under `offset`). The tint trim, the network's setting on the magenta–green axis, runs after the curve fit wherever the fit runs (up to four extra inferences). |
-| `--tone_stage curve:<numbers>` | Replays a sidecar's lightness curve (5 numbers). The tone stage itself runs on the final image wherever the curve fit runs with `-P srgb`. |
+| `--tone_stage curve:<numbers>` | Replays a sidecar's lightness curve (4 numbers: black, white, gamma, contrast). The tone stage itself runs inside the conversion wherever the curve fit runs with `-P srgb`. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | DINOv3's backend and the search's iterations. |
 
 ## Hardware the profiles were made with
