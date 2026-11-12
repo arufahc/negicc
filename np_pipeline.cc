@@ -278,27 +278,39 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                               const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share) {
-    const ToneCurve& c1 = designed;
-    *share = 1.0;
-    *targets = designed_targets;
-    auto ok = [&](const ToneCurve& c) {
+    auto after_of = [&](const ToneCurve& c) {
         double after = 0.0;
         tone_clip_sample(pc, matrix, img, w, h, stride, &c, &after, nullptr);
-        return after <= white_before + kToneClipAllowance;
+        return after;
     };
-    if (ok(c1)) return c1;
-    // The largest of the fixed shares that passes; none: the clipping is not the highlight move's, keep 1. Fixed shares
-    // need no monotone clipping (a bisection does) and cost at most four more curves.
+    // The designed curve, else the largest of the fixed shares within the allowance, else the least clipping of them
+    // (the larger share on a tie). Fixed shares need no monotone clipping (a bisection does) and cost at most four more
+    // curves.
+    ToneCurve best = designed;
+    ToneTargets best_t = designed_targets;
+    double best_after = after_of(designed), best_share = 1.0;
+    *share = 1.0;
+    *targets = designed_targets;
+    if (best_after <= white_before + kToneClipAllowance) return designed;
     for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
         ToneTargets t;
         const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[k], &t);
-        if (ok(c)) {
+        const double after = after_of(c);
+        if (after <= white_before + kToneClipAllowance) {
             *share = kToneClipShares[k];
             *targets = t;
             return c;
         }
+        if (after < best_after) {
+            best = c;
+            best_t = t;
+            best_after = after;
+            best_share = kToneClipShares[k];
+        }
     }
-    return c1;
+    *share = best_share;
+    *targets = best_t;
+    return best;
 }
 
 void LibRawDeleter::operator()(LibRaw* p) const {

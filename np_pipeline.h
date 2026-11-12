@@ -90,8 +90,8 @@ constexpr double kToneTopSlope = 0.07;
 constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // White clipping: where the curve would clip more than kToneClipAllowance more of the export's pixels white than the
 // conversion without it, the highlight and range moves are scaled down to the largest of kToneClipShares that keeps
-// it within the allowance, measured on every 8th pixel each way of the unconverted image through the kernel. When none
-// does, the clipping does not come from that move, and the moves stay as designed.
+// it within the allowance, measured on every 8th pixel each way of the whole unconverted image (film borders included)
+// through the kernel. When none does, the share that clips least is kept.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
 
@@ -130,8 +130,9 @@ std::vector<float> tone_table(const ToneCurve& q);
 // The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
 // pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1), or, where the
 // curve would clip more than kToneClipAllowance beyond the conversion's own clipping (white_before), the largest
-// share of the highlight and range moves that does not. The clipping is measured on a sparse sample of img converted
-// through the kernel with each curve. share gets the share kept.
+// share of the highlight and range moves that does not, or, when none does, the share that clips least. The clipping
+// is measured on a sparse sample of the whole of img (film borders included, while the plan's preview shows only the
+// inner crop: a known mismatch) converted through the kernel with each curve. share gets the share kept.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const float* matrix,
                               const uint16_t* img, int w, int h, int stride, double white_before,
