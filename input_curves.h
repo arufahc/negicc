@@ -230,21 +230,23 @@ struct CurveFitOptions {
 
 // ---- The joint fit -------------------------------------------------------------------------------------------
 //
-// g, b and the four curve numbers fitted against the intent field with E tied to the lightness constraint: each
-// candidate is scored at the E that renders the grid's median L* at target_L (Auto's), so the fit chooses its colour at
-// the lightness the export will have, instead of fitting at Auto's E and moving E afterwards (which moved the colour
-// it had fitted). The objective is z2 (the mean of the cells' squared residuals over their 3 n terms, grid_intent_loss
-// / 3) plus CurveFitOptions::joint_lambda times the curves' squared numbers, evaluated on a per-cell model:
+// g, b and the G and B curves' bend a_G, a_B (k is 0) fitted so the frame's scene-neutral anchors render grey, with E
+// tied to the lightness constraint: each candidate is scored at the E that renders the grid's median L* at target_L
+// (Auto's), so the fit chooses its colour at the lightness the export will have. The objective is the four
+// scene-neutral residuals (JointCurveModel::residuals: the anchors' p^2-weighted mean a* and b*, and their slopes over
+// L* against the slope shrink's target), the never-greener guard's two hinges on the guarded pass (JointFitGuard), and
+// sqrt(CurveFitOptions::joint_lambda) times a_G and a_B. The intent field is not part of it (its losses are only
+// reported). It is evaluated on a per-cell model:
 //   - each cell's three matrix rows are taken once (merged · rgb), and a candidate's (e, g, b) only scales them;
 //   - the curve is applied to each cell's G and B value analytically, in(curve(v)), in place of composing the two
 //     4096-entry tables per candidate (the export's tables sample the same function at their entries);
 //   - E is solved within [e_lo, e_hi] by secant steps on log E warm-started from the previous candidate's E (one to
 //     three grid renders), with a bracketed bisection as the fallback; a candidate whose E would leave the bounds is
 //     not one (the export could not render it at target_L there);
-//   - the solver is Levenberg-Marquardt on the residuals (dL, da, db) / (sigma sqrt(3 n)) and sqrt(lambda) times the
-//     curve numbers, with a forward-difference Jacobian, box bounds by projection and the shape (curve_shape_ok over
-//     the whole table, at each candidate's anchor) by cutting a step back to the furthest point that keeps it (its E
-//     solved at each point tried) or rejecting it and raising the damping.
+//   - the solver is Levenberg-Marquardt on those residuals with a forward-difference Jacobian, box bounds by
+//     projection and the shape (curve_shape_ok over the whole table, at each candidate's anchor) by cutting a step
+//     back to the furthest point that keeps it (its E solved at each point tried) or rejecting it and raising the
+//     damping.
 // The solved correction is then handed over by evidence: its displacement from Auto in (ln g, ln b, a_G, a_B) is
 // scaled by w = m / (m + JointCurveModel::kEvidenceHalfMass), m the anchors' evidence mass, and E solved there again.
 // The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
@@ -487,7 +489,7 @@ class JointCurveModel {
 
   // set_scene_neutral found anchors (the head's p, with some evidence).
   bool has_anchors() const { return has_anchors_; }
-  // What set_scene_neutral's slope shrink and offset gate did, and the evidence they had.
+  // What set_scene_neutral decided: the evidence, the hand-over weight and the slope shrink.
   const NeutralTargetDecisions& decisions() const { return decisions_; }
 
   NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
@@ -1071,10 +1073,10 @@ inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, cons
 // Stage 2, the curve fit: removes what is left of the colour cast, and its change from shadows to highlights, on the
 // bracket Auto chose. It takes the grid cells, the film base, Auto's (E, g, b) and the neutral head's probabilities,
 // builds p^2-weighted neutral anchors (JointCurveModel) and solves p = (g, b, a_G, a_B) by Levenberg-Marquardt, E
-// solved at each candidate to keep target_L. The fit runs first without the never-greener guard (kGreenGuard*); when
-// its result is greener than Auto's (deep shadows exempt) it runs again with it. It hands on the curves and the
-// fitted (E, g, b), which run_white_light_fit re-meters on the combined profile. evaluations and renders count both
-// passes.
+// solved at each candidate to keep target_L, then hands the solved correction over by the anchors' evidence
+// (kEvidenceHalfMass). The fit runs first without the never-greener guard (kGreenGuard*); when its handed-over result
+// is greener than Auto's (deep shadows exempt) it runs again with it. It hands on the curves and the fitted (E, g, b),
+// which run_white_light_fit re-meters on the combined profile. evaluations and renders count both passes.
 inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
                                             const float* mu, const float* sigma, float target_L, const int table_n[2],
                                             const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,

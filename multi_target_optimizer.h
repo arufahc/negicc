@@ -423,7 +423,7 @@ struct WhiteLightFitResult {
   negicc::NeutralStats neutral_auto, neutral_export;
   // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them it kept Auto's colour.
   bool neutral_anchors = false;
-  // What the slope shrink and offset gate decided on those anchors (JointCurveModel::decisions).
+  // The anchors' evidence, hand-over weight and slope shrink (JointCurveModel::decisions).
   negicc::NeutralTargetDecisions neutral_decisions;
   // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
   // the search's final parameters, intent_repredicted).
@@ -435,28 +435,31 @@ struct WhiteLightFitResult {
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
-// bundles: on the same frame as the search,
-//   1. the joint fit (negicc::fit_input_curves_joint): g, b and the four curve numbers by Levenberg-Marquardt against
-//      the search's intent field on the frame's grid (predicted again at the search's final parameters when the
-//      pullback or the clip fallback moved them after its preview), each candidate at the E that keeps Auto's grid
-//      median L*, within the bracket's calibrated range of E widened to hold Auto's E; its curves anchored (ref,
-//      u_med) on the film base (the one opts gives, else the brightest grid cell per channel) at its own E, g, b;
+// bundles, on the same frame as the search (the WhiteLightFit steps in multi_target_optimizer.cc):
+//   0. prepare: the search's intent field (predicted again at the search's final parameters when the pullback or the
+//      clip fallback moved them after its preview), the cells the fit uses (a fallback crop leaves out cells at the
+//      film base's level or holder-dark), Auto's render and grid median L*, E's bounds (the bracket's calibrated range
+//      widened to hold Auto's E) and the scene-neutral anchors (JointCurveModel::set_scene_neutral);
+//   1. the joint fit (negicc::fit_input_curves_joint): g, b, a_G and a_B by Levenberg-Marquardt so the anchors render
+//      grey, each candidate at the E that keeps Auto's grid median L*, the correction handed over by evidence, and
+//      the never-greener guard checked on the result; its curves anchored (ref, u_med) on the film base (the one opts
+//      gives, else the brightest grid cell per channel) at its own E, g, b;
 //   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
-//      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its
-//      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
-//      own result with no curves (WhiteLightFitResult::fallback);
+//      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its shape fails at the re-metered
+//      anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's own result with no curves
+//      (WhiteLightFitResult::fallback). Steps 1 and 2 repeat (up to three fits) while the re-metered roll-off differs
+//      from the one the fit ran with;
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
-//      (apply_input_curves on bundle.targets[res.target_idx]);
-//   4. the tint trim (TintTrimResult): a lattice of "pure a*" offsets of the
-//      fitted state, scored by the network's a* residual, the best candidates rendered and scored on their own fields,
-//      the pick moved one bootstrap standard error toward magenta, composed into the same tables (E re-solved and the
-//      roll-off measured again);
-//   5. with tone_head, the tone stage's plan (ToneStagePlan: the heads' predictions and the final render's preview)
-//      for the conversion to solve and apply to the final image.
+//      (compose_bracket_tables on bundle.targets[res.target_idx]);
+//   4. the tint trim (TintTrim): a lattice of "pure a*" offsets of the fitted state, scored by the network's a*
+//      residual, the best candidates rendered and scored on their own fields, the pick moved one bootstrap standard
+//      error toward magenta and capped on the neutrals, composed into the same tables (E re-solved and the roll-off
+//      measured again);
+//   5. record: the export's parameters, losses and neutral statistics, and with tone_head the tone stage's plan
+//      (ToneStagePlan: the heads' predictions and the final render's preview) for the conversion to solve and apply
+//      to the final image.
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
-// ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
-// parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
-// the fit run again (up to twice) when that roll-off differs from the one it ran with.
+// ENCODE_SRGB_LINEAR, which is what the fit models), with the roll-off measured as the export measures it.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
 bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
