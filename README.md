@@ -149,6 +149,8 @@ The conversion runs in that order:
 4. **Set the tones** (white light). The tone head says where the shadows and highlights of a finished scan of this
    picture would sit, and one lightness curve moves the image toward that. Colour is not touched.
 
+[DESIGN.md](DESIGN.md) lists the white-light stages and every tunable number each one carries, with what it does.
+
 On the frame below the first render is cyan-green; the search brings it to a natural daylight balance.
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)

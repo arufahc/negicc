@@ -360,6 +360,9 @@ class JointCurveModel {
   // Evidence hand-over: the evidence mass (sum of p^2) at which the fit's correction is applied at half strength
   // (w = m / (m + this)), so that a correction resting on very little neutral evidence is not trusted. A policy
   // value, not derived.
+  // TODO: the value was checked on few low-evidence frames; re-check it on the scans that arrive through the web
+  // portal as they accumulate (their evidence distribution, and the corrections of low-evidence scans at 6, 12, 24
+  // and 48).
   static constexpr double kEvidenceHalfMass = 12.0;
   static double hand_over_weight(double evidence) { return evidence / (evidence + kEvidenceHalfMass); }
 
