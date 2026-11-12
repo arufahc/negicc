@@ -26,6 +26,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 #include "argparse/argparse.hpp"
 #include "embedded_data.h"
@@ -95,6 +96,26 @@ static bool check_pixel_shift_files(const std::vector<std::string>& files) {
 }
 
 // --roi: 'auto [h|v]', or x y w h [rot_cw [hflip [vflip]]]. False with the error reported.
+// The items of a comma-separated value, empty ones included ("1,,2" has three).
+static std::vector<std::string> split_csv(const std::string& v) {
+  std::vector<std::string> items;
+  for (size_t p0 = 0;;) {
+    const size_t p1 = v.find(',', p0);
+    items.push_back(v.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
+    if (p1 == std::string::npos) return items;
+    p0 = p1 + 1;
+  }
+}
+
+// One item of a recorded-numbers value: the whole item a finite number (strtof for float, strtod for double).
+template <typename T>
+static bool parse_number(const std::string& item, T& x) {
+  char* end = nullptr;
+  if constexpr (std::is_same_v<T, float>) x = std::strtof(item.c_str(), &end);
+  else x = std::strtod(item.c_str(), &end);
+  return !item.empty() && end && *end == '\0' && std::isfinite(x);
+}
+
 static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
   if (roi_tokens.empty()) {
     log_error("--roi requires arguments\n");
@@ -267,12 +288,29 @@ int parse_options(int ac, char* av[], Options& o) {
     .required()
     .help("Output file location.");
   parser.add_argument("--dino")
-    .help("Intent adapter for the parameter search in place of the film stock's built-in one: adapter.onnx or a "
-          "directory holding it.");
+    .help("Models in place of the built-in ones, as a comma-separated list of <head>:<path> entries, head one of "
+          "intent (the intent adapter: adapter.onnx or a directory holding it), neutral (a neutral_head.bin) or tone "
+          "(a tone_head.bin); an entry without a head is the intent adapter. Heads not named stay built in. Paths "
+          "cannot contain commas; everything after the head's colon is the path.");
   parser.add_argument("--list_profiles")
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
+  parser.add_argument("--tint_trim")
+    .help("Replays a recorded tint trim: theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a sidecar's "
+          "cli_equivalent), with --target, -E, --gain_g and --gain_b. The tint trim itself runs as the white-light "
+          "curve fit's last step, wherever the fit runs: the network judges whether the fitted picture reads too "
+          "green or too magenta, a lattice of magenta-green trims is scored against the intent field, the best few "
+          "are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, moved one standard "
+          "error toward magenta, is composed into the bracket's tables. Trims that would make the picture greener "
+          "than Auto are not candidates. The sidecar records the tint trim under \"offset\".");
+  parser.add_argument("--tone_stage")
+    .help("Replays a recorded tone curve: curve:black,white,gamma,contrast (a sidecar's cli_equivalent), with "
+          "--target, -E, --gain_g and --gain_b. The tone stage itself runs wherever the curve fit runs, with -P "
+          "srgb: tone heads on DINOv3 features of the final render's preview predict the frame's shadow level, "
+          "highlight level and tonal range as a lab scan would have them, and one monotone L* curve, applied in the "
+          "conversion itself, moves the image all the way to the predicted shadow level and half way to the "
+          "highlight level and range, holding the mid-tones and each colour's a* and b*.");
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -290,8 +328,10 @@ int parse_options(int ac, char* av[], Options& o) {
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
           "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
           "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
-          "and B input curves jointly (Levenberg-Marquardt) to the search's intent field on the bracket it chose, each "
-          "candidate at the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
+          "and B input curves jointly (Levenberg-Marquardt) so the cells the neutral head finds neutral (weighted by "
+          "p^2) render grey on the bracket it chose, each candidate at the E that keeps Auto's grid median L*, the "
+          "correction applied at m / (m + 12) of its strength (m the evidence, sum of p^2), then re-meter E on that "
+          "bracket's profile with its "
           "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
           "needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P srgb or srgb-g10. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
@@ -299,7 +339,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "
           "are positive, because the parser takes a value starting with '-' for an option. The older order "
           "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
-          "White-light (d65) bundles and -P only.")
+          "White-light (d65) bundles and -P only. off also leaves out the tint trim and the tone stage, which run "
+          "where the fit runs.")
     .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
@@ -382,9 +423,7 @@ int parse_options(int ac, char* av[], Options& o) {
   }
 
   // The film format of the frame detector: --roi auto's search (35mm unless given, as negicc-station and the recorded
-  // parity cases), and, when given, the film base's frame detection with a given frame. Before, it was refused without
-  // --roi auto, so the film base's detection with a given --roi could never be told the format; and auto (every
-  // format) could not be asked for.
+  // parity cases), and, when given, the film base's frame detection with a given frame. auto asks for every format.
   o.film_format_given = parser.is_used("--film_format");
   const std::string film_format_arg = parser.get<std::string>("--film_format");
   o.film_format = film_format_from_name(film_format_arg);
@@ -399,7 +438,7 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--film_profile")) o.film_profile = parser.get<std::string>("--film_profile");
   o.target_given = parser.is_used("--target");
   if (o.target_given) o.target = parser.get<std::string>("--target");
-  {
+  if (parser.is_used("--fit_curves")) {
     // One value, so the flag never takes the RAW file that follows it (with nargs it did: "--fit_curves on in.ARW").
     // Recorded curves lead with "ref:" and the refs (refG,refB,u_medG,u_medB,aG,kG,aB,kB[,u_loG,u_loB]): the older
     // order led with aG, and a negative aG made the value start with '-', which argparse rejects as an unknown option
@@ -407,23 +446,15 @@ int parse_options(int ac, char* av[], Options& o) {
     std::string fcv = parser.get<std::string>("--fit_curves");
     const bool ref_first = fcv.compare(0, 4, "ref:") == 0;
     if (ref_first) fcv.erase(0, 4);
-    std::vector<std::string> fc;
-    for (size_t p0 = 0;;) {
-      const size_t p1 = fcv.find(',', p0);
-      fc.push_back(fcv.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0));
-      if (p1 == std::string::npos) break;
-      p0 = p1 + 1;
-    }
+    const std::vector<std::string> fc = split_csv(fcv);
     if (!ref_first && fc.size() == 1 && (fc[0] == "on" || fc[0] == "off" || fc[0] == "auto")) {
-      o.fit_curves = fc[0] == "on";
-      o.fit_curves_auto = fc[0] == "auto";
+      o.fit_curves = fc[0] == "on" ? Options::kFitCurvesOn : fc[0] == "off" ? Options::kFitCurvesOff
+                                                                           : Options::kFitCurvesAuto;
     } else if (fc.size() == 8 || fc.size() == 10) {
       // Ten: the curve held below u_lo (InputCurves::hold), with u_loG and u_loB.
       float v[10];
       for (size_t i = 0; i < fc.size(); ++i) {
-        char* end = nullptr;
-        v[i] = std::strtof(fc[i].c_str(), &end);
-        if (fc[i].empty() || !end || *end != '\0' || !std::isfinite(v[i])) {
+        if (!parse_number(fc[i], v[i])) {
           log_error("--fit_curves: '%s' is not a number (give off, auto, on, or "
                     "ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB with u_loG,u_loB appended for a held curve)\n",
                     fc[i].c_str());
@@ -452,8 +483,80 @@ int parse_options(int ac, char* av[], Options& o) {
       return 1;
     }
   }
-  if (parser.is_used("--dino")) o.dino_adapter = parser.get<std::string>("--dino");
+  if (parser.is_used("--dino")) {
+    // Comma-separated entries; in each, a known head name before the first colon is the head and the rest the path,
+    // else the whole entry is the intent adapter's path (so "adapter_dir" and drive letters such as "C:\..." keep
+    // their meaning). A word of two or more letters before the colon that is not a head is an error.
+    const std::string v = parser.get<std::string>("--dino");
+    std::stringstream ss(v);
+    std::string entry;
+    bool seen[3] = {false, false, false};
+    const char* heads[3] = {"intent", "neutral", "tone"};
+    std::string* dst[3] = {&o.dino_adapter, &o.neutral_head_file, &o.tone_head_file};
+    bool any = false;
+    while (std::getline(ss, entry, ',')) {
+      any = true;
+      if (entry.empty()) {
+        log_error("--dino: an empty entry in '%s'\n", v.c_str());
+        return 1;
+      }
+      int h = 0;
+      std::string path = entry;
+      const size_t colon = entry.find(':');
+      if (colon != std::string::npos) {
+        const std::string name = entry.substr(0, colon);
+        int k = -1;
+        for (int i = 0; i < 3; ++i)
+          if (name == heads[i]) k = i;
+        bool word = name.size() >= 2;
+        for (char ch : name) word = word && (std::isalpha((unsigned char)ch) || ch == '_');
+        if (k >= 0) {
+          h = k;
+          path = entry.substr(colon + 1);
+        } else if (word) {
+          log_error("--dino: unknown head '%s' in '%s' (heads: intent, neutral, tone)\n", name.c_str(), entry.c_str());
+          return 1;
+        }
+      }
+      if (path.empty()) {
+        log_error("--dino: the entry '%s' has no path\n", entry.c_str());
+        return 1;
+      }
+      if (seen[h]) {
+        log_error("--dino: the %s head is given twice\n", heads[h]);
+        return 1;
+      }
+      seen[h] = true;
+      *dst[h] = path;
+    }
+    if (!any || (!v.empty() && v.back() == ',')) {
+      log_error("--dino: an empty entry in '%s'\n", v.c_str());
+      return 1;
+    }
+  }
   o.dino_backend = parser.get<std::string>("--dino_backend");
+  // Recorded numbers after a prefix (which keeps a negative first number from reading as an option).
+  // --tint_trim and --tone_stage replay recorded values only (the steps themselves run wherever the curve fit runs).
+  auto replay = [&](const char* name, const char* prefix, int count, bool& given, double* out) {
+    if (!parser.is_used(name)) return true;
+    const std::string v = parser.get<std::string>(name);
+    const std::string pre = prefix;
+    if (v.compare(0, pre.size(), pre) == 0) {
+      const std::vector<std::string> items = split_csv(v.substr(pre.size()));
+      bool ok = (int)items.size() == count;
+      for (int k = 0; ok && k < count; ++k) ok = parse_number(items[k], out[k]);
+      if (ok) {
+        given = true;  // nothing is searched or predicted: the recorded values are replayed
+        return true;
+      }
+    }
+    log_error("%s takes recorded values only (the step runs wherever the curve fit runs): %s followed by %d "
+              "comma-separated numbers, not '%s'\n", name, prefix, count, v.c_str());
+    return false;
+  };
+  if (!replay("--tint_trim", "theta:", 10, o.tint_trim_replay_given, o.tint_trim_replay) ||
+      !replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay))
+    return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

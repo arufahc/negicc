@@ -16,6 +16,7 @@
 #ifndef MULTI_TARGET_OPTIMIZER_H
 #define MULTI_TARGET_OPTIMIZER_H
 
+#include <array>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@
 #include "dinov3_engine.h"
 #include "input_curves.h"
 #include "profile_bundle.h"
+#include "intent_head.h"
 
 // Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
 struct RgbImage {
@@ -122,7 +124,7 @@ struct ParamSearchOptions {
   bool verbose = true;
   // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
   // rebate, bare light or holder. The curve fit then leaves out the grid cells that are holder-dark, and (when
-  // film_base_is_rebate is true) those at the film base's level (fit_input_curves_after_search). When the film base
+  // film_base_is_rebate is true) those at the film base's level (run_white_light_fit). When the film base
   // came from the scan's statistics (the 99.5th percentile of the film itself), its level is the thinnest picture
   // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;
@@ -161,6 +163,11 @@ struct FixedPointResult {
   // The intent field DINOv3 predicted from the best step's preview (the field that step's parameters were searched
   // against next and its residual was measured with): grid_h x grid_w cells, row-major, [L*, a*, b*] per cell.
   std::vector<float> mu, sigma;
+  // The neutral head's p per cell from the same preview (DinoV3InferenceResult::neutral_p); empty without one.
+  std::vector<float> neutral_p;
+  // The tone heads' input from the same preview: the backbone's pooled features and the tokens' spread (1920 values,
+  // ToneHead); empty unless the engine gives the spread (DinoV3Engine::set_token_spread).
+  std::vector<float> tone_features;
   int grid_w = 0, grid_h = 0;
 };
 
@@ -177,6 +184,8 @@ struct ParamSearchResult {
   // The chosen step's intent field (FixedPointResult::mu, sigma, grid_w, grid_h), written to the sidecar's
   // intent_field, and that step's parameters (E in the search's units).
   std::vector<float> intent_mu, intent_sigma;
+  std::vector<float> intent_neutral_p;  // FixedPointResult::neutral_p of that step (empty without a neutral head)
+  std::vector<float> intent_tone_features;  // FixedPointResult::tone_features of that step (may be empty)
   int intent_grid_w = 0, intent_grid_h = 0;
   ConversionParams intent_params;
 
@@ -294,7 +303,7 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
 // curves (anchored at from = {E, g, b}) re-anchored at to = {E, g, b} on frame, for the knobs, which move E, g and b
 // after the curves were fitted or recorded: ref, u_med and u_lo moved by what the frame's film base and grid move
 // between anchor_curves at from and at to, so with to == from the result is curves unchanged, bit for bit. frame,
-// scan_shutter_s, scan_iso and opts (its film base and crop) as fit_input_curves_after_search took them; engine gives
+// scan_shutter_s, scan_iso and opts (its film base and crop) as run_white_light_fit took them; engine gives
 // the grid's size only (it need not be loaded). Where the re-anchored curves leave the shape over the bracket's input
 // table (curve_shape_ok at max_dev_stops), each channel's a and k are scaled down by the largest factor that keeps it
 // (scale[0], scale[1]; 1: not needed). False (reported) on a bundle with a crosstalk matrix or a bad bracket.
@@ -305,12 +314,70 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 
 // The plausible range of Auto's grid median L* (the lightness the curve fit keeps): outside it the intent failed (a
 // render nearly black or blown out, as when the frame holds rebate or holder), and the fit does not chase it.
-constexpr float kIntentMinL = 12.0f;
+constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// What fit_input_curves_after_search did.
-struct CurveRefitResult {
-  negicc::CurveFitResult fit;     // the curves (with ref and u_med), g and b of the joint fit, its data losses
+// What the tint trim's tables are made from: the density change theta = (d_G, d_B, k_G, k_B) and, per
+// channel, the frame's median cell density above the film base (piv) and the two factors that place the film base on
+// the input table (v_base = gain x diag x film_base / 65535, gain the channel's E, E g or E b). A value's density
+// above the film base, D = -log10(v / v_base), does not depend on the gains, so the same numbers rebuild the export's
+// tables at the E, g and b a replay or the knobs render at. R is the reference and is not changed.
+struct TintTrimTables {
+  double theta[4] = {0, 0, 0, 0};
+  double piv[3] = {0, 0, 0};
+  float diag[3] = {0, 0, 0};       // the diagonal of the search's input matrix (merged[0], merged[4], merged[8])
+  float film_base[3] = {0, 0, 0};  // the film base the curves are anchored on (CurveFrame::film_base)
+};
+
+// The bracket's input tables composed in one place (Stage 4): prof's tables become base's, with curves composed into G
+// and B when given, then the tint trim's density change (when given) composed in front at at = (E, g, b). Used by the
+// fit after the trim, by a replayed trim, and by the knobs, which compose the tables again at the E, g and b they move
+// to. prof may be base (curves and trim then compose on its current tables).
+void compose_bracket_tables(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves* curves,
+                            const TintTrimTables* trim, const float at[3]);
+
+// The tint trim the white-light fit's result takes from the network (run_white_light_fit, step
+// 4): an offset s along the "pure a*" direction of the fitted state (mean a* +s, mean b* held, on the grid model).
+struct TintTrimResult {
+  bool ran = false;               // the trim ran and was applied (s may be 0)
+  const char* skipped = nullptr;  // why it did not run: "grid" (the network's grid is not the frame's) or "infer"
+                                  // (inference failed)
+  double s_min = 0.0;   // the lattice point the network's a* residual liked best, among the rendered candidates
+  double se = 0.0;      // the bootstrap standard error of the residual's minimum
+  double s = 0.0;       // the trim applied: s_min + se (one standard error toward magenta)
+  bool trim_capped = false;  // the trim cap shortened s from s_uncapped (anchors' confidence trim_conf)
+  double s_uncapped = 0.0;
+  double trim_conf = 0.0;
+  TintTrimTables tables;  // the density change it is (theta: d_G, d_B in D, k_G, k_B) and what its tables need
+  int lattice = 0, lattice_kept = 0;  // lattice points, and those not greener than Auto (with s = 0 always kept)
+  float residual_pivot = 0.0f;        // the a* residual of the fitted state (s = 0) against its own field
+  // The rendered candidates: s, the residual predicted from the pivot's field, the residual against their own field.
+  std::vector<std::array<float, 3>> candidates;
+  int inferences = 0;   // DINOv3 inferences the scan ran (the pivot and the candidates other than s = 0)
+  double time_ms = 0.0;
+};
+
+// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (intent_head.h, on features an
+// inference of the fit already produced) and the final render's preview; the conversion solves the curve between the
+// preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
+struct ToneStagePlan {
+  bool planned = false;           // a curve was solved (by the conversion) and the conversion applies it
+  const char* skipped = nullptr;  // why not: "off", "encoding" (not -P srgb), "features" (no pooled features)
+  // Whose DINOv3 features the heads read: "offset" (step 4's winning candidate, the tint trim's) or "final" (the final
+  // state's preview, one inference, when the scan did not run); "search" (the intent preview) only if that inference
+  // failed.
+  const char* features = "search";
+  double pred_mean[11] = {}, pred_sd[11] = {};  // the heads' predictions (ToneHead targets, in their order)
+  // The preview (8-bit RGB at DINOv3's size) the curve is solved on, kept for the conversion, which also caps the
+  // highlight move on the final image where it would clip (tone_plan_for_image), solving it again at a smaller share.
+  std::vector<uint8_t> preview;
+};
+
+// What run_white_light_fit did.
+struct WhiteLightFitResult {
+  // The joint fit of the last pass: its curves (with ref and u_med), g, b and E, its data losses, evaluations, grid
+  // renders for E and steps, whether it settled, and its never-greener guard.
+  negicc::JointCurveFit fit;
   ConversionParams params_before; // the search's parameters (E in this frame's units, as ParamSearchResult::params)
   ConversionParams params;        // the result: E re-metered on the combined profile, the fit's g and b (frame units)
   float target_median_L = 0.0f;   // Auto's grid median L* (the re-meter's target), on the export's render at Auto's
@@ -352,35 +419,51 @@ struct CurveRefitResult {
   negicc::CurveFitOptions options;
   // The loss's lightness and colour parts on the export's render: Auto's result on the bracket's profile, the fit's
   // result at its own E, and the result on the combined profile; and the time the fit, re-meter and checks took.
-  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit_e
+  negicc::LossParts parts_auto, parts_fit, parts_export;  // parts_fit: after the (last) fit, at fit.e
+  negicc::NeutralStats neutral_auto, neutral_export;
+  // The fit had scene-neutral anchors (the neutral head's p with some evidence); without them it kept Auto's colour.
+  bool neutral_anchors = false;
+  // The anchors' evidence, hand-over weight and slope shrink (JointCurveModel::decisions).
+  negicc::NeutralTargetDecisions neutral_decisions;
+  // Whose p the guard (fit.guard) weighted by: "search" (the search's chosen preview) or "refit" (predicted again at
+  // the search's final parameters, intent_repredicted).
+  const char* guard_p_source = "search";
+  // Step 4, the tint trim, and the tone stage's plan.
+  TintTrimResult tint_trim;
+  ToneStagePlan tone;
   double time_ms = 0.0;
-  // The joint fit: the E it solved on its per-cell model, its grid renders for E, its steps, and whether it settled.
-  float fit_e = 1.0f;
-  int fit_renders = 0, fit_iterations = 0, fit_polish = 0, fit_start = 0;
-  bool fit_converged = false;
 };
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
-// bundles: on the same frame as the search,
-//   1. the joint fit (negicc::fit_input_curves_joint): g, b and the four curve numbers by Levenberg-Marquardt against
-//      the search's intent field on the frame's grid (predicted again at the search's final parameters when the
-//      pullback or the clip fallback moved them after its preview), each candidate at the E that keeps Auto's grid
-//      median L*, within the bracket's calibrated range of E widened to hold Auto's E; its curves anchored (ref,
-//      u_med) on the film base (the one opts gives, else the brightest grid cell per channel) at its own E, g, b;
+// bundles, on the same frame as the search (the WhiteLightFit steps in multi_target_optimizer.cc):
+//   0. prepare: the search's intent field (predicted again at the search's final parameters when the pullback or the
+//      clip fallback moved them after its preview), the cells the fit uses (a fallback crop leaves out cells at the
+//      film base's level or holder-dark), Auto's render and grid median L*, E's bounds (the bracket's calibrated range
+//      widened to hold Auto's E) and the scene-neutral anchors (JointCurveModel::set_scene_neutral);
+//   1. the joint fit (negicc::fit_input_curves_joint): g, b, a_G and a_B by Levenberg-Marquardt so the anchors render
+//      grey, each candidate at the E that keeps Auto's grid median L*, the correction handed over by evidence, and
+//      the never-greener guard checked on the result; its curves anchored (ref, u_med) on the film base (the one opts
+//      gives, else the brightest grid cell per channel) at its own E, g, b;
 //   2. E re-metered on the real combined tables around the fit's E, so the grid's median L* at the fitted g and b
-//      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its
-//      shape fails at the re-metered anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's
-//      own result with no curves (CurveRefitResult::fallback);
+//      equals Auto's (no DINOv3 pass), each channel's curve scaled down where its shape fails at the re-metered
+//      anchor; when the re-metered E leaves the bounds, or the shape still fails, Auto's own result with no curves
+//      (WhiteLightFitResult::fallback). Steps 1 and 2 repeat (up to three fits) while the re-metered roll-off differs
+//      from the one the fit ran with;
 //   3. the bracket's G and B input tables composed with the curves, anchored at the result, in place
-//      (apply_input_curves on bundle.targets[res.target_idx]).
+//      (compose_bracket_tables on bundle.targets[res.target_idx]);
+//   4. the tint trim (TintTrim): a lattice of "pure a*" offsets of the fitted state, scored by the network's a*
+//      residual, the best candidates rendered and scored on their own fields, the pick moved one bootstrap standard
+//      error toward magenta and capped on the neutrals, composed into the same tables (E re-solved and the roll-off
+//      measured again);
+//   5. record: the export's parameters, losses and neutral statistics, and with tone_head the tone stage's plan
+//      (ToneStagePlan: the heads' predictions and the final render's preview) for the conversion to solve and apply
+//      to the final image.
 // Every step renders the grid as the export renders it (encoding: the export's OutputEncoding, ENCODE_SRGB or
-// ENCODE_SRGB_LINEAR, which is what the fit models): its roll-off, measured as the export measures it, at Auto's
-// parameters for the target and the first fit, alternated with the re-meter until it holds still at the result, and
-// the fit run again (up to twice) when that roll-off differs from the one it ran with.
+// ENCODE_SRGB_LINEAR, which is what the fit models), with the roll-off measured as the export measures it.
 // False (reported) on a bundle with a crosstalk matrix, a search without an intent field, or a failed inference.
-bool fit_input_curves_after_search(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
-                                   double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                                   const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
-                                   int encoding, CurveRefitResult& out);
+bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                         double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                         const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
+                         int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
 
 #endif  // MULTI_TARGET_OPTIMIZER_H

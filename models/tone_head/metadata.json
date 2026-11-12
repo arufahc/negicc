@@ -1,0 +1,43 @@
+{
+  "model_name": "tone_head_pool_a",
+  "backbone": "dinov3-small",
+  "backbone_spec": "dinov3-small_portra400",
+  "features": "pooled + token_sd",
+  "in_dim": 1920,
+  "hidden_dims": [512, 256],
+  "targets": ["L2", "L5", "L10", "L50", "L90", "L95", "L98", "IQR", "R9010", "Cmean", "C90"],
+  "parameters": 1120534,
+  "architecture": "standardise((features - xm) / xs) -> Linear(1920, 512) -> GELU (erf) -> Dropout(0.2) -> Linear(512, 256) -> GELU (erf) -> Linear(256, 22): 11 standardised means and 11 log-variances (clamped to [-6, 4])",
+  "output": "per frame: mean and standard deviation of each target, a lab scan's pixel L* percentiles, L75 - L25, L90 - L10 and chroma at network size",
+  "training": {
+    "corpus": "FilmCorpus lab scans, 8 stocks (ektar100, gold200, portra, portra160, portra400, portra800, pro160ns, pro400h)",
+    "split": "by photographer: pool C = sha1(photographer) mod 100 < 10 (held out, both sites); pool A = the remaining photohito photographers; pool B = the remaining flickr photographers",
+    "pool": "A",
+    "scans": {"A": 6378, "B": 3054, "C": 1107},
+    "photographers_A": 1282,
+    "input": "frozen DINOv3 features of the clean scan (15 % of draws) or of one of 4 randomly perturbed copies (exposure, gamma, contrast, black and white points, saturation, a*/b* cast), at network size",
+    "target": "the clean scan's descriptors",
+    "loss": "Gaussian negative log-likelihood on standardised targets",
+    "optimizer": "AdamW (weight decay 0.01), one-cycle LR to 2e-3",
+    "epochs": 40,
+    "batch": 256,
+    "early_stopping": "5 % of pool A's photographers held out; best epoch by mean absolute error over the perturbed copies",
+    "source": "whitelab TONE arm: tools/extract_corpus.py --K 4, tools/train_heads.py A --kind pool"
+  },
+  "validation_pool_C": {
+    "note": "mean absolute error over the perturbed copies, in L* (C* for Cmean): head / corpus mean / the perturbed input's own value",
+    "L2": [5.15, 7.00, 9.89],
+    "L98": [4.02, 5.38, 15.00],
+    "R9010": [7.46, 12.82, 16.96],
+    "L50": [6.63, 14.80, 9.11],
+    "IQR": [6.57, 11.46, 10.10],
+    "Cmean": [3.33, 5.17, 3.50],
+    "within_scan_sd": {"L2": 1.20, "L98": 0.81, "R9010": 2.22},
+    "between_scan_sd": {"L2": 7.67, "L98": 4.47, "R9010": 12.61}
+  },
+  "files": {
+    "tone_head.pt": {"sha256": "a902d964b18bb1c264260a944e9725d63f0c6ef301c6ea9e1aedca9cfbcc19cd", "bytes": 4506697},
+    "tone_head.bin": {"sha256": "4a54da3b6c3da0dac43a21a6cf9671880c70d98efa0f483c84cecbbf8a0dc692", "bytes": 4497604,
+                      "format": "TNH1: uint32 in_dim, hidden1, hidden2, targets; float32 xm, xs, w1, b1, w2, b2, w3, b3, ym, ys (little-endian)"}
+  }
+}

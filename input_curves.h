@@ -131,6 +131,9 @@ struct CurveFrame {
   float film_base[3] = {0.0f, 0.0f, 0.0f};
   const uint16_t* grid = nullptr;
   int n = 0;
+  // The neutral-patch head's p(neutral) per grid cell (n values, DinoV3InferenceResult::neutral_p), or null when the
+  // head did not run. The joint fit's scene-neutral anchors come from it (JointCurveModel::set_scene_neutral).
+  const float* neutral_p = nullptr;
 };
 
 // shape's a and k anchored at (e, g, b): ref, u_med and u_lo from the frame there (input_curve_reference).
@@ -142,10 +145,9 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
 
 // One channel's curve over the whole input table it is composed into (compose_input_table): at every entry
 // v = i / (n - 1) below ref, u = log2(v / ref), the curve is monotonic (denser film never renders lighter in this
-// channel) and within max_dev stops of the base TRC (|u s(u) - u|). Before, this was checked only over the frame's
-// density range [u_lo, 0] (the densest grid cell), while the table carries the curve down to 1 / (n - 1), where
-// pixels denser than any grid cell land: there the curve could fold over or move arbitrarily far from the TRC. The
-// identity (a = k = 0) always passes.
+// channel) and within max_dev stops of the base TRC (|u s(u) - u|). The whole table is checked, not only the frame's
+// density range [u_lo, 0] (the densest grid cell): pixels denser than any grid cell land below it, where the curve
+// could otherwise fold over or move arbitrarily far from the TRC. The identity (a = k = 0) always passes.
 inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev,
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
@@ -196,36 +198,22 @@ inline LossParts grid_intent_loss_parts(const PipelineConfig& cfg, const float* 
   return s;
 }
 
-inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
-                               const uint16_t* grid, int n, const float* mu, const float* sigma) {
-  return grid_intent_loss_parts(cfg, merged, e, g, b, grid, n, mu, sigma).total();
-}
-
-// The lowest g or b a fit may reach (CurveFitOptions::g_bound, b_bound below g0, b0 are floored here).
+// The lowest g or b a fit may reach (the gain bounds below g0, b0 are floored here).
 constexpr float kGainFloor = 1e-3f;
 
 struct CurveFitOptions {
-  float curve_bound = 0.25f;  // |a|, |k| <= this
-  float max_dev_stops = 1.0f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
-  float g_bound = 0.5f;       // |g - g0| <= this
-  float b_bound = 0.6f;       // |b - b0| <= this
-  // Penalty on the four curve numbers, lambda (aG^2 + kG^2 + aB^2 + kB^2), added to the fits' objective z2 (the mean
-  // of the squared residuals over the 3 n cell terms). The gains and the curves' slope terms (1 + a) move the
-  // residuals almost alike, so without it the Levenberg-Marquardt normal matrix is nearly singular along that
-  // direction; the small default only fixes the direction the residuals leave free (Iterations 227 and 228 ran 0).
-  float lambda = 1e-3f;
-  float step0_gain = 0.08f;
-  float step0_curve = 0.05f;
-  float step_min = 1e-4f;
-  int max_evals = 8000;
-  float polish_step0 = 0.02f;   // the joint fit's coordinate polish: first step, and its budget
-  int polish_max_evals = 600;
-  // Step 2 options (hold_slope on; the others off, which reproduces the joint fit):
-  int starts = 1;               // seeds: no curves, then a = +-start_a on G and B in turn; the lowest loss wins
-  float start_a = 0.06f;
+  // Safety limits, which act only where a fit runs away: the largest per-channel slope change |a|, the largest
+  // departure of each curve from the base TRC over the whole table (curve_shape_ok), and the gains' range around
+  // Auto's, g in [g0 * 2^-s, g0 * 2^s] and the same for b.
+  float curve_bound = 0.35f;
+  float max_dev_stops = 2.2f;
+  float g_bound_stops = 0.75f;
+  float b_bound_stops = 1.25f;
+  // Penalty on the curve numbers, joint_lambda (a_G^2 + a_B^2), added to the joint fit's objective. A numerical
+  // constant, not a tuning knob: the gains and the curves' slope terms (1 + a) move the residuals almost alike, so
+  // without it the Levenberg-Marquardt normal matrix is nearly singular along that direction.
+  float joint_lambda = 1.5f;
   bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
-  float l_weight = 1.0f;        // weight of the cells' L* residuals in the loss (lightness is held by the constraint)
-  float huber = 0.0f;           // > 0: each residual through a Huber function with this threshold (in sigma units)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
   // E stays at Auto's (the measurement of the solver against the pattern search).
 #ifdef NEGICC_CURVE_FIT_E_FIXED
@@ -234,150 +222,93 @@ struct CurveFitOptions {
   bool solve_e = true;
 #endif
   // The tolerance, in L*, of each candidate's E solve (JointCurveModel::solve_e). The Jacobian's probes move a
-  // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 (before) left the probe's E
-  // either unchanged or moved by up to the tolerance, so the derivative through E was noise. 2e-5 is a few float steps
-  // of L* near 50.
+  // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 would leave the probe's E
+  // either unchanged or moved by up to the tolerance, so the derivative through E would be noise. 2e-5 is a few float
+  // steps of L* near 50.
   float e_tol_L = 2e-5f;
 };
 
-struct CurveFitResult {
-  InputCurves curves;
-  float g = 1.0f, b = 1.0f;
-  double loss_before = 0.0, loss_after = 0.0;
-  int evaluations = 0;
-};
-
-// The first fit, which the joint fit below replaced in neg_process: g, b and the four curve numbers with E fixed,
-// against the frozen intent field mu, sigma on the frame's grid: a deterministic bounded pattern search (each
-// coordinate tried at +step and -step in turn, kept when the objective falls; all steps halve after a sweep without
-// improvement) on the same objective (z2 plus the lambda penalty) and with the same held curves (hold_slope). Each
-// candidate's curves are anchored at its own g and b (anchor_curves), so the curves the result carries pivot on the
-// film base at the fitted g and b.
-//
-// TODO(cuda): this evaluates on the CPU (about 700 cells x 1,000 to 2,500 evaluations). On a CUDA build it should run
-// as a kernel that composes the input tables and scores the cells on the device, using the profile's existing device
-// copy, so the fit never copies the grid render back to the host per evaluation.
-inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, float e, float g0, float b0,
-                                       const float* mu, const float* sigma,
-                                       const CurveFitOptions& o = CurveFitOptions()) {
-  const ProfileData base = cfg.profile;
-  CombinedProfile comb;
-  auto curves_of = [&](const float* p) {
-    InputCurves t;
-    t.hold = o.hold_slope;  // as the joint fit's curves (before, this fit ignored hold_slope)
-    t.a[0] = p[2];
-    t.k[0] = p[3];
-    t.a[1] = p[4];
-    t.k[1] = p[5];
-    return anchor_curves(t, f, e, p[0], p[1]);
-  };
-  auto objective = [&](const float* p, int& evals) {
-    const InputCurves t = curves_of(p);
-    ++evals;
-    // Monotonic and bounded over the whole input table, or not a candidate.
-    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.ref[0], base.in_trc_size[1], o.max_dev_stops, t.u_hold(0)) ||
-        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.ref[1], base.in_trc_size[2], o.max_dev_stops, t.u_hold(1)))
-      return static_cast<double>(INFINITY);
-    comb.build(base, t);
-    cfg.profile = comb.data;
-    const double pen = o.lambda * (static_cast<double>(p[2]) * p[2] + static_cast<double>(p[3]) * p[3] +
-                                   static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
-    // z2 (grid_intent_loss is the sum of the three per-cell means, 3 z2) plus the penalty, as the joint fit's.
-    return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) / 3.0 + pen;
-  };
-  // The gains keep a positive floor: at g or b = 0 the channel's ref (the film base through the gain) is 0 and the
-  // curve's anchor collapses (u = log2(v / ref) is undefined), so a wide g_bound or b_bound never reaches it.
-  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
-                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
-  const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
-  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f};
-  float step[6] = {o.step0_gain, o.step0_gain, o.step0_curve, o.step0_curve, o.step0_curve, o.step0_curve};
-  CurveFitResult r;
-  int evals = 0;
-  double best = objective(p, evals);
-  {
-    comb.build(base, curves_of(p));
-    cfg.profile = comb.data;
-    r.loss_before = grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma);
-  }
-  while (evals < o.max_evals) {
-    bool improved = false;
-    for (int d = 0; d < 6 && evals < o.max_evals; ++d) {
-      for (int sgn : {1, -1}) {
-        if (evals >= o.max_evals) break;  // checked per trial, so the budget is never overrun by the second sign
-        float q[6];
-        std::copy(p, p + 6, q);
-        q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step[d]));
-        if (q[d] == p[d]) continue;
-        const double fq = objective(q, evals);
-        if (fq < best) {
-          best = fq;
-          std::copy(q, q + 6, p);
-          improved = true;
-          break;
-        }
-      }
-    }
-    if (!improved) {
-      float mx = 0.0f;
-      for (float& st : step) {
-        st *= 0.5f;
-        mx = std::max(mx, st);
-      }
-      if (mx < o.step_min) break;
-    }
-  }
-  r.curves = curves_of(p);
-  r.g = p[0];
-  r.b = p[1];
-  comb.build(base, r.curves);
-  cfg.profile = comb.data;
-  r.loss_after = grid_intent_loss(cfg, f.merged, e, r.g, r.b, f.grid, f.n, mu, sigma);
-  r.evaluations = evals;
-  return r;
-}
-
-
 // ---- The joint fit -------------------------------------------------------------------------------------------
 //
-// g, b and the four curve numbers fitted against the intent field with E tied to the lightness constraint: each
-// candidate is scored at the E that renders the grid's median L* at target_L (Auto's), so the fit chooses its colour at
-// the lightness the export will have, instead of fitting at Auto's E and moving E afterwards (which moved the colour
-// it had fitted). The objective is z2 (the mean of the cells' squared residuals over their 3 n terms, grid_intent_loss
-// / 3) plus CurveFitOptions::lambda times the curves' squared numbers, evaluated on a per-cell model:
+// g, b and the G and B curves' bend a_G, a_B (k is 0) fitted so the frame's scene-neutral anchors render grey, with E
+// tied to the lightness constraint: each candidate is scored at the E that renders the grid's median L* at target_L
+// (Auto's), so the fit chooses its colour at the lightness the export will have. The objective is the four
+// scene-neutral residuals (JointCurveModel::residuals: the anchors' p^2-weighted mean a* and b*, and their slopes over
+// L* against the slope shrink's target), the never-greener guard's two hinges on the guarded pass (JointFitGuard), and
+// sqrt(CurveFitOptions::joint_lambda) times a_G and a_B. The intent field is not part of it (its losses are only
+// reported). It is evaluated on a per-cell model:
 //   - each cell's three matrix rows are taken once (merged · rgb), and a candidate's (e, g, b) only scales them;
 //   - the curve is applied to each cell's G and B value analytically, in(curve(v)), in place of composing the two
 //     4096-entry tables per candidate (the export's tables sample the same function at their entries);
 //   - E is solved within [e_lo, e_hi] by secant steps on log E warm-started from the previous candidate's E (one to
 //     three grid renders), with a bracketed bisection as the fallback; a candidate whose E would leave the bounds is
 //     not one (the export could not render it at target_L there);
-//   - the solver is Levenberg-Marquardt on the residuals (dL, da, db) / (sigma sqrt(3 n)) and sqrt(lambda) times the
-//     curve numbers, with a forward-difference Jacobian, box bounds by projection and the shape (curve_shape_ok over
-//     the whole table, at each candidate's anchor) by cutting a step back to the furthest point that keeps it (its E
-//     solved at each point tried) or rejecting it and raising the damping.
+//   - the solver is Levenberg-Marquardt on those residuals with a forward-difference Jacobian, box bounds by
+//     projection and the shape (curve_shape_ok over the whole table, at each candidate's anchor) by cutting a step
+//     back to the furthest point that keeps it (its E solved at each point tried) or rejecting it and raising the
+//     damping.
+// The solved correction is then handed over by evidence: its displacement from Auto in (ln g, ln b, a_G, a_B) is
+// scaled by w = m / (m + JointCurveModel::kEvidenceHalfMass), m the anchors' evidence mass, and E solved there again.
 // The result's curves are anchored at its E, g and b; the caller re-meters E on the real combined tables, which moves
 // it by the small difference between the model and the tables.
+struct NeutralStats {
+  int m = 0;
+  float a_bar = 0.0f, b_bar = 0.0f;
+  float k_a = 0.0f, k_b = 0.0f;
+  float q_a = 0.0f, q_b = 0.0f;
+  float off() const { return std::hypot(a_bar, b_bar); }
+  float slope() const { return std::hypot(k_a, k_b); }
+  float quad() const { return std::hypot(q_a, q_b); }
+};
+
+// What JointCurveModel::set_scene_neutral decided beyond the anchors themselves, for the sidecar.
+struct NeutralTargetDecisions {
+  float evidence = 0.0f;     // the anchors' evidence mass, sum of p^2 (0: no anchors, the fit keeps Auto's colour)
+  float span_L = 0.0f;       // the anchors' weighted L* standard deviation the slope shrink measured
+  float slope_share = 0.0f;  // the share of the anchors' slope at Auto the fit removes: sd^2 / (sd^2 + s0^2)
+  float hand_over = 0.0f;    // the share of the fitted correction kept: evidence / (evidence + kEvidenceHalfMass)
+};
+
+// The joint fit's never-greener guard (fit_input_curves_joint): the grid's mean a* at Auto and at the fit's result,
+// over all cells and weighted by the neutral head's p^2, for the sidecar.
+struct GreenGuard {
+  bool counted[2] = {false, false};  // [all cells, p^2-weighted]: the term had enough cells / evidence to count
+  float auto_a[2] = {0.0f, 0.0f};    // Auto's mean a* (g0, b0, no curves, E solved)
+  float fit_a[2] = {0.0f, 0.0f};     // the fit's mean a* at its result
+  bool binding = false;              // a counted term ended more than the tolerance greener than Auto: the hinge pulled
+  // The fit runs first without the guard's residuals; refit: its result broke the bound, so this is the guarded re-run.
+  // free_fit_a: the unguarded result's two means (equal to fit_a when it was kept).
+  bool refit = false;
+  float free_fit_a[2] = {0.0f, 0.0f};
+  // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ((2, 22],
+  // (22, 45], (45, 70], (70, 92)), the band's cells and evidence mass. A band with no cells has zeros.
+  int band_cells[4] = {0, 0, 0, 0};
+  float band_mass[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float band_auto_a[4][2] = {}, band_fit_a[4][2] = {};
+};
+
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
-  // The data loss (grid_intent_loss's units: the sum of the three per-cell means, without the penalty) at the first
-  // seed (Auto's g and b, no curves, E solved) and at the result.
-  double loss_before = 0.0, loss_after = 0.0;
+  // The data loss (the sum of the four squared scene-neutral residuals, JointCurveModel::residuals, without the guard
+  // and the penalty): at Auto's g and b with no curves (E solved), at the solver's point before the evidence hand-over
+  // (loss_solved), and at the result after it (loss_after).
+  double loss_before = 0.0, loss_solved = 0.0, loss_after = 0.0;
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
   int renders = 0;      // grid median renders spent solving E (the evaluations' and the cut-backs')
   int iterations = 0;   // accepted Levenberg-Marquardt steps
-  int polish_evaluations = 0;  // of the evaluations, the coordinate polish's (counted the same way)
-  int start = 0;               // the seed that won (CurveFitOptions::starts)
   bool converged = false;      // every feasible run settled (a step or gain below tolerance), none stalled
   // False when no seed is feasible (not even Auto's g and b without curves keeps target_L within the E bounds): the
   // result is then Auto's g, b and e0 with no curves, which the caller should not take as a fit.
   bool feasible = true;
+  NeutralStats neutral_before, neutral_after;
+  GreenGuard guard;
 };
 
 class JointCurveModel {
  public:
-  JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* mu, const float* sigma)
-      : cfg_(cfg), f_(f), mu_(mu), sigma_(sigma), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
+  JointCurveModel(const PipelineConfig& cfg, const CurveFrame& f, const float* = nullptr, const float* = nullptr)
+      : cfg_(cfg), f_(f), rows_(3 * f.n), L_(f.n), ug_(f.n), ub_(f.n) {
     for (int i = 0; i < f.n; ++i) {
       const Rgb x = load_u16(f.grid + 3 * i);
       for (int r = 0; r < 3; ++r)
@@ -425,42 +356,195 @@ class JointCurveModel {
     return L_[f_.n / 2];
   }
 
-  // The residuals (dL, da, db) / sigma of every cell at (e, g, b) with shape anchored there; returns the sum of their
-  // squares over the n cells (grid_intent_loss's units, the sum of the three per-cell means; the fit's objective
-  // divides the residuals by sqrt(3 n)).
-  // l_weight and huber reshape the residuals (CurveFitOptions); 1 and 0 leave them as grid_intent_loss's.
-  void set_weighting(float l_weight, float huber) {
-    l_scale_ = std::sqrt(std::max(l_weight, 0.0f));
-    huber_ = huber;
-  }
+  // Slope shrink: s0 of sd^2 / (sd^2 + s0^2), in L*; most of a slope measured over an L* spread well under s0 is kept.
+  static constexpr float kSlopeSpanL = 6.0f;
+  // Evidence hand-over: the evidence mass (sum of p^2) at which the fit's correction is applied at half strength
+  // (w = m / (m + this)), so that a correction resting on very little neutral evidence is not trusted. A policy
+  // value, not derived.
+  // TODO: the value was checked on few low-evidence frames; re-check it on the scans that arrive through the web
+  // portal as they accumulate (their evidence distribution, and the corrections of low-evidence scans at 6, 12, 24
+  // and 48).
+  static constexpr double kEvidenceHalfMass = 12.0;
+  static double hand_over_weight(double evidence) { return evidence / (evidence + kEvidenceHalfMass); }
 
-  double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
-    const InputCurves c = anchored(shape, e, g, b);
-    r.resize(3 * (size_t)f_.n);
-    double s = 0.0;
-    auto robust = [&](double x) {
-      if (!(huber_ > 0.0f) || std::fabs(x) <= huber_) return x;
-      const double ax = std::fabs(x);
-      return (x < 0 ? -1.0 : 1.0) * std::sqrt(2.0 * huber_ * ax - (double)huber_ * huber_);  // r'^2 = 2 Huber(r)
-    };
+  // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0): every cell Auto renders at
+  // L* 2..92 (2 < L* < 92) is an anchor, weighted by the neutral-patch head's p(neutral) squared
+  // (CurveFrame::neutral_p), with no threshold on p and no balancing between tone ranges; the weights are normalised
+  // to sum to 1. Their
+  // sum of p^2 before that is the evidence. The fit then removes the anchors' cast in full: the offset residuals aim
+  // at a* = b* = 0, and the slope residuals at (1 - f) k0, k0 the anchors' slope at Auto and f = sd^2 / (sd^2 +
+  // kSlopeSpanL^2), sd the anchors' weighted L* standard deviation (the slope shrink: a slope measured over a narrow
+  // tone range is not extrapolated into a bend across the whole range).
+  //
+  // Without the head's p (no head loaded, or no inference), when fewer than 8 finite cells (whatever their p) lie in
+  // that L* range, or when every p^2 is 0, there are no anchors (has_anchors() false): the neutral residuals are 0, and
+  // the joint fit stays at its start, Auto's g and b with no G/B bend (E still solved to Auto's median L*; the
+  // re-meter and the steps after the fit run as on any frame).
+  // decisions() records the evidence, the hand-over weight and the slope shrink.
+  void set_scene_neutral(float e0, float g0, float b0) {
+    neu_idx_.clear();
+    neu_w_.clear();
+    has_anchors_ = false;
+    w_off_ = w_slope_ = 0.0f;
+    k_target_a_ = k_target_b_ = 0.0f;
+    decisions_ = NeutralTargetDecisions{};
+    if (f_.n <= 0 || !f_.neutral_p) return;
+
+    const InputCurves zero_c{};
+    std::vector<Lab> lab0(f_.n);
+    std::vector<float> c0(f_.n);
     for (int i = 0; i < f_.n; ++i) {
-      const Lab lab = cell_lab(i, e, g, b, c);
-      r[3 * i] = robust(l_scale_ * (lab.L - mu_[3 * i]) / std::max(sigma_[3 * i], kSigmaFloor));
-      r[3 * i + 1] = robust((lab.a - mu_[3 * i + 1]) / std::max(sigma_[3 * i + 1], kSigmaFloor));
-      r[3 * i + 2] = robust((lab.b - mu_[3 * i + 2]) / std::max(sigma_[3 * i + 2], kSigmaFloor));
-      s += r[3 * i] * r[3 * i] + r[3 * i + 1] * r[3 * i + 1] + r[3 * i + 2] * r[3 * i + 2];
+      lab0[i] = cell_lab(i, e0, g0, b0, zero_c);
+      const float c = std::hypot(lab0[i].a, lab0[i].b);
+      c0[i] = std::isfinite(c) && std::isfinite(lab0[i].L) ? c : INFINITY;
     }
-    return f_.n ? s / f_.n : 0.0;
+
+    // The cells in range, collected by lightness band ((2, 22], (22, 45], (45, 70], (70, 92)) and used together: the
+    // bands balance nothing; they only fix the order of the anchors and so of every sum over them (collecting them in
+    // grid order instead moves 28 of 29 test frames by rounding).
+    std::vector<int> bands[4];
+    int total = 0;
+    for (int i = 0; i < f_.n; ++i) {
+      if (!std::isfinite(c0[i])) continue;
+      const float L = lab0[i].L;
+      if (L > 2.0f && L < 92.0f) {
+        if (L <= 22.0f) bands[0].push_back(i);
+        else if (L <= 45.0f) bands[1].push_back(i);
+        else if (L <= 70.0f) bands[2].push_back(i);
+        else bands[3].push_back(i);
+        ++total;
+      }
+    }
+    if (total < 8) return;
+
+    std::vector<int> b_sel[4];
+    std::vector<float> pw(f_.n, 0.0f);  // p^2 per cell
+    double mass = 0.0;
+    for (int b = 0; b < 4; ++b) {
+      for (int i : bands[b]) {
+        const float p = std::clamp(f_.neutral_p[i], 0.0f, 1.0f);
+        pw[i] = p * p;
+        if (pw[i] > 0.0f) {
+          b_sel[b].push_back(i);
+          mass += pw[i];
+        }
+      }
+    }
+    decisions_.evidence = (float)mass;
+    decisions_.hand_over = (float)hand_over_weight(decisions_.evidence);
+
+    float w_sum = 0.0f;
+    for (int b = 0; b < 4; ++b) {
+      for (int i : b_sel[b]) {
+        neu_idx_.push_back(i);
+        neu_w_.push_back(pw[i]);
+        w_sum += pw[i];
+      }
+    }
+    if (!(w_sum > 0.0f)) {
+      neu_idx_.clear();
+      neu_w_.clear();
+      return;
+    }
+    for (float& w : neu_w_) w /= w_sum;
+    has_anchors_ = true;
+    const int m = (int)neu_idx_.size();
+
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      sL += w * lab0[i].L;
+      sa += w * lab0[i].a;
+      sb += w * lab0[i].b;
+    }
+    double vL0 = 0.0, covLa0 = 0.0, covLb0 = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      const double dL = lab0[i].L - sL;
+      vL0 += w * dL * dL;
+      covLa0 += w * dL * (lab0[i].a - sa);
+      covLb0 += w * dL * (lab0[i].b - sb);
+    }
+    const double ka0 = 50.0 * covLa0 / (vL0 + 25.0);
+    const double kb0 = 50.0 * covLb0 / (vL0 + 25.0);
+
+    w_off_ = 1.0f / 1.5f;
+    w_slope_ = std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
+
+    // Slope shrink: the anchors' weighted L* spread (their weights renormalised over them; a separate pass from vL0,
+    // which is centred on a mean summed in another order). The same quantity as vL0 up to rounding, kept as its own
+    // pass because using vL0 moves 21 of 29 test frames by rounding.
+    double w_span = 0.0, L_span = 0.0;
+    for (int k = 0; k < m; ++k) {
+      w_span += neu_w_[k];
+      L_span += neu_w_[k] * lab0[neu_idx_[k]].L;
+    }
+    L_span /= w_span;
+    double vL_span = 0.0;
+    for (int k = 0; k < m; ++k) {
+      const double dL = lab0[neu_idx_[k]].L - L_span;
+      vL_span += neu_w_[k] * dL * dL;
+    }
+    vL_span /= w_span;
+    const double s0_sq = (double)kSlopeSpanL * (double)kSlopeSpanL;
+    const float slope_share = (float)(vL_span / (vL_span + s0_sq));
+    k_target_a_ = (float)((1.0 - slope_share) * ka0);
+    k_target_b_ = (float)((1.0 - slope_share) * kb0);
+    decisions_.span_L = (float)std::sqrt(vL_span);
+    decisions_.slope_share = slope_share;
+
   }
 
-  // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with
-  // log E, each cell's L* does). Secant steps on log E from e_warm (clamped into the bounds), each new point kept in a
+  // set_scene_neutral found anchors (the head's p, with some evidence).
+  bool has_anchors() const { return has_anchors_; }
+  // What set_scene_neutral decided: the evidence, the hand-over weight and the slope shrink.
+  const NeutralTargetDecisions& decisions() const { return decisions_; }
+
+  NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
+    const InputCurves c = anchored(shape, e, g, b);
+    return neutral_stats_anchored(e, g, b, c);
+  }
+
+  NeutralStats neutral_stats_on(const PipelineConfig& cfg, float e, float g, float b) const {
+    NeutralStats st;
+    st.m = (int)neu_idx_.size();
+    if (st.m <= 0) return st;
+    float m[9];
+    candidate_matrix(f_.merged, e, g, b, m);
+    std::vector<Lab> labs(st.m);
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      labs[k] = linear_srgb_to_lab(to_display(cfg, convert_pixel_linear(cfg, m, f_.grid + 3 * i)));
+      sL += w * labs[k].L;
+      sa += w * labs[k].a;
+      sb += w * labs[k].b;
+    }
+    return compute_neutral_moments(labs, sL, sa, sb, st);
+  }
+
+  // 4-equation scene-neutral residuals: [w_off * a_bar, w_off * b_bar, w_slope * (k_a - kt_a),
+  // w_slope * (k_b - kt_b)], kt the slope target set_scene_neutral's slope shrink left.
+  double residuals(float e, float g, float b, const InputCurves& shape, std::vector<double>& r) {
+    const NeutralStats st = neutral_stats(e, g, b, shape);
+    r.assign(4, 0.0);
+    if (st.m <= 0 || !has_anchors_) return 0.0;
+    r[0] = (double)w_off_ * st.a_bar;
+    r[1] = (double)w_off_ * st.b_bar;
+    r[2] = (double)w_slope_ * (st.k_a - k_target_a_);
+    r[3] = (double)w_slope_ * (st.k_b - k_target_b_);
+    return r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
+  }
+
+  // E with the grid's median L* at target_L within [e_lo, e_hi] (a larger E renders darker: the median falls with log
+  // E, each cell's L* does). Secant steps on log E from e_warm (clamped into the bounds), each new point kept in a
   // bracket of the two nearest points either side of the target; where the secant leaves the bracket or stalls, the
   // bounds the bracket lacks are tested and the bracket bisected. False when the target lies outside the bounds (the
   // median at one bound is already past it): e is that bound, and the point is not one the export can render at
-  // target_L. Before, a warm start at a bound was stepped outward and clamped back onto itself (the secant then saw
-  // two equal points and gave up), the fallback bisected [e0 / 4, 4 e0] without testing its ends, and an unreachable
-  // target returned a bound as if it were the answer.
+  // target_L.
   bool solve_e(float g, float b, const InputCurves& shape, float target_L, float e_warm, float e_lo, float e_hi,
                float tol, int& renders, float& e) {
     const float lo_t = std::log(e_lo), hi_t = std::log(e_hi);
@@ -531,6 +615,59 @@ class JointCurveModel {
   }
 
  private:
+  NeutralStats compute_neutral_moments(const std::vector<Lab>& labs, double sL, double sa, double sb,
+                                       NeutralStats& st) const {
+    double vL = 0.0, sLa = 0.0, sLb = 0.0, sz3 = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const double w = neu_w_[k];
+      const double dL = labs[k].L - sL;
+      const double z = dL / 50.0;
+      vL += w * dL * dL;
+      sz3 += w * z * z * z;
+      sLa += w * dL * (labs[k].a - sa);
+      sLb += w * dL * (labs[k].b - sb);
+    }
+    const double ka = 50.0 * sLa / (vL + 25.0);
+    const double kb = 50.0 * sLb / (vL + 25.0);
+    const double vz = vL / 2500.0;
+    const double mu3 = sz3 / (vz + 1e-4);
+    double vq = 0.0, sqa = 0.0, sqb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const double w = neu_w_[k];
+      const double z = (labs[k].L - sL) / 50.0;
+      const double uq = 4.0 * (z * z - vz - mu3 * z);
+      const double ea = (labs[k].a - sa) - ka * z;
+      const double eb = (labs[k].b - sb) - kb * z;
+      vq += w * uq * uq;
+      sqa += w * uq * ea;
+      sqb += w * uq * eb;
+    }
+    st.a_bar = (float)sa;
+    st.b_bar = (float)sb;
+    st.k_a = (float)ka;
+    st.k_b = (float)kb;
+    st.q_a = (float)(sqa / (vq + 0.04));
+    st.q_b = (float)(sqb / (vq + 0.04));
+    return st;
+  }
+
+  NeutralStats neutral_stats_anchored(float e, float g, float b, const InputCurves& c) const {
+    NeutralStats st;
+    st.m = (int)neu_idx_.size();
+    if (st.m <= 0) return st;
+    std::vector<Lab> labs(st.m);
+    double sL = 0.0, sa = 0.0, sb = 0.0;
+    for (int k = 0; k < st.m; ++k) {
+      const int i = neu_idx_[k];
+      const double w = neu_w_[k];
+      labs[k] = cell_lab(i, e, g, b, c);
+      sL += w * labs[k].L;
+      sa += w * labs[k].a;
+      sb += w * labs[k].b;
+    }
+    return compute_neutral_moments(labs, sL, sa, sb, st);
+  }
+
   static float median(std::vector<float> v) {
     if (v.empty()) return 0.0f;
     const size_t h = v.size() / 2;
@@ -542,43 +679,137 @@ class JointCurveModel {
 
   PipelineConfig cfg_;
   CurveFrame f_;
-  const float* mu_;
-  const float* sigma_;
   float fb_[3] = {0.0f, 0.0f, 0.0f};
-  float l_scale_ = 1.0f, huber_ = 0.0f;
+  float w_off_ = 0.0f, w_slope_ = 0.0f;
+  float k_target_a_ = 0.0f, k_target_b_ = 0.0f;  // the slope residuals' target (slope shrink)
+  NeutralTargetDecisions decisions_;
   std::vector<float> rows_, L_, ug_, ub_;
+  std::vector<int> neu_idx_;
+  std::vector<float> neu_w_;
+  bool has_anchors_ = false;
 };
 
-// The joint fit from Auto's (e0, g0, b0) and no curves; cfg carries the bracket's own profile and the export's encoding
-// and roll-off. target_L: Auto's grid median L*. table_n: the G and B input tables' sizes, for the shape check. e_lo,
-// e_hi: the bounds of every candidate's E (0: e0 / 4 and 4 e0, as before they were given); they should hold e0.
-inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
-                                            const float* mu, const float* sigma, float target_L, const int table_n[2],
-                                            const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
-                                            float e_hi = 0.0f) {
+// The never-greener guard: the joint fit may move the grid's colour anywhere the neutral term asks, except greener
+// than Auto. Over the grid cells Auto renders at L* 2..92 (one band: the whole tone range), the candidate's mean a*
+// over all cells, and its mean a* weighted by the neutral head's p^2, may not fall more than kGreenGuardTolAb below
+// Auto's. The bound applies to the result, not to the solver's path: the fit runs first without the guard, and that
+// result stands when neither counted mean ends more than the tolerance greener than Auto's. Otherwise the fit runs
+// again from the same start with each excess in the Levenberg-Marquardt residuals as kGreenGuardWeight x
+// max(0, a*_Auto - tol - a*), 0 at Auto and wherever the candidate is not greener: a penalty in the objective rather
+// than a clamp afterwards. (A hinge on every evaluation also blocked steps that pass through a slightly greener point
+// on the way to a less green result, stalling the fit at its start.) A term counts with at least kGreenGuardMinCells
+// cells, the weighted one with an evidence mass (sum p^2) of at least kGreenGuardMinMass.
+// Shadows carry no debit (green_guard_cell_a): in both means, a cell Auto renders in the deep shadows that ends greener
+// than at Auto counts at Auto's a*, so the fit may correct a shadow cast toward green; a shadow cell that ends more
+// magenta keeps its credit, and mid-tones and highlights count as they are. The tint trim's guard check is not
+// affected.
+constexpr float kGreenGuardTolAb = 0.5f;
+// The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
+// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
+constexpr double kGreenGuardShadowL0 = 15.0;
+constexpr double kGreenGuardShadowWidth = 10.0;
+// A cell's a* as the guard's means count it: a_Auto + d, d = a - a_Auto, with a negative d (the cell greener than at
+// Auto) scaled by 1 - w_s, w_s the shadow weight of the cell's L* at Auto.
+inline double green_guard_cell_a(double a, double a_auto, double L_auto) {
+  if (!std::isfinite(a) || !std::isfinite(a_auto)) return a;
+  const double d = a - a_auto;
+  if (d >= 0.0) return a;
+  const double x = std::clamp((L_auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5, 0.0, 1.0);
+  const double ws = 1.0 - x * x * (3.0 - 2.0 * x);
+  return a_auto + (1.0 - ws) * d;
+}
+constexpr float kGreenGuardWeight = 4.0f;
+constexpr double kGreenGuardMinCells = 8.0;
+constexpr double kGreenGuardMinMass = 2.0;
+
+// The never-greener guard on one pass of the joint fit: its cells (Auto's render at L* 2..92), their p^2, Auto's a*
+// and L* per cell, Auto's two means (ref) and which of them count. set_cells() takes the cells from Auto's render once
+// Auto's E is solved; means() gives a candidate's two means; hinge() a mean's excess as the residual the guarded pass
+// adds; binds() whether a result breaks the bound. (The tint trim's guard check differs in its tolerance, its L* edge,
+// the shadow exemption and how it compares the means, so it keeps its own.)
+struct JointFitGuard {
+  std::vector<char> in;
+  std::vector<double> pw, auto_a, auto_L;  // p^2; Auto's a* (a cell a candidate renders non-finite counts at it) and L*
+  double ref[2] = {0.0, 0.0};
+  bool counted[2] = {false, false};
+  bool ready = false;  // set_cells() and ref done: the residuals carry the guard's entries from then on
+
+  // lab_auto(i): cell i's Lab on Auto's render; neutral_p: the head's p per cell, or null.
+  template <typename AutoLab>
+  void set_cells(int n, AutoLab lab_auto, const float* neutral_p) {
+    in.assign(n, 0);
+    pw.assign(n, 0.0);
+    auto_a.assign(n, 0.0);
+    auto_L.assign(n, 0.0);
+    double na = 0.0, wp = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const Lab l = lab_auto(i);
+      if (!std::isfinite(l.L) || !std::isfinite(l.a) || !(l.L > 2.0f && l.L < 92.0f)) continue;
+      in[i] = 1;
+      auto_a[i] = l.a;
+      auto_L[i] = l.L;
+      const double p = neutral_p ? std::clamp((double)neutral_p[i], 0.0, 1.0) : 0.0;
+      pw[i] = p * p;
+      na += 1.0;
+      wp += pw[i];
+    }
+    counted[0] = na >= kGreenGuardMinCells;
+    counted[1] = wp >= kGreenGuardMinMass;
+  }
+  // a_of(i): the candidate's a* of cell i. v: the mean over the guard's cells and the p^2-weighted mean, each cell's
+  // a* as green_guard_cell_a counts it.
+  template <typename CellA>
+  void means(CellA a_of, double v[2]) const {
+    double sa = 0.0, na = 0.0, sp = 0.0, wp = 0.0;
+    for (int i = 0; i < (int)in.size(); ++i) {
+      if (!in[i]) continue;
+      // The same cells for every candidate (the ones set_cells counted): a cell a candidate renders non-finite counts
+      // at Auto's a*, so the two means never compare different populations.
+      double a = a_of(i);
+      if (!std::isfinite(a)) a = auto_a[i];
+      a = green_guard_cell_a(a, auto_a[i], auto_L[i]);
+      sa += a;
+      na += 1.0;
+      sp += pw[i] * a;
+      wp += pw[i];
+    }
+    v[0] = na > 0 ? sa / na : 0.0;
+    v[1] = wp > 0 ? sp / wp : 0.0;
+  }
+  double hinge(int k, const double v[2]) const {
+    return counted[k] ? (double)kGreenGuardWeight * std::max(0.0, ref[k] - kGreenGuardTolAb - v[k]) : 0.0;
+  }
+  bool binds(int k, const double v[2]) const { return counted[k] && ref[k] - kGreenGuardTolAb - v[k] > 0.0; }
+};
+
+// One pass of the joint fit (fit_input_curves_joint); guard_path: the guard's hinge joins the residuals at every
+// evaluation. Off, the hinge residuals are 0 (same residual count) and the guard is only measured at the result.
+inline JointCurveFit fit_input_curves_joint_pass(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0,
+                                                 float b0, const float* mu, const float* sigma, float target_L,
+                                                 const int table_n[2], const CurveFitOptions& o, float e_lo, float e_hi,
+                                                 bool guard_path) {
   JointCurveModel model(cfg, f, mu, sigma);
-  model.set_weighting(o.l_weight, o.huber);
+  model.set_scene_neutral(e0, g0, b0);
   if (!(e_lo > 0.0f)) e_lo = e0 * 0.25f;
   if (!(e_hi > e_lo)) e_hi = std::max(e_lo, e0 * 4.0f);
-  // The gains' positive floor, as in fit_input_curves.
-  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
-                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
-  const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
+  const float g_lo = g0 * std::exp2(-o.g_bound_stops), g_hi = g0 * std::exp2(o.g_bound_stops);
+  const float b_lo = b0 * std::exp2(-o.b_bound_stops), b_hi = b0 * std::exp2(o.b_bound_stops);
+  const float lo[4] = {std::max(kGainFloor, g_lo), std::max(kGainFloor, b_lo), -o.curve_bound, -o.curve_bound};
+  const float hi[4] = {g_hi, b_hi, o.curve_bound, o.curve_bound};
   auto shape_of = [&](const float* p) {
     InputCurves c;
     c.hold = o.hold_slope;
     c.a[0] = p[2];
-    c.k[0] = p[3];
-    c.a[1] = p[4];
-    c.k[1] = p[5];
+    c.k[0] = 0.0f;
+    c.a[1] = p[3];
+    c.k[1] = 0.0f;
     return c;
   };
   JointCurveFit out;
+  out.neutral_before = model.neutral_stats(e0, g0, b0, InputCurves{});
   int renders = 0;
-  const double inv_sqrt_3n = f.n > 0 ? 1.0 / std::sqrt(3.0 * f.n) : 0.0;
-  const double sqrt_lambda = std::sqrt(std::max(0.0, static_cast<double>(o.lambda)));
-  // A point's E (solved within the bounds, or e0) and whether the point is a candidate: its E reaches target_L within
-  // the bounds and (check_shape) its curves keep the shape at its anchor.
+  const double sqrt_lambda = std::sqrt(std::max(0.0, static_cast<double>(o.joint_lambda)));
+
   auto solve_point = [&](const float* p, float e_warm, float& e, bool check_shape) {
     const InputCurves shape = shape_of(p);
     if (o.solve_e) {
@@ -591,37 +822,71 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     return curve_shape_ok(c.a[0], c.k[0], c.u_med[0], c.ref[0], table_n[0], o.max_dev_stops, c.u_hold(0)) &&
            curve_shape_ok(c.a[1], c.k[1], c.u_med[1], c.ref[1], table_n[1], o.max_dev_stops, c.u_hold(1));
   };
-  // A point evaluated: its E, the solver's residual vector r (the cells' over sqrt(3 n), then the penalty's four),
-  // the objective (the sum of r's squares) and the data loss; false when it is not a candidate (solve_point).
+
+  // The guard (JointFitGuard), set once Auto's E is solved (guard_init), before which evaluate adds no guard
+  // residuals.
+  JointFitGuard guard;
+  auto guard_means = [&](const float* q, float eq, double v[2]) {
+    const InputCurves c = model.anchored(shape_of(q), eq, q[0], q[1]);
+    guard.means([&](int i) { return (double)model.cell_lab(i, eq, q[0], q[1], c).a; }, v);
+  };
+  auto guard_init = [&](float eq) {
+    const InputCurves c = model.anchored(InputCurves{}, eq, g0, b0);
+    guard.set_cells(f.n, [&](int i) { return model.cell_lab(i, eq, g0, b0, c); }, f.neutral_p);
+    const float p0[4] = {g0, b0, 0.0f, 0.0f};
+    guard_means(p0, eq, guard.ref);
+    out.guard.counted[0] = guard.counted[0];
+    out.guard.counted[1] = guard.counted[1];
+    guard.ready = true;
+  };
+  // The evidence hand-over of a solver point p: (ln g, ln b, a_G, a_B) moved from Auto's (g0, b0, 0, 0) by w.
+  const double w_hand = JointCurveModel::hand_over_weight(model.decisions().evidence);
+  auto hand_over = [&](const float* p, float q[4]) {
+    q[0] = (float)(g0 * std::pow((double)p[0] / g0, w_hand));
+    q[1] = (float)(b0 * std::pow((double)p[1] / b0, w_hand));
+    q[2] = (float)(w_hand * p[2]);
+    q[3] = (float)(w_hand * p[3]);
+  };
   auto evaluate = [&](const float* p, float e_warm, float& e, std::vector<double>& r, double& cost, double& data,
                       bool check_shape) {
     ++out.evaluations;
     if (!solve_point(p, e_warm, e, check_shape)) return false;
     data = model.residuals(e, p[0], p[1], shape_of(p), r);
-    const size_t nd = r.size();
-    double sum = 0.0;
-    for (size_t k = 0; k < nd; ++k) {
-      r[k] *= inv_sqrt_3n;
-      sum += r[k] * r[k];
+    double sum = data;
+    if (guard.ready) {
+      // The hinges are 0 on the unguarded pass (the guard is measured at its result only), so the means are needed
+      // only on the guarded one; the residual vector keeps its two guard entries either way. The guarded pass measures
+      // the means where the result will be: at p's evidence hand-over, its E solved there (p's own E if that fails).
+      double v[2] = {0.0, 0.0};
+      if (guard_path) {
+        float q[4], eq = e;
+        hand_over(p, q);
+        if (solve_point(q, e, eq, false)) guard_means(q, eq, v);
+        else guard_means(p, e, v);
+      }
+      for (int k = 0; k < 2; ++k) {
+        const double h = guard_path ? guard.hinge(k, v) : 0.0;
+        r.push_back(h);
+        sum += h * h;
+      }
     }
-    r.resize(nd + 4);
-    for (int j = 0; j < 4; ++j) {
+    const size_t nd = r.size();
+    r.resize(nd + 2);
+    for (int j = 0; j < 2; ++j) {
       r[nd + j] = sqrt_lambda * p[2 + j];
       sum += r[nd + j] * r[nd + j];
     }
     cost = sum;
     return std::isfinite(cost);
   };
-  // The furthest point p + t (q - p), t in [0, 1], that is a candidate (its E solved at each t tried, warm-started at
-  // e; t = 0, p itself, is one), by bisection; its t, and its E in e_t. Before, the shape was checked at p's E and the
-  // point then evaluated at its own, where it could fail again, so the solver stalled on the boundary.
+
   auto cut_back = [&](const float* p, const float* q, float e, float& e_t) {
     float t_ok = 0.0f, t_bad = 1.0f;
     e_t = e;
     for (int it = 0; it < 10; ++it) {
       const float t = 0.5f * (t_ok + t_bad);
-      float qt[6];
-      for (int j = 0; j < 6; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
+      float qt[4];
+      for (int j = 0; j < 4; ++j) qt[j] = p[j] + t * (q[j] - p[j]);
       float et = e;
       if (solve_point(qt, e, et, true)) {
         t_ok = t;
@@ -633,203 +898,224 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     return t_ok;
   };
 
-  // One run of the solver and the polish from p_init; its result in p_out, e_out, cost_out (the objective), data_out
-  // (the data loss); feasible_out false when not even the seed's no-curve end is a candidate.
-  auto run = [&](const float* p_init, bool first, float* p_out, float& e_out, double& cost_out, double& data_out,
-                 bool& settled_out, bool& feasible_out) {
-    float p[6];
-    std::copy(p_init, p_init + 6, p);
-    float e = e0;
-    std::vector<double> r, rt, rj;
-    double cost = 0.0, data = 0.0;
-    settled_out = false;
-    feasible_out = false;
-    // The seed must be a candidate (before, it was evaluated without the shape check, so an infeasible seed could
-    // win): where its curves leave the shape or its E the bounds, they are cut back towards none.
-    if (!evaluate(p, e0, e, r, cost, data, true)) {
-      float none[6];
-      std::copy(p, p + 6, none);
-      for (int j = 2; j < 6; ++j) none[j] = 0.0f;
-      float e_none = e0;
-      if (!solve_point(none, e0, e_none, true)) return;
-      float e_t = e_none;
-      const float t = cut_back(none, p, e_none, e_t);
-      for (int j = 2; j < 6; ++j) p[j] = t * p[j];
-      if (!evaluate(p, e_t, e, r, cost, data, true)) return;
+  float p[4] = {g0, b0, 0.0f, 0.0f}, e = e0;
+  std::vector<double> r, rt, rj;
+  double cost = 0.0, data = 0.0;
+  if (!evaluate(p, e0, e, r, cost, data, true)) {
+    out.feasible = false;
+    out.converged = false;
+    out.g = g0;
+    out.b = b0;
+    out.e = e0;
+    out.curves = model.anchored(shape_of(p), e0, g0, b0);
+    out.neutral_after = out.neutral_before;
+    out.renders = renders;
+    return out;
+  }
+  out.feasible = true;
+  out.loss_before = data;
+  // The guard's reference is Auto at its solved E; Auto's point again with the guard's residuals (all 0 there).
+  guard_init(e);
+  evaluate(p, e, e, r, cost, data, true);
+
+  const int m = 4;
+  double lambda = 1e-3;
+  bool settled = (!model.has_anchors() || data <= 1e-6);
+  for (int iter = 0; iter < 25 && !settled; ++iter) {
+    const size_t nr = r.size();
+    std::vector<double> J(nr * m, 0.0);
+    for (int j = 0; j < m; ++j) {
+      float q[4];
+      std::copy(p, p + 4, q);
+      const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
+      q[j] += h;
+      float ej = e;
+      double cj = 0.0, dj = 0.0;
+      if (!evaluate(q, e, ej, rj, cj, dj, false) || rj.size() != nr) continue;
+      for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
     }
-    feasible_out = true;
-    if (first) out.loss_before = data;
-    const int m = 6;
-    double lambda = 1e-3;
-    bool settled = false;
-    for (int iter = 0; iter < 60 && !settled; ++iter) {
-      // Forward-difference Jacobian of the residuals (E solved at each probe, warm-started at this point's E, to
-      // CurveFitOptions::e_tol_L, so the probe's E follows the parameter instead of the solver's tolerance).
-      const size_t nr = r.size();
-      std::vector<double> J(nr * m);
+    double A[4][4] = {}, gvec[4] = {};
+    for (size_t k = 0; k < nr; ++k) {
+      for (int a = 0; a < m; ++a) {
+        gvec[a] += J[k * m + a] * r[k];
+        for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
+      }
+    }
+    for (int a = 0; a < m; ++a)
+      for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
+    for (int a = 0; a < m; ++a) {
+      if ((p[a] <= lo[a] + 1e-5f && gvec[a] > 0.0) || (p[a] >= hi[a] - 1e-5f && gvec[a] < 0.0)) {
+        for (int bb = 0; bb < m; ++bb) A[a][bb] = A[bb][a] = 0.0;
+        A[a][a] = 1.0;
+        gvec[a] = 0.0;
+      }
+    }
+
+    bool accepted = false;
+    for (int tries = 0; tries < 10 && !accepted; ++tries) {
+      double M[4][5];
+      for (int a = 0; a < m; ++a) {
+        for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-6) : 0.0);
+        M[a][4] = -gvec[a];
+      }
+      for (int c = 0; c < m; ++c) {
+        int piv = c;
+        for (int rr = c + 1; rr < m; ++rr)
+          if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
+        for (int cc = 0; cc < 5; ++cc) std::swap(M[c][cc], M[piv][cc]);
+        if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
+        for (int rr = c + 1; rr < m; ++rr) {
+          const double fct = M[rr][c] / M[c][c];
+          for (int cc = c; cc < 5; ++cc) M[rr][cc] -= fct * M[c][cc];
+        }
+      }
+      double delta[4];
+      for (int c = m - 1; c >= 0; --c) {
+        double sum = M[c][4];
+        for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
+        delta[c] = sum / M[c][c];
+      }
+      float q[4];
+      float step = 0.0f;
       for (int j = 0; j < m; ++j) {
-        float q[6];
-        std::copy(p, p + 6, q);
-        const float h = (q[j] + 1e-3f <= hi[j]) ? 1e-3f : -1e-3f;
-        q[j] += h;
-        float ej = e;
-        double cj = 0.0, dj = 0.0;
-        if (!evaluate(q, e, ej, rj, cj, dj, false) || rj.size() != nr) {
-          // The probe's E left the bounds: no derivative along j this iteration.
-          for (size_t k = 0; k < nr; ++k) J[k * m + j] = 0.0;
-          continue;
-        }
-        for (size_t k = 0; k < nr; ++k) J[k * m + j] = (rj[k] - r[k]) / h;
+        q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
+        step = std::max(step, std::fabs(q[j] - p[j]));
       }
-      double A[6][6] = {}, gvec[6] = {};
-      for (size_t k = 0; k < nr; ++k) {
-        for (int a = 0; a < m; ++a) {
-          gvec[a] += J[k * m + a] * r[k];
-          for (int bb = a; bb < m; ++bb) A[a][bb] += J[k * m + a] * J[k * m + bb];
-        }
+      if (step < 1e-5f) {
+        settled = true;
+        break;
       }
-      for (int a = 0; a < m; ++a)
-        for (int bb = 0; bb < a; ++bb) A[a][bb] = A[bb][a];
-      bool accepted = false;
-      for (int tries = 0; tries < 12 && !accepted; ++tries) {
-        // (A + lambda diag(A)) delta = -g, by Gaussian elimination with partial pivoting.
-        double M[6][7];
-        for (int a = 0; a < m; ++a) {
-          for (int bb = 0; bb < m; ++bb) M[a][bb] = A[a][bb] + (a == bb ? lambda * std::max(A[a][a], 1e-12) : 0.0);
-          M[a][6] = -gvec[a];
+      float eq = e;
+      double cq = 0.0, dq = 0.0;
+      bool feasible = false;
+      for (float step_s : {1.0f, 0.5f, 0.25f, 0.1f, 0.05f}) {
+        float qt[4];
+        for (int j = 0; j < m; ++j) {
+          qt[j] = std::min(hi[j], std::max(lo[j], p[j] + step_s * (float)delta[j]));
         }
-        for (int c = 0; c < m; ++c) {
-          int piv = c;
-          for (int rr = c + 1; rr < m; ++rr)
-            if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
-          for (int cc = 0; cc < 7; ++cc) std::swap(M[c][cc], M[piv][cc]);
-          if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
-          for (int rr = c + 1; rr < m; ++rr) {
-            const double fct = M[rr][c] / M[c][c];
-            for (int cc = c; cc < 7; ++cc) M[rr][cc] -= fct * M[c][cc];
+        float eq_t = e;
+        double cq_t = 0.0, dq_t = 0.0;
+        bool ok = evaluate(qt, e, eq_t, rt, cq_t, dq_t, true);
+        if (!ok && step_s == 1.0f) {
+          float e_t = e;
+          const float t_ok = cut_back(p, qt, e, e_t);
+          if (t_ok > 0.0f) {
+            for (int j = 0; j < m; ++j) qt[j] = p[j] + t_ok * (qt[j] - p[j]);
+            ok = evaluate(qt, e_t, eq_t, rt, cq_t, dq_t, true);
           }
         }
-        double delta[6];
-        for (int c = m - 1; c >= 0; --c) {
-          double sum = M[c][6];
-          for (int cc = c + 1; cc < m; ++cc) sum -= M[c][cc] * delta[cc];
-          delta[c] = sum / M[c][c];
-        }
-        float q[6];
-        float step = 0.0f;
-        for (int j = 0; j < m; ++j) {
-          q[j] = std::min(hi[j], std::max(lo[j], p[j] + (float)delta[j]));
-          step = std::max(step, std::fabs(q[j] - p[j]));
-        }
-        if (step < 1e-6f) {
-          settled = true;
+        if (ok && cq_t < cost) {
+          std::copy(qt, qt + 4, q);
+          eq = eq_t;
+          cq = cq_t;
+          dq = dq_t;
+          feasible = true;
           break;
         }
-        float eq = e;
-        double cq = 0.0, dq = 0.0;
-        bool feasible = evaluate(q, e, eq, rt, cq, dq, true);
-        if (!feasible) {
-          // The step leaves the shape or the E bounds: the furthest candidate along it (the optimum of a strong cast
-          // usually sits on the shape's boundary, and rejecting the whole step stalled the solver inside it).
-          float e_t = e;
-          const float t_ok = cut_back(p, q, e, e_t);
-          if (t_ok > 0.0f) {
-            for (int j = 0; j < m; ++j) q[j] = p[j] + t_ok * (q[j] - p[j]);
-            feasible = evaluate(q, e_t, eq, rt, cq, dq, true);
-          }
-        }
-        if (feasible && cq < cost) {
-          const double gain = cost - cq;
-          std::copy(q, q + 6, p);
-          e = eq;
-          r.swap(rt);
-          cost = cq;
-          data = dq;
-          lambda = std::max(lambda / 3.0, 1e-9);
-          accepted = true;
-          ++out.iterations;
-          if (gain < 1e-7 * std::max(1.0, cost)) settled = true;
-        } else {
-          lambda *= 4.0;
-        }
       }
-      // No step lowers the objective at any damping tried while the steps were not yet negligible: the solver stalled
-      // (before, this was reported as settled).
-      if (!accepted && !settled) break;
-    }
-    // A coordinate polish from the solver's result (each parameter tried at +step and -step, kept when the objective
-    // falls, steps halving after a sweep without one): it slides along an active bound or the shape's boundary, where
-    // the Levenberg-Marquardt step, which moves all parameters at once, keeps leaving the feasible set.
-    {
-      float step = o.polish_step0;
-      int polish = 0;
-      while (step >= o.step_min && polish < o.polish_max_evals) {
-        bool improved = false;
-        for (int d = 0; d < m && polish < o.polish_max_evals; ++d) {
-          for (int sgn : {1, -1}) {
-            if (polish >= o.polish_max_evals) break;  // per trial, so the budget is never overrun
-            float q[6];
-            std::copy(p, p + 6, q);
-            q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step));
-            if (q[d] == p[d]) continue;
-            float eq = e;
-            double cq = 0.0, dq = 0.0;
-            ++polish;
-            if (evaluate(q, e, eq, rt, cq, dq, true) && cq < cost) {
-              std::copy(q, q + 6, p);
-              e = eq;
-              r.swap(rt);
-              cost = cq;
-              data = dq;
-              improved = true;
-              break;
-            }
-          }
-        }
-        if (!improved) step *= 0.5f;
+      if (feasible && cq < cost) {
+        const double gain = cost - cq;
+        std::copy(q, q + 4, p);
+        e = eq;
+        r.swap(rt);
+        cost = cq;
+        data = dq;
+        lambda = std::max(lambda / 3.0, 1e-9);
+        accepted = true;
+        ++out.iterations;
+        if (gain < 1e-6 * std::max(1.0, cost) || data < 1e-4) settled = true;
+      } else {
+        lambda *= 4.0;
       }
-      out.polish_evaluations += polish;
     }
-    std::copy(p, p + 6, p_out);
-    e_out = e;
-    cost_out = cost;
-    data_out = data;
-    settled_out = settled;
-  };
-
-  // The seeds: no curves, then a = +start_a and -start_a on G and on B in turn (CurveFitOptions::starts of them); the
-  // feasible run with the lowest objective wins, the first on a tie. The result starts as the first seed's point, so it
-  // is defined even when no run is feasible.
-  const float seeds[5][2] = {{0.0f, 0.0f}, {1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}, {-1.0f, 1.0f}};
-  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f}, e = e0;
-  double cost = INFINITY, data = 0.0;
-  bool any = false;
-  out.converged = true;
-  for (int si = 0; si < std::max(1, std::min(o.starts, 5)); ++si) {
-    float p0[6] = {g0, b0, seeds[si][0] * o.start_a, 0.0f, seeds[si][1] * o.start_a, 0.0f};
-    float ps[6], es = e0;
-    double cs = 0.0, ds = 0.0;
-    bool settled = false, feasible = false;
-    run(p0, si == 0, ps, es, cs, ds, settled, feasible);
-    if (!feasible) continue;
-    out.converged = out.converged && settled;
-    if (!any || cs < cost) {
-      std::copy(ps, ps + 6, p);
-      e = es;
-      cost = cs;
-      data = ds;
-      out.start = si;
-      any = true;
+    if (!accepted && !settled) break;
+  }
+  // The evidence hand-over: the solved (ln g, ln b, a_G, a_B) moves from Auto's (g0, b0, 0, 0) by w, E solved there
+  // again (the result stays at the solved point if that E cannot be found). The guard below measures this result.
+  {
+    float q[4], eq = e;
+    hand_over(p, q);
+    if (solve_point(q, e, eq, false)) {
+      std::copy(q, q + 4, p);
+      e = eq;
     }
   }
-  out.feasible = any;
-  if (!any) out.converged = false;
+  out.converged = settled;
   out.g = p[0];
   out.b = p[1];
   out.e = e;
   out.curves = model.anchored(shape_of(p), e, p[0], p[1]);
-  out.loss_after = any ? data : 0.0;
+  {
+    double v[2];
+    guard_means(p, e, v);
+    for (int k = 0; k < 2; ++k) {
+      out.guard.auto_a[k] = (float)guard.ref[k];
+      out.guard.fit_a[k] = (float)v[k];
+      if (guard.binds(k, v)) out.guard.binding = true;
+    }
+    // Per band of Auto's render, for the sidecar: Auto's cells as guard_init rendered them (at Auto's E, as auto_a),
+    // the fit's at its result.
+    const InputCurves c_fit = model.anchored(shape_of(p), e, p[0], p[1]);
+    double s[4][4] = {}, n[4] = {}, w[4] = {};
+    for (int i = 0; i < f.n; ++i) {
+      if (!guard.in[i]) continue;
+      const Lab lf = model.cell_lab(i, e, p[0], p[1], c_fit);
+      if (!std::isfinite(lf.a)) continue;
+      const double la_a = guard.auto_a[i], la_L = guard.auto_L[i], pw = guard.pw[i];
+      const int bd = la_L <= 22.0 ? 0 : la_L <= 45.0 ? 1 : la_L <= 70.0 ? 2 : 3;
+      n[bd] += 1.0;
+      w[bd] += pw;
+      s[bd][0] += la_a;
+      s[bd][1] += pw * la_a;
+      s[bd][2] += lf.a;
+      s[bd][3] += pw * lf.a;
+    }
+    for (int bd = 0; bd < 4; ++bd) {
+      out.guard.band_cells[bd] = (int)n[bd];
+      out.guard.band_mass[bd] = (float)w[bd];
+      if (n[bd] > 0) {
+        out.guard.band_auto_a[bd][0] = (float)(s[bd][0] / n[bd]);
+        out.guard.band_fit_a[bd][0] = (float)(s[bd][2] / n[bd]);
+      }
+      if (w[bd] > 0) {
+        out.guard.band_auto_a[bd][1] = (float)(s[bd][1] / w[bd]);
+        out.guard.band_fit_a[bd][1] = (float)(s[bd][3] / w[bd]);
+      }
+    }
+  }
+
+  out.neutral_after = model.neutral_stats(e, p[0], p[1], out.curves);
+  out.loss_solved = data;
+  {
+    std::vector<double> r_after;
+    out.loss_after = model.residuals(e, p[0], p[1], shape_of(p), r_after);
+  }
   out.renders = renders;
+  return out;
+}
+
+// Stage 2, the curve fit: removes what is left of the colour cast, and its change from shadows to highlights, on the
+// bracket Auto chose. It takes the grid cells, the film base, Auto's (E, g, b) and the neutral head's probabilities,
+// builds p^2-weighted neutral anchors (JointCurveModel) and solves p = (g, b, a_G, a_B) by Levenberg-Marquardt, E
+// solved at each candidate to keep target_L, then hands the solved correction over by the anchors' evidence
+// (kEvidenceHalfMass). The fit runs first without the never-greener guard (kGreenGuard*); when its handed-over result
+// is greener than Auto's (deep shadows exempt) it runs again with it. It hands on the curves and the fitted (E, g, b),
+// which run_white_light_fit re-meters on the combined profile. evaluations and renders count both passes.
+inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const CurveFrame& f, float e0, float g0, float b0,
+                                            const float* mu, const float* sigma, float target_L, const int table_n[2],
+                                            const CurveFitOptions& o = CurveFitOptions(), float e_lo = 0.0f,
+                                            float e_hi = 0.0f) {
+  const JointCurveFit free_fit =
+      fit_input_curves_joint_pass(cfg, f, e0, g0, b0, mu, sigma, target_L, table_n, o, e_lo, e_hi, false);
+  JointCurveFit out = free_fit;
+  if (free_fit.guard.binding) {
+    out = fit_input_curves_joint_pass(cfg, f, e0, g0, b0, mu, sigma, target_L, table_n, o, e_lo, e_hi, true);
+    out.guard.refit = true;
+    out.evaluations += free_fit.evaluations;
+    out.renders += free_fit.renders;
+  }
+  out.guard.free_fit_a[0] = free_fit.guard.fit_a[0];
+  out.guard.free_fit_a[1] = free_fit.guard.fit_a[1];
   return out;
 }
 
@@ -849,14 +1135,11 @@ inline float grid_median_L(const PipelineConfig& cfg, const float* merged, float
 // bisection in log E (a larger E renders darker), the curves (shape's a and k) anchored at each E it tries, so the
 // profile it measures is the one the export renders at that E. cfg carries the bracket's own profile. The bisection
 // runs over [e_centre / 2, 2 e_centre] within [e_lo, e_hi] when the target lies there (both ends tested first), else
-// over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. Before,
-// it bisected [e0 / 4, 4 e0] around Auto's E whatever E the fit had solved, without testing the ends, and an
-// unreachable target returned a bound as if it were the answer.
-// negicc-station Iteration 230's F6L, which replaces the E/g/b fixed point after the curve fit (the fixed point
-// followed its own darker render).
-inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
-                                 float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
-                                 int iters = 40) {
+// over [e_lo, e_hi]; where the target lies outside those too, *clipped is set and E is the bound it reached. It is used
+// instead of a fixed point on E, g and b after the fit, which would follow its own darker render.
+inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e_centre,
+                                  float e_lo, float e_hi, float g, float b, float target_L, bool* clipped = nullptr,
+                                  int iters = 40) {
   const ProfileData base = cfg.profile;
   CombinedProfile comb;
   auto median_at = [&](float e) {
@@ -870,11 +1153,14 @@ inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const 
   if (!enclosed) {
     lo = e_lo;
     hi = e_hi;
-    const bool dark_at_lo = median_at(lo) < target_L;  // darker than the target even at the lowest E
-    if (dark_at_lo || median_at(hi) > target_L) {      // or lighter even at the highest
+    const float L_lo = median_at(lo), L_hi = median_at(hi);
+    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E (0.05 L* LUT tolerance)
+    if (dark_at_lo || L_hi - 0.05f > target_L) {      // or lighter even at the highest
       if (clipped) *clipped = true;
-      return dark_at_lo ? lo : hi;
+      return L_lo < target_L ? lo : hi;
     }
+    if (L_lo <= target_L) return lo;
+    if (L_hi >= target_L) return hi;
   }
   for (int i = 0; i < iters; ++i) {
     const float mid = std::sqrt(lo * hi);
@@ -887,7 +1173,7 @@ inline float remeter_e_median_in(PipelineConfig cfg, const CurveFrame& f, const 
 // The same around e0 over [e0 / 4, 4 e0] (the bounds before they were given).
 inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
                               float b, float target_L, int iters = 40) {
-  return remeter_e_median_in(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
+  return solve_e_for_median_L(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
 }
 
 }  // namespace negicc

@@ -643,7 +643,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     e_bounds[2] = 1.0;
   }
   // The range the search moves E in, as ratios to e_center: with E pinned it holds E at e_center (optimize_impl), so
-  // [1, 1]. Before, a pinned E reported the custom bounds of the bracket, ratios to another E (the metered one).
+  // [1, 1].
   out.bounds_lo = (pin_mask & PIN_E) ? 1.0f : (float)e_bounds[0];
   out.bounds_hi = (pin_mask & PIN_E) ? 1.0f : (float)e_bounds[1];
 

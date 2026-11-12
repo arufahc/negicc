@@ -37,6 +37,12 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
+// The white-light tone stage's types (np_pipeline.h), which the sidecar refers to.
+struct ToneCurve;
+struct ToneTargets;
+struct ToneClip;
+struct TonePlanCurve;
+
 struct FileFingerprint {
   bool ok = false;
   uintmax_t size = 0;
@@ -101,7 +107,26 @@ struct Sidecar {
   // curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
-  const CurveRefitResult* curve_fit = nullptr;
+  const WhiteLightFitResult* curve_fit = nullptr;
+  // The models the search ran with: the intent adapter, the neutral head and the tone heads ("[built-in] <name>" or
+  // the path --dino gave, with the file's size and CRC-32; empty: not loaded). A run that reused a previous sidecar
+  // keeps that run's record (cached_heads_json_str).
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
+  std::string cached_heads_json_str;
+  // The tint trim and the tone curve the conversion rendered with (curve_fit's, or replayed; null: none),
+  // whether the tone curve was applied to the final image, and the clipping it measured.
+  const TintTrimTables* tint_trim_tables = nullptr;
+  // A replay ("knobs" or "cli", else empty), and what happened to a recorded tint trim: given, and left out because the
+  // conversion rendered another bracket.
+  std::string replay_source;
+  bool replay_tint_trim_given = false, replay_tint_trim_other_bracket = false;
+  const ToneCurve* tone_curve = nullptr;
+  const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
+  const TonePlanCurve* tone_plan = nullptr;   // with curve_fit: the tone stage's plan the conversion solved from it
+  double tone_share = 1.0;
+  bool tone_applied = false;
+  const ToneClip* tone_clip = nullptr;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
   const negicc::InputCurves* cli_input_curves = nullptr;
@@ -113,5 +138,7 @@ const char* neg_process_version();
 
 // A file's size and CRC-32 (zlib), as the sidecar records each input (inputs.raw_file_stats). False when unreadable.
 bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
+// The same for bytes in memory (a built-in model).
+FileFingerprint memory_fingerprint(const void* data, size_t size);
 
 bool write_json_sidecar(const Sidecar& sc);

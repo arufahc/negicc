@@ -66,17 +66,27 @@ struct Options {
   bool hflip = false, vflip = false;
 
   // Parameter search
-  std::string dino_adapter;                    // --dino, empty when not given
+  // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
+  // the built-in ones; empty: the built-in one.
+  std::string dino_adapter, neutral_head_file, tone_head_file;
+  // The tint trim and the tone stage run wherever the white-light curve fit runs; their flags only replay recorded
+  // values (a sidecar's cli_equivalent), with given values and no search:
+  // --tint_trim theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (TintTrimTables' G and B numbers) and
+  // --tone_stage curve:black,white,gamma,contrast (ToneCurve).
+  bool tint_trim_replay_given = false;
+  double tint_trim_replay[10] = {};
+  bool tone_replay_given = false;
+  double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool dino_iters_given = false;
 
-  // Fitted G/B input curves (input_curves.h)
-  bool fit_curves = false;                     // --fit_curves on
-  // --fit_curves auto, the default: the curves on every white-light bundle search with -P srgb or srgb-g10, nothing
-  // elsewhere (TriLED, another or no -P, given parameters). --fit_curves off turns it off.
-  bool fit_curves_auto = true;
-  bool input_curves_given = false;             // --input_curves (replayed, not fitted)
+  // Fitted G/B input curves (input_curves.h). --fit_curves auto (the default) fits them on every white-light bundle
+  // search with -P srgb or srgb-g10 and nowhere else (TriLED, another or no -P, given parameters); on does the same
+  // and is an error where it does not apply; off turns the fit (with its tint trim and tone stage) off.
+  enum FitCurvesMode { kFitCurvesAuto, kFitCurvesOn, kFitCurvesOff };
+  FitCurvesMode fit_curves = kFitCurvesAuto;
+  bool input_curves_given = false;             // recorded curves given to --fit_curves (replayed, not fitted)
   negicc::InputCurves input_curves;
 
   // Output

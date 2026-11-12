@@ -55,6 +55,98 @@
 #include "np_raw.h"
 #include "profile_bundle.h"
 
+// ---- The white-light tone stage (np_pipeline.cc) ----
+// The white-light tone stage: one monotone lightness curve on CIE L* (D65), set per frame from the tone heads
+// (ToneHead, intent_head.h), applied in the conversion kernel to each pixel's display linear sRGB value
+// (color_pipeline.h apply_tone): its luminance Y goes to Y' = Y(f(L*(Y))) on the white point's neutral, and its colour
+// difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
+// not re-balanced, and no pixel is converted to Lab.
+//
+//   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,  h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
+//
+// The four curve numbers are solved so the render's own descriptors move toward the heads' predictions: since f is
+// monotone, the toned render's percentiles are f of the render's, so L2' = f(L2), L50' = f(L50), L98' = f(L98) and
+// (L90 - L10)' = f(L90) - f(L10). Each target is the render's value moved a share of the way to the prediction:
+// all the way for the shadow level L2 (kToneShadowMove), half way for the highlight level L98 and the tonal range
+// L90 - L10 (kToneHighlightMove, kToneRangeMove), and not at all for the mid-tone L50, which the curve holds. A weak
+// prior keeps the curve near the identity where the targets leave it free. The descriptors are measured on the
+// network-size preview of the final render, as the heads' training targets were on lab scans.
+
+// The shares of the way from the render's descriptor to the heads' prediction the curve moves.
+constexpr double kToneShadowMove = 1.0;     // L2
+constexpr double kToneHighlightMove = 0.5;  // L98
+constexpr double kToneRangeMove = 0.5;      // L90 - L10 (the mid-tone L50 is held where it is)
+// The curve's bounds (black, white, gamma, contrast) and the identity it starts from.
+constexpr double kToneLo[4] = {-15.0, 80.0, 0.7, 0.7};
+constexpr double kToneHi[4] = {15.0, 110.0, 1.45, 1.5};
+// The prior's weight, and its scales: 5 L* for the black and white points, 0.1 in log for gamma and contrast.
+constexpr double kTonePrior = 0.02;
+// Above the render's L98 no target says where the curve goes, and quite different white points can fit the four targets
+// about equally, so a small change of the render could switch between them. This weight holds the curve's rise above
+// L98 to the input's, f(100) = f(L98) + (100 - L98) (slope 1 on average there), but never above white, f(100) <= 100,
+// so a lifted L98 does not push the top past white into clipping. That makes the solution unique, and the solve starts
+// from several white points and keeps the lowest cost, so it does not depend on which basin a single start falls into.
+constexpr double kToneTopSlope = 0.07;
+constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
+// White clipping: where the curve would clip more than kToneClipAllowance more of the export's pixels white than the
+// conversion without it, the highlight and range moves are scaled down to the largest of kToneClipShares that keeps
+// it within the allowance, measured on every 8th pixel each way of the whole unconverted image (film borders included)
+// through the kernel. When none does, the share that clips least is kept.
+constexpr double kToneClipAllowance = 0.005;
+constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
+
+struct ToneCurve {
+    double black = 0.0, white = 100.0, gamma = 1.0, contrast = 1.0;
+};
+
+// The render's descriptors the curve is solved from: pixel L* percentiles.
+struct ToneDescriptors {
+    double L2 = 0, L10 = 0, L25 = 0, L50 = 0, L75 = 0, L90 = 0, L98 = 0;
+    double range() const { return L90 - L10; }
+};
+
+// The targets the curve is solved for (the render's descriptors moved toward the predictions).
+struct ToneTargets {
+    double L2 = 0, L50 = 0, L98 = 0, range = 0;
+};
+
+// The share of the export's pixels clipped white (a channel at the maximum) and black (every channel 0): before the
+// stage on the clip check's sample of the conversion without the curve, after it on the whole export.
+struct ToneClip {
+    double white_before = 0, white_after = 0, black_before = 0, black_after = 0;
+};
+
+// The descriptors of an 8-bit RGB image (n pixels, 3 bytes each); percentiles interpolate linearly between ranks.
+ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n);
+
+// The plan at a highlight share: the targets and the curve solved for them.
+ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                    double highlight_share, ToneTargets* targets);
+
+// The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
+constexpr int kToneTableSize = 8192;
+std::vector<float> tone_table(const ToneCurve& q);
+
+// The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
+// pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1), or, where the
+// curve would clip more than kToneClipAllowance beyond the conversion's own clipping (white_before), the largest
+// share of the highlight and range moves that does not, or, when none does, the share that clips least. The clipping
+// is measured on a sparse sample of the whole of img (film borders included, while the plan's preview shows only the
+// inner crop: a known mismatch) converted through the kernel with each curve. share gets the share kept.
+ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                              const negicc::PipelineConfig& pc, const float* matrix,
+                              const uint16_t* img, int w, int h, int stride, double white_before,
+                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
+                              double* share);
+
+// The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
+// predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.
+struct TonePlanCurve {
+  ToneDescriptors render;         // the final render's preview before the stage
+  ToneTargets targets;            // the descriptors the curve aims at
+  ToneCurve curve;                // the curve
+};
+
 // Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
 struct CachedSidecar {
   bool is_auto = false;                  // true: cached from "auto"; false: cached from "dino"
@@ -73,6 +165,12 @@ struct CachedSidecar {
   std::string curves_source;
   std::string input_curves_json_str;
   std::string intent_field_json_str;
+  std::string heads_json_str;
+  // Its tint trim (input_curves.offset) and tone curve (tone_stage.curve), when it applied them.
+  bool has_tint_trim = false;
+  TintTrimTables tint_trim;
+  bool has_tone = false;
+  ToneCurve tone_curve;
 };
 
 // What the profile and the options decide before the scan is read.
@@ -88,7 +186,7 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
-  bool fit_curves_auto_active = false;   // --fit_curves auto in effect (a white-light bundle search with -P)
+  bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
@@ -99,12 +197,35 @@ struct Setup {
   negicc::FlatFieldPtr flat_field;
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
+  std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
+  // The intent adapter, neutral head and tone heads that run ([built-in] <name> or the --dino path) and their files'
+  // size and CRC-32, for the sidecar.
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
+  ToneHead tone_head;                    // the white-light tone heads (where the fit runs)
+  // The tint trim and the tone curve the conversion renders with: this run's curve fit's, a previous run's (the knobs
+  // on its sidecar) or given (--tint_trim theta:..., --tone_stage curve:...). Neither is searched or predicted again on
+  // a replay. The trim belongs to bracket tint_trim_target_idx; tint_trim_base_prof is that bracket's profile without
+  // it (curves composed, when there are curves), and tint_trim_composed says its tables carry it.
+  bool has_tint_trim = false;
+  TintTrimTables tint_trim;
+  int tint_trim_target_idx = -1;
+  bool tint_trim_composed = false;
+  ParsedFilmProfile tint_trim_base_prof;
+  // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise. And
+  // whether a recorded tint trim was left out because the conversion renders another bracket than the one it was made
+  // on.
+  std::string replay_source;
+  bool tint_trim_other_bracket = false;
+  bool has_tone = false;
+  ToneCurve tone_curve;
   // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
   // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
   // empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
-  CurveRefitResult curve_fit;
+  WhiteLightFitResult curve_fit;
+  TonePlanCurve tone_plan;  // the tone stage's plan solved from curve_fit.tone (when curve_fit.tone.planned)
   // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
   // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
   int curves_base_idx = -1;
@@ -202,7 +323,7 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
-  // With --fit_curves on or auto: the curve fit's re-metered E and fitted g and b on the combined profile, which the
+  // Where the fit runs: the curve fit's re-metered E and fitted g and b on the combined profile, which the
   // conversion takes in place of the search's (auto_res keeps the search's own).
   bool has_curve_params = false;
   ConversionParams curve_params;
@@ -222,6 +343,12 @@ struct Scan {
   // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  // The white-light tone stage as convert applied it to the final image (WhiteLightFitResult::tone has the plan).
+  bool tone_applied = false;
+  ToneClip tone_clip;
+  ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)
+  ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
+  double tone_share = 1.0;         // and the share of the highlight and range moves kept
   std::vector<uint16_t> rolloff_frame;
   int rolloff_frame_w = 0, rolloff_frame_h = 0;
   double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;

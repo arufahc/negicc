@@ -223,8 +223,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
   }
   // As load_raw: the analysis sees the whole image at half size (the film base's statistics read the rebate and the
   // gaps around the frame, not only the picture), and places the frame in it (--roi halved, or --roi auto's detected
-  // crop); the frame is cut from the full image after it. Before, --roi auto kept only the frame before the analysis,
-  // so the film base was read from the picture.
+  // crop); the frame is cut from the full image after it.
   if (analyse) {
     const int hw = w / 2, hh = h / 2;
     std::unique_ptr<LibRaw> half(new_image_proc(hw, hh));

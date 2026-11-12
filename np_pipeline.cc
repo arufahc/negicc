@@ -27,7 +27,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -40,6 +42,276 @@
 #include "np_input.h"
 #include "np_output.h"
 #include "np_profile.h"
+
+// ---- Stage 5, the white-light tone stage (np_pipeline.h) ----
+//
+// One monotone L* curve applied in the conversion kernel (color_pipeline.h apply_tone), holding the mid-tones. It
+// takes the tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were
+// made on; the conversion solves the curve after the fit (tone_plan), scales the highlight and range moves down where
+// the curve would clip the export (tone_plan_for_image, on a sample through the kernel) and converts the image once
+// with the curve's table (tone_table).
+//
+// The preview's L* (sRGB D65, in double precision): the descriptors the curve is solved from. Only the small preview is
+// measured this way; no output pixel goes through Lab.
+static inline double tone_srgb_decode(double c) {
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+static inline double tone_lab_f(double t) {
+    return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+}
+static inline double tone_lab_finv(double t) {
+    return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
+}
+
+// sRGB-encoded r, g, b in 0..1 -> L* (the luminance row of linear sRGB D65 -> XYZ).
+static inline double tone_rgb_to_L(double r, double g, double b) {
+    const double Y = 0.212671 * tone_srgb_decode(r) + 0.715160 * tone_srgb_decode(g) + 0.072169 * tone_srgb_decode(b);
+    return 116.0 * tone_lab_f(Y) - 16.0;
+}
+
+// f(L) without the final clamp to 0..100.
+static inline double tone_curve_L(double L, const ToneCurve& q) {
+    double x = L / 100.0;
+    x = x < 1e-5 ? 1e-5 : (x > 1 - 1e-5 ? 1 - 1e-5 : x);
+    x = std::pow(x, q.gamma);
+    const double xc = std::pow(x, q.contrast), yc = std::pow(1 - x, q.contrast);
+    return q.black + (q.white - q.black) * xc / (xc + yc);
+}
+
+// The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
+std::vector<float> tone_table(const ToneCurve& q) {
+    std::vector<float> lut(kToneTableSize + 1);
+    for (int i = 0; i <= kToneTableSize; ++i) {
+        const double t = (double)i / kToneTableSize;
+        double L2 = tone_curve_L(116.0 * tone_lab_f(t * t) - 16.0, q);
+        L2 = L2 < 0 ? 0 : (L2 > 100 ? 100 : L2);
+        lut[i] = (float)tone_lab_finv((L2 + 16.0) / 116.0);
+    }
+    return lut;
+}
+
+ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
+    ToneDescriptors d;
+    if (n == 0) return d;
+    std::vector<double> L(n);
+    for (size_t i = 0; i < n; ++i) L[i] = tone_rgb_to_L(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0);
+    std::sort(L.begin(), L.end());
+    auto pct = [&](double p) {
+        const double r = p / 100.0 * (double)(n - 1);
+        const size_t i = (size_t)r;
+        return i + 1 < n ? L[i] + (r - (double)i) * (L[i + 1] - L[i]) : L[n - 1];
+    };
+    d.L2 = pct(2);
+    d.L10 = pct(10);
+    d.L25 = pct(25);
+    d.L50 = pct(50);
+    d.L75 = pct(75);
+    d.L90 = pct(90);
+    d.L98 = pct(98);
+    return d;
+}
+
+// highlight_share scales the highlight and range moves (1: as designed; less where they would clip, see above).
+static inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L2, double pred_L98, double pred_range,
+                                       double highlight_share = 1.0) {
+    ToneTargets t;
+    t.L2 = cur.L2 + kToneShadowMove * (pred_L2 - cur.L2);
+    t.L98 = cur.L98 + highlight_share * kToneHighlightMove * (pred_L98 - cur.L98);
+    t.L50 = cur.L50;
+    t.range = cur.range() + highlight_share * kToneRangeMove * (pred_range - cur.range());
+    return t;
+}
+
+// The curve (black, white, gamma, contrast) that brings cur to t: bounded least squares on the four target residuals
+// and the identity prior, by Levenberg-Marquardt with the bounds held by projection (a parameter at a bound that the
+// gradient pushes outward is held there). Returns the curve.
+static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
+    auto curve_of = [](const double* q) {
+        ToneCurve c;
+        c.black = q[0];
+        c.white = q[1];
+        c.gamma = q[2];
+        c.contrast = q[3];
+        return c;
+    };
+    auto resid = [&](const double* q, double* r) {
+        const ToneCurve c = curve_of(q);
+        r[0] = tone_curve_L(cur.L2, c) - t.L2;
+        r[1] = tone_curve_L(cur.L98, c) - t.L98;
+        r[2] = tone_curve_L(cur.L50, c) - t.L50;
+        r[3] = tone_curve_L(cur.L90, c) - tone_curve_L(cur.L10, c) - t.range;
+        r[4] = kTonePrior * (q[0] / 5.0);
+        r[5] = kTonePrior * ((q[1] - 100.0) / 5.0);
+        r[6] = kTonePrior * (std::log(q[2]) / 0.1);
+        r[7] = kTonePrior * (std::log(q[3]) / 0.1);
+        {
+            const double f98 = tone_curve_L(cur.L98, c);
+            r[8] = kToneTopSlope * (tone_curve_L(100.0, c) - std::min(100.0, f98 + (100.0 - cur.L98)));
+        }
+    };
+    constexpr int kR = 9, kP = 4;
+    auto cost_of = [&](const double* q) {
+        double r[kR];
+        resid(q, r);
+        double s = 0.0;
+        for (double v : r) s += v * v;
+        return s;
+    };
+    double best_q[kP] = {0.0, 100.0, 1.0, 1.0}, best_cost = INFINITY;
+    for (double white0 : kToneWhiteStarts) {
+    double q[kP] = {0.0, white0, 1.0, 1.0};
+    double cost = cost_of(q), lambda = 1e-3;
+    for (int iter = 0; iter < 200; ++iter) {
+        double r[kR], J[kR][kP];
+        resid(q, r);
+        for (int j = 0; j < kP; ++j) {  // central differences, kept inside the bounds
+            const double h = 1e-6 * std::max(1.0, std::fabs(q[j]));
+            double qp[kP], qm[kP], rp[kR], rm[kR];
+            std::copy(q, q + kP, qp);
+            std::copy(q, q + kP, qm);
+            qp[j] = std::min(kToneHi[j], q[j] + h);
+            qm[j] = std::max(kToneLo[j], q[j] - h);
+            resid(qp, rp);
+            resid(qm, rm);
+            for (int k = 0; k < kR; ++k) J[k][j] = (rp[k] - rm[k]) / (qp[j] - qm[j]);
+        }
+        double A[kP][kP] = {}, g[kP] = {};
+        for (int k = 0; k < kR; ++k)
+            for (int a = 0; a < kP; ++a) {
+                g[a] += J[k][a] * r[k];
+                for (int b = 0; b < kP; ++b) A[a][b] += J[k][a] * J[k][b];
+            }
+        bool held[kP];
+        for (int a = 0; a < kP; ++a)
+            held[a] = (q[a] <= kToneLo[a] && g[a] > 0.0) || (q[a] >= kToneHi[a] && g[a] < 0.0);
+        bool improved = false;
+        double step = 0.0;
+        for (int tries = 0; tries < 20 && !improved; ++tries) {
+            double M[kP][kP + 1];
+            for (int a = 0; a < kP; ++a) {
+                for (int b = 0; b < kP; ++b)
+                    M[a][b] = (held[a] || held[b]) ? (a == b ? 1.0 : 0.0)
+                                                   : A[a][b] + (a == b ? lambda * std::max(A[a][a], 1e-12) : 0.0);
+                M[a][kP] = held[a] ? 0.0 : -g[a];
+            }
+            for (int c = 0; c < kP; ++c) {  // Gaussian elimination with partial pivoting
+                int piv = c;
+                for (int rr = c + 1; rr < kP; ++rr)
+                    if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
+                for (int cc = 0; cc <= kP; ++cc) std::swap(M[c][cc], M[piv][cc]);
+                if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
+                for (int rr = c + 1; rr < kP; ++rr) {
+                    const double f = M[rr][c] / M[c][c];
+                    for (int cc = c; cc <= kP; ++cc) M[rr][cc] -= f * M[c][cc];
+                }
+            }
+            double d[kP];
+            for (int c = kP - 1; c >= 0; --c) {
+                double s = M[c][kP];
+                for (int cc = c + 1; cc < kP; ++cc) s -= M[c][cc] * d[cc];
+                d[c] = s / M[c][c];
+            }
+            double qn[kP];
+            step = 0.0;
+            for (int j = 0; j < kP; ++j) {
+                qn[j] = std::clamp(q[j] + d[j], kToneLo[j], kToneHi[j]);
+                step = std::max(step, std::fabs(qn[j] - q[j]));
+            }
+            const double cn = cost_of(qn);
+            if (cn < cost) {
+                std::copy(qn, qn + kP, q);
+                cost = cn;
+                lambda = std::max(lambda / 3.0, 1e-12);
+                improved = true;
+            } else {
+                lambda *= 4.0;
+            }
+            if (step < 1e-13) break;
+        }
+        if (!improved || step < 1e-12) break;
+    }
+    if (cost < best_cost) {
+        best_cost = cost;
+        std::copy(q, q + kP, best_q);
+    }
+    }
+    return curve_of(best_q);
+}
+
+ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                    double highlight_share, ToneTargets* targets) {
+    const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share);
+    if (targets) *targets = t;
+    return tone_solve(render, t);
+}
+
+// The share of the conversion's pixels clipped white (a channel at the maximum) and black (every channel 0) on a sparse
+// sample of the unconverted image (every kToneClipSampleStep-th pixel each way), converted through the kernel as the
+// export converts them: with pc as it is (no tone), or with curve q's table.
+static void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
+                             int stride, const ToneCurve* q, double* white, double* black) {
+    static constexpr int kToneClipSampleStep = 8;
+    negicc::PipelineConfig c = pc;
+    std::vector<float> lut;
+    if (q) {
+        lut = tone_table(*q);
+        c.tone.lut = lut.data();
+        c.tone.n = kToneTableSize;
+    }
+    long long n = 0, wc = 0, kc = 0;
+#pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
+    for (int y = 0; y < h; y += kToneClipSampleStep) {
+        for (int x = 0; x < w; x += kToneClipSampleStep) {
+            const Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
+            const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
+            ++n;
+            wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
+            kc += (o[0] == 0 && o[1] == 0 && o[2] == 0);
+        }
+    }
+    *white = n ? (double)wc / (double)n : 0.0;
+    if (black) *black = n ? (double)kc / (double)n : 0.0;
+}
+
+ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                              const negicc::PipelineConfig& pc, const float* matrix,
+                              const uint16_t* img, int w, int h, int stride, double white_before,
+                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
+                              double* share) {
+    auto after_of = [&](const ToneCurve& c) {
+        double after = 0.0;
+        tone_clip_sample(pc, matrix, img, w, h, stride, &c, &after, nullptr);
+        return after;
+    };
+    // The designed curve, else the largest of the fixed shares within the allowance, else the least clipping of them
+    // (the larger share on a tie). Fixed shares need no monotone clipping (a bisection does) and cost at most four more
+    // curves.
+    ToneCurve best = designed;
+    ToneTargets best_t = designed_targets;
+    double best_after = after_of(designed), best_share = 1.0;
+    *share = 1.0;
+    *targets = designed_targets;
+    if (best_after <= white_before + kToneClipAllowance) return designed;
+    for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
+        ToneTargets t;
+        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[k], &t);
+        const double after = after_of(c);
+        if (after <= white_before + kToneClipAllowance) {
+            *share = kToneClipShares[k];
+            *targets = t;
+            return c;
+        }
+        if (after < best_after) {
+            best = c;
+            best_t = t;
+            best_after = after;
+            best_share = kToneClipShares[k];
+        }
+    }
+    *share = best_share;
+    *targets = best_t;
+    return best;
+}
 
 void LibRawDeleter::operator()(LibRaw* p) const {
   if (!p) return;
@@ -233,7 +505,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},
+      {"", "--flat", 1, false},           {"", "--tint_trim", 1, false},      {"", "--tone_stage", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -306,12 +578,11 @@ static bool same_number(const std::string& a, const std::string& b) {
          std::isfinite(vb) && va == vb;
 }
 
-// Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and
-// the knobs: the same normalised arguments (result_args), a number also matching the same number written otherwise
-// (1 and 1.0) and a path the same existing file. Any
-// option that changes the result (the profile, the flat field, -r/-g/-b, -E, --target, the gains, --roi,
-// --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must therefore be the same. Before, only
-// --flat and -r/-g/-b were compared, and a sidecar without an argv array matched anything.
+// Whether the previous run (its sidecar's argv) was given the same arguments as this one, apart from the output and the
+// knobs: the same normalised arguments (result_args), a number also matching the same number written otherwise (1 and
+// 1.0) and a path the same existing file. Any option that changes the result (the profile, the flat field, -r/-g/-b,
+// -E, --target, the gains, --roi, --film_format, -P, --fit_curves, -q, --no_crop, --dino, --dino_iters ...) must
+// therefore be the same. A sidecar without an argv array matches nothing.
 static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, const Options& o, std::string& why) {
   if (!argv_json.is_array()) {
     why = "it records no argv";
@@ -464,7 +735,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.cached_sidecar.auto_json_str = a.dump();
     s.dino_path = a.value("model", "");
     s.cached_sidecar.dino_backend = a.value("backend", o.dino_backend);
-    // Fitted G/B input curves of the previous run (--fit_curves on or auto): the knobs act on its result (the
+    // Fitted G/B input curves of the previous run (the curve fit's): the knobs act on its result (the
     // re-metered E and the fit's g, b) through the same combined profile, so the curves are replayed, not refitted.
     // A fit that fell back (applied false, channels null) has no curves to replay, but its re-metered values are the
     // base all the same.
@@ -515,14 +786,58 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (j.contains("intent_field") && j["intent_field"].is_object()) {
       s.cached_sidecar.intent_field_json_str = j["intent_field"].dump();
     }
+    if (j.contains("heads") && j["heads"].is_object()) s.cached_sidecar.heads_json_str = j["heads"].dump();
+    // The tint trim and the tone curve it applied: replayed as recorded (the knobs act on top).
+    auto numbers = [](const nlohmann::ordered_json& a, int n, double* out) {
+      if (!a.is_array() || (int)a.size() != n) return false;
+      for (int i = 0; i < n; ++i) {
+        if (!a[i].is_number()) return false;
+        out[i] = a[i].get<double>();
+      }
+      return true;
+    };
+    if (j.contains("input_curves") && j["input_curves"].is_object()) {
+      const auto& ic = j["input_curves"];
+      // The sidecar records the tint trim under "offset".
+      if (ic.contains("offset") && ic["offset"].is_object() && ic["offset"].value("applied", false)) {
+        const auto& of = ic["offset"];
+        TintTrimTables& t = s.cached_sidecar.tint_trim;
+        double d[3], fb[3];
+        if (!numbers(of.value("theta", nlohmann::ordered_json()), 4, t.theta) ||
+            !numbers(of.value("piv", nlohmann::ordered_json()), 3, t.piv) ||
+            !numbers(of.value("diag", nlohmann::ordered_json()), 3, d) ||
+            !numbers(of.value("film_base", nlohmann::ordered_json()), 3, fb))
+          return why = "its tint trim is not valid", false;
+        for (int c = 0; c < 3; ++c) {
+          t.diag[c] = (float)d[c];
+          t.film_base[c] = (float)fb[c];
+        }
+        s.cached_sidecar.has_tint_trim = true;
+      }
+    }
+    if (j.contains("tone_stage") && j["tone_stage"].is_object() && j["tone_stage"].value("applied", false)) {
+      const auto& cv = j["tone_stage"].value("curve", nlohmann::ordered_json());
+      double q[4];
+      const char* keys[4] = {"black", "white", "gamma", "contrast"};
+      bool ok = cv.is_object();
+      for (int i = 0; ok && i < 4; ++i) {
+        ok = cv.contains(keys[i]) && cv[keys[i]].is_number();
+        if (ok) q[i] = cv[keys[i]].get<double>();
+      }
+      if (!ok) return why = "its tone curve is not valid", false;
+      ToneCurve& tc = s.cached_sidecar.tone_curve;
+      tc.black = q[0];
+      tc.white = q[1];
+      tc.gamma = q[2];
+      tc.contrast = q[3];
+      s.cached_sidecar.has_tone = true;
+    }
     return true;
   }
 
   if (!s.bundle_search && j.contains("dino") && j["dino"].is_object()) {
     const auto& d = j["dino"];
-    // The bracket the previous run converted on (its sidecar's): with --target it must be that one. Before, the
-    // bracket was picked here with select_bundle_target_without_dino, before any exposure range was measured, so it
-    // was always the first admissible bracket and a run without --target was reused only when that happened to match.
+    // The bracket the previous run converted on (its sidecar's): with --target it must be that one.
     int expected_idx = -1;
     if (s.is_bundle) {
       const std::string recorded = prof.value("bundle_target", "");
@@ -725,7 +1040,7 @@ int prepare(const Options& o, Setup& s) {
   s.exposure_given = o.exposure_given;
   s.use_dino = s.has_profile && !o.gain_g_given && !o.gain_b_given;
   s.bundle_search = s.use_dino && s.is_bundle && s.manual_target_idx < 0 && !s.exposure_given;
-  if (!o.dino_adapter.empty() && !s.use_dino) {
+  if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
     log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
                     "--film_profile) without --gain_g or --gain_b\n");
     return 1;
@@ -805,8 +1120,16 @@ int prepare(const Options& o, Setup& s) {
   // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
-  if (o.fit_curves || o.input_curves_given) {
-    const char* opt = o.fit_curves ? "--fit_curves on" : "--fit_curves with recorded curves";
+  const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
+  if (fit_on || o.input_curves_given) {
+    const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
+    // TODO: the fitted curves and the tone stage on single-shot tri-LED. They need five changes: (1) let the fit run on
+    // a single-shot crosstalk bundle (other tri-LED cases unchanged); (2) call the fit on the CFA path, which Sony raws
+    // take and which has no fit call; (3) drop the crosstalk rejection in run_white_light_fit; (4) run the
+    // fit on M_frame so its E is in the export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor
+    // the curves at the film base in camera RGB, since the detector returns the base already crosstalk-corrected and
+    // M_frame would apply the matrix a second time. Open before enabling: the fit lowers the mean chroma (by about a
+    // fifth where tried), and three-shot scans and other stocks are untested.
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
       log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: with a crosstalk matrix the film base "
                 "does not mark the dark end of every channel\n", opt);
@@ -823,19 +1146,20 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
-  if (o.fit_curves && !fit_encoding_ok) {
+  if (fit_on && !fit_encoding_ok) {
     log_error("--fit_curves on needs -P srgb or -P srgb-g10: the fit scores the frame through linear sRGB, not "
               "through a custom output profile\n");
     return 1;
   }
-  // --fit_curves auto: on wherever on applies, nothing elsewhere.
-  s.fit_curves_auto_active = o.fit_curves_auto && s.is_bundle && s.white_light && !s.has_crosstalk &&
-                             fit_encoding_ok && s.bundle_search;
-  if (o.fit_curves && !s.bundle_search) {
+  if (fit_on && !s.bundle_search) {
     log_error("--fit_curves on fits after the bundle search: it takes no --target, -E, --gain_g or --gain_b "
               "(--fit_curves with recorded curves, ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB, replays them)\n");
     return 1;
   }
+  // --fit_curves auto or on: the curve fit (with its tint trim and the tone stage) wherever it applies (on has
+  // checked above that it does), nothing elsewhere; off: none.
+  s.fit_curves_active = o.fit_curves != Options::kFitCurvesOff && s.is_bundle && s.white_light && !s.has_crosstalk &&
+                        fit_encoding_ok && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
     // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
@@ -872,6 +1196,37 @@ int prepare(const Options& o, Setup& s) {
     s.input_curves_source = "cli";
   }
 
+  // A recorded tint trim and tone curve (a sidecar's cli_equivalent) replay a recorded result like the
+  // recorded curves: on the --target bracket at the given E, g and b, with nothing searched or predicted.
+  if (o.input_curves_given || o.tint_trim_replay_given || o.tone_replay_given) s.replay_source = "cli";
+  if (o.tint_trim_replay_given || o.tone_replay_given) {
+    if (!s.is_bundle || !s.white_light || s.has_crosstalk || s.manual_target_idx < 0 || !o.exposure_given ||
+        !o.gain_g_given || !o.gain_b_given) {
+      log_error("--tint_trim theta:... and --tone_stage curve:... replay a white-light result: they need a d65 "
+                "bundle, --target, -E, --gain_g and --gain_b (the sidecar's cli_equivalent gives all of them)\n");
+      return 1;
+    }
+    if (o.tint_trim_replay_given) {
+      const double* v = o.tint_trim_replay;
+      TintTrimTables& t = s.tint_trim;
+      for (int k = 0; k < 4; ++k) t.theta[k] = v[k];
+      for (int c = 1; c < 3; ++c) {
+        t.piv[c] = v[3 + c];
+        t.diag[c] = (float)v[5 + c];
+        t.film_base[c] = (float)v[7 + c];
+      }
+      s.has_tint_trim = true;
+      s.tint_trim_target_idx = s.manual_target_idx;
+      s.tint_trim_base_prof = bundle.targets[s.tint_trim_target_idx].film_prof;  // the recorded curves already composed
+      s.tint_trim_base_prof.rebind_pointers();
+    }
+    if (o.tone_replay_given) {
+      const double* q = o.tone_replay;
+      s.tone_curve = {q[0], q[1], q[2], q[3]};
+      s.has_tone = true;
+    }
+  }
+
   // --brightness, --tint and --warmth on a previous run's output (<output>.json): its Auto or DINOv3 result is the
   // base the knobs move, so neither the backbone nor the search runs again; its fitted curves are replayed on its
   // bracket.
@@ -888,7 +1243,19 @@ int prepare(const Options& o, Setup& s) {
       s.input_curves = s.cached_sidecar.curves;
       s.input_curves_source = s.cached_sidecar.curves_source;
     }
-    s.fit_curves_auto_active = false;  // the curves (or none) come from the previous run
+    s.fit_curves_active = false;  // the curves (or none) come from the previous run
+    s.replay_source = "knobs";
+    if (s.cached_sidecar.has_tint_trim && s.cached_sidecar.target_idx >= 0) {
+      s.has_tint_trim = true;
+      s.tint_trim = s.cached_sidecar.tint_trim;
+      s.tint_trim_target_idx = s.cached_sidecar.target_idx;
+      s.tint_trim_base_prof = bundle.targets[s.tint_trim_target_idx].film_prof;
+      s.tint_trim_base_prof.rebind_pointers();
+    }
+    if (s.cached_sidecar.has_tone) {
+      s.has_tone = true;
+      s.tone_curve = s.cached_sidecar.tone_curve;
+    }
   } else if (s.use_dino) {
     const EmbeddedFile* trt = find_embedded_backbone(true);
     const EmbeddedFile* onnx = find_embedded_backbone(false);
@@ -908,10 +1275,18 @@ int prepare(const Options& o, Setup& s) {
       if (trt && std::strcmp(s.engine.backend_used(), "gpu") != 0) {
         s.dino_path = std::string("[built-in] ") + onnx->name;
       }
+      // A model's file named by --dino, read whole (an error names the head).
+      auto read_file = [](const std::string& path, const char* head) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error(std::string("--dino ") + head + ": cannot read " + path);
+        return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+      };
       if (!o.dino_adapter.empty()) {
         std::string adapter = o.dino_adapter;
         if (is_directory(adapter)) adapter = (std::filesystem::path(adapter) / "adapter.onnx").string();
         s.engine.load_adapter_file(adapter);
+        s.head_path[0] = adapter;
+        s.head_fp[0].ok = file_fingerprint(adapter, s.head_fp[0].size, s.head_fp[0].crc);
       } else {
         std::string adapter_dir;
         const std::string profile_name = !o.film_stock.empty() ? o.film_stock
@@ -929,6 +1304,62 @@ int prepare(const Options& o, Setup& s) {
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
         s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
+        s.head_path[0] = std::string("[built-in] ") + a->name;
+        s.head_fp[0] = memory_fingerprint(a->data, a->size);
+      }
+      // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
+      // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
+      if (s.fit_curves_active) {
+        std::vector<char> file;
+        const void* data = nullptr;
+        size_t size = 0;
+        std::string name = "[built-in] models/neutral_head/neutral_head.bin";
+        if (o.neutral_head_file.empty()) {
+          const EmbeddedFile* f = find_embedded_file("models/neutral_head/neutral_head.bin");
+          if (f) {
+            data = f->data;
+            size = f->size;
+          }
+        } else {
+          file = read_file(o.neutral_head_file, "neutral");
+          data = file.data();
+          size = file.size();
+          name = o.neutral_head_file;
+        }
+        if (data && s.engine.needs_adapter()) {
+          try {
+            s.engine.set_neutral_head(data, size);
+          } catch (const std::exception& e) {  // not a neutral head file: say which file
+            if (o.neutral_head_file.empty()) throw;
+            throw std::runtime_error("--dino neutral: " + o.neutral_head_file + ": " + e.what());
+          }
+          s.neutral_head = name;
+          s.head_path[1] = name;
+          s.head_fp[1] = memory_fingerprint(data, size);
+          log_info("Neutral head %s\n", name.c_str());
+        }
+      }
+      // The tone heads read the search's pooled features and the tokens' spread (only where the fit runs; the stage
+      // itself needs -P srgb, which the fit checks).
+      if (s.fit_curves_active && s.engine.needs_adapter()) {
+        std::string err;
+        if (o.tone_head_file.empty()) {
+          const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
+          if (!f || !s.tone_head.load(f->data, f->size, err)) {
+            throw std::runtime_error("the built-in tone heads (models/tone_head/tone_head.bin) " +
+                                     (f ? err : std::string("are missing")));
+          }
+          s.head_path[2] = "[built-in] models/tone_head/tone_head.bin";
+          s.head_fp[2] = memory_fingerprint(f->data, f->size);
+        } else {
+          const std::vector<char> file = read_file(o.tone_head_file, "tone");
+          if (!s.tone_head.load(file.data(), file.size(), err))
+            throw std::runtime_error("--dino tone: " + o.tone_head_file + ": " + err);
+          s.head_path[2] = o.tone_head_file;
+          s.head_fp[2] = memory_fingerprint(file.data(), file.size());
+        }
+        s.engine.set_token_spread(true);
+        log_info("Tone heads %s\n", s.head_path[2].c_str());
       }
     } catch (const std::exception& e) {
       log_error("%s\n", e.what());
@@ -941,9 +1372,7 @@ int prepare(const Options& o, Setup& s) {
 }
 
 // The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
-// meters it (Scan::bracket_exposure, meter_bracket_exposures). Before, the bundle's e_center over the first row's
-// scale: the whole frame's statistics without e_norm (and on TriLED without the bracket's exposure ratio), which put
-// it up to a few stops from the E Auto meters for the same bracket.
+// meters it (Scan::bracket_exposure, meter_bracket_exposures).
 static float given_station_e(const Options& o, const Scan& scan, int target_idx) {
   if (o.exposure_given || target_idx < 0 || target_idx >= (int)scan.bracket_exposure.size() ||
       !scan.bracket_exposure[target_idx].valid) {
@@ -998,6 +1427,24 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
+    // A replayed tint trim: composed into the bracket's tables at the base E, g and b (a fit's own run has
+    // it there already), before the knobs' grey and the roll-off are measured through them.
+    const bool tint_trim_here = s.has_tint_trim && target_idx == s.tint_trim_target_idx;
+    if (s.has_tint_trim && !tint_trim_here) {
+      // Said, not silent: the trim was made on another bracket's tables.
+      s.tint_trim_other_bracket = true;
+      log_warn("the recorded tint trim was made on bracket %d; this conversion renders bracket %d, so it is "
+               "not applied\n", s.tint_trim_target_idx, target_idx);
+    }
+    if (tint_trim_here && !s.tint_trim_composed) {
+      const float at[3] = {base_e, base_g, base_b};
+      ParsedFilmProfile& tp = bundle.targets[target_idx].film_prof;
+      compose_bracket_tables(tp, tp, nullptr, &s.tint_trim, at);
+      s.tint_trim_composed = true;
+      log_info("Tint trim replayed on bracket %d at E %.4f g %.4f b %.4f (theta %.5f %.5f %.5f %.5f)\n",
+               target_idx, base_e, base_g, base_b, s.tint_trim.theta[0], s.tint_trim.theta[1], s.tint_trim.theta[2],
+               s.tint_trim.theta[3]);
+    }
     if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
@@ -1012,16 +1459,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       g = scan.knob_res.g;
       b = scan.knob_res.b;
       // The knobs moved E, g and b off the anchor of the curves the bracket renders through (fitted, recorded or a
-      // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones,
-      // so the curves stay on the film densities they were fitted to. Before, the tables kept the base's anchor, so
-      // a brightness knob slid the curves along the table.
+      // previous run's): re-anchor them there and compose the bracket's input tables again from its un-curved ones, so
+      // the curves stay on the film densities they were fitted to.
       //
       // The knobs were solved on the profile at the base's anchor, and the re-anchored curves change it: the grey then
       // missed its target (on two white-LED frames up to 0.08 stop and 5 a* for a 0.5 stop brightness). So, until the
       // gains hold still (each within kKnobTol of the previous pass, at most kMaxKnobPasses): the knobs solved on the
       // re-anchored profile for the same grey (the one the base's profile renders as neutral L* 50), and the curves
       // re-anchored at that result. Each pass cuts the miss about fourfold.
-      if (target_idx == s.curves_base_idx && s.input_curves.active()) {
+      //
+      // The tint trim is a density change on the film, so the knobs rebuild its tables at their E, g and b
+      // the same way, in the same passes.
+      const bool curves_here = target_idx == s.curves_base_idx && s.input_curves.active();
+      if (curves_here || tint_trim_here) {
         constexpr int kMaxKnobPasses = 8;
         constexpr float kKnobTol = 1e-4f;
         ParsedFilmProfile& prof = bundle.targets[target_idx].film_prof;
@@ -1033,12 +1483,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
         auto reanchor_at = [&](const float to[3]) {
-          if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
-                                     s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
-                                     scan.knob_curves, scale)) {
-            return false;
+          if (curves_here) {
+            if (!reanchor_input_curves(bundle, s.engine, target_idx, frame, scan_shutter_s, scan_iso, ro,
+                                       s.input_curves, from, to, negicc::CurveFitOptions().max_dev_stops,
+                                       scan.knob_curves, scale)) {
+              return false;
+            }
           }
-          apply_input_curves(prof, s.curves_base_prof, scan.knob_curves);
+          compose_bracket_tables(prof, curves_here ? s.curves_base_prof : s.tint_trim_base_prof,
+                                 curves_here ? &scan.knob_curves : nullptr,
+                                 tint_trim_here ? &s.tint_trim : nullptr, to);
           return true;
         };
         const float to1[3] = {e, g, b};
@@ -1065,12 +1519,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         e = k2.e;
         g = k2.g;
         b = k2.b;
-        scan.has_knob_curves = true;
-        log_info("Curves re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey L* %.3f "
+        scan.has_knob_curves = curves_here;
+        log_info("Input tables re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s%s); the grey L* %.3f "
                  "a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, %+.4f "
                  "stop, before them)\n",
                  e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
-                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "", k2.grey_lab[0],
+                 scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "",
+                 tint_trim_here ? ", tint trim rebuilt" : "", k2.grey_lab[0],
                  k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
@@ -1138,8 +1593,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   int det_sensor_w = 0, det_sensor_h = 0;
   // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
   // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
-  // Before, only the bundle search and given gains built it, so -E and --target there converted with the bundle's film
-  // base instead of the scan's, unlike the same scan on the CFA path or with the search.
   // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
   auto take_detected_frame = [&](int full_w, int full_h) {
     if (scan.frame_det.conf < kLowFrameConfidence) {
@@ -1224,7 +1677,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
-        if (o.fit_curves || s.fit_curves_auto_active) {
+        if (s.fit_curves_active) {
           // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
           // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
           // white-light bundle search.
@@ -1238,13 +1691,50 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           ParamSearchOptions fit_search_opts = opts;
           fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
           fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
-          if (!fit_input_curves_after_search(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                             scan.auto_res, fit_opts, export_encoding, s.curve_fit)) {
+          if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
+                                   scan.auto_res, fit_opts, export_encoding,
+                                   s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
             log_error("Fitting the input curves failed\n");
             return false;
           }
+          // The tone stage's plan from the fit's: the descriptors of the final render's preview, the curve between
+          // them and the heads' predictions.
+          s.tone_plan = TonePlanCurve{};
+          if (ToneStagePlan& tp = s.curve_fit.tone; !tp.skipped && !tp.preview.empty()) {
+            const size_t npx = tp.preview.size() / 3;
+            s.tone_plan.render = tone_descriptors(tp.preview.data(), npx);
+            s.tone_plan.curve = tone_plan(s.tone_plan.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
+                                          tp.pred_mean[ToneHead::kR9010], 1.0, &s.tone_plan.targets);
+            tp.planned = true;
+            if (fit_search_opts.verbose) {
+              const TonePlanCurve& t = s.tone_plan;
+              log_info("Tone: L2 %.1f -> %.1f, L98 %.1f -> %.1f, L90-L10 %.1f -> %.1f; curve black %.2f white %.2f "
+                       "gamma %.3f contrast %.3f\n",
+                       (float)t.render.L2, (float)t.targets.L2, (float)t.render.L98, (float)t.targets.L98,
+                       (float)t.render.range(), (float)t.targets.range, (float)t.curve.black, (float)t.curve.white,
+                       (float)t.curve.gamma, (float)t.curve.contrast);
+            }
+          }
+          if (!s.curve_fit.neutral_anchors) {
+            log_info("Curves: %s; no scene-neutral anchors, the fit keeps Auto's colour\n",
+                     s.neutral_head.empty() ? "no neutral head" : "no neutral evidence from the head");
+          }
           s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = o.fit_curves ? "fit" : "auto";
+          s.input_curves_source = o.fit_curves == Options::kFitCurvesOn ? "fit" : "auto";
+          // The fit composed its tint trim into the bracket's tables already; the knobs rebuild them at
+          // their own E, g and b (from the curves, else from the bracket's own tables).
+          if (s.curve_fit.tint_trim.ran) {
+            s.has_tint_trim = true;
+            s.tint_trim = s.curve_fit.tint_trim.tables;
+            s.tint_trim_target_idx = scan.auto_res.target_idx;
+            s.tint_trim_composed = true;
+            s.tint_trim_base_prof = s.curves_base_prof;
+            s.tint_trim_base_prof.rebind_pointers();
+          }
+          if (s.curve_fit.tone.planned) {
+            s.has_tone = true;
+            s.tone_curve = s.tone_plan.curve;
+          }
           scan.has_curve_params = true;
           scan.curve_params = s.curve_fit.params;
         }
@@ -1761,7 +2251,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.bundle_target_name = res.target_name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The search's E, g and b (after the curve fit's re-meter with --fit_curves on or auto), moved by the knobs when
+    // The search's E, g and b (after the curve fit's re-meter where the fit runs), moved by the knobs when
     // given, converted as the station converts them (the sidecar's cli_equivalent reproduces it).
     const ConversionParams& p = scan.params();
     const float fe = scan.has_knob_res ? scan.knob_res.e : p.e;
@@ -1801,10 +2291,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
     if (!s.has_cached_sidecar && s.is_bundle) {
       // With a bundle the search runs on the station's merged matrix (the crosstalk with each row normalised by the
-      // film base, station_base), in the station's E, g and b, as the bundle search and given values do: it starts
-      // from -E (or 1) and g = b = 1, the film base rendered neutral. Before, only a pinned -E started there; --target
-      // alone searched on the bare crosstalk from absolute g = b = 1, which on a negative is far from neutral (the
-      // orange mask), with the bracket's exposure range in those units.
+      // film base, station_base), in the station's E, g and b, as the bundle search and given values do: it starts from
+      // -E (or 1) and g = b = 1, the film base rendered neutral.
       const float e0 = (c.pin_mask & PIN_E) ? o.exposure_comp : 1.0f;
       negicc::candidate_matrix(station_base, e0, 1.0f, 1.0f, c.merged_matrix);
       user_gains = {e0, 1.0f, 1.0f};
@@ -1822,11 +2310,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.film_prof = tgt.film_prof;
       c.film_prof.rebind_pointers();
       set_target_bounds(cfg, tgt);
-      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (Step 2, the
-      // E its bootstrap starts the bracket from) and searches the bracket's range as the bundle search does, so
-      // --target without -E starts where Auto would on that bracket. Before, the bundle's e_center over the first
-      // row's scale, up to a few stops off (a black render, or one stop dark on TriLED). The bounds are ratios to the
-      // centre.
+      // The search's E is the station's: it centres on the E the bundle search meters for this bracket (Step 2, the E
+      // its bootstrap starts the bracket from) and searches the bracket's range as the bundle search does, so --target
+      // without -E starts where Auto would on that bracket. The bounds are ratios to the centre.
       const int ti = c.bundle_target_idx;
       if (ti < (int)scan.bracket_exposure.size() && scan.bracket_exposure[ti].valid) {
         const BracketExposure& be = scan.bracket_exposure[ti];
@@ -1995,8 +2481,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     }
   } else if (o.knobs_given) {
     // A single ICC profile with given gains: the knobs move the given (absolute) E, g and b through that profile, as
-    // they move the solver's result above. Before, they were accepted and never solved, and the sidecar recorded a
-    // zeroed knobs block.
+    // they move the solver's result above.
     if (!c.film_prof.data.has_profile) {
       log_error("--brightness, --tint and --warmth need the film profile to solve the grey point\n");
       return 1;
@@ -2078,7 +2563,62 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
-  backend.convert(out, export_pc, c.merged_matrix, scan.image());
+  // The white-light tone stage (np_pipeline.h): the curve fit's plan, or the recorded curve on a replay, applied in the
+  // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
+  // the recorded curve is applied after them, as recorded: a fixed monotone map on top of the knobbed render (zero
+  // knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against the knobbed render,
+  // which would pull the shadow level back to the prediction and undo the knob.
+  scan.tone_applied = false;
+  const bool tone_here = s.has_tone && out.encoding == ENCODE_SRGB;
+  LibRaw* tp = scan.proc.get();
+  const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
+  uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
+  const int stride = !scan.rgb3.empty() ? 3 : 4;
+  const ToneStagePlan& plan = s.curve_fit.tone;
+  const bool tone_plan_here = tone_here && plan.planned && !plan.preview.empty();
+  const int iw = tp->imgdata.sizes.iwidth, ih = tp->imgdata.sizes.iheight;
+  if (tone_here) {
+    // The clip check on a sparse sample of the input through the kernel, before the one full conversion.
+    scan.tone_curve = s.tone_curve;
+    scan.tone_share = 1.0;
+    const double t_tone_0 = omp_get_wtime();
+    tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride, nullptr, &scan.tone_clip.white_before,
+                     &scan.tone_clip.black_before);
+    if (tone_plan_here) {
+      // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
+      scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
+                                            plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
+                                            export_pc, c.merged_matrix,
+                                            rgb, iw, ih, stride, scan.tone_clip.white_before, s.tone_plan.curve,
+                                            s.tone_plan.targets, &scan.tone_targets, &scan.tone_share);
+    }
+    const double t_tone_1 = omp_get_wtime();
+    const ToneCurve& q = scan.tone_curve;
+    const std::vector<float> lut = tone_table(q);
+    negicc::PipelineConfig tone_pc = export_pc;
+    tone_pc.tone.lut = lut.data();
+    tone_pc.tone.n = kToneTableSize;
+    backend.convert(out, tone_pc, c.merged_matrix, scan.image());
+    const double t_tone_2 = omp_get_wtime();
+    long long wa = 0, ka = 0;
+#pragma omp parallel for schedule(static) reduction(+ : wa, ka)
+    for (long long i = 0; i < (long long)npx; ++i) {
+      const uint16_t* px = rgb + (size_t)i * stride;
+      wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
+      ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
+    }
+    if (npx) {
+      scan.tone_clip.white_after = (double)wa / npx;
+      scan.tone_clip.black_after = (double)ka / npx;
+    }
+    scan.tone_applied = true;
+    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); white clip %.4f%% -> "
+             "%.4f%%; %.0f ms checking the clipping, %.0f ms converting with the curve\n",
+             q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
+             100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
+  } else {
+    backend.convert(out, export_pc, c.merged_matrix, scan.image());
+  }
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);
     cmsCloseProfile(out.custom);
@@ -2188,6 +2728,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.cached_dino_search_ms = s.cached_sidecar.t_dino_search_ms;
     }
     sc.cached_intent_field_json_str = s.cached_sidecar.intent_field_json_str;
+    sc.cached_heads_json_str = s.cached_sidecar.heads_json_str;
     sc.cached_input_curves_json_str = s.cached_sidecar.input_curves_json_str;
   }
   if (scan.has_knob_res) {
@@ -2206,12 +2747,26 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.t_tiff_write_ms = scan.t_tiff_write_ms;
   sc.t_auto_ms = scan.t_auto_ms;
   sc.t_analysis_ms = scan.t_analysis_ms;
+  for (int i = 0; i < 3; ++i) {
+    sc.head_path[i] = s.head_path[i];
+    sc.head_fp[i] = s.head_fp[i];
+  }
+  sc.tint_trim_tables = s.has_tint_trim && !s.tint_trim_other_bracket ? &s.tint_trim : nullptr;
+  sc.replay_source = s.replay_source;
+  sc.replay_tint_trim_other_bracket = s.tint_trim_other_bracket;
+  sc.replay_tint_trim_given = s.has_tint_trim;
+  sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
+  sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
+  sc.tone_share = scan.tone_share;
+  sc.tone_applied = scan.tone_applied;
+  sc.tone_clip = &scan.tone_clip;
   if (!s.input_curves_source.empty()) {
     sc.input_curves_source = s.input_curves_source;
     sc.input_curves = &s.input_curves;
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
     sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
+    sc.tone_plan = sc.curve_fit ? &s.tone_plan : nullptr;
   }
   write_json_sidecar(sc);
   return 0;

@@ -9,6 +9,8 @@
 
 #include "dinov3_runner.h"
 
+class NeutralHead;
+
 // The fused DINOv3 intent model (src/export_intent_engine.py): inputs pixel_values, pool_weights; outputs mu,
 // sigma, pooled, pooled_tone. Preprocessing reproduces intent_model.predict / dino_geometry.
 // py-ref: negicc_station/src/dino_geometry.py:30-74 @ 2f7ee4a (geometry & tone weights)
@@ -59,6 +61,17 @@ public:
     // The loaded model is a backbone and needs an adapter.
     bool needs_adapter() const;
 
+    // The neutral-patch head (intent_head.h) from a neutral_head.bin held in memory: with it, infer() also gives
+    // DinoV3InferenceResult::neutral_p from the backbone's tokens. When the backbone and adapter run on the GPU the
+    // tokens are copied to the host once per inference for it. Null data clears it. Throws std::runtime_error on
+    // a bad file or a fused model (no tokens to read).
+    void set_neutral_head(const void* data, size_t size);
+    bool has_neutral_head() const { return neutral_head_ != nullptr; }
+    // With it on, infer() also gives DinoV3InferenceResult::token_sd, the spread of the backbone's tokens over the
+    // patches: with the pooled features, the input of the white-light tone heads (intent_head.h). Like the neutral head
+    // it needs the tokens on the host (one copy per inference when the backbone and adapter run on the GPU).
+    void set_token_spread(bool on) { token_spread_ = on; }
+
     bool is_loaded() const;
     const char* backend_name() const;
     const char* backend_used() const;
@@ -77,6 +90,8 @@ public:
 private:
     std::unique_ptr<DinoV3Runner> runner_;
     std::unique_ptr<DinoV3AdapterRunner> adapter_;
+    std::unique_ptr<NeutralHead> neutral_head_;
+    bool token_spread_ = false;
     std::vector<uint8_t> adapter_file_;
     std::string adapter_name_;
     int max_size_ = 512;
