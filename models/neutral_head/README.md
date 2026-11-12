@@ -4,9 +4,10 @@ Predicts, for every 16x16 patch of a preview, p(neutral): the probability that t
 intended positive, whatever colour cast the current render has. `neg_process` uses it to weight the scene-neutral
 anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): every grid cell
 Auto renders at L* 2..92 is an anchor with weight p^2, with no threshold, no minimum count and no balancing between
-tone ranges, and the sum of p^2 is the fit's evidence. The fit removes the anchors' cast in full. Without the head
-there are no anchors and the fit keeps Auto's colour. The fit's never-greener guard and the tint trim after it
-(`multi_target_optimizer.cc`) also weight their mean a* by p^2. The head replaced the raw-chroma selection and its
+tone ranges, and the sum of p^2 is the fit's evidence m. The fit pulls the anchors toward neutral with strength
+m / (m + 12) and pools them with the search's intent field for the overall magenta-green balance; without the head
+(m = 0) the anchors hold Auto's colour and only the intent field moves the overall a*. The fit's
+never-greener guard also weights its mean a* by p^2. The head replaced the raw-chroma selection and its
 four hand-tuned rules (low-key band merge, chart-like gate, shadow cluster, collinearity drop). It does not predict
 colour; the intent adapter's mu and sigma stay as they are.
 

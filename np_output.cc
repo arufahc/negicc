@@ -125,17 +125,6 @@ static std::string num_str(double val, const char* fmt) {
   return buf;
 }
 
-// The tint trim's tables in the sidecar, added to j: theta and the pivots in full (17 digits), so the export's
-// tables can be rebuilt from them exactly.
-static void put_tint_trim_tables(ordered_json& j, const TintTrimTables& t) {
-  auto n17 = [](double v) { return num(v, "%.17g"); };
-  auto n9 = [](double v) { return num(v, "%.9g"); };
-  j["theta"] = {n17(t.theta[0]), n17(t.theta[1]), n17(t.theta[2]), n17(t.theta[3])};
-  j["piv"] = {n17(t.piv[0]), n17(t.piv[1]), n17(t.piv[2])};
-  j["diag"] = {n9(t.diag[0]), n9(t.diag[1]), n9(t.diag[2])};
-  j["film_base"] = {n9(t.film_base[0]), n9(t.film_base[1]), n9(t.film_base[2])};
-}
-
 // A tone curve in full (17 digits): the curve the image went through, exactly.
 static ordered_json tone_curve_json(const ToneCurve& q) {
   return {{"black", num(q.black, "%.17g")}, {"white", num(q.white, "%.17g")}, {"gamma", num(q.gamma, "%.17g")},
@@ -367,8 +356,11 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"joint_lambda", n9(op.joint_lambda)},
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
-    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_solved", n9(f->fit.loss_solved)},
-                {"loss_after", n9(f->fit.loss_after)},
+    j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
+                // The fifth residual, in a*: the intent field's standard error, and its mean a* residual less
+                // the lever share and the lean, at Auto and at the result (zero when there was no fit).
+                {"intent_se", n9(f->fit.intent_se)}, {"intent_auto", n9(f->fit.intent_auto)},
+                {"intent_after", n9(f->fit.intent_after)},
                 {"evaluations", f->fit.evaluations}, {"g", n9(f->fit.g)}, {"b", n9(f->fit.b)},
                 {"solver", "joint"}, {"e", n9(f->fit.e)}, {"renders", f->fit.renders},
                 {"iterations", f->fit.iterations}, {"converged", f->fit.converged},
@@ -407,22 +399,20 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                              {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
                                              {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
                                              {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
-                                             // The anchors' evidence mass (sum of p^2) and the share of the
-                                             // fitted correction the hand-over kept, the slope shrink's L*
-                                             // spread and the share of Auto's slope the fit removes.
-                                             {"evidence", n9(f->neutral_decisions.evidence)},
-                                             {"hand_over", n9(f->neutral_decisions.hand_over)},
-                                             {"span_L", n9(f->neutral_decisions.span_L)},
-                                             {"slope_share", n9(f->neutral_decisions.slope_share)}}},
+                                             // The evidence mass (sum of p^2 over the cells in range, as the
+                                             // last fit pass saw them at its roll-off; earlier builds wrote it at
+                                             // Auto's roll-off, up to 2 % apart), the shrink weight
+                                             // m / (m + 12) inside the residuals, the anchors' L* spread and
+                                             // slope share, and their mean a*'s standard deviation.
+                                             {"evidence", n9(f->fit.evidence)},
+                                             {"shrink", n9(f->fit.shrink)},
+                                             {"span_L", n9(f->fit.span_L)},
+                                             {"slope_share", n9(f->fit.slope_share)},
+                                             {"anchor_sd", n9(f->fit.anchor_sd)}}},
                     // The never-greener guard of the last fit pass: Auto's and the fit's mean a* over all cells
                     // and weighted by p^2, whether each counted, and whether the guard pulled the fit.
                     {"guard", [&] {
                        const negicc::GreenGuard& gd = f->fit.guard;
-                       ordered_json bands = ordered_json::array();
-                       for (int bd = 0; bd < 4; ++bd)
-                         bands.push_back({{"cells", gd.band_cells[bd]}, {"mass", n9(gd.band_mass[bd])},
-                                          {"auto_a", {n9(gd.band_auto_a[bd][0]), n9(gd.band_auto_a[bd][1])}},
-                                          {"fit_a", {n9(gd.band_fit_a[bd][0]), n9(gd.band_fit_a[bd][1])}}});
                        return ordered_json{{"tol", n9(negicc::kGreenGuardTolAb)},
                                            {"counted", {gd.counted[0], gd.counted[1]}},
                                            {"auto_a", {n9(gd.auto_a[0]), n9(gd.auto_a[1])}},
@@ -432,33 +422,10 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                            // the bound and this is the guarded re-run.
                                            {"refit", gd.refit},
                                            {"free_fit_a", {n9(gd.free_fit_a[0]), n9(gd.free_fit_a[1])}},
-                                           {"p_source", f->guard_p_source},
-                                           // Per L* band of Auto's render (diagnostic): (2, 22], (22, 45], (45, 70], (70, 92).
-                                           {"bands", bands}};
+                                           {"p_source", f->guard_p_source}};
                      }()},
                     {"time_ms", num(f->time_ms, "%.1f")},
                     {"loss", n9(f->loss_export)}};
-    // Step 4, the tint trim (remeter's e and x_hi are after it).
-    const TintTrimResult& os = f->tint_trim;
-    ordered_json cands = ordered_json::array();
-    for (const auto& c : os.candidates) cands.push_back({n9(c[0]), n9(c[1]), n9(c[2])});
-    // s in full (17 digits), with the tables, so the export's tables can be rebuilt from them exactly.
-    if (os.ran) {
-      ordered_json o = {{"applied", true}, {"s", num(os.s, "%.17g")}, {"s_min", n9(os.s_min)}, {"se", n9(os.se)},
-                        {"trim_cap", os.trim_capped ? ordered_json{{"s_uncapped", n9(os.s_uncapped)},
-                                                                   {"conf", n9(os.trim_conf)}}
-                                                    : ordered_json(nullptr)}};
-      put_tint_trim_tables(o, os.tables);
-      o["lattice"] = os.lattice;
-      o["lattice_kept"] = os.lattice_kept;
-      o["residual_pivot"] = n9(os.residual_pivot);
-      o["candidates"] = cands;  // [s, residual predicted from the pivot's field, residual on its own field]
-      o["inferences"] = os.inferences;
-      o["time_ms"] = num(os.time_ms, "%.1f");
-      j["offset"] = o;
-    } else {
-      j["offset"] = {{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
-    }
   } else {
     j["bound"] = nullptr;
     j["options"] = nullptr;
@@ -467,14 +434,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
     j["max_dev_stops"] = nullptr;
     j["render"] = nullptr;
     j["remeter"] = nullptr;
-    // A replayed tint trim (recorded values, nothing searched): its numbers, so a replay of this output finds them too.
-    if (const TintTrimTables* ot = sc.tint_trim_tables) {
-      ordered_json o = {{"applied", true}, {"source", "replay"}};
-      put_tint_trim_tables(o, *ot);
-      j["offset"] = o;
-    } else {
-      j["offset"] = nullptr;
-    }
   }
   return j;
 }
@@ -634,15 +593,6 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (c.hold) v8 += "," + num_str(c.u_lo[0], "%.9g") + "," + num_str(c.u_lo[1], "%.9g");  // held below u_lo
     cli.push_back(v8);
   }
-  // The tint trim's tables and the tone curve, replayed as recorded (G and B numbers of TintTrimTables;
-  // theta and piv in full).
-  if (const TintTrimTables* ot = sc.tint_trim_tables) {
-    std::string v = "theta:";
-    for (double x : {ot->theta[0], ot->theta[1], ot->theta[2], ot->theta[3], ot->piv[1], ot->piv[2]})
-      v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
-    for (float x : {ot->diag[1], ot->diag[2], ot->film_base[1], ot->film_base[2]}) v += "," + num_str(x, "%.9g");
-    cli.insert(cli.end(), {"--tint_trim", v});
-  }
   if (sc.tone_curve && sc.tone_applied) {
     const ToneCurve& q = *sc.tone_curve;
     std::string v = "curve:";
@@ -784,9 +734,6 @@ bool write_json_sidecar(const Sidecar& sc) {
   // What a replay rendered from recorded values (null when nothing was replayed).
   if (!sc.replay_source.empty()) {
     j["replay"] = {{"source", sc.replay_source},
-                   {"offset", !sc.replay_tint_trim_given ? ordered_json(nullptr)
-                              : sc.replay_tint_trim_other_bracket ? ordered_json("not applied: another bracket")
-                                                               : ordered_json("applied")},
                    {"tone_curve", sc.tone_curve ? ordered_json(sc.tone_applied ? "applied" : "not applied")
                                                 : ordered_json(nullptr)}};
   } else {

@@ -296,14 +296,10 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
+  // Kept only to reject it with a reason: the tint trim stage was removed (its balance is part of the curve fit).
   parser.add_argument("--tint_trim")
-    .help("Replays a recorded tint trim: theta:dG,dB,kG,kB,pivG,pivB,diagG,diagB,baseG,baseB (a sidecar's "
-          "cli_equivalent), with --target, -E, --gain_g and --gain_b. The tint trim itself runs as the white-light "
-          "curve fit's last step, wherever the fit runs: the network judges whether the fitted picture reads too "
-          "green or too magenta, a lattice of magenta-green trims is scored against the intent field, the best few "
-          "are rendered and scored again (up to 4 extra DINOv3 inferences), and the best one, moved one standard "
-          "error toward magenta, is composed into the bracket's tables. Trims that would make the picture greener "
-          "than Auto are not candidates. The sidecar records the tint trim under \"offset\".");
+    .help("Removed: the tint trim stage is gone; the overall magenta-green balance is now part of the curve fit. "
+          "Giving this flag is an error.");
   parser.add_argument("--tone_stage")
     .help("Replays a recorded tone curve: curve:black,white,gamma,contrast (a sidecar's cli_equivalent), with "
           "--target, -E, --gain_g and --gain_b. The tone stage itself runs wherever the curve fit runs, with -P "
@@ -329,9 +325,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "applies (a white-light bundle search with -P srgb or srgb-g10), and nothing elsewhere (TriLED, another or "
           "no -P, given parameters), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
           "and B input curves jointly (Levenberg-Marquardt) so the cells the neutral head finds neutral (weighted by "
-          "p^2) render grey on the bracket it chose, each candidate at the E that keeps Auto's grid median L*, the "
-          "correction applied at m / (m + 12) of its strength (m the evidence, sum of p^2), then re-meter E on that "
-          "bracket's profile with its "
+          "p^2) render grey, pulled at m / (m + 12) of full strength (m the evidence, sum of p^2), and the overall "
+          "magenta-green balance agrees with the search's intent field, on the bracket it chose, each candidate at "
+          "the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
           "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
           "needs the bundle search (no --target, -E, --gain_g or --gain_b) and -P srgb or srgb-g10. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
@@ -339,8 +335,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "
           "are positive, because the parser takes a value starting with '-' for an option. The older order "
           "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
-          "White-light (d65) bundles and -P only. off also leaves out the tint trim and the tone stage, which run "
-          "where the fit runs.")
+          "White-light (d65) bundles and -P only. off also leaves out the tone stage, which runs where the fit runs.")
     .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
@@ -536,7 +531,7 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   o.dino_backend = parser.get<std::string>("--dino_backend");
   // Recorded numbers after a prefix (which keeps a negative first number from reading as an option).
-  // --tint_trim and --tone_stage replay recorded values only (the steps themselves run wherever the curve fit runs).
+  // --tone_stage replays recorded values only (the stage itself runs wherever the curve fit runs).
   auto replay = [&](const char* name, const char* prefix, int count, bool& given, double* out) {
     if (!parser.is_used(name)) return true;
     const std::string v = parser.get<std::string>(name);
@@ -554,9 +549,13 @@ int parse_options(int ac, char* av[], Options& o) {
               "comma-separated numbers, not '%s'\n", name, prefix, count, v.c_str());
     return false;
   };
-  if (!replay("--tint_trim", "theta:", 10, o.tint_trim_replay_given, o.tint_trim_replay) ||
-      !replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay))
+  if (parser.is_used("--tint_trim")) {
+    log_error("--tint_trim was removed: the tint trim stage is gone and the overall magenta-green balance is part of "
+              "the curve fit. Drop the flag (an older sidecar's cli_equivalent carries it; its other values still "
+              "apply, but the trim it recorded is not reproduced)\n");
     return 1;
+  }
+  if (!replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay)) return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
   o.output = parser.get<std::string>("--output");

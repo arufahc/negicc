@@ -20,7 +20,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -1790,12 +1789,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   return true;
 }
 
-// ---- Stage 4, the profile tables: the fitted G/B input curves --------------------------------------------------
+// ---- Stage 3, the profile tables: the fitted G/B input curves --------------------------------------------------
 //
-// The curves and the tint trim live in the bracket's input tables, composed at an E, g and b by one function,
-// compose_bracket_tables (below the tint trim): the fit's, a replay's, or the knobs', which compose them again from
-// the bracket's own tables (np_pipeline.cc). apply_input_curves composes the curves alone. Every render after that, on
-// the CPU or the GPU, reads one ordinary profile.
+// The curves live in the bracket's input tables, composed at an E, g and b (apply_input_curves): the fit's, a
+// replay's, or the knobs', which compose them again from the bracket's own tables (np_pipeline.cc). Every render after
+// that, on the CPU or the GPU, reads one ordinary profile.
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
   // In place: the profile is its own base (each table is composed into a temporary before it replaces the old one).
@@ -1892,647 +1890,6 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
-// ---- Stage 3, the tint trim on the fitted state ----------------------------------------------
-//
-// It takes the curved profile, the fitted (E, g, b, x_hi), Auto's render and the neutral head's weights
-// (TintTrimInput), and hands back the trim's tables (for the caller to compose into the bracket's), the E and roll-off
-// measured again, and the winning candidate's features for the tone heads (TintTrimOutcome). The joint fit balances the
-// scene-neutral anchors; whether the whole picture then reads too green or too magenta is a judgement the intent
-// network makes about the content. It barely tracks a re-rendered preview (its field moves little with the render), so
-// one inference on the fitted state gives a field the other offsets can be scored against: each lattice point's cells
-// are predicted as the pivot's cells plus the change the grid model gives, and scored by the a*-only residual S(s) =
-// mean_i ((a_i - mu_a,i) / sigma_a,i)^2. The few best points are rendered and scored on their own fields; the best of
-// those, moved one bootstrap standard error of the residual's minimum toward magenta (a slightly magenta frame is
-// preferred to a slightly green one), is the trim applied. Lattice points that make the grid greener than Auto (the
-// joint fit's guard, read on the export's render) are not candidates.
-constexpr double kTintTrimMax = 8.0;       // lattice s in [-8, 8] a*,
-constexpr double kTintTrimStep = 0.5;      // in steps of 0.5 a*
-constexpr int kTintTrimCandidates = 3;     // lattice points rendered and scored on their own fields
-constexpr double kTintTrimGuardSlack = 0.1;  // a*: the scan's guard allows this much beyond kGreenGuardTolAb
-constexpr double kTintTrimReadoutSE = 1.0;     // the pick moves this many standard errors toward magenta
-// The trim may not move confident neutrals away from neutral. With c = min(1, evidence / kTintTrimCapMass) (0 without
-// anchors), the neutral cells' p^2-weighted mean a* on the grid model (cells Auto renders at L* 2..92) may
-// end at most kTintTrimCapTol / ((c - 0.5) / 0.5) further from 0 than at the fitted state (1 a* at c = 1, 2 at
-// c = 0.75; no cap at c <= 0.5); a larger trim is shortened toward 0 until it does.
-constexpr double kTintTrimCapTol = 1.0;
-constexpr double kTintTrimCapMass = 100.0;  // evidence (sum p^2) at which the anchors count as fully confident
-
-// The fitted tables with t's density change composed in front of G and B (R is the reference): a value's density
-// above the film base D becomes D + d + k (D - P), P the frame's median cell density of that channel (piv).
-static void tint_trim_tables(const ProfileData& fitted, const TintTrimTables& t, float e, float g, float b,
-                             std::vector<float> out[3]) {
-  const double* th = t.theta;
-  const double* piv = t.piv;
-  const float gain[3] = {e, e * g, e * b};
-  for (int c = 0; c < 3; ++c) {
-    const int n = fitted.in_trc_size[c];
-    out[c].assign(fitted.in_trc[c], fitted.in_trc[c] + n);
-    if (c == 0 || n < 2) continue;
-    const double d = th[c - 1], k = th[c + 1];
-    if (d == 0.0 && k == 0.0) continue;
-    const double v_base = (double)gain[c] * t.diag[c] * t.film_base[c] / 65535.0;
-    if (!(v_base > 0)) continue;
-    for (int j = 0; j < n; ++j) {
-      const double v = (double)j / (n - 1);
-      if (v <= 0.0) continue;
-      const double D = -std::log10(v / v_base);
-      const double dD = d + k * (D - piv[c]);
-      const double v2 = std::min(1.0, std::max(0.0, v * std::pow(10.0, -dD)));
-      out[c][j] = negicc::apply_trc((float)v2, fitted.in_trc[c], n);
-    }
-  }
-}
-
-// The cells' CIELAB as the network's grid sees them: the 16 x 16 pixel block means of an 8-bit preview at DINOv3's
-// input size, sRGB (D65) to Lab in double precision. lab gets 3 values per cell, row-major.
-static void net_cell_lab(const std::vector<uint8_t>& u8, int w, int h, std::vector<double>& lab) {
-  const int gw = w / 16, gh = h / 16;
-  lab.assign((size_t)gw * gh * 3, 0.0);
-  for (int gy = 0; gy < gh; ++gy)
-    for (int gx = 0; gx < gw; ++gx) {
-      double rgb[3] = {0, 0, 0};
-      for (int y = 0; y < 16; ++y)
-        for (int x = 0; x < 16; ++x)
-          for (int c = 0; c < 3; ++c) rgb[c] += u8[((size_t)(gy * 16 + y) * w + gx * 16 + x) * 3 + c];
-      double lin[3];
-      for (int c = 0; c < 3; ++c) {
-        const double v = rgb[c] / 256.0 / 255.0;
-        lin[c] = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
-      }
-      const double X = (0.4124564 * lin[0] + 0.3575761 * lin[1] + 0.1804375 * lin[2]) / 0.95047;
-      const double Y = 0.2126729 * lin[0] + 0.7151522 * lin[1] + 0.0721750 * lin[2];
-      const double Z = (0.0193339 * lin[0] + 0.1191920 * lin[1] + 0.9503041 * lin[2]) / 1.08883;
-      auto f = [](double t) { return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0; };
-      double* o = &lab[((size_t)gy * gw + gx) * 3];
-      o[0] = 116.0 * f(Y) - 16.0;
-      o[1] = 500.0 * (f(X) - f(Y));
-      o[2] = 200.0 * (f(Y) - f(Z));
-    }
-}
-
-// The a*-only residual of cells' Lab against a field.
-static double tint_trim_residual(const std::vector<double>& lab, const std::vector<float>& mu,
-                                 const std::vector<float>& sigma) {
-  const size_t n = lab.size() / 3;
-  double s = 0.0;
-  for (size_t i = 0; i < n; ++i) {
-    const double z = (lab[3 * i + 1] - mu[3 * i + 1]) / sigma[3 * i + 1];
-    s += z * z;
-  }
-  return n ? s / (double)n : 0.0;
-}
-
-// A fixed PCG64 stream (128-bit LCG, XSL-RR output; the state and increment of the reference implementation's seed
-// 0), so the bootstrap and with it the trim are reproducible frame by frame.
-class TintTrimBootstrapRng {
- public:
-  // A uniform integer in [0, n), n >= 1 (Lemire's multiply-shift with rejection on 32-bit draws).
-  uint32_t below(uint32_t n) {
-    uint64_t m = (uint64_t)next32() * n;
-    uint32_t left = (uint32_t)m;
-    if (left < n) {
-      const uint32_t threshold = (UINT32_MAX - (n - 1)) % n;
-      while (left < threshold) {
-        m = (uint64_t)next32() * n;
-        left = (uint32_t)m;
-      }
-    }
-    return (uint32_t)(m >> 32);
-  }
-
- private:
-  static unsigned __int128 u128(uint64_t hi, uint64_t lo) { return ((unsigned __int128)hi << 64) | lo; }
-  uint32_t next32() {
-    if (has_half_) {
-      has_half_ = false;
-      return half_;
-    }
-    state_ = state_ * u128(0x2360ED051FC65DA4ULL, 0x4385DF649FCCF645ULL) + inc_;
-    const uint64_t x = (uint64_t)(state_ >> 64) ^ (uint64_t)state_;
-    const unsigned rot = (unsigned)(state_ >> 122);
-    const uint64_t out = (x >> rot) | (x << ((64 - rot) & 63));
-    half_ = (uint32_t)(out >> 32);
-    has_half_ = true;
-    return (uint32_t)out;
-  }
-  unsigned __int128 state_ = u128(0x1aa1b5345996452dULL, 0x09585eb7a69561e3ULL);
-  unsigned __int128 inc_ = u128(0x418ddadb3af71a82ULL, 0x588133bc447873a9ULL);
-  uint32_t half_ = 0;
-  bool has_half_ = false;
-};
-
-// The standard error of the residual's minimum over s (sorted ascending; the refinement takes s[1] - s[0] as the
-// step): pred[k] is the predicted cells' Lab at s[k]. Blocks of kTintTrimBootstrapBlock^2 grid cells are resampled with
-// replacement; each resample's minimum, when inside the range, is refined by a parabola through it and its two
-// neighbours (by at most one step); the standard error is the population standard deviation of the minima.
-static double tint_trim_bootstrap_se(const std::vector<std::vector<double>>& pred, const std::vector<double>& s,
-                                     const std::vector<float>& mu, const std::vector<float>& sigma, int gw, int gh) {
-  static constexpr int kTintTrimBootstrapResamples = 300;
-  static constexpr int kTintTrimBootstrapBlock = 4;  // cells: blocks of 4 x 4 grid cells are resampled together
-  const int K = (int)s.size();
-  const int bx = (gw + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
-  const int by = (gh + kTintTrimBootstrapBlock - 1) / kTintTrimBootstrapBlock;
-  const int nb = bx * by;
-  std::vector<double> blocks((size_t)K * nb, 0.0);
-  std::vector<double> cnt(nb, 0.0);
-  for (int y = 0; y < gh; ++y)
-    for (int x = 0; x < gw; ++x) {
-      const int blk = (y / kTintTrimBootstrapBlock) * bx + x / kTintTrimBootstrapBlock;
-      const size_t i = (size_t)y * gw + x;
-      cnt[blk] += 1.0;
-      for (int k = 0; k < K; ++k) {
-        const double z = (pred[k][3 * i + 1] - mu[3 * i + 1]) / sigma[3 * i + 1];
-        blocks[(size_t)k * nb + blk] += z * z;
-      }
-    }
-  TintTrimBootstrapRng rng;
-  std::vector<int> idx(nb);
-  std::vector<double> mins, curve(K);
-  mins.reserve(kTintTrimBootstrapResamples);
-  for (int rep = 0; rep < kTintTrimBootstrapResamples; ++rep) {
-    for (int j = 0; j < nb; ++j) idx[j] = (int)rng.below((uint32_t)nb);
-    double n = 0.0;
-    for (int j = 0; j < nb; ++j) n += cnt[idx[j]];
-    int best = 0;
-    for (int k = 0; k < K; ++k) {
-      double v = 0.0;
-      for (int j = 0; j < nb; ++j) v += blocks[(size_t)k * nb + idx[j]];
-      curve[k] = v / n;
-      if (curve[k] < curve[best]) best = k;
-    }
-    double m = s[best];
-    if (best > 0 && best < K - 1) {
-      const double y0 = curve[best - 1], y1 = curve[best], y2 = curve[best + 1], den = y0 - 2 * y1 + y2;
-      const double off = den > 0 ? 0.5 * (y0 - y2) / den : 0.0;
-      m = s[best] + std::clamp(off, -1.0, 1.0) * (s[1] - s[0]);
-    }
-    mins.push_back(m);
-  }
-  double mean = 0.0;
-  for (double m : mins) mean += m;
-  mean /= (double)mins.size();
-  double v = 0.0;
-  for (double m : mins) v += (m - mean) * (m - mean);
-  return std::sqrt(v / (double)mins.size());
-}
-
-// Step 4 on the fitted state (e, g, b, x_hi on entry; prof holds the fitted tables). On return prof's G and B tables
-// carry the trim, and e and x_hi are those it renders at (E re-solved to target_L over fit_grid within [e_lo, e_hi],
-// the roll-off measured again). grid_all is every cell of the network's grid (the fit may have left some out), with
-// p_all the neutral head's p of each (may be empty); auto_pd, e_auto, g_auto, b_auto and x_auto render Auto's result;
-// q995 gets the measured roll-off's 99.5% point, and tone_features the tone heads' input from the inference of the
-// winning candidate (the state closest to the export: it differs by the standard error), for step 5.
-// What the tint trim reads: the fitted state (its profile, E, g, b and roll-off), the frame's grid and matrix, the
-// lightness E is solved to, Auto's render (the guard) and the neutral head's weights (the cap).
-struct TintTrimInput {
-  SearchFrame* fr = nullptr;                    // renders the network's previews and runs the inferences
-  const ProfileData* fitted = nullptr;          // the bracket's tables with the fitted curves composed
-  const negicc::CurveFrame* cf = nullptr;       // the curves' anchor (its film base)
-  const float* merged = nullptr;                // the search's input matrix
-  const std::vector<uint16_t>* grid_all = nullptr;  // every grid cell (the network's grid)
-  int grid_w = 0, grid_h = 0;
-  const uint16_t* fit_grid = nullptr;           // the cells the fit and the re-meter use
-  size_t nf = 0;
-  int encoding = ENCODE_SRGB;
-  float target_L = 50.0f;                       // the grid median L* E is solved to
-  float e_lo = 0.0f, e_hi = 0.0f;               // E's bounds
-  std::function<float(const ProfileData&, float, float, float, float*)> rolloff_at;  // the export's roll-off
-  const ProfileData* auto_pd = nullptr;         // Auto's tables, E, g, b and roll-off (the guard's reference)
-  float e_auto = 0.0f, g_auto = 1.0f, b_auto = 1.0f, x_auto = 1.0f;
-  const std::vector<float>* p_all = nullptr;    // the neutral head's p for every grid cell
-  float anchor_conf = 0.0f;                     // the cap's confidence, min(1, evidence / kTintTrimCapMass)
-  float e = 0.0f, g = 1.0f, b = 1.0f, x_hi = 1.0f;  // the fitted state
-};
-
-// What it hands back: the record (with the tables of the trim to compose), the export's E, roll-off and its q995, and
-// the winning candidate's features for the tone heads (empty when it did not run).
-struct TintTrimOutcome {
-  TintTrimResult result;
-  float e = 0.0f, x_hi = 1.0f, q995 = 0.0f;
-  std::vector<float> tone_features;
-};
-
-// The trim's steps, in the order run() takes them; the state they share is the members below.
-class TintTrim {
- public:
-  explicit TintTrim(const TintTrimInput& in)
-      : in_(in), N_((int)in.nf), NA_((int)(in.grid_all->size() / 3)), x0_(in.x_hi) {}
-
-  TintTrimOutcome run() {
-    const Clock::time_point t0 = Clock::now();
-    TintTrimOutcome o;
-    o.e = in_.e;
-    o.x_hi = in_.x_hi;
-    TintTrimResult& R = o.result;
-    solve_direction();
-    if (!pivot(R)) {
-      R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-      return o;
-    }
-    score_lattice(R);
-    const double s_pick = pick(R, o.tone_features);
-    const double s = cap(s_pick, R);
-    R.s = s;
-    finish_export(s, o);
-    R.ran = true;
-    R.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-    return o;
-  }
-
- private:
-  struct Tables {
-    std::vector<float> in[3];
-    ProfileData pd;
-  };
-
-  // ---- The grid model at a density change theta ----
-
-  void build(const double th[4], float ee, Tables& T) const {
-    TintTrimTables t = frame_t_;
-    for (int k = 0; k < 4; ++k) t.theta[k] = th[k];
-    tint_trim_tables(*in_.fitted, t, ee, in_.g, in_.b, T.in);
-    T.pd = *in_.fitted;
-    for (int c = 0; c < 3; ++c) T.pd.in_trc[c] = T.in[c].data();
-  }
-  float median_L_at(const double th[4], float ee, float xx) const {
-    Tables T;
-    build(th, ee, T);
-    return negicc::grid_median_L(make_pipeline_config(T.pd, AUTO_KNEE, xx, in_.encoding), in_.merged, ee, in_.g,
-                                 in_.b, in_.fit_grid, N_);
-  }
-  // E with the grid's median L* at target_L: bisection on log E (the median falls as E rises).
-  float solve_e(const double th[4], float xx) const {
-    double lo = std::log(in_.e_lo), hi = std::log(in_.e_hi);
-    for (int it = 0; it < 40; ++it) {
-      const double mid = 0.5 * (lo + hi);
-      if (median_L_at(th, (float)std::exp(mid), xx) > in_.target_L) lo = mid;
-      else hi = mid;
-    }
-    return (float)std::exp(0.5 * (lo + hi));
-  }
-  void lab_all(const ProfileData& pd, float ee, float gg, float bb, float xx, std::vector<float>& lab) const {
-    const negicc::PipelineConfig cfg = make_pipeline_config(pd, AUTO_KNEE, xx, in_.encoding);
-    float m[9];
-    negicc::candidate_matrix(in_.merged, ee, gg, bb, m);
-    lab.resize(3 * (size_t)NA_);
-    for (int i = 0; i < NA_; ++i) {
-      const negicc::Lab l = negicc::linear_srgb_to_lab(
-          negicc::to_display(cfg, negicc::convert_pixel_linear(cfg, m, in_.grid_all->data() + 3 * i)));
-      lab[3 * i] = l.L;
-      lab[3 * i + 1] = l.a;
-      lab[3 * i + 2] = l.b;
-    }
-  }
-  // The grid model at theta: E re-solved with the fitted state's roll-off.
-  void lab_th(const double th[4], std::vector<float>& lab) const {
-    const float ee = solve_e(th, x0_);
-    Tables T;
-    build(th, ee, T);
-    lab_all(T.pd, ee, in_.g, in_.b, x0_, lab);
-  }
-  // The export at theta: E solved, the roll-off measured, E solved again and the roll-off measured again.
-  void finish(const double th[4], float& ee, float& xx, float* q995 = nullptr) const {
-    ee = solve_e(th, x0_);
-    Tables T;
-    build(th, ee, T);
-    float q = 0.0f;
-    xx = in_.rolloff_at(T.pd, ee, in_.g, in_.b, &q);
-    ee = solve_e(th, xx);
-    build(th, ee, T);
-    xx = in_.rolloff_at(T.pd, ee, in_.g, in_.b, &q);
-    if (q995) *q995 = q;
-  }
-  void moments(const std::vector<float>& lab, double mo[4]) const {
-    double sa = 0, sb = 0, sLL = 0, sLa = 0, sLb = 0;
-    for (int i : use_) {
-      sa += lab[3 * i + 1];
-      sb += lab[3 * i + 2];
-    }
-    sa /= use_.size();
-    sb /= use_.size();
-    for (int i : use_) {
-      const double z = (lab0_[3 * i] - Lm_) / 50.0;
-      sLL += z * z;
-      sLa += z * (lab[3 * i + 1] - sa);
-      sLb += z * (lab[3 * i + 2] - sb);
-    }
-    mo[0] = sa;
-    mo[1] = sb;
-    mo[2] = sLa / std::max(sLL, 1e-9);
-    mo[3] = sLb / std::max(sLL, 1e-9);
-  }
-  void theta_of(double shift_a, double th[4]) const {
-    for (int k = 0; k < 4; ++k)
-      th[k] = std::clamp(shift_a * u_[k], k < 2 ? -kTintTrimMaxDensity : -kTintTrimMaxContrast,
-                         k < 2 ? kTintTrimMaxDensity : kTintTrimMaxContrast);
-  }
-  void net_preview(double shift_a, std::vector<uint8_t>& pv, int& w, int& h) const {
-    double th[4];
-    theta_of(shift_a, th);
-    float ee, xx;
-    finish(th, ee, xx);
-    Tables T;
-    build(th, ee, T);
-    in_.fr->render_net_preview(T.pd, {ee, in_.g, in_.b, xx}, pv, w, h);
-  }
-  // The guard on a lattice point: Auto's cells at L* 2..92, the mean a* over all of them and weighted by p^2 not more
-  // than kGreenGuardTolAb (+ kTintTrimGuardSlack) below Auto's.
-  bool guard_ok(const std::vector<float>& lab) const {
-    const double tol = (double)negicc::kGreenGuardTolAb + kTintTrimGuardSlack;
-    double a = 0.0, aw = 0.0;
-    for (int i = 0; i < NA_; ++i)
-      if (in_band_[i]) {
-        a += lab[3 * i + 1];
-        aw += w2_[i] * lab[3 * i + 1];
-      }
-    if (n_in_ >= negicc::kGreenGuardMinCells && a / n_in_ < a_auto_ / n_in_ - tol) return false;
-    if (w_in_ >= negicc::kGreenGuardMinMass && aw / w_in_ < aw_auto_ / w_in_ - tol) return false;
-    return true;
-  }
-
-  // ---- 1. The tint direction ----
-  // The frame's pivot densities, then the direction on the grid model: mean a*, b* and their slopes over L* (per 50
-  // L*) over the fitted state's cells at L* 5..95; u solves J u = (1, 0, 0, 0) (mean a* +1, the rest held), with probe
-  // steps of (d_G, d_B, k_G, k_B), a ridge on the step-scaled columns (a layer the grid cannot move, e.g. a blue floor,
-  // would otherwise ask for an offset and a contrast change that cancel at many D), and the bounds of the change.
-  void solve_direction() {
-    double piv[3] = {0, 0, 0};
-    for (int c = 0; c < 3; ++c) {
-      std::vector<double> d(N_);
-      for (int i = 0; i < N_; ++i)
-        d[i] = -std::log10(std::max(1e-3, (double)in_.fit_grid[3 * i + c]) / in_.cf->film_base[c]);
-      std::nth_element(d.begin(), d.begin() + N_ / 2, d.end());
-      piv[c] = d[N_ / 2];
-    }
-    for (int c = 0; c < 3; ++c) {
-      frame_t_.piv[c] = piv[c];
-      frame_t_.diag[c] = in_.merged[4 * c];
-      frame_t_.film_base[c] = in_.cf->film_base[c];
-    }
-
-    const double zero[4] = {0, 0, 0, 0};
-    lab_th(zero, lab0_);
-    Lm_ = 0;
-    for (int i = 0; i < NA_; ++i)
-      if (lab0_[3 * i] > 5 && lab0_[3 * i] < 95) {
-        use_.push_back(i);
-        Lm_ += lab0_[3 * i];
-      }
-    if (use_.size() < 8) {
-      use_.clear();
-      Lm_ = 0;
-      for (int i = 0; i < NA_; ++i) {
-        use_.push_back(i);
-        Lm_ += lab0_[3 * i];
-      }
-    }
-    Lm_ /= use_.size();
-    double m0[4];
-    moments(lab0_, m0);
-    static constexpr double kTintTrimProbe[4] = {0.01, 0.01, 0.05, 0.05};
-    static constexpr double kTintTrimRidge = 1e-2;
-    double J[4][4];
-    // The probes and the lattice points are independent renders of the grid model (each solves its own E): run in
-    // parallel, each writing only its own slot, so the result is the same as in order.
-#pragma omp parallel for schedule(dynamic)
-    for (int j = 0; j < 4; ++j) {
-      double th[4] = {0, 0, 0, 0};
-      th[j] = kTintTrimProbe[j];
-      std::vector<float> l;
-      lab_th(th, l);
-      double mj[4];
-      moments(l, mj);
-      for (int r = 0; r < 4; ++r) J[r][j] = (mj[r] - m0[r]) / kTintTrimProbe[j];
-    }
-    const double* h = kTintTrimProbe;
-    const double y[4] = {1, 0, 0, 0};
-    double M[4][5];
-    for (int r = 0; r < 4; ++r) {
-      for (int c = 0; c < 4; ++c) {
-        double v = 0;
-        for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * J[k][c] * h[c];
-        M[r][c] = v + (r == c ? kTintTrimRidge : 0.0);
-      }
-      double v = 0;
-      for (int k = 0; k < 4; ++k) v += J[k][r] * h[r] * y[k];
-      M[r][4] = v;
-    }
-    for (int c = 0; c < 4; ++c) {
-      int pv = c;
-      for (int r = c + 1; r < 4; ++r)
-        if (std::fabs(M[r][c]) > std::fabs(M[pv][c])) pv = r;
-      for (int k = 0; k < 5; ++k) std::swap(M[c][k], M[pv][k]);
-      for (int r = 0; r < 4; ++r) {
-        if (r == c) continue;
-        const double f = M[r][c] / M[c][c];
-        for (int k = 0; k < 5; ++k) M[r][k] -= f * M[c][k];
-      }
-    }
-    for (int k = 0; k < 4; ++k) u_[k] = M[k][4] / M[k][k] * h[k];
-  }
-
-  // ---- 2. The pivot: the fitted state's preview, its field and its cells (false: skipped, R says why) ----
-  bool pivot(TintTrimResult& R) {
-    std::vector<uint8_t> pv;
-    int pw = 0, ph = 0;
-    net_preview(0.0, pv, pw, ph);
-    if (pw / 16 != in_.grid_w || ph / 16 != in_.grid_h) {
-      R.skipped = "grid";
-    } else if (!in_.fr->predict_net(pv, pw, ph, mu0_, sg0_, tf0_)) {
-      R.skipped = "infer";
-    }
-    if (R.skipped) return false;
-    R.inferences = 1;
-    net_cell_lab(pv, pw, ph, x_piv_);
-    return true;
-  }
-
-  // ---- 3. The lattice scored on the grid model, with the guard and the neutrals' a* at each point ----
-  void score_lattice(TintTrimResult& R) {
-    std::vector<float> lab_auto;
-    lab_all(*in_.auto_pd, in_.e_auto, in_.g_auto, in_.b_auto, in_.x_auto, lab_auto);
-    in_band_.assign(NA_, 0);
-    w2_.assign(NA_, 0.0);
-    const std::vector<float>& p_all = *in_.p_all;
-    for (int i = 0; i < NA_; ++i) {
-      if (!(lab_auto[3 * i] > 2.0f && lab_auto[3 * i] <= 92.0f)) continue;
-      in_band_[i] = 1;
-      const double p = (size_t)NA_ == p_all.size() ? std::clamp((double)p_all[i], 0.0, 1.0) : 0.0;
-      w2_[i] = p * p;
-      n_in_ += 1.0;
-      w_in_ += w2_[i];
-      a_auto_ += lab_auto[3 * i + 1];
-      aw_auto_ += w2_[i] * lab_auto[3 * i + 1];
-    }
-    K_ = (int)std::lround(2.0 * kTintTrimMax / kTintTrimStep) + 1;
-    k_zero_ = K_ / 2;
-    shift_a_of_.assign(K_, 0.0);
-    score_.assign(K_, 0.0);
-    kept_.assign(K_, 0);
-    pred_.assign(K_, {});
-    anchor_a_.assign(K_, 0.0);
-#pragma omp parallel for schedule(dynamic)
-    for (int k = 0; k < K_; ++k) {
-      shift_a_of_[k] = -kTintTrimMax + k * kTintTrimStep;
-      double th[4];
-      theta_of(shift_a_of_[k], th);
-      std::vector<float> l;
-      lab_th(th, l);
-      if (w_in_ > 0.0) {
-        double aw = 0.0;
-        for (int i = 0; i < NA_; ++i)
-          if (in_band_[i]) aw += w2_[i] * l[3 * i + 1];
-        anchor_a_[k] = aw / w_in_;
-      }
-      pred_[k].resize(3 * (size_t)NA_);
-      for (int i = 0; i < 3 * NA_; ++i) pred_[k][i] = x_piv_[i] + ((double)l[i] - (double)lab0_[i]);
-      score_[k] = tint_trim_residual(pred_[k], mu0_, sg0_);
-      kept_[k] = guard_ok(l) || k == k_zero_;
-    }
-    R.lattice = K_;
-    R.residual_pivot = (float)score_[k_zero_];
-    for (char c : kept_) R.lattice_kept += c;
-  }
-
-  // ---- 4. The pick: the kTintTrimCandidates kept points of lowest predicted residual, each scored on its own field;
-  // the best, moved kTintTrimReadoutSE bootstrap standard errors toward magenta ----
-  double pick(TintTrimResult& R, std::vector<float>& tone_features) {
-    // The candidates (ties in lattice order).
-    std::vector<int> order;
-    for (int k = 0; k < K_; ++k)
-      if (kept_[k]) order.push_back(k);
-    std::stable_sort(order.begin(), order.end(), [&](int i, int j) { return score_[i] < score_[j]; });
-    if ((int)order.size() > kTintTrimCandidates) order.resize(kTintTrimCandidates);
-
-    // The standard error, over the kept points in lattice order.
-    std::vector<std::vector<double>> pk;
-    std::vector<double> sk;
-    for (int k = 0; k < K_; ++k)
-      if (kept_[k]) {
-        pk.push_back(pred_[k]);
-        sk.push_back(shift_a_of_[k]);
-      }
-    const double se = sk.size() >= 3 ? tint_trim_bootstrap_se(pk, sk, mu0_, sg0_, in_.grid_w, in_.grid_h) : 0.0;
-
-    // Each candidate scored on its own field (the pivot's own, for s = 0); the lowest wins, the first on a tie.
-    double best_shift_a = 0.0, best_v = 0.0;
-    bool have = false;
-    tone_features = tf0_;
-    for (int k : order) {
-      double v;
-      std::vector<float> tf;
-      if (k == k_zero_) {
-        v = tint_trim_residual(x_piv_, mu0_, sg0_);
-        tf = tf0_;
-      } else {
-        std::vector<uint8_t> cpv;
-        int cw = 0, ch = 0;
-        net_preview(shift_a_of_[k], cpv, cw, ch);
-        std::vector<float> mu, sg;
-        ++R.inferences;
-        if (!in_.fr->predict_net(cpv, cw, ch, mu, sg, tf)) continue;
-        std::vector<double> xc;
-        net_cell_lab(cpv, cw, ch, xc);
-        v = tint_trim_residual(xc, mu, sg);
-      }
-      R.candidates.push_back({(float)shift_a_of_[k], (float)score_[k], (float)v});
-      if (!have || v < best_v) {
-        have = true;
-        best_shift_a = shift_a_of_[k];
-        best_v = v;
-        tone_features = std::move(tf);
-      }
-    }
-    R.s_min = best_shift_a;
-    R.se = se;
-    return best_shift_a + kTintTrimReadoutSE * se;
-  }
-
-  // ---- 5. The cap on the neutrals: s shortened toward 0 until the neutral cells' a* keeps within the limit ----
-  double cap(double shift_a, TintTrimResult& R) const {
-    const float conf = in_.anchor_conf;
-    if (!(conf > 0.5f && w_in_ >= negicc::kGreenGuardMinMass)) return shift_a;
-    const int K = K_;
-    auto anchor_at = [&](double s) {  // linear between lattice points
-      const double u = std::clamp((s + kTintTrimMax) / kTintTrimStep, 0.0, (double)(K - 1));
-      const int k0 = std::min((int)u, K - 2);
-      return anchor_a_[k0] + (u - k0) * (anchor_a_[k0 + 1] - anchor_a_[k0]);
-    };
-    const double a0 = anchor_a_[k_zero_];
-    const double lim = std::fabs(a0) + kTintTrimCapTol / ((conf - 0.5) / 0.5);
-    const double shift_a_uncapped = shift_a;
-    double shift_a_final = shift_a;
-    if (std::fabs(anchor_at(shift_a_final)) > lim) {
-      const int steps = 200;
-      double shift_a_ok = 0.0;
-      for (int j = 1; j <= steps; ++j) {
-        const double shift_a_j = shift_a_uncapped * j / steps;
-        if (std::fabs(anchor_at(shift_a_j)) > lim) break;
-        shift_a_ok = shift_a_j;
-      }
-      shift_a_final = shift_a_ok;
-    }
-    R.trim_capped = shift_a_final != shift_a_uncapped;
-    R.s_uncapped = shift_a_uncapped;
-    R.trim_conf = conf;
-    if (R.trim_capped)
-      std::cout << "Tint trim cap: conf " << fixed(conf, 3) << ", anchors a* " << fixed(a0, 2, true)
-                << " at the fit, " << fixed(anchor_at(shift_a_uncapped), 2, true) << " at s "
-                << fixed(shift_a_uncapped, 2, true) << ", limit " << fixed(lim, 2) << ": s "
-                << fixed(shift_a_final, 2, true) << " (anchors " << fixed(anchor_at(shift_a_final), 2, true) << ")\n";
-    return shift_a_final;
-  }
-
-  // ---- 6. Finish: the trim's tables, and the export's E and roll-off at them ----
-  void finish_export(double shift_a, TintTrimOutcome& o) const {
-    double th[4];
-    theta_of(shift_a, th);
-    finish(th, o.e, o.x_hi, &o.q995);
-    o.result.tables = frame_t_;
-    for (int k = 0; k < 4; ++k) o.result.tables.theta[k] = th[k];
-  }
-
-  static constexpr double kTintTrimMaxDensity = 0.3, kTintTrimMaxContrast = 0.6;  // the density change's bounds (d, k)
-
-  const TintTrimInput& in_;
-  const int N_, NA_;
-  const float x0_;                 // the fitted state's roll-off, at which the grid model renders
-  TintTrimTables frame_t_;         // the frame's part of the tables; theta varies
-  std::vector<float> lab0_;        // the fitted state's cells (theta 0)
-  std::vector<int> use_;           // the cells the direction's moments use
-  double Lm_ = 0.0;                // their mean L*
-  double u_[4] = {0, 0, 0, 0};     // the direction: theta per a* of shift
-  std::vector<float> mu0_, sg0_, tf0_;  // the pivot's field and features
-  std::vector<double> x_piv_;      // the pivot's cells as the network sees them
-  std::vector<char> in_band_;      // the guard's cells (Auto's L* 2..92) and their p^2
-  std::vector<double> w2_;
-  double n_in_ = 0.0, w_in_ = 0.0, a_auto_ = 0.0, aw_auto_ = 0.0;
-  int K_ = 0, k_zero_ = 0;         // the lattice
-  std::vector<double> shift_a_of_, score_, anchor_a_;
-  std::vector<char> kept_;
-  std::vector<std::vector<double>> pred_;
-};
-
-// prof's G and B input tables (its current ones: the bracket's, composed with any curves) with t's density change
-// composed in front, at E, g and b, in place.
-static void compose_tint_trim_tables(ParsedFilmProfile& prof, const TintTrimTables& t, float e, float g, float b) {
-  std::vector<float> in[3];
-  tint_trim_tables(prof.data, t, e, g, b, in);
-  for (int c = 0; c < 3; ++c) prof.in_trc[c] = in[c];
-  prof.rebind_pointers();
-}
-
-void compose_bracket_tables(ParsedFilmProfile& prof, const ParsedFilmProfile& base, const negicc::InputCurves* curves,
-                            const TintTrimTables* trim, const float at[3]) {
-  if (curves) {
-    apply_input_curves(prof, base, *curves);
-  } else if (&prof != &base) {
-    prof = base;
-    prof.rebind_pointers();
-  }
-  if (trim) compose_tint_trim_tables(prof, *trim, at[0], at[1], at[2]);
-}
-
 // The white-light fit's steps (run_white_light_fit), in the order run() takes them, and the state they share.
 class WhiteLightFit {
  public:
@@ -2560,7 +1917,6 @@ class WhiteLightFit {
     if (!prepare()) return false;
     fit_and_remeter();
     compose_curves();
-    tint_trim();
     record();
     return true;
   }
@@ -2626,7 +1982,6 @@ class WhiteLightFit {
     // cells. Both limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9
     // stops below it.
     constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
-    neutral_p_all_ = neutral_p;  // every cell's, for step 4 (which scores the whole grid)
     fit_grid_ = stats.grid.data();
     nf_ = n;
     out_.cells_total = (int)n;
@@ -2678,6 +2033,17 @@ class WhiteLightFit {
     }
     neutral_p_ = neutral_p;
     if (neutral_p_.size() == nf_) cf_.neutral_p = neutral_p_.data();
+    // The intent field over the fit's cells for the fit's fifth residual, and each cell's 4 x 4 block of the grid.
+    field_.mu = mu_.data();
+    field_.sigma = sigma_.data();
+    field_.bx.clear();
+    field_.by.clear();
+    for (size_t k = 0; k < nf_; ++k) {
+      const size_t i = kept_idx.empty() ? k : kept_idx[k];
+      field_.bx.push_back((int)(i % stats.grid_w) / 4);
+      field_.by.push_back((int)(i / stats.grid_w) / 4);
+    }
+    field_.nbx = (stats.grid_w + 3) / 4;
     prof_ = &bundle_.targets[idx_].film_prof;
     const ParsedFilmProfile& prof = *prof_;
     // The export's render of the grid: its encoding and the roll-off it measures, which only the sRGB encoding
@@ -2727,7 +2093,6 @@ class WhiteLightFit {
     m_neu_->set_scene_neutral(e_start_, res_.params.g, res_.params.b);
     out_.neutral_auto = m_neu_->neutral_stats_on(cfg_auto_, e_start_, res_.params.g, res_.params.b);
     out_.neutral_anchors = m_neu_->has_anchors();  // as the fit's own selection: the same frame, E, g and b
-    out_.neutral_decisions = m_neu_->decisions();
     x_ = out_.x_hi_auto;
     q995_ = q995_auto_;
     e_new_ = e_start_;
@@ -2774,8 +2139,19 @@ class WhiteLightFit {
     const float e_lo_fit = std::min(e_start_, out_.e_lo * 1.001f);
     const float e_hi_fit = std::max(e_start_, out_.e_hi / 1.001f);
     const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding_);
-    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, e_start_, res_.params.g, res_.params.b, mu_.data(),
-                                              sigma_.data(), fit_target_L_, table_n_, fit_opts_, e_lo_fit, e_hi_fit);
+    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, field_, e_start_, res_.params.g, res_.params.b,
+                                              fit_target_L_, table_n_, fit_opts_, e_lo_fit, e_hi_fit);
+    if (!out_.fit.ok) {
+      // Fewer than 8 cells in range, or no feasible start: Auto's colour (its g and b, no curves).
+      negicc::JointCurveModel mdl(cfg, cf_);
+      out_.fit.curves = mdl.anchored(negicc::InputCurves{}, e_start_, res_.params.g, res_.params.b);
+      out_.fit.g = res_.params.g;
+      out_.fit.b = res_.params.b;
+      out_.fit.e = e_start_;
+      out_.fit.feasible = true;
+      out_.fallback = out_.fit.skipped;  // reported only: the re-meter still runs on Auto's values
+      if (opts_.verbose) std::cout << "Curves: no fit (" << out_.fit.skipped << "): Auto's g and b, no curves\n";
+    }
     const negicc::JointCurveFit& jf = out_.fit;
     if (opts_.verbose) {
       const negicc::InputCurves& c = out_.fit.curves;
@@ -2865,85 +2241,22 @@ class WhiteLightFit {
   }
 
   // ---- 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and
-  // the bracket's tables composed with them (compose_bracket_tables): every later use of the bracket renders through
-  // them. The bracket's own tables are kept: they render Auto's result (the tint trim's guard) and are the base the
-  // trim's tables are composed from ----
+  // the bracket's tables composed with them in place (apply_input_curves): every later use of the bracket renders
+  // through them ----
   void compose_curves() {
     out_.fit.curves = negicc::anchor_curves(out_.fit.curves, cf_, e_new_, out_.fit.g, out_.fit.b);
-    auto_prof_ = *prof_;
-    auto_prof_.rebind_pointers();
-    compose_bracket_tables(*prof_, auto_prof_, &out_.fit.curves, nullptr, nullptr);
+    apply_input_curves(*prof_, out_.fit.curves);
     out_.x_hi = x_;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
     out_.x_hi_q995 = q995_;
     out_.rolloff_measured = encoding_ == ENCODE_SRGB;
   }
 
-  // ---- 4. The tint trim on the curved tables, composed into the bracket's (E and the roll-off measured again) ----
-  void tint_trim() {
-    out_.tone.features = "search";
-    const float trim_conf =
-        out_.neutral_anchors ? (float)std::min(1.0, (double)out_.neutral_decisions.evidence / kTintTrimCapMass)
-                             : 0.0f;
-    const FrameStats& stats = fr_.stats();
-    TintTrimInput ti;
-    ti.fr = &fr_;
-    ti.fitted = &prof_->data;
-    ti.cf = &cf_;
-    ti.merged = merged_;
-    ti.grid_all = &stats.grid;
-    ti.grid_w = stats.grid_w;
-    ti.grid_h = stats.grid_h;
-    ti.fit_grid = fit_grid_;
-    ti.nf = nf_;
-    ti.encoding = encoding_;
-    ti.target_L = fit_target_L_;
-    ti.e_lo = std::min(e_new_, out_.e_lo * 1.001f);
-    ti.e_hi = std::max(e_new_, out_.e_hi / 1.001f);
-    ti.rolloff_at = [this](const negicc::ProfileData& p, float e, float g, float b, float* q995) {
-      return rolloff_at(p, e, g, b, q995);
-    };
-    ti.auto_pd = &auto_prof_.data;
-    ti.e_auto = e_start_;
-    ti.g_auto = res_.params.g;
-    ti.b_auto = res_.params.b;
-    ti.x_auto = out_.x_hi_auto;
-    ti.p_all = &neutral_p_all_;
-    ti.anchor_conf = trim_conf;
-    ti.e = e_new_;
-    ti.g = out_.fit.g;
-    ti.b = out_.fit.b;
-    ti.x_hi = out_.x_hi;
-    TintTrimOutcome trim = TintTrim(ti).run();
-    out_.tint_trim = std::move(trim.result);
-    if (out_.tint_trim.ran) {
-      const float at[3] = {trim.e, out_.fit.g, out_.fit.b};
-      compose_bracket_tables(*prof_, auto_prof_, &out_.fit.curves, &out_.tint_trim.tables, at);
-      e_new_ = trim.e;
-      out_.x_hi = trim.x_hi;
-      out_.x_hi_q995 = trim.q995;
-      if (trim.tone_features.size() == (size_t)ToneHead::kInDim) {
-        tone_features_.swap(trim.tone_features);
-        out_.tone.features = "offset";
-      }
-    }
-    if (opts_.verbose) {
-      if (out_.tint_trim.ran) {
-        std::cout << "Tint trim: a* " << fixed(out_.tint_trim.s, 3, true) << " (minimum "
-                  << fixed(out_.tint_trim.s_min, 2, true)
-                  << " + SE " << fixed(out_.tint_trim.se, 3) << "), " << out_.tint_trim.lattice_kept << " of "
-                  << out_.tint_trim.lattice << " lattice points kept, " << out_.tint_trim.inferences
-                  << " inferences, E " << fixed(e_new_, 4) << ", roll-off " << fixed(out_.x_hi, 3) << "\n";
-      } else {
-        std::cout << "Tint trim: not run (" << out_.tint_trim.skipped << ")\n";
-      }
-    }
-  }
-
-  // ---- 5. Record: the export's parameters, lightness, losses and neutral statistics, and the tone stage's plan
+  // ---- 4. Record: the export's parameters, lightness, losses and neutral statistics, and the tone stage's plan
   // (the heads' predictions and the final render's preview, on which the conversion solves the curve between them,
   // np_pipeline.cc) ----
   void record() {
     const ParsedFilmProfile& prof = *prof_;
+    out_.tone.features = "search";
     const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out_.x_hi, encoding_);
     out_.params = {e_new_, out_.fit.g, out_.fit.b, out_.x_hi};
     out_.target_median_L = fit_target_L_;
@@ -2953,20 +2266,18 @@ class WhiteLightFit {
     out_.neutral_export = m_neu_->neutral_stats_on(cfg_comb, e_new_, out_.fit.g, out_.fit.b);
     out_.loss_export = out_.parts_export.total();
 
-    // The heads read the image the stage will be applied to: the tint trim's winning candidate when the trim ran (it
-    // differs from the export by the standard error only); otherwise the final state's preview, rendered below for
-    // the descriptors anyway, costs one inference (the search's intent preview has the pre-fit colour).
+    // The heads read the image the stage will be applied to: the final state's preview, rendered below for the
+    // descriptors anyway, at one inference (the search's intent preview has the pre-fit colour, and is the fallback
+    // when that inference fails).
     ToneStagePlan& tp = out_.tone;
     std::vector<uint8_t> pv;
     int pw = 0, ph = 0;
     if (tone_head_ && encoding_ == ENCODE_SRGB) {
       fr_.render_net_preview(prof.data, out_.params, pv, pw, ph);
-      if (std::strcmp(tp.features, "offset") != 0) {
-        std::vector<float> mu_f, sg_f, tf;
-        if (fr_.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
-          tone_features_.swap(tf);
-          tp.features = "final";
-        }
+      std::vector<float> mu_f, sg_f, tf;
+      if (fr_.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
+        tone_features_.swap(tf);
+        tp.features = "final";
       }
     }
     if (!tone_head_) {
@@ -3004,13 +2315,12 @@ class WhiteLightFit {
   Clock::time_point t_fit0_;
   const float* merged_ = nullptr;
   float e_int_ = 0.0f;
-  std::vector<float> mu_, sigma_, neutral_p_, neutral_p_all_, tone_features_;
+  std::vector<float> mu_, sigma_, neutral_p_, tone_features_;
   negicc::CurveFrame cf_;
   std::vector<uint16_t> kept_grid_;
   const uint16_t* fit_grid_ = nullptr;
   size_t nf_ = 0;
   ParsedFilmProfile* prof_ = nullptr;   // the bracket's profile, composed in place
-  ParsedFilmProfile auto_prof_;         // its own tables (step 3 on)
   float q995_auto_ = 0.0f;
   negicc::PipelineConfig cfg_auto_{};
   float target_L_ = 0.0f, fit_target_L_ = 0.0f;
@@ -3020,6 +2330,7 @@ class WhiteLightFit {
   float x_ = 1.0f, q995_ = 0.0f, e_new_ = 0.0f;  // the re-metered roll-off, its q995 and E
   bool clipped_ = false;
   negicc::CombinedProfile comb_;  // the re-meter's combined tables
+  negicc::JointFitField field_;   // the intent field the fit's fifth residual reads
 };
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
