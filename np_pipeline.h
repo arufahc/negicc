@@ -165,7 +165,7 @@ struct CachedSidecar {
   std::string input_curves_json_str;
   std::string intent_field_json_str;
   std::string heads_json_str;
-  // Its tint trim (input_curves.tint_trim) and tone curve (tone_stage.curve), when it applied them.
+  // Its tint trim (input_curves.offset) and tone curve (tone_stage.curve), when it applied them.
   bool has_tint_trim = false;
   TintTrimTables tint_trim;
   bool has_tone = false;

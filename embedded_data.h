@@ -23,8 +23,9 @@
 
 // Data files built into neg_process (EMBED_FILES in the Makefile): the profile bundles under profiles/<Key>/ (bundle.json and
 // its ICC profiles), the DINOv3 intent adapters under models/dinov3-small_<stock>/ and the DINOv3 backbone when it
-// was exported before the build (models/dinov3-small/backbone.onnx, and backbone.engine in USE_CUDA=1 builds), and the
-// neutral-patch head of the white-light curve fit (models/neutral_head/neutral_head.bin). Names are the files' paths in
+// was exported before the build (models/dinov3-small/backbone.onnx, and backbone.engine in USE_CUDA=1 builds), the
+// neutral-patch head of the white-light curve fit (models/neutral_head/neutral_head.bin) and the tone heads of its
+// tone stage (models/tone_head/tone_head.bin). Names are the files' paths in
 // the repository, e.g. "profiles/Portra400-A7R4-TriLED/bundle.json" or "models/dinov3-small_portra400/adapter.onnx".
 struct EmbeddedFile {
   const char* name;

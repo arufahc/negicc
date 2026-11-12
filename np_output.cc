@@ -433,7 +433,7 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                                            {"refit", gd.refit},
                                            {"free_fit_a", {n9(gd.free_fit_a[0]), n9(gd.free_fit_a[1])}},
                                            {"p_source", f->guard_p_source},
-                                           // Per L* band of Auto's render (diagnostic): [2,22], 45, 70, 92.
+                                           // Per L* band of Auto's render (diagnostic): (2, 22], (22, 45], (45, 70], (70, 92).
                                            {"bands", bands}};
                      }()},
                     {"time_ms", num(f->time_ms, "%.1f")},

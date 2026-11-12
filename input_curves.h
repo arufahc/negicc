@@ -280,7 +280,7 @@ struct GreenGuard {
   // free_fit_a: the unguarded result's two means (equal to fit_a when it was kept).
   bool refit = false;
   float free_fit_a[2] = {0.0f, 0.0f};
-  // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ([2, 22],
+  // Diagnostics only (the guard acts on the means above): the same means per L* band of Auto's render ((2, 22],
   // (22, 45], (45, 70], (70, 92)), the band's cells and evidence mass. A band with no cells has zeros.
   int band_cells[4] = {0, 0, 0, 0};
   float band_mass[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -368,16 +368,18 @@ class JointCurveModel {
   static double hand_over_weight(double evidence) { return evidence / (evidence + kEvidenceHalfMass); }
 
   // Builds the scene-neutral anchors from the rendered scan cells Lab0(i) at (e0, g0, b0): every cell Auto renders at
-  // L* 2..92 is an anchor, weighted by the neutral-patch head's p(neutral) squared (CurveFrame::neutral_p), with no
-  // threshold, no minimum count and no balancing between tone ranges; the weights are normalised to sum to 1. Their
+  // L* 2..92 (2 < L* < 92) is an anchor, weighted by the neutral-patch head's p(neutral) squared
+  // (CurveFrame::neutral_p), with no threshold on p and no balancing between tone ranges; the weights are normalised
+  // to sum to 1. Their
   // sum of p^2 before that is the evidence. The fit then removes the anchors' cast in full: the offset residuals aim
   // at a* = b* = 0, and the slope residuals at (1 - f) k0, k0 the anchors' slope at Auto and f = sd^2 / (sd^2 +
   // kSlopeSpanL^2), sd the anchors' weighted L* standard deviation (the slope shrink: a slope measured over a narrow
   // tone range is not extrapolated into a bend across the whole range).
   //
-  // Without the head's p (no head loaded, or no inference), or when every p^2 is 0, there are no anchors
-  // (has_anchors() false): the neutral residuals are 0, and the joint fit stays at its start, Auto's g and b with no
-  // G/B bend (E still solved to Auto's median L*; the re-meter and the steps after the fit run as on any frame).
+  // Without the head's p (no head loaded, or no inference), when fewer than 8 finite cells (whatever their p) lie in
+  // that L* range, or when every p^2 is 0, there are no anchors (has_anchors() false): the neutral residuals are 0, and
+  // the joint fit stays at its start, Auto's g and b with no G/B bend (E still solved to Auto's median L*; the
+  // re-meter and the steps after the fit run as on any frame).
   // decisions() records the evidence, the hand-over weight and the slope shrink.
   void set_scene_neutral(float e0, float g0, float b0) {
     neu_idx_.clear();
@@ -397,6 +399,9 @@ class JointCurveModel {
       c0[i] = std::isfinite(c) && std::isfinite(lab0[i].L) ? c : INFINITY;
     }
 
+    // The cells in range, collected by lightness band ((2, 22], (22, 45], (45, 70], (70, 92)) and used together: the
+    // bands balance nothing; they only fix the order of the anchors and so of every sum over them (collecting them in
+    // grid order instead moves 28 of 29 test frames by rounding).
     std::vector<int> bands[4];
     int total = 0;
     for (int i = 0; i < f_.n; ++i) {
@@ -469,7 +474,8 @@ class JointCurveModel {
     w_slope_ = std::sqrt((float)(vL0 / (vL0 + 100.0))) / 2.0f;
 
     // Slope shrink: the anchors' weighted L* spread (their weights renormalised over them; a separate pass from vL0,
-    // which is centred on a mean summed in another order).
+    // which is centred on a mean summed in another order). The same quantity as vL0 up to rounding, kept as its own
+    // pass because using vL0 moves 21 of 29 test frames by rounding.
     double w_span = 0.0, L_span = 0.0;
     for (int k = 0; k < m; ++k) {
       w_span += neu_w_[k];
