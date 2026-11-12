@@ -198,31 +198,21 @@ inline LossParts grid_intent_loss_parts(const PipelineConfig& cfg, const float* 
   return s;
 }
 
-inline double grid_intent_loss(const PipelineConfig& cfg, const float* merged, float e, float g, float b,
-                               const uint16_t* grid, int n, const float* mu, const float* sigma) {
-  return grid_intent_loss_parts(cfg, merged, e, g, b, grid, n, mu, sigma).total();
-}
-
 // The lowest g or b a fit may reach (CurveFitOptions::g_bound, b_bound below g0, b0 are floored here).
 constexpr float kGainFloor = 1e-3f;
 
 struct CurveFitOptions {
   float curve_bound = 0.35f;  // |a|, |k| <= this
   float max_dev_stops = 2.2f; // each curve within this many stops of the base TRC over the whole table (curve_shape_ok)
-  float g_bound = 0.5f;       // |g - g0| <= this (fit_input_curves)
-  float b_bound = 0.6f;       // |b - b0| <= this (fit_input_curves)
+  float g_bound = 0.5f;       // |g - g0| <= this (joint fit, when g_bound_stops <= 0)
+  float b_bound = 0.6f;       // |b - b0| <= this (joint fit, when b_bound_stops <= 0)
   float g_bound_stops = 0.75f;  // joint fit: g in [g0 * 2^-s, g0 * 2^s] (<= 0: additive g_bound)
   float b_bound_stops = 1.25f;  // joint fit: b in [b0 * 2^-s, b0 * 2^s] (<= 0: additive b_bound)
-  // Penalty on the four curve numbers, lambda (aG^2 + kG^2 + aB^2 + kB^2), added to the fits' objective z2 (the mean
-  // of the squared residuals over the 3 n cell terms). The gains and the curves' slope terms (1 + a) move the
-  // residuals almost alike, so without it the Levenberg-Marquardt normal matrix is nearly singular along that
-  // direction; damping non-essential curve bends also prevents shadow-to-highlight crossover on clean frames.
-  float lambda = 0.25f;
+  // Penalty on the curve numbers, joint_lambda (a_G^2 + a_B^2), added to the joint fit's objective. The gains and the
+  // curves' slope terms (1 + a) move the residuals almost alike, so without it the Levenberg-Marquardt normal matrix
+  // is nearly singular along that direction; damping non-essential curve bends also prevents shadow-to-highlight
+  // crossover on clean frames.
   float joint_lambda = 1.5f;
-  float step0_gain = 0.08f;
-  float step0_curve = 0.05f;
-  float step_min = 1e-4f;
-  int max_evals = 8000;
   bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
   // E stays at Auto's (the measurement of the solver against the pattern search).
@@ -238,111 +228,13 @@ struct CurveFitOptions {
   float e_tol_L = 2e-5f;
 };
 
-struct CurveFitResult {
-  InputCurves curves;
-  float g = 1.0f, b = 1.0f;
-  double loss_before = 0.0, loss_after = 0.0;
-  int evaluations = 0;
-};
-
-// The first fit, which the joint fit below replaced in neg_process: g, b and the four curve numbers with E fixed,
-// against the frozen intent field mu, sigma on the frame's grid: a deterministic bounded pattern search (each
-// coordinate tried at +step and -step in turn, kept when the objective falls; all steps halve after a sweep without
-// improvement) on the same objective (z2 plus the lambda penalty) and with the same held curves (hold_slope). Each
-// candidate's curves are anchored at its own g and b (anchor_curves), so the curves the result carries pivot on the
-// film base at the fitted g and b.
-//
-// TODO(cuda): this evaluates on the CPU (about 700 cells x 1,000 to 2,500 evaluations). On a CUDA build it should run
-// as a kernel that composes the input tables and scores the cells on the device, using the profile's existing device
-// copy, so the fit never copies the grid render back to the host per evaluation.
-inline CurveFitResult fit_input_curves(PipelineConfig cfg, const CurveFrame& f, float e, float g0, float b0,
-                                       const float* mu, const float* sigma,
-                                       const CurveFitOptions& o = CurveFitOptions()) {
-  const ProfileData base = cfg.profile;
-  CombinedProfile comb;
-  auto curves_of = [&](const float* p) {
-    InputCurves t;
-    t.hold = o.hold_slope;  // as the joint fit's curves
-    t.a[0] = p[2];
-    t.k[0] = p[3];
-    t.a[1] = p[4];
-    t.k[1] = p[5];
-    return anchor_curves(t, f, e, p[0], p[1]);
-  };
-  auto objective = [&](const float* p, int& evals) {
-    const InputCurves t = curves_of(p);
-    ++evals;
-    // Monotonic and bounded over the whole input table, or not a candidate.
-    if (!curve_shape_ok(t.a[0], t.k[0], t.u_med[0], t.ref[0], base.in_trc_size[1], o.max_dev_stops, t.u_hold(0)) ||
-        !curve_shape_ok(t.a[1], t.k[1], t.u_med[1], t.ref[1], base.in_trc_size[2], o.max_dev_stops, t.u_hold(1)))
-      return static_cast<double>(INFINITY);
-    comb.build(base, t);
-    cfg.profile = comb.data;
-    const double pen = o.lambda * (static_cast<double>(p[2]) * p[2] + static_cast<double>(p[3]) * p[3] +
-                                   static_cast<double>(p[4]) * p[4] + static_cast<double>(p[5]) * p[5]);
-    // z2 (grid_intent_loss is the sum of the three per-cell means, 3 z2) plus the penalty, as the joint fit's.
-    return grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma) / 3.0 + pen;
-  };
-  // The gains keep a positive floor: at g or b = 0 the channel's ref (the film base through the gain) is 0 and the
-  // curve's anchor collapses (u = log2(v / ref) is undefined), so a wide g_bound or b_bound never reaches it.
-  const float lo[6] = {std::max(kGainFloor, g0 - o.g_bound), std::max(kGainFloor, b0 - o.b_bound), -o.curve_bound,
-                       -o.curve_bound, -o.curve_bound, -o.curve_bound};
-  const float hi[6] = {g0 + o.g_bound, b0 + o.b_bound, o.curve_bound, o.curve_bound, o.curve_bound, o.curve_bound};
-  float p[6] = {g0, b0, 0.0f, 0.0f, 0.0f, 0.0f};
-  float step[6] = {o.step0_gain, o.step0_gain, o.step0_curve, o.step0_curve, o.step0_curve, o.step0_curve};
-  CurveFitResult r;
-  int evals = 0;
-  double best = objective(p, evals);
-  {
-    comb.build(base, curves_of(p));
-    cfg.profile = comb.data;
-    r.loss_before = grid_intent_loss(cfg, f.merged, e, p[0], p[1], f.grid, f.n, mu, sigma);
-  }
-  while (evals < o.max_evals) {
-    bool improved = false;
-    for (int d = 0; d < 6 && evals < o.max_evals; ++d) {
-      for (int sgn : {1, -1}) {
-        if (evals >= o.max_evals) break;  // checked per trial, so the budget is never overrun by the second sign
-        float q[6];
-        std::copy(p, p + 6, q);
-        q[d] = std::min(hi[d], std::max(lo[d], p[d] + sgn * step[d]));
-        if (q[d] == p[d]) continue;
-        const double fq = objective(q, evals);
-        if (fq < best) {
-          best = fq;
-          std::copy(q, q + 6, p);
-          improved = true;
-          break;
-        }
-      }
-    }
-    if (!improved) {
-      float mx = 0.0f;
-      for (float& st : step) {
-        st *= 0.5f;
-        mx = std::max(mx, st);
-      }
-      if (mx < o.step_min) break;
-    }
-  }
-  r.curves = curves_of(p);
-  r.g = p[0];
-  r.b = p[1];
-  comb.build(base, r.curves);
-  cfg.profile = comb.data;
-  r.loss_after = grid_intent_loss(cfg, f.merged, e, r.g, r.b, f.grid, f.n, mu, sigma);
-  r.evaluations = evals;
-  return r;
-}
-
-
 // ---- The joint fit -------------------------------------------------------------------------------------------
 //
 // g, b and the four curve numbers fitted against the intent field with E tied to the lightness constraint: each
 // candidate is scored at the E that renders the grid's median L* at target_L (Auto's), so the fit chooses its colour at
 // the lightness the export will have, instead of fitting at Auto's E and moving E afterwards (which moved the colour
 // it had fitted). The objective is z2 (the mean of the cells' squared residuals over their 3 n terms, grid_intent_loss
-// / 3) plus CurveFitOptions::lambda times the curves' squared numbers, evaluated on a per-cell model:
+// / 3) plus CurveFitOptions::joint_lambda times the curves' squared numbers, evaluated on a per-cell model:
 //   - each cell's three matrix rows are taken once (merged · rgb), and a candidate's (e, g, b) only scales them;
 //   - the curve is applied to each cell's G and B value analytically, in(curve(v)), in place of composing the two
 //     4096-entry tables per candidate (the export's tables sample the same function at their entries);
@@ -396,8 +288,8 @@ struct GreenGuard {
 struct JointCurveFit {
   InputCurves curves;
   float e = 1.0f, g = 1.0f, b = 1.0f;
-  // The data loss (grid_intent_loss's units: the sum of the three per-cell means, without the penalty) at the first
-  // seed (Auto's g and b, no curves, E solved) and at the result.
+  // The data loss (the sum of the four squared scene-neutral residuals, JointCurveModel::residuals, without the guard
+  // and the penalty) at Auto's g and b with no curves (E solved) and at the result.
   double loss_before = 0.0, loss_after = 0.0;
   int evaluations = 0;  // points whose E was solved and whose shape and residuals were evaluated (every one tried)
   int renders = 0;      // grid median renders spent solving E (the evaluations' and the cut-backs')

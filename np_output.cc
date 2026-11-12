@@ -361,14 +361,11 @@ static ordered_json input_curves_json(const Sidecar& sc) {
   if (const WhiteLightFitResult* f = sc.curve_fit) {
     // The options the fit ran with, all of them.
     const negicc::CurveFitOptions& op = f->options;
-    j["lambda"] = n9(op.lambda);
     j["bound"] = n9(op.curve_bound);
     j["options"] = {{"curve_bound", n9(op.curve_bound)}, {"max_dev_stops", n9(op.max_dev_stops)},
                     {"g_bound", n9(op.g_bound)}, {"b_bound", n9(op.b_bound)},
                     {"g_bound_stops", n9(op.g_bound_stops)}, {"b_bound_stops", n9(op.b_bound_stops)},
-                    {"lambda", n9(op.lambda)},
-                    {"step0_gain", n9(op.step0_gain)}, {"step0_curve", n9(op.step0_curve)},
-                    {"step_min", n9(op.step_min)}, {"max_evals", op.max_evals},
+                    {"joint_lambda", n9(op.joint_lambda)},
                     {"hold_slope", op.hold_slope},
                     {"solve_e", op.solve_e}, {"e_tol_L", n9(op.e_tol_L)}};
     j["fit"] = {{"loss_before", n9(f->fit.loss_before)}, {"loss_after", n9(f->fit.loss_after)},
@@ -463,7 +460,6 @@ static ordered_json input_curves_json(const Sidecar& sc) {
       j["offset"] = {{"applied", false}, {"skipped", os.skipped ? os.skipped : ""}};
     }
   } else {
-    j["lambda"] = nullptr;
     j["bound"] = nullptr;
     j["options"] = nullptr;
     j["fit"] = nullptr;
