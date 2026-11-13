@@ -34,13 +34,13 @@ AUROC gain over the rule +0.042 [+0.036, +0.047] (image split) and +0.033 [+0.02
 cluster bootstrap over photographers. Hard subset (neutral patches the cast made colourful, and colourful patches it
 made grey): 0.795-0.806 vs 0.752. Leave-one-stock-out: the head beats the rule on all 8 held-out stocks.
 
-Owner blind A/B on 12 negicc-web uploads and 20 whitelab frames: B5 with head anchors replacing its four selection
-rules (low-key merge, collinearity drop, chart-like gate, shadow cluster) ties B5 (7:7:14).
+Owner blind A/B on 12 negicc-web uploads and 20 of the owner's white-light scans: B5 with head anchors replacing its
+four selection rules (low-key merge, collinearity drop, chart-like gate, shadow cluster) ties B5 (7:7:14).
 
 ## Files
 
-- `neutral_head.pt`: the trained PyTorch dict `{features: "tok", kind: "mlp", state, mean, std}` (the same file as
-  negicc-station's `models/neutral_head/neutral_head_pooled_mlp.pt`; sha256 in `metadata.json`).
+- `neutral_head.pt`: the trained PyTorch dict `{features: "tok", kind: "mlp", state, mean, std}` (sha256 in
+  `metadata.json`).
 - `neutral_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs
   it in plain C++ (`NeutralHead` in `dinov3_engine.h`) on the tokens the backbone already produced. Format in
   `export_neutral_head.py`.
@@ -70,14 +70,4 @@ The sidecar's `heads.neutral` records which file ran, with its size and CRC-32.
 
 ## Provenance
 
-Trained with negicc-station's `training/neutral_head/` (branch `exp-neutral-head`, commit 1781969: extraction,
-training and evaluation scripts; weights and metadata in commit 0ac462b). From the negicc-station repository root:
-
-```bash
-./venv/bin/python training/neutral_head/extract_neutral.py <out_dir> --workers 64 --per-stock 1500
-./venv/bin/python training/neutral_head/train_pooled.py <out_dir> --split image --folds 5
-./venv/bin/python training/neutral_head/train_pooled.py <out_dir> --split photographer
-./venv/bin/python training/neutral_head/final_pooled.py <out_dir>        # writes the deployable head
-```
-
-`metadata.json` has the settings, metrics and checksums.
+Trained on the lab scans and labels described above. `metadata.json` has the settings, metrics and checksums.
