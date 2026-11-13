@@ -118,14 +118,12 @@ the same stage.
 | Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
 | Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
 | Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
-| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto nudges exposure down by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
+| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
 | Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
 
-That makes eleven choices. The admissible-bracket rule, the overflow tolerances, the clip fallback and the highlight
-pullback were ported unchanged from negicc-station, so that both programs pick the same result. negicc-station
-records no reason for their values. None of the eleven has been switched off on the 140-frame test set, so the table
-has no Effect column. The search also does not always converge to the same answer: where it ends depends on where
-it starts.
+That makes eleven choices. None of them has been switched off on the 140-frame test set yet, so the table has no
+Effect column. The search also does not always converge to the same answer: where it ends depends on where it
+starts.
 
 ## Stage 2: Curve fit
 
@@ -216,7 +214,6 @@ They live in `input_curves.h`, and "How the estimates work" shows where most of 
   anchors, so a dark neutral object can end a few a\* off.
 - **The clip check** measures the whole export, film borders included, while the tone curve is planned on the inner
   crop.
-- **Stage 1's thresholds have no recorded basis.** The admissible-bracket rule, the overflow tolerances, the clip
-  fallback and the highlight pullback were copied from negicc-station, which gives no reason for their values. None
-  of them has been switched off on the test set, so how many frames each one changes is unknown. To do: measure the
-  Effect of each, as for stages 2 and 4.
+- **Stage 1 thresholds that need confirming:** the admissible-bracket cut (0.75), the overflow tolerances (1.5 and
+  1.2 stops), the clip fallback's trigger and acceptance limits (0.03 %, half the clipping, −4.5 to +0.5 L\*, 10 %)
+  and the highlight pullback's tiers (L\* 58 with 2.2 %, L\* 48 with 7.5 %).

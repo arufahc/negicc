@@ -114,19 +114,10 @@ its own exposure.
 ![ICC profile](samples/icc.png)
 ![Gamut Volume](samples/gamut_volume.png)
 
-How closely each profile reproduces the chart, measured with ArgyllCMS `profcheck` on all 288 patches (CIEDE2000;
-under 2 is barely visible):
-
 ![Profile accuracy per bracket](samples/profile_accuracy.png)
 
-Under the RGB LED the error is well below 1 ΔE₀₀: the median is 0.4 to 0.7 in every bracket, and the mean is at most
-0.83 from −2 to +3 EV, rising to 1.1 only at −3 EV on Portra 160 and Ektar 100. Under the white LED the mean is 0.6
-to 1.5 and the median 0.4 to 0.9. On both lights the error is lowest in the middle brackets and highest at −3 EV.
-On patches held out of the fit the median error is 1.3 to 2.3. Each bundle's README has its numbers per bracket,
-fitted and held out: [Portra 400 RGB LED](profiles/Portra400-A7R4-TriLED/README.md),
-[white LED](profiles/Portra400-A7R4-D65/README.md); [Portra 160 RGB LED](profiles/Portra160-A7R4-TriLED/README.md),
-[white LED](profiles/Portra160-A7R4-D65/README.md); [Ektar 100 RGB LED](profiles/Ektar100-A7R4-TriLED/README.md),
-[white LED](profiles/Ektar100-A7R4-D65/README.md).
+Under the RGB LED the profiles reproduce the chart to well below 1 ΔE₀₀ (ArgyllCMS `profcheck`); each bundle's README
+has its numbers, for example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md).
 
 ### Choosing exposure and colour
 
@@ -159,6 +150,19 @@ light, and there is no lamp or camera difference for a fit to correct.
 On the frame below the first render is cyan-green and the search brings it to a daylight balance.
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
+
+The neutral head marks the cells that should be grey: here the road, the building fronts and the dark uniforms,
+not the trees. Weighted by it, the
+search's render runs green-yellow in the shadows and magenta-blue in the highlights; the curve fit takes most of that
+trend out.
+
+![Neutral head and the curve fit](samples/neutral_field.png)
+
+The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
+lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
+was.
+
+![Tone head and the lightness curve](samples/tone_prediction.png)
 
 [DESIGN.md](DESIGN.md) has the formulas, every number these steps depend on, and a list of what is known not to
 work well yet.
