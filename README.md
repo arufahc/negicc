@@ -74,13 +74,19 @@ bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base
 
 | `-P` | Density | In a `.dpx` | In a `.tif` / `.tiff` |
 | :--- | :--- | :--- | :--- |
-| `statusm` | Status M | Status M at the Cineon scaling | Status M at the ADX16 scaling |
-| `rp180` | SMPTE RP 180 printing density | Cineon | RP 180 at the ADX16 scaling |
+| `statusm` | Status M | Status M at the Cineon scaling | Status M at 8000 codes per unit density |
+| `rp180` | SMPTE RP 180 printing density | Cineon | RP 180 at 8000 codes per unit density |
 | `apd` | Academy Printing Density (SMPTE ST 2065-2) | ADX10 | ADX16 |
 
-The output's extension picks the file. A `.dpx` holds 10 bits, `code = 95 + 500 × D`, and clips at about 1.86
-density above the base. A TIFF holds 16 bits, `code = 1520 + 8000 × D`. Pixels that run off either end are counted
-in the sidecar.
+The output's extension picks the file. A `.dpx` holds 10 bits, `code = 95 + 500 × k × D`, and clips at about 1.86
+density above the base. A TIFF holds 16 bits, `code = 1520 + 8000 × k × D`. `k` is 1 for `statusm` and `rp180`.
+For `apd` it is the channel factor of ADX (SMPTE ST 2065-3): 1.00 for red, 0.92 for green and 0.95 for blue, so a
+tool that reads the file as ADX gets Academy Printing Density back. The factors are recorded in the file
+(`encoding.channel_factors`). Pixels that run off either end are counted in the sidecar.
+
+A density file's zero is the film base. Without `--film_base` the base is read from the scan: from the rebate when
+the frame shows one, else estimated from the thinnest film in the frame, which is too dark wherever the frame has no
+unexposed film. `neg_process` warns in that case, and when the base is the profile's own roll's.
 
 Each pixel is divided by the film base, its logarithm is taken, and a 3×3 matrix turns the densities the LED sees
 into the measure asked for. The matrices were fitted from the LED's measured spectrum, the film's dye spectra and
