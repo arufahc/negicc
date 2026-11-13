@@ -1936,35 +1936,49 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
-// The white-light fit's steps (run_white_light_fit), in the order run() takes them, and the state they share.
-class WhiteLightFit {
+// The tone stage's plan on the render the conversion exports: the preview of profile pd at params (the search's units)
+// at DINOv3's size, one inference on it for the tone heads' input, and the heads' predictions. features holds the
+// search's own tone features on entry (read only if that inference fails) and the ones the heads read on return.
+static void plan_tone_on_render(SearchFrame& fr, const ProfileData& pd, const ConversionParams& params,
+                                const ToneHead* tone_head, int encoding, std::vector<float>& features,
+                                ToneStagePlan& tp) {
+  std::vector<uint8_t> pv;
+  int pw = 0, ph = 0;
+  if (tone_head && encoding == ENCODE_SRGB) {
+    fr.render_net_preview(pd, params, pv, pw, ph);
+    std::vector<float> mu_f, sg_f, tf;
+    if (fr.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
+      features.swap(tf);
+      tp.features = "final";
+    }
+  }
+  if (!tone_head) {
+    tp.skipped = "off";
+  } else if (encoding != ENCODE_SRGB) {
+    tp.skipped = "encoding";
+  } else if (features.size() != (size_t)ToneHead::kInDim ||
+             !tone_head->run(features.data(), tp.pred_mean, tp.pred_sd)) {
+    tp.skipped = "features";
+  } else {
+    tp.preview.swap(pv);
+  }
+}
+
+// The white-light fit on plain data (fit_white_light_curves): the steps after the frame and its intent field are
+// known, in the order run() takes them, and the state they share. neg_process's WhiteLightFit and negicc-station
+// both run it.
+class WhiteLightFitCore {
  public:
-  WhiteLightFit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s,
-                double scan_iso, const ParamSearchOptions& opts, const ParamSearchResult& res,
-                const negicc::CurveFitOptions& fit_opts, int encoding, const ToneHead* tone_head,
-                WhiteLightFitResult& out)
-      : bundle_(bundle), frame_(frame), scan_shutter_s_(scan_shutter_s), scan_iso_(scan_iso), opts_(opts), res_(res),
-        fit_opts_(fit_opts), encoding_(encoding), tone_head_(tone_head), out_(out),
-        fr_(bundle, engine, opts.verbose, opts.max_steps, scratch_) {}
+  WhiteLightFitCore(const WhiteLightFitData& d, const negicc::CurveFitOptions& fit_opts,
+                    const WhiteLightRolloff& rolloff, WhiteLightFitResult& out)
+      : d_(d), fit_opts_(fit_opts), rolloff_(rolloff), out_(out) {}
 
   bool run() {
-    // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
-    if (bundle_.has_crosstalk) {
-      std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base "
-                   "does not mark the dark end of every channel" << std::endl;
-      return false;
-    }
-    idx_ = res_.target_idx;
-    if (idx_ < 0 || idx_ >= (int)bundle_.targets.size()) {
-      std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
-      return false;
-    }
-    // Pinned parameters (ParamSearchOptions): g and b stay at the search's, which held them, and E is neither solved
-    // per candidate nor re-metered.
-    if (opts_.pin_mask & PIN_G) fit_opts_.g_bound_stops = 0.0f;
-    if (opts_.pin_mask & PIN_B) fit_opts_.b_bound_stops = 0.0f;
+    // Pinned parameters: g and b stay at the search's, which held them, and E is neither solved per candidate nor
+    // re-metered.
+    if (d_.pin_mask & PIN_G) fit_opts_.g_bound_stops = 0.0f;
+    if (d_.pin_mask & PIN_B) fit_opts_.b_bound_stops = 0.0f;
     if (pin_e()) fit_opts_.solve_e = false;
-    t_fit0_ = Clock::now();
     if (!prepare()) return false;
     fit_and_remeter();
     compose_curves();
@@ -1973,61 +1987,42 @@ class WhiteLightFit {
   }
 
  private:
-  bool pin_e() const { return (opts_.pin_mask & PIN_E) != 0; }
+  bool pin_e() const { return (d_.pin_mask & PIN_E) != 0; }
 
-  // The export's roll-off on profile p at (e, g, b), as neg_process measures every conversion's (sRGB only).
-  float rolloff_at(const negicc::ProfileData& p, float e, float g, float b, float* q995) const {
-    if (encoding_ != ENCODE_SRGB) return 1.0f;
-    return measure_rolloff_x_hi(bundle_, p, frame_, scan_shutter_s_, scan_iso_, e, g, b, opts_.crop_ratio, q995,
-                                opts_.film_base_rgb_d);
+  // The export's roll-off on profile p (the bracket's tables composed with curves c) at (e, g, b), as the
+  // conversion measures it (sRGB only).
+  float rolloff_at(const negicc::ProfileData& p, const negicc::InputCurves& c, float e, float g, float b,
+                   float* q995) const {
+    if (d_.encoding != ENCODE_SRGB) return 1.0f;
+    return rolloff_(p, c, e, g, b, q995);
   }
 
-  // ---- 0. Prepare: the frame, the intent field, the cells the fit uses, Auto's render and lightness, E's bounds,
-  // and the scene-neutral anchors ----
+  // ---- 0. Prepare: the curves' anchor, the cells the fit uses, Auto's render and lightness, E's bounds, and the
+  // scene-neutral anchors ----
   bool prepare() {
-    fr_.set_shoulder(1.0f, true);
-    fr_.set_frame(frame_, opts_.crop_ratio);
-    const FrameStats& stats = fr_.stats();
-    const FrameScale scale = frame_scale(bundle_, (float)scan_shutter_s_, (float)scan_iso_, opts_);
-    fr_.set_frame_matrix(scale.frame_matrix, scale.e_norm);
-    const size_t n = stats.grid.size() / 3;
-    if (res_.intent_grid_w != stats.grid_w || res_.intent_grid_h != stats.grid_h ||
-        res_.intent_mu.size() != n * 3 || res_.intent_sigma.size() != n * 3 || n == 0) {
-      std::cerr << "ERROR! The search's intent field does not match the frame's grid" << std::endl;
+    const size_t n = (size_t)d_.n;
+    if (d_.mu.size() != n * 3 || d_.sigma.size() != n * 3 || n == 0 || !d_.prof || !d_.grid || !d_.merged) {
+      std::cerr << "ERROR! The curve fit's intent field does not match the frame's grid" << std::endl;
       return false;
     }
-    // The search's matrix and E: white-light bundles search on M_frame with E in this frame's units.
-    merged_ = fr_.input_matrix();
-    e_int_ = res_.params.e;  // white light (checked above): the search's E is already in this frame's units
-    out_.params_before = res_.params;
+    static_cast<negicc::ProfileData&>(base_) = *d_.prof;
     out_.options = fit_opts_;
-
-    // The intent field the fit scores against: the search's, predicted from the preview at intent_params. The
-    // highlight pullback (and the clip fallback) move E, or the bracket's parameters, after that preview, so there the
-    // field is predicted again from a preview at the search's final parameters on the bracket's own profile, so the
-    // fit does not run at one E against a field predicted at another. One DINOv3 inference, only then.
-    mu_ = res_.intent_mu;
-    sigma_ = res_.intent_sigma;
-    std::vector<float> neutral_p = res_.intent_neutral_p;  // the neutral head's p of the same preview, if it ran
-    tone_features_ = res_.intent_tone_features;           // the tone heads' input from it, if given
-    {
-      const ConversionParams& ip = res_.intent_params;  // the search's own units, which are this frame's on white light
-      auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
-      if (moved(ip.e, res_.params.e) || moved(ip.g, res_.params.g) || moved(ip.b, res_.params.b) ||
-          moved(ip.shoulder, res_.params.shoulder)) {
-        std::vector<uint8_t> preview;
-        fr_.render_preview(idx_, res_.params, preview);
-        if (!fr_.predict(preview, mu_, sigma_)) return false;
-        neutral_p = fr_.last_neutral_p();
-        tone_features_ = fr_.last_tone_features();
-        out_.intent_repredicted = true;
-        out_.guard_p_source = "refit";
-      }
+    mu_ = d_.mu;
+    sigma_ = d_.sigma;
+    std::vector<float> neutral_p = d_.neutral_p;
+    // The curves' anchor on this frame: the film base given, else the brightest grid cell per channel (of the whole
+    // grid, before any cell is left out below).
+    cf_ = negicc::CurveFrame{};
+    cf_.merged = d_.merged;
+    cf_.knee = AUTO_KNEE;
+    if (d_.has_film_base) {
+      for (int c = 0; c < 3; ++c) cf_.film_base[c] = d_.film_base[c];
+    } else {
+      for (size_t i = 0; i < n; ++i)
+        for (int c = 0; c < 3; ++c) cf_.film_base[c] = std::max(cf_.film_base[c], (float)d_.grid[i * 3 + c]);
     }
-
-    // The curves' anchor on this frame: the film base read from the scan, else the brightest grid cell per channel
-    // (of the whole grid, before any cell is left out below).
-    cf_ = curve_frame_of(stats, merged_, opts_);
+    cf_.grid = d_.grid;
+    cf_.n = (int)n;
     // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate,
     // gaps, bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of
     // the film itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops
@@ -2035,7 +2030,7 @@ class WhiteLightFit {
     // cells. Both limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9
     // stops below it.
     constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
-    fit_grid_ = stats.grid.data();
+    fit_grid_ = d_.grid;
     nf_ = n;
     out_.cells_total = (int)n;
     std::vector<size_t> kept_idx;
@@ -2051,15 +2046,15 @@ class WhiteLightFit {
       m.swap(km);
       s.swap(ks);
     };
-    if (opts_.fallback_crop && cf_.film_base[1] > 0.0f && cf_.film_base[2] > 0.0f) {
+    if (d_.fallback_crop && cf_.film_base[1] > 0.0f && cf_.film_base[2] > 0.0f) {
       std::vector<size_t> try_idx;
       const float base_lim[2] = {cf_.film_base[1] * std::exp2(-kBaseCellStops),
                                  cf_.film_base[2] * std::exp2(-kBaseCellStops)};
       const float holder_lim = cf_.film_base[1] * std::exp2(-kHolderCellStops);
       for (size_t i = 0; i < n; ++i) {
-        const float g = stats.grid[i * 3 + 1], b = stats.grid[i * 3 + 2];
-        if ((opts_.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
-        kept_grid_.insert(kept_grid_.end(), stats.grid.begin() + i * 3, stats.grid.begin() + i * 3 + 3);
+        const float g = d_.grid[i * 3 + 1], b = d_.grid[i * 3 + 2];
+        if ((d_.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+        kept_grid_.insert(kept_grid_.end(), d_.grid + i * 3, d_.grid + i * 3 + 3);
         try_idx.push_back(i);
       }
       // Only with enough picture left (at least 16 cells and a quarter of the grid, enough to constrain the fit's six
@@ -2078,7 +2073,7 @@ class WhiteLightFit {
         }
         cf_.grid = fit_grid_;
         cf_.n = (int)nf_;
-        if (opts_.verbose) {
+        if (d_.verbose) {
           std::cout << "Curves: fallback crop, " << out_.cells_excluded << " of " << n
                     << " grid cells at the film base's level or holder-dark left out\n";
         }
@@ -2093,59 +2088,57 @@ class WhiteLightFit {
     field_.by.clear();
     for (size_t k = 0; k < nf_; ++k) {
       const size_t i = kept_idx.empty() ? k : kept_idx[k];
-      field_.bx.push_back((int)(i % stats.grid_w) / 4);
-      field_.by.push_back((int)(i / stats.grid_w) / 4);
+      field_.bx.push_back((int)(i % d_.grid_w) / 4);
+      field_.by.push_back((int)(i / d_.grid_w) / 4);
     }
-    field_.nbx = (stats.grid_w + 3) / 4;
-    prof_ = &bundle_.targets[idx_].film_prof;
-    const ParsedFilmProfile& prof = *prof_;
+    field_.nbx = (d_.grid_w + 3) / 4;
     // The export's render of the grid: its encoding and the roll-off it measures, which only the sRGB encoding
     // applies, so the median L* the re-meter matches is the one the export renders.
-    out_.encoding = encoding_;
+    out_.encoding = d_.encoding;
     q995_auto_ = 0.0f;
-    out_.x_hi_auto = rolloff_at(prof.data, e_int_, res_.params.g, res_.params.b, &q995_auto_);
-    cfg_auto_ = make_pipeline_config(prof.data, AUTO_KNEE, out_.x_hi_auto, encoding_);
+    out_.x_hi_auto = rolloff_at(base_, negicc::InputCurves{}, d_.e, d_.g, d_.b, &q995_auto_);
+    cfg_auto_ = make_pipeline_config(base_, AUTO_KNEE, out_.x_hi_auto, d_.encoding);
     // Auto's grid median L* on the bracket's own profile, as the export renders Auto's result: the lightness the fit
     // keeps (within kIntentMinL..kIntentMaxL).
-    target_L_ = negicc::grid_median_L(cfg_auto_, merged_, e_int_, res_.params.g, res_.params.b, fit_grid_, (int)nf_);
+    target_L_ = negicc::grid_median_L(cfg_auto_, d_.merged, d_.e, d_.g, d_.b, fit_grid_, (int)nf_);
     // A pinned E keeps its own lightness, whatever it is.
     fit_target_L_ = pin_e() ? target_L_ : std::clamp(target_L_, kIntentMinL, kIntentMaxL);
     // Auto's loss parts on the same render; both before step 3 replaces the profile's tables (cfg points at them).
-    out_.parts_auto = negicc::grid_intent_loss_parts(cfg_auto_, merged_, e_int_, res_.params.g, res_.params.b,
+    out_.parts_auto = negicc::grid_intent_loss_parts(cfg_auto_, d_.merged, d_.e, d_.g, d_.b,
                                                      fit_grid_, (int)nf_, mu_.data(), sigma_.data());
-    table_n_[0] = prof.data.in_trc_size[1];
-    table_n_[1] = prof.data.in_trc_size[2];
+    table_n_[0] = base_.in_trc_size[1];
+    table_n_[1] = base_.in_trc_size[2];
 
     // The bounds of E for the fit and the re-meter: the bracket's calibrated range (its enclosure, which the search
     // measured) widened to hold Auto's E with a margin that scales with the gain bounds (0.1 + 0.5 * max(s_g, s_b)
     // stops), so a gain change has E room to hold Auto's median L*; without a range, 2 stops either side of Auto's E.
     const float s_gain = std::max(fit_opts_.g_bound_stops, fit_opts_.b_bound_stops);
     const float margin = std::exp2(0.1f + 0.5f * s_gain);
-    if (res_.e_range_lo > 0.0f && res_.e_range_hi >= res_.e_range_lo) {
-      out_.e_lo = std::min(res_.e_range_lo, e_int_ / margin);
-      out_.e_hi = std::max(res_.e_range_hi, e_int_ * margin);
+    if (d_.e_range_lo > 0.0f && d_.e_range_hi >= d_.e_range_lo) {
+      out_.e_lo = std::min(d_.e_range_lo, d_.e / margin);
+      out_.e_hi = std::max(d_.e_range_hi, d_.e * margin);
     } else {
-      out_.e_lo = e_int_ * 0.25f;
-      out_.e_hi = e_int_ * 4.0f;
+      out_.e_lo = d_.e * 0.25f;
+      out_.e_hi = d_.e * 4.0f;
     }
 
-    e_start_ = e_int_;
+    e_start_ = d_.e;
     out_.intent_lightness_failed = (fit_target_L_ != target_L_);
     if (out_.intent_lightness_failed) {
       out_.fallback_target_L = fit_target_L_;
-      out_.e_lo = std::min(out_.e_lo, e_int_ * 0.25f);
-      out_.e_hi = std::max(out_.e_hi, e_int_ * 4.0f);
-      e_start_ = negicc::solve_e_for_median_L(cfg_auto_, cf_, negicc::InputCurves{}, e_int_, out_.e_lo, out_.e_hi,
-                                              res_.params.g, res_.params.b, fit_target_L_, &out_.fallback_clipped);
-      out_.fallback_e_moved = std::fabs(e_start_ - e_int_) > 1e-6f * std::max(1.0f, std::fabs(e_int_));
-      out_.x_hi_auto = rolloff_at(prof.data, e_start_, res_.params.g, res_.params.b, &q995_auto_);
-      cfg_auto_ = make_pipeline_config(prof.data, AUTO_KNEE, out_.x_hi_auto, encoding_);
+      out_.e_lo = std::min(out_.e_lo, d_.e * 0.25f);
+      out_.e_hi = std::max(out_.e_hi, d_.e * 4.0f);
+      e_start_ = negicc::solve_e_for_median_L(cfg_auto_, cf_, negicc::InputCurves{}, d_.e, out_.e_lo, out_.e_hi,
+                                              d_.g, d_.b, fit_target_L_, &out_.fallback_clipped);
+      out_.fallback_e_moved = std::fabs(e_start_ - d_.e) > 1e-6f * std::max(1.0f, std::fabs(d_.e));
+      out_.x_hi_auto = rolloff_at(base_, negicc::InputCurves{}, e_start_, d_.g, d_.b, &q995_auto_);
+      cfg_auto_ = make_pipeline_config(base_, AUTO_KNEE, out_.x_hi_auto, d_.encoding);
       out_.e_lo = std::min(out_.e_lo, e_start_ / margin);
       out_.e_hi = std::max(out_.e_hi, e_start_ * margin);
     }
     m_neu_ = std::make_unique<negicc::JointCurveModel>(cfg_auto_, cf_, mu_.data(), sigma_.data());
-    m_neu_->set_scene_neutral(e_start_, res_.params.g, res_.params.b);
-    out_.neutral_auto = m_neu_->neutral_stats_on(cfg_auto_, e_start_, res_.params.g, res_.params.b);
+    m_neu_->set_scene_neutral(e_start_, d_.g, d_.b);
+    out_.neutral_auto = m_neu_->neutral_stats_on(cfg_auto_, e_start_, d_.g, d_.b);
     out_.neutral_anchors = m_neu_->has_anchors();  // as the fit's own selection: the same frame, E, g and b
     x_ = out_.x_hi_auto;
     q995_ = q995_auto_;
@@ -2159,8 +2152,8 @@ class WhiteLightFit {
       out_.fit.curves.a[ch] = out_.fit.curves.k[ch] = 0.0f;
       out_.shape_scale_ch[ch] = 0.0f;
     }
-    out_.fit.g = res_.params.g;
-    out_.fit.b = res_.params.b;
+    out_.fit.g = d_.g;
+    out_.fit.b = d_.b;
     e_new_ = e_start_;
     x_ = out_.x_hi_auto;
     q995_ = q995_auto_;
@@ -2187,27 +2180,26 @@ class WhiteLightFit {
 
   // One joint fit at roll-off x_fit; false (Auto's result taken) when it found no feasible point.
   bool fit_pass(float x_fit) {
-    const ParsedFilmProfile& prof = *prof_;
     out_.x_hi_fit = x_fit;
     out_.fallback = nullptr;
     const float e_lo_fit = std::min(e_start_, out_.e_lo * 1.001f);
     const float e_hi_fit = std::max(e_start_, out_.e_hi / 1.001f);
-    const negicc::PipelineConfig cfg = make_pipeline_config(prof.data, AUTO_KNEE, x_fit, encoding_);
-    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, field_, e_start_, res_.params.g, res_.params.b,
+    const negicc::PipelineConfig cfg = make_pipeline_config(base_, AUTO_KNEE, x_fit, d_.encoding);
+    out_.fit = negicc::fit_input_curves_joint(cfg, cf_, field_, e_start_, d_.g, d_.b,
                                               fit_target_L_, table_n_, fit_opts_, e_lo_fit, e_hi_fit);
     if (!out_.fit.ok) {
       // Fewer than 8 cells in range, or no feasible start: Auto's colour (its g and b, no curves).
       negicc::JointCurveModel mdl(cfg, cf_);
-      out_.fit.curves = mdl.anchored(negicc::InputCurves{}, e_start_, res_.params.g, res_.params.b);
-      out_.fit.g = res_.params.g;
-      out_.fit.b = res_.params.b;
+      out_.fit.curves = mdl.anchored(negicc::InputCurves{}, e_start_, d_.g, d_.b);
+      out_.fit.g = d_.g;
+      out_.fit.b = d_.b;
       out_.fit.e = e_start_;
       out_.fit.feasible = true;
       out_.fallback = out_.fit.skipped;  // reported only: the re-meter still runs on Auto's values
-      if (opts_.verbose) std::cout << "Curves: no fit (" << out_.fit.skipped << "): Auto's g and b, no curves\n";
+      if (d_.verbose) std::cout << "Curves: no fit (" << out_.fit.skipped << "): Auto's g and b, no curves\n";
     }
     const negicc::JointCurveFit& jf = out_.fit;
-    if (opts_.verbose) {
+    if (d_.verbose) {
       const negicc::InputCurves& c = out_.fit.curves;
       std::cout << "Curves: G a " << fixed(c.a[0], 4) << " k " << fixed(c.k[0], 4) << ", B a " << fixed(c.a[1], 4)
                 << " k " << fixed(c.k[1], 4) << "; E " << fixed(jf.e, 4) << " g " << fixed(out_.fit.g, 4) << " b "
@@ -2220,10 +2212,10 @@ class WhiteLightFit {
       return false;
     }
     negicc::CombinedProfile c0;
-    c0.build(prof.data, out_.fit.curves);
+    c0.build(base_, out_.fit.curves);
     negicc::PipelineConfig c0cfg = cfg;
     c0cfg.profile = c0.data;
-    out_.parts_fit = negicc::grid_intent_loss_parts(c0cfg, merged_, jf.e, out_.fit.g, out_.fit.b, fit_grid_,
+    out_.parts_fit = negicc::grid_intent_loss_parts(c0cfg, d_.merged, jf.e, out_.fit.g, out_.fit.b, fit_grid_,
                                                     (int)nf_, mu_.data(), sigma_.data());
     return true;
   }
@@ -2232,7 +2224,6 @@ class WhiteLightFit {
   // roll-off holds still (at most kMaxPasses).
   void remeter(float e_centre) {
     constexpr int kMaxPasses = 6;
-    const ParsedFilmProfile& prof = *prof_;
     out_.remeter_converged = false;
     for (int pass = 1; pass <= kMaxPasses; ++pass) {
       ++out_.remeter_passes;
@@ -2240,13 +2231,14 @@ class WhiteLightFit {
         e_new_ = e_centre;  // held: only the roll-off is measured on the combined tables
         clipped_ = false;
       } else {
-        e_new_ = negicc::solve_e_for_median_L(make_pipeline_config(prof.data, AUTO_KNEE, x_, encoding_), cf_,
+        e_new_ = negicc::solve_e_for_median_L(make_pipeline_config(base_, AUTO_KNEE, x_, d_.encoding), cf_,
                                               out_.fit.curves, e_centre, out_.e_lo, out_.e_hi, out_.fit.g, out_.fit.b,
                                               fit_target_L_, &clipped_);
       }
-      comb_.build(prof.data, negicc::anchor_curves(out_.fit.curves, cf_, e_new_, out_.fit.g, out_.fit.b));
+      const negicc::InputCurves anchored = negicc::anchor_curves(out_.fit.curves, cf_, e_new_, out_.fit.g, out_.fit.b);
+      comb_.build(base_, anchored);
       float q = 0.0f;
-      const float x_new = rolloff_at(comb_.data, e_new_, out_.fit.g, out_.fit.b, &q);
+      const float x_new = rolloff_at(comb_.data, anchored, e_new_, out_.fit.g, out_.fit.b, &q);
       q995_ = q;
       if (x_new == x_) {
         out_.remeter_converged = true;
@@ -2300,58 +2292,28 @@ class WhiteLightFit {
   }
 
   // ---- 3. The curves anchored at the parameters the export renders with (the re-metered E, the fitted g and b), and
-  // the bracket's tables composed with them in place (apply_input_curves): every later use of the bracket renders
-  // through them ----
+  // the bracket's tables composed with them (the caller composes them into its own profile the same way) ----
   void compose_curves() {
     out_.fit.curves = negicc::anchor_curves(out_.fit.curves, cf_, e_new_, out_.fit.g, out_.fit.b);
-    apply_input_curves(*prof_, out_.fit.curves);
+    comb_final_.build(base_, out_.fit.curves);
     out_.x_hi = x_;  // measured on this profile at these parameters (step 2), or Auto's on the fallback
     out_.x_hi_q995 = q995_;
-    out_.rolloff_measured = encoding_ == ENCODE_SRGB;
+    out_.rolloff_measured = d_.encoding == ENCODE_SRGB;
   }
 
-  // ---- 4. Record: the export's parameters, lightness, losses and neutral statistics, and the tone stage's plan
-  // (the heads' predictions and the final render's preview, on which the conversion solves the curve between them,
-  // np_pipeline.cc) ----
+  // ---- 4. Record: the export's parameters, lightness, losses and neutral statistics ----
   void record() {
-    const ParsedFilmProfile& prof = *prof_;
-    out_.tone.features = "search";
-    const negicc::PipelineConfig cfg_comb = make_pipeline_config(prof.data, AUTO_KNEE, out_.x_hi, encoding_);
+    negicc::PipelineConfig cfg_comb = make_pipeline_config(base_, AUTO_KNEE, out_.x_hi, d_.encoding);
+    cfg_comb.profile = comb_final_.data;
     out_.params = {e_new_, out_.fit.g, out_.fit.b, out_.x_hi};
     out_.target_median_L = fit_target_L_;
-    out_.median_L = negicc::grid_median_L(cfg_comb, merged_, e_new_, out_.fit.g, out_.fit.b, fit_grid_, (int)nf_);
-    out_.parts_export = negicc::grid_intent_loss_parts(cfg_comb, merged_, e_new_, out_.fit.g, out_.fit.b, fit_grid_,
+    out_.median_L = negicc::grid_median_L(cfg_comb, d_.merged, e_new_, out_.fit.g, out_.fit.b, fit_grid_, (int)nf_);
+    out_.parts_export = negicc::grid_intent_loss_parts(cfg_comb, d_.merged, e_new_, out_.fit.g, out_.fit.b, fit_grid_,
                                                        (int)nf_, mu_.data(), sigma_.data());
     out_.neutral_export = m_neu_->neutral_stats_on(cfg_comb, e_new_, out_.fit.g, out_.fit.b);
     out_.loss_export = out_.parts_export.total();
-
-    // The heads read the image the stage will be applied to: the final state's preview, rendered below for the
-    // descriptors anyway, at one inference (the search's intent preview has the pre-fit colour, and is the fallback
-    // when that inference fails).
-    ToneStagePlan& tp = out_.tone;
-    std::vector<uint8_t> pv;
-    int pw = 0, ph = 0;
-    if (tone_head_ && encoding_ == ENCODE_SRGB) {
-      fr_.render_net_preview(prof.data, out_.params, pv, pw, ph);
-      std::vector<float> mu_f, sg_f, tf;
-      if (fr_.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
-        tone_features_.swap(tf);
-        tp.features = "final";
-      }
-    }
-    if (!tone_head_) {
-      tp.skipped = "off";
-    } else if (encoding_ != ENCODE_SRGB) {
-      tp.skipped = "encoding";
-    } else if (tone_features_.size() != (size_t)ToneHead::kInDim ||
-               !tone_head_->run(tone_features_.data(), tp.pred_mean, tp.pred_sd)) {
-      tp.skipped = "features";
-    } else {
-      tp.preview.swap(pv);
-    }
-    out_.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0_).count();
-    if (opts_.verbose) {
-      std::cout << "Curves: E re-metered " << fixed(e_int_, 4) << " -> " << fixed(e_new_, 4) << " (grid median L* "
+    if (d_.verbose) {
+      std::cout << "Curves: E re-metered " << fixed(d_.e, 4) << " -> " << fixed(e_new_, 4) << " (grid median L* "
                 << fixed(out_.median_L, 2) << ", Auto's " << fixed(target_L_, 2) << "); g "
                 << fixed(out_.params.g, 4) << " b " << fixed(out_.params.b, 4)
                 << (!out_.fallback ? "" : "; no curves, Auto's result (") << (out_.fallback ? out_.fallback : "")
@@ -2359,27 +2321,16 @@ class WhiteLightFit {
     }
   }
 
-  ProfileBundle& bundle_;
-  const negicc::RgbView& frame_;
-  const double scan_shutter_s_, scan_iso_;
-  const ParamSearchOptions& opts_;
-  const ParamSearchResult& res_;
+  const WhiteLightFitData& d_;
   negicc::CurveFitOptions fit_opts_;  // the caller's, with the pins applied (run)
-  const int encoding_;
-  const ToneHead* tone_head_;
+  const WhiteLightRolloff& rolloff_;
   WhiteLightFitResult& out_;
-  ParamSearchResult scratch_;  // the inferences and timings of the frame below; not reported
-  SearchFrame fr_;
-  int idx_ = -1;
-  Clock::time_point t_fit0_;
-  const float* merged_ = nullptr;
-  float e_int_ = 0.0f;
-  std::vector<float> mu_, sigma_, neutral_p_, tone_features_;
+  ProfileData base_;                  // the bracket's own profile (its tables are the caller's)
+  std::vector<float> mu_, sigma_, neutral_p_;
   negicc::CurveFrame cf_;
   std::vector<uint16_t> kept_grid_;
   const uint16_t* fit_grid_ = nullptr;
   size_t nf_ = 0;
-  ParsedFilmProfile* prof_ = nullptr;   // the bracket's profile, composed in place
   float q995_auto_ = 0.0f;
   negicc::PipelineConfig cfg_auto_{};
   float target_L_ = 0.0f, fit_target_L_ = 0.0f;
@@ -2388,9 +2339,130 @@ class WhiteLightFit {
   std::unique_ptr<negicc::JointCurveModel> m_neu_;
   float x_ = 1.0f, q995_ = 0.0f, e_new_ = 0.0f;  // the re-metered roll-off, its q995 and E
   bool clipped_ = false;
-  negicc::CombinedProfile comb_;  // the re-meter's combined tables
-  negicc::JointFitField field_;   // the intent field the fit's fifth residual reads
+  negicc::CombinedProfile comb_;        // the re-meter's combined tables
+  negicc::CombinedProfile comb_final_;  // the result's combined tables
+  negicc::JointFitField field_;         // the intent field the fit's fifth residual reads
 };
+
+// neg_process's white-light fit (run_white_light_fit) on the frame the search ran on: the search's intent field
+// (predicted again where the search moved its result afterwards), the fit on that data (WhiteLightFitCore), the
+// bracket's tables composed with the curves in place, and the tone stage's plan.
+class WhiteLightFit {
+ public:
+  WhiteLightFit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s,
+                double scan_iso, const ParamSearchOptions& opts, const ParamSearchResult& res,
+                const negicc::CurveFitOptions& fit_opts, int encoding, const ToneHead* tone_head,
+                WhiteLightFitResult& out)
+      : bundle_(bundle), frame_(frame), scan_shutter_s_(scan_shutter_s), scan_iso_(scan_iso), opts_(opts), res_(res),
+        fit_opts_(fit_opts), encoding_(encoding), tone_head_(tone_head), out_(out),
+        fr_(bundle, engine, opts.verbose, opts.max_steps, scratch_) {}
+
+  bool run() {
+    // White light only (see the --fit_curves gate in np_pipeline.cc): a TriLED bundle's curves are the measured ones.
+    if (bundle_.has_crosstalk) {
+      std::cerr << "ERROR! Fitted input curves are for white-light bundles: a TriLED bundle converts through its "
+                   "measured curves" << std::endl;
+      return false;
+    }
+    const int idx = res_.target_idx;
+    if (idx < 0 || idx >= (int)bundle_.targets.size()) {
+      std::cerr << "ERROR! Fitted input curves need the bracket of a finished search" << std::endl;
+      return false;
+    }
+    const Clock::time_point t_fit0 = Clock::now();
+    fr_.set_shoulder(1.0f, true);
+    fr_.set_frame(frame_, opts_.crop_ratio);
+    const FrameStats& stats = fr_.stats();
+    const FrameScale scale = frame_scale(bundle_, (float)scan_shutter_s_, (float)scan_iso_, opts_);
+    fr_.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+    const size_t n = stats.grid.size() / 3;
+    if (res_.intent_grid_w != stats.grid_w || res_.intent_grid_h != stats.grid_h ||
+        res_.intent_mu.size() != n * 3 || res_.intent_sigma.size() != n * 3 || n == 0) {
+      std::cerr << "ERROR! The search's intent field does not match the frame's grid" << std::endl;
+      return false;
+    }
+    out_.params_before = res_.params;
+
+    // The fit's data. The search's matrix and E: white-light bundles search on M_frame with E in this frame's units.
+    WhiteLightFitData d;
+    ParsedFilmProfile& prof = bundle_.targets[idx].film_prof;
+    d.prof = &prof.data;
+    d.merged = fr_.input_matrix();
+    d.grid = stats.grid.data();
+    d.n = (int)n;
+    d.grid_w = stats.grid_w;
+    d.has_film_base = opts_.film_base_rgb_d || opts_.film_base_rgb;
+    for (int c = 0; c < 3 && d.has_film_base; ++c) {
+      d.film_base[c] = opts_.film_base_rgb_d ? (float)opts_.film_base_rgb_d[c] : opts_.film_base_rgb[c];
+    }
+    d.fallback_crop = opts_.fallback_crop;
+    d.film_base_is_rebate = opts_.film_base_is_rebate;
+    d.e = res_.params.e;
+    d.g = res_.params.g;
+    d.b = res_.params.b;
+    d.e_range_lo = res_.e_range_lo;
+    d.e_range_hi = res_.e_range_hi;
+    d.pin_mask = opts_.pin_mask;
+    d.verbose = opts_.verbose;
+    d.encoding = encoding_;
+    // The intent field the fit scores against: the search's, predicted from the preview at intent_params. The
+    // highlight pullback (and the clip fallback) move E, or the bracket's parameters, after that preview, so there the
+    // field is predicted again from a preview at the search's final parameters on the bracket's own profile, so the
+    // fit does not run at one E against a field predicted at another. One DINOv3 inference, only then.
+    d.mu = res_.intent_mu;
+    d.sigma = res_.intent_sigma;
+    d.neutral_p = res_.intent_neutral_p;                  // the neutral head's p of the same preview, if it ran
+    std::vector<float> tone_features = res_.intent_tone_features;  // the tone heads' input from it, if given
+    {
+      const ConversionParams& ip = res_.intent_params;  // the search's own units, which are this frame's on white light
+      auto moved = [](float a, float b) { return std::fabs(a - b) > 1e-6f * std::max(1.0f, std::fabs(b)); };
+      if (moved(ip.e, res_.params.e) || moved(ip.g, res_.params.g) || moved(ip.b, res_.params.b) ||
+          moved(ip.shoulder, res_.params.shoulder)) {
+        std::vector<uint8_t> preview;
+        fr_.render_preview(idx, res_.params, preview);
+        if (!fr_.predict(preview, d.mu, d.sigma)) return false;
+        d.neutral_p = fr_.last_neutral_p();
+        tone_features = fr_.last_tone_features();
+        out_.intent_repredicted = true;
+        out_.guard_p_source = "refit";
+      }
+    }
+    // The export's roll-off, as neg_process measures every conversion's.
+    const WhiteLightRolloff rolloff = [&](const negicc::ProfileData& p, const negicc::InputCurves&, float e, float g,
+                                          float b, float* q995) {
+      return measure_rolloff_x_hi(bundle_, p, frame_, scan_shutter_s_, scan_iso_, e, g, b, opts_.crop_ratio, q995,
+                                  opts_.film_base_rgb_d);
+    };
+    if (!fit_white_light_curves(d, fit_opts_, rolloff, out_)) return false;
+    // The bracket's tables composed with the curves in place (apply_input_curves): every later use of the bracket
+    // renders through them.
+    apply_input_curves(prof, out_.fit.curves);
+    // The tone stage's plan: the heads read the image the stage will be applied to, the final state's preview, at one
+    // inference (the search's intent preview has the pre-fit colour, and is the fallback when that inference fails).
+    out_.tone.features = "search";
+    plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features, out_.tone);
+    out_.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
+    return true;
+  }
+
+ private:
+  ProfileBundle& bundle_;
+  const negicc::RgbView& frame_;
+  const double scan_shutter_s_, scan_iso_;
+  const ParamSearchOptions& opts_;
+  const ParamSearchResult& res_;
+  const negicc::CurveFitOptions fit_opts_;
+  const int encoding_;
+  const ToneHead* tone_head_;
+  WhiteLightFitResult& out_;
+  ParamSearchResult scratch_;  // the inferences and timings of the frame below; not reported
+  SearchFrame fr_;
+};
+
+bool fit_white_light_curves(const WhiteLightFitData& data, const negicc::CurveFitOptions& fit_opts,
+                            const WhiteLightRolloff& rolloff, WhiteLightFitResult& out) {
+  return WhiteLightFitCore(data, fit_opts, rolloff, out).run();
+}
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
 // negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
@@ -2401,4 +2473,35 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          WhiteLightFitResult& out) {
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
+}
+
+bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                          const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
+  const int idx = res.target_idx;
+  if (idx < 0 || idx >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! The tone stage needs the bracket of a finished search" << std::endl;
+    return false;
+  }
+  out = ToneStagePlan{};
+  ParamSearchResult scratch;  // the inference and timings of the frame below; not reported
+  SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
+  fr.set_shoulder(1.0f, true);
+  fr.set_frame(frame, opts.crop_ratio);
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+  const ProfileData& pd = bundle.targets[idx].film_prof.data;
+  // The export's roll-off at the search's result, as the conversion measures it (only the sRGB encoding applies one).
+  ConversionParams p = res.params;
+  float q995 = 0.0f;
+  p.shoulder = encoding == ENCODE_SRGB
+                   ? measure_rolloff_x_hi(bundle, pd, frame, scan_shutter_s, scan_iso, p.e, p.g, p.b, opts.crop_ratio,
+                                          &q995, opts.film_base_rgb_d)
+                   : 1.0f;
+  // The preview renders in the search's units: a TriLED search runs on M_frame / e_norm with E in the reference's
+  // units, while res.params.e is in this frame's (white light searches in the frame's units).
+  if (bundle.has_crosstalk) p.e *= fr.e_norm();
+  std::vector<float> features = res.intent_tone_features;
+  plan_tone_on_render(fr, pd, p, &tone_head, encoding, features, out);
+  return true;
 }

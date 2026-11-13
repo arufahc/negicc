@@ -41,276 +41,6 @@
 #include "np_output.h"
 #include "np_profile.h"
 
-// ---- Stage 4, the white-light tone stage (np_pipeline.h) ----
-//
-// One monotone L* curve applied in the conversion kernel (color_pipeline.h apply_tone), holding the mid-tones. It
-// takes the tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were
-// made on; the conversion solves the curve after the fit (tone_plan), scales the highlight and range moves down where
-// the curve would clip the export (tone_plan_for_image, on a sample through the kernel) and converts the image once
-// with the curve's table (tone_table).
-//
-// The preview's L* (sRGB D65, in double precision): the descriptors the curve is solved from. Only the small preview is
-// measured this way; no output pixel goes through Lab.
-static inline double tone_srgb_decode(double c) {
-    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-}
-static inline double tone_lab_f(double t) {
-    return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
-}
-static inline double tone_lab_finv(double t) {
-    return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
-}
-
-// sRGB-encoded r, g, b in 0..1 -> L* (the luminance row of linear sRGB D65 -> XYZ).
-static inline double tone_rgb_to_L(double r, double g, double b) {
-    const double Y = 0.212671 * tone_srgb_decode(r) + 0.715160 * tone_srgb_decode(g) + 0.072169 * tone_srgb_decode(b);
-    return 116.0 * tone_lab_f(Y) - 16.0;
-}
-
-// f(L) without the final clamp to 0..100.
-static inline double tone_curve_L(double L, const ToneCurve& q) {
-    double x = L / 100.0;
-    x = x < 1e-5 ? 1e-5 : (x > 1 - 1e-5 ? 1 - 1e-5 : x);
-    x = std::pow(x, q.gamma);
-    const double xc = std::pow(x, q.contrast), yc = std::pow(1 - x, q.contrast);
-    return q.black + (q.white - q.black) * xc / (xc + yc);
-}
-
-// The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
-std::vector<float> tone_table(const ToneCurve& q) {
-    std::vector<float> lut(kToneTableSize + 1);
-    for (int i = 0; i <= kToneTableSize; ++i) {
-        const double t = (double)i / kToneTableSize;
-        double L2 = tone_curve_L(116.0 * tone_lab_f(t * t) - 16.0, q);
-        L2 = L2 < 0 ? 0 : (L2 > 100 ? 100 : L2);
-        lut[i] = (float)tone_lab_finv((L2 + 16.0) / 116.0);
-    }
-    return lut;
-}
-
-ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
-    ToneDescriptors d;
-    if (n == 0) return d;
-    std::vector<double> L(n);
-    for (size_t i = 0; i < n; ++i) L[i] = tone_rgb_to_L(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0);
-    std::sort(L.begin(), L.end());
-    auto pct = [&](double p) {
-        const double r = p / 100.0 * (double)(n - 1);
-        const size_t i = (size_t)r;
-        return i + 1 < n ? L[i] + (r - (double)i) * (L[i + 1] - L[i]) : L[n - 1];
-    };
-    d.L2 = pct(2);
-    d.L10 = pct(10);
-    d.L25 = pct(25);
-    d.L50 = pct(50);
-    d.L75 = pct(75);
-    d.L90 = pct(90);
-    d.L98 = pct(98);
-    return d;
-}
-
-// highlight_share scales the highlight and range moves (1: as designed; less where they would clip, see above).
-static inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L2, double pred_L98, double pred_range,
-                                       double highlight_share = 1.0) {
-    ToneTargets t;
-    t.L2 = cur.L2 + kToneShadowMove * (pred_L2 - cur.L2);
-    t.L98 = cur.L98 + highlight_share * kToneHighlightMove * (pred_L98 - cur.L98);
-    t.L50 = cur.L50;
-    t.range = cur.range() + highlight_share * kToneRangeMove * (pred_range - cur.range());
-    return t;
-}
-
-// The curve (black, white, gamma, contrast) that brings cur to t: bounded least squares on the four target residuals
-// and the identity prior, by Levenberg-Marquardt with the bounds held by projection (a parameter at a bound that the
-// gradient pushes outward is held there). Returns the curve.
-static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets& t) {
-    auto curve_of = [](const double* q) {
-        ToneCurve c;
-        c.black = q[0];
-        c.white = q[1];
-        c.gamma = q[2];
-        c.contrast = q[3];
-        return c;
-    };
-    auto resid = [&](const double* q, double* r) {
-        const ToneCurve c = curve_of(q);
-        r[0] = tone_curve_L(cur.L2, c) - t.L2;
-        r[1] = tone_curve_L(cur.L98, c) - t.L98;
-        r[2] = tone_curve_L(cur.L50, c) - t.L50;
-        r[3] = tone_curve_L(cur.L90, c) - tone_curve_L(cur.L10, c) - t.range;
-        r[4] = kTonePrior * (q[0] / 5.0);
-        r[5] = kTonePrior * ((q[1] - 100.0) / 5.0);
-        r[6] = kTonePrior * (std::log(q[2]) / 0.1);
-        r[7] = kTonePrior * (std::log(q[3]) / 0.1);
-        {
-            const double f98 = tone_curve_L(cur.L98, c);
-            r[8] = kToneTopSlope * (tone_curve_L(100.0, c) - std::min(100.0, f98 + (100.0 - cur.L98)));
-        }
-    };
-    constexpr int kR = 9, kP = 4;
-    auto cost_of = [&](const double* q) {
-        double r[kR];
-        resid(q, r);
-        double s = 0.0;
-        for (double v : r) s += v * v;
-        return s;
-    };
-    double best_q[kP] = {0.0, 100.0, 1.0, 1.0}, best_cost = INFINITY;
-    for (double white0 : kToneWhiteStarts) {
-    double q[kP] = {0.0, white0, 1.0, 1.0};
-    double cost = cost_of(q), lambda = 1e-3;
-    for (int iter = 0; iter < 200; ++iter) {
-        double r[kR], J[kR][kP];
-        resid(q, r);
-        for (int j = 0; j < kP; ++j) {  // central differences, kept inside the bounds
-            const double h = 1e-6 * std::max(1.0, std::fabs(q[j]));
-            double qp[kP], qm[kP], rp[kR], rm[kR];
-            std::copy(q, q + kP, qp);
-            std::copy(q, q + kP, qm);
-            qp[j] = std::min(kToneHi[j], q[j] + h);
-            qm[j] = std::max(kToneLo[j], q[j] - h);
-            resid(qp, rp);
-            resid(qm, rm);
-            for (int k = 0; k < kR; ++k) J[k][j] = (rp[k] - rm[k]) / (qp[j] - qm[j]);
-        }
-        double A[kP][kP] = {}, g[kP] = {};
-        for (int k = 0; k < kR; ++k)
-            for (int a = 0; a < kP; ++a) {
-                g[a] += J[k][a] * r[k];
-                for (int b = 0; b < kP; ++b) A[a][b] += J[k][a] * J[k][b];
-            }
-        bool held[kP];
-        for (int a = 0; a < kP; ++a)
-            held[a] = (q[a] <= kToneLo[a] && g[a] > 0.0) || (q[a] >= kToneHi[a] && g[a] < 0.0);
-        bool improved = false;
-        double step = 0.0;
-        for (int tries = 0; tries < 20 && !improved; ++tries) {
-            double M[kP][kP + 1];
-            for (int a = 0; a < kP; ++a) {
-                for (int b = 0; b < kP; ++b)
-                    M[a][b] = (held[a] || held[b]) ? (a == b ? 1.0 : 0.0)
-                                                   : A[a][b] + (a == b ? lambda * std::max(A[a][a], 1e-12) : 0.0);
-                M[a][kP] = held[a] ? 0.0 : -g[a];
-            }
-            for (int c = 0; c < kP; ++c) {  // Gaussian elimination with partial pivoting
-                int piv = c;
-                for (int rr = c + 1; rr < kP; ++rr)
-                    if (std::fabs(M[rr][c]) > std::fabs(M[piv][c])) piv = rr;
-                for (int cc = 0; cc <= kP; ++cc) std::swap(M[c][cc], M[piv][cc]);
-                if (std::fabs(M[c][c]) < 1e-300) M[c][c] = 1e-300;
-                for (int rr = c + 1; rr < kP; ++rr) {
-                    const double f = M[rr][c] / M[c][c];
-                    for (int cc = c; cc <= kP; ++cc) M[rr][cc] -= f * M[c][cc];
-                }
-            }
-            double d[kP];
-            for (int c = kP - 1; c >= 0; --c) {
-                double s = M[c][kP];
-                for (int cc = c + 1; cc < kP; ++cc) s -= M[c][cc] * d[cc];
-                d[c] = s / M[c][c];
-            }
-            double qn[kP];
-            step = 0.0;
-            for (int j = 0; j < kP; ++j) {
-                qn[j] = std::clamp(q[j] + d[j], kToneLo[j], kToneHi[j]);
-                step = std::max(step, std::fabs(qn[j] - q[j]));
-            }
-            const double cn = cost_of(qn);
-            if (cn < cost) {
-                std::copy(qn, qn + kP, q);
-                cost = cn;
-                lambda = std::max(lambda / 3.0, 1e-12);
-                improved = true;
-            } else {
-                lambda *= 4.0;
-            }
-            if (step < 1e-13) break;
-        }
-        if (!improved || step < 1e-12) break;
-    }
-    if (cost < best_cost) {
-        best_cost = cost;
-        std::copy(q, q + kP, best_q);
-    }
-    }
-    return curve_of(best_q);
-}
-
-ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                    double highlight_share, ToneTargets* targets) {
-    const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share);
-    if (targets) *targets = t;
-    return tone_solve(render, t);
-}
-
-// The share of the conversion's pixels clipped white (a channel at the maximum) and black (every channel 0) on a sparse
-// sample of the unconverted image (every kToneClipSampleStep-th pixel each way), converted through the kernel as the
-// export converts them: with pc as it is (no tone), or with curve q's table.
-static void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
-                             int stride, const ToneCurve* q, double* white, double* black) {
-    static constexpr int kToneClipSampleStep = 8;
-    negicc::PipelineConfig c = pc;
-    std::vector<float> lut;
-    if (q) {
-        lut = tone_table(*q);
-        c.tone.lut = lut.data();
-        c.tone.n = kToneTableSize;
-    }
-    long long n = 0, wc = 0, kc = 0;
-#pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
-    for (int y = 0; y < h; y += kToneClipSampleStep) {
-        for (int x = 0; x < w; x += kToneClipSampleStep) {
-            const Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
-            const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
-            ++n;
-            wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
-            kc += (o[0] == 0 && o[1] == 0 && o[2] == 0);
-        }
-    }
-    *white = n ? (double)wc / (double)n : 0.0;
-    if (black) *black = n ? (double)kc / (double)n : 0.0;
-}
-
-ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const negicc::PipelineConfig& pc, const float* matrix,
-                              const uint16_t* img, int w, int h, int stride, double white_before,
-                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
-                              double* share) {
-    auto after_of = [&](const ToneCurve& c) {
-        double after = 0.0;
-        tone_clip_sample(pc, matrix, img, w, h, stride, &c, &after, nullptr);
-        return after;
-    };
-    // The designed curve, else the largest of the fixed shares within the allowance, else the least clipping of them
-    // (the larger share on a tie). Fixed shares need no monotone clipping (a bisection does) and cost at most four more
-    // curves.
-    ToneCurve best = designed;
-    ToneTargets best_t = designed_targets;
-    double best_after = after_of(designed), best_share = 1.0;
-    *share = 1.0;
-    *targets = designed_targets;
-    if (best_after <= white_before + kToneClipAllowance) return designed;
-    for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
-        ToneTargets t;
-        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[k], &t);
-        const double after = after_of(c);
-        if (after <= white_before + kToneClipAllowance) {
-            *share = kToneClipShares[k];
-            *targets = t;
-            return c;
-        }
-        if (after < best_after) {
-            best = c;
-            best_t = t;
-            best_after = after;
-            best_share = kToneClipShares[k];
-        }
-    }
-    *share = best_share;
-    *targets = best_t;
-    return best;
-}
-
 void LibRawDeleter::operator()(LibRaw* p) const {
   if (!p) return;
   p->free_image();
@@ -1076,23 +806,17 @@ int prepare(const Options& o, Setup& s) {
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
 
-  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md): white light only, since with
-  // a crosstalk matrix the film base does not mark the dark end of every channel. The output must apply the film
+  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md): white light only. A TriLED
+  // bundle's curves are measured under the light the scan was made with, so fitting them per frame has no basis; the
+  // white-light fit corrects for a lamp and camera the profiles were not made with. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
   const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
   if (fit_on || o.input_curves_given) {
     const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
-    // TODO: the fitted curves and the tone stage on single-shot tri-LED. They need five changes: (1) let the fit run on
-    // a single-shot crosstalk bundle (other tri-LED cases unchanged); (2) call the fit on the CFA path, which Sony raws
-    // take and which has no fit call; (3) drop the crosstalk rejection in run_white_light_fit; (4) run the
-    // fit on M_frame so its E is in the export's units (the search's matrix is M_frame / e_norm on tri-LED); (5) anchor
-    // the curves at the film base in camera RGB, since the detector returns the base already crosstalk-corrected and
-    // M_frame would apply the matrix a second time. Open before enabling: the fit lowers the mean chroma (by about a
-    // fifth where tried), and three-shot scans and other stocks are untested.
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
-      log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: with a crosstalk matrix the film base "
-                "does not mark the dark end of every channel\n", opt);
+      log_error("%s needs a white-light (d65, rec2020_linear) profile bundle: a TriLED bundle converts through its "
+                "measured curves, which are not fitted\n", opt);
       return 1;
     }
     if (o.colorspace.empty()) {
@@ -1106,15 +830,19 @@ int prepare(const Options& o, Setup& s) {
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
+  // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
+  // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
+  const bool tone_on = o.tone_stage == Options::kToneStageOn;
+  const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb";
 
   // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
   // which picks the bracket, the exposure and the gains.
   //
   // White light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the rest
-  // (pinned_search), followed by the curve fit and the tone stage as after an unpinned search, unless --fit_curves off.
-  // With all four given there is nothing to search: the search then runs only where the curve fit runs (it needs the
-  // search's intent field), and --fit_curves off, another -P, or recorded curves or a recorded tone curve (a
-  // sidecar's cli_equivalent) convert with the given values alone.
+  // (pinned_search), followed by the curve fit and the tone stage as after an unpinned search, unless turned off.
+  // With all four given there is nothing to search: the search then runs only where the curve fit or the tone stage
+  // runs (they need the search's intent field and frame), and --fit_curves off with --tone_stage off, another -P, or
+  // recorded curves or a recorded tone curve (a sidecar's cli_equivalent) convert with the given values alone.
   //
   // TriLED and a single ICC profile: the search runs unless --gain_g or --gain_b is given; with --target or -E (and on
   // a single ICC profile) the single-bracket solver solves the gains, and the exposure unless -E gives it.
@@ -1125,7 +853,7 @@ int prepare(const Options& o, Setup& s) {
     const bool replay = o.input_curves_given || o.tone_replay_given;
     const bool fit_wanted = o.fit_curves != Options::kFitCurvesOff && fit_encoding_ok;
     s.pinned_search = s.is_bundle && s.white_light && !s.has_crosstalk && any_pin && !replay &&
-                      (!all_pinned || fit_wanted);
+                      (!all_pinned || fit_wanted || tone_wanted);
     s.use_dino = s.has_profile && (!gains_given || s.pinned_search);
     s.bundle_search = s.use_dino && s.is_bundle &&
                       (s.pinned_search || (s.manual_target_idx < 0 && !s.exposure_given));
@@ -1133,7 +861,8 @@ int prepare(const Options& o, Setup& s) {
   if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
     log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
                     "--film_profile) without --gain_g or --gain_b (on a white-light bundle they may be given, unless "
-                    "--target, -E and both gains are given with --fit_curves off or recorded values)\n");
+                    "--target, -E and both gains are given with --fit_curves off and --tone_stage off, or recorded "
+                    "values)\n");
     return 1;
   }
   if (fit_on && !fit_encoding_ok) {
@@ -1145,10 +874,19 @@ int prepare(const Options& o, Setup& s) {
     log_error("--fit_curves on fits after the bundle search, which did not run for these arguments\n");
     return 1;
   }
-  // --fit_curves auto or on: the curve fit (with the tone stage) wherever it applies (on has
-  // checked above that it does), nothing elsewhere; off: none.
+  if (tone_on && o.colorspace != "srgb") {
+    log_error("--tone_stage on needs -P srgb: the stage is a lightness curve applied before the sRGB encoding\n");
+    return 1;
+  }
+  if (tone_on && !(s.is_bundle && s.bundle_search)) {
+    log_error("--tone_stage on runs after the bundle search, which did not run for these arguments\n");
+    return 1;
+  }
+  // --fit_curves auto or on: the curve fit wherever it applies (on has checked above that it does), nothing
+  // elsewhere; off: none. --tone_stage likewise, after every bundle search with -P srgb.
   s.fit_curves_active = o.fit_curves != Options::kFitCurvesOff && s.is_bundle && s.white_light && !s.has_crosstalk &&
                         fit_encoding_ok && s.bundle_search;
+  s.tone_active = tone_wanted && s.is_bundle && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
     // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
@@ -1189,9 +927,8 @@ int prepare(const Options& o, Setup& s) {
   // --target bracket at the given E, g and b, with nothing searched or predicted.
   if (o.input_curves_given || o.tone_replay_given) s.replay_source = "cli";
   if (o.tone_replay_given) {
-    if (!s.is_bundle || !s.white_light || s.has_crosstalk || s.manual_target_idx < 0 || !o.exposure_given ||
-        !o.gain_g_given || !o.gain_b_given) {
-      log_error("--tone_stage curve:... replays a white-light result: it needs a d65 bundle, --target, -E, --gain_g "
+    if (!s.is_bundle || s.manual_target_idx < 0 || !o.exposure_given || !o.gain_g_given || !o.gain_b_given) {
+      log_error("--tone_stage curve:... replays a recorded result: it needs a profile bundle, --target, -E, --gain_g "
                 "and --gain_b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
@@ -1217,6 +954,7 @@ int prepare(const Options& o, Setup& s) {
       s.input_curves_source = s.cached_sidecar.curves_source;
     }
     s.fit_curves_active = false;  // the curves (or none) come from the previous run
+    s.tone_active = false;        // and so does the tone curve (or none)
     s.replay_source = "knobs";
     if (s.cached_sidecar.has_tone) {
       s.has_tone = true;
@@ -1305,9 +1043,9 @@ int prepare(const Options& o, Setup& s) {
           log_info("Neutral head %s\n", name.c_str());
         }
       }
-      // The tone heads read the search's pooled features and the tokens' spread (only where the fit runs; the stage
-      // itself needs -P srgb, which the fit checks).
-      if (s.fit_curves_active && s.engine.needs_adapter()) {
+      // The tone heads read the pooled features and the tokens' spread of one inference (only where the tone stage
+      // runs).
+      if (s.tone_active && s.engine.needs_adapter()) {
         std::string err;
         if (o.tone_head_file.empty()) {
           const EmbeddedFile* f = find_embedded_file("models/tone_head/tone_head.bin");
@@ -1573,6 +1311,74 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       log_info("Film-base balance before the camera matrix: camera channel gains %.6f %.6f %.6f\n", k[0], k[1], k[2]);
     };
   }
+  // What follows a finished bundle search, on either decode path: on white light the curve fit (with the tone stage's
+  // plan on its result), elsewhere the tone stage's plan on the search's own result.
+  auto solve_tone_plan = [&](bool verbose) {
+    // The descriptors of the final render's preview, and the curve between them and the heads' predictions.
+    s.tone_plan = TonePlanCurve{};
+    s.tone_stage_ran = true;
+    ToneStagePlan& tp = s.tone_stage;
+    if (tp.skipped || tp.preview.empty()) return;
+    const size_t npx = tp.preview.size() / 3;
+    s.tone_plan.render = tone_descriptors(tp.preview.data(), npx);
+    s.tone_plan.curve = tone_plan(s.tone_plan.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
+                                  tp.pred_mean[ToneHead::kR9010], 1.0, &s.tone_plan.targets);
+    tp.planned = true;
+    s.has_tone = true;
+    s.tone_curve = s.tone_plan.curve;
+    if (verbose) {
+      const TonePlanCurve& t = s.tone_plan;
+      log_info("Tone: L2 %.1f -> %.1f, L98 %.1f -> %.1f, L90-L10 %.1f -> %.1f; curve black %.2f white %.2f "
+               "gamma %.3f contrast %.3f\n",
+               (float)t.render.L2, (float)t.targets.L2, (float)t.render.L98, (float)t.targets.L98,
+               (float)t.render.range(), (float)t.targets.range, (float)t.curve.black, (float)t.curve.white,
+               (float)t.curve.gamma, (float)t.curve.contrast);
+    }
+  };
+  auto stages_after_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                                 const ParamSearchOptions& opts) -> bool {
+    const ToneHead* tone_head = s.tone_active && s.tone_head.loaded() ? &s.tone_head : nullptr;
+    if (s.fit_curves_active) {
+      // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
+      // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
+      // white-light bundle search.
+      negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
+      // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
+      const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
+      s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
+      s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
+      s.curves_base_prof.rebind_pointers();
+      // --roi auto that fell back to the whole image: the grid may hold rebate, bare light or holder.
+      ParamSearchOptions fit_search_opts = opts;
+      fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
+      fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
+      if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts, scan.auto_res,
+                               fit_opts, export_encoding, tone_head, s.curve_fit)) {
+        log_error("Fitting the input curves failed\n");
+        return false;
+      }
+      s.tone_stage = std::move(s.curve_fit.tone);
+      solve_tone_plan(fit_search_opts.verbose);
+      if (!s.curve_fit.neutral_anchors) {
+        log_info("Curves: %s; no scene-neutral anchors, the fit keeps Auto's colour\n",
+                 s.neutral_head.empty() ? "no neutral head" : "no neutral evidence from the head");
+      }
+      s.input_curves = s.curve_fit.fit.curves;
+      s.input_curves_source = o.fit_curves == Options::kFitCurvesOn ? "fit" : "auto";
+      scan.has_curve_params = true;
+      scan.curve_params = s.curve_fit.params;
+    } else if (tone_head) {
+      // No curve fit (TriLED, whose curves are the measured ones, or --fit_curves off): the search's result stands
+      // and the tone stage is planned on its render (-P srgb, prepare).
+      if (!plan_auto_tone_stage(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res, ENCODE_SRGB,
+                                *tone_head, s.tone_stage)) {
+        log_error("Planning the tone stage failed\n");
+        return false;
+      }
+      solve_tone_plan(opts.verbose);
+    }
+    return true;
+  };
   HalfSizeAnalysis analyse;
   if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
@@ -1627,57 +1433,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         scan.has_auto_res = true;
-        if (s.fit_curves_active) {
-          // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
-          // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
-          // white-light bundle search.
-          negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
-          // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
-          const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
-          s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
-          s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
-          s.curves_base_prof.rebind_pointers();
-          // --roi auto that fell back to the whole image: the grid may hold rebate, bare light or holder.
-          ParamSearchOptions fit_search_opts = opts;
-          fit_search_opts.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
-          fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
-          if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts,
-                                   scan.auto_res, fit_opts, export_encoding,
-                                   s.tone_head.loaded() ? &s.tone_head : nullptr, s.curve_fit)) {
-            log_error("Fitting the input curves failed\n");
-            return false;
-          }
-          // The tone stage's plan from the fit's: the descriptors of the final render's preview, the curve between
-          // them and the heads' predictions.
-          s.tone_plan = TonePlanCurve{};
-          if (ToneStagePlan& tp = s.curve_fit.tone; !tp.skipped && !tp.preview.empty()) {
-            const size_t npx = tp.preview.size() / 3;
-            s.tone_plan.render = tone_descriptors(tp.preview.data(), npx);
-            s.tone_plan.curve = tone_plan(s.tone_plan.render, tp.pred_mean[ToneHead::kL2], tp.pred_mean[ToneHead::kL98],
-                                          tp.pred_mean[ToneHead::kR9010], 1.0, &s.tone_plan.targets);
-            tp.planned = true;
-            if (fit_search_opts.verbose) {
-              const TonePlanCurve& t = s.tone_plan;
-              log_info("Tone: L2 %.1f -> %.1f, L98 %.1f -> %.1f, L90-L10 %.1f -> %.1f; curve black %.2f white %.2f "
-                       "gamma %.3f contrast %.3f\n",
-                       (float)t.render.L2, (float)t.targets.L2, (float)t.render.L98, (float)t.targets.L98,
-                       (float)t.render.range(), (float)t.targets.range, (float)t.curve.black, (float)t.curve.white,
-                       (float)t.curve.gamma, (float)t.curve.contrast);
-            }
-          }
-          if (!s.curve_fit.neutral_anchors) {
-            log_info("Curves: %s; no scene-neutral anchors, the fit keeps Auto's colour\n",
-                     s.neutral_head.empty() ? "no neutral head" : "no neutral evidence from the head");
-          }
-          s.input_curves = s.curve_fit.fit.curves;
-          s.input_curves_source = o.fit_curves == Options::kFitCurvesOn ? "fit" : "auto";
-          if (s.curve_fit.tone.planned) {
-            s.has_tone = true;
-            s.tone_curve = s.tone_plan.curve;
-          }
-          scan.has_curve_params = true;
-          scan.curve_params = s.curve_fit.params;
-        }
+        if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       }
       // The bracket analysis (timings_ms.analysis, not raw_decode): the enclosures, the knobs and the roll-off, or the
@@ -1972,6 +1728,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         return 1;
       }
       scan.has_auto_res = true;
+      if (!stages_after_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
+        delete proc;
+        return 1;
+      }
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
     }
     if (s.is_bundle) {
@@ -2503,7 +2263,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
   // encoding applies it.
   const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
-  // The white-light tone stage (np_pipeline.h): the curve fit's plan, or the recorded curve on a replay, applied in the
+  // The tone stage (tone_stage.h): this run's plan, or the recorded curve on a replay, applied in the
   // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
   // the recorded curve is applied after them, as recorded: a fixed monotone map on top of the knobbed render (zero
   // knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against the knobbed render,
@@ -2514,7 +2274,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
   uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
   const int stride = !scan.rgb3.empty() ? 3 : 4;
-  const ToneStagePlan& plan = s.curve_fit.tone;
+  const ToneStagePlan& plan = s.tone_stage;
   const bool tone_plan_here = tone_here && plan.planned && !plan.preview.empty();
   const int iw = tp->imgdata.sizes.iwidth, ih = tp->imgdata.sizes.iheight;
   if (tone_here) {
@@ -2703,7 +2463,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.cli_input_curves = scan.has_knob_curves ? &scan.knob_curves : nullptr;
     sc.curve_fit = (s.input_curves_source == "fit" || s.input_curves_source == "auto") && !s.has_cached_sidecar
                        ? &s.curve_fit : nullptr;
-    sc.tone_plan = sc.curve_fit ? &s.tone_plan : nullptr;
+  }
+  if (s.tone_stage_ran && !s.has_cached_sidecar) {
+    sc.tone_stage_plan = &s.tone_stage;
+    sc.tone_plan = &s.tone_plan;
   }
   write_json_sidecar(sc);
   return 0;

@@ -600,12 +600,13 @@ bool write_json_sidecar(const Sidecar& sc) {
     cli.insert(cli.end(), {"--tone_stage", v});
   }
   // A white-light bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone
-  // render these pixels, and --fit_curves off keeps the curve fit and the tone stage, which run after given values
-  // too, from running on the replay.
+  // render these pixels, and --fit_curves off with --tone_stage off keeps the curve fit and the tone stage, which
+  // run after given values too, from running on the replay. (A TriLED bundle's given gains turn the search off, and
+  // with it the tone stage.)
   if (sc.is_bundle && sc.input_space == InputSpace::kRec2020Linear && cli.size() >= 2 &&
       std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
-    cli.insert(cli.end(), {"--fit_curves", "off"});
+    cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
   j["cli_equivalent"] = cli;
 
@@ -683,7 +684,7 @@ bool write_json_sidecar(const Sidecar& sc) {
                {"shoulder_q995", sh.has_q995 ? num(sh.q995) : ordered_json(nullptr)},
                {"shoulder_knee", sh.has_knee ? num(sh.knee) : ordered_json(nullptr)}};
 
-  // The white-light tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
+  // The tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
   // curve, and the clipping before (the clip check's sample) and after (the whole export).
   auto clip_json = [&]() {
     if (!sc.tone_applied || !sc.tone_clip) return ordered_json(nullptr);
@@ -691,9 +692,9 @@ bool write_json_sidecar(const Sidecar& sc) {
     return ordered_json{{"white_before", num(k.white_before, "%.6f")}, {"white_after", num(k.white_after, "%.6f")},
                         {"black_before", num(k.black_before, "%.6f")}, {"black_after", num(k.black_after, "%.6f")}};
   };
-  if (const WhiteLightFitResult* f = sc.curve_fit) {
+  if (sc.tone_stage_plan) {
     auto n9 = [](double v) { return num(v, "%.9g"); };
-    const ToneStagePlan& tp = f->tone;
+    const ToneStagePlan& tp = *sc.tone_stage_plan;
     if (tp.planned && sc.tone_plan) {
       const TonePlanCurve& pl = *sc.tone_plan;
       ordered_json pred, pred_sd;

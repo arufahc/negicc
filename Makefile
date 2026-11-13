@@ -262,7 +262,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_trt_runner.o bin_out/dinov3_auto_solver.o \
-              bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o bin_out/film_base_detect.o \
+              bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o bin_out/film_base_detect.o bin_out/tone_stage.o \
               bin_out/profile_bundle.o bin_out/multi_target_optimizer.o
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
@@ -311,6 +311,11 @@ GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo 
 bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
+
+# The tone stage's curve, plan and clip check (neg_process and negicc-station).
+bin_out/tone_stage.o: tone_stage.cc tone_stage.h color_pipeline.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(DINOV3_CXXFLAGS) -c tone_stage.cc -o $@
 
 bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -406,7 +411,8 @@ NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_output.cc np_input.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
-          multi_target_optimizer.h input_curves.h dinov3_engine.h white_light_balance.h embedded_data.h 3rd_party/tiff_head.h
+          multi_target_optimizer.h input_curves.h dinov3_engine.h white_light_balance.h embedded_data.h tone_stage.h \
+          3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out

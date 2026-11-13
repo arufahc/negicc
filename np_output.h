@@ -37,7 +37,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
-// The white-light tone stage's types (np_pipeline.h), which the sidecar refers to.
+// The tone stage's types (tone_stage.h), which the sidecar refers to.
 struct ToneCurve;
 struct ToneTargets;
 struct ToneClip;
@@ -120,7 +120,10 @@ struct Sidecar {
   std::string replay_source;
   const ToneCurve* tone_curve = nullptr;
   const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
-  const TonePlanCurve* tone_plan = nullptr;   // with curve_fit: the tone stage's plan the conversion solved from it
+  // This run's tone stage, when it was planned (after the curve fit, or after the search where no fit runs): the
+  // heads' plan and the curve the conversion solved from it.
+  const ToneStagePlan* tone_stage_plan = nullptr;
+  const TonePlanCurve* tone_plan = nullptr;
   double tone_share = 1.0;
   bool tone_applied = false;
   const ToneClip* tone_clip = nullptr;

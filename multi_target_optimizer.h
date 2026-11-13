@@ -19,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include "cfa_pipeline.h"
@@ -325,7 +326,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (dinov3_engine.h, on the features of
+// The tone stage's plan (tone_stage.h): the tone heads' predictions (dinov3_engine.h, on the features of
 // one inference on the final render's preview) and that preview; the conversion solves the curve between the
 // preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {
@@ -400,6 +401,46 @@ struct WhiteLightFitResult {
   ToneStagePlan tone;
   double time_ms = 0.0;
 };
+
+// The tone stage's plan after a search with no curve fit (TriLED bundles, and white light with --fit_curves off): the
+// heads' predictions and the preview of the search's own result, res.params on the bracket's profile at the roll-off
+// the conversion measures there. Nothing of the search's result changes. False (reported) on a bad bracket; a plan
+// that could not be made says why in out.skipped.
+bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                          const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out);
+
+// The white-light fit on plain data: what run_white_light_fit does after the frame and its intent field are known,
+// for callers with their own frame and search (negicc-station). Every pointer is the caller's and outlives the call.
+struct WhiteLightFitData {
+  const negicc::ProfileData* prof = nullptr;  // the bracket's own profile (un-curved tables)
+  const float* merged = nullptr;              // the 3x3 input matrix before the gains, E in the frame's units
+  const uint16_t* grid = nullptr;             // n cells of 16-bit camera-linear RGB (the frame's statistics grid)
+  int n = 0, grid_w = 0;                      // cells, and the grid's width (the cells' 4 x 4 blocks)
+  // The film base the conversion uses, in the grid's units; without one the brightest grid cell per channel.
+  bool has_film_base = false;
+  float film_base[3] = {0.0f, 0.0f, 0.0f};
+  // The frame is the whole image, not a detected frame (cells at the film base's level or holder-dark are left
+  // out), and whether its base was read from the rebate.
+  bool fallback_crop = false, film_base_is_rebate = false;
+  // The intent field (n x 3 each) and the neutral head's p per cell (n values, or empty when the head did not run),
+  // of a preview at (e, g, b) on the bracket's profile.
+  std::vector<float> mu, sigma, neutral_p;
+  float e = 1.0f, g = 1.0f, b = 1.0f;         // the search's result
+  float e_range_lo = 0.0f, e_range_hi = 0.0f; // the bracket's calibrated range of E (0: unknown)
+  int pin_mask = 0;                           // PIN_E | PIN_G | PIN_B the caller holds
+  bool verbose = false;
+  int encoding = negicc::ENCODE_SRGB;         // the export's (the roll-off applies to sRGB only)
+};
+// The export's roll-off x_hi (and its 99.5% point) at (e, g, b) on the bracket's tables composed with curves
+// (combined holds them composed; curves inactive: the bracket's own), measured as the caller's conversion measures it.
+using WhiteLightRolloff = std::function<float(const negicc::ProfileData& combined, const negicc::InputCurves& curves,
+                                              float e, float g, float b, float* q995)>;
+// Steps 1 and 2 of run_white_light_fit below and its record: out.fit.curves anchored at out.params, which the caller
+// composes into its profile (apply_input_curves, or compose_input_table per channel). out.params_before, out.tone and
+// out.time_ms are the caller's. False (reported) when the data do not fit together.
+bool fit_white_light_curves(const WhiteLightFitData& data, const negicc::CurveFitOptions& fit_opts,
+                            const WhiteLightRolloff& rolloff, WhiteLightFitResult& out);
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
 // bundles, on the same frame as the search (the WhiteLightFit steps in multi_target_optimizer.cc):
