@@ -143,7 +143,7 @@ work well yet.
 
 Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the
 profiles were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 -P srgb`. The frame crop was given by hand.
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
@@ -153,7 +153,7 @@ profiles were not made with. Left: the scan as the camera saw it. Right: `neg_pr
 ![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
 
 *Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
-DanielE, 2026-07-11. Converted with `--fit_curves off --tone_stage off`.
+DanielE, 2026-07-11.
 
 ![Fête du Travail](samples/web_d216d498d5.jpg)
 
