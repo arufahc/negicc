@@ -14,7 +14,7 @@
 //      convert_pixel_linear: the pre-shoulder value (the clip statistics and the x_hi histogram read it)
 //   -> highlight shoulder (identity when cfg.shoulder_x_hi <= kShoulderOff) -> clamp to [0, 1]
 //      convert_pixel_display: the display value (render and Lab read it)
-//   -> tone curve (apply_tone; only with cfg.tone on an sRGB export: the white-light tone stage)
+//   -> tone curve (apply_tone; only with cfg.tone on an sRGB export: the tone stage)
 //   -> encode (sRGB curve or linear), clamp
 //      convert_pixel: the output code value in [0, 1]
 //
@@ -63,7 +63,7 @@ struct ProfileData {
 };
 
 // Everything a conversion needs apart from the per-candidate 3x3 input matrix.
-// The white-light tone stage's curve on display linear sRGB luminance (np_pipeline.h): lut holds Y' = f(Y) at
+// The tone stage's curve on display linear sRGB luminance (tone_stage.h): lut holds Y' = f(Y) at
 // Y = (i / n)^2, i = 0..n (n + 1 entries, linear interpolation in sqrt(Y)); above 1 Y' / Y stays at its value at 1.
 // lut null or n < 1: no tone stage. The table lives in the memory of the code that runs the kernel (host memory on the
 // CPU; device code needs a device copy, uploaded once per frame). A zero-initialised ToneTable is "no tone stage".
@@ -311,7 +311,7 @@ NEGICC_HD Rgb convert_pixel_display(const PipelineConfig& cfg, const float* matr
     return to_display(cfg, convert_pixel_linear(cfg, matrix, px));
 }
 
-// ---- Stage: tone (white-light export only) ------------------------------------------------------------------
+// ---- Stage: tone (sRGB export only) ------------------------------------------------------------------
 // The derivative of CIE Lab's f (the cube root above the linear segment).
 NEGICC_HD float tone_lab_fprime(float t) {
     return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;

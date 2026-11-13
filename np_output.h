@@ -37,7 +37,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
-// The white-light tone stage's types (np_pipeline.h), which the sidecar refers to.
+// The tone stage's types (tone_stage.h), which the sidecar refers to.
 struct ToneCurve;
 struct ToneTargets;
 struct ToneClip;

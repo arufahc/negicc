@@ -325,7 +325,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// The tone stage's plan (np_pipeline.h): the tone heads' predictions (dinov3_engine.h, on the features of
+// The tone stage's plan (tone_stage.h): the tone heads' predictions (dinov3_engine.h, on the features of
 // one inference on the final render's preview) and that preview; the conversion solves the curve between the
 // preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {

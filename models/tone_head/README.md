@@ -2,7 +2,7 @@
 
 Predict, from a preview's frozen DINOv3 features, the tone a lab scan of the frame would have: 11 descriptors of its
 pixels at network size, each with a mean and a standard deviation. `neg_process` uses three of them for the white-light
-tone stage (`np_pipeline.cc`): the shadow level L2 (L* at 2 %), the highlight level L98 (L* at 98 %) and the tonal range
+tone stage (`tone_stage.cc`): the shadow level L2 (L* at 2 %), the highlight level L98 (L* at 98 %) and the tonal range
 R9010 (L* at 90 % minus L* at 10 %). One monotone L* curve then moves the image all the way to the predicted L2 and
 half way to the predicted L98 and R9010, holding L50; it is applied in the conversion kernel on display linear sRGB,
 holding each colour's a* and b* to first order. The heads predict tone only; colour is the curve fit's.

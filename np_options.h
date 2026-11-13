@@ -69,7 +69,7 @@ struct Options {
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
   // the built-in ones; empty: the built-in one.
   std::string dino_adapter, neutral_head_file, tone_head_file;
-  // The tone stage (np_pipeline.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
+  // The tone stage (tone_stage.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
   // white light and TriLED alike, whether or not the curve fit runs; on does the same and is an error where it does
   // not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded curve (a sidecar's
   // cli_equivalent), with given values and no search.
