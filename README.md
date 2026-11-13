@@ -88,22 +88,29 @@ the measure's published response curves, and are part of the profile set (`densi
 with the spectrum under `light_source`). They are computed from datasheet spectra and have not been checked against
 a densitometer.
 
-How well a 3×3 matrix reproduces each measure over the film's range, as each bundle records it
-(`fit_rms_density`, `fit_max_density`), across the three stocks:
+How well a 3×3 matrix reproduces each measure on the film model, as each bundle records it (`fit_rms_density`,
+`fit_max_density`), across the three stocks. The fit covers the densities a scan reaches (the film's neutral scale
+between log exposure −1.5 and 1.0, about 2.2 above the base):
 
 | Measure | RMS error (density) | Worst case (density) |
 | :--- | :--- | :--- |
-| Status M | up to 0.011 | up to 0.13, in green |
-| RP 180 printing density | up to 0.009 in red and green, up to 0.044 in blue | up to 0.25, in blue |
-| Academy Printing Density | up to 0.025 in red, 0.005 in green, 0.031 in blue | up to 0.31, in blue |
+| Status M | up to 0.004 | up to 0.04, in green |
+| RP 180 printing density | up to 0.004 in red and green, up to 0.010 in blue | up to 0.10, in blue |
+| Academy Printing Density | up to 0.010 in red, 0.002 in green and blue | up to 0.08, in red |
+
+These are errors against the model, not against the film. Two rows rest on film data that does not exist: the
+datasheets give no base density below about 400 nm or above about 700 nm, and the fit holds the nearest measured
+value there. RP 180 blue has up to 6% of its response below that range. Above it, RP 180 red has 4%, 7% and 26%
+of its response and Academy Printing Density red 20%, 30% and 59% (Portra 400, Portra 160, Ektar 100). Take those
+rows as approximate (`response_outside_film_data` in the bundle).
 
 The Status M matrix is then calibrated on the profile's own film. The grey scale of the profile's chart, shot at
-seven exposures, is held to the film's datasheet: one factor on the green and one on the blue density the LED sees,
-so that neutral patches have the datasheet's Status M balance (`density_matrices.neutral_calibration`; the matrix
-before the factors is `spectral_fit_matrix`). The green factor is 0.93 for Portra 400, 0.88 for Portra 160 and 0.77
-for Ektar 100. This makes neutral film follow the datasheet; where a roll's development differs from the
-datasheet's, the file follows the datasheet and not a densitometer. The two printing densities have no such
-reference and are the fit from the spectra alone.
+seven exposures, is held to the Status M density of the film model's neutral scale: one factor on the green and one
+on the blue density the LED sees (`density_matrices.neutral_calibration`; the matrix before the factors is
+`spectral_fit_matrix`). The factors are 1.02 and 1.06 for Portra 400 and 0.96 and 0.97 for Portra 160. Ektar 100's
+(0.83 and 1.08) lie more than 0.10 from 1 and are recorded, not applied: that roll or scan differs from the model by
+more than two factors should hide. The two printing densities have no such reference and are the fit from the
+spectra alone.
 
 The matrices assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is not
 modelled.
