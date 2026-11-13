@@ -8,8 +8,7 @@ colours to make one ICC profile per bracket (`Target_1.icc` to `Target_7.icc`). 
 channel crosstalk was removed and the values were scaled to the film base (the unexposed film), which scans are
 normalised to as well. The captures were flat-field corrected.
 
-negicc-station built the bundle and its `tools/export_negicc_data.py` split it into these files. `bundle.json`
-holds the measurements, the crosstalk matrix, the film base and an `export` record of the source file.
+`bundle.json` holds the measurements, the crosstalk matrix, the film base and an `export` record of the source file.
 
 ## Accuracy
 
