@@ -83,21 +83,22 @@ density above the base. A TIFF holds 16 bits, `code = 1520 + 8000 × D`. Pixels 
 in the sidecar.
 
 Each pixel is divided by the film base, its logarithm is taken, and a 3×3 matrix turns the densities the LED sees
-into the measure asked for. The matrices were fitted by simulating film through the scan: the LED's measured
-spectrum (separated into its three LEDs), the film's dye spectra, the camera's spectral sensitivity (calibrated to
-the crosstalk measured on this camera) and the crosstalk correction, against the measure's published response
-curves. They are part of the profile set (`density_matrices` in `bundle.json`, with the spectrum under
-`light_source`). They are computed from published spectra and have not been checked against a densitometer.
+into the measure asked for. The matrices were fitted from the LED's measured spectrum, the film's dye spectra and
+the measure's published response curves, and are part of the profile set (`density_matrices` in `bundle.json`,
+with the spectrum under `light_source`). They are computed from datasheet spectra and have not been checked against
+a densitometer.
 
-How well a 3×3 matrix reproduces each measure on that simulation, as each bundle records it (`fit_rms_density`,
-`fit_max_density`), across the three stocks. The fit covers film up to 1.5 density above the base in every channel;
-denser film is outside it.
+How well a 3×3 matrix reproduces each measure over the film's range, as each bundle records it
+(`fit_rms_density`, `fit_max_density`), across the three stocks:
 
 | Measure | RMS error (density) | Worst case (density) |
 | :--- | :--- | :--- |
-| Status M | up to 0.003 | up to 0.025 |
-| RP 180 printing density | up to 0.003 in red and green, up to 0.010 in blue | up to 0.05, in blue |
-| Academy Printing Density | up to 0.007 in red, 0.003 in green and blue | up to 0.08, in red |
+| Status M | up to 0.011 | up to 0.13, in green |
+| RP 180 printing density | up to 0.009 in red and green, up to 0.044 in blue | up to 0.25, in blue |
+| Academy Printing Density | up to 0.025 in red, 0.005 in green, 0.031 in blue | up to 0.31, in blue |
+
+The matrices also assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is
+not modelled, and could add a few hundredths of density.
 
 Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
 its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
