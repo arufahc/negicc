@@ -20182,10 +20182,6 @@
     0.0,
     0.0
    ],
-   "band_splits_nm": [
-    495.0,
-    578.0
-   ],
    "instrument": "OHSP-350C",
    "measured": "2026-06-25T02:29:13",
    "source": "data/light_spectra/shoebox_a7r4-022913.csv"
@@ -20198,111 +20194,171 @@
    "samples": 3000,
    "colour_sigma": 0.15,
    "seed": 0,
-   "hostname": "vm"
+   "hostname": "wp0",
+   "method": "camera_chain",
+   "max_density": 1.5,
+   "samples_fitted": 1589,
+   "samples_not_positive": 4
   },
+  "led_separation": {
+   "model": "two asymmetric Gaussians per LED, fitted together",
+   "fit_rms_of_peak": 0.00265,
+   "fit_max_of_peak": 0.01256,
+   "peaks_nm": [
+    634.0,
+    517.0,
+    463.0
+   ],
+   "power_share": [
+    0.3682,
+    0.165,
+    0.4669
+   ]
+  },
+  "camera": {
+   "model": "ILCE-7RM4",
+   "curves": "3rd_party/rawtoaces-data/Sony_ILCE-7RM4_380_780_5.json",
+   "curves_source": "rawtoaces-data (Academy Software Foundation), Apache-2.0",
+   "calibrated_to": "crosstalk_profile.crosstalk_matrix_normalized",
+   "calibration_factors": [
+    [
+     1.0,
+     1.1116,
+     1.5805
+    ],
+    [
+     0.9935,
+     1.0,
+     1.1018
+    ],
+    [
+     1.0592,
+     1.0602,
+     1.0
+    ]
+   ],
+   "calibration_passes": 14
+  },
+  "crosstalk_correction_matrix": [
+   [
+    1.0142583748785035,
+    -0.08232376340456526,
+    -0.026613946496026795
+   ],
+   [
+    -0.1860939884363283,
+    1.161766417054109,
+    -0.5193214590885378
+   ],
+   [
+    0.03492585321723816,
+    -0.32364759807691906,
+    1.1457453787601515
+   ]
+  ],
   "status_m": {
    "matrix": [
     [
-     1.23888,
-     -0.06437,
-     0.00636
+     1.3025,
+     -0.07575,
+     0.00077
     ],
     [
-     0.00043,
-     1.02981,
-     -0.04652
+     -0.01099,
+     1.04118,
+     -0.01473
     ],
     [
-     0.01487,
-     -0.04396,
-     1.03569
+     0.0055,
+     0.01598,
+     0.98149
     ]
    ],
    "target_curves": "Status M (digitised)",
    "fit_rms_density": [
-    0.004,
-    0.0107,
-    0.0019
+    0.0009,
+    0.0019,
+    0.0015
    ],
    "fit_max_density": [
-    0.0251,
-    0.131,
-    0.0211
+    0.006,
+    0.0134,
+    0.0247
    ],
    "density_range": [
-    2.91,
-    3.1,
-    3.49
+    1.76,
+    1.52,
+    1.5
    ]
   },
   "rp180_printing_density": {
    "matrix": [
     [
-     1.48133,
-     -0.09798,
-     0.01097
+     1.56933,
+     -0.11588,
+     0.00316
     ],
     [
-     -0.03004,
-     1.16036,
-     -0.07809
+     -0.01111,
+     1.12269,
+     -0.03609
     ],
     [
-     0.27099,
-     0.04333,
-     0.55526
+     0.18045,
+     0.02758,
+     0.68563
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
    "fit_rms_density": [
-    0.0068,
-    0.0035,
-    0.0437
+    0.0015,
+    0.0028,
+    0.0095
    ],
    "fit_max_density": [
-    0.0302,
-    0.0585,
-    0.2457
+    0.0079,
+    0.0159,
+    0.0391
    ],
    "density_range": [
-    3.45,
-    3.54,
-    2.27
+    2.09,
+    1.62,
+    1.28
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
-     1.34779,
-     -0.01968,
-     0.0399
+     1.56208,
+     -0.09622,
+     0.01658
     ],
     [
-     -0.04683,
-     1.10656,
-     -0.04757
+     -0.03768,
+     1.08987,
+     -0.01306
     ],
     [
-     0.07042,
-     0.00289,
-     0.91336
+     0.01625,
+     0.02309,
+     0.9494
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
    "fit_rms_density": [
-    0.0254,
-    0.0048,
-    0.026
+    0.0041,
+    0.0024,
+    0.0025
    ],
    "fit_max_density": [
-    0.1664,
-    0.1157,
-    0.2663
+    0.0454,
+    0.0161,
+    0.0253
    ],
    "density_range": [
-    3.19,
-    3.32,
-    3.02
+    2.07,
+    1.58,
+    1.47
    ]
   }
  },
@@ -20310,9 +20366,9 @@
   "bundle_key": "Portra400-A7R4-TriLED",
   "stock_key": "portra400",
   "source_file": "profile_Portra400-A7R4-TriLED_20261003_172952.json",
-  "source_sha256": "eae5fad8570d954404a99ae1e69ee283e40a35689e86514cdcd8a943d7994a7b",
+  "source_sha256": "c46e39627d7e49512e0b15adddddb08dc9fde66b42aa0f0743dd5db56e45b8b6",
   "adapter": "models/dinov3-small_portra400",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "7d122ce94d7bfb86c98e1baf83b6f47acd03ddf7"
+  "station_commit": "e0b621db8bde8dcd09f6924b850041830a17a516"
  }
 }
