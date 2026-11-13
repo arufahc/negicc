@@ -20230,151 +20230,176 @@
    "samples": 3000,
    "colour_sigma": 0.15,
    "seed": 0,
-   "hostname": "wp0"
+   "hostname": "wp0",
+   "log_exposure_range": [
+    -1.5,
+    1.0
+   ],
+   "film_data_gaps": "held at the nearest measured value",
+   "film_data_measured_nm": [
+    405.0,
+    695.0
+   ]
   },
   "status_m": {
    "matrix": [
     [
-     1.27333,
-     -0.06585,
-     0.00706
+     1.27652,
+     -0.06596,
+     0.00428
     ],
     [
-     -0.02441,
-     0.97677,
-     -0.09059
+     -0.05718,
+     1.09875,
+     -0.09104
     ],
     [
-     0.04052,
-     -0.00068,
-     0.88652
+     0.0328,
+     0.00217,
+     0.95071
     ]
    ],
    "target_curves": "Status M (digitised)",
    "fit_rms_density": [
-    0.0033,
-    0.0105,
-    0.0012
+    0.0013,
+    0.0039,
+    0.0004
    ],
    "fit_max_density": [
-    0.0158,
-    0.0938,
-    0.0189
+    0.0064,
+    0.0302,
+    0.0054
    ],
    "density_range": [
-    2.48,
-    2.99,
-    3.33
+    1.86,
+    2.01,
+    2.32
+   ],
+   "response_outside_film_data": [
+    0.009,
+    0.0,
+    0.0002
    ],
    "spectral_fit_matrix": [
     [
-     1.27333,
-     -0.07515,
-     0.0078
+     1.27652,
+     -0.06875,
+     0.00442
     ],
     [
-     -0.02441,
-     1.11467,
-     -0.1001
+     -0.05718,
+     1.14522,
+     -0.09406
     ],
     [
-     0.04052,
-     -0.00077,
-     0.97957
+     0.0328,
+     0.00226,
+     0.98227
     ]
    ]
   },
   "rp180_printing_density": {
    "matrix": [
     [
-     1.55074,
-     -0.11398,
-     0.01797
+     1.56461,
+     -0.10923,
+     0.0116
     ],
     [
-     -0.04549,
-     1.22634,
-     -0.12578
+     -0.04452,
+     1.2068,
+     -0.11024
     ],
     [
-     0.42238,
-     0.03077,
-     0.48818
+     0.22749,
+     0.02262,
+     0.7242
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
    "fit_rms_density": [
-    0.0087,
-    0.0059,
-    0.0316
+    0.0035,
+    0.0024,
+    0.0089
    ],
    "fit_max_density": [
-    0.0338,
-    0.0942,
-    0.1861
+    0.019,
+    0.0391,
+    0.0941
    ],
    "density_range": [
-    2.97,
-    3.36,
-    2.18
+    2.23,
+    2.16,
+    1.9
+   ],
+   "response_outside_film_data": [
+    0.07,
+    0.0,
+    0.0592
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
-     1.46808,
-     -0.05329,
-     0.03856
+     1.5438,
+     -0.07701,
+     0.02512
     ],
     [
-     -0.08721,
-     1.21561,
-     -0.10923
+     -0.09606,
+     1.2162,
+     -0.0998
     ],
     [
-     0.12083,
-     0.00272,
-     0.88411
+     0.03166,
+     -0.01308,
+     0.98574
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
    "fit_rms_density": [
-    0.0253,
-    0.0051,
-    0.0228
+    0.0095,
+    0.002,
+    0.0011
    ],
    "fit_max_density": [
-    0.1437,
-    0.0815,
-    0.2495
+    0.0826,
+    0.0151,
+    0.0206
    ],
    "density_range": [
-    2.85,
-    3.23,
-    2.91
+    2.19,
+    2.14,
+    2.31
+   ],
+   "response_outside_film_data": [
+    0.2967,
+    0.0001,
+    0.0039
    ]
   },
   "neutral_calibration": {
-   "reference": "the film's datasheet Status M curves of a neutral exposure (the dye file's density_curves)",
+   "reference": "the Status M density of the film model's neutral scale (dye amounts, dye spectra and base through the Status M response)",
    "patches": "the grey scale of the profile's targets, every exposure bracket",
    "patches_used": 140,
    "light_density_factors": [
     1.0,
-    0.8763,
-    0.905
+    0.9594,
+    0.9679
    ],
    "exposure_offsets_log": [
-    -0.006,
-    -0.218
+    -0.007,
+    -0.202
    ],
    "green_blue_rms_before": [
-    0.0489,
-    0.0408
+    0.0227,
+    0.0272
    ],
    "green_blue_rms_after": [
-    0.0142,
-    0.023
+    0.0163,
+    0.0248
    ],
+   "max_calibration": 0.1,
    "applied_to": [
     "status_m"
    ]
@@ -20384,9 +20409,9 @@
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "5d47029cf95edaea4f48a52e00e4f873c13752dcf8e0aa0af267147004aa86f1",
+  "source_sha256": "83a5ac764673f1d47ccc33a16d54288a1add324e2fc2ccd59c21b7617b92037b",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "decdde8e11ba3dd692a2a10b640cf208e5f4c975"
+  "station_commit": "cc632b866370fcd08ae27a505a9c8fbcea44118c"
  }
 }
