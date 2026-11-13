@@ -86,6 +86,19 @@ bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by L
 
 ![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
 
+Single-shot TriLED scans on a Sony RGGB sensor, against a 4-shot pixel-shift capture of the same frame.
+
+| Algorithm | Raw MAE ↓ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | R−G zipper ↓ |
+| :--- | :---: | :---: | :---: | :---: |
+| 4-shot pixel shift (ground truth) | 0.00 | ∞ | 0.00 / 0.00 | 142.4 |
+| **Grain-aware colour-ratio** (TriLED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
+| LibRaw DCB (`-q 4`) | 79.60 | 39.85 | 1.76 / 7.21 | 71.7 |
+| LibRaw VNG (`-q 1`) | 80.19 | 39.96 | 1.75 / 7.12 | 58.6 |
+| PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 40.03 | 1.73 / 6.97 | 55.3 (grain maze) |
+| Bilinear (`-q 0`) | 89.15 | 39.16 | 1.90 / 7.87 | 115.0 |
+
+Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positive.
+
 ### The profiles
 
 For each stock an IT8 chart was photographed onto the film at seven exposures, from three stops under to three stops
@@ -101,8 +114,19 @@ its own exposure.
 ![ICC profile](samples/icc.png)
 ![Gamut Volume](samples/gamut_volume.png)
 
-On the chart patches used for the fit the profiles average 0.5 to 0.8 ΔE₀₀. On patches held out of the fit the
-typical error is 1.4 to 2.3. The tables are in [MEASUREMENTS.md](MEASUREMENTS.md).
+How closely each profile reproduces the chart, measured with ArgyllCMS `profcheck` on all 288 patches (CIEDE2000;
+under 2 is barely visible):
+
+![Profile accuracy per bracket](samples/profile_accuracy.png)
+
+Under the RGB LED the error is well below 1 ΔE₀₀: the median is 0.4 to 0.7 in every bracket, and the mean is at most
+0.83 from −2 to +3 EV, rising to 1.1 only at −3 EV on Portra 160 and Ektar 100. Under the white LED the mean is 0.6
+to 1.5 and the median 0.4 to 0.9. On both lights the error is lowest in the middle brackets and highest at −3 EV.
+On patches held out of the fit the median error is 1.3 to 2.3. Each bundle's README has its numbers per bracket,
+fitted and held out: [Portra 400 RGB LED](profiles/Portra400-A7R4-TriLED/README.md),
+[white LED](profiles/Portra400-A7R4-D65/README.md); [Portra 160 RGB LED](profiles/Portra160-A7R4-TriLED/README.md),
+[white LED](profiles/Portra160-A7R4-D65/README.md); [Ektar 100 RGB LED](profiles/Ektar100-A7R4-TriLED/README.md),
+[white LED](profiles/Ektar100-A7R4-D65/README.md).
 
 ### Choosing exposure and colour
 
