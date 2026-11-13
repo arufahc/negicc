@@ -22,9 +22,11 @@
 //
 //     T = v / base_level,   D_light = -log10(max(T, kDensityMinT)),   D = M * D_light,   code = round(offset + scale * D)
 //
-// M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon / ADX10 one
-// (10 bits: offset 95, 500 codes per unit density) and the ADX16 one (16 bits: offset 1520, 8000 codes per unit
-// density), used for every measure, so RP 180 density in a DPX is a Cineon file and APD in a TIFF is ADX16.
+// M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
+// offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
+// density in a DPX is a Cineon file. Academy Printing Density is written as ADX (SMPTE ST 2065-3): the same offsets
+// and scales with the standard's channel factors on the density, code = offset + scale * k * D with k = 1.00, 0.92,
+// 0.95 for R, G, B. Status M and RP 180 take no factors (k = 1).
 //
 // Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the
 // encoding, the film base, the matrix applied and the light's record with its spectrum. A TIFF has it in its
@@ -43,14 +45,20 @@ struct DensityEncoding {
   int bits = 16;
   int offset = 1520;
   int scale = 8000;
+  double k[3] = {1.0, 1.0, 1.0};      // the channel factors on the density (ADX: 1.00, 0.92, 0.95)
   int max_code() const { return (1 << bits) - 1; }
 };
-inline DensityEncoding density_encoding(bool dpx) {
+// The channel factors of ADX (SMPTE ST 2065-3:2020, equations 1 and 2).
+constexpr double kAdxChannelFactor[3] = {1.00, 0.92, 0.95};
+inline DensityEncoding density_encoding(bool dpx, DensityMeasure measure) {
   DensityEncoding e;
   if (dpx) {
     e.bits = 10;
     e.offset = 95;
     e.scale = 500;
+  }
+  if (measure == kDensityApd) {
+    for (int c = 0; c < 3; ++c) e.k[c] = kAdxChannelFactor[c];
   }
   return e;
 }
@@ -102,8 +110,10 @@ struct DensityFileInfo {
 
 // Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
 // description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
-// word, big-endian, transfer and colorimetric "printing density") with it in the user-defined data. 0 on success.
+// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
+// user-defined data. 0 on success.
 int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
                        const std::string& description, const DensityFileInfo& info);
 int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                      const std::string& description, const DensityEncoding& enc, const DensityFileInfo& info);
+                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
+                      const DensityFileInfo& info);

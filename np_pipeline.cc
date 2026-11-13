@@ -2480,12 +2480,22 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     compute_station_merged_matrix(s.bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(),
                                   scan.film_base_rgb() != nullptr, d.merged, nullptr, nullptr);
     d.base_level = s.bundle.normalization_target / 65535.0;
-    d.encoding = density_encoding(o.output_dpx);
+    d.encoding = density_encoding(o.output_dpx, o.density_measure);
     const DensityMatrix& dm = s.bundle.density_matrix[o.density_measure];
     const RgbInput img = scan.image();
     density_encode_in_place(img.pixels, img.width, img.height, img.channels, d.merged, d.base_level, dm.m, d.encoding,
                             d.clip);
     const double px = (double)std::max<uint64_t>(1, d.clip.pixels);
+    // The film base is the zero of a density file. Read from a capture or the scan's rebate it is measured; taken from
+    // the thinnest film of a frame with no unexposed film in view, or from the bundle's roll, it is an estimate, and
+    // every density is off by its error, differently per channel and per frame.
+    if (!scan.film_base.found) {
+      log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
+               "roll's base; give --film_base <capture of this roll's unexposed film>\n");
+    } else if (scan.film_base.source == "statistics") {
+      log_warn("the film base was estimated from the thinnest film on this frame, which shows no rebate: the densities "
+               "are too low wherever the frame has no unexposed film; give --film_base <capture of unexposed film>\n");
+    }
     {
       // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.
       double low = 0.0, floor = 0.0;
@@ -2502,9 +2512,10 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                  "scan is underexposed\n", 100.0 * floor, -std::log10(kDensityMinT));
       }
     }
-    log_info("Density (%s, %d bits, code = %d + %d D): clamped below 0 %.3f%% %.3f%% %.3f%%, above %d %.3f%% %.3f%% "
+    log_info("Density (%s, %d bits, code = %d + %d k D, k = %.2f %.2f %.2f): clamped below 0 %.3f%% %.3f%% %.3f%%, above %d %.3f%% %.3f%% "
              "%.3f%% of the pixels (R G B)\n",
              density_measure_name(o.density_measure), d.encoding.bits, d.encoding.offset, d.encoding.scale,
+             d.encoding.k[0], d.encoding.k[1], d.encoding.k[2],
              100.0 * d.clip.low[0] / px, 100.0 * d.clip.low[1] / px, 100.0 * d.clip.low[2] / px, d.encoding.max_code(),
              100.0 * d.clip.high[0] / px, 100.0 * d.clip.high[1] / px, 100.0 * d.clip.high[2] / px);
     const double t_end = omp_get_wtime();
@@ -2650,7 +2661,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     const RgbInput img = scan.image();
     log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
     ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
-                                           c.density.encoding, info)
+                                           c.density.encoding, o.density_measure, info)
                        : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
                                             info);
   } else {

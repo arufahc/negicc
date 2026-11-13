@@ -281,7 +281,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile. "
           "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
-          "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). Density takes a "
+          "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). apd is written "
+          "with the channel factors of SMPTE ST 2065-3. Density takes a "
           "TriLED bundle whose density matrices were built in, and none of the exposure, gain, curve, tone or look "
           "options; the colour balance the search finds is recorded in the file, not applied.");
   parser.add_argument("--roi")

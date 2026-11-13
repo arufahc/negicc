@@ -48,7 +48,7 @@ void density_encode_in_place(uint16_t* pixels, int width, int height, int channe
       }
       for (int c = 0; c < 3; ++c) {
         const double dens = m[c * 3] * d[0] + m[c * 3 + 1] * d[1] + m[c * 3 + 2] * d[2];
-        long code = std::lround(offset + scale * dens);
+        long code = std::lround(offset + scale * enc.k[c] * dens);
         if (code < 0) {
           code = 0;
           ++low[c];
@@ -78,7 +78,10 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
                    {"bits", rec.encoding.bits},
                    {"offset", rec.encoding.offset},
                    {"scale", rec.encoding.scale},
-                   {"formula", "code = offset + scale * D, D the density above the film base"}};
+                   {"channel_factors", {rec.encoding.k[0], rec.encoding.k[1], rec.encoding.k[2]}},
+                   {"standard", rec.measure == kDensityApd ? "ADX, SMPTE ST 2065-3 (the channel factors applied)"
+                                                           : (rec.measure == kDensityRp180 ? "Cineon scaling" : "none")},
+                   {"formula", "code = offset + scale * k * D, D the density above the film base, k the channel factor"}};
   j["profile_bundle"] = rec.bundle_key;
   j["film_base"] = {{"rgb", {rec.film_base_rgb[0], rec.film_base_rgb[1], rec.film_base_rgb[2]}},
                     {"source", rec.film_base_source}};
@@ -122,7 +125,8 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
         {"bracket", rec.balance_target},
         {"density_offset", {measure[0], measure[1], measure[2]}},
         {"code_offset",
-         {measure[0] * rec.encoding.scale, measure[1] * rec.encoding.scale, measure[2] * rec.encoding.scale}},
+         {measure[0] * rec.encoding.scale * rec.encoding.k[0], measure[1] * rec.encoding.scale * rec.encoding.k[1],
+          measure[2] * rec.encoding.scale * rec.encoding.k[2]}},
         {"use", "D + density_offset (code + code_offset) has the colour balance the picture conversion gives this "
                 "frame; the offsets sum to zero, so the overall level is unchanged and the exposure is left to the "
                 "grade"}};
@@ -298,7 +302,8 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
 }
 
 int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                      const std::string& description, const DensityEncoding& enc, const DensityFileInfo& info) {
+                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
+                      const DensityFileInfo& info) {
   if (enc.bits != 10) {
     log_error("Internal error: a DPX holds 10-bit density codes\n");
     return -1;
@@ -348,15 +353,21 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
   be32(el + 12, (uint32_t)enc.max_code());                                 // reference high
   be_float(el + 16, (float)(enc.max_code() - enc.offset) / (float)enc.scale);
   el[20] = 50;                     // descriptor: R, G, B
-  el[21] = 1;                      // transfer characteristic: printing density
-  el[22] = 1;                      // colorimetric specification: printing density
+  // The transfer characteristic and the colorimetric specification: 1, printing density, for RP 180 (the Cineon
+  // convention) and for Academy Printing Density (the code tools know; the element's description says ADX); 0, user
+  // defined, for Status M, which is not a printing density.
+  const uint8_t kind = measure == kDensityStatusM ? 0 : 1;
+  el[21] = kind;
+  el[22] = kind;
   el[23] = 10;                     // bits
   be16(el + 24, 1);                // packing: filled to 32-bit words, method A
   be16(el + 26, 0);                // no run-length encoding
   be32(el + 28, image_offset);
   be32(el + 32, 0);
   be32(el + 36, 0);
-  put_str(el + 40, 32, "density above film base");
+  put_str(el + 40, 32, measure == kDensityStatusM ? "Status M density above base"
+                           : measure == kDensityRp180 ? "RP 180 printing density"
+                                                      : "ADX10, SMPTE ST 2065-3");
   for (int k = 1; k < 8; ++k) memset(im + 12 + k * 72, 0, 72);
   // Orientation information (256 bytes): undefined but for the original size and the input device.
   uint8_t* orient = p + 1408;
