@@ -515,7 +515,13 @@ bool write_json_sidecar(const Sidecar& sc) {
   fb["source"] = sc.film_base_source;
   fb["applied"] = sc.film_base_applied;
   const negicc::FilmBaseDetection* d = sc.film_base_detection;
-  auto num3 = [](const double* v) { return ordered_json{num(v[0], "%.10g"), num(v[1], "%.10g"), num(v[2], "%.10g")}; };
+  // A base given by a capture is taken from this record by a later run (--film_base auto), so it is written with the
+  // digits that give its doubles back; a base read from the scan keeps the ten digits it has always had.
+  const bool given_base = sc.film_base_source == "capture" || sc.film_base_source == "sidecar";
+  const char* base_fmt = given_base ? "%.17g" : "%.10g";
+  auto num3 = [base_fmt](const double* v) {
+    return ordered_json{num(v[0], base_fmt), num(v[1], base_fmt), num(v[2], base_fmt)};
+  };
   if (sc.film_base_source == "none") {
     fb["film_base_rgb"] = nullptr;
   } else if (d && d->found) {
@@ -538,6 +544,9 @@ bool write_json_sidecar(const Sidecar& sc) {
     fb["detector"] = det;
   } else {
     fb["detector"] = nullptr;
+  }
+  if (!sc.film_base_capture_json.empty()) {
+    fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
@@ -748,7 +757,12 @@ bool write_json_sidecar(const Sidecar& sc) {
     j["replay"] = nullptr;
   }
 
-  j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", 16}};
+  // A density output (np_density.h): its record, and the file's bit depth (a DPX holds 10 bits).
+  ordered_json density = sc.density_json.empty() ? ordered_json(nullptr)
+                                                 : ordered_json::parse(sc.density_json, nullptr, false);
+  const int out_bits = density.is_object() && density.contains("encoding") ? density["encoding"].value("bits", 16) : 16;
+  j["output"] = {{"path", sc.output_path}, {"colorspace", sc.colorspace}, {"bits", out_bits}};
+  if (density.is_object()) j["density"] = density;
 
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");

@@ -747,6 +747,32 @@ int prepare(const Options& o, Setup& s) {
   // py-ref: negicc_station/src/pipeline_api.py @ 813166c (prepare_image)
   s.white_light = s.is_bundle && bundle.input_space == InputSpace::kRec2020Linear;
   s.camera_rgb_input = o.tiff_input && s.is_bundle && !s.white_light;
+  // A film base capture is read as a TriLED scan's mosaic is: camera RGB through the bundle's crosstalk correction.
+  if (!o.film_base_file.empty() && (!s.is_bundle || s.white_light)) {
+    log_error("--film_base with a capture needs a TriLED (camera_raw_rgb) profile bundle: the capture is read as the "
+              "scan's camera RGB, through the bundle's crosstalk correction\n");
+    return 1;
+  }
+  // The density output: the bundle's matrix for the measure, on a TriLED bundle.
+  if (o.density) {
+    if (!s.is_bundle) {
+      log_error("-P %s needs a profile bundle (--film_stock and --light_source tri, or -p a bundle): the density "
+                "matrices are the bundle's\n", o.colorspace.c_str());
+      return 1;
+    }
+    if (s.white_light) {
+      log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not "
+                "supported\n", o.colorspace.c_str());
+      return 1;
+    }
+    if (!bundle.density_matrix[o.density_measure].present) {
+      log_error("The profile bundle %s has no density_matrices.%s: rebuild the bundle with negicc-station "
+                "(tools/fit_density_matrices.py), which fits the matrix from the light's spectrum\n",
+                bundle.path.c_str(), density_measure_key(o.density_measure));
+      return 1;
+    }
+    s.density = true;
+  }
   if (s.white_light) {
     if (row_given[0] || row_given[1] || row_given[2]) {
       log_error("-r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
@@ -1085,6 +1111,68 @@ static float given_station_e(const Options& o, const Scan& scan, int target_idx)
   return scan.bracket_exposure[target_idx].e_center;
 }
 
+// --film_base auto: the film base a previous run of this output read from a capture (its <output>.json has
+// film_base.source "capture", or "sidecar" when it took it the same way), when that run converted these input files
+// (their names, sizes and CRC-32s). The scan's own base is then not read. A base read from the scan is not taken from
+// the sidecar: reading it again gives it bit for bit, while the sidecar's ten digits would not.
+static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
+  const std::string sidecar_path = o.output + ".json";
+  if (!is_regular_file(sidecar_path)) return;
+  std::ifstream ifs(sidecar_path);
+  if (!ifs.is_open()) return;
+  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
+  if (!j.is_object() || j.value("schema", "") != "negicc.neg_process.sidecar/1") return;
+  if (!j.contains("film_base") || !j["film_base"].is_object()) return;
+  const auto& fb = j["film_base"];
+  const std::string source = fb.value("source", "");
+  if (source != "capture" && source != "sidecar") return;
+  std::string why;
+  const auto rgb = fb.value("film_base_rgb", nlohmann::ordered_json());
+  if (!rgb.is_array() || rgb.size() != 3 || !rgb[0].is_number() || !rgb[1].is_number() || !rgb[2].is_number() ||
+      !(rgb[0].get<double>() > 0.0) || !(rgb[1].get<double>() > 0.0) || !(rgb[2].get<double>() > 0.0)) {
+    why = "it records no positive film base";
+  }
+  const auto inputs = j.value("inputs", nlohmann::ordered_json());
+  const auto files = inputs.is_object() ? inputs.value("raw_files", nlohmann::ordered_json()) : nlohmann::ordered_json();
+  const auto stats = inputs.is_object() ? inputs.value("raw_file_stats", nlohmann::ordered_json())
+                                        : nlohmann::ordered_json();
+  if (why.empty() && (!files.is_array() || files.size() != o.files.size() || !stats.is_array() ||
+                      stats.size() != o.files.size())) {
+    why = "it converted other files";
+  }
+  if (why.empty()) {
+    if (s.input_fingerprints.size() != o.files.size()) s.input_fingerprints.assign(o.files.size(), FileFingerprint{});
+    for (size_t i = 0; why.empty() && i < o.files.size(); ++i) {
+      FileFingerprint& fp = s.input_fingerprints[i];
+      if (!fp.ok) fp.ok = file_fingerprint(o.files[i], fp.size, fp.crc);
+      const auto& st = stats[i];
+      if (!files[i].is_string() || !paths_match(files[i].get<std::string>(), o.files[i])) {
+        why = "it converted other files";
+      } else if (!st.is_object() || !st.contains("size") || !st["size"].is_number_unsigned() ||
+                 !st.contains("crc32") || !st["crc32"].is_number_unsigned() || !fp.ok ||
+                 st["size"].get<uintmax_t>() != fp.size || st["crc32"].get<uint32_t>() != fp.crc) {
+        why = o.files[i] + " is not the file it converted";
+      }
+    }
+  }
+  if (!why.empty()) {
+    log_info("Not taking the film base of %s: %s; reading it from the scan\n", sidecar_path.c_str(), why.c_str());
+    return;
+  }
+  scan.has_given_base = true;
+  scan.given_base = negicc::FilmBaseDetection{};
+  scan.given_base.found = true;
+  scan.given_base.source = "sidecar";
+  for (int c = 0; c < 3; ++c) scan.given_base.rgb[c] = rgb[c].get<double>();
+  const auto dec = fb.value("decode_rgb", nlohmann::ordered_json());
+  if (dec.is_array() && dec.size() == 3 && dec[0].is_number() && dec[1].is_number() && dec[2].is_number()) {
+    for (int c = 0; c < 3; ++c) scan.given_base.decode_rgb[c] = dec[c].get<double>();
+  }
+  if (fb.contains("capture") && fb["capture"].is_object()) scan.base_capture_json = fb["capture"].dump();
+  log_info("Film base (a previous run's capture, from %s): R=%.1f G=%.1f B=%.1f\n", sidecar_path.c_str(),
+           scan.given_base.rgb[0], scan.given_base.rgb[1], scan.given_base.rgb[2]);
+}
+
 int decode(const Options& o, Setup& s, Scan& scan) {
   ProfileBundle& bundle = s.bundle;
   std::copy(o.roi, o.roi + 4, scan.roi);
@@ -1095,6 +1183,63 @@ int decode(const Options& o, Setup& s, Scan& scan) {
 
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
+
+  // The film base given in place of the scan's own (Scan::has_given_base): --film_base's capture, read here, before
+  // the scan, so a capture that cannot be used fails first; or, with --film_base auto, a previous run's.
+  if (!o.film_base_file.empty()) {
+    double scan_shutter_s = scan.exif_shutter_d, scan_iso = scan.exif_iso_d;
+    if (!scan.has_exif_exp || !(scan_shutter_s > 0.0) || !(scan_iso > 0.0)) {
+      LibRaw probe;
+      if (open_raw_file(&probe, o.files[0]) == LIBRAW_SUCCESS) scan.scan_exposure(probe, scan_shutter_s, scan_iso);
+    }
+    if (!(scan_shutter_s > 0.0) || !(scan_iso > 0.0)) {
+      log_error("%s records no shutter speed or ISO, which --film_base needs to scale the capture to the scan's "
+                "exposure\n", o.files[0].c_str());
+      return 1;
+    }
+    const double* xt = s.bundle.has_crosstalk ? s.bundle.crosstalk_matrix_d : nullptr;
+    std::string err;
+    log_info("Loading film base capture %s\n", o.film_base_file.c_str());
+    if (!read_film_base_capture(o.film_base_file, o.film_base_roi_given ? o.film_base_roi : nullptr, s.flat_field, xt,
+                                scan_shutter_s, scan_iso, scan.base_capture, err)) {
+      log_error("--film_base: %s\n", err.c_str());
+      return 1;
+    }
+    const FilmBaseCapture& cap = scan.base_capture;
+    scan.has_base_capture = true;
+    scan.has_given_base = true;
+    scan.given_base = negicc::FilmBaseDetection{};
+    scan.given_base.found = true;
+    scan.given_base.source = "capture";
+    for (int c = 0; c < 3; ++c) {
+      scan.given_base.rgb[c] = cap.rgb[c];
+      scan.given_base.decode_rgb[c] = cap.decode_rgb[c];
+    }
+    nlohmann::ordered_json cj;
+    cj["path"] = o.film_base_file;
+    cj["roi"] = {cap.roi[0], cap.roi[1], cap.roi[2], cap.roi[3]};
+    cj["roi_source"] = cap.roi_source;
+    cj["tiles_kept"] = cap.roi_source == "given" || cap.roi_source == "statistics" ? nlohmann::ordered_json(nullptr)
+                                                                                   : nlohmann::ordered_json(cap.tiles_kept);
+    cj["tiles_total"] = cap.roi_source == "given" || cap.roi_source == "statistics"
+                            ? nlohmann::ordered_json(nullptr)
+                            : nlohmann::ordered_json(cap.tiles_total);
+    cj["spread_density"] = cap.roi_source == "statistics" ? nlohmann::ordered_json(nullptr)
+                                                           : nlohmann::ordered_json(cap.spread_density);
+    cj["decode_rgb"] = {cap.decode_rgb[0], cap.decode_rgb[1], cap.decode_rgb[2]};
+    cj["shutter_s"] = cap.shutter_s;
+    cj["iso"] = cap.iso;
+    cj["exposure_scale"] = cap.exposure_scale;
+    scan.base_capture_json = cj.dump();
+    log_info("Film base (capture, %s, region %d,%d,%d,%d%s): R=%.1f G=%.1f B=%.1f (exposure scale %.4f)\n",
+             cap.roi_source.c_str(), cap.roi[0], cap.roi[1], cap.roi[2], cap.roi[3],
+             cap.tiles_total ? (", " + std::to_string(cap.tiles_kept) + " of " + std::to_string(cap.tiles_total) +
+                                " tiles").c_str()
+                             : "",
+             cap.rgb[0], cap.rgb[1], cap.rgb[2], cap.exposure_scale);
+  } else if (s.is_bundle && !s.white_light) {
+    load_sidecar_film_base(o, s, scan);
+  }
 
   // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked without
   // the search, the single-bracket search's bounds and the exposure of given values read. Measured here, on the
@@ -1251,9 +1396,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the
   // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
   // detector, so the base comes from the statistics.
-  // TODO: a film base from an image (a capture of unexposed film, as negicc-station's Film Base tab takes) in its place.
+  // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it is.
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
+    if (scan.has_given_base) {  // --film_base's capture, or a previous run's: logged where it was read
+      scan.film_base = scan.given_base;
+      return;
+    }
     const double* xt = (s.bundle.has_crosstalk && !s.white_light) ? s.bundle.crosstalk_matrix_d : nullptr;
     const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, scan.film_base);
     const negicc::FilmBaseDetection& fb = scan.film_base;
@@ -2232,6 +2381,35 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
 int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend& backend) {
   OutputSpec& out = c.out;
+  if (s.density) {
+    // The density output (np_density.h): the film base's merged matrix as the station builds it (crosstalk correction
+    // and film base scale, the scan's exposure ratio with the bundle's own base), E = g = b = 1, then the log and the
+    // measure's matrix. No knee, no film profile.
+    out.encoding = ENCODE_DENSITY;
+    const double t_start = omp_get_wtime();
+    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    scan.scan_exposure(*scan.proc, scan_shutter_s, scan_iso);
+    DensityOutput& d = c.density;
+    compute_station_merged_matrix(s.bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(),
+                                  scan.film_base_rgb() != nullptr, d.merged, nullptr, nullptr);
+    d.base_level = s.bundle.normalization_target / 65535.0;
+    d.encoding = density_encoding(o.output_dpx);
+    const DensityMatrix& dm = s.bundle.density_matrix[o.density_measure];
+    const RgbInput img = scan.image();
+    density_encode_in_place(img.pixels, img.width, img.height, img.channels, d.merged, d.base_level, dm.m, d.encoding,
+                            d.clip);
+    const double px = (double)std::max<uint64_t>(1, d.clip.pixels);
+    log_info("Density (%s, %d bits, code = %d + %d D): clamped below 0 %.3f%% %.3f%% %.3f%%, above %d %.3f%% %.3f%% "
+             "%.3f%% of the pixels (R G B)\n",
+             density_measure_name(o.density_measure), d.encoding.bits, d.encoding.offset, d.encoding.scale,
+             100.0 * d.clip.low[0] / px, 100.0 * d.clip.low[1] / px, 100.0 * d.clip.low[2] / px, d.encoding.max_code(),
+             100.0 * d.clip.high[0] / px, 100.0 * d.clip.high[1] / px, 100.0 * d.clip.high[2] / px);
+    const double t_end = omp_get_wtime();
+    scan.t_full_conversion_ms = (t_end - t_start) * 1000.0;
+    log_info("Processing time: %f\n", t_end - t_start);
+    (void)backend;
+    return 0;
+  }
   if (!o.colorspace.empty()) {
     const std::string& colorspace_str = o.colorspace;
     if (colorspace_str == "srgb") {
@@ -2336,10 +2514,40 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   const OutputEncoding encoding = c.out.encoding;
   const int out_w = proc->imgdata.sizes.iwidth, out_h = proc->imgdata.sizes.iheight;
 
-  log_info("Writing TIFF '%s'\n", o.output.c_str());
   const double t_tiff_0 = omp_get_wtime();
-  int ret = write_tiff(proc, attach_profile, o.output, s.is_bundle ? c.embedded_icc : std::vector<uint8_t>{},
-                       scan.rgb3.empty() ? nullptr : scan.rgb3.data());
+  int ret = 0;
+  std::string density_json;
+  if (s.density) {
+    // The density file and its metadata (np_density.h): the same record in the file and in the sidecar.
+    DensityRecord rec;
+    rec.measure = o.density_measure;
+    rec.encoding = c.density.encoding;
+    rec.container = o.output_dpx ? "dpx" : "tiff";
+    rec.bundle_key = s.bundle.key;
+    const double* fb = scan.film_base_rgb() ? scan.film_base_rgb() : s.bundle.film_base_avg_d;
+    for (int k = 0; k < 3; ++k) rec.film_base_rgb[k] = fb[k];
+    rec.film_base_source = scan.film_base.found ? scan.film_base.source : "bundle";
+    rec.matrix = &s.bundle.density_matrix[o.density_measure];
+    rec.bundle = &s.bundle;
+    rec.clip = &c.density.clip;
+    rec.tool_version = std::string("neg_process ") + neg_process_version();
+    density_json = density_metadata_json(rec);
+    DensityFileInfo info;
+    info.make = proc->imgdata.idata.make;
+    info.model = proc->imgdata.idata.model;
+    info.software = rec.tool_version;
+    info.timestamp = (long long)proc->imgdata.other.timestamp;
+    const RgbInput img = scan.image();
+    log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
+    ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
+                                           c.density.encoding, info)
+                       : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
+                                            info);
+  } else {
+    log_info("Writing TIFF '%s'\n", o.output.c_str());
+    ret = write_tiff(proc, attach_profile, o.output, s.is_bundle ? c.embedded_icc : std::vector<uint8_t>{},
+                     scan.rgb3.empty() ? nullptr : scan.rgb3.data());
+  }
   scan.t_tiff_write_ms = (omp_get_wtime() - t_tiff_0) * 1000.0;
 
   if (ret != 0 || o.no_metadata) {
@@ -2356,6 +2564,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     cs_name = attach_profile;
   } else if (encoding == ENCODE_NONE) {
     cs_name = attach_profile.empty() ? "camera-linear" : attach_profile;
+  } else if (encoding == ENCODE_DENSITY) {
+    cs_name = o.colorspace;
   }
 
   std::string roi_source = "none";
@@ -2391,6 +2601,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
+  sc.film_base_capture_json = scan.base_capture_json;
+  sc.density_json = density_json;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;

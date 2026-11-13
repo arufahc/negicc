@@ -59,6 +59,50 @@ to convert with the given values and nothing else.
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
 
+### Density instead of a picture
+
+With an RGB-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative as density above the film base, with
+no conversion to a picture, for grading tools and film-print LUTs:
+
+```bash
+# SMPTE RP 180 printing density in a 10-bit DPX: a Cineon file.
+bin_out/neg_process --film_stock portra400 --light_source tri -P rp180 --roi auto -o scan.dpx scan.ARW
+
+# Academy Printing Density in a 16-bit TIFF: ADX16. The film base comes from a capture of unexposed film.
+bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base base.ARW --roi auto -o scan.tiff scan.ARW
+```
+
+| `-P` | Density | In a `.dpx` | In a `.tif` / `.tiff` |
+| :--- | :--- | :--- | :--- |
+| `statusm` | Status M | Status M at the Cineon scaling | Status M at the ADX16 scaling |
+| `rp180` | SMPTE RP 180 printing density | Cineon | RP 180 at the ADX16 scaling |
+| `apd` | Academy Printing Density (SMPTE ST 2065-2) | ADX10 | ADX16 |
+
+The output's extension picks the file. A `.dpx` holds 10 bits, `code = 95 + 500 × D`, and clips at about 1.86
+density above the base. A TIFF holds 16 bits, `code = 1520 + 8000 × D`. Pixels that run off either end are counted
+in the sidecar.
+
+Each pixel is divided by the film base, its logarithm is taken, and a 3×3 matrix turns the densities the LED sees
+into the measure asked for. The matrices were fitted from the LED's measured spectrum, the film's dye spectra and
+the measure's published response curves, and are part of the profile set (`density_matrices` in `bundle.json`,
+with the spectrum under `light_source`). They are computed from datasheet spectra and have not been checked against
+a densitometer. A 3×3 matrix fits Status M to about 0.01 density and the two printing densities to about 0.03.
+
+Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
+its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
+
+Density takes no bracket, search, curve fit, contrast step or look option, and no white-LED scan.
+
+### The film base from a capture
+
+`--film_base base.ARW` reads the film base from a capture of unexposed film, for a picture or for density. The
+capture is decoded as the scan is and scaled to the scan's exposure. It need not be clean: the brightest smooth part
+of its centre is found, leaving out dust, scratches, holder edges and clipped areas. `--film_base base.ARW:x,y,w,h`
+gives the region in sensor pixels. It needs an RGB-LED profile set and a Sony RAW.
+
+A later run to the same output takes that base back from `<output>.json`, so the capture is not needed again.
+Without a capture the base is read from the scan itself, as before.
+
 ## How it works
 
 A colour negative has three dye layers on an orange base, and the layers do not respond to light in step with each
@@ -195,7 +239,9 @@ If one of them is yours and you want it removed, open an issue.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
+| `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
+| `--film_base auto\|<file>[:x,y,w,h]` | The film base: read from the scan (default), or from a capture of unexposed film, over a region in sensor pixels when given. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
