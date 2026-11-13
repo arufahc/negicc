@@ -97,13 +97,23 @@ How well a 3×3 matrix reproduces each measure over the film's range, as each bu
 | RP 180 printing density | up to 0.009 in red and green, up to 0.044 in blue | up to 0.25, in blue |
 | Academy Printing Density | up to 0.025 in red, 0.005 in green, 0.031 in blue | up to 0.31, in blue |
 
-The matrices also assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is
-not modelled, and could add a few hundredths of density.
+Each matrix is then calibrated on the profile's own film. The grey scale of the profile's chart, shot at seven
+exposures, is held to the film's datasheet: one factor on the green and one on the blue density the LED sees, so that
+neutral patches have the datasheet's Status M balance (`density_matrices.neutral_calibration`; the matrix before the
+factors is `spectral_fit_matrix`). The green factor is 0.93 for Portra 400, 0.88 for Portra 160 and 0.77 for
+Ektar 100. This makes neutral film follow the datasheet; where a roll's development differs from the datasheet's,
+the file follows the datasheet and not a densitometer.
+
+The matrices assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is not
+modelled.
 
 Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
 its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
 
-Density takes no bracket, search, curve fit, contrast step or look option, and no white-LED scan. The sidecar
+Density takes no bracket, exposure, gain, curve fit, contrast step or look option, and no white-LED scan. The
+densities are the film as measured. The search that balances a picture still runs, and the colour balance it finds
+for the frame is recorded in the file and the sidecar, not applied (`suggested_balance`: one density offset per
+channel, summing to zero, that a grading tool can add). The sidecar
 counts the pixels that ran off either end of the code range, and those too dense to measure.
 
 ### The film base from a capture

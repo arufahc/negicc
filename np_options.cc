@@ -282,7 +282,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
           "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). Density takes a "
-          "TriLED bundle whose density matrices were built in, and none of the search, curve, tone or look options.");
+          "TriLED bundle whose density matrices were built in, and none of the exposure, gain, curve, tone or look "
+          "options; the colour balance the search finds is recorded in the file, not applied.");
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -675,7 +676,7 @@ int parse_options(int ac, char* av[], Options& o) {
               "'%s')\n", o.colorspace.c_str(), o.output.c_str());
     return 1;
   }
-  // Density is the negative as measured: no bracket, no parameter search, no curves, no tone stage and no look.
+  // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = parser.is_used("--fit_curves") && parser.get<std::string>("--fit_curves") != "auto";
@@ -691,7 +692,7 @@ int parse_options(int ac, char* av[], Options& o) {
     for (const Refused& r : refused) {
       if (r.used) {
         log_error("%s does not apply to a density output (-P %s): it writes the negative's density above the film "
-                  "base, with no bracket, parameter search, curves, tone stage or look\n", r.flag, o.colorspace.c_str());
+                  "base, with no given bracket, exposure, gains, curves, tone stage or look\n", r.flag, o.colorspace.c_str());
         return 1;
       }
     }
@@ -701,10 +702,9 @@ int parse_options(int ac, char* av[], Options& o) {
               o.colorspace.c_str());
     return 1;
   }
-  // The conversion then takes the film base's merged matrix as it is: exposure and gains of 1, nothing searched.
-  o.exposure_comp = 1.0f;
-  o.gain_g = o.gain_b = 1.0f;
-  o.exposure_given = o.gain_g_given = o.gain_b_given = true;
+  // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
+  // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
+  // the file as a suggested balance (np_density.h DensityRecord::has_balance).
   o.fit_curves = Options::kFitCurvesOff;
   o.tone_stage = Options::kToneStageOff;
   return 0;

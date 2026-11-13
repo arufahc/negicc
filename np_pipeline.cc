@@ -2633,6 +2633,13 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     rec.matrix = &s.bundle.density_matrix[o.density_measure];
     rec.bundle = &s.bundle;
     rec.clip = &c.density.clip;
+    if (c.station_params) {
+      rec.has_balance = true;
+      rec.balance_e = (*c.station_params)[0];
+      rec.balance_g = (*c.station_params)[1];
+      rec.balance_b = (*c.station_params)[2];
+      rec.balance_target = c.bundle_target_name;
+    }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
     density_json = density_metadata_json(rec);
     DensityFileInfo info;
