@@ -129,6 +129,11 @@ struct Sidecar {
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
   const negicc::InputCurves* cli_input_curves = nullptr;
+  // A film base read from a capture (--film_base; film_base_source "capture", or "sidecar" when a previous run's is
+  // taken): the capture's record as JSON (film_base.capture). Empty: none.
+  std::string film_base_capture_json;
+  // The density output's record (np_density.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
+  std::string density_json;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

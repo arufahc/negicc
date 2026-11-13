@@ -260,8 +260,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .scan<'g', float>()
     .default_value(0.0f);
   // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film), as
-  // negicc-station's Auto does; --film_base_rgb, which took it as numbers or from the rebate, is gone.
-  // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does).
+  // negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; np_film_base.h);
+  // --film_base_rgb, which took it as numbers or from the rebate, is gone.
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
           "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
@@ -278,7 +278,11 @@ int parse_options(int ac, char* av[], Options& o) {
           "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
           "RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
-    .help("srgb, srgb-g10 or [ICC profile path]. If specified the corrected RGB will be converted using this as the output profile.");
+    .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile. "
+          "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
+          "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
+          "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). Density takes a "
+          "TriLED bundle whose density matrices were built in, and none of the search, curve, tone or look options.");
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -368,6 +372,14 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
+  parser.add_argument("--film_base")
+    .help("The film base: auto (default), or a capture of unexposed film, <file>[:x,y,w,h]. auto takes the base a "
+          "previous run read from a capture and kept in <output>.json (when the inputs are the same), else reads it "
+          "from the scan (the rebate, else the thinnest film). A capture is decoded as the scan is (flat field, "
+          "crosstalk correction) and scaled to the scan's exposure; x,y,w,h is the region to read in sensor pixels, "
+          "and without it the smooth, brightest part of the capture's centre is found. Needs a TriLED bundle and a "
+          "Sony CFA RAW.")
+    .default_value(std::string("auto"));
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
   parser.add_argument("raw_files").nargs(1, 4);
@@ -594,5 +606,104 @@ int parse_options(int ac, char* av[], Options& o) {
   o.output = parser.get<std::string>("--output");
   if (parser.is_used("--colorspace")) o.colorspace = parser.get<std::string>("--colorspace");
   o.no_metadata = parser.get<bool>("--no-metadata");
+
+  // --film_base: auto, or <file>[:x,y,w,h]. The region follows the last colon when four whole numbers do.
+  {
+    const std::string fb = parser.get<std::string>("--film_base");
+    if (fb.empty()) {
+      log_error("--film_base takes auto or a capture of unexposed film, <file>[:x,y,w,h]\n");
+      return 1;
+    }
+    if (fb != "auto") {
+      o.film_base_file = fb;
+      const size_t colon = fb.rfind(':');
+      if (colon != std::string::npos && colon + 1 < fb.size()) {
+        const std::vector<std::string> items = split_csv(fb.substr(colon + 1));
+        double v[4] = {0, 0, 0, 0};
+        bool ok = items.size() == 4;
+        for (int k = 0; ok && k < 4; ++k) ok = parse_number(items[k], v[k]) && v[k] == std::floor(v[k]);
+        if (ok) {
+          if (v[0] < 0 || v[1] < 0 || v[2] <= 0 || v[3] <= 0) {
+            log_error("--film_base: the region x,y,w,h must lie on the sensor with a positive size (got %s)\n",
+                      fb.substr(colon + 1).c_str());
+            return 1;
+          }
+          for (int k = 0; k < 4; ++k) o.film_base_roi[k] = (int)v[k];
+          o.film_base_roi_given = true;
+          o.film_base_file = fb.substr(0, colon);
+        } else if (fb.find_first_not_of("0123456789,.-+ ", colon + 1) == std::string::npos) {
+          // Numbers after the colon that are not a region: not part of a file name.
+          log_error("--film_base: the region after the colon takes four whole numbers, x,y,w,h in sensor pixels "
+                    "(got '%s')\n", fb.substr(colon + 1).c_str());
+          return 1;
+        }
+      }
+      if (o.input_mode != InputMode::kRaw) {
+        log_error("--film_base with a capture applies to a single CFA RAW or a pixel shift capture\n");
+        return 1;
+      }
+    }
+  }
+
+  // The output file: a density (-P statusm, rp180, apd) goes to a .dpx or a .tif / .tiff; everything else is a TIFF.
+  std::string ext;
+  {
+    const size_t dot = o.output.find_last_of('.');
+    const size_t slash = o.output.find_last_of("/\\");
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) ext = o.output.substr(dot);
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+  }
+  for (int m = 0; m < kDensityMeasures; ++m) {
+    if (o.colorspace == density_measure_name((DensityMeasure)m)) {
+      o.density = true;
+      o.density_measure = (DensityMeasure)m;
+    }
+  }
+  if (!o.density) {
+    if (ext == ".dpx") {
+      log_error("A .dpx output holds density: give -P statusm, rp180 or apd\n");
+      return 1;
+    }
+    return 0;
+  }
+  if (ext == ".dpx") {
+    o.output_dpx = true;
+  } else if (ext != ".tif" && ext != ".tiff") {
+    log_error("-P %s writes density to a .dpx (10 bits) or a .tif / .tiff (16 bits) file, by -o's extension (got "
+              "'%s')\n", o.colorspace.c_str(), o.output.c_str());
+    return 1;
+  }
+  // Density is the negative as measured: no bracket, no parameter search, no curves, no tone stage and no look.
+  {
+    struct Refused { const char* flag; bool used; };
+    const bool fit_set = parser.is_used("--fit_curves") && parser.get<std::string>("--fit_curves") != "auto";
+    const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
+    const Refused refused[] = {
+        {"--target", o.target_given},          {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},          {"--gain_b", o.gain_b_given},
+        {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
+        {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
+        {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
+        {"--fit_curves", fit_set},             {"--tone_stage", tone_set},
+    };
+    for (const Refused& r : refused) {
+      if (r.used) {
+        log_error("%s does not apply to a density output (-P %s): it writes the negative's density above the film "
+                  "base, with no bracket, parameter search, curves, tone stage or look\n", r.flag, o.colorspace.c_str());
+        return 1;
+      }
+    }
+  }
+  if (o.light_source == "d65") {
+    log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not supported\n",
+              o.colorspace.c_str());
+    return 1;
+  }
+  // The conversion then takes the film base's merged matrix as it is: exposure and gains of 1, nothing searched.
+  o.exposure_comp = 1.0f;
+  o.gain_g = o.gain_b = 1.0f;
+  o.exposure_given = o.gain_g_given = o.gain_b_given = true;
+  o.fit_curves = Options::kFitCurvesOff;
+  o.tone_stage = Options::kToneStageOff;
   return 0;
 }

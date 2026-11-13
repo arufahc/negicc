@@ -397,7 +397,7 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 # neg_process.cc is, so moving code between them leaves its arithmetic as it was.
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
               $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
-NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc
+NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc np_film_base.cc np_density.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detector.h profile_bundle.h \

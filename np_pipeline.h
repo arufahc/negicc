@@ -48,6 +48,8 @@
 #include "flat_field.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
+#include "np_density.h"
+#include "np_film_base.h"
 #include "np_options.h"
 #include "np_output.h"
 #include "profile_bundle.h"
@@ -97,6 +99,7 @@ struct Setup {
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
+  bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_density.h)
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
@@ -165,6 +168,13 @@ struct OutputSpec {
   cmsHPROFILE xyz = nullptr;             // ENCODE_CUSTOM: the XYZ input and the output profile
   cmsHPROFILE custom = nullptr;
 };
+// The density output's conversion (np_density.h): the measure's matrix, the encoding and the clamped pixels.
+struct DensityOutput {
+  double base_level = 1.0;               // what the film base lands on after the film base's merged matrix
+  float merged[9] = {0};                 // that matrix (crosstalk correction x film base scale), E = g = b = 1
+  DensityEncoding encoding;
+  DensityClip clip;
+};
 
 // The compute on the scan's data.
 class Backend {
@@ -215,6 +225,15 @@ struct Scan {
   // when no film base is given; not found: the bundle's.
   negicc::FilmBaseDetection film_base;
   const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
+  // The film base given in place of the scan's own (--film_base): read from a capture of unexposed film
+  // (np_film_base.h; film_base.source "capture"), or, with --film_base auto, the base a previous run read from a
+  // capture and kept in <output>.json (source "sidecar", with that run's capture record as JSON). has_given_base:
+  // film_base holds it and the scan's is not read.
+  bool has_given_base = false;
+  negicc::FilmBaseDetection given_base;
+  bool has_base_capture = false;
+  FilmBaseCapture base_capture;
+  std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)
   // The white-light decode's gains on the camera channels (ChannelBalance); 1, 1, 1: the mosaic was left as it was.
   float balance_gains[3] = {1, 1, 1};
 
@@ -294,6 +313,7 @@ struct Conversion {
   std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
   std::string film_base_source = "none";
   OutputSpec out;
+  DensityOutput density;                 // with Setup::density
 };
 
 int prepare(const Options& o, Setup& s);
