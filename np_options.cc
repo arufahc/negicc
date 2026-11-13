@@ -378,7 +378,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "read the base from a capture and kept it in <output>.json, with the same inputs, flat field and crosstalk "
           "correction: then that base is taken. A capture is decoded as the scan is (flat field, crosstalk "
           "correction) and scaled to the scan's exposure; x,y,w,h is the region to read in sensor pixels, and "
-          "without it the smooth, brightest part of the capture's centre is found. Needs a TriLED bundle and a Sony "
+          "without it the brightest smooth stretch of film on the capture is found. Needs a TriLED bundle and a Sony "
           "CFA RAW.")
     .default_value(std::string("auto"));
   parser.add_argument("--flat")

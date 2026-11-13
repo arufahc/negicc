@@ -108,10 +108,11 @@ counts the pixels that ran off either end of the code range, and those too dense
 
 ### The film base from a capture
 
-`--film_base base.ARW` reads the film base from a capture of unexposed film, for a picture or for density. The
-capture is decoded as the scan is and scaled to the scan's exposure. It need not be clean: the brightest smooth part
-of its centre is found, leaving out dust, scratches, clipped areas, and anything that is not the colour of film
-base, such as bare light beside the film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
+`--film_base base.ARW` reads the film base from a capture that shows unexposed film: a whole frame of it, or a
+picture with a strip of rebate beside it. The base is used for a picture or for density. The capture is decoded as
+the scan is and scaled to the scan's exposure. The brightest smooth stretch of film anywhere on it is found, leaving
+out dust, scratches, clipped areas, and anything that is not the colour of film base, such as bare light beside the
+film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
 needs an RGB-LED profile set and a Sony RAW. Give the same `--flat` as for the scan.
 
 A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
