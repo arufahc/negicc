@@ -73,7 +73,18 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
                          0.072169 * decode[rgb[3 * i + 2]];
         L[i] = 116.0 * tone_lab_f(Y) - 16.0;
     }
-    std::sort(L.begin(), L.end());
+    // Only the ranks the seven percentiles read are put in place (each with its upper neighbour), in ascending order,
+    // each selection within the part left unsorted by the one before: the values a full sort would leave there.
+    static constexpr double kPct[7] = {2, 10, 25, 50, 75, 90, 98};
+    size_t from = 0;
+    for (double p : kPct) {
+        const size_t i = (size_t)(p / 100.0 * (double)(n - 1));
+        for (size_t k = i; k <= i + 1 && k < n; ++k) {
+            if (k < from) continue;
+            std::nth_element(L.begin() + (std::ptrdiff_t)from, L.begin() + (std::ptrdiff_t)k, L.end());
+            from = k + 1;
+        }
+    }
     auto pct = [&](double p) {
         const double r = p / 100.0 * (double)(n - 1);
         const size_t i = (size_t)r;
