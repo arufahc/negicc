@@ -20197,6 +20197,10 @@
     0.0,
     0.0
    ],
+   "band_splits_nm": [
+    495.0,
+    578.0
+   ],
    "instrument": "OHSP-350C",
    "measured": "2026-06-25T02:29:13",
    "source": "data/light_spectra/shoebox_a7r4-022913.csv"
@@ -20209,171 +20213,111 @@
    "samples": 3000,
    "colour_sigma": 0.15,
    "seed": 0,
-   "hostname": "wp0",
-   "method": "camera_chain",
-   "max_density": 1.5,
-   "samples_fitted": 1566,
-   "samples_not_positive": 12
+   "hostname": "vm"
   },
-  "led_separation": {
-   "model": "two asymmetric Gaussians per LED, fitted together",
-   "fit_rms_of_peak": 0.00265,
-   "fit_max_of_peak": 0.01256,
-   "peaks_nm": [
-    634.0,
-    517.0,
-    463.0
-   ],
-   "power_share": [
-    0.3682,
-    0.165,
-    0.4669
-   ]
-  },
-  "camera": {
-   "model": "ILCE-7RM4",
-   "curves": "3rd_party/rawtoaces-data/Sony_ILCE-7RM4_380_780_5.json",
-   "curves_source": "rawtoaces-data (Academy Software Foundation), Apache-2.0",
-   "calibrated_to": "crosstalk_profile.crosstalk_matrix_normalized",
-   "calibration_factors": [
-    [
-     1.0,
-     1.1116,
-     1.5805
-    ],
-    [
-     0.9935,
-     1.0,
-     1.1018
-    ],
-    [
-     1.0592,
-     1.0602,
-     1.0
-    ]
-   ],
-   "calibration_passes": 14
-  },
-  "crosstalk_correction_matrix": [
-   [
-    1.0142583748785035,
-    -0.08232376340456526,
-    -0.026613946496026795
-   ],
-   [
-    -0.1860939884363283,
-    1.161766417054109,
-    -0.5193214590885378
-   ],
-   [
-    0.03492585321723816,
-    -0.32364759807691906,
-    1.1457453787601515
-   ]
-  ],
   "status_m": {
    "matrix": [
     [
-     1.31214,
-     -0.09038,
-     0.00395
+     1.24841,
+     -0.07602,
+     0.00747
     ],
     [
-     -0.04041,
-     1.1199,
-     -0.05544
+     -0.03504,
+     1.1137,
+     -0.08219
     ],
     [
-     -0.0071,
-     0.04479,
-     0.97133
+     0.007,
+     -0.02619,
+     1.03113
     ]
    ],
    "target_curves": "Status M (digitised)",
    "fit_rms_density": [
-    0.0007,
-    0.0022,
-    0.0018
+    0.0034,
+    0.0086,
+    0.0015
    ],
    "fit_max_density": [
-    0.0085,
-    0.0133,
-    0.0164
+    0.0224,
+    0.0849,
+    0.0141
    ],
    "density_range": [
-    1.74,
-    1.55,
-    1.51
+    2.77,
+    3.06,
+    3.59
    ]
   },
   "rp180_printing_density": {
    "matrix": [
     [
-     1.58043,
-     -0.13918,
-     0.00441
+     1.50603,
+     -0.12272,
+     0.00878
     ],
     [
-     -0.01783,
-     1.15818,
-     -0.06537
+     -0.03172,
+     1.18472,
+     -0.09765
     ],
     [
-     0.19627,
-     0.04329,
-     0.64757
+     0.30062,
+     0.04853,
+     0.52837
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
    "fit_rms_density": [
-    0.0009,
-    0.0026,
-    0.0096
+    0.0035,
+    0.0039,
+    0.0425
    ],
    "fit_max_density": [
-    0.0096,
-    0.0166,
-    0.0503
+    0.0213,
+    0.0694,
+    0.237
    ],
    "density_range": [
-    2.06,
-    1.63,
-    1.29
+    3.3,
+    3.34,
+    2.28
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
-     1.56693,
-     -0.12406,
-     0.00815
+     1.4204,
+     -0.07097,
+     0.02038
     ],
     [
-     -0.06166,
-     1.16866,
-     -0.05949
+     -0.06952,
+     1.18419,
+     -0.0902
     ],
     [
-     0.01111,
-     0.03646,
-     0.94171
+     0.08163,
+     0.00939,
+     0.90179
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
    "fit_rms_density": [
-    0.0018,
-    0.0024,
-    0.003
+    0.0134,
+    0.0043,
+    0.0307
    ],
    "fit_max_density": [
-    0.0208,
-    0.0137,
-    0.0247
+    0.1089,
+    0.0683,
+    0.3136
    ],
    "density_range": [
-    2.04,
-    1.6,
-    1.47
+    3.11,
+    3.23,
+    3.04
    ]
   }
  },
@@ -20381,9 +20325,9 @@
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "840862e0d1f7e9dbc8afa85779a2972720c79dd8d34c236b2863d760699927d0",
+  "source_sha256": "72d9f09fbc7295a82d9a356004ad9dee86da30926506508890fd545e34602d40",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "e0b621db8bde8dcd09f6924b850041830a17a516"
+  "station_commit": "7d122ce94d7bfb86c98e1baf83b6f47acd03ddf7"
  }
 }
