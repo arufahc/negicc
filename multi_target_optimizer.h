@@ -325,7 +325,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// The white-light tone stage's plan (np_pipeline.h): the tone heads' predictions (dinov3_engine.h, on the features of
+// The tone stage's plan (np_pipeline.h): the tone heads' predictions (dinov3_engine.h, on the features of
 // one inference on the final render's preview) and that preview; the conversion solves the curve between the
 // preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {
@@ -400,6 +400,14 @@ struct WhiteLightFitResult {
   ToneStagePlan tone;
   double time_ms = 0.0;
 };
+
+// The tone stage's plan after a search with no curve fit (TriLED bundles, and white light with --fit_curves off): the
+// heads' predictions and the preview of the search's own result, res.params on the bracket's profile at the roll-off
+// the conversion measures there. Nothing of the search's result changes. False (reported) on a bad bracket; a plan
+// that could not be made says why in out.skipped.
+bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                          const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out);
 
 // The station's ConversionSession.set_fit_curves on the bracket a finished search chose (res), for white-light
 // bundles, on the same frame as the search (the WhiteLightFit steps in multi_target_optimizer.cc):

@@ -1,7 +1,8 @@
 # Design: the white-light conversion
 
 How `neg_process` converts a negative scanned under white light (`--light_source d65`, `-P srgb`), and every
-choice it makes along the way. Tri-LED scans and `--fit_curves off` run stage 1 only.
+choice it makes along the way. Tri-LED scans run stages 1 and 4: their curves are the measured ones and are not
+fitted. `--fit_curves off` leaves out stages 2 and 3, and `--tone_stage off` stage 4.
 
 ## The stages
 
@@ -148,6 +149,10 @@ The tone head predicts the shadow level, highlight level and tonal range a lab s
 lightness curve moves the image toward them while holding the mid-tone. The head reads one network inference on
 the final render's preview, the only one after the search. It is applied to each pixel's linear sRGB
 value inside the conversion: the pixel's brightness follows the curve and its colour is carried along unchanged.
+
+The stage runs after every bundle search with `-P srgb`, on white light and tri-LED alike. Where no curve fit runs
+(tri-LED, or `--fit_curves off`) it is planned on the search's own result, which it leaves as it is. In a blind
+comparison on 20 tri-LED frames the stage was preferred on 17 and the conversion without it on 2.
 
 | Choice | Value | What it does | Effect |
 |---|---|---|---|

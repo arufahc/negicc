@@ -63,8 +63,8 @@ python3 models/tone_head/export_tone_head.py --check   # needs torch and numpy
 
 ## Using it in neg_process
 
-Runs wherever the white-light curve fit runs with `-P srgb` (`--fit_curves off` leaves it out; `--tone_stage` only
-replays a recorded curve; TriLED never runs it). The engine then also gives the tokens' spread with every inference of
+Runs after every bundle search with `-P srgb`, on white-light and TriLED bundles, with or without the curve fit
+(`--tone_stage off` leaves it out; `--tone_stage curve:...` replays a recorded curve). The engine then also gives the tokens' spread with every inference of
 the search (`set_token_spread`); the heads run once, on the features of one inference on the final render's preview
 (the search's intent preview only if that inference fails), the only network inference after the search. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's descriptors
 before the stage, the targets, the curve (four numbers) and the clipping before (on the clip check's sample) and after.

@@ -120,7 +120,10 @@ struct Sidecar {
   std::string replay_source;
   const ToneCurve* tone_curve = nullptr;
   const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
-  const TonePlanCurve* tone_plan = nullptr;   // with curve_fit: the tone stage's plan the conversion solved from it
+  // This run's tone stage, when it was planned (after the curve fit, or after the search where no fit runs): the
+  // heads' plan and the curve the conversion solved from it.
+  const ToneStagePlan* tone_stage_plan = nullptr;
+  const TonePlanCurve* tone_plan = nullptr;
   double tone_share = 1.0;
   bool tone_applied = false;
   const ToneClip* tone_clip = nullptr;

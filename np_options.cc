@@ -223,8 +223,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
           "neutral). Defaults to 1.0. Given with a white-light (d65) bundle, the bundle search and the curve fit "
           "hold it and solve the rest; with -E, --target and --gain_b given too there is nothing to search, and the "
-          "search runs only for the curve fit and the tone stage (--fit_curves off converts with the given values "
-          "alone). Given with a TriLED bundle or an ICC profile, it turns the parameter search off. --tint and "
+          "search runs only for the curve fit and the tone stage (--fit_curves off --tone_stage off converts with "
+          "the given values alone). Given with a TriLED bundle or an ICC profile, it turns the parameter search off. --tint and "
           "--warmth move the result, a given gain too.")
     .scan<'g', float>()
     .default_value(1.0f);
@@ -309,12 +309,17 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Removed: the tint trim stage is gone; the overall magenta-green balance is now part of the curve fit. "
           "Giving this flag is an error.");
   parser.add_argument("--tone_stage")
-    .help("Replays a recorded tone curve: curve:black,white,gamma,contrast (a sidecar's cli_equivalent), with "
-          "--target, -E, --gain_g and --gain_b. The tone stage itself runs wherever the curve fit runs, with -P "
-          "srgb: tone heads on DINOv3 features of the final render's preview predict the frame's shadow level, "
-          "highlight level and tonal range as a lab scan would have them, and one monotone L* curve, applied in the "
-          "conversion itself, moves the image all the way to the predicted shadow level and half way to the "
-          "highlight level and range, holding the mid-tones and each colour's a* and b*.");
+    .help("auto (default), on, off, or a recorded curve: curve:black,white,gamma,contrast. auto: the tone stage "
+          "runs after every bundle search with -P srgb, on white-light and TriLED bundles alike and whether or not "
+          "the curve fit runs, and nowhere else (another or no -P, given parameters that leave nothing to search, a "
+          "single ICC profile), so it can be passed for every scan. on: the same, and an error where it does not "
+          "apply. off: no tone stage. The stage: tone heads on DINOv3 features of the final render's preview "
+          "predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, and one "
+          "monotone L* curve, applied in the conversion itself, moves the image all the way to the predicted shadow "
+          "level and half way to the highlight level and range, holding the mid-tones and each colour's a* and b*. "
+          "A recorded curve (a sidecar's cli_equivalent) is replayed with --target, -E, --gain_g and --gain_b, "
+          "without searching or predicting.")
+    .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
@@ -334,8 +339,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
           "applies (a white-light bundle search with -P srgb or srgb-g10, whether or not --target, -E, --gain_g or "
-          "--gain_b pin part of it), and nothing elsewhere (TriLED, another or no -P), so it can be passed for every "
-          "scan. on: after the bundle search, fit g, b and G "
+          "--gain_b pin part of it), and nothing elsewhere (TriLED, whose curves are the measured ones and are not "
+          "fitted; another or no -P), so it can be passed for every scan. on: after the bundle search, fit g, b and G "
           "and B input curves jointly (Levenberg-Marquardt) so the cells the neutral head finds neutral (weighted by "
           "p^2) render grey, pulled at m / (m + 12) of full strength (m the evidence, sum of p^2), and the overall "
           "magenta-green balance agrees with the search's intent field, on the bracket it chose, each candidate at "
@@ -343,14 +348,14 @@ int parse_options(int ac, char* av[], Options& o) {
           "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
           "needs a white-light bundle and -P srgb or srgb-g10. A given g or b is held by the fit and a given E is "
           "not re-metered; with --target, -E, --gain_g and --gain_b all given only the curves are fitted. off: "
-          "no fit and no tone stage; a sidecar's cli_equivalent carries it when neither ran, so its given values "
-          "replay as recorded. Recorded curves: "
+          "no fit (the tone stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
+          "--tone_stage off, when neither ran, so its given values replay as recorded. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
           "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
           "the bracket, E, g and b); needs --target, -E, --gain_g and --gain_b. The form leads with the refs, which "
           "are positive, because the parser takes a value starting with '-' for an option. The older order "
           "aG,kG,aB,kB,refG,refB,u_medG,u_medB[,u_loG,u_loB] (no prefix) is still read when aG is not negative. "
-          "White-light (d65) bundles and -P only. off also leaves out the tone stage, which runs where the fit runs.")
+          "White-light (d65) bundles and -P only.")
     .default_value(std::string("auto"));
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
@@ -546,10 +551,14 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   o.dino_backend = parser.get<std::string>("--dino_backend");
   // Recorded numbers after a prefix (which keeps a negative first number from reading as an option).
-  // --tone_stage replays recorded values only (the stage itself runs wherever the curve fit runs).
+  // --tone_stage: a mode, or recorded values to replay.
   auto replay = [&](const char* name, const char* prefix, int count, bool& given, double* out) {
     if (!parser.is_used(name)) return true;
     const std::string v = parser.get<std::string>(name);
+    if (v == "auto" || v == "on" || v == "off") {
+      o.tone_stage = v == "on" ? Options::kToneStageOn : v == "off" ? Options::kToneStageOff : Options::kToneStageAuto;
+      return true;
+    }
     const std::string pre = prefix;
     if (v.compare(0, pre.size(), pre) == 0) {
       const std::vector<std::string> items = split_csv(v.substr(pre.size()));
@@ -560,8 +569,8 @@ int parse_options(int ac, char* av[], Options& o) {
         return true;
       }
     }
-    log_error("%s takes recorded values only (the step runs wherever the curve fit runs): %s followed by %d "
-              "comma-separated numbers, not '%s'\n", name, prefix, count, v.c_str());
+    log_error("%s takes auto, on, off, or recorded values: %s followed by %d comma-separated numbers, not '%s'\n",
+              name, prefix, count, v.c_str());
     return false;
   };
   if (parser.is_used("--tint_trim")) {

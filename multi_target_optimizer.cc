@@ -1936,6 +1936,34 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   return true;
 }
 
+// The tone stage's plan on the render the conversion exports: the preview of profile pd at params (the search's units)
+// at DINOv3's size, one inference on it for the tone heads' input, and the heads' predictions. features holds the
+// search's own tone features on entry (read only if that inference fails) and the ones the heads read on return.
+static void plan_tone_on_render(SearchFrame& fr, const ProfileData& pd, const ConversionParams& params,
+                                const ToneHead* tone_head, int encoding, std::vector<float>& features,
+                                ToneStagePlan& tp) {
+  std::vector<uint8_t> pv;
+  int pw = 0, ph = 0;
+  if (tone_head && encoding == ENCODE_SRGB) {
+    fr.render_net_preview(pd, params, pv, pw, ph);
+    std::vector<float> mu_f, sg_f, tf;
+    if (fr.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
+      features.swap(tf);
+      tp.features = "final";
+    }
+  }
+  if (!tone_head) {
+    tp.skipped = "off";
+  } else if (encoding != ENCODE_SRGB) {
+    tp.skipped = "encoding";
+  } else if (features.size() != (size_t)ToneHead::kInDim ||
+             !tone_head->run(features.data(), tp.pred_mean, tp.pred_sd)) {
+    tp.skipped = "features";
+  } else {
+    tp.preview.swap(pv);
+  }
+}
+
 // The white-light fit's steps (run_white_light_fit), in the order run() takes them, and the state they share.
 class WhiteLightFit {
  public:
@@ -1948,10 +1976,10 @@ class WhiteLightFit {
         fr_(bundle, engine, opts.verbose, opts.max_steps, scratch_) {}
 
   bool run() {
-    // TODO: the deferred tri-LED extension of the fit; see the TODO at the --fit_curves gate in np_pipeline.cc.
+    // White light only (see the --fit_curves gate in np_pipeline.cc): a TriLED bundle's curves are the measured ones.
     if (bundle_.has_crosstalk) {
-      std::cerr << "ERROR! Fitted input curves are for white-light bundles: with a crosstalk matrix the film base "
-                   "does not mark the dark end of every channel" << std::endl;
+      std::cerr << "ERROR! Fitted input curves are for white-light bundles: a TriLED bundle converts through its "
+                   "measured curves" << std::endl;
       return false;
     }
     idx_ = res_.target_idx;
@@ -2328,27 +2356,7 @@ class WhiteLightFit {
     // The heads read the image the stage will be applied to: the final state's preview, rendered below for the
     // descriptors anyway, at one inference (the search's intent preview has the pre-fit colour, and is the fallback
     // when that inference fails).
-    ToneStagePlan& tp = out_.tone;
-    std::vector<uint8_t> pv;
-    int pw = 0, ph = 0;
-    if (tone_head_ && encoding_ == ENCODE_SRGB) {
-      fr_.render_net_preview(prof.data, out_.params, pv, pw, ph);
-      std::vector<float> mu_f, sg_f, tf;
-      if (fr_.predict_net(pv, pw, ph, mu_f, sg_f, tf) && tf.size() == (size_t)ToneHead::kInDim) {
-        tone_features_.swap(tf);
-        tp.features = "final";
-      }
-    }
-    if (!tone_head_) {
-      tp.skipped = "off";
-    } else if (encoding_ != ENCODE_SRGB) {
-      tp.skipped = "encoding";
-    } else if (tone_features_.size() != (size_t)ToneHead::kInDim ||
-               !tone_head_->run(tone_features_.data(), tp.pred_mean, tp.pred_sd)) {
-      tp.skipped = "features";
-    } else {
-      tp.preview.swap(pv);
-    }
+    plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features_, out_.tone);
     out_.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0_).count();
     if (opts_.verbose) {
       std::cout << "Curves: E re-metered " << fixed(e_int_, 4) << " -> " << fixed(e_new_, 4) << " (grid median L* "
@@ -2401,4 +2409,35 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          WhiteLightFitResult& out) {
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
+}
+
+bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
+                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                          const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
+  const int idx = res.target_idx;
+  if (idx < 0 || idx >= (int)bundle.targets.size()) {
+    std::cerr << "ERROR! The tone stage needs the bracket of a finished search" << std::endl;
+    return false;
+  }
+  out = ToneStagePlan{};
+  ParamSearchResult scratch;  // the inference and timings of the frame below; not reported
+  SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
+  fr.set_shoulder(1.0f, true);
+  fr.set_frame(frame, opts.crop_ratio);
+  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+  const ProfileData& pd = bundle.targets[idx].film_prof.data;
+  // The export's roll-off at the search's result, as the conversion measures it (only the sRGB encoding applies one).
+  ConversionParams p = res.params;
+  float q995 = 0.0f;
+  p.shoulder = encoding == ENCODE_SRGB
+                   ? measure_rolloff_x_hi(bundle, pd, frame, scan_shutter_s, scan_iso, p.e, p.g, p.b, opts.crop_ratio,
+                                          &q995, opts.film_base_rgb_d)
+                   : 1.0f;
+  // The preview renders in the search's units: a TriLED search runs on M_frame / e_norm with E in the reference's
+  // units, while res.params.e is in this frame's (white light searches in the frame's units).
+  if (bundle.has_crosstalk) p.e *= fr.e_norm();
+  std::vector<float> features = res.intent_tone_features;
+  plan_tone_on_render(fr, pd, p, &tone_head, encoding, features, out);
+  return true;
 }

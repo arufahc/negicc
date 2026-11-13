@@ -53,8 +53,8 @@
 #include "np_output.h"
 #include "profile_bundle.h"
 
-// ---- The white-light tone stage (np_pipeline.cc) ----
-// The white-light tone stage: one monotone lightness curve on CIE L* (D65), set per frame from the tone heads
+// ---- The tone stage (np_pipeline.cc) ----
+// The tone stage, on white-light and TriLED bundles alike: one monotone lightness curve on CIE L* (D65), set per frame from the tone heads
 // (ToneHead, dinov3_engine.h), applied in the conversion kernel to each pixel's display linear sRGB value
 // (color_pipeline.h apply_tone): its luminance Y goes to Y' = Y(f(L*(Y))) on the white point's neutral, and its colour
 // difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
@@ -185,6 +185,7 @@ struct Setup {
   // The bundle's search with --target, -E, --gain_g or --gain_b held (white light): Auto with those pinned.
   bool pinned_search = false;
   bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
+  bool tone_active = false;              // the tone stage runs (--tone_stage auto or on, where it applies)
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
@@ -200,7 +201,7 @@ struct Setup {
   // size and CRC-32, for the sidecar.
   std::string head_path[3];
   FileFingerprint head_fp[3];
-  ToneHead tone_head;                    // the white-light tone heads (where the fit runs)
+  ToneHead tone_head;                    // the tone heads (where the tone stage runs)
   // The tone curve the conversion renders with: this run's tone stage's, a previous run's (the knobs on its sidecar) or
   // given (--tone_stage curve:...); not predicted again on a replay.
   // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise.
@@ -213,7 +214,12 @@ struct Setup {
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   WhiteLightFitResult curve_fit;
-  TonePlanCurve tone_plan;  // the tone stage's plan solved from curve_fit.tone (when curve_fit.tone.planned)
+  // This run's tone stage: the heads' plan (the curve fit's on its result, or plan_auto_tone_stage's on the search's
+  // own result where no fit runs) and the curve solved from it (when tone_stage.planned). tone_stage_ran: a plan was
+  // attempted this run (the sidecar then says what came of it).
+  ToneStagePlan tone_stage;
+  bool tone_stage_ran = false;
+  TonePlanCurve tone_plan;
   // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
   // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
   int curves_base_idx = -1;
@@ -331,7 +337,7 @@ struct Scan {
   // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
-  // The white-light tone stage as convert applied it to the final image (WhiteLightFitResult::tone has the plan).
+  // The tone stage as convert applied it to the final image (Setup::tone_stage has the plan).
   bool tone_applied = false;
   ToneClip tone_clip;
   ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)

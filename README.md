@@ -53,8 +53,8 @@ bin_out/neg_process --film_stock portra400 --light_source d65 --target 4 -P srgb
 ```
 
 On white-LED scans, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
-search, the curve fit and the contrast step still run, holding what you gave. Add `--fit_curves off` to convert with
-the given values and nothing else.
+search, the curve fit and the contrast step still run, holding what you gave. Add `--fit_curves off --tone_stage off`
+to convert with the given values and nothing else.
 
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
@@ -127,7 +127,10 @@ A conversion goes through these steps:
    highlights. The slopes of the green and blue curves are adjusted until the surfaces the neutral head picked out
    are grey. The same fit sets the overall magenta-green balance from the intent head. A result greener than the
    search's is not accepted, apart from a small tolerance and the deep shadows.
-4. Set the contrast (white light only). One lightness curve moves the picture toward the tone head's prediction.
+4. Set the contrast (both lights). One lightness curve moves the picture toward the tone head's prediction.
+
+With the RGB LED the curves are the measured ones, so step 3 does not run there: the profiles were made under that
+light, and there is no lamp or camera difference for a fit to correct.
 
 On the frame below the first render is cyan-green and the search brings it to a daylight balance.
 
@@ -150,7 +153,7 @@ profiles were not made with. Left: the scan as the camera saw it. Right: `neg_pr
 ![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
 
 *Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
-DanielE, 2026-07-11. Converted with `--fit_curves off`.
+DanielE, 2026-07-11. Converted with `--fit_curves off --tone_stage off`.
 
 ![Fête du Travail](samples/web_d216d498d5.jpg)
 
@@ -173,8 +176,8 @@ If one of them is yours and you want it removed, open an issue.
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. |
-| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it and the contrast step; a sidecar's replay command carries it when neither ran. `on` is an error where it does not apply. Eight or ten numbers replay the curves recorded in a sidecar. |
-| `--tone_stage curve:<numbers>` | Replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). |
+| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED). Eight or ten numbers replay the curves recorded in a sidecar. |
+| `--tone_stage auto\|off\|on\|curve:<numbers>` | The contrast step. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). |
 | `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
