@@ -20271,18 +20271,18 @@
    "matrix": [
     [
      1.50603,
-     -0.09404,
-     0.00907
+     -0.12272,
+     0.00878
     ],
     [
      -0.03172,
-     0.90787,
-     -0.10086
+     1.18472,
+     -0.09765
     ],
     [
      0.30062,
-     0.03719,
-     0.54576
+     0.04853,
+     0.52837
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
@@ -20300,41 +20300,24 @@
     3.3,
     3.34,
     2.28
-   ],
-   "spectral_fit_matrix": [
-    [
-     1.50603,
-     -0.12272,
-     0.00878
-    ],
-    [
-     -0.03172,
-     1.18472,
-     -0.09765
-    ],
-    [
-     0.30062,
-     0.04853,
-     0.52837
-    ]
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
      1.4204,
-     -0.05438,
-     0.02105
+     -0.07097,
+     0.02038
     ],
     [
      -0.06952,
-     0.90746,
-     -0.09317
+     1.18419,
+     -0.0902
     ],
     [
      0.08163,
-     0.0072,
-     0.93146
+     0.00939,
+     0.90179
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
@@ -20352,23 +20335,6 @@
     3.11,
     3.23,
     3.04
-   ],
-   "spectral_fit_matrix": [
-    [
-     1.4204,
-     -0.07097,
-     0.02038
-    ],
-    [
-     -0.06952,
-     1.18419,
-     -0.0902
-    ],
-    [
-     0.08163,
-     0.00939,
-     0.90179
-    ]
    ]
   },
   "neutral_calibration": {
@@ -20391,6 +20357,9 @@
    "green_blue_rms_after": [
     0.0244,
     0.0335
+   ],
+   "applied_to": [
+    "status_m"
    ]
   }
  },
@@ -20398,9 +20367,9 @@
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "b418919a5c12bcbdd4d69c99a75f11300c643e0f6d18cbf604f22c504eae1336",
+  "source_sha256": "a293d7f078249f07d4c87b519ba9c5fa1163c890620162a3ff437595ecff502a",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "80ba02b9a6499f426152c0f65418486557f3613c"
+  "station_commit": "decdde8e11ba3dd692a2a10b640cf208e5f4c975"
  }
 }

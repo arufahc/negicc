@@ -20288,18 +20288,18 @@
    "matrix": [
     [
      1.55074,
-     -0.09988,
-     0.01626
+     -0.11398,
+     0.01797
     ],
     [
      -0.04549,
-     1.07463,
-     -0.11384
+     1.22634,
+     -0.12578
     ],
     [
      0.42238,
-     0.02696,
-     0.4418
+     0.03077,
+     0.48818
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
@@ -20317,41 +20317,24 @@
     2.97,
     3.36,
     2.18
-   ],
-   "spectral_fit_matrix": [
-    [
-     1.55074,
-     -0.11398,
-     0.01797
-    ],
-    [
-     -0.04549,
-     1.22634,
-     -0.12578
-    ],
-    [
-     0.42238,
-     0.03077,
-     0.48818
-    ]
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
      1.46808,
-     -0.0467,
-     0.03489
+     -0.05329,
+     0.03856
     ],
     [
      -0.08721,
-     1.06522,
-     -0.09886
+     1.21561,
+     -0.10923
     ],
     [
      0.12083,
-     0.00238,
-     0.80012
+     0.00272,
+     0.88411
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
@@ -20369,23 +20352,6 @@
     2.85,
     3.23,
     2.91
-   ],
-   "spectral_fit_matrix": [
-    [
-     1.46808,
-     -0.05329,
-     0.03856
-    ],
-    [
-     -0.08721,
-     1.21561,
-     -0.10923
-    ],
-    [
-     0.12083,
-     0.00272,
-     0.88411
-    ]
    ]
   },
   "neutral_calibration": {
@@ -20408,6 +20374,9 @@
    "green_blue_rms_after": [
     0.0142,
     0.023
+   ],
+   "applied_to": [
+    "status_m"
    ]
   }
  },
@@ -20415,9 +20384,9 @@
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "c2191bdacdd6359aad66311f3d9a9d09445b7a68ffc0c51ede9d3e98d052c623",
+  "source_sha256": "5d47029cf95edaea4f48a52e00e4f873c13752dcf8e0aa0af267147004aa86f1",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "80ba02b9a6499f426152c0f65418486557f3613c"
+  "station_commit": "decdde8e11ba3dd692a2a10b640cf208e5f4c975"
  }
 }
