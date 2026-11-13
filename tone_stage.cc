@@ -28,8 +28,8 @@
 // moves down where the curve would clip the export (tone_plan_for_image, on a sample through the kernel) and
 // converts the image once with the curve's table (tone_table).
 //
-// The preview's L* (sRGB D65, in double precision): the descriptors the curve is solved from. Only the small preview is
-// measured this way; no output pixel goes through Lab.
+// The preview's L* (sRGB D65, in double precision, Y from the luminance row of linear sRGB D65 -> XYZ): the descriptors
+// the curve is solved from. Only the small preview is measured this way; no output pixel goes through Lab.
 static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
 }
@@ -38,12 +38,6 @@ static inline double tone_lab_f(double t) {
 }
 static inline double tone_lab_finv(double t) {
     return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
-}
-
-// sRGB-encoded r, g, b in 0..1 -> L* (the luminance row of linear sRGB D65 -> XYZ).
-static inline double tone_rgb_to_L(double r, double g, double b) {
-    const double Y = 0.212671 * tone_srgb_decode(r) + 0.715160 * tone_srgb_decode(g) + 0.072169 * tone_srgb_decode(b);
-    return 116.0 * tone_lab_f(Y) - 16.0;
 }
 
 // f(L) without the final clamp to 0..100.
@@ -71,7 +65,14 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     ToneDescriptors d;
     if (n == 0) return d;
     std::vector<double> L(n);
-    for (size_t i = 0; i < n; ++i) L[i] = tone_rgb_to_L(rgb[3 * i] / 255.0, rgb[3 * i + 1] / 255.0, rgb[3 * i + 2] / 255.0);
+    // An 8-bit channel has 256 values: their sRGB decode is tabulated (the same doubles as decoding each pixel).
+    double decode[256];
+    for (int v = 0; v < 256; ++v) decode[v] = tone_srgb_decode(v / 255.0);
+    for (size_t i = 0; i < n; ++i) {
+        const double Y = 0.212671 * decode[rgb[3 * i]] + 0.715160 * decode[rgb[3 * i + 1]] +
+                         0.072169 * decode[rgb[3 * i + 2]];
+        L[i] = 116.0 * tone_lab_f(Y) - 16.0;
+    }
     std::sort(L.begin(), L.end());
     auto pct = [&](double p) {
         const double r = p / 100.0 * (double)(n - 1);
