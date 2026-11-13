@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "film_base_detect.h"
+#include "film_base_detector.h"
 
 #include <algorithm>
 #include <cmath>

@@ -30,7 +30,7 @@
 
 #include "dinov3_auto_solver.h"
 #include "dinov3_preprocess.h"
-#include "neg_pipeline.h"
+#include "profile_bundle.h"
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {

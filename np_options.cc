@@ -31,8 +31,8 @@
 #include "argparse/argparse.hpp"
 #include "embedded_data.h"
 #include "libraw/libraw.h"
-#include "pixel_shift_group.h"
 #include "np_input.h"
+#include "profile_bundle.h"
 
 // Four files of a 4-shot pixel shift: distinct, one group of four in shot order by the camera's group tags or, without
 // them, by their file counters. False with the error reported otherwise.
@@ -165,6 +165,15 @@ int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--list_profiles") == 0) {
       for (const std::string& key : list_embedded_bundles()) {
+        // Every bundle listed is one that loads: the build runs this after linking, so a bundle the parser rejects
+        // (profile_bundle.cc) fails the build instead of a conversion.
+        try {
+          ProfileBundle bundle;
+          load_embedded_bundle(key, bundle);
+        } catch (const std::exception& e) {
+          log_error("Built-in profile bundle %s cannot be read: %s\n", key.c_str(), e.what());
+          return 1;
+        }
         // Keys are "<Stock>-<camera>-<Light>".
         std::string stock = key.substr(0, key.find('-'));
         for (char& ch : stock) ch = (char)std::tolower((unsigned char)ch);
@@ -250,7 +259,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "positive: yellow, as in negicc-station). Reuses <output>.json when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
-  // A bundle conversion reads the film base from the scan (film_base_detect.h: the rebate, else the thinnest film), as
+  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film), as
   // negicc-station's Auto does; --film_base_rgb, which took it as numbers or from the rebate, is gone.
   // TODO: read the film base from an image (a capture of unexposed film, as negicc-station's Film Base tab does).
   parser.add_argument("--film_stock")

@@ -44,11 +44,10 @@
 
 #include "dinov3_auto_solver.h"
 #include "dinov3_engine.h"
-#include "film_base_detect.h"
+#include "film_base_detector.h"
 #include "flat_field.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
-#include "neg_pipeline.h"
 #include "np_options.h"
 #include "np_output.h"
 #include "profile_bundle.h"
@@ -212,7 +211,7 @@ struct Scan {
   int rot_cw = 0;
   bool hflip = false, vflip = false;
 
-  // The film base read from the scan (film_base_detect.h) for a bundle conversion, as negicc-station's Auto reads it
+  // The film base read from the scan (film_base_detector.h) for a bundle conversion, as negicc-station's Auto reads it
   // when no film base is given; not found: the bundle's.
   negicc::FilmBaseDetection film_base;
   const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }

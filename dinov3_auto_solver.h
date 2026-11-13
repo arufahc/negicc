@@ -20,9 +20,9 @@
 #include <string>
 #include <vector>
 
-#include "cfa_pipeline.h"
+#include "rgb_view.h"
 #include "dinov3_engine.h"
-#include "neg_pipeline.h"
+#include "profile_bundle.h"
 
 // Flags for pin_mask (manual argument overrides)
 constexpr unsigned PIN_E = 1 << 0;

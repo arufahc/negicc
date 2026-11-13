@@ -33,13 +33,13 @@
 #include <string>
 #include <vector>
 
-#include "cfa_pipeline.h"
+#include "rgb_view.h"
 #include "color_pipeline.h"
 #include "embedded_data.h"
 #include "nlohmann/json.hpp"
 #include "np_input.h"
 #include "np_output.h"
-#include "np_profile.h"
+#include "profile_bundle.h"
 
 void LibRawDeleter::operator()(LibRaw* p) const {
   if (!p) return;
@@ -1246,7 +1246,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.rolloff_iso = scan_iso;
   };
 
-  // The film base read from the scan for a bundle conversion (film_base_detect.h): from the whole half-size image
+  // The film base read from the scan for a bundle conversion (film_base_detector.h): from the whole half-size image
   // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
   // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the
   // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the

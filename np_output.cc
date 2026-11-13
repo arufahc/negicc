@@ -523,7 +523,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else {
     fb["film_base_rgb"] = sc.film_base_rgb;
   }
-  // Read from the scan (film_base_detect.h): the base in the half-size decode's units, the rebate patch sampled and
+  // Read from the scan (film_base_detector.h): the base in the half-size decode's units, the rebate patch sampled and
   // the frame detector's record.
   const bool rebate = d && d->found && d->source == "rebate";
   fb["decode_rgb"] = d && d->found ? num3(d->decode_rgb) : ordered_json(nullptr);

@@ -11,8 +11,8 @@
 //   Step 5 (Full export): The only step that allocates a cropped full-size RGB buffer, fusing grain-aware debayer
 //     (or 4x pixel-shift merge), crop/rotate/flip, and flat_divide.
 //   TODO: Upstream the matching CUDA kernels (kernels_cuda.cu) from negicc-station into negicc.
-#ifndef NEGICC_CFA_PIPELINE_H
-#define NEGICC_CFA_PIPELINE_H
+#ifndef NEGICC_RGB_VIEW_H
+#define NEGICC_RGB_VIEW_H
 
 #include <cstddef>
 #include <cstdint>
@@ -335,4 +335,4 @@ void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 
 }  // namespace negicc
 
-#endif  // NEGICC_CFA_PIPELINE_H
+#endif  // NEGICC_RGB_VIEW_H
