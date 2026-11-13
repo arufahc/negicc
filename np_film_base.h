@@ -23,8 +23,9 @@
 //
 // The region, when none is given, is found on the capture, which is seldom perfectly clean (dust, scratches, the
 // holder's edge, a sprocket hole, part of a picture):
-//   1. the central half of the frame (each way) is split into kBaseTileGrid x kBaseTileGrid tiles; each tile's median
-//      per channel and the spread of its green density (1.4826 x the median absolute deviation) are taken;
+//   1. the whole frame is split into square tiles, kBaseTileGrid along its longer side, small enough that a strip of
+//      rebate beside a picture holds whole tiles; each tile's median per channel and the spread of its green density
+//      (1.4826 x the median absolute deviation) are taken;
 //   2. tiles with clipped photosites are dropped (clipping is counted on the mosaic as recorded, before the flat
 //      field, which moves the levels), and tiles whose spread stands out: above kBaseTileMaxSpread and above
 //      kBaseSpreadFactor times the median tile's (dust, scratches, edges; a grainy film is uneven in every tile alike,
@@ -32,15 +33,20 @@
 //   3. tiles whose colour is not the film base's are dropped: through the crosstalk matrix, G/R and B/R must lie
 //      within kBaseColourTol (density) of the bundle's film base. Bare light beside the film is brighter than the
 //      base and not orange;
-//   4. of the rest, the brightest group is kept: going down from the brightest tile, the first whose green has at
-//      least kBaseMinTiles tiles within kBaseTileMargin (density) of it. The base is the thinnest film, so darker
-//      tiles are picture or shadow, whatever share of the frame they cover;
-//   5. the base is the median, per channel, of the kept tiles' medians.
-// With no such group the whole frame is tried the same way, then the thinnest film on the capture
-// (film_base_detector.h's statistics); with nothing usable, or a clipped result, the capture is refused.
+//   4. of the rest, the brightest group is kept: going down from the brightest tile, the first whose green has enough
+//      tiles within kBaseTileMargin (density) of it (kBaseMinTiles, and one tile in kBaseMinShare). The base is the
+//      thinnest film, so darker tiles are picture or shadow, whatever share of the frame they cover. The group is
+//      then taken again around its own median;
+//   5. of that group, the largest piece of touching tiles is kept when it is large enough: one stretch of film (a
+//      rebate strip) and not film of the same level elsewhere in the frame;
+//   6. the base is the median, per channel, of the kept tiles' medians.
+// With no such group the thinnest film on the capture is taken (film_base_detector.h's statistics); with nothing
+// usable, or a clipped result, the capture is refused.
 //
-// The thresholds were set on simulated captures (the sample scan's rebate levels and grain, with falloff, dust, a
-// scratch and a picture over part of the frame), not on real captures of unexposed film.
+// The thresholds of steps 2 to 4 were set on simulated captures. The tile size and steps 4 and 5 were set on seven
+// captures of Portra 400 frames with a rebate strip at one edge (2026-10-04), where the search agrees with the
+// station's hand-marked base to 0.005 density on five; on two it reads the strip on the other side of the picture,
+// which a region given by hand reads 0.01 to 0.03 density brighter than the marked one.
 
 #pragma once
 
@@ -48,8 +54,9 @@
 
 #include "flat_field.h"
 
-constexpr int kBaseTileGrid = 16;             // tiles each way (fewer on a capture too small for 8-pixel tiles)
-constexpr int kBaseMinTiles = 8;              // tiles that must agree
+constexpr int kBaseTileGrid = 96;             // square tiles along the longer side (fewer when they would be under 8 pixels)
+constexpr int kBaseMinTiles = 8;              // tiles that must agree, and at least ...
+constexpr int kBaseMinShare = 200;            // ... one tile in this many
 constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread up to which it is smooth whatever the rest
 constexpr double kBaseSpreadFactor = 1.5;     // ... and up to this many times the median tile's spread
 constexpr double kBaseTileMargin = 0.02;      // density: how far from the group's brightest tile a kept tile may lie
@@ -61,7 +68,7 @@ struct FilmBaseCapture {
   double decode_rgb[3] = {0.0, 0.0, 0.0};  // as the capture's half-size decode gives it, at the capture's exposure
   int roi[4] = {0, 0, 0, 0};               // the region read (x, y, w, h in sensor pixels): the given one, or the kept
                                            // tiles' bounding box
-  std::string roi_source;                  // "given", "tiles", "tiles_whole_frame" or "statistics"
+  std::string roi_source;                  // "given", "tiles" or "statistics"
   int tiles_kept = 0, tiles_total = 0;     // with the tiles
   double spread_density = 0.0;             // the spread of the kept tiles' green medians (a given region: of its pixels)
   double shutter_s = 0.0, iso = 0.0;       // the capture's exposure
