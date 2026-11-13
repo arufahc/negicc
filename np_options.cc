@@ -373,12 +373,13 @@ int parse_options(int ac, char* av[], Options& o) {
   // TODO: --flat from an image file (a RAW of the empty gate, as negicc-station's Flat Field tab captures), not only a
   // flat field .npz measured from one.
   parser.add_argument("--film_base")
-    .help("The film base: auto (default), or a capture of unexposed film, <file>[:x,y,w,h]. auto takes the base a "
-          "previous run read from a capture and kept in <output>.json (when the inputs are the same), else reads it "
-          "from the scan (the rebate, else the thinnest film). A capture is decoded as the scan is (flat field, "
-          "crosstalk correction) and scaled to the scan's exposure; x,y,w,h is the region to read in sensor pixels, "
-          "and without it the smooth, brightest part of the capture's centre is found. Needs a TriLED bundle and a "
-          "Sony CFA RAW.")
+    .help("The film base: auto (default), scan, or a capture of unexposed film, <file>[:x,y,w,h]. scan reads it from "
+          "the scan (the rebate, else the thinnest film). auto does the same, unless a previous run to this output "
+          "read the base from a capture and kept it in <output>.json, with the same inputs, flat field and crosstalk "
+          "correction: then that base is taken. A capture is decoded as the scan is (flat field, crosstalk "
+          "correction) and scaled to the scan's exposure; x,y,w,h is the region to read in sensor pixels, and "
+          "without it the smooth, brightest part of the capture's centre is found. Needs a TriLED bundle and a Sony "
+          "CFA RAW.")
     .default_value(std::string("auto"));
   parser.add_argument("--flat")
     .help("Scan flat-field .npz file (measured on the empty gate), applied in sensor coordinates.");
@@ -611,10 +612,11 @@ int parse_options(int ac, char* av[], Options& o) {
   {
     const std::string fb = parser.get<std::string>("--film_base");
     if (fb.empty()) {
-      log_error("--film_base takes auto or a capture of unexposed film, <file>[:x,y,w,h]\n");
+      log_error("--film_base takes auto, scan or a capture of unexposed film, <file>[:x,y,w,h]\n");
       return 1;
     }
-    if (fb != "auto") {
+    o.film_base_scan = fb == "scan";
+    if (fb != "auto" && fb != "scan") {
       o.film_base_file = fb;
       const size_t colon = fb.rfind(':');
       if (colon != std::string::npos && colon + 1 < fb.size()) {
@@ -623,7 +625,7 @@ int parse_options(int ac, char* av[], Options& o) {
         bool ok = items.size() == 4;
         for (int k = 0; ok && k < 4; ++k) ok = parse_number(items[k], v[k]) && v[k] == std::floor(v[k]);
         if (ok) {
-          if (v[0] < 0 || v[1] < 0 || v[2] <= 0 || v[3] <= 0) {
+          if (v[0] < 0 || v[1] < 0 || v[2] <= 0 || v[3] <= 0 || v[0] > 1e9 || v[1] > 1e9 || v[2] > 1e9 || v[3] > 1e9) {
             log_error("--film_base: the region x,y,w,h must lie on the sensor with a positive size (got %s)\n",
                       fb.substr(colon + 1).c_str());
             return 1;

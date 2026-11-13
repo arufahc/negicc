@@ -32,8 +32,8 @@ void density_encode_in_place(uint16_t* pixels, int width, int height, int channe
   const double inv_base = 1.0 / base_level;
   const double offset = enc.offset, scale = enc.scale;
   const long max_code = enc.max_code();
-  uint64_t low[3] = {0, 0, 0}, high[3] = {0, 0, 0};
-  #pragma omp parallel for schedule(static) reduction(+ : low[:3], high[:3])
+  uint64_t low[3] = {0, 0, 0}, high[3] = {0, 0, 0}, floor[3] = {0, 0, 0};
+  #pragma omp parallel for schedule(static) reduction(+ : low[:3], high[:3], floor[:3])
   for (int j = 0; j < height; ++j) {
     uint16_t* row = pixels + (size_t)j * width * channels;
     for (int i = 0; i < width; ++i) {
@@ -42,7 +42,9 @@ void density_encode_in_place(uint16_t* pixels, int width, int height, int channe
       double d[3];
       for (int c = 0; c < 3; ++c) {
         const double v = (double)merged[c * 3] * r + (double)merged[c * 3 + 1] * g + (double)merged[c * 3 + 2] * b;
-        d[c] = -std::log10(std::max(v * inv_base, kDensityMinT));
+        const double t = v * inv_base;
+        if (!(t > kDensityMinT)) ++floor[c];
+        d[c] = -std::log10(std::max(t, kDensityMinT));
       }
       for (int c = 0; c < 3; ++c) {
         const double dens = m[c * 3] * d[0] + m[c * 3 + 1] * d[1] + m[c * 3 + 2] * d[2];
@@ -61,6 +63,7 @@ void density_encode_in_place(uint16_t* pixels, int width, int height, int channe
   for (int c = 0; c < 3; ++c) {
     clip.low[c] = low[c];
     clip.high[c] = high[c];
+    clip.floor[c] = floor[c];
   }
   clip.pixels = (uint64_t)width * (uint64_t)height;
 }
@@ -95,6 +98,7 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
     const DensityClip& c = *rec.clip;
     j["clipped_pixels"] = {{"below_code_0", {c.low[0], c.low[1], c.low[2]}},
                            {"above_max_code", {c.high[0], c.high[1], c.high[2]}},
+                           {"at_density_floor", {c.floor[0], c.floor[1], c.floor[2]}},
                            {"pixels", c.pixels}};
   }
   j["tool"] = rec.tool_version;
@@ -170,9 +174,16 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
     if (extra.size() % 2) extra.push_back(0);
     return at;
   };
+  // An ASCII value with its terminating NUL; four bytes or fewer are stored in the entry itself (TIFF 6.0).
   auto ascii = [&](uint16_t tag, const std::string& s) {
-    const uint32_t at = add_extra(s.c_str(), s.size() + 1);
-    entries.push_back({tag, 2, (uint32_t)s.size() + 1, at});
+    const uint32_t n = (uint32_t)s.size() + 1;
+    if (n <= 4) {
+      uint32_t v = 0;
+      for (uint32_t k = 0; k < n; ++k) v |= (uint32_t)(uint8_t)s[k] << (8 * k);   // the bytes in file order
+      entries.push_back({tag, 2, n, v});
+      return;
+    }
+    entries.push_back({tag, 2, n, add_extra(s.c_str(), n)});
   };
   const uint16_t bps[3] = {16, 16, 16};
   const uint32_t res[2] = {300, 1};

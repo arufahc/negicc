@@ -86,22 +86,38 @@ Each pixel is divided by the film base, its logarithm is taken, and a 3×3 matri
 into the measure asked for. The matrices were fitted from the LED's measured spectrum, the film's dye spectra and
 the measure's published response curves, and are part of the profile set (`density_matrices` in `bundle.json`,
 with the spectrum under `light_source`). They are computed from datasheet spectra and have not been checked against
-a densitometer. A 3×3 matrix fits Status M to about 0.01 density and the two printing densities to about 0.03.
+a densitometer.
+
+How well a 3×3 matrix reproduces each measure over the film's range, as each bundle records it
+(`fit_rms_density`, `fit_max_density`), across the three stocks:
+
+| Measure | RMS error (density) | Worst case (density) |
+| :--- | :--- | :--- |
+| Status M | up to 0.011 | up to 0.13, in green |
+| RP 180 printing density | up to 0.009 in red and green, up to 0.044 in blue | up to 0.25, in blue |
+| Academy Printing Density | up to 0.025 in red, 0.005 in green, 0.031 in blue | up to 0.31, in blue |
+
+The matrices also assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is
+not modelled, and could add a few hundredths of density.
 
 Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
 its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
 
-Density takes no bracket, search, curve fit, contrast step or look option, and no white-LED scan.
+Density takes no bracket, search, curve fit, contrast step or look option, and no white-LED scan. The sidecar
+counts the pixels that ran off either end of the code range, and those too dense to measure.
 
 ### The film base from a capture
 
 `--film_base base.ARW` reads the film base from a capture of unexposed film, for a picture or for density. The
 capture is decoded as the scan is and scaled to the scan's exposure. It need not be clean: the brightest smooth part
-of its centre is found, leaving out dust, scratches, holder edges and clipped areas. `--film_base base.ARW:x,y,w,h`
-gives the region in sensor pixels. It needs an RGB-LED profile set and a Sony RAW.
+of its centre is found, leaving out dust, scratches, clipped areas, and anything that is not the colour of film
+base, such as bare light beside the film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
+needs an RGB-LED profile set and a Sony RAW. Give the same `--flat` as for the scan.
 
-A later run to the same output takes that base back from `<output>.json`, so the capture is not needed again.
-Without a capture the base is read from the scan itself, as before.
+A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
+`<output>.json`, so the capture is not needed again. `--film_base scan` reads the base from the scan itself
+instead. Without a capture, and with no earlier capture recorded for the output, the base is read from the scan
+as before.
 
 ## How it works
 
@@ -241,7 +257,7 @@ If one of them is yours and you want it removed, open an issue.
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
-| `--film_base auto\|<file>[:x,y,w,h]` | The film base: read from the scan (default), or from a capture of unexposed film, over a region in sensor pixels when given. |
+| `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |

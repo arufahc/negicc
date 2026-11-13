@@ -25,13 +25,22 @@
 // holder's edge, a sprocket hole, part of a picture):
 //   1. the central half of the frame (each way) is split into kBaseTileGrid x kBaseTileGrid tiles; each tile's median
 //      per channel and the spread of its green density (1.4826 x the median absolute deviation) are taken;
-//   2. tiles with clipped pixels are dropped (the base is the brightest film there is, so a clipped tile reads low),
-//      and tiles whose spread is above kBaseTileMaxSpread (dust, scratches, edges);
-//   3. of the rest, the tiles within kBaseTileMargin (density) of the 90th-percentile tile's green are kept: the base
-//      is the thinnest film, so darker tiles are picture or shadow;
-//   4. the base is the median, per channel, of the kept tiles' medians.
-// With fewer than kBaseMinTiles kept the whole frame is tried the same way, then the thinnest film on the capture
-// (film_base_detector.h's statistics); with nothing usable the capture is refused.
+//   2. tiles with clipped photosites are dropped (clipping is counted on the mosaic as recorded, before the flat
+//      field, which moves the levels), and tiles whose spread stands out: above kBaseTileMaxSpread and above
+//      kBaseSpreadFactor times the median tile's (dust, scratches, edges; a grainy film is uneven in every tile alike,
+//      which the median allows for);
+//   3. tiles whose colour is not the film base's are dropped: through the crosstalk matrix, G/R and B/R must lie
+//      within kBaseColourTol (density) of the bundle's film base. Bare light beside the film is brighter than the
+//      base and not orange;
+//   4. of the rest, the brightest group is kept: going down from the brightest tile, the first whose green has at
+//      least kBaseMinTiles tiles within kBaseTileMargin (density) of it. The base is the thinnest film, so darker
+//      tiles are picture or shadow, whatever share of the frame they cover;
+//   5. the base is the median, per channel, of the kept tiles' medians.
+// With no such group the whole frame is tried the same way, then the thinnest film on the capture
+// (film_base_detector.h's statistics); with nothing usable, or a clipped result, the capture is refused.
+//
+// The thresholds were set on simulated captures (the sample scan's rebate levels and grain, with falloff, dust, a
+// scratch and a picture over part of the frame), not on real captures of unexposed film.
 
 #pragma once
 
@@ -41,8 +50,10 @@
 
 constexpr int kBaseTileGrid = 16;             // tiles each way (fewer on a capture too small for 8-pixel tiles)
 constexpr int kBaseMinTiles = 8;              // tiles that must agree
-constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread above which it is not smooth
-constexpr double kBaseTileMargin = 0.02;      // density: how far from the 90th-percentile tile a kept tile may lie
+constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread up to which it is smooth whatever the rest
+constexpr double kBaseSpreadFactor = 1.5;     // ... and up to this many times the median tile's spread
+constexpr double kBaseTileMargin = 0.02;      // density: how far from the group's brightest tile a kept tile may lie
+constexpr double kBaseColourTol = 0.25;       // density: how far a tile's G/R and B/R may lie from the bundle's base
 constexpr double kBaseClipFraction = 0.001;   // a tile (or a given region) with more clipped pixels is clipped
 
 struct FilmBaseCapture {
@@ -58,9 +69,10 @@ struct FilmBaseCapture {
 };
 
 // Reads the film base from the capture at path. roi: the region in sensor pixels, or null to find it. flat: the scan's
-// flat field (null for none). crosstalk: the 3x3 row-major crosstalk matrix (null for none). scan_shutter_s, scan_iso:
-// the scan's exposure. False with err on a file that cannot be read, a capture that is not a Sony CFA RAW, a region
-// off the sensor or clipped, or a capture with no usable film.
+// flat field (null for none). crosstalk: the 3x3 row-major crosstalk matrix (null for none). expected_base: the
+// bundle's film base through the crosstalk matrix, whose colour the tiles are held to (null: no colour test).
+// scan_shutter_s, scan_iso: the scan's exposure. False with err on a file that cannot be read, a capture that is not a
+// Sony CFA RAW, a region off the sensor or clipped, or a capture with no usable film.
 bool read_film_base_capture(const std::string& path, const int* roi, const negicc::FlatFieldPtr& flat,
-                            const double* crosstalk, double scan_shutter_s, double scan_iso, FilmBaseCapture& out,
-                            std::string& err);
+                            const double* crosstalk, const double* expected_base, double scan_shutter_s,
+                            double scan_iso, FilmBaseCapture& out, std::string& err);

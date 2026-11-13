@@ -233,7 +233,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--vflip", 0, false},          {"-o", "--output", 1, true},          {"", "--dino", 1, false},
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
-      {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},
+      {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -381,6 +381,20 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     }
     if (!fp.ok || st["size"].get<uintmax_t>() != fp.size || st["crc32"].get<uint32_t>() != fp.crc) {
       return why = o.files[i] + " is not the file it converted", false;
+    }
+  }
+
+  // A film base capture is part of what was converted: the same file, not only the same name.
+  if (!o.film_base_file.empty()) {
+    const auto fbj = j.value("film_base", nlohmann::ordered_json());
+    const auto cap = fbj.is_object() ? fbj.value("capture", nlohmann::ordered_json()) : nlohmann::ordered_json();
+    const auto cf = cap.is_object() ? cap.value("file", nlohmann::ordered_json()) : nlohmann::ordered_json();
+    uintmax_t size = 0;
+    uint32_t crc = 0;
+    if (!cf.is_object() || !cf.contains("size") || !cf["size"].is_number_unsigned() || !cf.contains("crc32") ||
+        !cf["crc32"].is_number_unsigned() || !file_fingerprint(o.film_base_file, size, crc) ||
+        cf["size"].get<uintmax_t>() != size || cf["crc32"].get<uint32_t>() != crc) {
+      return why = o.film_base_file + " is not the film base capture it converted with", false;
     }
   }
 
@@ -1111,31 +1125,51 @@ static float given_station_e(const Options& o, const Scan& scan, int target_idx)
   return scan.bracket_exposure[target_idx].e_center;
 }
 
+// What a film base capture was read with, which a later run must share to take its base from the sidecar: the flat
+// field (its file's size and CRC-32; null for none) and the crosstalk matrix.
+static nlohmann::ordered_json film_base_read_with(const Options& o, const Setup& s) {
+  nlohmann::ordered_json j;
+  if (o.flat.empty()) {
+    j["flat"] = nullptr;
+  } else {
+    uintmax_t size = 0;
+    uint32_t crc = 0;
+    const bool ok = file_fingerprint(o.flat, size, crc);
+    j["flat"] = ok ? nlohmann::ordered_json({{"size", size}, {"crc32", crc}}) : nlohmann::ordered_json("unreadable");
+  }
+  nlohmann::ordered_json xt = nlohmann::ordered_json::array();
+  for (int i = 0; i < 9; ++i) xt.push_back(s.bundle.has_crosstalk ? s.bundle.crosstalk_matrix_d[i] : (i % 4 == 0 ? 1.0 : 0.0));
+  j["crosstalk"] = xt;
+  j["bundle"] = s.bundle.key;
+  return j;
+}
+
 // --film_base auto: the film base a previous run of this output read from a capture (its <output>.json has
 // film_base.source "capture", or "sidecar" when it took it the same way), when that run converted these input files
-// (their names, sizes and CRC-32s). The scan's own base is then not read. A base read from the scan is not taken from
-// the sidecar: reading it again gives it bit for bit, while the sidecar's ten digits would not.
-static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
-  const std::string sidecar_path = o.output + ".json";
-  if (!is_regular_file(sidecar_path)) return;
-  std::ifstream ifs(sidecar_path);
-  if (!ifs.is_open()) return;
-  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
-  if (!j.is_object() || j.value("schema", "") != "negicc.neg_process.sidecar/1") return;
+// (their names, sizes and CRC-32s) with this flat field and this crosstalk correction, which the base was read
+// through. The scan's own base is then not read. A base read from the scan is not taken from the sidecar: reading it
+// again gives it bit for bit, while the sidecar's ten digits would not. A sidecar that cannot be read is left alone.
+static void load_sidecar_film_base_checked(const Options& o, Setup& s, Scan& scan, const std::string& sidecar_path,
+                                           const nlohmann::ordered_json& j) {
+  if (!j.is_object() || !j.contains("schema") || !j["schema"].is_string() ||
+      j["schema"].get<std::string>() != "negicc.neg_process.sidecar/1") {
+    return;
+  }
   if (!j.contains("film_base") || !j["film_base"].is_object()) return;
   const auto& fb = j["film_base"];
-  const std::string source = fb.value("source", "");
+  if (!fb.contains("source") || !fb["source"].is_string()) return;
+  const std::string source = fb["source"].get<std::string>();
   if (source != "capture" && source != "sidecar") return;
   std::string why;
-  const auto rgb = fb.value("film_base_rgb", nlohmann::ordered_json());
+  const auto rgb = fb.contains("film_base_rgb") ? fb["film_base_rgb"] : nlohmann::ordered_json();
   if (!rgb.is_array() || rgb.size() != 3 || !rgb[0].is_number() || !rgb[1].is_number() || !rgb[2].is_number() ||
       !(rgb[0].get<double>() > 0.0) || !(rgb[1].get<double>() > 0.0) || !(rgb[2].get<double>() > 0.0)) {
     why = "it records no positive film base";
   }
-  const auto inputs = j.value("inputs", nlohmann::ordered_json());
-  const auto files = inputs.is_object() ? inputs.value("raw_files", nlohmann::ordered_json()) : nlohmann::ordered_json();
-  const auto stats = inputs.is_object() ? inputs.value("raw_file_stats", nlohmann::ordered_json())
-                                        : nlohmann::ordered_json();
+  const auto inputs = j.contains("inputs") ? j["inputs"] : nlohmann::ordered_json();
+  const auto files = inputs.is_object() && inputs.contains("raw_files") ? inputs["raw_files"] : nlohmann::ordered_json();
+  const auto stats = inputs.is_object() && inputs.contains("raw_file_stats") ? inputs["raw_file_stats"]
+                                                                              : nlohmann::ordered_json();
   if (why.empty() && (!files.is_array() || files.size() != o.files.size() || !stats.is_array() ||
                       stats.size() != o.files.size())) {
     why = "it converted other files";
@@ -1155,6 +1189,19 @@ static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
       }
     }
   }
+  // The base is in the film base space of the run that read it: through its flat field and crosstalk correction.
+  const auto cap = fb.contains("capture") && fb["capture"].is_object() ? fb["capture"] : nlohmann::ordered_json();
+  if (why.empty()) {
+    const nlohmann::ordered_json now = film_base_read_with(o, s);
+    const auto was = cap.is_object() && cap.contains("read_with") ? cap["read_with"] : nlohmann::ordered_json();
+    if (!was.is_object()) {
+      why = "it does not record the flat field and crosstalk correction the base was read with";
+    } else if (!was.contains("flat") || was["flat"] != now["flat"]) {
+      why = "the base was read with another flat field";
+    } else if (!was.contains("crosstalk") || was["crosstalk"] != now["crosstalk"]) {
+      why = "the base was read with another crosstalk correction";
+    }
+  }
   if (!why.empty()) {
     log_info("Not taking the film base of %s: %s; reading it from the scan\n", sidecar_path.c_str(), why.c_str());
     return;
@@ -1164,13 +1211,29 @@ static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
   scan.given_base.found = true;
   scan.given_base.source = "sidecar";
   for (int c = 0; c < 3; ++c) scan.given_base.rgb[c] = rgb[c].get<double>();
-  const auto dec = fb.value("decode_rgb", nlohmann::ordered_json());
+  const auto dec = fb.contains("decode_rgb") ? fb["decode_rgb"] : nlohmann::ordered_json();
   if (dec.is_array() && dec.size() == 3 && dec[0].is_number() && dec[1].is_number() && dec[2].is_number()) {
     for (int c = 0; c < 3; ++c) scan.given_base.decode_rgb[c] = dec[c].get<double>();
   }
-  if (fb.contains("capture") && fb["capture"].is_object()) scan.base_capture_json = fb["capture"].dump();
-  log_info("Film base (a previous run's capture, from %s): R=%.1f G=%.1f B=%.1f\n", sidecar_path.c_str(),
-           scan.given_base.rgb[0], scan.given_base.rgb[1], scan.given_base.rgb[2]);
+  scan.base_capture_json = cap.dump();
+  log_info("Film base (a previous run's capture, from %s; --film_base scan reads the scan's own): R=%.1f G=%.1f "
+           "B=%.1f\n", sidecar_path.c_str(), scan.given_base.rgb[0], scan.given_base.rgb[1], scan.given_base.rgb[2]);
+}
+
+static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
+  const std::string sidecar_path = o.output + ".json";
+  if (!is_regular_file(sidecar_path)) return;
+  std::ifstream ifs(sidecar_path);
+  if (!ifs.is_open()) return;
+  const nlohmann::ordered_json j = nlohmann::ordered_json::parse(ifs, nullptr, false);
+  try {
+    load_sidecar_film_base_checked(o, s, scan, sidecar_path, j);
+  } catch (const std::exception& e) {  // a field of the wrong type: the sidecar gives no base
+    scan.has_given_base = false;
+    scan.base_capture_json.clear();
+    log_info("Not taking the film base of %s: it cannot be read (%s); reading it from the scan\n",
+             sidecar_path.c_str(), e.what());
+  }
 }
 
 int decode(const Options& o, Setup& s, Scan& scan) {
@@ -1200,8 +1263,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const double* xt = s.bundle.has_crosstalk ? s.bundle.crosstalk_matrix_d : nullptr;
     std::string err;
     log_info("Loading film base capture %s\n", o.film_base_file.c_str());
+    const double* expected = s.bundle.has_film_base ? s.bundle.film_base_avg_d : nullptr;
     if (!read_film_base_capture(o.film_base_file, o.film_base_roi_given ? o.film_base_roi : nullptr, s.flat_field, xt,
-                                scan_shutter_s, scan_iso, scan.base_capture, err)) {
+                                expected, scan_shutter_s, scan_iso, scan.base_capture, err)) {
       log_error("--film_base: %s\n", err.c_str());
       return 1;
     }
@@ -1230,14 +1294,37 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     cj["shutter_s"] = cap.shutter_s;
     cj["iso"] = cap.iso;
     cj["exposure_scale"] = cap.exposure_scale;
+    {
+      uintmax_t size = 0;
+      uint32_t crc = 0;
+      cj["file"] = file_fingerprint(o.film_base_file, size, crc)
+                       ? nlohmann::ordered_json({{"size", size}, {"crc32", crc}})
+                       : nlohmann::ordered_json(nullptr);
+    }
+    cj["read_with"] = film_base_read_with(o, s);
     scan.base_capture_json = cj.dump();
+    // A base far from the bundle's own, at the scan's exposure, is probably not a capture of this film's base.
+    if (s.bundle.has_film_base) {
+      const double base_t = s.bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(s.bundle.film_base_shutter);
+      const double ratio = (scan_shutter_s * scan_iso) / (base_t * (double)s.bundle.film_base_iso);
+      double worst = 0.0;
+      for (int c = 0; c < 3; ++c) {
+        const double want = s.bundle.film_base_avg_d[c] * ratio;
+        if (want > 0.0) worst = std::max(worst, std::fabs(std::log2(cap.rgb[c] / want)));
+      }
+      if (worst > 2.0) {
+        log_warn("the film base read from %s is %.1f stops from the profile bundle's own at this exposure: check that "
+                 "it is a capture of this film's unexposed base under the same light\n",
+                 o.film_base_file.c_str(), worst);
+      }
+    }
     log_info("Film base (capture, %s, region %d,%d,%d,%d%s): R=%.1f G=%.1f B=%.1f (exposure scale %.4f)\n",
              cap.roi_source.c_str(), cap.roi[0], cap.roi[1], cap.roi[2], cap.roi[3],
              cap.tiles_total ? (", " + std::to_string(cap.tiles_kept) + " of " + std::to_string(cap.tiles_total) +
                                 " tiles").c_str()
                              : "",
              cap.rgb[0], cap.rgb[1], cap.rgb[2], cap.exposure_scale);
-  } else if (s.is_bundle && !s.white_light) {
+  } else if (s.is_bundle && !s.white_light && !o.film_base_scan) {
     load_sidecar_film_base(o, s, scan);
   }
 
@@ -2399,6 +2486,22 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     density_encode_in_place(img.pixels, img.width, img.height, img.channels, d.merged, d.base_level, dm.m, d.encoding,
                             d.clip);
     const double px = (double)std::max<uint64_t>(1, d.clip.pixels);
+    {
+      // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.
+      double low = 0.0, floor = 0.0;
+      for (int k = 0; k < 3; ++k) {
+        low = std::max(low, (double)d.clip.low[k] / px);
+        floor = std::max(floor, (double)d.clip.floor[k] / px);
+      }
+      if (low > 0.05) {
+        log_warn("%.1f%% of the pixels are thinner than the film base by more than the encoding holds: the film base "
+                 "is probably too dark (see the sidecar's film_base)\n", 100.0 * low);
+      }
+      if (floor > 0.05) {
+        log_warn("%.1f%% of the pixels are at the density floor (%.1f): the film base is probably too bright, or the "
+                 "scan is underexposed\n", 100.0 * floor, -std::log10(kDensityMinT));
+      }
+    }
     log_info("Density (%s, %d bits, code = %d + %d D): clamped below 0 %.3f%% %.3f%% %.3f%%, above %d %.3f%% %.3f%% "
              "%.3f%% of the pixels (R G B)\n",
              density_measure_name(o.density_measure), d.encoding.bits, d.encoding.offset, d.encoding.scale,

@@ -57,9 +57,12 @@ inline DensityEncoding density_encoding(bool dpx) {
 
 // Pixels whose code was clamped, per channel (R, G, B): below 0 (film much thinner than the base) and above the
 // largest code (film denser than the encoding reaches).
+// floor: pixels whose transmittance in a light channel was at or below kDensityMinT, so that the density of that
+// channel was held at its floor before the matrix (R, G, B of the light).
 struct DensityClip {
   uint64_t low[3] = {0, 0, 0};
   uint64_t high[3] = {0, 0, 0};
+  uint64_t floor[3] = {0, 0, 0};
   uint64_t pixels = 0;
 };
 

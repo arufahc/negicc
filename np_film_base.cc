@@ -50,7 +50,10 @@ struct RegionStats {
   size_t n = 0;
 };
 
-RegionStats region_stats(const negicc::RgbView& view, int x0, int y0, int w, int h, float clip) {
+// view: the capture with the flat field, which the levels are read from. raw: the same mosaic without it, which the
+// clipping is counted on (a photosite clips at the white level as recorded, whatever the flat field then makes of it).
+RegionStats region_stats(const negicc::RgbView& view, const negicc::RgbView& raw, int x0, int y0, int w, int h,
+                         float clip) {
   RegionStats st;
   // At most about 4096 samples a region, on a regular lattice.
   const int step = std::max(1, (int)std::ceil(std::sqrt((double)w * h / 4096.0)));
@@ -58,9 +61,10 @@ RegionStats region_stats(const negicc::RgbView& view, int x0, int y0, int w, int
   size_t clipped = 0;
   for (int y = y0; y < y0 + h; y += step) {
     for (int x = x0; x < x0 + w; x += step) {
-      uint16_t px[3];
+      uint16_t px[3], rpx[3];
       view.sample(x, y, px);
-      if (px[0] >= clip || px[1] >= clip || px[2] >= clip) ++clipped;
+      raw.sample(x, y, rpx);
+      if (rpx[0] >= clip || rpx[1] >= clip || rpx[2] >= clip) ++clipped;
       for (int c = 0; c < 3; ++c) ch[c].push_back((float)px[c]);
     }
   }
@@ -80,9 +84,25 @@ RegionStats region_stats(const negicc::RgbView& view, int x0, int y0, int w, int
   return st;
 }
 
-// The tiles of the window (x0, y0, w, h) of the half-size view: true with the base and the kept tiles' record when at
-// least kBaseMinTiles agree.
-bool base_from_tiles(const negicc::RgbView& view, int x0, int y0, int w, int h, float clip, FilmBaseCapture& out) {
+// Whether a tile's colour is the film base's: its medians through the crosstalk matrix, G/R and B/R against the
+// expected base's (np_film_base.h step 3).
+bool base_coloured(const double med[3], const double* crosstalk, const double* expected) {
+  if (!expected || !(expected[0] > 0.0) || !(expected[1] > 0.0) || !(expected[2] > 0.0)) return true;
+  double v[3];
+  for (int r = 0; r < 3; ++r) {
+    v[r] = 0.0;
+    for (int c = 0; c < 3; ++c) v[r] += (crosstalk ? crosstalk[r * 3 + c] : (r == c ? 1.0 : 0.0)) * med[c];
+  }
+  if (!(v[0] > 0.0) || !(v[1] > 0.0) || !(v[2] > 0.0)) return false;
+  const double dg = std::log10((v[1] / v[0]) / (expected[1] / expected[0]));
+  const double db = std::log10((v[2] / v[0]) / (expected[2] / expected[0]));
+  return std::fabs(dg) <= kBaseColourTol && std::fabs(db) <= kBaseColourTol;
+}
+
+// The tiles of the window (x0, y0, w, h) of the half-size view: true with the base and the kept tiles' record when a
+// group of at least kBaseMinTiles agrees.
+bool base_from_tiles(const negicc::RgbView& view, const negicc::RgbView& raw, int x0, int y0, int w, int h, float clip,
+                     const double* crosstalk, const double* expected, FilmBaseCapture& out) {
   struct Tile { int x, y, w, h; RegionStats st; };
   std::vector<Tile> tiles;
   // kBaseTileGrid tiles each way, fewer on a small capture so that a tile stays at least 8 pixels wide and high.
@@ -95,28 +115,40 @@ bool base_from_tiles(const negicc::RgbView& view, int x0, int y0, int w, int h, 
       t.w = x0 + (int)((long long)w * (i + 1) / gx) - t.x;
       t.h = y0 + (int)((long long)h * (j + 1) / gy) - t.y;
       if (t.w < 4 || t.h < 4) continue;
-      t.st = region_stats(view, t.x, t.y, t.w, t.h, clip);
+      t.st = region_stats(view, raw, t.x, t.y, t.w, t.h, clip);
       tiles.push_back(t);
     }
   }
   out.tiles_total = (int)tiles.size();
   out.tiles_kept = 0;
-  std::vector<const Tile*> smooth;
+  // Unclipped tiles with light in every channel; then the smooth ones among them, by the median tile's spread.
+  std::vector<const Tile*> lit;
+  std::vector<float> spreads;
   for (const Tile& t : tiles) {
-    if (t.st.n && t.st.clipped <= kBaseClipFraction && t.st.spread <= kBaseTileMaxSpread && t.st.med[1] > 0.0) {
-      smooth.push_back(&t);
+    if (t.st.n && t.st.clipped <= kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 && t.st.med[2] > 0.0) {
+      lit.push_back(&t);
+      spreads.push_back((float)t.st.spread);
     }
   }
-  if ((int)smooth.size() < kBaseMinTiles) return false;
-  std::vector<float> greens;
-  for (const Tile* t : smooth) greens.push_back((float)t->st.med[1]);
-  std::sort(greens.begin(), greens.end());
-  const double g90 = greens[std::min(greens.size() - 1, (size_t)std::floor(0.9 * (double)(greens.size() - 1) + 0.5))];
-  std::vector<const Tile*> kept;
-  for (const Tile* t : smooth) {
-    if (std::fabs(std::log10(t->st.med[1] / g90)) <= kBaseTileMargin) kept.push_back(t);
+  if ((int)lit.size() < kBaseMinTiles) return false;
+  const double spread_limit = std::max(kBaseTileMaxSpread, kBaseSpreadFactor * median_of(spreads));
+  std::vector<const Tile*> smooth;
+  for (const Tile* t : lit) {
+    if (t->st.spread <= spread_limit && base_coloured(t->st.med, crosstalk, expected)) smooth.push_back(t);
   }
-  if ((int)kept.size() < kBaseMinTiles) return false;
+  if ((int)smooth.size() < kBaseMinTiles) return false;
+  // The brightest group: from the brightest tile down, the first with kBaseMinTiles tiles within the margin of it.
+  std::sort(smooth.begin(), smooth.end(), [](const Tile* a, const Tile* b) { return a->st.med[1] > b->st.med[1]; });
+  std::vector<const Tile*> kept;
+  for (size_t i = 0; i < smooth.size() && kept.empty(); ++i) {
+    const double ref = smooth[i]->st.med[1];
+    std::vector<const Tile*> group;
+    for (const Tile* t : smooth) {
+      if (std::fabs(std::log10(t->st.med[1] / ref)) <= kBaseTileMargin) group.push_back(t);
+    }
+    if ((int)group.size() >= kBaseMinTiles) kept = group;
+  }
+  if (kept.empty()) return false;
   std::vector<float> ch[3];
   int bx0 = kept[0]->x, by0 = kept[0]->y, bx1 = bx0, by1 = by0;
   double lo = 1e30, hi = -1e30;
@@ -143,8 +175,8 @@ bool base_from_tiles(const negicc::RgbView& view, int x0, int y0, int w, int h, 
 }  // namespace
 
 bool read_film_base_capture(const std::string& path, const int* roi, const negicc::FlatFieldPtr& flat,
-                            const double* crosstalk, double scan_shutter_s, double scan_iso, FilmBaseCapture& out,
-                            std::string& err) {
+                            const double* crosstalk, const double* expected_base, double scan_shutter_s,
+                            double scan_iso, FilmBaseCapture& out, std::string& err) {
   out = FilmBaseCapture{};
   if (!is_regular_file(path)) {
     err = "no such file: " + path;
@@ -184,10 +216,13 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
   }
   const negicc::RgbView view =
       negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr, flat_args, flat_tables);
+  // The same mosaic without the flat field, for the clipping (region_stats).
+  const negicc::RgbView raw_view = negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr);
   const float clip = 0.98f * white_level;
 
   if (roi) {
-    if (roi[0] < 0 || roi[1] < 0 || roi[2] <= 0 || roi[3] <= 0 || roi[0] + roi[2] > src_w || roi[1] + roi[3] > src_h) {
+    if (roi[0] < 0 || roi[1] < 0 || roi[2] <= 0 || roi[3] <= 0 || (long long)roi[0] + roi[2] > src_w ||
+        (long long)roi[1] + roi[3] > src_h) {
       err = "the film base region " + std::to_string(roi[0]) + "," + std::to_string(roi[1]) + "," +
             std::to_string(roi[2]) + "," + std::to_string(roi[3]) + " is off the capture's sensor (" +
             std::to_string(src_w) + "x" + std::to_string(src_h) + ")";
@@ -196,7 +231,7 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     const int hx = roi[0] / 2, hy = roi[1] / 2;
     const int hw = std::max(1, std::min(half_w - hx, (roi[0] + roi[2] + 1) / 2 - hx));
     const int hh = std::max(1, std::min(half_h - hy, (roi[1] + roi[3] + 1) / 2 - hy));
-    const RegionStats st = region_stats(view, hx, hy, hw, hh, clip);
+    const RegionStats st = region_stats(view, raw_view, hx, hy, hw, hh, clip);
     if (!st.n || st.med[0] <= 0.0 || st.med[1] <= 0.0 || st.med[2] <= 0.0) {
       err = "the film base region of " + path + " holds no light";
       return false;
@@ -213,23 +248,27 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     if (st.spread > kBaseTileMaxSpread) {
       log_warn("the film base region of %s is not smooth (green density spread %.4f)\n", path.c_str(), st.spread);
     }
-  } else if (base_from_tiles(view, half_w / 4, half_h / 4, half_w / 2, half_h / 2, clip, out)) {
+  } else if (base_from_tiles(view, raw_view, half_w / 4, half_h / 4, half_w / 2, half_h / 2, clip, crosstalk,
+                             expected_base, out)) {
     out.roi_source = "tiles";
-  } else if (base_from_tiles(view, 0, 0, half_w, half_h, clip, out)) {
+  } else if (base_from_tiles(view, raw_view, 0, 0, half_w, half_h, clip, crosstalk, expected_base, out)) {
     out.roi_source = "tiles_whole_frame";
   } else {
-    // The thinnest film on the capture, as a scan's base is read when it shows no rebate.
-    negicc::FilmBaseDetection det;
-    if (!negicc::detect_film_base(view, nullptr, 0, 0, nullptr, det) || !det.found) {
-      err = "no usable film base on " + path + " (clipped, or no smooth film)";
+    // The thinnest film on the capture, as a TriLED scan's base is read when it shows no rebate; on the mosaic as
+    // recorded it must not be clipped.
+    float thin[3] = {0.0f, 0.0f, 0.0f}, thin_raw[3] = {0.0f, 0.0f, 0.0f};
+    negicc::thinnest_film_base(view, thin);
+    negicc::thinnest_film_base(raw_view, thin_raw);
+    if (!(thin[0] > 1.0f) || !(thin[1] > 1.0f) || !(thin[2] > 1.0f)) {
+      err = "no usable film base on " + path + " (no smooth film)";
       return false;
     }
-    if (det.decode_rgb[0] >= clip || det.decode_rgb[1] >= clip || det.decode_rgb[2] >= clip) {
+    if (thin_raw[0] >= clip || thin_raw[1] >= clip || thin_raw[2] >= clip) {
       err = "the film base capture " + path + " is clipped: capture the film base at a shorter exposure";
       return false;
     }
     log_warn("the film base capture %s has no smooth region; its thinnest film is taken\n", path.c_str());
-    for (int c = 0; c < 3; ++c) out.decode_rgb[c] = det.decode_rgb[c];
+    for (int c = 0; c < 3; ++c) out.decode_rgb[c] = thin[c];
     out.roi[0] = out.roi[1] = 0;
     out.roi[2] = src_w;
     out.roi[3] = src_h;

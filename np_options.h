@@ -93,7 +93,8 @@ struct Options {
   // The film base (--film_base): auto (the default: a base capture's values kept in <output>.json by a previous run,
   // else read from the scan), or a capture of unexposed film, with the region to read it over (x y w h in sensor
   // pixels) when given after a colon; without one the region is found on the capture (np_film_base.h).
-  std::string film_base_file;                  // empty: auto
+  std::string film_base_file;                  // empty: auto, or scan
+  bool film_base_scan = false;                 // --film_base scan: read from the scan, whatever <output>.json holds
   bool film_base_roi_given = false;
   int film_base_roi[4] = {0, 0, 0, 0};
 
