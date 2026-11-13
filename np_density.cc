@@ -101,6 +101,32 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
                            {"at_density_floor", {c.floor[0], c.floor[1], c.floor[2]}},
                            {"pixels", c.pixels}};
   }
+  if (rec.has_balance && rec.balance_e > 0.0 && rec.balance_g > 0.0 && rec.balance_b > 0.0) {
+    // The picture conversion multiplies the light's green and blue channels by g and b to balance the frame; in
+    // density that is an offset per channel. Through the measure's matrix, and with their mean taken out so that the
+    // file's overall level stays, the offsets are the colour balance alone. The exposure E is recorded and left to
+    // the grade: it is relative to the picture conversion's film profile, which a density file does not use.
+    const double light[3] = {0.0, -std::log10(rec.balance_g), -std::log10(rec.balance_b)};
+    double measure[3] = {light[0], light[1], light[2]};
+    if (rec.matrix) {
+      const double* m = rec.matrix->m;
+      for (int c = 0; c < 3; ++c) measure[c] = m[c * 3] * light[0] + m[c * 3 + 1] * light[1] + m[c * 3 + 2] * light[2];
+    }
+    const double mean = (measure[0] + measure[1] + measure[2]) / 3.0;
+    for (double& v : measure) v -= mean;
+    j["suggested_balance"] = {
+        {"from", "the picture conversion's parameter search on this frame; not applied to the densities"},
+        {"exposure", rec.balance_e},
+        {"gain_g", rec.balance_g},
+        {"gain_b", rec.balance_b},
+        {"bracket", rec.balance_target},
+        {"density_offset", {measure[0], measure[1], measure[2]}},
+        {"code_offset",
+         {measure[0] * rec.encoding.scale, measure[1] * rec.encoding.scale, measure[2] * rec.encoding.scale}},
+        {"use", "D + density_offset (code + code_offset) has the colour balance the picture conversion gives this "
+                "frame; the offsets sum to zero, so the overall level is unchanged and the exposure is left to the "
+                "grade"}};
+  }
   j["tool"] = rec.tool_version;
   return j.dump(indent);
 }
@@ -306,7 +332,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
     const size_t slash = path.find_last_of("/\\");
     put_str(p + 36, 100, slash == std::string::npos ? path : path.substr(slash + 1));
   }
-  put_str(p + 136, 24, date_time(0, ':'));
+  put_str(p + 136, 24, date_time(info.timestamp, ':'));   // the capture's time, as the TIFF's DateTime
   put_str(p + 160, 100, info.software);
   be32(p + 660, 0xffffffffu);      // not encrypted
   // Image information (640 bytes).

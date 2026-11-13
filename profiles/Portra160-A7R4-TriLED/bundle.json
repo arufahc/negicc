@@ -20230,24 +20230,24 @@
    "samples": 3000,
    "colour_sigma": 0.15,
    "seed": 0,
-   "hostname": "vm"
+   "hostname": "wp0"
   },
   "status_m": {
    "matrix": [
     [
      1.27333,
-     -0.07515,
-     0.0078
+     -0.06585,
+     0.00706
     ],
     [
      -0.02441,
-     1.11467,
-     -0.1001
+     0.97677,
+     -0.09059
     ],
     [
      0.04052,
-     -0.00077,
-     0.97957
+     -0.00068,
+     0.88652
     ]
    ],
    "target_curves": "Status M (digitised)",
@@ -20265,24 +20265,41 @@
     2.48,
     2.99,
     3.33
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.27333,
+     -0.07515,
+     0.0078
+    ],
+    [
+     -0.02441,
+     1.11467,
+     -0.1001
+    ],
+    [
+     0.04052,
+     -0.00077,
+     0.97957
+    ]
    ]
   },
   "rp180_printing_density": {
    "matrix": [
     [
      1.55074,
-     -0.11398,
-     0.01797
+     -0.09988,
+     0.01626
     ],
     [
      -0.04549,
-     1.22634,
-     -0.12578
+     1.07463,
+     -0.11384
     ],
     [
      0.42238,
-     0.03077,
-     0.48818
+     0.02696,
+     0.4418
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
@@ -20300,24 +20317,41 @@
     2.97,
     3.36,
     2.18
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.55074,
+     -0.11398,
+     0.01797
+    ],
+    [
+     -0.04549,
+     1.22634,
+     -0.12578
+    ],
+    [
+     0.42238,
+     0.03077,
+     0.48818
+    ]
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
      1.46808,
-     -0.05329,
-     0.03856
+     -0.0467,
+     0.03489
     ],
     [
      -0.08721,
-     1.21561,
-     -0.10923
+     1.06522,
+     -0.09886
     ],
     [
      0.12083,
-     0.00272,
-     0.88411
+     0.00238,
+     0.80012
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
@@ -20335,6 +20369,45 @@
     2.85,
     3.23,
     2.91
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.46808,
+     -0.05329,
+     0.03856
+    ],
+    [
+     -0.08721,
+     1.21561,
+     -0.10923
+    ],
+    [
+     0.12083,
+     0.00272,
+     0.88411
+    ]
+   ]
+  },
+  "neutral_calibration": {
+   "reference": "the film's datasheet Status M curves of a neutral exposure (the dye file's density_curves)",
+   "patches": "the grey scale of the profile's targets, every exposure bracket",
+   "patches_used": 140,
+   "light_density_factors": [
+    1.0,
+    0.8763,
+    0.905
+   ],
+   "exposure_offsets_log": [
+    -0.006,
+    -0.218
+   ],
+   "green_blue_rms_before": [
+    0.0489,
+    0.0408
+   ],
+   "green_blue_rms_after": [
+    0.0142,
+    0.023
    ]
   }
  },
@@ -20342,9 +20415,9 @@
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "b10aa99ce523fc2ce19775b512b46cea7cfe558024d07eba5b434c2d4dba04f7",
+  "source_sha256": "c2191bdacdd6359aad66311f3d9a9d09445b7a68ffc0c51ede9d3e98d052c623",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "7d122ce94d7bfb86c98e1baf83b6f47acd03ddf7"
+  "station_commit": "80ba02b9a6499f426152c0f65418486557f3613c"
  }
 }

@@ -83,6 +83,12 @@ struct DensityRecord {
   const DensityMatrix* matrix = nullptr;
   const ProfileBundle* bundle = nullptr;
   const DensityClip* clip = nullptr;  // null before the conversion
+  // The balance the picture conversion's parameter search found for this frame (E, g, b as -E, --gain_g and --gain_b
+  // take them, and the bracket it chose). It is not applied to the densities; the file records the colour part
+  // (g and b) as offsets a grading tool can add (density_metadata_json: suggested_balance).
+  bool has_balance = false;
+  double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
+  std::string balance_target;
   std::string tool_version;
 };
 // The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.

@@ -20213,24 +20213,24 @@
    "samples": 3000,
    "colour_sigma": 0.15,
    "seed": 0,
-   "hostname": "vm"
+   "hostname": "wp0"
   },
   "status_m": {
    "matrix": [
     [
      1.24841,
-     -0.07602,
-     0.00747
+     -0.05826,
+     0.00771
     ],
     [
      -0.03504,
-     1.1137,
-     -0.08219
+     0.85345,
+     -0.0849
     ],
     [
      0.007,
-     -0.02619,
-     1.03113
+     -0.02007,
+     1.06506
     ]
    ],
    "target_curves": "Status M (digitised)",
@@ -20248,24 +20248,41 @@
     2.77,
     3.06,
     3.59
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.24841,
+     -0.07602,
+     0.00747
+    ],
+    [
+     -0.03504,
+     1.1137,
+     -0.08219
+    ],
+    [
+     0.007,
+     -0.02619,
+     1.03113
+    ]
    ]
   },
   "rp180_printing_density": {
    "matrix": [
     [
      1.50603,
-     -0.12272,
-     0.00878
+     -0.09404,
+     0.00907
     ],
     [
      -0.03172,
-     1.18472,
-     -0.09765
+     0.90787,
+     -0.10086
     ],
     [
      0.30062,
-     0.04853,
-     0.52837
+     0.03719,
+     0.54576
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
@@ -20283,24 +20300,41 @@
     3.3,
     3.34,
     2.28
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.50603,
+     -0.12272,
+     0.00878
+    ],
+    [
+     -0.03172,
+     1.18472,
+     -0.09765
+    ],
+    [
+     0.30062,
+     0.04853,
+     0.52837
+    ]
    ]
   },
   "academy_printing_density": {
    "matrix": [
     [
      1.4204,
-     -0.07097,
-     0.02038
+     -0.05438,
+     0.02105
     ],
     [
      -0.06952,
-     1.18419,
-     -0.0902
+     0.90746,
+     -0.09317
     ],
     [
      0.08163,
-     0.00939,
-     0.90179
+     0.0072,
+     0.93146
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
@@ -20318,6 +20352,45 @@
     3.11,
     3.23,
     3.04
+   ],
+   "spectral_fit_matrix": [
+    [
+     1.4204,
+     -0.07097,
+     0.02038
+    ],
+    [
+     -0.06952,
+     1.18419,
+     -0.0902
+    ],
+    [
+     0.08163,
+     0.00939,
+     0.90179
+    ]
+   ]
+  },
+  "neutral_calibration": {
+   "reference": "the film's datasheet Status M curves of a neutral exposure (the dye file's density_curves)",
+   "patches": "the grey scale of the profile's targets, every exposure bracket",
+   "patches_used": 148,
+   "light_density_factors": [
+    1.0,
+    0.7663,
+    1.0329
+   ],
+   "exposure_offsets_log": [
+    -0.502,
+    -0.221
+   ],
+   "green_blue_rms_before": [
+    0.1039,
+    0.0341
+   ],
+   "green_blue_rms_after": [
+    0.0244,
+    0.0335
    ]
   }
  },
@@ -20325,9 +20398,9 @@
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "72d9f09fbc7295a82d9a356004ad9dee86da30926506508890fd545e34602d40",
+  "source_sha256": "b418919a5c12bcbdd4d69c99a75f11300c643e0f6d18cbf604f22c504eae1336",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "7d122ce94d7bfb86c98e1baf83b6f47acd03ddf7"
+  "station_commit": "80ba02b9a6499f426152c0f65418486557f3613c"
  }
 }
