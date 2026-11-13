@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "color_pipeline.h"
@@ -96,6 +97,12 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 // The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
 constexpr int kToneTableSize = 8192;
 std::vector<float> tone_table(const ToneCurve& q);
+
+// Which of kToneClipShares the plan keeps, as an index: 0 (the designed moves) when the designed curve clips no more
+// than kToneClipAllowance beyond white_before (the conversion's own white clipping); else the largest share that does
+// not; else the share that clips least (the larger on a tie). white_after_of(k) gives the white clipping with the
+// curve planned at kToneClipShares[k]; it is called for k = 0 first and for no share after the one kept.
+int tone_pick_clip_share(double white_before, const std::function<double(int)>& white_after_of);
 
 // The share of a sparse sample of the unconverted image img (every 8th pixel each way) that the conversion through pc
 // and matrix clips white (a channel at the 16-bit maximum) and black (every channel 0): with pc as it is (q null), or

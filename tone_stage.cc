@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 // ---- Stage 4, the tone stage (tone_stage.h) ----
@@ -249,42 +250,42 @@ void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, con
     if (black) *black = n ? (double)kc / (double)n : 0.0;
 }
 
+int tone_pick_clip_share(double white_before, const std::function<double(int)>& white_after_of) {
+    // The designed curve, else the largest of the fixed shares within the allowance, else the least clipping of them
+    // (the larger share on a tie). Fixed shares need no monotone clipping (a bisection does) and cost at most four more
+    // curves.
+    const int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
+    int best = 0;
+    double best_after = white_after_of(0);
+    if (best_after <= white_before + kToneClipAllowance) return 0;
+    for (int k = 1; k < n; ++k) {
+        const double after = white_after_of(k);
+        if (after <= white_before + kToneClipAllowance) return k;
+        if (after < best_after) {
+            best = k;
+            best_after = after;
+        }
+    }
+    return best;
+}
+
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const float* matrix,
                               const uint16_t* img, int w, int h, int stride, double white_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
                               double* share) {
-    auto after_of = [&](const ToneCurve& c) {
+    constexpr int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
+    ToneCurve curves[n];
+    ToneTargets tts[n];
+    curves[0] = designed;
+    tts[0] = designed_targets;
+    const int k = tone_pick_clip_share(white_before, [&](int i) {
+        if (i > 0) curves[i] = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[i], &tts[i]);
         double after = 0.0;
-        tone_clip_sample(pc, matrix, img, w, h, stride, &c, &after, nullptr);
+        tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &after, nullptr);
         return after;
-    };
-    // The designed curve, else the largest of the fixed shares within the allowance, else the least clipping of them
-    // (the larger share on a tie). Fixed shares need no monotone clipping (a bisection does) and cost at most four more
-    // curves.
-    ToneCurve best = designed;
-    ToneTargets best_t = designed_targets;
-    double best_after = after_of(designed), best_share = 1.0;
-    *share = 1.0;
-    *targets = designed_targets;
-    if (best_after <= white_before + kToneClipAllowance) return designed;
-    for (size_t k = 1; k < sizeof(kToneClipShares) / sizeof(kToneClipShares[0]); ++k) {
-        ToneTargets t;
-        const ToneCurve c = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[k], &t);
-        const double after = after_of(c);
-        if (after <= white_before + kToneClipAllowance) {
-            *share = kToneClipShares[k];
-            *targets = t;
-            return c;
-        }
-        if (after < best_after) {
-            best = c;
-            best_t = t;
-            best_after = after;
-            best_share = kToneClipShares[k];
-        }
-    }
-    *share = best_share;
-    *targets = best_t;
-    return best;
+    });
+    *share = kToneClipShares[k];
+    *targets = tts[k];
+    return curves[k];
 }
