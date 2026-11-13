@@ -66,4 +66,8 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
 // (backbone.onnx). Null when the build has none.
 const EmbeddedFile* find_embedded_backbone(bool trt_engine);
 
+struct ProfileBundle;  // profile_bundle.h
+// Loads the built-in profile bundle with this key (embedded_bundle_key). False when none has that key.
+bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle);
+
 #endif  // EMBEDDED_DATA_H

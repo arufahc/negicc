@@ -38,4 +38,4 @@ Do **not** embed machine-specific absolute paths (e.g., `/home/user/Projects/...
 
 ## Code Style Rules
 
-- Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`, `raw_info.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by `negicc-station` (`cfa_pipeline.h`, `cfa_pipeline.cc`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`, `input_curves.h`, `film_base_detect.h`, and `film_base_detect.cc`) use `namespace negicc`.
+- Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`, `np_input.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by `negicc-station` (`rgb_view.h`, `rgb_view.cc`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`, `input_curves.h`, `film_base_detector.h`, and `film_base_detector.cc`) use `namespace negicc`.

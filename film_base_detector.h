@@ -35,7 +35,7 @@
 
 #include <string>
 
-#include "cfa_pipeline.h"
+#include "rgb_view.h"
 #include "film_frame_detector.h"
 
 namespace negicc {

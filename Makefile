@@ -10,7 +10,7 @@
 PYTHON ?= python3
 CMAKE ?= cmake
 
-.PHONY: all lib libraw deps onnxruntime neg_process raw_info dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -58,10 +58,6 @@ $(shell mkdir -p bin_out; printf '%s\n' "$(LIBRAW_LDLIBS)" | cmp -s - bin_out/li
         printf '%s\n' "$(LIBRAW_LDLIBS)" > bin_out/libraw.ldlibs)
 
 libraw: $(LIBRAW_LIB)
-
-raw_info: raw_info.cc $(LIBRAW_LIB) $(ZLIB_LIB)
-	mkdir -p bin_out
-	$(CXX) -o bin_out/raw_info raw_info.cc -I3rd_party $(LIBRAW_INC) $(LIBRAW_LIB) $(ZLIB_LIB) $(LIBRAW_LDLIBS) -fopenmp
 
 # ----------------------------------------------------------------------
 # Little-CMS 2 and zlib, pinned by the 3rd_party/lcms2 (2.14) and 3rd_party/zlib (1.3) submodules and built here as
@@ -262,7 +258,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
 DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_trt_runner.o bin_out/dinov3_auto_solver.o \
-              bin_out/flat_field.o bin_out/cfa_pipeline.o bin_out/film_frame_detector.o bin_out/film_base_detect.o bin_out/tone_stage.o \
+              bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o bin_out/film_base_detector.o bin_out/tone_stage.o \
               bin_out/profile_bundle.o bin_out/multi_target_optimizer.o
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
@@ -273,7 +269,7 @@ bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h color_pipe
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_preprocess.cc -o $@
 
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h cfa_pipeline.h color_pipeline.h flat_field.h film_frame_detector.h neg_pipeline.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
@@ -281,20 +277,20 @@ bin_out/flat_field.o: flat_field.cc flat_field.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c flat_field.cc -o $@
 
-bin_out/cfa_pipeline.o: cfa_pipeline.cc cfa_pipeline.h color_pipeline.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
+bin_out/rgb_view.o: rgb_view.cc rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -c cfa_pipeline.cc -o $@
+	$(CXX) $(DINOV3_CXXFLAGS) -c rgb_view.cc -o $@
 
 # The TensorRT runners with USE_CUDA=1 (which defines NEGICC_USE_CUDA), their stubs otherwise.
 bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_engine.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_trt_runner.cc -o $@
 
-bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h cfa_pipeline.h color_pipeline.h flat_field.h film_frame_detector.h neg_pipeline.h dinov3_auto_solver.h $(BUILD_STAMP)
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h dinov3_auto_solver.h np_log.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h dinov3_preprocess.h cfa_pipeline.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h neg_pipeline.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h dinov3_preprocess.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -317,9 +313,9 @@ bin_out/tone_stage.o: tone_stage.cc tone_stage.h color_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c tone_stage.cc -o $@
 
-bin_out/film_base_detect.o: film_base_detect.cc film_base_detect.h cfa_pipeline.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
+bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_view.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_base_detect.cc -o $@
+	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_base_detector.cc -o $@
 
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
@@ -386,13 +382,7 @@ $(shell mkdir -p bin_out; printf '%s\n' $(EMBED_FILES) > $(EMBED_MANIFEST).tmp; 
             rm -f $(EMBED_MANIFEST).tmp; \
         fi)
 
-# neg_process throws on a bundle it cannot read, so the bundles are checked before they are embedded: every bracket
-# needs a shutter speed shutter_to_seconds (profile_bundle.cc) can read.
-bin_out/.bundles_checked: $(filter %/bundle.json,$(EMBED_FILES)) $(EMBED_MANIFEST) check_profile_bundles.py | bin_out
-	$(PYTHON) check_profile_bundles.py $(filter %/bundle.json,$(EMBED_FILES))
-	touch $@
-
-bin_out/embedded_data.S: $(EMBED_FILES) $(EMBED_MANIFEST) bin_out/.bundles_checked Makefile $(BUILD_STAMP) | bin_out
+bin_out/embedded_data.S: $(EMBED_FILES) $(EMBED_MANIFEST) Makefile $(BUILD_STAMP) | bin_out
 	$(file > $@,$(foreach i,$(EMBED_IDX),$(call EMBED_FILE_ASM,$(i),$(word $(i),$(EMBED_FILES))))$(EMBED_TABLE_ASM))
 
 bin_out/embedded_data_files.o: bin_out/embedded_data.S
@@ -407,10 +397,10 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 # neg_process.cc is, so moving code between them leaves its arithmetic as it was.
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
               $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
-NP_SRCS = np_options.cc np_pipeline.cc np_profile.cc np_output.cc np_input.cc
+NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
-NP_HDRS = $(wildcard np_*.h) neg_pipeline.h cfa_pipeline.h color_pipeline.h flat_field.h \
-          dinov3_auto_solver.h film_frame_detector.h film_base_detect.h pixel_shift_group.h profile_bundle.h \
+NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
+          dinov3_auto_solver.h film_frame_detector.h film_base_detector.h profile_bundle.h \
           multi_target_optimizer.h input_curves.h dinov3_engine.h white_light_balance.h embedded_data.h tone_stage.h \
           3rd_party/tiff_head.h
 
@@ -434,6 +424,8 @@ neg_process: bin_out/neg_process
 bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
+	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
 
 # The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
 # transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.
@@ -450,9 +442,9 @@ dinov3_engine:
 clean: clean_lib
 
 clean_lib:
-	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* bin_out/.bundles_checked $(EMBED_MANIFEST)
+	rm -f bin_out/*.o bin_out/*.a bin_out/*.S bin_out/.use_cuda_* $(EMBED_MANIFEST)
 
 clean_all: clean_lib
 	rm -rf bin_out/libraw bin_out/libraw.a bin_out/libraw.ldlibs bin_out/.libraw_jpeg_* bin_out/lcms2 bin_out/zlib \
 	       bin_out/libjpeg bin_out/libtiff bin_out/onnxruntime bin_out/libonnxruntime.a
-	rm -f bin_out/raw_info bin_out/neg_process
+	rm -f bin_out/neg_process

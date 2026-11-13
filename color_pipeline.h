@@ -19,7 +19,7 @@
 //      convert_pixel: the output code value in [0, 1]
 //
 // A backend that adds a stage writes it here as a NEGICC_HD function and calls it from these convert_pixel_*
-// functions; per-pixel kernels (CPU loops in cfa_pipeline.cc, CUDA kernels in negicc-station) only call them.
+// functions; per-pixel kernels (CPU loops in rgb_view.cc, CUDA kernels in negicc-station) only call them.
 #ifndef NEGICC_COLOR_PIPELINE_H
 #define NEGICC_COLOR_PIPELINE_H
 

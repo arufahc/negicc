@@ -22,7 +22,7 @@
 #include <functional>
 #include <vector>
 
-#include "cfa_pipeline.h"
+#include "rgb_view.h"
 #include "dinov3_engine.h"
 #include "input_curves.h"
 #include "profile_bundle.h"
@@ -261,7 +261,7 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
 // bracket target_idx (second) at the search's E, g and b (ParamSearchResult::params, the
 // station's): the 99.5% point of the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's
 // last step measures the same on its half-size frame; neg_process measures every bundle conversion's there too, so
-// given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detect.h),
+// given values reproduce it. q995 gets the point. film_base_rgb: a film base read from this scan (film_base_detector.h),
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,

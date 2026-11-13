@@ -173,3 +173,18 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
 const EmbeddedFile* find_embedded_backbone(bool trt_engine) {
   return find_embedded_file(trt_engine ? "models/dinov3-small/backbone.engine" : "models/dinov3-small/backbone.onnx");
 }
+
+bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle) {
+  std::string dir;
+  const EmbeddedFile* f = find_embedded_bundle(key, dir);
+  if (!f) return false;
+  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+    const EmbeddedFile* e = find_embedded_file(dir + "/" + name);
+    if (!e) return false;
+    out.assign(e->data, e->data + e->size);
+    return true;
+  };
+  load_profile_bundle_from_memory((const char*)f->data, f->size, std::string("[built-in] ") + f->name, read_file,
+                                  bundle);
+  return true;
+}

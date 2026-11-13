@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "dinov3_preprocess.h"
-#include "neg_pipeline.h"
+#include "profile_bundle.h"
 
 static constexpr double TOL_PARAM = 0.02;
 static constexpr double TOL_REL_ERR = 0.015;

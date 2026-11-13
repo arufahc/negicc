@@ -22,9 +22,67 @@
 #include <vector>
 #include <lcms2.h>
 
-#include "neg_pipeline.h"
-#include "cfa_pipeline.h"
-#include "dinov3_auto_solver.h"
+#include "color_pipeline.h"
+#include "rgb_view.h"
+
+struct SolverConfig;  // dinov3_auto_solver.h
+
+// --------------------------------------------------------------------------------------------------------------------
+// The film profile as the host holds it (the parsed tables and the pointers into them), the output encodings and the
+// shared pipeline's configuration built from a profile. Every pixel stage lives once, in color_pipeline.h (namespace
+// negicc); these are what the host needs around it.
+// --------------------------------------------------------------------------------------------------------------------
+
+using Rgb = negicc::Rgb;
+using Lab = negicc::Lab;
+
+// neg_process's output encodings: the two the shared pipeline encodes, and two that bypass its encoding stage.
+enum OutputEncoding : int {
+  ENCODE_SRGB = negicc::ENCODE_SRGB,                // sRGB transfer curve, with the highlight shoulder
+  ENCODE_SRGB_LINEAR = negicc::ENCODE_SRGB_LINEAR,  // linear-light sRGB primaries
+  ENCODE_CUSTOM = 2,                                // PCS XYZ through Little-CMS into an output ICC profile
+  ENCODE_NONE = 3                                   // the corrected camera RGB, no film profile applied
+};
+
+// The film profile's AToB0 pipeline (negicc::ProfileData) with host defaults: no profile, identity matrix.
+struct ProfileData : negicc::ProfileData {
+  ProfileData()
+      : negicc::ProfileData{0, {nullptr, nullptr, nullptr}, {0, 0, 0}, {nullptr, nullptr, nullptr}, {0, 0, 0}, 0,
+                            {1, 0, 0, 0, 1, 0, 0, 0, 1}, {0, 0, 0}, nullptr, {0, 0, 0}} {}
+};
+
+// A parsed film profile: the tables ProfileData points into.
+struct ParsedFilmProfile {
+  ProfileData data;
+  std::vector<float> in_trc[3];
+  std::vector<float> out_trc[3];
+  std::vector<float> clut;
+
+  // Points data at this object's tables (after a copy or a move).
+  void rebind_pointers() {
+    for (int c = 0; c < 3; ++c) {
+      data.in_trc[c] = in_trc[c].empty() ? nullptr : in_trc[c].data();
+      data.out_trc[c] = out_trc[c].empty() ? nullptr : out_trc[c].data();
+    }
+    data.clut = clut.empty() ? nullptr : clut.data();
+  }
+};
+
+// The shared pipeline's configuration for a profile, knee and shoulder. Built once per conversion or search
+// iteration, never per pixel: set_shoulder() solves the shoulder's knee.
+inline negicc::PipelineConfig make_pipeline_config(const ProfileData& prof, float knee, float shoulder_x_hi = 1.0f,
+                                                   int encoding = ENCODE_SRGB) {
+  negicc::PipelineConfig cfg{};
+  cfg.profile = prof;
+  cfg.knee = knee;
+  cfg.encoding = encoding;
+  negicc::set_shoulder(cfg, shoulder_x_hi);
+  return cfg;
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// The profile bundle: a film stock's brackets, each with its film profile.
+// --------------------------------------------------------------------------------------------------------------------
 
 // Default minimum target bracket index to consider (skips extreme highlight overexposure brackets, e.g. +2EV, +1.5EV)
 static constexpr int kDefaultMinTargetIdx = 2;
@@ -150,5 +208,52 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
 
 // Target selection without DINOv3 (picks feasible target minimizing |fill_ratio - 0.85|)
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx = kDefaultMinTargetIdx);
+
+// --------------------------------------------------------------------------------------------------------------------
+// Profiles
+// neg_process's profiles: resolving a profile path, and loading an ICC film profile, or a profile bundle JSON.
+// --------------------------------------------------------------------------------------------------------------------
+
+bool is_directory(const std::string& path);
+bool is_regular_file(const std::string& path);
+// The path of a profile argument: as given, else under profiles/ (and a few historical locations).
+std::string resolve_profile_path(const std::string& input_path);
+// Loads an ICC film profile (-p with a single ICC profile, for research).
+bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof);
+// Loads the negicc-station profile bundle JSON a -p argument names (as given or under profiles/), or the bundle.json
+// of a split-bundle directory (profiles/<Key>). False when the argument is not a bundle (an ICC profile).
+bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle);
+// Reads an ICC profile file into a malloc'ed buffer (*prof_out, *size): 0 on success, -1 otherwise.
+int read_profile(const std::string& prof_name, unsigned** prof_out, unsigned* size);
+
+// --------------------------------------------------------------------------------------------------------------------
+// Input matrix and shoulder
+// neg_process's conversion: the input matrix (crosstalk correction, film base scale, exposure and gains) and the
+// highlight shoulder's record.
+// --------------------------------------------------------------------------------------------------------------------
+
+// The soft knee of the highlight compression: fixed, as the station's Auto (multi_target_optimizer.cc AUTO_KNEE).
+constexpr float kKnee = 0.95f;
+
+// The highlight roll-off (color_pipeline.h's shoulder) as the sidecar records it (tone.shoulder*): measured for every
+// bundle conversion (multi_target_optimizer.h measure_rolloff_x_hi), off with an ICC profile. Only the sRGB output
+// applies it.
+struct ShoulderInfo {
+  float x_hi = 1.0f;                 // 1 is off
+  std::string source = "off";        // off | rolloff
+  bool has_q995 = false;
+  float q995 = 0.0f;                 // the frame's 99.5% point of the pre-shoulder max channel
+  bool has_knee = false;
+  float knee = 1.0f;                 // the linear knee x_k
+  bool active() const { return x_hi > negicc::kShoulderOff; }
+};
+
+// The input matrix: the crosstalk rows r_coef, g_coef and b_coef, each scaled by its channel's film base ratio
+// (profile_film_base_rgb / film_base_rgb) and by global_exposure_comp, gain_g and gain_b as negicc-station applies
+// them, into merged_matrix (3x3, row-major). Prints the rows.
+void adjust_correction_matrix(const std::vector<float>& r_coef, const std::vector<float>& g_coef,
+                              const std::vector<float>& b_coef, float global_exposure_comp, float gain_g,
+                              float gain_b, const std::vector<int>& profile_film_base_rgb,
+                              const std::vector<int>& film_base_rgb, float* merged_matrix);
 
 #endif  // PROFILE_BUNDLE_H

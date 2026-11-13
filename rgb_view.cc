@@ -1,4 +1,4 @@
-#include "cfa_pipeline.h"
+#include "rgb_view.h"
 
 #include <algorithm>
 #include <cmath>

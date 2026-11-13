@@ -24,7 +24,7 @@
 #include "film_frame_detector.h"
 #include "input_curves.h"
 #include "np_input.h"
-#include "np_profile.h"
+#include "profile_bundle.h"
 
 struct Options {
   int argc = 0;
@@ -97,5 +97,5 @@ struct Options {
 };
 
 // Parses and checks the command line into o: 0 to convert, 1 on an error (reported), -1 when there is nothing more to
-// do (--list_profiles, which it prints).
+// do (--list_profiles, which it prints after loading each built-in bundle; one that cannot be read is an error).
 int parse_options(int ac, char* av[], Options& o);
