@@ -343,24 +343,86 @@ Stages 1 and 2 write the density file, and nothing after them changes a pixel of
 ## The spectral data
 
 All of it is on 380 to 780 nm at 1 nm. None of it is read per frame except by the print's colour table (stage 8),
-which uses what the print material's file already holds.
+which uses what the print material's file already holds. "Specific to" says what a change of equipment or material
+replaces.
 
-| Data | Source | Used by | Kept in |
-|---|---|---|---|
-| The scanning light's spectrum, split into its three LED bands at 495 and 578 nm | A spectrometer reading of the light | A | `bundle.json`, `light_source` |
-| The film's three dye spectra and base, and its neutral scale as dye amounts against log exposure | spektrafilm's film profile | A, B | Not shipped: used when the profile set and the print material's file are built |
-| The response curves of Status M, RP 180 (SMPTE RP 180, Table 1) and APD (SMPTE ST 2065-2) | The standards | A, B | Not shipped: used when the profile set and the print material's file are built |
-| The print material's spectral sensitivity per layer | spektrafilm's print profile | B | Not shipped: used when the print material's file is built |
-| The printer lamp | A 3200 K blackbody, no heat filter | B | A constant |
-| The print material's curve per layer, its three dye spectra and base | spektrafilm's print profile | B, then 7 and 8 | `prints/<print>.json` |
-| The CIE 1931 2° observer, and D50 (paper) or D55 (print film) as the viewing light | The CIE tables | B, then 8 | `prints/<print>.json`, as their product |
+| Data | Specific to | Source | Used by | Kept in |
+|---|---|---|---|---|
+| The scanning light's spectrum, split into its three LED bands at 495 and 578 nm | The light | A spectrometer reading of the light | A | `bundle.json`, `light_source` |
+| The film's three dye spectra and base, and its neutral scale as dye amounts against log exposure | The film stock | spektrafilm's film profile | A, B | Not shipped: used when the profile set and the print material's file are built |
+| The response curves of Status M, RP 180 (SMPTE RP 180, Table 1) and APD (SMPTE ST 2065-2) | Nothing: the standards | The standards | A, B | Not shipped: used when the profile set and the print material's file are built |
+| The print material's spectral sensitivity per layer | The print material | spektrafilm's print profile | B | Not shipped: used when the print material's file is built |
+| The printer lamp | Nothing: a choice | A 3200 K blackbody, no heat filter | B | A constant |
+| The print material's curve per layer, its three dye spectra and base | The print material | spektrafilm's print profile | B, then 7 and 8 | `prints/<print>.json` |
+| The CIE 1931 2° observer, and D50 (paper) or D55 (print film) as the viewing light | Nothing: the CIE tables and a choice of light | The CIE tables | B, then 8 | `prints/<print>.json`, as their product |
 
 Of these, `bundle.json` holds the light's spectrum and nothing else spectral: not the film's dye spectra and not
 the response curves. It names the film model its matrices were fitted on (`density_matrices.film_dye_spectra`) and
 holds the fitted matrices.
 
-Measured on the scanner and not spectral: the crosstalk correction, the flat field, the film base, and the chart's
-grey steps at each of the seven exposure brackets, which are in `bundle.json`.
+**The camera has no spectral data here.** Its response curves are not used. What stands in for them is the crosstalk
+correction `C`, which is specific to the camera and the light together: it is measured by capturing each LED alone,
+and it turns the camera's RGB into the three LED channels. After it, each channel is taken to be one LED band, and
+the density matrices are fitted on the bands, with no camera in them. `C` could instead be computed from the
+camera's response curves and the light's spectrum; the next section compares the two.
+
+Measured on the scanner and not spectral, all specific to the camera and the light: the crosstalk correction, the
+flat field, the film base (also specific to the roll), and the chart's grey steps at each of the seven exposure
+brackets (also specific to the film stock), which are in `bundle.json`.
+
+## The crosstalk correction, measured and computed
+
+Each camera pixel sees all three LEDs: the green pixel takes in nearly half as much of the blue LED as the blue
+pixel does. The correction `C` undoes that.
+
+![The camera's response curves and the light's three LEDs](samples/crosstalk_spectra.png)
+
+- **Measured**, as `neg_process` uses it: each LED is captured alone, the response of the three pixels to it is
+  read, each LED's column is scaled to its own pixel, and the matrix is inverted. It does not depend on how bright
+  each LED is.
+- **Computed**: the camera's published response curves (Sony ILCE-7RM4, from the Academy's `rawtoaces-data`) times
+  the spectrum of each LED. The light was measured with all three LEDs on, so the three are first separated by
+  fitting each as two skewed Gaussians (the sum fits the measurement to 0.27 % of its peak, 1.26 % at worst).
+
+![Crosstalk terms, measured against computed](samples/crosstalk_measured_vs_computed.png)
+
+| Leak | Measured | Computed | Computed / measured |
+|---|---|---|---|
+| Green pixel, red LED | 0.168 | 0.170 | 1.01 |
+| Blue pixel, red LED | 0.017 | 0.016 | 0.95 |
+| Red pixel, green LED | 0.089 | 0.079 | 0.89 |
+| Blue pixel, green LED | 0.280 | 0.269 | 0.96 |
+| Red pixel, blue LED | 0.063 | 0.041 | 0.66 |
+| Green pixel, blue LED | 0.457 | 0.421 | 0.92 |
+
+Four of the six leaks agree within 8 %. The two that involve the red pixel do not: the published curves give it 11 %
+less of the green LED and 34 % less of the blue LED than this camera shows. The two correction matrices differ by
+0.046 at most:
+
+```
+measured                      computed
+ 1.014  -0.082  -0.027         1.013  -0.077  -0.010
+-0.186   1.162  -0.519        -0.186   1.142  -0.474
+ 0.035  -0.324   1.146         0.034  -0.306   1.128
+```
+
+What that does to density, on a model of Portra 400 seen through the published camera curves and corrected with
+either matrix (3000 sample colours):
+
+| Light density, red / green / blue | Up to 1.5 above the base |
+|---|---|
+| RMS difference | 0.003 / 0.009 / 0.002 |
+| Largest difference | 0.008 / 0.044 / 0.014 |
+
+Above a density of 1.5 the comparison stops meaning much: under dense film the green and blue pixels' signal is
+mostly leakage from the other LEDs, the corrected signal nears zero, and with either matrix it goes below zero on a
+few of the samples.
+
+So the measured matrix is kept. It is of this camera and this light, where the published curves are of another body
+of the same model and the LED spectra are a fit; and it needs no spectral data of the camera at all. The computed
+one would serve a camera whose curves are known and whose light cannot be switched one LED at a time, at a cost of
+about 0.01 density up to a density of 1.5. This comparison was computed on a workstation with the scripts kept
+outside this repository; the model film is spektrafilm's Portra 400.
 
 ## The matrices
 
