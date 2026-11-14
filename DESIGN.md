@@ -107,10 +107,10 @@ In a blind comparison on 20 narrow-band frames, the stage was preferred on 17 an
 
 # White light: the curve fit
 
-Stages 2 and 3, between the search and the tone stage. They exist for white light only, because a white-light
-conversion has more error in it than a narrow-band one: the search has chosen a bracket, an exposure and gains, and
-the fit then corrects the green and blue gains and the slopes of the green and blue curves, so that what the frame
-shows as neutral comes out grey.
+Stages 2 and 3, between the search and the tone stage. They exist for white light only. A white-light conversion leaves
+a cast that differs from frame to frame, more than a narrow-band one does: the search has chosen a bracket, an
+exposure and gains, and the fit then corrects the green and blue gains and the slopes of the green and blue curves,
+so that what the frame shows as neutral comes out grey.
 
 What the two sets of profiles show of that, on the chart they were built from (CIEDE2000, mean over a stock's seven
 brackets; each bundle's README has the brackets):
@@ -122,8 +122,8 @@ brackets; each bundle's README has the brackets):
 | Ektar 100 | 0.72 | 0.90 | 3.29 | 2.42 |
 
 On the patches a profile was fitted to, white light is the less exact by about a quarter. On patches held out of
-the fit it is not worse. So the chart alone does not show the larger error of a white-light conversion: that is seen
-on converted frames, which these figures do not measure.
+the fit it is the more exact, by 15 to 26 %. So the chart does not show the larger error of a white-light
+conversion. That error is seen on converted frames, and this document has no figure for it.
 
 ## How the fit estimates a cast
 
@@ -298,8 +298,8 @@ The two results of stage 4 are each a vector of three numbers, one per channel (
   density of the film where an 18 % grey object of the scene lies on this negative.
 - **`S`, the slopes.** No unit: a ratio, density per density. Each multiplies, in one channel of the print
   material's printing density, the difference between a pixel's density and the mid grey's, so it is a contrast
-  scale per channel. Green is 1 by definition, and red and blue are fitted. For the same frame on Portra Endura:
-  0.90, 1.00, 0.97 (the same bracket), which lowers the red contrast by 10 % and the blue by 3 % against green.
+  scale per channel. Green is 1 by definition, and red and blue are fitted. For the same bracket on Portra Endura:
+  0.90, 1.00, 0.97, which lowers the red contrast by 10 % and the blue by 3 % against green.
 
 Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
 (`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds all of it: the density file
@@ -450,6 +450,12 @@ against the density through the LED band alone. The third is the two corrections
 | Camera with the computed correction, against the LED bands alone | 0.012 / 0.013 / 0.007 | 0.050 / 0.038 / 0.062 |
 | The computed correction against the measured one | 0.003 / 0.009 / 0.002 | 0.008 / 0.044 / 0.014 |
 
+Most of the first two rows is a scale, which RMS and largest do not show: against the LED band alone the model's
+camera reads red and green 2 to 3 % flatter and blue 1 % steeper (slopes 0.967, 0.974 and 1.010 with the measured
+correction, 0.972, 0.980 and 1.007 with the computed one), and a scale goes through `M` into every density of the
+file. The first row pairs the model's camera, which has the published curves, with the correction measured on this
+camera, so the second row is the cleaner size of what a camera adds.
+
 Above a density of 1.5 the comparison stops meaning much: under dense film the green and blue pixels' signal is
 mostly leakage from the other LEDs, the corrected signal nears zero, and with either matrix it goes below zero on a
 few of the samples.
@@ -466,7 +472,7 @@ side, the second one free to sit up to 25 nm from the first; the film model is s
 script that computes the tables and draws the two figures, and its output, are kept with the film model and the
 light's spectrum, beside the tools that build the profile sets, outside this repository.
 
-# The matrices
+## The matrices
 
 Densities are above the film base. "Fitted on the film model" means: 3000 sample colours of the film are drawn, dye
 amounts along its neutral scale between log exposure −1.5 and 1.0 with a log-normal colour variation; the spectral
@@ -555,8 +561,9 @@ Node 1 is one 3×4 matrix. Its 3×3 part is `S P diag(largest code / (scale k))`
 multiplied are, in order, `C`, `B`, the logarithm, `M`, `k` into the file and out of it again, `P` and `S`; after the
 print's curves comes `X`. The frame's mid grey, balanced, lands on the printing density 0.70, code 445 of a 10-bit Cineon file, where
 Cineon holds the LAD patch (an 18 % grey card is at 470). The print exposes that density as an 18 % grey. Both are
-choices: a Cineon scan has an 18 % card at 0.75, and a print to the LAD aim, a visual density of 1.0, is about a
-third of a stop darker (0.10 less on each of the three offsets of the first Matrix). Inside the CLF the constant
+choices: a Cineon scan has an 18 % card at 0.75, and a print to the LAD aim, a visual density of 1.0, takes about
+a third of a stop more exposure (0.10 less on each of the three offsets of the first Matrix); its grey has Y = 0.10
+where this one has 0.18. Inside the CLF the constant
 cancels, so the picture does not depend on it; it matters to whoever takes the output of node 1 to a print LUT made
 for Cineon densities.
 
