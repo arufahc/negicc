@@ -1,0 +1,8 @@
+Changes made to spektrafilm's data in the files of this folder (https://github.com/andreavolpato/spektrafilm,
+CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt).
+
+2026-11-14  kodak_portra_endura.json, kodak_2383.json: made from spektrafilm's print profiles
+            kodak_portra_endura.json and kodak_2383.json at its commit 3bb2c2d. The curves, dye spectra and base
+            are resampled to 1 nm with gaps held at the nearest measured value; the observer under the viewing
+            light, the exposure of an 18 % grey and the matrices from RP 180 and Academy Printing Density are
+            computed from them and added. Modified by Alpha Lam.

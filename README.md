@@ -59,6 +59,20 @@ to convert with the given values and nothing else.
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
 
+### The film base from a capture
+
+`--film_base base.ARW` reads the film base from a capture that shows unexposed film: a whole frame of it, or a
+picture with a strip of rebate beside it. The base is used for a picture or for density. The capture is decoded as
+the scan is and scaled to the scan's exposure. The brightest smooth stretch of film anywhere on it is found, leaving
+out dust, scratches, clipped areas, and anything that is not the colour of film base, such as bare light beside the
+film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
+needs an RGB-LED profile set and a Sony RAW. Give the same `--flat` as for the scan.
+
+A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
+`<output>.json`, so the capture is not needed again. `--film_base scan` reads the base from the scan itself
+instead. Without a capture, and with no earlier capture recorded for the output, the base is read from the scan
+as before.
+
 ## How it works
 
 A colour negative has three dye layers on an orange base, and the layers do not respond to light in step with each
@@ -190,6 +204,26 @@ DanielE, 2026-07-11.
 The RAW files and the pictures belong to the photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
+## Density files and print emulation
+
+With an RGB-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
+place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `rp180` in a DPX is a Cineon file and
+`apd` in a TIFF is ADX16.
+
+```sh
+bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base base.ARW --roi auto -o scan.tif scan.ARW
+oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
+```
+
+Beside an `rp180` or `apd` file `neg_process` writes one CLF transform per print material, Kodak Portra Endura paper
+and Kodak Vision 2383 print film. Any tool that reads CLF renders the file through it as a print on that material.
+The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
+how the print is computed.
+
+![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
+
+*Left to right: negicc's picture, the print on Portra Endura paper, the print on Vision 2383 film.*
+
 ## Options
 
 `bin_out/neg_process --help` lists everything. The common ones:
@@ -199,7 +233,9 @@ If one of them is yours and you want it removed, open an issue.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside an `rp180` or `apd` file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
+| `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
+| `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
@@ -228,4 +264,7 @@ profiles and a white D65 LED panel for the white-LED ones; the coloraid.de `R190
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx` is packed into the
 `neg_process` binary. It is Meta's, under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a
 binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other
-people's photographs, credited above.
+people's photographs, credited above. The print materials in `prints/*.json` derive from
+[spektrafilm](https://github.com/andreavolpato/spektrafilm)'s print profiles and are under CC BY-SA 4.0
+(`prints/README.md`); a CLF that `neg_process` writes with them carries that notice for its two tables, and the pictures made through
+one are free.
