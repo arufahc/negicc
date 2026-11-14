@@ -135,11 +135,11 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 // Beside a printing density file goes one CLF per print material that prints it: density -> the print material's
 // printing density -> its curves and dyes -> sRGB.
 //
-// A print material (a paper or a print film) and what is computed with it when a density file is written: the slopes
-// that make the film's grey steps print grey, and the print's curves and colour table as CLF nodes.
+// A print material (a paper or a print film) and what is computed with it when a density file is written: one
+// matrix for the frame, and the print's curves and colour table as CLF nodes.
 //
 // A print material is a data file, prints/<id>.json (schema negicc.print_material/1, written by negicc-station
-// src/print_slopes.py: print_material), built into neg_process. It holds the curve of each layer, the dye spectra and
+// src/print_emulation.py: print_material), built into neg_process. It holds the curve of each layer, the dye spectra and
 // base, the observer under the viewing light, and the 3x3 from each printing density measure to the density the
 // material reads itself. It holds nothing of a film stock, and a film's bundle holds nothing of a print material.
 //
@@ -149,18 +149,19 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 //     XYZ           = sum_w t(w) observer(w)
 // and a printing density pd is exposed as  logE = aim - (pd - grey_density),  aim the exposure that prints an 18 % grey.
 //
-// py-ref: negicc_station/src/print_slopes.py (PrintModel, fit_slopes, bracket_slopes, print_clf)
+// py-ref: negicc_station/src/print_emulation.py (PrintModel, frame_grey, print_clf)
 
 struct PrintMaterial {
   std::string id, name, viewing_illuminant;
   double grey_density = 0.70;                 // the printing density exposed as the print's mid grey
-  // The 3x3 from a measure's density to the density this material reads, for [0] RP 180 and [1] Academy Printing
-  // Density: one per film model by its name (a bundle's density_matrices.film_dye_spectra) and "any" for other films.
+  // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
+  // Academy Printing Density): one per film model by its name (a bundle's density_matrices.film_dye_spectra) and
+  // "any" for other films.
   struct ToPrint {
     std::string film;
     std::array<double, 9> m;
   };
-  std::vector<ToPrint> to_print[2];
+  std::vector<ToPrint> to_print[kDensityMeasures];
   // The matrix for a film model, else the one for any film; null when the material has none for the measure.
   const ToPrint* to_print_for(int measure, const std::string& film) const {
     const ToPrint* any = nullptr;
@@ -177,61 +178,24 @@ struct PrintMaterial {
   double white[3] = {1, 1, 1};
   double aim[3] = {0, 0, 0};
   double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
-  double judged_lo = 12.0, judged_hi = 92.0;  // the printed lightness between which a grey step is judged
-  double slope_lo = 0.6, slope_hi = 1.5;
-  // The material's own grey scale, as slopes (own_slopes): what the fit gives the neutral scale of the films the
-  // material was made for. A frame's slopes are the fit's divided by these, so the print keeps the stock's look and
-  // only the film's share is corrected. 1, 1, 1 for a material that is printed neutral.
-  double own_slopes[3] = {1.0, 1.0, 1.0};
-  int min_patches = 12;                       // the fewest judged steps for a fit
 };
 
 // Reads a print material's JSON. False with why in err.
 bool load_print_material(const std::string& json_text, PrintMaterial& out, std::string& err);
-
-// CIELAB (L*, a*, b*) of the print of a log exposure per layer, under the material's viewing light.
-void print_lab(const PrintMaterial& m, const double log_e[3], double lab[3]);
-
-// Whether a frame's print takes slopes fitted on the chart's grey steps (fit_print_slopes). On: the print already
-// takes its level from the chart (the frame's mid grey) and its balance from the search, so the bracket's grey steps
-// are used for the contrast of red and blue against green as well. Off, the print's matrices are the whole of it
-// and the film's grey scale prints as the chain gives it. The fit holds for the film batch, development and scan of
-// the profile's chart.
-constexpr bool kApplyPrintSlopes = true;
-
-// The slopes on the red and the blue printing density (green stays 1), about the row grey_at, that make grey steps
-// print neutral: the steps (rows of the material's printing density) are printed with the row grey_at as an 18 % grey
-// and one printer-light setting; the slopes and the red and blue lights minimise the steps' a* and b*, over the steps
-// that print between judged_lo and judged_hi before the slopes. ok is false, and the slopes 1, when fewer than
-// min_patches steps are judged.
-struct PrintSlopeFit {
-  bool ok = false;
-  double slopes[3] = {1.0, 1.0, 1.0};
-  bool at_bound = false;                            // a slope ended on slope_lo or slope_hi
-  int judged = 0;
-  // Mean C*ab of the judged steps printed as a CLF prints them, with no printer light of the fit's own: without the
-  // slopes and with them.
-  double chroma_before = 0.0, chroma_after = 0.0;
-  double slopes_neutral[3] = {1.0, 1.0, 1.0};       // the fit's own, before the division by the material's own_slopes
-};
-PrintSlopeFit fit_print_slopes(const PrintMaterial& m, const std::vector<std::array<double, 3>>& print_density,
-                               int grey_at);
 
 // The material as CLF nodes, to follow a Matrix that gives its printing density: Matrix (density -> log exposure) /
 // Range / LUT1D (the curve of each layer) / Matrix / LUT3D (dye amounts -> linear sRGB, cube points a side) /
 // Exponent (the sRGB curve). The text ends before </ProcessList>.
 std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int cube = 45);
 
-// How one frame prints on one print material: computed when the file is written, from the bundle's chart readings
-// and the print material's data. Neither is stored in the other.
+// How one frame prints on one print material. Everything is looked up and multiplied; nothing is fitted when a file
+// is written. The bundle gives, for the exposure bracket the picture conversion's search chose (without a search, the
+// middle one), what the film's chart says of that bracket (DensityBracket), and the print material gives its matrix:
 //
-//   bracket   the exposure bracket the picture conversion's search gave the frame; without a search, the middle one.
-//   grey      the frame's mid grey as the measure's density: the chart's mid grey (gs10) on that bracket, denser by
-//             log10(E) in every light channel for the exposure E the search found. With the balance (the gains g and
-//             b, level included) it prints as the print's mid grey.
-//   slopes    fitted on that bracket's grey steps, as the print material reads them, about its mid grey, so that they
-//             print neutral (fit_print_slopes), then divided by the print material's own grey scale where it has one.
-//             1 when kApplyPrintSlopes is off or the bracket has too few usable steps.
+//   grey      the frame's mid grey as the measure's density: the bracket's mid grey, denser by log10(E) in every
+//             light channel for the exposure E the search found. With the balance (the gains g and b, level
+//             included) it prints as the print's mid grey.
+//   slopes    the bracket's: they give the film's grey scale equal contrast in the three channels.
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
 struct FramePrint {
@@ -242,17 +206,10 @@ struct FramePrint {
   bool searched = false;              // the bracket and exposure come from the search
   double exposure = 1.0;
   double grey[3] = {0, 0, 0};
-  double slopes[3] = {1, 1, 1};       // as applied: the fit's, less the print material's own grey scale
-  double slopes_neutral[3] = {1, 1, 1};
-  double own_slopes[3] = {1, 1, 1};   // the print material's
-  bool fitted = false;
-  bool at_bound = false;              // a slope ended on the fit's bound: clipped, not found
-  int steps = 0, steps_judged = 0;
-  double chroma_before = 0.0, chroma_after = 0.0;   // of the judged steps as the CLF prints them: no slopes, slopes
+  double slopes[3] = {1, 1, 1};
   double grey_density = 0.70;
 };
-// False, with why in err, when the bundle has no grey steps for the bracket or the material has no matrix for the
-// measure.
+// False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err);
 
 // A Common LUT Format (CLF, ST 2136-1) transform for one density file and one print material: the file's code values
@@ -263,7 +220,7 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
 
 // The prints of one density file: for every print material built into neg_process (prints/<id>.json), how the frame
 // prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
-// one file, its code scale, measure and channel factors). Empty for Status M, which is not a printing density.
+// one file, its code scale, measure and channel factors).
 struct DensityPrints {
   std::vector<PrintMaterial> materials;
   std::vector<FramePrint> frames;

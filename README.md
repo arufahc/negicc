@@ -161,9 +161,18 @@ A conversion goes through these steps:
 With the RGB LED the curves are the measured ones, so step 3 does not run there: the profiles were made under that
 light, and there is no lamp or camera difference for a fit to correct.
 
-On the frame below the first render is cyan-green and the search brings it to a daylight balance.
+#### The search
+
+On the frame below the first render is cyan-green and the search brings it to a daylight balance. This step removes
+the uniform colour cast that comes from the LED lights being set to different powers.
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
+
+#### Curve fitting (D65 light only)
+
+Under a white light the crosstalk matrix and the light's spectrum are unknown, and a broadband light brings in a
+lot of noise between the response curves of the film's dye layers. This step is needed to neutralise the colours
+and to remove the crossover colour cast, the one that differs between shadows and highlights.
 
 The neutral head marks the cells that should be grey: here the road, the building fronts and the dark uniforms,
 not the trees. Weighted by it, the
@@ -171,6 +180,8 @@ search's render runs green-yellow in the shadows and magenta-blue in the highlig
 trend out.
 
 ![Neutral head and the curve fit](samples/neutral_field.png)
+
+#### Toning
 
 The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
 lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
@@ -215,7 +226,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base
 oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
 ```
 
-Beside an `rp180` or `apd` file `neg_process` writes one CLF transform per print material, Kodak Portra Endura paper
+Beside the density file `neg_process` writes one CLF transform per print material, Kodak Portra Endura paper
 and Kodak Vision 2383 print film. Any tool that reads CLF renders the file through it as a print on that material.
 The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
 how the print is computed.
@@ -233,7 +244,7 @@ how the print is computed.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside an `rp180` or `apd` file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside the file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |

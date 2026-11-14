@@ -20241,22 +20241,52 @@
     695.0
    ]
   },
-  "status_m": {
+  "light_to_film": {
    "matrix": [
     [
-     1.27652,
-     -0.06596,
-     0.00428
+     1.29392,
+     -0.08869,
+     -0.00574
     ],
     [
-     -0.05718,
-     1.09875,
-     -0.09104
+     -0.03372,
+     1.01904,
+     -0.10151
     ],
     [
-     0.0328,
-     0.00217,
-     0.95071
+     5e-05,
+     -0.01824,
+     0.94718
+    ]
+   ],
+   "what": "the light's density above the film base (R, G, B) to the film model's dye amounts (cyan, magenta, yellow); depends on the light's spectrum and the film's dyes",
+   "fit_rms": [
+    0.0026,
+    0.0037,
+    0.0028
+   ],
+   "fit_max": [
+    0.0233,
+    0.0573,
+    0.0359
+   ]
+  },
+  "status_m": {
+   "film_to_measure": [
+    [
+     0.9868,
+     0.01886,
+     0.01268
+    ],
+    [
+     -0.01474,
+     1.1225,
+     0.02111
+    ],
+    [
+     0.02594,
+     0.02322,
+     1.03954
     ]
    ],
    "target_curves": "Status M (digitised)",
@@ -20267,8 +20297,8 @@
    ],
    "fit_max_density": [
     0.0064,
-    0.0302,
-    0.0054
+    0.0305,
+    0.0053
    ],
    "density_range": [
     1.86,
@@ -20280,40 +20310,28 @@
     0.0,
     0.0002
    ],
-   "spectral_fit_matrix": [
-    [
-     1.27652,
-     -0.06875,
-     0.00442
-    ],
-    [
-     -0.05718,
-     1.14522,
-     -0.09406
-    ],
-    [
-     0.0328,
-     0.00226,
-     0.98227
-    ]
+   "light_density_factors": [
+    1.0,
+    0.95942,
+    0.96784
    ]
   },
   "rp180_printing_density": {
-   "matrix": [
+   "film_to_measure": [
     [
-     1.56461,
-     -0.10923,
-     0.0116
+     1.20871,
+     -0.00127,
+     0.01948
     ],
     [
-     -0.04452,
-     1.2068,
-     -0.11024
+     -0.00337,
+     1.18379,
+     0.01061
     ],
     [
-     0.22749,
-     0.02262,
-     0.7242
+     0.17707,
+     0.05208,
+     0.77064
     ]
    ],
    "target_curves": "SMPTE RP 180-1999 Table 1",
@@ -20323,9 +20341,9 @@
     0.0089
    ],
    "fit_max_density": [
-    0.019,
-    0.0391,
-    0.0941
+    0.0189,
+    0.0393,
+    0.0937
    ],
    "density_range": [
     2.23,
@@ -20339,21 +20357,21 @@
    ]
   },
   "academy_printing_density": {
-   "matrix": [
+   "film_to_measure": [
     [
-     1.5438,
-     -0.07701,
-     0.02512
+     1.19292,
+     0.02967,
+     0.03707
     ],
     [
-     -0.09606,
-     1.2162,
-     -0.0998
+     -0.04297,
+     1.18966,
+     0.02206
     ],
     [
-     0.03166,
-     -0.01308,
-     0.98574
+     0.02464,
+     0.00815,
+     1.04153
     ]
    ],
    "target_curves": "SMPTE ST 2065-2:2020",
@@ -20363,9 +20381,9 @@
     0.0011
    ],
    "fit_max_density": [
-    0.0826,
-    0.0151,
-    0.0206
+    0.0818,
+    0.0148,
+    0.0204
    ],
    "density_range": [
     2.19,
@@ -20385,7 +20403,7 @@
    "light_density_factors": [
     1.0,
     0.9594,
-    0.9679
+    0.9678
    ],
    "exposure_offsets_log": [
     -0.007,
@@ -20396,22 +20414,121 @@
     0.0272
    ],
    "green_blue_rms_after": [
-    0.0163,
+    0.0162,
     0.0248
    ],
    "max_calibration": 0.1,
    "applied_to": [
     "status_m"
    ]
+  },
+  "brackets": {
+   "what": "per exposure bracket of the profile: the chart's mid grey as the light's density above the film base, and the slopes that give the film's grey scale equal contrast in the three channels",
+   "slopes_in": "academy_printing_density",
+   "slopes_formula": "1 / (least-squares ratio of the red, or blue, to the green density of the bracket's grey steps, each less the mid grey's)",
+   "grey_step": "gs10",
+   "targets": {
+    "Target 1": {
+     "grey_light_density": [
+      0.12592,
+      0.19174,
+      0.22425
+     ],
+     "slopes": [
+      1.0771,
+      1.0,
+      1.0448
+     ],
+     "grey_steps": 24
+    },
+    "Target 2": {
+     "grey_light_density": [
+      0.21304,
+      0.33082,
+      0.35371
+     ],
+     "slopes": [
+      1.0564,
+      1.0,
+      1.0566
+     ],
+     "grey_steps": 24
+    },
+    "Target 3": {
+     "grey_light_density": [
+      0.30697,
+      0.45788,
+      0.47575
+     ],
+     "slopes": [
+      1.0071,
+      1.0,
+      1.0492
+     ],
+     "grey_steps": 24
+    },
+    "Target 4": {
+     "grey_light_density": [
+      0.46377,
+      0.62036,
+      0.6561
+     ],
+     "slopes": [
+      0.9343,
+      1.0,
+      1.0203
+     ],
+     "grey_steps": 24
+    },
+    "Target 5": {
+     "grey_light_density": [
+      0.56426,
+      0.75829,
+      0.80527
+     ],
+     "slopes": [
+      0.8872,
+      1.0,
+      0.9768
+     ],
+     "grey_steps": 24
+    },
+    "Target 6": {
+     "grey_light_density": [
+      0.67311,
+      0.93152,
+      0.9861
+     ],
+     "slopes": [
+      0.9064,
+      1.0,
+      0.9778
+     ],
+     "grey_steps": 24
+    },
+    "Target 7": {
+     "grey_light_density": [
+      0.83349,
+      1.11189,
+      1.14744
+     ],
+     "slopes": [
+      0.911,
+      1.0,
+      1.0212
+     ],
+     "grey_steps": 24
+    }
+   }
   }
  },
  "export": {
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "83a5ac764673f1d47ccc33a16d54288a1add324e2fc2ccd59c21b7617b92037b",
+  "source_sha256": "b480e6ef216381b4b6d1d4e1f1352a3926e977211a6432ddaefa65255fd027b4",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "2c95f97699c633a13f60e62fd85e77091a1305f9"
+  "station_commit": "c20ea86e04395ce921dca3d1b71b7750d6609cdd"
  }
 }

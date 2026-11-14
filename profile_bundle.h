@@ -16,7 +16,6 @@
 #ifndef PROFILE_BUNDLE_H
 #define PROFILE_BUNDLE_H
 
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -98,11 +97,6 @@ struct BundleTarget {
   bool has_target_ev = false;
   double target_ev = 0.0;
   std::vector<float> patches_g;
-  // The chart's grey steps gs<N>, in the order of N, as the profile read them (R, G, B after the crosstalk correction,
-  // at this target's exposure), and the position of the mid grey gs10 among them (-1 without one). Empty when a step
-  // lacks a channel.
-  std::vector<std::array<double, 3>> grey_rgb;
-  int grey_mid = -1;
   float tgt_min_g = 0.0f;
   float tgt_max_g = 0.0f;
   std::vector<uint8_t> icc_bytes;
@@ -148,10 +142,21 @@ const char* density_measure_name(DensityMeasure m);
 const char* density_measure_key(DensityMeasure m);
 
 // A bundle's matrix for one density measure: D_measure = m * D_light, both above the film base, rows R, G, B.
+// m is the product of the bundle's two parts: the measure's film_to_measure (the film's dye amounts to the measure's
+// density) times light_to_film (the light's density to the dye amounts), with the measure's light_density_factors.
 struct DensityMatrix {
   bool present = false;
   double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   std::string target_curves;          // what defines the measure, as the bundle names it
+};
+
+// What a print of a density file takes from the film's chart for one exposure bracket (density_matrices.brackets):
+// the chart's mid grey as the light's density above the film base, and the slopes that give the film's grey scale
+// equal contrast in the three channels (green 1), in Academy Printing Density.
+struct DensityBracket {
+  std::string name;
+  double grey_light[3] = {0.0, 0.0, 0.0};
+  double slopes[3] = {1.0, 1.0, 1.0};
 };
 
 struct ProfileBundle {
@@ -177,6 +182,7 @@ struct ProfileBundle {
   // (density_matrices), and the light's record with that spectrum (light_source), kept as the bundle writes it for
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
+  std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
 };

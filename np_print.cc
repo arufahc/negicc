@@ -22,7 +22,6 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
-#include <functional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -482,91 +481,6 @@ void amounts_to_xyz(const PrintMaterial& m, const double amount[3], double xyz[3
   }
 }
 
-// Least squares over up to 4 parameters within bounds: Levenberg-Marquardt with a forward-difference Jacobian, each
-// step clamped to the bounds.
-using Residuals = std::function<void(const double* p, std::vector<double>& r)>;
-void least_squares(const Residuals& fn, int n, double* p, const double* lo, const double* hi) {
-  std::vector<double> r, r1;
-  fn(p, r);
-  auto cost_of = [](const std::vector<double>& v) {
-    double c = 0.0;
-    for (double x : v) c += x * x;
-    return c;
-  };
-  double cost = cost_of(r), lambda = 1e-3;
-  for (int iter = 0; iter < 200; ++iter) {
-    const size_t rows = r.size();
-    std::vector<double> jac(rows * n);
-    for (int k = 0; k < n; ++k) {
-      double q[4];
-      std::copy(p, p + n, q);
-      double h = 1e-6;
-      if (hi && q[k] + h > hi[k]) h = -h;
-      q[k] += h;
-      fn(q, r1);
-      for (size_t i = 0; i < rows; ++i) jac[i * n + k] = (r1[i] - r[i]) / h;
-    }
-    double a[16] = {0}, g[4] = {0};
-    for (size_t i = 0; i < rows; ++i) {
-      for (int k = 0; k < n; ++k) {
-        g[k] += jac[i * n + k] * r[i];
-        for (int l = 0; l < n; ++l) a[k * 4 + l] += jac[i * n + k] * jac[i * n + l];
-      }
-    }
-    bool improved = false;
-    double change = 0.0;
-    for (int tries = 0; tries < 30 && !improved; ++tries) {
-      // Solve (J'J + lambda diag(J'J)) d = -g by Gaussian elimination with pivoting.
-      double mtx[4][5];
-      for (int k = 0; k < n; ++k) {
-        for (int l = 0; l < n; ++l) mtx[k][l] = a[k * 4 + l];
-        mtx[k][k] += lambda * std::max(a[k * 4 + k], 1e-12);
-        mtx[k][n] = -g[k];
-      }
-      bool singular = false;
-      for (int c = 0; c < n && !singular; ++c) {
-        int piv = c;
-        for (int k = c + 1; k < n; ++k) {
-          if (std::fabs(mtx[k][c]) > std::fabs(mtx[piv][c])) piv = k;
-        }
-        if (std::fabs(mtx[piv][c]) < 1e-300) {
-          singular = true;
-          break;
-        }
-        if (piv != c) std::swap_ranges(mtx[c], mtx[c] + n + 1, mtx[piv]);
-        for (int k = 0; k < n; ++k) {
-          if (k == c) continue;
-          const double f = mtx[k][c] / mtx[c][c];
-          for (int l = c; l <= n; ++l) mtx[k][l] -= f * mtx[c][l];
-        }
-      }
-      if (singular) {
-        lambda *= 10.0;
-        continue;
-      }
-      double q[4];
-      for (int k = 0; k < n; ++k) {
-        q[k] = p[k] + mtx[k][n] / mtx[k][k];
-        if (lo) q[k] = std::max(q[k], lo[k]);
-        if (hi) q[k] = std::min(q[k], hi[k]);
-      }
-      fn(q, r1);
-      const double c1 = cost_of(r1);
-      if (c1 < cost) {
-        change = cost - c1;
-        std::copy(q, q + n, p);
-        r = r1;
-        cost = c1;
-        lambda = std::max(lambda * 0.2, 1e-12);
-        improved = true;
-      } else {
-        lambda *= 10.0;
-      }
-    }
-    if (!improved || change <= 1e-14 * std::max(cost, 1e-30)) break;
-  }
-}
-
 }  // namespace
 
 bool load_print_material(const std::string& json_text, PrintMaterial& out, std::string& err) {
@@ -581,10 +495,10 @@ bool load_print_material(const std::string& json_text, PrintMaterial& out, std::
   m.viewing_illuminant = j.value("viewing_illuminant", "");
   m.grey_density = j.value("print_grey_density", 0.70);
   if (j.contains("to_print_density") && j["to_print_density"].is_object()) {
-    const char* keys[2] = {"rp180_printing_density", "academy_printing_density"};
-    for (int k = 0; k < 2; ++k) {
-      if (!j["to_print_density"].contains(keys[k]) || !j["to_print_density"][keys[k]].is_object()) continue;
-      for (auto it = j["to_print_density"][keys[k]].begin(); it != j["to_print_density"][keys[k]].end(); ++it) {
+    for (int k = 0; k < kDensityMeasures; ++k) {
+      const char* key = density_measure_key((DensityMeasure)k);
+      if (!j["to_print_density"].contains(key) || !j["to_print_density"][key].is_object()) continue;
+      for (auto it = j["to_print_density"][key].begin(); it != j["to_print_density"][key].end(); ++it) {
         PrintMaterial::ToPrint t;
         t.film = it.key();
         if (read_3x3(it.value(), t.m.data())) m.to_print[k].push_back(t);
@@ -609,110 +523,8 @@ bool load_print_material(const std::string& json_text, PrintMaterial& out, std::
     err = "a field of the print material is missing or malformed";
     return false;
   }
-  double pair[2];
-  if (j.contains("judged_lightness") && read_fixed(j["judged_lightness"], pair, 2)) {
-    m.judged_lo = pair[0];
-    m.judged_hi = pair[1];
-  }
-  if (j.contains("slope_bounds") && read_fixed(j["slope_bounds"], pair, 2)) {
-    m.slope_lo = pair[0];
-    m.slope_hi = pair[1];
-  }
-  m.min_patches = j.value("bracket_min_patches", 12);
-  double own[3];
-  if (j.contains("own_slopes") && read_fixed(j["own_slopes"], own, 3) && own[0] > 0 && own[1] > 0 && own[2] > 0) {
-    std::copy(own, own + 3, m.own_slopes);
-  }
   out = std::move(m);
   return true;
-}
-
-void print_lab(const PrintMaterial& m, const double log_e[3], double lab[3]) {
-  double amount[3], xyz[3], f[3];
-  for (int c = 0; c < 3; ++c) amount[c] = interp(m.log_exposure, m.curves[c], log_e[c]);
-  amounts_to_xyz(m, amount, xyz);
-  for (int c = 0; c < 3; ++c) {
-    const double t = std::max(xyz[c], 1e-7) / m.white[c];
-    f[c] = t > 0.008856 ? std::cbrt(t) : 7.787 * t + 16.0 / 116.0;
-  }
-  lab[0] = 116.0 * f[1] - 16.0;
-  lab[1] = 500.0 * (f[0] - f[1]);
-  lab[2] = 200.0 * (f[1] - f[2]);
-}
-
-PrintSlopeFit fit_print_slopes(const PrintMaterial& m, const std::vector<std::array<double, 3>>& pd, int grey_at) {
-  PrintSlopeFit fit;
-  const int n = (int)pd.size();
-  if (grey_at < 0 || grey_at >= n) return fit;
-  const std::array<double, 3> grey = pd[grey_at];
-  // p: slope red, slope blue, light red, light blue.
-  auto printed = [&](const double p[4], int i, double lab[3]) {
-    const double slopes[3] = {p[0], 1.0, p[1]}, lights[3] = {p[2], 0.0, p[3]};
-    double log_e[3];
-    for (int c = 0; c < 3; ++c) log_e[c] = m.aim[c] - slopes[c] * (pd[i][c] - grey[c]) + lights[c];
-    print_lab(m, log_e, lab);
-  };
-  std::vector<char> ok(n, 1);
-  auto chroma_residuals = [&](const double p[4], std::vector<double>& r) {
-    r.clear();
-    for (int i = 0; i < n; ++i) {
-      if (!ok[i]) continue;
-      double lab[3];
-      printed(p, i, lab);
-      r.push_back(lab[1]);
-      r.push_back(lab[2]);
-    }
-  };
-  auto lights_only = [&](double lights[2]) {
-    lights[0] = lights[1] = 0.0;
-    least_squares([&](const double* q, std::vector<double>& r) {
-      const double p[4] = {1.0, 1.0, q[0], q[1]};
-      chroma_residuals(p, r);
-    }, 2, lights, nullptr, nullptr);
-  };
-  auto mean_chroma = [&](const double p[4]) {
-    double sum = 0.0;
-    int count = 0;
-    for (int i = 0; i < n; ++i) {
-      if (!ok[i]) continue;
-      double lab[3];
-      printed(p, i, lab);
-      sum += std::hypot(lab[1], lab[2]);
-      ++count;
-    }
-    return count ? sum / count : 0.0;
-  };
-  // The steps judged: those that print between near black and near white with the lights that balance all of them.
-  double lights[2];
-  lights_only(lights);
-  {
-    const double p[4] = {1.0, 1.0, lights[0], lights[1]};
-    std::vector<char> judged(n, 0);
-    for (int i = 0; i < n; ++i) {
-      double lab[3];
-      printed(p, i, lab);
-      judged[i] = lab[0] > m.judged_lo && lab[0] < m.judged_hi;
-      fit.judged += judged[i];
-    }
-    ok = judged;
-  }
-  if (fit.judged < m.min_patches) return fit;
-  lights_only(lights);
-  double p[4] = {1.0, 1.0, lights[0], lights[1]};
-  const double lo[4] = {m.slope_lo, m.slope_lo, -1.0, -1.0}, hi[4] = {m.slope_hi, m.slope_hi, 1.0, 1.0};
-  least_squares([&](const double* q, std::vector<double>& r) { chroma_residuals(q, r); }, 4, p, lo, hi);
-  // The fit's own lights are not part of a CLF (the frame's balance takes their place): the record is of the steps
-  // printed with the slopes alone.
-  // The slopes applied are the fit's less the material's own grey scale, where it has one.
-  fit.slopes_neutral[0] = p[0];
-  fit.slopes_neutral[2] = p[1];
-  for (int k = 0; k < 3; ++k) fit.slopes[k] = fit.slopes_neutral[k] / m.own_slopes[k];
-  const double plain[4] = {1.0, 1.0, 0.0, 0.0}, applied[4] = {fit.slopes[0], fit.slopes[2], 0.0, 0.0};
-  fit.chroma_before = mean_chroma(plain);
-  fit.chroma_after = mean_chroma(applied);
-  for (int k = 0; k < 2; ++k) fit.at_bound |= p[k] <= m.slope_lo + 1e-9 || p[k] >= m.slope_hi - 1e-9;
-  fit.ok = true;
-  return fit;
 }
 
 std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) {
@@ -778,12 +590,12 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
 }
 
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err) {
-  if (!rec.bundle || !rec.matrix || rec.measure == kDensityStatusM) return err = "not a printing density", false;
+  if (!rec.bundle || !rec.matrix) return err = "no bundle", false;
   const ProfileBundle& bundle = *rec.bundle;
   // The film model the bundle's density matrices were fitted on names the material's matrix for this film.
   const nlohmann::json fit_record = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
   const std::string film = fit_record.is_object() ? fit_record.value("film_dye_spectra", std::string()) : std::string();
-  const PrintMaterial::ToPrint* to_print = material.to_print_for(rec.measure == kDensityRp180 ? 0 : 1, film);
+  const PrintMaterial::ToPrint* to_print = material.to_print_for((int)rec.measure, film);
   if (!to_print) return err = "the print material has no matrix for this measure", false;
   if (bundle.targets.empty()) return err = "the bundle has no brackets", false;
   FramePrint p;
@@ -793,69 +605,26 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   for (int k = 0; k < 9; ++k) p.to_print[k] = to_print->m[k];
   p.to_print_for = to_print->film;
   // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure.
-  const BundleTarget* target = nullptr;
   p.searched = rec.has_balance && rec.balance_e > 0.0;
-  if (p.searched) {
-    for (const BundleTarget& t : bundle.targets) {
-      if (t.name == rec.balance_target) target = &t;
-    }
-  }
-  if (!target) {
-    p.searched = false;
-    target = &bundle.targets[bundle.targets.size() / 2];
-  }
-  p.bracket = target->name;
+  p.bracket = p.searched ? rec.balance_target : bundle.targets[bundle.targets.size() / 2].name;
   p.exposure = p.searched ? rec.balance_e : 1.0;
-  // The bracket's grey steps, which the bundle's loader keeps with its other patches.
-  const std::vector<std::array<double, 3>>& grey_rgb = target->grey_rgb;
-  const int grey_mid = target->grey_mid;
-  if (grey_rgb.empty() || grey_mid < 0) {
-    return err = "the bundle's bracket " + target->name + " has no grey steps", false;
+  const DensityBracket* bracket = nullptr;
+  for (const DensityBracket& b : bundle.density_brackets) {
+    if (b.name == p.bracket) bracket = &b;
   }
-  // The steps as light densities above the profile's film base, at the base's exposure, then as the measure's and as
-  // the print material's density.
-  // py-ref: negicc_station/src/print_slopes.py (grey_scale, bracket_slopes)
-  const double base_exposure = shutter_to_seconds_d(bundle.film_base_shutter.empty() ? "1/8s" : bundle.film_base_shutter) *
-                               (double)bundle.film_base_iso / 100.0;
-  const double target_exposure = shutter_to_seconds_d(target->shutter) * target->iso / 100.0;
-  if (!(base_exposure > 0.0) || !(target_exposure > 0.0)) return err = "the bundle's exposures cannot be read", false;
-  const double ratio = base_exposure / target_exposure;
-  const double* m = rec.matrix->m;
-  std::vector<std::array<double, 3>> pd;
-  std::array<double, 3> mid = {0.0, 0.0, 0.0};
-  for (size_t i = 0; i < grey_rgb.size(); ++i) {
-    double light[3], measure[3];
-    for (int c = 0; c < 3; ++c) {
-      const double v = grey_rgb[i][c] * ratio, base = bundle.film_base_avg_d[c];
-      if (!(v > 0.0) || !(base > 0.0)) return err = "a grey step or the film base of the bundle is not positive", false;
-      light[c] = -std::log10(v / base);
-    }
-    for (int c = 0; c < 3; ++c) measure[c] = m[c * 3] * light[0] + m[c * 3 + 1] * light[1] + m[c * 3 + 2] * light[2];
-    if ((int)i == grey_mid) mid = {measure[0], measure[1], measure[2]};
-    std::array<double, 3> row;
-    for (int c = 0; c < 3; ++c) {
-      row[c] = p.to_print[c * 3] * measure[0] + p.to_print[c * 3 + 1] * measure[1] + p.to_print[c * 3 + 2] * measure[2];
-    }
-    pd.push_back(row);
+  if (!bracket) {
+    return err = "the bundle has no density_matrices.brackets entry for " + p.bracket +
+                 ": rebuild it with the profile-building tools", false;
   }
   // The exposure E multiplies the light's channels before the bracket's profile reads them: the film that the
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
+  // py-ref: negicc_station/src/print_emulation.py (frame_grey)
+  const double* m = rec.matrix->m;
   const double shift = std::log10(p.exposure);
-  for (int c = 0; c < 3; ++c) p.grey[c] = mid[c] + shift * (m[c * 3] + m[c * 3 + 1] + m[c * 3 + 2]);
-  // The slopes stay 1 unless the switch is on (np_print.h kApplyPrintSlopes): nothing is fitted to the chart.
-  const PrintSlopeFit fit = kApplyPrintSlopes ? fit_print_slopes(material, pd, grey_mid) : PrintSlopeFit();
-  p.steps = (int)pd.size();
-  p.steps_judged = fit.judged;
-  p.fitted = fit.ok;
-  if (fit.ok) {
-    for (int c = 0; c < 3; ++c) {
-      p.slopes[c] = fit.slopes[c];
-      p.slopes_neutral[c] = fit.slopes_neutral[c];
-      p.own_slopes[c] = material.own_slopes[c];
-    }
-    p.at_bound = fit.at_bound;
-    p.chroma_before = fit.chroma_before;
-    p.chroma_after = fit.chroma_after;
+  for (int c = 0; c < 3; ++c) {
+    p.grey[c] = 0.0;
+    for (int k = 0; k < 3; ++k) p.grey[c] += m[c * 3 + k] * (bracket->grey_light[k] + shift);
+    p.slopes[c] = bracket->slopes[c];
   }
   out = p;
   return true;
@@ -918,15 +687,8 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
        ". The mid grey is the chart's on the bracket " + xml(print.bracket) +
        (print.searched ? " and at the exposure the picture conversion's search gave this frame"
                        : " (no search: the middle bracket)") +
-       "; balanced, it prints as the print's mid grey" +
-       (!kApplyPrintSlopes
-            ? std::string(". Nothing is fitted to the film's chart: the slopes are 1")
-            : std::string(". The slopes are ") +
-                  (!print.fitted ? "1: the bracket has too few usable grey steps"
-                                 : (print.own_slopes[0] != 1.0 || print.own_slopes[2] != 1.0)
-                                       ? "fitted on that bracket's grey steps so that they print neutral, then divided "
-                                         "by this print material's own grey scale, so the print keeps the stock's look"
-                                       : "fitted on that bracket's grey steps so that they print neutral")) +
+       "; balanced, it prints as the print's mid grey. The slopes are the bracket's in the film's profile: they "
+       "give the film's grey scale equal contrast in the three channels" +
        ". The density file holds none of this. Add a constant to the three offsets of the first Matrix to print "
        "lighter (+) or darker (-), 0.30 a stop.</Description>\n";
   s += "  <Description>The 1D and 3D tables are derived by neg_process from the print profile of this material in "
@@ -948,7 +710,6 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
 
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output) {
   DensityPrints out;
-  if (rec.measure == kDensityStatusM) return out;
   for (const EmbeddedFile& file : list_embedded_files()) {
     const std::string name = file.name;
     if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
@@ -981,34 +742,16 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"bracket_from", p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
-          {"slopes_applied", kApplyPrintSlopes}};
-      if (kApplyPrintSlopes) {
-        one["slopes"] = {p.slopes[0], p.slopes[1], p.slopes[2]};
-        one["slopes_neutral"] = {p.slopes_neutral[0], p.slopes_neutral[1], p.slopes_neutral[2]};
-        one["print_own_slopes"] = {p.own_slopes[0], p.own_slopes[1], p.own_slopes[2]};
-        one["slopes_fitted"] = p.fitted;
-        one["slopes_at_bound"] = p.at_bound;
-        one["grey_steps"] = p.steps;
-        one["grey_steps_judged"] = p.steps_judged;
-        if (p.fitted) {
-          one["grey_scale_chroma_before"] = p.chroma_before;
-          one["grey_scale_chroma_after"] = p.chroma_after;
-        }
-      }
+          {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}}};
       materials[p.id] = one;
     }
     j["print"] = {
-        {"what", "how this frame prints on each print material: the frame's mid grey, from the chart's mid grey on "
-                 "the frame's exposure bracket and the exposure the search found, lands on the print's mid grey. "
-                 "With slopes_applied, slopes_neutral are fitted, when the file is written, on that bracket's grey "
-                 "steps as the print material reads them, so that they print neutral, and slopes, which the CLF "
-                 "applies, are those divided by print_own_slopes, the material's own grey scale (1 for a material "
-                 "that is printed neutral)"},
-        {"grey_scale_chroma", "mean C*ab of the bracket's judged grey steps as the CLF prints them, about the "
-                              "bracket's mid grey: _before with no slopes, _after with the slopes applied"},
+        {"what", "how this frame prints on each print material: the frame's mid grey lands on the print's mid grey, "
+                 "and the slopes give the film's grey scale equal contrast in the three channels. The bracket and the "
+                 "exposure are the search's; the mid grey and the slopes are the bracket's in the profile set "
+                 "(density_matrices.brackets), looked up, not fitted"},
         {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
-                    "slopes 1 unless slopes_applied, balance = suggested_balance.density_offset + "
-                    "density_offset_mean_removed"},
+                    "balance = suggested_balance.density_offset + density_offset_mean_removed"},
         {"applied", "no: the densities are as read. The CLF beside the file for each print material "
                     "(<output>.<print>.clf) applies the balance, the exposure and the slopes; apply them once, there "
                     "or by hand, not both"},
