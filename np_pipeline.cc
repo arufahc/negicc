@@ -36,7 +36,6 @@
 #include "rgb_view.h"
 #include "color_pipeline.h"
 #include "embedded_data.h"
-#include "np_print.h"
 #include "nlohmann/json.hpp"
 #include "np_input.h"
 #include "np_output.h"
@@ -2655,7 +2654,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
-    // The prints of the file (np_print.h): how the frame prints on each print material, recorded in the metadata,
+    // The prints of the file (np_density.h): how the frame prints on each print material, recorded in the metadata,
     // and the CLFs that go beside it.
     const DensityPrints prints = density_prints(rec, o.output);
     rec.print_json = prints.metadata_json;
