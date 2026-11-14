@@ -73,7 +73,7 @@ A later run to the same output, with the same inputs and the same `--flat`, take
 instead. Without a capture, and with no earlier capture recorded for the output, the base is read from the scan
 as before.
 
-## How it works
+## Method
 
 A colour negative has three dye layers on an orange base, and the layers do not respond to light in step with each
 other. Inverting the photo and stretching the histogram gets the colours wrong for that reason, and gets them wrong

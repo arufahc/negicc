@@ -14,7 +14,7 @@
 
 The first two make a picture (`-P srgb`) in four stages, numbered in the order they run:
 
-| # | Stage | What it decides | Where it acts |
+| # | Stage | Output | Applied to |
 |---|---|---|---|
 | 1 | Auto search | Which exposure bracket's profile converts the frame, and the exposure and the green and blue gains to use with it. | Only on small preview renders, which it scores. It has no pixel path of its own: its result is a set of parameters for the conversion. |
 | 2 | Curve fit | A correction of the green and blue gains and of the slopes of the green and blue tone curves. It makes surfaces the neutral head picked out come out grey, and sets the overall magenta-green balance. | The green and blue input tables of the profile. |
@@ -30,7 +30,7 @@ four; `--fit_curves off` leaves out stages 2 and 3, and `--tone_stage off` leave
 
 Stages 1 and 4. The profile's curves are the measured ones and are not fitted.
 
-## How the search scores a render
+## Scoring model
 
 **The intent field.** The search renders a small preview, and the intent network predicts, for each cell i of a
 grid over it, what a finished scan would show there: a mean mu_i = (mu_L, mu_a, mu_b) and an uncertainty sigma_i per
@@ -53,12 +53,12 @@ render at (E, g, b) -> network predicts mu, sigma -> search (E, g, b) against th
 stop when |dE| + |dg| + |db| <= 0.02, or once the residual has passed its minimum (the best step is kept)
 ```
 
-## Reading the tables
+## Table conventions
 
-Each table lists the **choices** a stage makes: numbers that decide how the picture looks or how far an estimate is
-trusted. **Effect** is the number of frames, out of a 140-frame test set, that change visibly (mean ΔE above 1) when
-the choice is switched off, or halved or doubled where the table says so. It shows how much work a choice does, not
-whether the result is better. Bounds that only act when something goes wrong are listed in one line under each
+Each table lists the **parameters** of a stage: the values that determine the rendering or the weight given to an
+estimate. **Effect** is the number of frames, out of a 140-frame test set, that change visibly (mean ΔE above 1) when
+the parameter is switched off, or halved or doubled where the table says so. It measures a parameter's influence,
+not whether the result is better. Bounds that only act when something goes wrong are listed in one line under each
 table. Iteration counts, step sizes and table sizes are left to the code.
 
 ## Stage 1: Auto search
@@ -67,12 +67,12 @@ For each candidate bracket, Auto renders the bracket's profile at a metered expo
 the finished picture should look like, and then searches exposure and gains for the closest match. White-light scans
 use the same stage.
 
-| Choice | Value | What it does |
+| Parameter | Value | Purpose |
 |---|---|---|
 | Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
 | Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
 | Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
-| Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | How far a scene may run past a bracket's calibrated range, at either end, before the bracket is ruled out. |
+| Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | The margin by which a scene may exceed a bracket's calibrated range, at either end, before the bracket is ruled out. |
 | Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
 | Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
 | Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
@@ -81,7 +81,7 @@ use the same stage.
 | Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
 | Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
 
-That makes eleven choices. None of them has been switched off on the 140-frame test set yet, so the table has no
+That makes eleven parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
 Effect column. The search also does not always converge to the same answer: where it ends depends on where it
 starts.
 
@@ -97,13 +97,13 @@ The stage runs after every bracket search with `-P srgb`, on white light and nar
 runs (narrow-band, or `--fit_curves off`), it is planned on the search's own result and leaves that result's colour as it is.
 In a blind comparison on 20 narrow-band frames, the stage was preferred on 17 and the conversion without it on 2.
 
-| Choice | Value | What it does | Effect |
+| Parameter | Value | Purpose | Effect |
 |---|---|---|---|
 | Shadow move | 1.0 | Moves the shadows all the way to the predicted shadow level. | 60 at half |
 | Highlight move | 0.5 | Moves the highlights half way to the predicted highlight level. | 16 to 30 |
 | Range move | 0.5 | Moves the tonal range half way to the predicted range. | 38 to 61 |
 | Clip allowance | 0.5 % of pixels | If the curve would clip more than this share of pixels to white, the highlight and range moves are scaled back until it does not. | 14 |
-| Curve limits | Black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | How far each of the curve's four parameters may go. On most frames at least one of them sits on its limit. | — |
+| Curve limits | Black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each of the curve's four parameters. On most frames at least one of them sits on its limit. | — |
 
 # White light: the curve fit
 
@@ -112,7 +112,7 @@ a cast that differs from frame to frame, more than a narrow-band one does: the s
 exposure and gains, and the fit then corrects the green and blue gains and the slopes of the green and blue curves,
 so that what the frame shows as neutral comes out grey.
 
-What the two sets of profiles show of that, on the chart they were built from (CIEDE2000, mean over a stock's seven
+The errors of the two sets of profiles on the chart they were built from show the difference (CIEDE2000, mean over a stock's seven
 brackets; each bundle's README has the brackets):
 
 | Stock | Fitted patches: narrow band | white light | Held-out patches: narrow band | white light |
@@ -125,7 +125,7 @@ On the patches a profile was fitted to, white light is the less exact by about a
 the fit it is the more exact, by 15 to 26 %. So the chart does not show the larger error of a white-light
 conversion. That error is seen on converted frames, and this document has no figure for it.
 
-## How the fit estimates a cast
+## Cast estimation
 
 **The neutral prediction.** A second head gives each cell p_i in [0, 1], the probability that it shows a neutral
 surface. The anchors are the cells that Auto's render puts between L\* 2 and L\* 92, and each is weighted by p squared:
@@ -175,7 +175,7 @@ between them is split. With little, the intent field decides. The 1 under the sq
 sigma_anc approaches as m grows, are each estimate's systematic error in a\*: however much evidence there is, neither
 is trusted closer than that.
 
-| What rests on what | Basis |
+| Component | Basis |
 |---|---|
 | The z-score loss and the inverse-variance weights | Maximum likelihood under a Gaussian model for each cell. |
 | mu, sigma and p | Learned networks, checked on held-out data and in blind comparisons. |
@@ -185,10 +185,10 @@ is trusted closer than that.
 ## Stage 2: Curve fit
 
 One least-squares solve over four numbers: the green and blue gains, and the slopes of the green and blue input
-curves. It works on the anchor and intent terms described in "How the fit estimates a cast". Exposure is re-solved at
+curves. It works on the anchor and intent terms described in "Cast estimation". Exposure is re-solved at
 every step, so the median lightness stays where Auto put it.
 
-| Choice | Value | What it does | Effect |
+| Parameter | Value | Purpose | Effect |
 |---|---|---|---|
 | Evidence half-mass | 12 | The anchors pull toward neutral with strength m / (m + 12): half strength when the neutral evidence m is 12. A correction resting on very little neutral surface is mostly ignored. | — |
 | Head systematic error | 1 a\* | Neither estimate of the overall a\* (the neutral anchors or the intent field) is trusted more precisely than this. So when there is plenty of evidence and they disagree, the difference is split. A stated value, not derived. | — |
@@ -207,7 +207,7 @@ out.
 The fit may not end greener than Auto's render: slightly magenta is preferred to slightly green. The fit first runs
 freely. Only if its result is greener than Auto's does it run again with the excess green penalised.
 
-| Choice | Value | What it does | Effect |
+| Parameter | Value | Purpose | Effect |
 |---|---|---|---|
 | The guard | On | As above. Without it, mid-tones end up greener on 38 of the 140 frames. | 41 |
 | Tolerance | 0.5 a\* | A result up to this much greener than Auto's still counts as not greener. | 7 |
@@ -218,9 +218,9 @@ freely. Only if its result is greener than Auto's does it run again with the exc
 Nothing is decided here. The correction of stage 2 is written into the profile's green and blue input tables, so
 the one conversion of the pixels applies it.
 
-## Count
+## Parameter count
 
-| Stage | Choices |
+| Stage | Parameters |
 |---|---|
 | 1 Auto search | 11 |
 | 2 Curve fit | 6 |
@@ -229,12 +229,12 @@ the one conversion of the pixels applies it.
 | 4 Tone stage | 5 |
 | **White light, stages 2 to 4** | **14** |
 
-Not counted as choices: the solver's constants. They set how the terms are scaled and solved rather than what the
+Not counted as parameters: the solver's constants. They set how the terms are scaled and solved rather than what the
 solve aims at: the guard's penalty weight 4 and its counting minimums, the 4 x 4 blocks of the standard error, the
 slope weight and the 25 in the slope moment, the residual scale 1/1.5, the slope ridge 1.5 and the lever factor.
-They live in `input_curves.h`, and "How the fit estimates a cast" shows where most of them enter.
+They live in `input_curves.h`, and "Cast estimation" shows where most of them enter.
 
-## What is not principled yet
+## Known limitations
 
 - **Evidence half-mass (12).** A stated value, not a derived one. To do: re-check it on the scans that arrive
   through the web portal.
@@ -262,14 +262,14 @@ They live in `input_curves.h`, and "How the fit estimates a cast" shows where mo
 
 # Print emulation
 
-How `neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
-CLF that prints it on a paper or a print film, and every choice it makes along the way. The density file is the film
-as measured. The CLF holds everything that turns it into a picture, and `neg_process` only looks its numbers up and
+`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
+CLF that prints it on a paper or a print film. This part specifies both and lists every parameter involved. The
+density file is the film as measured. The CLF holds everything that turns it into a picture, and `neg_process` only looks its numbers up and
 multiplies them: nothing is fitted when a file is written.
 
-## The stages
+## Pipeline
 
-| # | Stage | What it does | Where its numbers come from |
+| # | Stage | Function | Inputs |
 |---|---|---|---|
 | 1 | Density | Camera RGB to the density of the film above its base, in one standard measure. Writes the density file. | The profile set: the crosstalk correction and the density matrix. |
 | 2 | Search | Stage 1 of the picture conversion, unchanged: the exposure bracket, the exposure and the green and blue gains. Nothing is applied to the file. | The frame. |
@@ -279,7 +279,7 @@ multiplies them: nothing is fitted when a file is written.
 A profile set holds nothing of a print material, and a print material's file (`prints/<print>.json`) holds nothing
 measured on a film. `-P` picks one measure for a run. The code is `np_print.cc`.
 
-## How the numbers are found
+## Derivations
 
 **Density.** `v` is the camera RGB after the flat field, `C` the crosstalk correction and `B` the scale that puts
 the film base on one level:
@@ -353,7 +353,7 @@ rgb    = X XYZ                                  linear sRGB, then the sRGB curve
 
 ## Stage 1: the density file
 
-| Choice | Value | What it does |
+| Parameter | Value | Purpose |
 |---|---|---|
 | Measures | Status M, RP 180, APD | `rp180` is SMPTE RP 180 printing density, the Cineon convention; `apd` is Academy Printing Density, SMPTE ST 2065-2. |
 | Container | `.dpx`: 10 bits, `95 + 500 k D`. `.tif`: 16 bits, `1520 + 8000 k D` | The output's extension picks it. `rp180` in a DPX is a Cineon file; `apd` is ADX10 or ADX16. A DPX clips at 1.86 above the base. |
@@ -367,7 +367,7 @@ The file carries the matrix, the light's spectrum (and its three LED spectra whe
 time), the film base and the encoding as JSON, in a TIFF's
 `ImageDescription` or a DPX's user data, and so does the sidecar.
 
-How well a 3×3 reproduces each measure on the film model (`fit_rms_density`, `fit_max_density` in the bundle), over
+Accuracy of the 3×3 for each measure on the film model (`fit_rms_density`, `fit_max_density` in the bundle), over
 the three stocks and the densities a scan reaches, about 2.2 above the base:
 
 | Measure | RMS error (density) | Worst case (density) |
@@ -384,11 +384,11 @@ These are errors against the model, not against the film.
 - **Status M is calibrated on the chart**, the printing densities are not. One factor on the green and one on the
   blue LED density hold the chart's grey scale to the film model's Status M: 1.02 and 1.06 for Portra 400, 0.96 and
   0.97 for Portra 160. Ektar 100's, 0.83 and 1.08, lie more than 0.10 from 1 and are recorded, not applied.
-- **Each LED band is taken as one channel.** What the camera adds to that is sized below.
+- **Each LED band is taken as one channel.** The camera's departure from that is quantified under "The crosstalk correction, measured and computed".
 
 ## Stage 3: the frame matrix
 
-| Choice | Value | What it does |
+| Parameter | Value | Purpose |
 |---|---|---|
 | Mid grey patch | `gs10` | The chart's step nearest 18 % reflectance. |
 | Mid grey lands on | 0.70 | Code 445 of a Cineon file, where Cineon holds the LAD patch. The constant cancels inside the CLF. |
@@ -420,7 +420,7 @@ The same frame without slopes and with its own, on each print material, beside t
 
 ## Stage 4: the print
 
-| Choice | Value | What it does |
+| Parameter | Value | Purpose |
 |---|---|---|
 | Print materials | Kodak Portra Endura (paper), Kodak Vision 2383 (print film) | One CLF each, `<output>.<print>.clf`. |
 | Printer lamp | 3200 K blackbody, no heat filter | With the material's sensitivity it defines the density the material reads. |
@@ -471,7 +471,7 @@ The computed one uses the published curves of the same camera model (Sony ILCE-7
 | Red pixel, blue LED | 0.063 | 0.041 | 0.66 |
 | Green pixel, blue LED | 0.457 | 0.421 | 0.92 |
 
-Four of the six agree within 8 %. The two of the red pixel do not. What that does to density, on a model of Portra
+Four of the six agree within 8 %. The two of the red pixel do not. The effect on density, on a model of Portra
 400 seen through the published curves, up to a density of 1.5 (red / green / blue):
 
 | | RMS | Largest |
@@ -487,10 +487,9 @@ spectral data of the camera.
 
 ## Dependencies
 
-Every number in the chain has one owner. The table lists each, what it is derived from, on what basis, where it is
-kept, and what makes it stale.
+The source, basis, storage and invalidation condition of each quantity in the chain:
 
-| Quantity | Derived from | Basis | Kept in | Redo when |
+| Quantity | Derived from | Basis | Stored in | Invalidated by |
 |---|---|---|---|---|
 | `C`, crosstalk correction | The camera and the light | Measured: each LED captured alone | `bundle.json` | The camera or the light changes |
 | Flat field | The scanner's optics and light | Measured: a capture with no film | `--flat` file | The scanner is rearranged |
@@ -502,11 +501,11 @@ kept, and what makes it stale.
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
 | Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |
 
-Three consequences follow. `L`, `F` and `P` come from spectra alone: none is fitted to the film's chart, so the
+`L`, `F` and `P` come from spectra alone: none is fitted to the film's chart, so the
 chart enters the print only through a bracket's mid grey and slopes. A scanner with another light replaces `L` and
 `C` and nothing else. A new print material is one file, and no profile set changes for it.
 
-## What is not principled yet
+## Known limitations
 
 - **The densities are a model's.** `L` and `F` come from datasheet spectra and have not been checked against a
   densitometer.
