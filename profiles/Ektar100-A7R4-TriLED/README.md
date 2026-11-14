@@ -8,8 +8,7 @@ colours to make one ICC profile per bracket (`Target_1.icc` to `Target_7.icc`). 
 channel crosstalk was removed and the values were scaled to the film base (the unexposed film), which scans are
 normalised to as well. The captures were flat-field corrected.
 
-negicc-station built the bundle and its `tools/export_negicc_data.py` split it into these files. `bundle.json`
-holds the measurements, the crosstalk matrix, the film base and an `export` record of the source file.
+`bundle.json` holds the measurements, the crosstalk matrix, the film base and an `export` record of the source file.
 
 ## Accuracy
 
@@ -29,7 +28,6 @@ barely visible).
 **Fitted** is ArgyllCMS `profcheck` on all 288 chart patches the profile was built from (the output is stored in
 `bundle.json`). It shows how well the profile fits its own data, so it flatters the profile. **Held out** is the
 error on patches the profile never saw: each bracket's profile was rebuilt twice, each time leaving out alternate
-halves of the 264 colour patches, and checked on the half it left out (negicc-station's
-`src/audit/profile_holdout.py`, 2 folds). The 24 grey patches, which set the tone curves, stay in every build.
+halves of the 264 colour patches, and checked on the half it left out. The 24 grey patches, which set the tone curves, stay in every build.
 That is the better guide to the error on colours in a real photograph. The profiles are not de-glared: removing the
 chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.

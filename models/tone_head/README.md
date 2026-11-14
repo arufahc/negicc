@@ -74,6 +74,5 @@ replace `tone_head.bin` and rebuild. The sidecar's `heads.tone` records which fi
 
 ## Provenance
 
-Trained in the whitelab TONE arm (`tools/extract_corpus.py --K 4`, then `tools/train_heads.py A --kind pool`), with
-negicc-station's environment and its DINOv3 ViT-S/16 (`dinov3-small_portra400`: the same backbone and layers as
-`../dinov3-small`). `metadata.json` has the settings, metrics and checksums.
+Trained on tokens from the DINOv3 ViT-S/16 backbone (the same backbone and layers as `../dinov3-small`).
+`metadata.json` has the settings, metrics and checksums.
