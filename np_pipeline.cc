@@ -2505,8 +2505,10 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
         floor = std::max(floor, (double)d.clip.floor[k] / px);
       }
       if (low > 0.05) {
-        log_warn("%.1f%% of the pixels are thinner than the film base by more than the encoding holds: the film base "
-                 "is probably too dark (see the sidecar's film_base)\n", 100.0 * low);
+        log_warn("%.1f%% of the output's pixels are thinner than the film base by more than the encoding holds. The "
+                 "count is over the whole output: bare light beside the film counts too, so crop to the frame "
+                 "(--roi) before reading it as the film. If the output is the frame, the film base is probably too "
+                 "dark (see the sidecar's film_base)\n", 100.0 * low);
       }
       if (floor > 0.05) {
         log_warn("%.1f%% of the pixels are at the density floor (%.1f): the film base is probably too bright, or the "
@@ -2653,13 +2655,13 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
-    // Beside a printing density file, one CLF per print material built in (prints/<id>.json): the file's codes to
+    // Beside a printing density file, one CLF per print material built in (prints/<id>.json), named after the whole
+    // output as the sidecar is (a CLF fits one file: its code scale, measure and channel factors): the file's codes to
     // the print as sRGB. How the frame prints (its bracket's slopes, its mid grey) is computed here and recorded.
     std::vector<PrintMaterial> print_materials;
     std::vector<FramePrint> prints;
     std::vector<std::string> print_paths;
     if (o.density_measure != kDensityStatusM) {
-      const std::string stem = o.output.substr(0, o.output.find_last_of('.'));
       for (const EmbeddedFile& file : list_embedded_files()) {
         const std::string name = file.name;
         if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
@@ -2671,7 +2673,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
           log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
           continue;
         }
-        print_paths.push_back(stem + "." + material.id + ".clf");
+        print_paths.push_back(o.output + "." + material.id + ".clf");
         print_materials.push_back(std::move(material));
         prints.push_back(print);
       }
@@ -2684,25 +2686,32 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     info.software = rec.tool_version;
     info.timestamp = (long long)proc->imgdata.other.timestamp;
     const RgbInput img = scan.image();
-    log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
-    ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
-                                           c.density.encoding, o.density_measure, info)
-                       : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
-                                            info);
-    if (ret == 0) {
-      for (size_t k = 0; k < prints.size(); ++k) {
-        const std::string clf = density_print_clf(rec, prints[k], print_clf_nodes(print_materials[k]));
-        FILE* f = fopen(print_paths[k].c_str(), "wb");
-        const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
-        if ((f && fclose(f) != 0) || !ok) {
-          log_error("Cannot write '%s'\n", print_paths[k].c_str());
-          ret = 1;
-          break;
-        }
-        log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
-                 print_paths[k].c_str(), prints[k].name.c_str(), prints[k].bracket.c_str(), prints[k].slopes[0],
-                 prints[k].slopes[1], prints[k].slopes[2], prints[k].fitted ? "" : ", not fitted");
+    // The CLFs first: one that cannot be written stops the run before the density file exists, and a density file
+    // that cannot be written takes its CLFs with it. Nothing is left half done.
+    size_t written = 0;
+    for (; ret == 0 && written < prints.size(); ++written) {
+      const size_t k = written;
+      const std::string clf = density_print_clf(rec, prints[k], print_clf_nodes(print_materials[k]));
+      FILE* f = fopen(print_paths[k].c_str(), "wb");
+      const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
+      if ((f && fclose(f) != 0) || !ok) {
+        log_error("Cannot write '%s'\n", print_paths[k].c_str());
+        ret = 1;
+        break;
       }
+      log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
+               print_paths[k].c_str(), prints[k].name.c_str(), prints[k].bracket.c_str(), prints[k].slopes[0],
+               prints[k].slopes[1], prints[k].slopes[2], prints[k].fitted ? "" : ", not fitted");
+    }
+    if (ret == 0) {
+      log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
+      ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
+                                             c.density.encoding, o.density_measure, info)
+                         : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
+                                              info);
+    }
+    if (ret != 0) {
+      for (size_t k = 0; k < prints.size(); ++k) unlink(print_paths[k].c_str());
     }
   } else {
     log_info("Writing TIFF '%s'\n", o.output.c_str());

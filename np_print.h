@@ -81,8 +81,11 @@ void print_lab(const PrintMaterial& m, const double log_e[3], double lab[3]);
 struct PrintSlopeFit {
   bool ok = false;
   double slopes[3] = {1.0, 1.0, 1.0};
+  bool at_bound = false;                            // a slope ended on slope_lo or slope_hi
   int judged = 0;
-  double chroma_before = 0.0, chroma_after = 0.0;   // mean C*ab of the judged steps without and with the slopes
+  // Mean C*ab of the judged steps printed as a CLF prints them, with no printer light of the fit's own: without the
+  // slopes and with them.
+  double chroma_before = 0.0, chroma_after = 0.0;
 };
 PrintSlopeFit fit_print_slopes(const PrintMaterial& m, const std::vector<std::array<double, 3>>& print_density,
                                int grey_at);

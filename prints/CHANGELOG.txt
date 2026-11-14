@@ -1,0 +1,9 @@
+Changes to the files in this folder, which derive from spektrafilm's print profiles
+(https://github.com/andreavolpato/spektrafilm, CC BY-SA 4.0,
+https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt).
+
+2026-11-14  kodak_portra_endura.json, kodak_2383.json written by negicc-station (tools/export_print_materials.py)
+            from spektrafilm's kodak_portra_endura.json and kodak_2383.json at commit 3bb2c2d: curves, dye spectra
+            and base resampled to 1 nm with gaps held at the nearest measured value; the observer under the viewing
+            light, the exposure of an 18 % grey and the matrices from RP 180 and Academy Printing Density computed
+            from them. Modified by Alpha Lam (negicc-station).
