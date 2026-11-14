@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <array>
 #include <string>
 #include <vector>
 #include <lcms2.h>
@@ -97,6 +98,11 @@ struct BundleTarget {
   bool has_target_ev = false;
   double target_ev = 0.0;
   std::vector<float> patches_g;
+  // The chart's grey steps gs0, gs1, ... as the profile read them (R, G, B after the crosstalk correction, at this
+  // target's exposure), and the position of the mid grey gs10 among them (-1 without one): what a print's slopes are
+  // fitted on (np_density.h density_frame_print). Empty when a step lacks a channel.
+  std::vector<std::array<double, 3>> grey_rgb;
+  int grey_mid = -1;
   float tgt_min_g = 0.0f;
   float tgt_max_g = 0.0f;
   std::vector<uint8_t> icc_bytes;
@@ -173,9 +179,6 @@ struct ProfileBundle {
   DensityMatrix density_matrix[kDensityMeasures];
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
-  // "density_matrices.print_slopes", compact: for each printing density measure and print material, what makes this
-  // film's grey scale print grey (np_density.h PrintSlopes). Empty when the bundle has none.
-  std::string print_slopes_json;
 };
 
 // Seconds of a shutter speed as the profiles record it, a string ("1/8s", "0.4s", "2"); throws

@@ -36,6 +36,7 @@
 #include "rgb_view.h"
 #include "color_pipeline.h"
 #include "embedded_data.h"
+#include "np_print.h"
 #include "nlohmann/json.hpp"
 #include "np_input.h"
 #include "np_output.h"
@@ -2652,6 +2653,30 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
+    // Beside a printing density file, one CLF per print material built in (prints/<id>.json): the file's codes to
+    // the print as sRGB. How the frame prints (its bracket's slopes, its mid grey) is computed here and recorded.
+    std::vector<PrintMaterial> print_materials;
+    std::vector<FramePrint> prints;
+    std::vector<std::string> print_paths;
+    if (o.density_measure != kDensityStatusM) {
+      const std::string stem = o.output.substr(0, o.output.find_last_of('.'));
+      for (const EmbeddedFile& file : list_embedded_files()) {
+        const std::string name = file.name;
+        if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
+        PrintMaterial material;
+        FramePrint print;
+        std::string err;
+        if (!load_print_material(std::string((const char*)file.data, file.size), material, err) ||
+            !density_frame_print(rec, material, print, err)) {
+          log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
+          continue;
+        }
+        print_paths.push_back(stem + "." + material.id + ".clf");
+        print_materials.push_back(std::move(material));
+        prints.push_back(print);
+      }
+      rec.prints = &prints;
+    }
     density_json = density_metadata_json(rec);
     DensityFileInfo info;
     info.make = proc->imgdata.idata.make;
@@ -2664,31 +2689,19 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
                                            c.density.encoding, o.density_measure, info)
                        : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
                                             info);
-    if (ret == 0 && o.density_measure != kDensityStatusM) {
-      // Beside a printing density file, one CLF per print material the bundle has slopes for: the file's codes to
-      // the print as sRGB, with the frame's balance and the film's slopes, which the file itself does not hold.
-      const std::string stem = o.output.substr(0, o.output.find_last_of('.'));
-      for (const PrintSlopes& print : density_print_slopes(s.bundle, o.density_measure)) {
-        const EmbeddedFile* body = find_embedded_file("prints/" + print.id + ".clf");
-        const std::string clf =
-            body ? density_print_clf(rec, print, std::string((const char*)body->data, body->size)) : std::string();
-        if (clf.empty()) {
-          log_warn("No print transform for %s is built in (prints/%s.clf): no CLF written for it\n",
-                   print.name.c_str(), print.id.c_str());
-          continue;
-        }
-        const std::string path = stem + "." + print.id + ".clf";
-        FILE* f = fopen(path.c_str(), "wb");
+    if (ret == 0) {
+      for (size_t k = 0; k < prints.size(); ++k) {
+        const std::string clf = density_print_clf(rec, prints[k], print_clf_nodes(print_materials[k]));
+        FILE* f = fopen(print_paths[k].c_str(), "wb");
         const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
         if ((f && fclose(f) != 0) || !ok) {
-          log_error("Cannot write '%s'\n", path.c_str());
+          log_error("Cannot write '%s'\n", print_paths[k].c_str());
           ret = 1;
           break;
         }
-        const double* sl = rec.has_balance ? print.slopes_for(rec.balance_target) : print.slopes;
-        log_info("Wrote '%s': this file as a print on %s, sRGB (slopes %.3f %.3f %.3f%s)\n", path.c_str(),
-                 print.name.c_str(), sl[0], sl[1], sl[2],
-                 rec.has_balance ? ", the frame's bracket and balance" : ", no balance found");
+        log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
+                 print_paths[k].c_str(), prints[k].name.c_str(), prints[k].bracket.c_str(), prints[k].slopes[0],
+                 prints[k].slopes[1], prints[k].slopes[2], prints[k].fitted ? "" : ", not fitted");
       }
     }
   } else {

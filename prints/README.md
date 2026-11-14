@@ -1,10 +1,12 @@
 # Print materials
 
-One Common LUT Format transform per print material: its printing density (as density, 0.70 exposed as mid grey) to
-the print under its viewing light, as sRGB. `neg_process` builds them in and writes, beside each printing density
-file, the frame's matrix followed by these nodes.
+One JSON per print material (`negicc.print_material/1`): the curve of each layer, the dye spectra and base, the
+observer under the viewing light, and the 3x3 from each printing density measure (RP 180, Academy Printing Density)
+to the density the material reads itself. That matrix comes from spectra alone; there is one per film model, by
+name, and one for any other film. A file holds nothing measured on a film. `neg_process` builds them in and computes
+from them, for each printing density file it writes, a CLF that prints the file (np_print.h).
 
-Written by negicc-station (`tools/export_print_clfs.py`, `src/print_slopes.py`). The print curves, dye spectra and
-spectral sensitivities come from [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato
+Written by negicc-station (`tools/export_print_materials.py`, `src/print_slopes.py`). The print curves, dye spectra
+and spectral sensitivities come from [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato
 (print profiles, CC BY-SA 4.0); these files derive from them and carry the same licence. They are a model and have
 not been compared with a real print.
