@@ -16,6 +16,7 @@
 #ifndef PROFILE_BUNDLE_H
 #define PROFILE_BUNDLE_H
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -97,6 +98,11 @@ struct BundleTarget {
   bool has_target_ev = false;
   double target_ev = 0.0;
   std::vector<float> patches_g;
+  // The chart's grey steps gs<N>, in the order of N, as the profile read them (R, G, B after the crosstalk correction,
+  // at this target's exposure), and the position of the mid grey gs10 among them (-1 without one). Empty when a step
+  // lacks a channel.
+  std::vector<std::array<double, 3>> grey_rgb;
+  int grey_mid = -1;
   float tgt_min_g = 0.0f;
   float tgt_max_g = 0.0f;
   std::vector<uint8_t> icc_bytes;

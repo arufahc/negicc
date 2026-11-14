@@ -771,57 +771,6 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   return s;
 }
 
-namespace {
-
-// The bundle's JSON as it was loaded: the file at its path (a split bundle's directory holds bundle.json), else the
-// one built in under its key.
-std::string bundle_json_text(const ProfileBundle& bundle) {
-  for (const std::string& path : {bundle.path, bundle.path + "/bundle.json"}) {
-    std::ifstream file(path, std::ios::binary);
-    std::stringstream text;
-    if (file && text << file.rdbuf() && !text.str().empty() && text.str()[0] == '{') return text.str();
-  }
-  std::string dir;
-  const EmbeddedFile* file = find_embedded_bundle(bundle.key, dir);
-  return file ? std::string((const char*)file->data, file->size) : std::string();
-}
-
-// The chart's grey steps of one bracket as the profile read them (R, G, B after the crosstalk correction, at the
-// bracket's exposure): every patch gs<N>, in the order of N, and the position of the mid grey gs10 among them.
-// py-ref: negicc_station/src/print_slopes.py (grey_scale)
-bool bracket_grey_steps(const ProfileBundle& bundle, const std::string& bracket,
-                        std::vector<std::array<double, 3>>& rgb, int& mid) {
-  const nlohmann::json j = nlohmann::json::parse(bundle_json_text(bundle), nullptr, false);
-  if (!j.is_object() || !j.contains("targets") || !j["targets"].is_array()) return false;
-  for (const auto& target : j["targets"]) {
-    if (!target.is_object() || target.value("name", "") != bracket || !target.contains("patches")) continue;
-    std::vector<std::pair<int, std::array<double, 3>>> steps;
-    for (auto it = target["patches"].begin(); it != target["patches"].end(); ++it) {
-      const std::string& key = it.key();
-      if (key.size() < 3 || key.compare(0, 2, "gs") != 0 || key.find_first_not_of("0123456789", 2) != std::string::npos) {
-        continue;
-      }
-      const auto& p = it.value();
-      if (!p.is_object() || !p.contains("r") || !p.contains("g") || !p.contains("b") || !p["r"].is_number() ||
-          !p["g"].is_number() || !p["b"].is_number()) {
-        return false;
-      }
-      steps.push_back({std::stoi(key.substr(2)), {p["r"].get<double>(), p["g"].get<double>(), p["b"].get<double>()}});
-    }
-    std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    rgb.clear();
-    mid = -1;
-    for (const auto& step : steps) {
-      if (step.first == 10) mid = (int)rgb.size();
-      rgb.push_back(step.second);
-    }
-    return !rgb.empty() && mid >= 0;
-  }
-  return false;
-}
-
-}  // namespace
-
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err) {
   if (!rec.bundle || !rec.matrix || rec.measure == kDensityStatusM) return err = "not a printing density", false;
   const ProfileBundle& bundle = *rec.bundle;
@@ -851,9 +800,10 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   }
   p.bracket = target->name;
   p.exposure = p.searched ? rec.balance_e : 1.0;
-  std::vector<std::array<double, 3>> grey_rgb;
-  int grey_mid = -1;
-  if (!bracket_grey_steps(bundle, target->name, grey_rgb, grey_mid)) {
+  // The bracket's grey steps, which the bundle's loader keeps with its other patches.
+  const std::vector<std::array<double, 3>>& grey_rgb = target->grey_rgb;
+  const int grey_mid = target->grey_mid;
+  if (grey_rgb.empty() || grey_mid < 0) {
     return err = "the bundle's bracket " + target->name + " has no grey steps", false;
   }
   // The steps as light densities above the profile's film base, at the base's exposure, then as the measure's and as
