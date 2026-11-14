@@ -137,7 +137,7 @@ A printing density file (`rp180`, `apd`) also records the film's print slopes (`
 A film whose three channels differ in contrast prints a grey scale that drifts in colour from shadows to highlights,
 which no printer-light setting removes. The slopes are one density scale per channel, about a reference grey, that
 does, for a print material: Kodak Portra Endura paper and Kodak Vision 2383 print film. They are measured on the
-grey steps of the profile's chart at its seven exposures, through a model of the print material (spektrafilm's print
+grey steps of the profile's chart, for each of its seven exposures (a frame takes those of its own bracket), through a model of the print material (spektrafilm's print
 profiles); the model has not been compared with a real print.
 
 Beside a printing density file goes one Common LUT Format (CLF) transform per print material, named after the

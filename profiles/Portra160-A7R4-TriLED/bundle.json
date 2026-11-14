@@ -20450,6 +20450,120 @@
      "grey_scale_chroma_after": {
       "mean": 1.53,
       "max": 5.05
+     },
+     "bracket_slopes": {
+      "Target 1": {
+       "slopes": [
+        1.1099,
+        1.0,
+        1.0495
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 2.1,
+        "max": 2.79
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.31,
+        "max": 2.14
+       }
+      },
+      "Target 2": {
+       "slopes": [
+        1.0575,
+        1.0,
+        1.0702
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 1.88,
+        "max": 2.79
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.36,
+        "max": 2.25
+       }
+      },
+      "Target 3": {
+       "slopes": [
+        0.9582,
+        1.0,
+        1.0251
+       ],
+       "patches_judged": 19,
+       "grey_scale_chroma_before": {
+        "mean": 1.83,
+        "max": 2.35
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.45,
+        "max": 2.08
+       }
+      },
+      "Target 4": {
+       "slopes": [
+        0.923,
+        1.0,
+        0.9559
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.88,
+        "max": 2.95
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.29,
+        "max": 1.99
+       }
+      },
+      "Target 5": {
+       "slopes": [
+        0.9411,
+        1.0,
+        0.9485
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.21,
+        "max": 2.87
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.71,
+        "max": 1.78
+       }
+      },
+      "Target 6": {
+       "slopes": [
+        0.9755,
+        1.0,
+        1.0328
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.25,
+        "max": 2.17
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.89,
+        "max": 2.08
+       }
+      },
+      "Target 7": {
+       "slopes": [
+        0.9693,
+        1.0,
+        1.0968
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 2.09,
+        "max": 3.96
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.0,
+        "max": 1.97
+       }
+      }
      }
     },
     "kodak_2383": {
@@ -20490,6 +20604,120 @@
      "grey_scale_chroma_after": {
       "mean": 1.67,
       "max": 5.19
+     },
+     "bracket_slopes": {
+      "Target 1": {
+       "slopes": [
+        0.9175,
+        1.0,
+        1.115
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 3.0,
+        "max": 6.19
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.95,
+        "max": 3.16
+       }
+      },
+      "Target 2": {
+       "slopes": [
+        0.8742,
+        1.0,
+        1.0869
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 3.62,
+        "max": 6.62
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.94,
+        "max": 3.17
+       }
+      },
+      "Target 3": {
+       "slopes": [
+        0.7832,
+        1.0,
+        1.0947
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.69,
+        "max": 6.54
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.79,
+        "max": 1.4
+       }
+      },
+      "Target 4": {
+       "slopes": [
+        0.7558,
+        1.0,
+        1.0225
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.53,
+        "max": 8.77
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.93,
+        "max": 2.49
+       }
+      },
+      "Target 5": {
+       "slopes": [
+        0.7772,
+        1.0,
+        1.0131
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.15,
+        "max": 8.63
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.36,
+        "max": 2.7
+       }
+      },
+      "Target 6": {
+       "slopes": [
+        0.8081,
+        1.0,
+        1.0957
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.54,
+        "max": 6.23
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.49,
+        "max": 3.5
+       }
+      },
+      "Target 7": {
+       "slopes": [
+        0.7994,
+        1.0,
+        1.1587
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 5.15,
+        "max": 7.76
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.95,
+        "max": 2.53
+       }
+      }
      }
     }
    },
@@ -20608,6 +20836,120 @@
      "grey_scale_chroma_after": {
       "mean": 1.53,
       "max": 5.05
+     },
+     "bracket_slopes": {
+      "Target 1": {
+       "slopes": [
+        1.1099,
+        1.0,
+        1.0498
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 2.1,
+        "max": 2.79
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.31,
+        "max": 2.15
+       }
+      },
+      "Target 2": {
+       "slopes": [
+        1.0573,
+        1.0,
+        1.0706
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 1.88,
+        "max": 2.8
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.37,
+        "max": 2.26
+       }
+      },
+      "Target 3": {
+       "slopes": [
+        0.9579,
+        1.0,
+        1.0254
+       ],
+       "patches_judged": 19,
+       "grey_scale_chroma_before": {
+        "mean": 1.84,
+        "max": 2.36
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.45,
+        "max": 2.09
+       }
+      },
+      "Target 4": {
+       "slopes": [
+        0.9228,
+        1.0,
+        0.956
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.89,
+        "max": 2.96
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.29,
+        "max": 1.99
+       }
+      },
+      "Target 5": {
+       "slopes": [
+        0.941,
+        1.0,
+        0.9486
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.21,
+        "max": 2.87
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.71,
+        "max": 1.78
+       }
+      },
+      "Target 6": {
+       "slopes": [
+        0.9752,
+        1.0,
+        1.0331
+       ],
+       "patches_judged": 18,
+       "grey_scale_chroma_before": {
+        "mean": 1.25,
+        "max": 2.17
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.89,
+        "max": 2.08
+       }
+      },
+      "Target 7": {
+       "slopes": [
+        0.9689,
+        1.0,
+        1.0973
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 2.1,
+        "max": 3.98
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.01,
+        "max": 1.97
+       }
+      }
      }
     },
     "kodak_2383": {
@@ -20648,6 +20990,120 @@
      "grey_scale_chroma_after": {
       "mean": 1.67,
       "max": 5.19
+     },
+     "bracket_slopes": {
+      "Target 1": {
+       "slopes": [
+        0.9175,
+        1.0,
+        1.1153
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 3.0,
+        "max": 6.2
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.95,
+        "max": 3.16
+       }
+      },
+      "Target 2": {
+       "slopes": [
+        0.8741,
+        1.0,
+        1.0871
+       ],
+       "patches_judged": 24,
+       "grey_scale_chroma_before": {
+        "mean": 3.62,
+        "max": 6.62
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.94,
+        "max": 3.17
+       }
+      },
+      "Target 3": {
+       "slopes": [
+        0.7831,
+        1.0,
+        1.0948
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.69,
+        "max": 6.54
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.79,
+        "max": 1.39
+       }
+      },
+      "Target 4": {
+       "slopes": [
+        0.7558,
+        1.0,
+        1.0225
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.54,
+        "max": 8.78
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.94,
+        "max": 2.49
+       }
+      },
+      "Target 5": {
+       "slopes": [
+        0.7772,
+        1.0,
+        1.0131
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.15,
+        "max": 8.63
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.36,
+        "max": 2.7
+       }
+      },
+      "Target 6": {
+       "slopes": [
+        0.808,
+        1.0,
+        1.0959
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 4.54,
+        "max": 6.23
+       },
+       "grey_scale_chroma_after": {
+        "mean": 1.49,
+        "max": 3.5
+       }
+      },
+      "Target 7": {
+       "slopes": [
+        0.7993,
+        1.0,
+        1.1589
+       ],
+       "patches_judged": 17,
+       "grey_scale_chroma_before": {
+        "mean": 5.15,
+        "max": 7.77
+       },
+       "grey_scale_chroma_after": {
+        "mean": 0.96,
+        "max": 2.53
+       }
+      }
      }
     }
    }
@@ -20657,9 +21113,9 @@
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "f12d990c089aae8d102d031f3b56973ba1cbdd8901a385288540b7e228115448",
+  "source_sha256": "7e2a703e0e30fa3ac19028fa1127747362d02b0046541902da19d7f10df12f5e",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "f80fa00a859771288812c97cd9f2ade50f8e3b43"
+  "station_commit": "a03286988faa1587251d82b1fbe24a1bdc69312a"
  }
 }

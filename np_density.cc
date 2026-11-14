@@ -193,6 +193,17 @@ std::vector<PrintSlopes> density_print_slopes(const ProfileBundle& bundle, Densi
     }
     if (!ok) continue;
     p.name = n.value("print", p.id);
+    if (n.contains("bracket_slopes") && n["bracket_slopes"].is_object()) {
+      for (auto b = n["bracket_slopes"].begin(); b != n["bracket_slopes"].end(); ++b) {
+        if (!b.value().is_object() || !b.value().contains("slopes")) continue;
+        const nlohmann::ordered_json& s = b.value()["slopes"];
+        if (!s.is_array() || s.size() != 3 || !s[0].is_number() || !s[1].is_number() || !s[2].is_number()) continue;
+        const std::array<double, 3> v = {s[0].get<double>(), s[1].get<double>(), s[2].get<double>()};
+        if (std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]) && v[0] > 0 && v[1] > 0 && v[2] > 0) {
+          p.bracket_slopes.emplace_back(b.key(), v);
+        }
+      }
+    }
     out.push_back(p);
   }
   return out;
@@ -236,11 +247,13 @@ std::string density_print_clf(const DensityRecord& rec, const PrintSlopes& print
   if (!exposed) {
     for (int c = 0; c < 3; ++c) grey[c] = print.about[c];
   }
+  // The slopes of the frame's bracket; without a bracket, those fitted on all the brackets.
+  const double* slopes = exposed ? print.slopes_for(rec.balance_target) : print.slopes;
   double a[9], b[3];
   for (int i = 0; i < 3; ++i) {
     double shift = 0.0;
     for (int j = 0; j < 3; ++j) {
-      const double p = print.slopes[i] * print.to_print[i * 3 + j];
+      const double p = slopes[i] * print.to_print[i * 3 + j];
       a[i * 3 + j] = p * max_code / (e.scale * e.k[j]);
       shift += p * (bal[j] - grey[j] - e.offset / (e.scale * e.k[j]));
     }
@@ -250,13 +263,14 @@ std::string density_print_clf(const DensityRecord& rec, const PrintSlopes& print
   snprintf(buf, sizeof buf,
            "  <Description>This frame (%s, %s density in %d bits, code = %d + %d k D) printed on %s. The first Matrix "
            "takes the file's code values to the print's printing density with the frame's colour balance, density "
-           "offsets %+.4f %+.4f %+.4f%s, and the film's slopes on this print material, %.4f %.4f %.4f about the "
+           "offsets %+.4f %+.4f %+.4f%s, and the film's slopes on this print material%s, %.4f %.4f %.4f about the "
            "frame's mid grey, density %.4f %.4f %.4f, which prints as mid grey: %s. The density file holds none of "
            "this. Add a constant to the three offsets of the first Matrix to print lighter (+) or darker (-), 0.30 a "
            "stop.</Description>\n",
            rec.bundle_key.c_str(), density_measure_name(rec.measure), e.bits, e.offset, e.scale, print.name.c_str(),
-           bal[0], bal[1], bal[2], balanced ? "" : " (no balance was found: none applied)", print.slopes[0],
-           print.slopes[1], print.slopes[2], grey[0], grey[1], grey[2],
+           bal[0], bal[1], bal[2], balanced ? "" : " (no balance was found: none applied)",
+           slopes != print.slopes ? " for the frame's bracket" : "", slopes[0], slopes[1], slopes[2], grey[0], grey[1],
+           grey[2],
            exposed ? "the chart's mid grey on the bracket and at the exposure the picture conversion's search gave "
                      "this frame"
                    : "the chart's mid grey at normal exposure (no exposure was found for the frame)");
