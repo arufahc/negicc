@@ -351,14 +351,6 @@ XYZ    = sum_w t(w) light(w) observer(w) / sum_w light(w) y(w)
 rgb    = X XYZ                                  linear sRGB, then the sRGB curve
 ```
 
-| What rests on what | Basis |
-|---|---|
-| `C` | Measured: each LED captured alone. |
-| `L`, `F`, `P` | Fitted on a model of the film, from spectra alone. None is fitted to the film's chart. |
-| The mid grey and the slopes of a bracket | The film's chart, as the profile set was built from it. |
-| The bracket, `E`, `g`, `b` | The picture conversion's search, which uses the ICC profiles. |
-| The print's curves, dyes and sensitivity | spektrafilm's print profiles. A model, not compared with a real print. |
-
 ## Stage 1: the density file
 
 | Choice | Value | What it does |
@@ -371,7 +363,8 @@ rgb    = X XYZ                                  linear sRGB, then the sRGB curve
 | Flat field | As for a picture | It corrects the scan and the base capture before the density is taken. |
 | Not applied | Exposure, gains, curves, tone stage, look | The file is the film as measured. The search's result is recorded (`suggested_balance`). |
 
-The file carries the matrix, the LED's spectrum, the film base and the encoding as JSON, in a TIFF's
+The file carries the matrix, the light's spectrum (and its three LED spectra when they were measured one LED at a
+time), the film base and the encoding as JSON, in a TIFF's
 `ImageDescription` or a DPX's user data, and so does the sidecar.
 
 How well a 3×3 reproduces each measure on the film model (`fit_rms_density`, `fit_max_density` in the bundle), over
@@ -447,7 +440,7 @@ is computed from the print material's file when a CLF is written.
 
 | Data | Specific to | Used for | Kept in |
 |---|---|---|---|
-| The scanning light's spectrum, split into three LED bands at 495 and 578 nm | The light | `L` | `bundle.json`, `light_source` |
+| The scanning light as three LED spectra: each LED measured alone, or one spectrum with all LEDs on cut at 495 and 578 nm | The light | `L` | `bundle.json`, `light_source`: the all-on spectrum and the three (`led_spectra`) |
 | The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | Not shipped |
 | The response curves of Status M, RP 180 and APD | The standards | `F`, `P` | Not shipped |
 | The print material's spectral sensitivity | The print material | `P` | Not shipped |
@@ -492,18 +485,26 @@ flatter and blue 1 % steeper. Above a density of 1.5 the corrected green and blu
 comparison stops meaning much. The measured matrix is kept: it is of this camera and this light, and needs no
 spectral data of the camera.
 
-## What depends on what
+## Dependencies
 
-| | The frame | The film stock | The print material | The scanner and its light |
+Every number in the chain has one owner. The table lists each, what it is derived from, on what basis, where it is
+kept, and what makes it stale.
+
+| Quantity | Derived from | Basis | Kept in | Redo when |
 |---|---|---|---|---|
-| `C`, the flat field | | | | yes |
-| `B` | yes: the roll's film base | | | |
-| `L` | | yes: its dye spectra | | yes: the light's spectrum |
-| `F` | | yes: its dye spectra | | |
-| `P` | | a little: its dye spectra | yes | |
-| The mid grey and slopes of a bracket | | yes: the chart | | |
-| balance, `grey`, `S` | yes: the search's bracket, exposure and gains | | | |
-| CLF nodes 2 to 7 | | | yes | |
+| `C`, crosstalk correction | The camera and the light | Measured: each LED captured alone | `bundle.json` | The camera or the light changes |
+| Flat field | The scanner's optics and light | Measured: a capture with no film | `--flat` file | The scanner is rearranged |
+| `B`, film base scale | The roll | Measured on each run: `--film_base`, the rebate, or the thinnest film | The density file's metadata | Every roll |
+| `L`, LED density to dye amounts | The light's spectrum, the film's dye spectra | Fitted on the film model | `bundle.json`, `light_to_film` | The light or the film stock changes |
+| `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
+| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json` | A print material is added |
+| Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
+| Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
+| Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |
+
+Three consequences follow. `L`, `F` and `P` come from spectra alone: none is fitted to the film's chart, so the
+chart enters the print only through a bracket's mid grey and slopes. A scanner with another light replaces `L` and
+`C` and nothing else. A new print material is one file, and no profile set changes for it.
 
 ## What is not principled yet
 
