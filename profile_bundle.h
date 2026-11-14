@@ -43,7 +43,7 @@ enum OutputEncoding : int {
   ENCODE_SRGB_LINEAR = negicc::ENCODE_SRGB_LINEAR,  // linear-light sRGB primaries
   ENCODE_CUSTOM = 2,                                // PCS XYZ through Little-CMS into an output ICC profile
   ENCODE_NONE = 3,                                  // the corrected camera RGB, no film profile applied
-  ENCODE_DENSITY = 4                                // density above the film base as code values (np_density.h)
+  ENCODE_DENSITY = 4                                // density above the film base as code values (np_print.h)
 };
 
 // The film profile's AToB0 pipeline (negicc::ProfileData) with host defaults: no profile, identity matrix.

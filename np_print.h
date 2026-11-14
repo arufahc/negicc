@@ -179,6 +179,10 @@ struct PrintMaterial {
   double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
   double judged_lo = 12.0, judged_hi = 92.0;  // the printed lightness between which a grey step is judged
   double slope_lo = 0.6, slope_hi = 1.5;
+  // The material's own grey scale, as slopes (own_slopes): what the fit gives the neutral scale of the films the
+  // material was made for. A frame's slopes are the fit's divided by these, so the print keeps the stock's look and
+  // only the film's share is corrected. 1, 1, 1 for a material that is printed neutral.
+  double own_slopes[3] = {1.0, 1.0, 1.0};
   int min_patches = 12;                       // the fewest judged steps for a fit
 };
 
@@ -201,6 +205,7 @@ struct PrintSlopeFit {
   // Mean C*ab of the judged steps printed as a CLF prints them, with no printer light of the fit's own: without the
   // slopes and with them.
   double chroma_before = 0.0, chroma_after = 0.0;
+  double slopes_neutral[3] = {1.0, 1.0, 1.0};       // the fit's own, before the division by the material's own_slopes
 };
 PrintSlopeFit fit_print_slopes(const PrintMaterial& m, const std::vector<std::array<double, 3>>& print_density,
                                int grey_at);
@@ -229,7 +234,9 @@ struct FramePrint {
   bool searched = false;              // the bracket and exposure come from the search
   double exposure = 1.0;
   double grey[3] = {0, 0, 0};
-  double slopes[3] = {1, 1, 1};
+  double slopes[3] = {1, 1, 1};       // as applied: the fit's, less the print material's own grey scale
+  double slopes_neutral[3] = {1, 1, 1};
+  double own_slopes[3] = {1, 1, 1};   // the print material's
   bool fitted = false;
   bool at_bound = false;              // a slope ended on the fit's bound: clipped, not found
   int steps = 0, steps_judged = 0;

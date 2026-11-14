@@ -705,7 +705,7 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_density.h DensityRecord::has_balance).
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance).
   o.fit_curves = Options::kFitCurvesOff;
   o.tone_stage = Options::kToneStageOff;
   return 0;

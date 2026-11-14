@@ -48,7 +48,7 @@
 #include "flat_field.h"
 #include "libraw/libraw.h"
 #include "multi_target_optimizer.h"
-#include "np_density.h"
+#include "np_print.h"
 #include "np_film_base.h"
 #include "np_options.h"
 #include "np_output.h"
@@ -99,7 +99,7 @@ struct Setup {
   bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
-  bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_density.h)
+  bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
@@ -168,7 +168,7 @@ struct OutputSpec {
   cmsHPROFILE xyz = nullptr;             // ENCODE_CUSTOM: the XYZ input and the output profile
   cmsHPROFILE custom = nullptr;
 };
-// The density output's conversion (np_density.h): the measure's matrix, the encoding and the clamped pixels.
+// The density output's conversion (np_print.h): the measure's matrix, the encoding and the clamped pixels.
 struct DensityOutput {
   double base_level = 1.0;               // what the film base lands on after the film base's merged matrix
   float merged[9] = {0};                 // that matrix (crosstalk correction x film base scale), E = g = b = 1

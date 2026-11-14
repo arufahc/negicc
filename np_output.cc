@@ -766,7 +766,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     j["replay"] = nullptr;
   }
 
-  // A density output (np_density.h): its record, and the file's bit depth (a DPX holds 10 bits).
+  // A density output (np_print.h): its record, and the file's bit depth (a DPX holds 10 bits).
   ordered_json density = sc.density_json.empty() ? ordered_json(nullptr)
                                                  : ordered_json::parse(sc.density_json, nullptr, false);
   const int out_bits = density.is_object() && density.contains("encoding") ? density["encoding"].value("bits", 16) : 16;

@@ -2469,7 +2469,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend& backend) {
   OutputSpec& out = c.out;
   if (s.density) {
-    // The density output (np_density.h): the film base's merged matrix as the station builds it (crosstalk correction
+    // The density output (np_print.h): the film base's merged matrix as the station builds it (crosstalk correction
     // and film base scale, the scan's exposure ratio with the bundle's own base), E = g = b = 1, then the log and the
     // measure's matrix. No knee, no film profile.
     out.encoding = ENCODE_DENSITY;
@@ -2634,7 +2634,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   int ret = 0;
   std::string density_json;
   if (s.density) {
-    // The density file and its metadata (np_density.h): the same record in the file and in the sidecar.
+    // The density file and its metadata (np_print.h): the same record in the file and in the sidecar.
     DensityRecord rec;
     rec.measure = o.density_measure;
     rec.encoding = c.density.encoding;
@@ -2654,7 +2654,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
-    // The prints of the file (np_density.h): how the frame prints on each print material, recorded in the metadata,
+    // The prints of the file (np_print.h): how the frame prints on each print material, recorded in the metadata,
     // and the CLFs that go beside it.
     const DensityPrints prints = density_prints(rec, o.output);
     rec.print_json = prints.metadata_json;

@@ -132,7 +132,7 @@ struct Sidecar {
   // A film base read from a capture (--film_base; film_base_source "capture", or "sidecar" when a previous run's is
   // taken): the capture's record as JSON (film_base.capture). Empty: none.
   std::string film_base_capture_json;
-  // The density output's record (np_density.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
+  // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
 };
 
