@@ -318,12 +318,23 @@ material, and a print material's file holds nothing measured on a film.
 | 1 | Scan to light density | Per pixel | Camera RGB, the flat field, the crosstalk correction, the film base | `D_light`: density in the red, green and blue of the LED |
 | 2 | Light density to a density measure | Per pixel | `D_light`, `M` | The density file: Status M, RP 180 or APD |
 | 3 | Balance and exposure | Per frame: stage 1 of the conversion, the Auto search | The frame | The bracket, the exposure `E`, the gains `g` and `b` |
-| 4 | Mid grey and slopes | Per frame | The 24 grey steps of that bracket from the profile set, `M`, the print material's file | `grey`, `S` |
+| 4 | The frame's mid grey `grey` and the slopes `S` (defined below the table) | Per frame | The 24 grey steps of that bracket from the profile set, `M`, the print material's file | `grey`: three densities. `S`: three ratios |
 | 5 | Density to the print's printing density | CLF node 1 | The file's code values, `P`, `S`, the balance, `grey` | The density the print material reads |
 | 6 | Printing density to the print's exposure | CLF node 2 | The exposure that prints an 18 % grey | Log exposure per layer |
 | 7 | Exposure to dye amounts | CLF nodes 3 and 4: a range and a 1D table of 4096 points | The print's curve per layer | Three dye amounts |
 | 8 | Dye amounts to colour | CLF nodes 5 and 6: a scale and a 3D table of 45 points a side | The print's dye spectra and base, the observer under the viewing light | Linear sRGB |
 | 9 | Display | CLF node 7 | | sRGB |
+
+The two results of stage 4 are each a vector of three numbers, one per channel (red, green, blue):
+
+- **`grey`, the frame's mid grey.** Unit: density (log10, above the film base), in the file's measure (RP 180 or
+  APD). It is the density of the film where an 18 % grey object of the scene lies on this negative: the density of
+  the chart's 18 % grey step on the frame's bracket, moved by the exposure and gains the search found. For one
+  Portra 400 frame, as APD: 1.23, 1.05, 1.08. The CLF prints this density as the print's mid grey.
+- **`S`, the slopes.** No unit: a ratio, density per density. Each multiplies, in one channel of the print
+  material's printing density, the difference between a pixel's density and the mid grey's, so it is a contrast
+  scale per channel. Green is 1 by definition, and red and blue are fitted. For the same frame on Portra Endura:
+  0.90, 1.00, 0.97, which lowers the red contrast by 10 % and the blue by 3 % against green.
 
 Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
 (`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds all of it: the density file
