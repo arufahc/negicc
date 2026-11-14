@@ -133,26 +133,36 @@ for the frame is recorded in the file and the sidecar, not applied (`suggested_b
 channel, summing to zero, that a grading tool can add). The sidecar
 counts the pixels that ran off either end of the code range, and those too dense to measure.
 
-A printing density file (`rp180`, `apd`) also records the film's print slopes (`print_slopes`), again not applied.
-A film whose three channels differ in contrast prints a grey scale that drifts in colour from shadows to highlights,
-which no printer-light setting removes. The slopes are one density scale per channel, about a reference grey, that
-does, for a print material: Kodak Portra Endura paper and Kodak Vision 2383 print film. They are measured on the
-grey steps of the profile's chart, for each of its seven exposures (a frame takes those of its own bracket), through a model of the print material (spektrafilm's print
-profiles); the model has not been compared with a real print.
-
-Beside a printing density file goes one Common LUT Format (CLF) transform per print material, named after the
-output: `scan.kodak_portra_endura.clf` and `scan.kodak_2383.clf` for `scan.tif`. Each takes the file's code values
-to the print as sRGB. Its first node is a matrix for the frame: the colour balance, the exposure and the slopes,
-none of which the density file holds. The exposure places the frame's mid grey, the chart's mid grey on the bracket
-and at the exposure the search gave the frame, on the print's mid grey. The nodes after it are the print material
-alone (its curves and dyes, `prints/`). Any tool that reads CLF renders the picture, for example with OpenImageIO:
+Beside a printing density file (`rp180`, `apd`) goes one Common LUT Format (CLF) transform per print material,
+named after the output: `scan.kodak_portra_endura.clf` and `scan.kodak_2383.clf` for `scan.tif`. Each takes the
+file's code values to a print of the negative on that material, as sRGB. Any tool that reads CLF renders it, for
+example OpenImageIO:
 
 ```sh
 oiiotool scan.tif --ociofiletransform scan.kodak_portra_endura.clf -o print.jpg
 ```
 
-To print lighter or darker, add a constant to the three offsets of the first matrix (0.30 is a stop). The balance
-and the slopes are applied there and nowhere else: do not also add them by hand from the metadata.
+The CLF is computed when the file is written, from two things that are kept apart: the film's profile set (the
+chart's grey steps at each of its seven exposures, the film base, the density matrices) and the print material
+(`prints/<print>.json`: its curves, dye spectra and spectral sensitivity). Neither holds anything of the other.
+
+| Node | What it does | Computed from |
+|------|--------------|---------------|
+| Matrix | Code values to the print material's printing density, with the frame's colour balance, exposure and slopes | The frame (the search's gains, exposure and bracket), the film's chart, the print material |
+| Matrix, range, 1D table | Printing density to the dye amount of each layer of the print | The print material |
+| Matrix, 3D table (45 points a side) | Dye amounts to the print's colour under its viewing light | The print material |
+| Exponent | The sRGB curve | |
+
+The exposure places the frame's mid grey on the print's mid grey: the chart's mid grey on the bracket the search
+chose, at the exposure it found. The slopes are one density scale on red and on blue. A film whose channels differ
+in contrast prints a grey scale that drifts in colour from shadows to highlights, which no printer-light setting
+removes; the slopes are fitted, for the frame's bracket, so that the bracket's 24 grey steps print neutral on the
+print material. The density file itself holds none of this; its metadata records what was computed (`print`). To
+print lighter or darker, add a constant to the three offsets of the first matrix (0.30 is a stop). Apply the
+balance, the exposure and the slopes once: through the CLF, or by hand from the metadata, not both.
+
+The print materials are a model (spektrafilm's print profiles, a 3200 K printer lamp) and have not been compared
+with a real print.
 
 ### The film base from a capture
 

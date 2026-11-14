@@ -507,10 +507,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     for (auto it = dm.begin(); it != dm.end(); ++it) {
       bool is_measure = false;
       for (int m = 0; m < kDensityMeasures; ++m) is_measure |= it.key() == density_measure_key((DensityMeasure)m);
-      if (it.key() == "print_slopes") {
-        if (it.value().is_object()) bundle.print_slopes_json = it.value().dump();
-        continue;
-      }
       if (!is_measure) fit[it.key()] = it.value();
     }
     bundle.density_fit_json = fit.dump();
@@ -635,6 +631,20 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
           tgt.patches_g.push_back(it.value()["g"].get<float>());
         }
+      }
+      // The grey steps gs0, gs1, ... with all three channels, for the print slopes.
+      for (int k = 0; k < 64; ++k) {
+        const std::string key = "gs" + std::to_string(k);
+        if (!tj["patches"].contains(key)) break;
+        const auto& pj = tj["patches"][key];
+        if (!pj.is_object() || !pj.contains("r") || !pj.contains("g") || !pj.contains("b") || !pj["r"].is_number() ||
+            !pj["g"].is_number() || !pj["b"].is_number()) {
+          tgt.grey_rgb.clear();
+          tgt.grey_mid = -1;
+          break;
+        }
+        if (k == 10) tgt.grey_mid = (int)tgt.grey_rgb.size();
+        tgt.grey_rgb.push_back({pj["r"].get<double>(), pj["g"].get<double>(), pj["b"].get<double>()});
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
       // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)

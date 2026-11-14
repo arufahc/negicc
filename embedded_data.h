@@ -22,7 +22,7 @@
 #include <vector>
 
 // Data files built into neg_process (EMBED_FILES in the Makefile): the profile bundles under profiles/<Key>/ (bundle.json and
-// its ICC profiles), the print materials' transforms under prints/ (np_density.h density_print_clf), the DINOv3 intent adapters under models/dinov3-small_<stock>/ and the DINOv3 backbone when it
+// its ICC profiles), the print materials under prints/ (np_print.h), the DINOv3 intent adapters under models/dinov3-small_<stock>/ and the DINOv3 backbone when it
 // was exported before the build (models/dinov3-small/backbone.onnx, and backbone.engine in USE_CUDA=1 builds), the
 // neutral-patch head of the white-light curve fit (models/neutral_head/neutral_head.bin) and the tone heads of its
 // tone stage (models/tone_head/tone_head.bin). Names are the files' paths in

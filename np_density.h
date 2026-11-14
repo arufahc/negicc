@@ -35,9 +35,7 @@
 #pragma once
 
 #include <cstdint>
-#include <array>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "profile_bundle.h"
@@ -83,6 +81,8 @@ struct DensityClip {
 void density_encode_in_place(uint16_t* pixels, int width, int height, int channels, const float merged[9],
                              double base_level, const double m[9], const DensityEncoding& enc, DensityClip& clip);
 
+struct FramePrint;
+
 // What the file's metadata records beyond the bundle's own (ProfileBundle::light_source_json, density_fit_json).
 struct DensityRecord {
   DensityMeasure measure = kDensityStatusM;
@@ -101,6 +101,8 @@ struct DensityRecord {
   double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
   std::string balance_target;
   std::string tool_version;
+  // How the frame prints on each print material (density_frame_print), recorded in the metadata; null before.
+  const std::vector<FramePrint>* prints = nullptr;
 };
 // The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.
 std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
@@ -109,48 +111,40 @@ std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
 // False, and zeros, when the record has no balance.
 bool density_balance_offset(const DensityRecord& rec, double offset[3]);
 
-// A print material's slopes for one measure, from the bundle (density_matrices.print_slopes; negicc-station
-// src/print_slopes.py): the 3x3 from the measure's density to the print material's printing density, and the scale
-// on each channel of that density, about a reference grey, that makes this film's grey scale print grey:
+// How one frame prints on one print material (np_print.h): computed when the file is written, from the bundle's chart
+// readings and the print material's data. Neither is stored in the other.
 //
-//     print density = to_print * about + slopes * (to_print * (D - about))
+//   bracket   the exposure bracket the picture conversion's search gave the frame; without a search, the middle one.
+//   grey      the frame's mid grey as the measure's density: the chart's mid grey (gs10) on that bracket, denser by
+//             log10(E) in every light channel for the exposure E the search found. It prints as the print's mid grey.
+//   slopes    fitted on that bracket's grey steps, as the print material reads them, about its mid grey, so that they
+//             print neutral (fit_print_slopes). 1 when the bracket has too few usable steps.
 //
-// They are a property of the film and the print material, measured on the profile's chart. A density file is written
-// without them; its metadata records them (print_slopes) and the CLF beside it applies them (density_print_clf).
-struct PrintSlopes {
-  std::string id;                     // "kodak_portra_endura", "kodak_2383"
-  std::string name;
+//     printing density = grey_density + slopes * (to_print * (D + balance - grey))
+struct FramePrint {
+  std::string id, name;               // the print material
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  double slopes[3] = {1, 1, 1};       // fitted on all the exposure brackets together
-  double about[3] = {0, 0, 0};
-  // The slopes fitted on each exposure bracket alone (bracket_slopes), by the bracket's name: a frame is printed
-  // with those of the bracket the picture conversion's search gave it, else with `slopes`.
-  std::vector<std::pair<std::string, std::array<double, 3>>> bracket_slopes;
-  const double* slopes_for(const std::string& bracket) const {
-    for (const auto& b : bracket_slopes) {
-      if (b.first == bracket) return b.second.data();
-    }
-    return slopes;
-  }
+  std::string to_print_for;           // the film model the matrix is for, or "any"
+  std::string bracket;
+  bool searched = false;              // the bracket and exposure come from the search
+  double exposure = 1.0;
+  double grey[3] = {0, 0, 0};
+  double slopes[3] = {1, 1, 1};
+  bool fitted = false;
+  int steps = 0, steps_judged = 0;
+  double chroma_before = 0.0, chroma_after = 0.0;
+  double grey_density = 0.70;
 };
-std::vector<PrintSlopes> density_print_slopes(const ProfileBundle& bundle, DensityMeasure measure);
+struct PrintMaterial;   // np_print.h
+// False, with why in err, when the bundle has no grey steps for the bracket or the material has no matrix for the
+// measure.
+bool density_frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err);
 
 // A Common LUT Format (CLF, ST 2136-1) transform for one density file and one print material: the file's code values
-// (0-1) to the print, as sRGB. print_clf is the print material alone (prints/<id>.clf, written by negicc-station:
-// its printing density, kPrintGreyDensity exposed as mid grey, to sRGB). In front of its nodes goes one Matrix for the
-// frame, with the balance (density_balance_offset) and the film's slopes:
-//
-//     printing density = kPrintGreyDensity + slopes * (to_print * (D + balance - grey))
-//
-// grey is the frame's mid grey (density_frame_grey), which so prints as the print's mid grey; without one, the film's
-// reference grey (PrintSlopes::about). This is the only place the balance, the exposure and the slopes are applied.
-// Empty when print_clf has no Matrix node to go in front of.
-constexpr double kPrintGreyDensity = 0.70;
-// The frame's mid grey as the measure's density: the chart's mid grey on the bracket the picture conversion's search
-// chose for the frame (the bundle's print_slopes.bracket_grey_density), denser by log10(E) in every light channel for
-// the exposure E it found. False, and zeros, when the search gave none or the bundle has no table.
-bool density_frame_grey(const DensityRecord& rec, double grey[3]);
-std::string density_print_clf(const DensityRecord& rec, const PrintSlopes& print, const std::string& print_clf);
+// (0-1) to the print, as sRGB. Its first node is a Matrix for the frame, with the balance (density_balance_offset),
+// the exposure and the slopes of FramePrint; nodes is the print material's own (print_clf_nodes). This is the only
+// place the balance, the exposure and the slopes are applied.
+std::string density_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
 
 struct DensityFileInfo {
   std::string make, model;            // the camera
