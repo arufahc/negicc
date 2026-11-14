@@ -195,6 +195,14 @@ static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double 
   return true;
 }
 
+const char* density_measure_name(DensityMeasure m) {
+  return m == kDensityStatusM ? "statusm" : m == kDensityRp180 ? "rp180" : "apd";
+}
+
+const char* density_measure_key(DensityMeasure m) {
+  return m == kDensityStatusM ? "status_m" : m == kDensityRp180 ? "rp180_printing_density" : "academy_printing_density";
+}
+
 double shutter_to_seconds_d(const std::string& shutter) {
   std::string s = shutter;
   const size_t b = s.find_first_not_of(" \t\r\n");
@@ -491,6 +499,38 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
   bundle.normalization_target = j.value("normalization_target", 55000.0);
 
+  // The density export's matrices and the light's record (profile_bundle.h); absent from older bundles.
+  if (j.contains("light_source") && j["light_source"].is_object()) bundle.light_source_json = j["light_source"].dump();
+  if (j.contains("density_matrices") && j["density_matrices"].is_object()) {
+    const nlohmann::json& dm = j["density_matrices"];
+    nlohmann::json fit = nlohmann::json::object();
+    for (auto it = dm.begin(); it != dm.end(); ++it) {
+      bool is_measure = false;
+      for (int m = 0; m < kDensityMeasures; ++m) is_measure |= it.key() == density_measure_key((DensityMeasure)m);
+      if (!is_measure) fit[it.key()] = it.value();
+    }
+    bundle.density_fit_json = fit.dump();
+    for (int m = 0; m < kDensityMeasures; ++m) {
+      const char* key = density_measure_key((DensityMeasure)m);
+      if (!dm.contains(key)) continue;
+      const nlohmann::json& node = dm[key];
+      float unused[9];
+      DensityMatrix& out = bundle.density_matrix[m];
+      if (!node.is_object() || !node.contains("matrix") || !parse_3x3_matrix(node["matrix"], unused, out.m)) {
+        throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
+                                 " needs a 3x3 \"matrix\"");
+      }
+      for (double v : out.m) {
+        if (!std::isfinite(v)) {
+          throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
+                                   ".matrix has a value that is not finite");
+        }
+      }
+      out.present = true;
+      out.target_curves = node.value("target_curves", std::string());
+    }
+  }
+
   // The colour path the bundle was measured in. Bundles from before the field are camera_raw_rgb.
   // py-ref: negicc_station/src/film_profiling.py @ 813166c (FilmProfile.__init__)
   const nlohmann::json& space = j.contains("input_space") ? j["input_space"] : nlohmann::json("camera_raw_rgb");
@@ -590,6 +630,29 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
         if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
           tgt.patches_g.push_back(it.value()["g"].get<float>());
+        }
+      }
+      // The grey steps: every key gs<N>, in the order of N, with all three channels (print slopes, np_density.h).
+      // py-ref: negicc_station/src/print_slopes.py (grey_scale)
+      std::vector<std::pair<int, std::array<double, 3>>> steps;
+      bool whole = true;
+      for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
+        const std::string& key = it.key();
+        if (key.size() < 3 || key.compare(0, 2, "gs") != 0 ||
+            key.find_first_not_of("0123456789", 2) != std::string::npos) {
+          continue;
+        }
+        const auto& pj = it.value();
+        whole = whole && pj.is_object() && pj.contains("r") && pj.contains("g") && pj.contains("b") &&
+                pj["r"].is_number() && pj["g"].is_number() && pj["b"].is_number();
+        if (!whole) break;
+        steps.push_back({std::stoi(key.substr(2)), {pj["r"].get<double>(), pj["g"].get<double>(), pj["b"].get<double>()}});
+      }
+      if (whole) {
+        std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& step : steps) {
+          if (step.first == 10) tgt.grey_mid = (int)tgt.grey_rgb.size();
+          tgt.grey_rgb.push_back(step.second);
         }
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.

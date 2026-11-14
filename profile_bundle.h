@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <array>
 #include <string>
 #include <vector>
 #include <lcms2.h>
@@ -41,7 +42,8 @@ enum OutputEncoding : int {
   ENCODE_SRGB = negicc::ENCODE_SRGB,                // sRGB transfer curve, with the highlight shoulder
   ENCODE_SRGB_LINEAR = negicc::ENCODE_SRGB_LINEAR,  // linear-light sRGB primaries
   ENCODE_CUSTOM = 2,                                // PCS XYZ through Little-CMS into an output ICC profile
-  ENCODE_NONE = 3                                   // the corrected camera RGB, no film profile applied
+  ENCODE_NONE = 3,                                  // the corrected camera RGB, no film profile applied
+  ENCODE_DENSITY = 4                                // density above the film base as code values (np_density.h)
 };
 
 // The film profile's AToB0 pipeline (negicc::ProfileData) with host defaults: no profile, identity matrix.
@@ -96,6 +98,11 @@ struct BundleTarget {
   bool has_target_ev = false;
   double target_ev = 0.0;
   std::vector<float> patches_g;
+  // The chart's grey steps gs<N>, in the order of N, as the profile read them (R, G, B after the crosstalk correction, at this
+  // target's exposure), and the position of the mid grey gs10 among them (-1 without one): what a print's slopes are
+  // fitted on (np_density.h density_frame_print). Empty when a step lacks a channel.
+  std::vector<std::array<double, 3>> grey_rgb;
+  int grey_mid = -1;
   float tgt_min_g = 0.0f;
   float tgt_max_g = 0.0f;
   std::vector<uint8_t> icc_bytes;
@@ -133,6 +140,20 @@ const char* to_string(InputSpace space);
 // TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
 // profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and
 // the profiling code writes it.
+// A density measure a scan's densities are written in (-P): Status M, SMPTE RP 180 printing density (the Cineon
+// convention) or Academy Printing Density (SMPTE ST 2065-2, which ADX encodes).
+enum DensityMeasure { kDensityStatusM = 0, kDensityRp180 = 1, kDensityApd = 2, kDensityMeasures = 3 };
+// The -P value ("statusm", "rp180", "apd") and the bundle's density_matrices key of a measure.
+const char* density_measure_name(DensityMeasure m);
+const char* density_measure_key(DensityMeasure m);
+
+// A bundle's matrix for one density measure: D_measure = m * D_light, both above the film base, rows R, G, B.
+struct DensityMatrix {
+  bool present = false;
+  double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  std::string target_curves;          // what defines the measure, as the bundle names it
+};
+
 struct ProfileBundle {
   std::string path;
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
@@ -151,6 +172,13 @@ struct ProfileBundle {
   float film_base_iso = 100.0f;
   double normalization_target = 55000.0;
   std::vector<BundleTarget> targets;
+  // The density export (-P statusm, rp180, apd): the 3x3 matrices that turn the scanning light's channel densities
+  // above the film base into a standard density measure, fitted when the bundle was built from the light's spectrum
+  // (density_matrices), and the light's record with that spectrum (light_source), kept as the bundle writes it for
+  // the output's metadata. A bundle from before the fields has none.
+  DensityMatrix density_matrix[kDensityMeasures];
+  std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
+  std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
 };
 
 // Seconds of a shutter speed as the profiles record it, a string ("1/8s", "0.4s", "2"); throws

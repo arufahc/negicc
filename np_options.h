@@ -90,9 +90,23 @@ struct Options {
   bool input_curves_given = false;             // recorded curves given to --fit_curves (replayed, not fitted)
   negicc::InputCurves input_curves;
 
+  // The film base (--film_base): auto (the default: a base capture's values kept in <output>.json by a previous run,
+  // else read from the scan), or a capture of unexposed film, with the region to read it over (x y w h in sensor
+  // pixels) when given after a colon; without one the region is found on the capture (np_film_base.h).
+  std::string film_base_file;                  // empty: auto, or scan
+  bool film_base_scan = false;                 // --film_base scan: read from the scan, whatever <output>.json holds
+  bool film_base_roi_given = false;
+  int film_base_roi[4] = {0, 0, 0, 0};
+
   // Output
   std::string output;                          // -o
   std::string colorspace;                      // -P, empty when not given
+  // -P statusm, rp180 or apd: the output is the negative's density above the film base in that measure, not a
+  // picture. -o's extension gives the container: .dpx (10 bits, code = 95 + 500 D) or .tif / .tiff (16 bits,
+  // code = 1520 + 8000 D).
+  bool density = false;
+  DensityMeasure density_measure = kDensityStatusM;
+  bool output_dpx = false;
   bool no_metadata = false;
 };
 

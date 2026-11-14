@@ -327,7 +327,7 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
 # white-light tone stage.
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
-EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx \
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc prints/*.json models/dinov3-small_*/adapter.onnx \
                                 models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
                                 $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
               $(wildcard $(BACKBONE_FILES))
@@ -397,7 +397,7 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 # neg_process.cc is, so moving code between them leaves its arithmetic as it was.
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
               $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
-NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc
+NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc np_film_base.cc np_density.cc np_print.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
           dinov3_auto_solver.h film_frame_detector.h film_base_detector.h profile_bundle.h \
