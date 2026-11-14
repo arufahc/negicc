@@ -2685,9 +2685,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
           ret = 1;
           break;
         }
+        const double* sl = rec.has_balance ? print.slopes_for(rec.balance_target) : print.slopes;
         log_info("Wrote '%s': this file as a print on %s, sRGB (slopes %.3f %.3f %.3f%s)\n", path.c_str(),
-                 print.name.c_str(), print.slopes[0], print.slopes[1], print.slopes[2],
-                 rec.has_balance ? ", the frame's balance" : ", no balance found");
+                 print.name.c_str(), sl[0], sl[1], sl[2],
+                 rec.has_balance ? ", the frame's bracket and balance" : ", no balance found");
       }
     }
   } else {

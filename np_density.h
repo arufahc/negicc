@@ -35,7 +35,9 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "profile_bundle.h"
@@ -119,8 +121,17 @@ struct PrintSlopes {
   std::string id;                     // "kodak_portra_endura", "kodak_2383"
   std::string name;
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  double slopes[3] = {1, 1, 1};
+  double slopes[3] = {1, 1, 1};       // fitted on all the exposure brackets together
   double about[3] = {0, 0, 0};
+  // The slopes fitted on each exposure bracket alone (bracket_slopes), by the bracket's name: a frame is printed
+  // with those of the bracket the picture conversion's search gave it, else with `slopes`.
+  std::vector<std::pair<std::string, std::array<double, 3>>> bracket_slopes;
+  const double* slopes_for(const std::string& bracket) const {
+    for (const auto& b : bracket_slopes) {
+      if (b.first == bracket) return b.second.data();
+    }
+    return slopes;
+  }
 };
 std::vector<PrintSlopes> density_print_slopes(const ProfileBundle& bundle, DensityMeasure measure);
 
