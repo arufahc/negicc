@@ -2655,30 +2655,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
-    // Beside a printing density file, one CLF per print material built in (prints/<id>.json), named after the whole
-    // output as the sidecar is (a CLF fits one file: its code scale, measure and channel factors): the file's codes to
-    // the print as sRGB. How the frame prints (its bracket's slopes, its mid grey) is computed here and recorded.
-    std::vector<PrintMaterial> print_materials;
-    std::vector<FramePrint> prints;
-    std::vector<std::string> print_paths;
-    if (o.density_measure != kDensityStatusM) {
-      for (const EmbeddedFile& file : list_embedded_files()) {
-        const std::string name = file.name;
-        if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
-        PrintMaterial material;
-        FramePrint print;
-        std::string err;
-        if (!load_print_material(std::string((const char*)file.data, file.size), material, err) ||
-            !density_frame_print(rec, material, print, err)) {
-          log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
-          continue;
-        }
-        print_paths.push_back(o.output + "." + material.id + ".clf");
-        print_materials.push_back(std::move(material));
-        prints.push_back(print);
-      }
-      rec.prints = &prints;
-    }
+    // The prints of the file (np_print.h): how the frame prints on each print material, recorded in the metadata,
+    // and the CLFs that go beside it.
+    const DensityPrints prints = density_prints(rec, o.output);
+    rec.print_json = prints.metadata_json;
     density_json = density_metadata_json(rec);
     DensityFileInfo info;
     info.make = proc->imgdata.idata.make;
@@ -2688,30 +2668,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     const RgbInput img = scan.image();
     // The CLFs first: one that cannot be written stops the run before the density file exists, and a density file
     // that cannot be written takes its CLFs with it. Nothing is left half done.
-    size_t written = 0;
-    for (; ret == 0 && written < prints.size(); ++written) {
-      const size_t k = written;
-      const std::string clf = density_print_clf(rec, prints[k], print_clf_nodes(print_materials[k]));
-      FILE* f = fopen(print_paths[k].c_str(), "wb");
-      const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
-      if ((f && fclose(f) != 0) || !ok) {
-        log_error("Cannot write '%s'\n", print_paths[k].c_str());
-        ret = 1;
-        break;
-      }
-      log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
-               print_paths[k].c_str(), prints[k].name.c_str(), prints[k].bracket.c_str(), prints[k].slopes[0],
-               prints[k].slopes[1], prints[k].slopes[2], prints[k].fitted ? "" : ", not fitted");
-    }
+    ret = write_print_clfs(rec, prints);
     if (ret == 0) {
       log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
       ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
                                              c.density.encoding, o.density_measure, info)
                          : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
                                               info);
-    }
-    if (ret != 0) {
-      for (size_t k = 0; k < prints.size(); ++k) unlink(print_paths[k].c_str());
+      if (ret != 0) remove_print_clfs(prints);
     }
   } else {
     log_info("Writing TIFF '%s'\n", o.output.c_str());

@@ -632,29 +632,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           tgt.patches_g.push_back(it.value()["g"].get<float>());
         }
       }
-      // The grey steps: every key gs<N>, in the order of N, with all three channels (print slopes, np_density.h).
-      // py-ref: negicc_station/src/print_slopes.py (grey_scale)
-      std::vector<std::pair<int, std::array<double, 3>>> steps;
-      bool whole = true;
-      for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
-        const std::string& key = it.key();
-        if (key.size() < 3 || key.compare(0, 2, "gs") != 0 ||
-            key.find_first_not_of("0123456789", 2) != std::string::npos) {
-          continue;
-        }
-        const auto& pj = it.value();
-        whole = whole && pj.is_object() && pj.contains("r") && pj.contains("g") && pj.contains("b") &&
-                pj["r"].is_number() && pj["g"].is_number() && pj["b"].is_number();
-        if (!whole) break;
-        steps.push_back({std::stoi(key.substr(2)), {pj["r"].get<double>(), pj["g"].get<double>(), pj["b"].get<double>()}});
-      }
-      if (whole) {
-        std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-        for (const auto& step : steps) {
-          if (step.first == 10) tgt.grey_mid = (int)tgt.grey_rgb.size();
-          tgt.grey_rgb.push_back(step.second);
-        }
-      }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
       // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)
       for (int k = 0; k < 24; ++k) {

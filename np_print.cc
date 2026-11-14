@@ -19,9 +19,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <sstream>
+#include <utility>
 
 #include <nlohmann/json.hpp>
+
+#include "embedded_data.h"
+#include "np_log.h"
+#include "profile_bundle.h"
 
 namespace {
 
@@ -359,4 +366,297 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   s += "  <Exponent inBitDepth=\"32f\" outBitDepth=\"32f\" style=\"monCurveRev\">\n"
        "    <ExponentParams exponent=\"2.4\" offset=\"0.055\" />\n  </Exponent>\n";
   return s;
+}
+
+namespace {
+
+// The bundle's JSON as it was loaded: the file at its path (a split bundle's directory holds bundle.json), else the
+// one built in under its key.
+std::string bundle_json_text(const ProfileBundle& bundle) {
+  for (const std::string& path : {bundle.path, bundle.path + "/bundle.json"}) {
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream text;
+    if (file && text << file.rdbuf() && !text.str().empty() && text.str()[0] == '{') return text.str();
+  }
+  std::string dir;
+  const EmbeddedFile* file = find_embedded_bundle(bundle.key, dir);
+  return file ? std::string((const char*)file->data, file->size) : std::string();
+}
+
+// The chart's grey steps of one bracket as the profile read them (R, G, B after the crosstalk correction, at the
+// bracket's exposure): every patch gs<N>, in the order of N, and the position of the mid grey gs10 among them.
+// py-ref: negicc_station/src/print_slopes.py (grey_scale)
+bool bracket_grey_steps(const ProfileBundle& bundle, const std::string& bracket,
+                        std::vector<std::array<double, 3>>& rgb, int& mid) {
+  const nlohmann::json j = nlohmann::json::parse(bundle_json_text(bundle), nullptr, false);
+  if (!j.is_object() || !j.contains("targets") || !j["targets"].is_array()) return false;
+  for (const auto& target : j["targets"]) {
+    if (!target.is_object() || target.value("name", "") != bracket || !target.contains("patches")) continue;
+    std::vector<std::pair<int, std::array<double, 3>>> steps;
+    for (auto it = target["patches"].begin(); it != target["patches"].end(); ++it) {
+      const std::string& key = it.key();
+      if (key.size() < 3 || key.compare(0, 2, "gs") != 0 || key.find_first_not_of("0123456789", 2) != std::string::npos) {
+        continue;
+      }
+      const auto& p = it.value();
+      if (!p.is_object() || !p.contains("r") || !p.contains("g") || !p.contains("b") || !p["r"].is_number() ||
+          !p["g"].is_number() || !p["b"].is_number()) {
+        return false;
+      }
+      steps.push_back({std::stoi(key.substr(2)), {p["r"].get<double>(), p["g"].get<double>(), p["b"].get<double>()}});
+    }
+    std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    rgb.clear();
+    mid = -1;
+    for (const auto& step : steps) {
+      if (step.first == 10) mid = (int)rgb.size();
+      rgb.push_back(step.second);
+    }
+    return !rgb.empty() && mid >= 0;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err) {
+  if (!rec.bundle || !rec.matrix || rec.measure == kDensityStatusM) return err = "not a printing density", false;
+  const ProfileBundle& bundle = *rec.bundle;
+  // The film model the bundle's density matrices were fitted on names the material's matrix for this film.
+  const nlohmann::json fit_record = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
+  const std::string film = fit_record.is_object() ? fit_record.value("film_dye_spectra", std::string()) : std::string();
+  const PrintMaterial::ToPrint* to_print = material.to_print_for(rec.measure == kDensityRp180 ? 0 : 1, film);
+  if (!to_print) return err = "the print material has no matrix for this measure", false;
+  if (bundle.targets.empty()) return err = "the bundle has no brackets", false;
+  FramePrint p;
+  p.id = material.id;
+  p.name = material.name;
+  p.grey_density = material.grey_density;
+  for (int k = 0; k < 9; ++k) p.to_print[k] = to_print->m[k];
+  p.to_print_for = to_print->film;
+  // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure.
+  const BundleTarget* target = nullptr;
+  p.searched = rec.has_balance && rec.balance_e > 0.0;
+  if (p.searched) {
+    for (const BundleTarget& t : bundle.targets) {
+      if (t.name == rec.balance_target) target = &t;
+    }
+  }
+  if (!target) {
+    p.searched = false;
+    target = &bundle.targets[bundle.targets.size() / 2];
+  }
+  p.bracket = target->name;
+  p.exposure = p.searched ? rec.balance_e : 1.0;
+  std::vector<std::array<double, 3>> grey_rgb;
+  int grey_mid = -1;
+  if (!bracket_grey_steps(bundle, target->name, grey_rgb, grey_mid)) {
+    return err = "the bundle's bracket " + target->name + " has no grey steps", false;
+  }
+  // The steps as light densities above the profile's film base, at the base's exposure, then as the measure's and as
+  // the print material's density.
+  // py-ref: negicc_station/src/print_slopes.py (grey_scale, bracket_slopes)
+  const double base_exposure = shutter_to_seconds_d(bundle.film_base_shutter.empty() ? "1/8s" : bundle.film_base_shutter) *
+                               (double)bundle.film_base_iso / 100.0;
+  const double target_exposure = shutter_to_seconds_d(target->shutter) * target->iso / 100.0;
+  if (!(base_exposure > 0.0) || !(target_exposure > 0.0)) return err = "the bundle's exposures cannot be read", false;
+  const double ratio = base_exposure / target_exposure;
+  const double* m = rec.matrix->m;
+  std::vector<std::array<double, 3>> pd;
+  std::array<double, 3> mid = {0.0, 0.0, 0.0};
+  for (size_t i = 0; i < grey_rgb.size(); ++i) {
+    double light[3], measure[3];
+    for (int c = 0; c < 3; ++c) {
+      const double v = grey_rgb[i][c] * ratio, base = bundle.film_base_avg_d[c];
+      if (!(v > 0.0) || !(base > 0.0)) return err = "a grey step or the film base of the bundle is not positive", false;
+      light[c] = -std::log10(v / base);
+    }
+    for (int c = 0; c < 3; ++c) measure[c] = m[c * 3] * light[0] + m[c * 3 + 1] * light[1] + m[c * 3 + 2] * light[2];
+    if ((int)i == grey_mid) mid = {measure[0], measure[1], measure[2]};
+    std::array<double, 3> row;
+    for (int c = 0; c < 3; ++c) {
+      row[c] = p.to_print[c * 3] * measure[0] + p.to_print[c * 3 + 1] * measure[1] + p.to_print[c * 3 + 2] * measure[2];
+    }
+    pd.push_back(row);
+  }
+  // The exposure E multiplies the light's channels before the bracket's profile reads them: the film that the
+  // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
+  const double shift = std::log10(p.exposure);
+  for (int c = 0; c < 3; ++c) p.grey[c] = mid[c] + shift * (m[c * 3] + m[c * 3 + 1] + m[c * 3 + 2]);
+  const PrintSlopeFit fit = fit_print_slopes(material, pd, grey_mid);
+  p.steps = (int)pd.size();
+  p.steps_judged = fit.judged;
+  p.fitted = fit.ok;
+  if (fit.ok) {
+    for (int c = 0; c < 3; ++c) p.slopes[c] = fit.slopes[c];
+    p.at_bound = fit.at_bound;
+    p.chroma_before = fit.chroma_before;
+    p.chroma_after = fit.chroma_after;
+  }
+  out = p;
+  return true;
+}
+
+std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes) {
+  // x: the file's code / max code.  D_j = (x_j * max - offset) / (scale * k_j);  with the balance bal and the frame's
+  // mid grey,  pd_i = grey_density + s_i * sum_j P_ij (D_j + bal_j - grey_j).
+  //
+  // bal is the whole of what the search's gains g and b do to the density, level included (the zero-sum offsets and
+  // the mean taken out of them). The conversion renders as the chart's mid grey the film that is denser than it by
+  // log10 E, log10 E g and log10 E b in the light's channels; with grey carrying log10 E and bal the rest, that film
+  // comes out at grey_density in all three channels.
+  const DensityEncoding& e = rec.encoding;
+  const double max_code = (double)e.max_code();
+  double bal[3], bal_mean = 0.0;
+  const bool balanced = density_balance_offset(rec, bal, &bal_mean);
+  for (double& v : bal) v += bal_mean;
+  double a[9], b[3];
+  for (int i = 0; i < 3; ++i) {
+    double shift = 0.0;
+    for (int j = 0; j < 3; ++j) {
+      const double p = print.slopes[i] * print.to_print[i * 3 + j];
+      a[i * 3 + j] = p * max_code / (e.scale * e.k[j]);
+      shift += p * (bal[j] - print.grey[j] - e.offset / (e.scale * e.k[j]));
+    }
+    b[i] = print.grey_density + shift;
+  }
+  // Names come from a bundle and a print material file: escaped, and the text built without a fixed buffer.
+  auto xml = [](const std::string& text) {
+    std::string out;
+    for (char ch : text) {
+      switch (ch) {
+        case '&': out += "&amp;"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '"': out += "&quot;"; break;
+        default: out += ch;
+      }
+    }
+    return out;
+  };
+  auto num = [](const char* format, double a, double b, double c) {
+    char text[96];
+    snprintf(text, sizeof text, format, a, b, c);
+    return std::string(text);
+  };
+  char buf[256];
+  const std::string print_name = xml(print.name);
+  std::string s = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+  s += "<ProcessList id=\"negicc.print." + xml(print.id) + "\" name=\"" + print_name + "\" compCLFversion=\"3.0\">\n";
+  snprintf(buf, sizeof buf, "%s density in %d bits, code = %d + %d k D", density_measure_name(rec.measure), e.bits,
+           e.offset, e.scale);
+  s += "  <Description>This frame (" + xml(rec.bundle_key) + ", " + buf + ") printed on " + print_name +
+       ", as sRGB. The first Matrix takes the file's code values to the print's printing density with the frame's "
+       "colour balance, density offsets " + num("%+.4f %+.4f %+.4f", bal[0], bal[1], bal[2]) +
+       (balanced ? "" : " (no balance was found: none applied)") + ", and slopes " +
+       num("%.4f %.4f %.4f", print.slopes[0], print.slopes[1], print.slopes[2]) +
+       " about the frame's mid grey, density " + num("%.4f %.4f %.4f", print.grey[0], print.grey[1], print.grey[2]) +
+       ". The mid grey is the chart's on the bracket " + xml(print.bracket) +
+       (print.searched ? " and at the exposure the picture conversion's search gave this frame"
+                       : " (no search: the middle bracket)") +
+       "; balanced, it prints as the print's mid grey. The slopes are " +
+       (print.fitted ? "fitted on that bracket's grey steps so that they print neutral"
+                     : "1: the bracket has too few usable grey steps") +
+       ". The density file holds none of this. Add a constant to the three offsets of the first Matrix to print "
+       "lighter (+) or darker (-), 0.30 a stop.</Description>\n";
+  s += "  <Description>The 1D and 3D tables are derived by neg_process from the print profile of this material in "
+       "spektrafilm (Andrea Volpato, https://github.com/andreavolpato/spektrafilm): its curve per layer resampled, "
+       "and its dye spectra computed into colours. CC BY-SA 4.0, "
+       "https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt. The matrices are computed "
+       "by neg_process and are not spektrafilm's data. A model, not compared with a real print.</Description>\n";
+  s += "  <InputDescriptor>density code values</InputDescriptor>\n  <OutputDescriptor>sRGB</OutputDescriptor>\n";
+  s += "  <Matrix inBitDepth=\"32f\" outBitDepth=\"32f\">\n    <Array dim=\"3 4\">\n";
+  for (int i = 0; i < 3; ++i) {
+    snprintf(buf, sizeof buf, "      %.10g %.10g %.10g %.10g\n", a[i * 3], a[i * 3 + 1], a[i * 3 + 2], b[i]);
+    s += buf;
+  }
+  s += "    </Array>\n  </Matrix>\n";
+  s += nodes;
+  s += "</ProcessList>\n";
+  return s;
+}
+
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output) {
+  DensityPrints out;
+  if (rec.measure == kDensityStatusM) return out;
+  for (const EmbeddedFile& file : list_embedded_files()) {
+    const std::string name = file.name;
+    if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
+    PrintMaterial material;
+    FramePrint print;
+    std::string err;
+    if (!load_print_material(std::string((const char*)file.data, file.size), material, err) ||
+        !frame_print(rec, material, print, err)) {
+      log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
+      continue;
+    }
+    out.paths.push_back(output + "." + material.id + ".clf");
+    out.materials.push_back(std::move(material));
+    out.frames.push_back(print);
+  }
+  if (out.frames.empty()) return out;
+  using nlohmann::ordered_json;
+  ordered_json j;
+  const std::vector<FramePrint>* prints = &out.frames;
+  {
+    // How the frame prints on each print material: computed for this frame, applied by the CLF beside the file.
+    ordered_json materials = ordered_json::object();
+    for (const FramePrint& p : *prints) {
+      const double* t = p.to_print;
+      ordered_json one = {
+          {"print", p.name},
+          {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
+          {"to_print_density_for", p.to_print_for},
+          {"bracket", p.bracket},
+          {"bracket_from", p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
+          {"exposure", p.exposure},
+          {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
+          {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
+          {"slopes_fitted", p.fitted},
+          {"slopes_at_bound", p.at_bound},
+          {"grey_steps", p.steps},
+          {"grey_steps_judged", p.steps_judged}};
+      if (p.fitted) {
+        one["grey_scale_chroma_before"] = p.chroma_before;
+        one["grey_scale_chroma_after"] = p.chroma_after;
+      }
+      materials[p.id] = one;
+    }
+    j["print"] = {
+        {"what", "how this frame prints on each print material: the slopes are fitted, when the file is written, on "
+                 "the grey steps of the frame's exposure bracket in the film's profile, as the print material reads "
+                 "them, so that they print neutral"},
+        {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
+                    "balance = suggested_balance.density_offset + density_offset_mean_removed"},
+        {"grey_scale_chroma", "mean C*ab of the bracket's judged grey steps as the CLF prints them, about the "
+                              "bracket's mid grey: _before with no slopes, _after with the slopes"},
+        {"applied", "no: the densities are as read. The CLF beside the file for each print material "
+                    "(<output>.<print>.clf) applies the balance, the exposure and the slopes; apply them once, there "
+                    "or by hand, not both"},
+        {"materials", materials}};
+  }
+  out.metadata_json = j["print"].dump();
+  return out;
+}
+
+void remove_print_clfs(const DensityPrints& prints) {
+  for (const std::string& path : prints.paths) remove(path.c_str());
+}
+
+int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints) {
+  for (size_t k = 0; k < prints.frames.size(); ++k) {
+    const FramePrint& print = prints.frames[k];
+    const std::string clf = frame_print_clf(rec, print, print_clf_nodes(prints.materials[k]));
+    FILE* f = fopen(prints.paths[k].c_str(), "wb");
+    const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
+    if ((f && fclose(f) != 0) || !ok) {
+      log_error("Cannot write '%s'\n", prints.paths[k].c_str());
+      remove_print_clfs(prints);
+      return 1;
+    }
+    log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
+             prints.paths[k].c_str(), print.name.c_str(), print.bracket.c_str(), print.slopes[0], print.slopes[1],
+             print.slopes[2], print.fitted ? "" : ", not fitted");
+  }
+  return 0;
 }

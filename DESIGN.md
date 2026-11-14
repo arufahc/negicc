@@ -235,8 +235,8 @@ material, and a print material's file holds nothing measured on a film.
 
 | # | Stage | When | Input | Output |
 |---|---|---|---|---|
-| A | Density matrices of a film and a light | When the profile set is built (negicc-station) | The light's spectrum, the film's dye spectra, the response curves of the density measures | `M`, one 3×3 per measure, in `bundle.json` |
-| B | A print material's file | Once per print material (negicc-station) | The print material's sensitivity, curves and dye spectra, a printer lamp, the film's dye spectra, the measures' response curves, the CIE observer and a viewing light | `prints/<print>.json` |
+| A | Density matrices of a film and a light | When the profile set is built | The light's spectrum, the film's dye spectra, the response curves of the density measures | `M`, one 3×3 per measure, in `bundle.json` |
+| B | A print material's file | Once per print material, ahead of time | The print material's sensitivity, curves and dye spectra, a printer lamp, the film's dye spectra, the measures' response curves, the CIE observer and a viewing light | `prints/<print>.json` |
 | 1 | Scan to light density | Per pixel | Camera RGB, the flat field, the crosstalk correction, the film base | `D_light`: density in the red, green and blue of the LED |
 | 2 | Light density to a density measure | Per pixel | `D_light`, `M` | The density file: Status M, RP 180 or APD |
 | 3 | Balance and exposure | Per frame: stage 1 of the conversion, the Auto search | The frame | The bracket, the exposure `E`, the gains `g` and `b` |
@@ -248,8 +248,8 @@ material, and a print material's file holds nothing measured on a film.
 | 9 | Display | CLF node 7 | | sRGB |
 
 Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
-(`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds stages 1, 2, 4 and 5, and `np_print.cc`
-the print material: the fit of the slopes and nodes 2 to 7.
+(`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds the density file, stages 1 and 2, and
+`np_print.cc` everything of the print: stages 4 to 9, the print material, the fit of the slopes and the CLF.
 
 ## The spectral data
 
@@ -259,9 +259,9 @@ which uses what the print material's file already holds.
 | Data | Source | Used by | Kept in |
 |---|---|---|---|
 | The scanning light's spectrum, split into its three LED bands at 495 and 578 nm | A spectrometer reading of the light | A | `bundle.json`, `light_source` |
-| The film's three dye spectra and base, and its neutral scale as dye amounts against log exposure | spektrafilm's film profile | A, B | negicc-station |
-| The response curves of Status M, RP 180 (SMPTE RP 180, Table 1) and APD (SMPTE ST 2065-2) | The standards | A, B | negicc-station |
-| The print material's spectral sensitivity per layer | spektrafilm's print profile | B | negicc-station |
+| The film's three dye spectra and base, and its neutral scale as dye amounts against log exposure | spektrafilm's film profile | A, B | Not shipped: used when the profile set and the print material's file are built |
+| The response curves of Status M, RP 180 (SMPTE RP 180, Table 1) and APD (SMPTE ST 2065-2) | The standards | A, B | Not shipped: used when the profile set and the print material's file are built |
+| The print material's spectral sensitivity per layer | spektrafilm's print profile | B | Not shipped: used when the print material's file is built |
 | The printer lamp | A 3200 K blackbody, no heat filter | B | A constant |
 | The print material's curve per layer, its three dye spectra and base | spektrafilm's print profile | B, then 7 and 8 | `prints/<print>.json` |
 | The CIE 1931 2° observer, and D50 (paper) or D55 (print film) as the viewing light | The CIE tables | B, then 8 | `prints/<print>.json`, as their product |
