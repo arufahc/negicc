@@ -485,6 +485,146 @@ flatter and blue 1 % steeper. Above a density of 1.5 the corrected green and blu
 comparison stops meaning much. The measured matrix is kept: it is of this camera and this light, and needs no
 spectral data of the camera.
 
+## White-light scans
+
+Not built: `neg_process` refuses a density output on a white-light profile set. This section specifies how a
+white-light scan gets a density file and its CLFs, and reports the experiments run so far.
+
+**What differs.** A white-light scan is decoded to linear Rec.2020 channels: the camera's channels, balanced on the
+film base, through the camera's colour matrix. There is no crosstalk correction `C`, since there are no separate
+LEDs to unmix. The density above the base is taken per channel as before:
+
+```
+T        = B v / base level
+D_white  = -log10(max(T, 0.0001))
+D        = M D_white                          M = F L, as for a narrow-band scan
+```
+
+**`L` for white light.** No spectrum of the light is measured, and none of the camera. Linear Rec.2020 is taken as
+what it is defined to be: the CIE 1931 observer under D65, through the Rec.2020 matrix. `L` is then fitted as for the
+LED, on the same 3000 sample colours of the film model: each sample's spectrum is seen by the observer under D65,
+turned into Rec.2020, and its density per channel taken against the model's own base; `L` is the least-squares 3×3
+from those densities to the dye amounts. `F` does not depend on the light and is the narrow-band profile set's. So a
+white-light profile set carries the same block as a narrow-band one, with another `L`, and needs no narrow-band
+twin, no measured light and no data of the camera.
+
+For Portra 400:
+
+```
+L        2.267  -0.798  -0.024        F L for APD   2.663  -0.905  -0.007
+        -0.330   1.376  -0.053                     -0.424   1.612  -0.032
+        -0.036  -0.079   1.044                     -0.005  -0.051   1.060
+```
+
+**How far the assumption holds.** The model's film base comes out at 1 : 0.51 : 0.31 in Rec.2020, and the base of
+the white-light profile set is 1 : 0.56 : 0.30. Each film stock also has both profile sets built from the same seven
+chart negatives, so every patch is read twice, and the APD of a white-light reading can be held against the APD of
+the narrow-band one. Over the 2016 patches (red / green / blue, RMS):
+
+| Stock | `F L` from spectra | A 3×3 fitted to the chart itself |
+|---|---|---|
+| Portra 400 | 0.081 / 0.055 / 0.050 | 0.040 / 0.034 / 0.021 |
+| Portra 160 | 0.041 / 0.067 / 0.031 | 0.040 / 0.037 / 0.024 |
+| Ektar 100 | 0.085 / 0.087 / 0.065 | 0.048 / 0.058 / 0.028 |
+
+The second column is the best any 3×3 can do on this scanner, fitted to the very patches it is judged on. The
+matrix from spectra is 1.5 to 2 times less exact; part of that is a constant offset per channel (Portra 400's red
+reads 0.07 low on average), which the frame's balance takes out. `M` for the LED fits its film model within 0.010,
+so a white-light density file is several times less exact than a narrow-band one either way. The matrix fitted to
+the chart is not used: it belongs to one camera and one light, and needs the narrow-band twin.
+
+**Mid grey and slopes.** A white-light profile set has its own seven brackets, and the search picks among those.
+Its `brackets` entry is computed from its own chart readings by the formulas of "Derivations": the mid grey patch of
+each bracket as `D_white`, and the slopes from the bracket's 24 grey steps in APD through `F L`. For Portra 400,
+against the narrow-band profile set of the same negatives (red, blue):
+
+| Bracket | White light | Narrow band |
+|---|---|---|
+| 1 | 0.978, 1.072 | 0.916, 0.982 |
+| 3 | 0.975, 1.086 | 0.911, 0.993 |
+| 5 | 0.932, 1.067 | 0.890, 0.999 |
+| 7 | 0.899, 1.029 | 0.871, 0.987 |
+
+The slopes are measured through the matrix they are used with, so where the two matrices read a channel's contrast
+differently, the slopes differ to match: in both chains the bracket's grey steps end with equal contrast in the
+three channels. What the slopes cannot repair is the matrix's error off the grey axis.
+
+**Balance and exposure.** The search is stage 1 of the white-light conversion and gives a bracket, `E`, `g` and `b`
+as it does under the LED. The gains multiply the channels `D_white` is taken in, so `balance` and `grey` are those
+of "Derivations", and the frame matrix and the print are a narrow-band scan's.
+
+**The curve fit.** A white-light conversion has one stage more: the fit bends the green and blue input curves so
+that what the frame shows as neutral comes out grey. It acts on a channel's stops below the film base, `u = -D log2
+10`:
+
+```
+f(u) = u (1 + a + k tanh(u - u_med))          held below the densest cell; red has no curve
+```
+
+The bracket's profile renders the chart's grey step `i`, of channel density `d_i`, as that grey. With the fitted
+curves, the film this frame renders as step `i` has the channel density `D_i` that solves
+
+```
+f_c(u) = -(d_c,i + log10(E g_c)) log2 10      D_c,i = -u / log2 10
+```
+
+That is the grey scale the fitted curves describe. It goes forward through `F L` to APD, where the frame's mid grey
+is its mid step and the slopes are the regression of "Derivations" over its 24 steps:
+
+```
+grey'  = F L D_mid                            balance and exposure are in D_mid already
+S'     = slopes of F L (D_i - D_mid)
+print density = 0.70 + S' P (D - grey')
+```
+
+No pixel goes back to the scan's channels: the fit changes two numbers of the first matrix and its offsets, as `g`
+and `b` do. Without a fit (`a = k = 0`) this is the narrow-band formula exactly. It agrees with the fitted curves
+on the grey axis and, like `S`, is a diagonal scale off it. This is the one place where something is computed when
+a file is written: 24 points through a 3×3 and a closed-form regression.
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Light assumed | D65, CIE 1931 2° observer, linear Rec.2020 | What the white-light decode aims at. It stands in for the light's and the camera's spectra. |
+| `F` | The narrow-band profile set's | It depends on the film and the measure alone. |
+| Offset in `L` | None | Bare film is zero in both readings. |
+| Film base | The scan's rebate, else the thinnest film in the frame | `--film_base` with a capture reads a narrow-band mosaic and is not available under white light. |
+| Curve fit | Run for a density output on white light | Its result goes into the first matrix alone. |
+
+**What it needs to be built.** The profile builder writes `L` and the `brackets` entry into a white-light profile
+set; `neg_process` drops its two refusals, runs the curve fit for a white-light density output, and builds the first
+matrix from the fitted grey scale. No print material's file changes.
+
+**The experiments.** Both ran in a copy of `neg_process` with the refusals removed, on white-light scans whose film
+stocks are unknown, each on the Portra 400 profile set as the picture conversion runs them today.
+
+1. *The matrix fitted to the chart, with slopes fitted for print neutrality* (an earlier form of both): 137 scans
+   from 43 cameras. All gave a density file and both CLFs, and OpenImageIO rendered every one. A blind comparison by
+   the owner on 48, the paper print against the picture conversion: 14 for the print, 15 for the picture, 19 no
+   preference. With the base from the rebate 12 to 8 with 15 no preference; with the base estimated from the frame
+   2 to 7 with 4. On a roll scanned under the LED the same comparison went 8 to 26.
+2. *`L` from spectra, the brackets of this section, and the curve fit folded in*: the 137 and 8 raws uploaded
+   through the web portal. All 145 converted. The first matrix built here from the search alone equals the one the
+   copy writes within 0.0004. The fit applied on every frame, with `k = 0` on all; against the chart's, its slopes
+   differ by −0.15 to +0.17 in red and −0.23 to +0.06 in blue over the middle 80 % of frames. Against the picture
+   conversion the print's median luminance is 0.12 stop darker on the median frame, with extremes of 1.3 stop darker
+   and 1.0 lighter; without the fit the extremes are 2.9 darker and 0.3 lighter. A blind comparison is set up and not
+   yet voted on.
+
+**Limits.**
+
+- **The assumption is as good as the camera's colour matrix.** A camera is not the CIE observer, least of all on
+  film dyes, and a scanning light is not D65. On the one scanner where it can be checked the cost is the first
+  column of the table above. On other cameras it is not measured.
+- **Noise.** The rows of `F L` are about twice as long as those of the LED's `M` (2.8 against 1.5 in red), so the
+  scan's noise is about twice as large in the density file.
+- **The film base.** Where the frame shows no rebate, the zero of the density file is an estimate, and those frames
+  did worst in the first comparison.
+- **Dense film.** A broad channel compresses high densities, which a 3×3 cannot undo. The largest errors are on
+  the densest brackets.
+- **Another stock's brackets.** A scan of an unprofiled stock borrows the mid grey and slopes of the profile set it
+  runs on. The curve fit corrects the slopes from the frame itself; whether that is enough is what the second
+  comparison asks.
+
 ## Dependencies
 
 The source, basis, storage and invalidation condition of each quantity in the chain:
@@ -498,6 +638,7 @@ The source, basis, storage and invalidation condition of each quantity in the ch
 | `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
 | `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json` | A print material is added |
 | Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
+| `L` for white light (not built) | The film's dye spectra; the CIE observer under D65 as linear Rec.2020 | Fitted on the film model | A white-light `bundle.json`, `light_to_film` | The film stock changes |
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
 | Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |
 
