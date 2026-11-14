@@ -313,7 +313,7 @@ material, and a print material's file holds nothing measured on a film.
 
 | # | Stage | When | Input | Output |
 |---|---|---|---|---|
-| A | Density matrices of a film and a light | When the profile set is built | The light's spectrum, the film's dye spectra, the response curves of the density measures | `M`, one 3×3 per measure, in `bundle.json` |
+| A | Density matrices of a film and a light | When the profile set is built | Three inputs: (1) the light's spectrum; (2) the film's three dye spectra and base; (3) the response curves of one density measure, a red, a green and a blue curve. There are three measures (Status M, RP 180, APD), each with its own three curves, and the fit is run once for each | `M`, one 3×3 per measure, in `bundle.json` |
 | B | A print material's file | Once per print material, ahead of time | The print material's sensitivity, curves and dye spectra, a printer lamp, the film's dye spectra, the measures' response curves, the CIE observer and a viewing light | `prints/<print>.json` |
 | 1 | Scan to light density | Per pixel | Camera RGB, the flat field, the crosstalk correction, the film base | `D_light`: density in the red, green and blue of the LED |
 | 2 | Light density to a density measure | Per pixel | `D_light`, `M` | The density file: Status M, RP 180 or APD |
@@ -343,6 +343,10 @@ which uses what the print material's file already holds.
 | The printer lamp | A 3200 K blackbody, no heat filter | B | A constant |
 | The print material's curve per layer, its three dye spectra and base | spektrafilm's print profile | B, then 7 and 8 | `prints/<print>.json` |
 | The CIE 1931 2° observer, and D50 (paper) or D55 (print film) as the viewing light | The CIE tables | B, then 8 | `prints/<print>.json`, as their product |
+
+Of these, `bundle.json` holds the light's spectrum and nothing else spectral: not the film's dye spectra and not
+the response curves. It names the film model its matrices were fitted on (`density_matrices.film_dye_spectra`) and
+holds the fitted matrices.
 
 Measured on the scanner and not spectral: the crosstalk correction, the flat field, the film base, and the chart's
 grey steps at each of the seven exposure brackets, which are in `bundle.json`.
