@@ -503,31 +503,81 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   if (j.contains("light_source") && j["light_source"].is_object()) bundle.light_source_json = j["light_source"].dump();
   if (j.contains("density_matrices") && j["density_matrices"].is_object()) {
     const nlohmann::json& dm = j["density_matrices"];
+    // Everything but the matrices and the brackets is the fit's record, kept for the output's metadata.
     nlohmann::json fit = nlohmann::json::object();
     for (auto it = dm.begin(); it != dm.end(); ++it) {
-      bool is_measure = false;
+      bool is_measure = it.key() == "brackets";
       for (int m = 0; m < kDensityMeasures; ++m) is_measure |= it.key() == density_measure_key((DensityMeasure)m);
       if (!is_measure) fit[it.key()] = it.value();
     }
     bundle.density_fit_json = fit.dump();
+    auto finite = [](const double* m) {
+      for (int k = 0; k < 9; ++k) {
+        if (!std::isfinite(m[k])) return false;
+      }
+      return true;
+    };
+    // The matrix of a measure is kept in two parts: light_to_film, the light's density to the film's dye amounts
+    // (it changes with the light), and the measure's film_to_measure, the dye amounts to its density (it does not).
+    // The matrix applied is their product, with the measure's light_density_factors on the light's densities.
+    float unused[9];
+    double light_to_film[9];
+    const bool has_light = dm.contains("light_to_film") && dm["light_to_film"].is_object() &&
+                           dm["light_to_film"].contains("matrix") &&
+                           parse_3x3_matrix(dm["light_to_film"]["matrix"], unused, light_to_film) && finite(light_to_film);
     for (int m = 0; m < kDensityMeasures; ++m) {
       const char* key = density_measure_key((DensityMeasure)m);
       if (!dm.contains(key)) continue;
       const nlohmann::json& node = dm[key];
-      float unused[9];
       DensityMatrix& out = bundle.density_matrix[m];
-      if (!node.is_object() || !node.contains("matrix") || !parse_3x3_matrix(node["matrix"], unused, out.m)) {
-        throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
-                                 " needs a 3x3 \"matrix\"");
+      double film_to_measure[9];
+      if (!has_light || !node.is_object() || !node.contains("film_to_measure") ||
+          !parse_3x3_matrix(node["film_to_measure"], unused, film_to_measure) || !finite(film_to_measure)) {
+        throw std::runtime_error("profile bundle " + raw_path + ": density_matrices needs a finite 3x3 "
+                                 "light_to_film.matrix and " + key + ".film_to_measure");
       }
-      for (double v : out.m) {
-        if (!std::isfinite(v)) {
+      double factor[3] = {1.0, 1.0, 1.0};
+      if (node.contains("light_density_factors")) {
+        const nlohmann::json& f = node["light_density_factors"];
+        if (!f.is_array() || f.size() != 3 || !f[0].is_number() || !f[1].is_number() || !f[2].is_number()) {
           throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
-                                   ".matrix has a value that is not finite");
+                                   ".light_density_factors needs three numbers");
+        }
+        for (int c = 0; c < 3; ++c) factor[c] = f[c].get<double>();
+      }
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          double v = 0.0;
+          for (int k = 0; k < 3; ++k) v += film_to_measure[r * 3 + k] * light_to_film[k * 3 + c];
+          out.m[r * 3 + c] = v * factor[c];
         }
       }
       out.present = true;
       out.target_curves = node.value("target_curves", std::string());
+    }
+    // What a print of a density file takes from the chart, per exposure bracket (np_print.h): the mid grey as the
+    // light's density, and the slopes of the film's grey scale.
+    if (dm.contains("brackets") && dm["brackets"].is_object() && dm["brackets"].contains("targets") &&
+        dm["brackets"]["targets"].is_object()) {
+      auto three = [](const nlohmann::json& a, double out[3]) {
+        if (!a.is_array() || a.size() != 3) return false;
+        for (int c = 0; c < 3; ++c) {
+          if (!a[c].is_number()) return false;
+          out[c] = a[c].get<double>();
+          if (!std::isfinite(out[c])) return false;
+        }
+        return true;
+      };
+      const nlohmann::json& targets = dm["brackets"]["targets"];
+      for (auto it = targets.begin(); it != targets.end(); ++it) {
+        DensityBracket bracket;
+        bracket.name = it.key();
+        if (it.value().is_object() && it.value().contains("grey_light_density") && it.value().contains("slopes") &&
+            three(it.value()["grey_light_density"], bracket.grey_light) && three(it.value()["slopes"], bracket.slopes) &&
+            bracket.slopes[0] > 0.0 && bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0) {
+          bundle.density_brackets.push_back(bracket);
+        }
+      }
     }
   }
 
@@ -630,33 +680,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
         if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
           tgt.patches_g.push_back(it.value()["g"].get<float>());
-        }
-      }
-      // The grey steps: every key gs<N> (N of at most four digits), in the order of N, with all three channels.
-      // py-ref: negicc_station/src/print_slopes.py (grey_scale)
-      {
-        std::vector<std::pair<int, std::array<double, 3>>> steps;
-        bool whole = true;
-        for (auto it = tj["patches"].begin(); it != tj["patches"].end() && whole; ++it) {
-          const std::string& key = it.key();
-          if (key.size() < 3 || key.size() > 6 || key.compare(0, 2, "gs") != 0 ||
-              key.find_first_not_of("0123456789", 2) != std::string::npos) {
-            continue;
-          }
-          const auto& pj = it.value();
-          whole = pj.is_object() && pj.contains("r") && pj.contains("g") && pj.contains("b") && pj["r"].is_number() &&
-                  pj["g"].is_number() && pj["b"].is_number();
-          if (whole) {
-            steps.push_back({std::stoi(key.substr(2)),
-                             {pj["r"].get<double>(), pj["g"].get<double>(), pj["b"].get<double>()}});
-          }
-        }
-        if (whole) {
-          std::sort(steps.begin(), steps.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-          for (const auto& step : steps) {
-            if (step.first == 10) tgt.grey_mid = (int)tgt.grey_rgb.size();
-            tgt.grey_rgb.push_back(step.second);
-          }
         }
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
