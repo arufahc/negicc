@@ -507,6 +507,10 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     for (auto it = dm.begin(); it != dm.end(); ++it) {
       bool is_measure = false;
       for (int m = 0; m < kDensityMeasures; ++m) is_measure |= it.key() == density_measure_key((DensityMeasure)m);
+      if (it.key() == "print_slopes") {
+        if (it.value().is_object()) bundle.print_slopes_json = it.value().dump();
+        continue;
+      }
       if (!is_measure) fit[it.key()] = it.value();
     }
     bundle.density_fit_json = fit.dump();
