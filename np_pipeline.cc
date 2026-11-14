@@ -2664,6 +2664,32 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
                                            c.density.encoding, o.density_measure, info)
                        : write_density_tiff(o.output, img.pixels, img.width, img.height, img.channels, density_json,
                                             info);
+    if (ret == 0 && o.density_measure != kDensityStatusM) {
+      // Beside a printing density file, one CLF per print material the bundle has slopes for: the file's codes to
+      // the print as sRGB, with the frame's balance and the film's slopes, which the file itself does not hold.
+      const std::string stem = o.output.substr(0, o.output.find_last_of('.'));
+      for (const PrintSlopes& print : density_print_slopes(s.bundle, o.density_measure)) {
+        const EmbeddedFile* body = find_embedded_file("prints/" + print.id + ".clf");
+        const std::string clf =
+            body ? density_print_clf(rec, print, std::string((const char*)body->data, body->size)) : std::string();
+        if (clf.empty()) {
+          log_warn("No print transform for %s is built in (prints/%s.clf): no CLF written for it\n",
+                   print.name.c_str(), print.id.c_str());
+          continue;
+        }
+        const std::string path = stem + "." + print.id + ".clf";
+        FILE* f = fopen(path.c_str(), "wb");
+        const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
+        if ((f && fclose(f) != 0) || !ok) {
+          log_error("Cannot write '%s'\n", path.c_str());
+          ret = 1;
+          break;
+        }
+        log_info("Wrote '%s': this file as a print on %s, sRGB (slopes %.3f %.3f %.3f%s)\n", path.c_str(),
+                 print.name.c_str(), print.slopes[0], print.slopes[1], print.slopes[2],
+                 rec.has_balance ? ", the frame's balance" : ", no balance found");
+      }
+    }
   } else {
     log_info("Writing TIFF '%s'\n", o.output.c_str());
     ret = write_tiff(proc, attach_profile, o.output, s.is_bundle ? c.embedded_icc : std::vector<uint8_t>{},

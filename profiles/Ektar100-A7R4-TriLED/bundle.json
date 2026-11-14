@@ -20368,15 +20368,263 @@
    "max_calibration": 0.1,
    "applied_to": [],
    "not_applied": "a factor lies more than 0.1 from 1: this film or this scan differs from the film model by more than two factors should hide"
+  },
+  "print_slopes": {
+   "what": "per-channel density scales, about a reference grey, that make this film's grey scale print neutral on a print material; recorded, not applied to a density file",
+   "formula": "print density = to_print_density @ about_density + slopes * (to_print_density @ (density - about_density))",
+   "measured_on": "the grey steps of the profile's targets at every exposure, printed with one printer-light setting",
+   "patches": 168,
+   "printer_light": "3200 K blackbody",
+   "print_profiles_source": "spektrafilm print profiles (Andrea Volpato), CC BY-SA 4.0",
+   "rp180_printing_density": {
+    "kodak_portra_endura": {
+     "print": "Kodak Professional Portra Endura",
+     "viewing_illuminant": "D50",
+     "to_print_density": [
+      [
+       0.85584,
+       0.06819,
+       0.01865
+      ],
+      [
+       -0.01562,
+       0.91307,
+       0.08656
+      ],
+      [
+       -0.0655,
+       0.00984,
+       1.10913
+      ]
+     ],
+     "slopes": [
+      0.9737,
+      1.0,
+      1.2411
+     ],
+     "about_density": [
+      0.6092,
+      0.4613,
+      0.5962
+     ],
+     "patches_judged": 133,
+     "grey_scale_chroma_before": {
+      "mean": 4.6,
+      "max": 7.97
+     },
+     "grey_scale_chroma_after": {
+      "mean": 2.41,
+      "max": 7.68
+     }
+    },
+    "kodak_2383": {
+     "print": "Kodak Vision 2383",
+     "viewing_illuminant": "D55",
+     "to_print_density": [
+      [
+       0.94045,
+       0.02686,
+       0.01615
+      ],
+      [
+       -0.01698,
+       0.9142,
+       0.0624
+      ],
+      [
+       -0.05408,
+       -0.01112,
+       1.13024
+      ]
+     ],
+     "slopes": [
+      0.8019,
+      1.0,
+      1.3383
+     ],
+     "about_density": [
+      0.6092,
+      0.4613,
+      0.5962
+     ],
+     "patches_judged": 111,
+     "grey_scale_chroma_before": {
+      "mean": 8.35,
+      "max": 13.3
+     },
+     "grey_scale_chroma_after": {
+      "mean": 4.04,
+      "max": 9.33
+     }
+    }
+   },
+   "bracket_grey_density": {
+    "rp180_printing_density": {
+     "Target 1": [
+      0.2586,
+      0.1899,
+      0.3466
+     ],
+     "Target 2": [
+      0.4349,
+      0.3239,
+      0.4722
+     ],
+     "Target 3": [
+      0.6092,
+      0.4613,
+      0.5962
+     ],
+     "Target 4": [
+      0.8357,
+      0.6723,
+      0.7349
+     ],
+     "Target 5": [
+      0.9861,
+      0.9034,
+      0.8691
+     ],
+     "Target 6": [
+      1.1217,
+      1.0678,
+      0.9839
+     ],
+     "Target 7": [
+      1.3233,
+      1.25,
+      1.1253
+     ]
+    },
+    "academy_printing_density": {
+     "Target 1": [
+      0.2583,
+      0.1861,
+      0.4019
+     ],
+     "Target 2": [
+      0.4337,
+      0.3168,
+      0.5364
+     ],
+     "Target 3": [
+      0.6072,
+      0.4511,
+      0.669
+     ],
+     "Target 4": [
+      0.8331,
+      0.658,
+      0.8117
+     ],
+     "Target 5": [
+      0.985,
+      0.8873,
+      0.9554
+     ],
+     "Target 6": [
+      1.121,
+      1.0497,
+      1.0791
+     ],
+     "Target 7": [
+      1.3221,
+      1.2284,
+      1.2289
+     ]
+    }
+   },
+   "academy_printing_density": {
+    "kodak_portra_endura": {
+     "print": "Kodak Professional Portra Endura",
+     "viewing_illuminant": "D50",
+     "to_print_density": [
+      [
+       0.87866,
+       0.05352,
+       0.00937
+      ],
+      [
+       0.01671,
+       0.9094,
+       0.06418
+      ],
+      [
+       0.0229,
+       0.04598,
+       0.88402
+      ]
+     ],
+     "slopes": [
+      0.9735,
+      1.0,
+      1.2428
+     ],
+     "about_density": [
+      0.6072,
+      0.4511,
+      0.669
+     ],
+     "patches_judged": 133,
+     "grey_scale_chroma_before": {
+      "mean": 4.62,
+      "max": 8.0
+     },
+     "grey_scale_chroma_after": {
+      "mean": 2.41,
+      "max": 7.7
+     }
+    },
+    "kodak_2383": {
+     "print": "Kodak Vision 2383",
+     "viewing_illuminant": "D55",
+     "to_print_density": [
+      [
+       0.96359,
+       0.01092,
+       0.0073
+      ],
+      [
+       0.01362,
+       0.91011,
+       0.04447
+      ],
+      [
+       0.03648,
+       0.02742,
+       0.89875
+      ]
+     ],
+     "slopes": [
+      0.802,
+      1.0,
+      1.3387
+     ],
+     "about_density": [
+      0.6072,
+      0.4511,
+      0.669
+     ],
+     "patches_judged": 111,
+     "grey_scale_chroma_before": {
+      "mean": 8.35,
+      "max": 13.3
+     },
+     "grey_scale_chroma_after": {
+      "mean": 4.04,
+      "max": 9.34
+     }
+    }
+   }
   }
  },
  "export": {
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "9cf4c66d282c0f6db6ed7d69bbb8b6aedd6f249579b4861428840f69bb470ceb",
+  "source_sha256": "1eea2381b79f71c8efac7ed8f1d260f43aae798ffd784c40422de0fd1238dd78",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "cc632b866370fcd08ae27a505a9c8fbcea44118c"
+  "station_commit": "f80fa00a859771288812c97cd9f2ade50f8e3b43"
  }
 }

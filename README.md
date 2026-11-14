@@ -124,11 +124,35 @@ modelled.
 Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
 its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
 
+`--flat` applies to a density output as it does to a picture: the flat field corrects the scan and the film base
+capture before the density is taken, so the light's fall-off towards the corners does not read as density.
+
 Density takes no bracket, exposure, gain, curve fit, contrast step or look option, and no white-LED scan. The
 densities are the film as measured. The search that balances a picture still runs, and the colour balance it finds
 for the frame is recorded in the file and the sidecar, not applied (`suggested_balance`: one density offset per
 channel, summing to zero, that a grading tool can add). The sidecar
 counts the pixels that ran off either end of the code range, and those too dense to measure.
+
+A printing density file (`rp180`, `apd`) also records the film's print slopes (`print_slopes`), again not applied.
+A film whose three channels differ in contrast prints a grey scale that drifts in colour from shadows to highlights,
+which no printer-light setting removes. The slopes are one density scale per channel, about a reference grey, that
+does, for a print material: Kodak Portra Endura paper and Kodak Vision 2383 print film. They are measured on the
+grey steps of the profile's chart at its seven exposures, through a model of the print material (spektrafilm's print
+profiles); the model has not been compared with a real print.
+
+Beside a printing density file goes one Common LUT Format (CLF) transform per print material, named after the
+output: `scan.kodak_portra_endura.clf` and `scan.kodak_2383.clf` for `scan.tif`. Each takes the file's code values
+to the print as sRGB. Its first node is a matrix for the frame: the colour balance, the exposure and the slopes,
+none of which the density file holds. The exposure places the frame's mid grey, the chart's mid grey on the bracket
+and at the exposure the search gave the frame, on the print's mid grey. The nodes after it are the print material
+alone (its curves and dyes, `prints/`). Any tool that reads CLF renders the picture, for example with OpenImageIO:
+
+```sh
+oiiotool scan.tif --ociofiletransform scan.kodak_portra_endura.clf -o print.jpg
+```
+
+To print lighter or darker, add a constant to the three offsets of the first matrix (0.30 is a stop). The balance
+and the slopes are applied there and nowhere else: do not also add them by hand from the metadata.
 
 ### The film base from a capture
 
@@ -280,7 +304,7 @@ If one of them is yours and you want it removed, open an issue.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside an `rp180` or `apd` file goes one CLF per print material (`<output>.<print>.clf`) that renders it as a print, sRGB. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |

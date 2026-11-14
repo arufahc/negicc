@@ -20403,15 +20403,263 @@
    "applied_to": [
     "status_m"
    ]
+  },
+  "print_slopes": {
+   "what": "per-channel density scales, about a reference grey, that make this film's grey scale print neutral on a print material; recorded, not applied to a density file",
+   "formula": "print density = to_print_density @ about_density + slopes * (to_print_density @ (density - about_density))",
+   "measured_on": "the grey steps of the profile's targets at every exposure, printed with one printer-light setting",
+   "patches": 168,
+   "printer_light": "3200 K blackbody",
+   "print_profiles_source": "spektrafilm print profiles (Andrea Volpato), CC BY-SA 4.0",
+   "rp180_printing_density": {
+    "kodak_portra_endura": {
+     "print": "Kodak Professional Portra Endura",
+     "viewing_illuminant": "D50",
+     "to_print_density": [
+      [
+       0.86282,
+       0.08748,
+       0.04882
+      ],
+      [
+       -0.02499,
+       0.89562,
+       0.1157
+      ],
+      [
+       -0.13204,
+       -0.01975,
+       1.21702
+      ]
+     ],
+     "slopes": [
+      0.9322,
+      1.0,
+      1.03
+     ],
+     "about_density": [
+      0.4358,
+      0.4865,
+      0.4247
+     ],
+     "patches_judged": 134,
+     "grey_scale_chroma_before": {
+      "mean": 2.11,
+      "max": 6.33
+     },
+     "grey_scale_chroma_after": {
+      "mean": 1.53,
+      "max": 5.05
+     }
+    },
+    "kodak_2383": {
+     "print": "Kodak Vision 2383",
+     "viewing_illuminant": "D55",
+     "to_print_density": [
+      [
+       0.94087,
+       0.03559,
+       0.03948
+      ],
+      [
+       -0.02069,
+       0.89292,
+       0.08346
+      ],
+      [
+       -0.10095,
+       -0.02674,
+       1.20073
+      ]
+     ],
+     "slopes": [
+      0.7641,
+      1.0,
+      1.1092
+     ],
+     "about_density": [
+      0.4358,
+      0.4865,
+      0.4247
+     ],
+     "patches_judged": 114,
+     "grey_scale_chroma_before": {
+      "mean": 5.4,
+      "max": 11.2
+     },
+     "grey_scale_chroma_after": {
+      "mean": 1.67,
+      "max": 5.19
+     }
+    }
+   },
+   "bracket_grey_density": {
+    "rp180_printing_density": {
+     "Target 1": [
+      0.1787,
+      0.2011,
+      0.1954
+     ],
+     "Target 2": [
+      0.3013,
+      0.3508,
+      0.3121
+     ],
+     "Target 3": [
+      0.4358,
+      0.4865,
+      0.4247
+     ],
+     "Target 4": [
+      0.6655,
+      0.6557,
+      0.5947
+     ],
+     "Target 5": [
+      0.8094,
+      0.8012,
+      0.7287
+     ],
+     "Target 6": [
+      0.9628,
+      0.9855,
+      0.8883
+     ],
+     "Target 7": [
+      1.196,
+      1.1782,
+      1.0457
+     ]
+    },
+    "academy_printing_density": {
+     "Target 1": [
+      0.1853,
+      0.1987,
+      0.2225
+     ],
+     "Target 2": [
+      0.3123,
+      0.3466,
+      0.3511
+     ],
+     "Target 3": [
+      0.4506,
+      0.4799,
+      0.4727
+     ],
+     "Target 4": [
+      0.6847,
+      0.6445,
+      0.6533
+     ],
+     "Target 5": [
+      0.8329,
+      0.7877,
+      0.8017
+     ],
+     "Target 6": [
+      0.9922,
+      0.9698,
+      0.9812
+     ],
+     "Target 7": [
+      1.2299,
+      1.1577,
+      1.1429
+     ]
+    }
+   },
+   "academy_printing_density": {
+    "kodak_portra_endura": {
+     "print": "Kodak Professional Portra Endura",
+     "viewing_illuminant": "D50",
+     "to_print_density": [
+      [
+       0.88435,
+       0.06711,
+       0.01831
+      ],
+      [
+       0.01988,
+       0.89546,
+       0.07458
+      ],
+      [
+       0.02917,
+       0.02455,
+       0.89852
+      ]
+     ],
+     "slopes": [
+      0.9318,
+      1.0,
+      1.0303
+     ],
+     "about_density": [
+      0.4506,
+      0.4799,
+      0.4727
+     ],
+     "patches_judged": 134,
+     "grey_scale_chroma_before": {
+      "mean": 2.12,
+      "max": 6.35
+     },
+     "grey_scale_chroma_after": {
+      "mean": 1.53,
+      "max": 5.05
+     }
+    },
+    "kodak_2383": {
+     "print": "Kodak Vision 2383",
+     "viewing_illuminant": "D55",
+     "to_print_density": [
+      [
+       0.95955,
+       0.01336,
+       0.01139
+      ],
+      [
+       0.02046,
+       0.89176,
+       0.05002
+      ],
+      [
+       0.05952,
+       0.01716,
+       0.88403
+      ]
+     ],
+     "slopes": [
+      0.7641,
+      1.0,
+      1.1092
+     ],
+     "about_density": [
+      0.4506,
+      0.4799,
+      0.4727
+     ],
+     "patches_judged": 114,
+     "grey_scale_chroma_before": {
+      "mean": 5.4,
+      "max": 11.2
+     },
+     "grey_scale_chroma_after": {
+      "mean": 1.67,
+      "max": 5.19
+     }
+    }
+   }
   }
  },
  "export": {
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "83a5ac764673f1d47ccc33a16d54288a1add324e2fc2ccd59c21b7617b92037b",
+  "source_sha256": "f12d990c089aae8d102d031f3b56973ba1cbdd8901a385288540b7e228115448",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "cc632b866370fcd08ae27a505a9c8fbcea44118c"
+  "station_commit": "f80fa00a859771288812c97cd9f2ade50f8e3b43"
  }
 }

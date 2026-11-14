@@ -327,7 +327,7 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
 # white-light tone stage.
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
-EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc models/dinov3-small_*/adapter.onnx \
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc prints/*.clf models/dinov3-small_*/adapter.onnx \
                                 models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
                                 $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
               $(wildcard $(BACKBONE_FILES))

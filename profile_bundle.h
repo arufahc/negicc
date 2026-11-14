@@ -173,6 +173,9 @@ struct ProfileBundle {
   DensityMatrix density_matrix[kDensityMeasures];
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
+  // "density_matrices.print_slopes", compact: for each printing density measure and print material, what makes this
+  // film's grey scale print grey (np_density.h PrintSlopes). Empty when the bundle has none.
+  std::string print_slopes_json;
 };
 
 // Seconds of a shutter speed as the profiles record it, a string ("1/8s", "0.4s", "2"); throws
