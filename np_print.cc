@@ -99,6 +99,12 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
     }
     if (!rec.bundle->light_source_json.empty()) {
       j["light_source"] = ordered_json::parse(rec.bundle->light_source_json, nullptr, false);
+      // The bundle's three LED spectra (led_spectra) are left out when they are the all-on spectrum cut at its band
+      // splits: the spectrum and the splits, both recorded, give them back. Spectra measured one LED at a time stay.
+      ordered_json& light = j["light_source"];
+      if (light.is_object() && light.contains("led_spectra") && light["led_spectra"].contains("band_splits_nm")) {
+        light.erase("led_spectra");
+      }
     }
   }
   if (rec.clip) {
