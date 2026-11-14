@@ -1,17 +1,18 @@
 # Design
 
-Two parts. The first is how `neg_process` makes a picture: the conversion of a white-light scan, of which a tri-LED
-scan runs two stages. The second is the other output of a tri-LED scan: the negative as a density file, and the CLF
-beside it that prints the file on a paper or a print film.
+Two parts. The first is how `neg_process` turns a scan into a picture, under either light: the search for exposure
+and colour, the curve fit of a white-light scan, and the tone stage. The second is the other output of a tri-LED
+scan: the negative as a density file, and the CLF beside it that prints the file on a paper or a print film.
 
-- [The white-light conversion](#design-the-white-light-conversion)
+- [The conversion to a picture](#design-the-conversion-to-a-picture)
 - [Density and its print](#design-density-and-its-print)
 
-# Design: the white-light conversion
+# Design: the conversion to a picture
 
-How `neg_process` converts a negative scanned under white light (`--light_source d65`, `-P srgb`), and every
-choice it makes along the way. Tri-LED scans run stages 1 and 4 only. Their curves are the measured ones and are not
-fitted. `--fit_curves off` leaves out stages 2 and 3, and `--tone_stage off` leaves out stage 4.
+How `neg_process` converts a scan of a negative to a picture (`-P srgb`), and every choice it makes along the way.
+A white-light scan (`--light_source d65`) runs all four stages. A tri-LED scan (`--light_source tri`) runs stages 1
+and 4 only: its curves are the measured ones and are not fitted. `--fit_curves off` leaves out stages 2 and 3, and
+`--tone_stage off` leaves out stage 4.
 
 ## The stages
 
