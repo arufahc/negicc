@@ -2,7 +2,7 @@
 
 One file per print material, a paper or a print film (`negicc.print_material/1`). `neg_process` builds them in and
 computes from them, for each printing density file it writes, a CLF that prints the file on that material
-(`np_density.h`, and "the print of a density file" in `DESIGN.md`).
+(`np_density.h`, and "Density and its print" in `DESIGN.md`).
 
 A file holds the material's curve per layer, its three dye spectra and its base, from the print profile of
 [spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato, resampled to 1 nm; and numbers

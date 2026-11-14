@@ -1,3 +1,12 @@
+# Design
+
+Two parts. The first is how `neg_process` makes a picture: the conversion of a white-light scan, of which a tri-LED
+scan runs two stages. The second is the other output of a tri-LED scan: the negative as a density file, and the CLF
+beside it that prints the file on a paper or a print film.
+
+- [The white-light conversion](#design-the-white-light-conversion)
+- [Density and its print](#design-density-and-its-print)
+
 # Design: the white-light conversion
 
 How `neg_process` converts a negative scanned under white light (`--light_source d65`, `-P srgb`), and every
@@ -221,89 +230,13 @@ They live in `input_curves.h`, and "How the estimates work" shows where most of 
   of them has been switched off on the test set, so how many frames each one changes is unknown. To do: measure the
   Effect of each, as for stages 2 and 4.
 
-# Design: the density file
+# Design: density and its print
 
-With an RGB-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative as density above the film base, with
-no conversion to a picture, for grading tools and film-print LUTs:
-
-```bash
-# SMPTE RP 180 printing density in a 10-bit DPX: a Cineon file.
-bin_out/neg_process --film_stock portra400 --light_source tri -P rp180 --roi auto -o scan.dpx scan.ARW
-
-# Academy Printing Density in a 16-bit TIFF: ADX16. The film base comes from a capture of unexposed film.
-bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base base.ARW --roi auto -o scan.tiff scan.ARW
-```
-
-| `-P` | Density | In a `.dpx` | In a `.tif` / `.tiff` |
-| :--- | :--- | :--- | :--- |
-| `statusm` | Status M | Status M at the Cineon scaling | Status M at 8000 codes per unit density |
-| `rp180` | SMPTE RP 180 printing density | Cineon | RP 180 at 8000 codes per unit density |
-| `apd` | Academy Printing Density (SMPTE ST 2065-2) | ADX10 | ADX16 |
-
-The output's extension picks the file. A `.dpx` holds 10 bits, `code = 95 + 500 × k × D`, and clips at about 1.86
-density above the base (for `apd`, with its channel factors, at 1.86 in red, 2.02 in green and 1.95 in blue). A TIFF holds 16 bits, `code = 1520 + 8000 × k × D`. `k` is 1 for `statusm` and `rp180`.
-For `apd` it is the channel factor of ADX (SMPTE ST 2065-3): 1.00 for red, 0.92 for green and 0.95 for blue, so a
-tool that reads the file as ADX gets Academy Printing Density back. The factors are recorded in the file
-(`encoding.channel_factors`). Pixels that run off either end are counted in the sidecar.
-
-A density file's zero is the film base. Without `--film_base` the base is read from the scan: from the rebate when
-the frame shows one, else estimated from the thinnest film in the frame, which is too dark wherever the frame has no
-unexposed film. `neg_process` warns in that case, and when the base is the profile's own roll's.
-
-Each pixel is divided by the film base, its logarithm is taken, and a 3×3 matrix turns the densities the LED sees
-into the measure asked for. The matrices were fitted from the LED's measured spectrum, the film's dye spectra and
-the measure's published response curves, and are part of the profile set (`density_matrices` in `bundle.json`,
-with the spectrum under `light_source`). They are computed from datasheet spectra and have not been checked against
-a densitometer.
-
-How well a 3×3 matrix reproduces each measure on the film model, as each bundle records it (`fit_rms_density`,
-`fit_max_density`), across the three stocks. The fit covers the densities a scan reaches (the film's neutral scale
-between log exposure −1.5 and 1.0, about 2.2 above the base):
-
-| Measure | RMS error (density) | Worst case (density) |
-| :--- | :--- | :--- |
-| Status M | up to 0.004 | up to 0.04, in green |
-| RP 180 printing density | up to 0.004 in red and green, up to 0.010 in blue | up to 0.10, in blue |
-| Academy Printing Density | up to 0.010 in red, 0.002 in green and blue | up to 0.08, in red |
-
-These are errors against the model, not against the film. Two rows rest on film data that does not exist: the
-datasheets give no base density below about 400 nm or above about 700 nm, and the fit holds the base's nearest
-measured value there. RP 180 blue depends on that base below 400 nm, and Academy Printing Density red on the cyan
-dye above 700 nm, where the film data is a reconstruction. RP 180 blue has up to 6% of its response below that range. Above it, RP 180 red has 4%, 7% and 26%
-of its response and Academy Printing Density red 20%, 30% and 59% (Portra 400, Portra 160, Ektar 100). Take those
-rows as approximate (`response_outside_film_data` in the bundle).
-
-The Status M matrix is then calibrated on the profile's own film. The grey scale of the profile's chart, shot at
-seven exposures, is held to the Status M density of the film model's neutral scale: one factor on the green and one
-on the blue density the LED sees (`density_matrices.neutral_calibration`; the matrix before the factors is
-`spectral_fit_matrix`). The factors are 1.02 and 1.06 for Portra 400 and 0.96 and 0.97 for Portra 160. Ektar 100's
-(0.83 and 1.08) lie more than 0.10 from 1 and are recorded, not applied: that roll or scan differs from the model by
-more than two factors should hide: its grey scale differs from the model's in shape, which no factor mends. How
-far the grey scale determines the applied factors, by resampling the seven negatives (desk review of 2026-11-13,
-not recomputed here): Portra 400's blue and Portra 160's green lie about six standard deviations from 1, Portra
-400's green two, and Portra 160's blue 1.4, so that last one is not determined. The reference is spektrafilm's film
-model, not the datasheet. The two printing densities have no such reference and are the fit from the spectra alone.
-
-The matrices assume the camera sees each LED band evenly. How the sensor's sensitivity varies inside a band is not
-modelled.
-
-Both files carry the matrix that was applied, the LED's spectrum, the film base and the encoding as JSON: a TIFF in
-its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
-
-`--flat` applies to a density output as it does to a picture: the flat field corrects the scan and the film base
-capture before the density is taken, so the light's fall-off towards the corners does not read as density.
-
-Density takes no bracket, exposure, gain, curve fit, contrast step or look option, and no white-LED scan. The
-densities are the film as measured. The search that balances a picture still runs, and the colour balance it finds
-for the frame is recorded in the file and the sidecar, not applied (`suggested_balance`: one density offset per
-channel, summing to zero, that a grading tool can add). The sidecar
-counts the pixels that ran off either end of the code range, and those too dense to measure.
-
-# Design: the print of a density file
-
-How `neg_process` turns a Tri-LED scan into a density file (`-P rp180`, `-P apd`) and writes beside it a CLF that
-prints the file on a print material. This part lists the stages, the input of each, the spectral data each needs and
-the matrices that are computed and multiplied. The README says how to use the output.
+With a tri-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
+place of a picture, for grading tools and film-print LUTs. Beside a printing density file (`rp180`, `apd`)
+`neg_process` also writes a CLF per print material, which renders the file as a print on that material. This part
+gives the stages from a scan to that print, what the density file holds and how good it is, the spectral data and
+the matrices behind it, and what is multiplied in what order. The README has the commands.
 
 Two things are prepared ahead of time: the film's profile set and the print material's file. Two are computed when
 `neg_process` runs: the density of each pixel, and the CLF for the frame. A profile set holds nothing of a print
@@ -339,6 +272,73 @@ The two results of stage 4 are each a vector of three numbers, one per channel (
 Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
 (`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds all of it: the density file
 (stages 1 and 2) and the print (stages 4 to 9: the print material, the fit of the slopes and the CLF).
+
+The sections below follow that order: the density file, then the spectral data and the matrices that the stages
+rest on, then the arithmetic of each stage, then how to use the CLF.
+
+## The density file
+
+Stages 1 and 2. Each pixel is divided by the film base, its logarithm is taken, and the 3×3 matrix `M` turns the
+densities the LED sees into the measure asked for.
+
+| `-P` | Density | In a `.dpx` (10 bits) | In a `.tif` / `.tiff` (16 bits) |
+| :--- | :--- | :--- | :--- |
+| `statusm` | Status M | Status M at the Cineon scaling | Status M at 8000 codes per unit density |
+| `rp180` | SMPTE RP 180 printing density | Cineon | RP 180 at 8000 codes per unit density |
+| `apd` | Academy Printing Density (SMPTE ST 2065-2) | ADX10 | ADX16 |
+
+**The encoding.** The output's extension picks the file. A DPX holds `code = 95 + 500 × k × D` and a TIFF
+`code = 1520 + 8000 × k × D`. `k` is 1 for `statusm` and `rp180`. For `apd` it is the channel factor of ADX (SMPTE
+ST 2065-3), 1.00 for red, 0.92 for green and 0.95 for blue, so a tool that reads the file as ADX gets Academy
+Printing Density back. A DPX clips at 1.86 density above the base; for `apd`, with its factors, at 1.86 in red, 2.02
+in green and 1.95 in blue. The sidecar counts the pixels that ran off either end of the code range, and those too
+dense to measure.
+
+**The zero is the film base.** `--film_base` takes it from a capture of unexposed film. Without it the base is read
+from the scan: from the rebate when the frame shows one, else estimated from the thinnest film in the frame, which is
+too dark wherever the frame has no unexposed film. `neg_process` warns in that case, and when the base is the
+profile's own roll's. `--flat` applies as it does to a picture: the flat field corrects the scan and the film base
+capture before the density is taken, so the light's fall-off towards the corners does not read as density.
+
+**Nothing of a picture is applied.** Density takes no bracket, exposure, gain, curve fit, tone stage or look option,
+and no white-light scan. The search that balances a picture still runs (stage 3), and what it finds is recorded, not
+applied: `suggested_balance` holds one density offset per channel, summing to zero, that a grading tool can add.
+
+**What the file carries.** The matrix that was applied, the LED's spectrum, the film base and the encoding, as JSON:
+a TIFF in its `ImageDescription` tag, a DPX in its user-defined data. The sidecar has the same record.
+
+### How good the densities are
+
+The matrices are computed from datasheet spectra and have not been checked against a densitometer. How well a 3×3
+reproduces each measure on the film model, as each bundle records it (`fit_rms_density`, `fit_max_density`), across
+the three stocks, over the densities a scan reaches (the film's neutral scale between log exposure −1.5 and 1.0,
+about 2.2 above the base):
+
+| Measure | RMS error (density) | Worst case (density) |
+| :--- | :--- | :--- |
+| Status M | up to 0.004 | up to 0.04, in green |
+| RP 180 printing density | up to 0.004 in red and green, up to 0.010 in blue | up to 0.10, in blue |
+| Academy Printing Density | up to 0.010 in red, 0.002 in green and blue | up to 0.08, in red |
+
+These are errors against the model, not against the film. Three things limit them further:
+
+- **Film data that does not exist.** The datasheets give no base density below about 400 nm or above about 700 nm,
+  and the fit holds the base's nearest measured value there. RP 180 blue depends on that base below 400 nm (up to
+  6 % of its response lies there), and Academy Printing Density red on the cyan dye above 700 nm, where the film
+  data is a reconstruction (20 %, 30 % and 59 % of its response for Portra 400, Portra 160 and Ektar 100; RP 180
+  red has 4 %, 7 % and 26 %). Take those rows as approximate (`response_outside_film_data` in the bundle).
+- **Each LED band is taken as one channel.** How the sensor's sensitivity varies inside a band is not modelled;
+  "The crosstalk correction, measured and computed" sizes what the camera adds.
+- **Only Status M is calibrated on the film.** The grey scale of the profile's chart, shot at seven exposures, is
+  held to the Status M density of the film model's neutral scale: one factor on the green and one on the blue
+  density the LED sees (`density_matrices.neutral_calibration`; the matrix before the factors is
+  `spectral_fit_matrix`). The factors are 1.02 and 1.06 for Portra 400 and 0.96 and 0.97 for Portra 160. Ektar
+  100's (0.83 and 1.08) lie more than 0.10 from 1 and are recorded, not applied: its grey scale differs from the
+  model's in shape, which no factor mends. A resampling of the seven negatives in a review of this work, not
+  recomputed here, puts Portra 400's blue and Portra 160's green about six standard deviations from 1, Portra 400's
+  green two, and Portra 160's blue 1.4, so that last factor is not determined by the grey scale. The reference is
+  spektrafilm's film model, not the datasheet. The two printing densities have no such reference and are the fit
+  from the spectra alone.
 
 ## The spectral data
 
@@ -461,6 +461,8 @@ and `P` from APD to Kodak Portra Endura is
 
 ## What is multiplied, in order
 
+The arithmetic of each stage, with the symbols of "The matrices".
+
 **Per pixel**, the density file. `v` is the camera RGB after the flat field:
 
 ```
@@ -532,6 +534,9 @@ and channel factors.
 | CLF nodes 2 to 7 | | | yes | |
 
 ## What is not principled yet
+
+- **The densities are a model's.** `M` comes from datasheet spectra and has not been checked against a
+  densitometer; "How good the densities are" lists what limits it.
 
 - **The print material is a model.** Its curves, dye spectra and sensitivity are spektrafilm's, the printer lamp is
   a 3200 K blackbody with no heat filter, and no result has been compared with a real print.
