@@ -281,7 +281,7 @@ material, and a print material's file holds nothing measured on a film.
 | 1 | Scan to light density | Per pixel | Camera RGB, the flat field, the crosstalk correction, the film base | `D_light`: density in the red, green and blue of the LED |
 | 2 | Light density to a density measure | Per pixel | `D_light`, `M` | The density file: Status M, RP 180 or APD |
 | 3 | Balance and exposure | Per frame: stage 1 of the conversion, the Auto search | The frame | The bracket, the exposure `E`, the gains `g` and `b` |
-| 4 | The frame's mid grey `grey` and the slopes `S` (defined below the table) | Per frame | The 24 grey steps of that bracket from the profile set, `M`, the print material's file | `grey`: three densities. `S`: three ratios |
+| 4 | The frame's mid grey `grey` and the slopes `S` (defined below the table) | Per frame | The 24 grey steps of that bracket from the profile set, `M`, `E`, the print material's file | `grey`: three densities. `S`: three ratios |
 | 5 | Density to the print's printing density | CLF node 1 | The file's code values, `P`, `S`, the balance, `grey` | The density the print material reads |
 | 6 | Printing density to the print's exposure | CLF node 2 | The exposure that prints an 18 % grey | Log exposure per layer |
 | 7 | Exposure to dye amounts | CLF nodes 3 and 4: a range and a 1D table of 4096 points | The print's curve per layer | Three dye amounts |
@@ -297,17 +297,97 @@ The two results of stage 4 are each a vector of three numbers, one per channel (
   density of the film where an 18 % grey object of the scene lies on this negative.
 - **`S`, the slopes.** No unit: a ratio, density per density. Each multiplies, in one channel of the print
   material's printing density, the difference between a pixel's density and the mid grey's, so it is a contrast
-  scale per channel. Green is 1 by definition, and red and blue are fitted. For the same bracket on Portra Endura:
-  0.90, 1.00, 0.97, which lowers the red contrast by 10 % and the blue by 3 % against green. On a print film
-  with a grey scale of its own (Vision 2383) the slopes applied are the fitted ones divided by the material's own,
-  so that only the film's share is corrected.
+  scale per channel. Green is 1 by definition, and red and blue are fitted on the bracket's grey steps. For the
+  same bracket on Portra Endura: 0.90, 1.00, 0.97, which lowers the red contrast by 10 % and the blue by 3 % against
+  green.
 
 Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
 (`<output>.<print>.clf`); stage 4 fills its first node. `np_print.cc` holds all of it: the density file
 (stages 1 and 2) and the print (stages 4 to 9: the print material, the fit of the slopes and the CLF).
 
-The sections below follow that order: the density file, then the spectral data and the matrices that the stages
-rest on, then the arithmetic of each stage, then how to use the CLF.
+The sections below follow that order: the chain from the LED's density to the print's in one place and what it
+takes from the chart, the density file, then the spectral data and the matrices that the stages rest on, then
+the arithmetic of each stage, then how to use the CLF.
+
+## From LED density to print density: three matrices from spectra, two slopes from the chart
+
+Between a camera pixel and the density that the print material reads there are three matrices and one logarithm:
+
+```
+camera RGB --C--> LED channels --/ film base, -log10--> LED density --M--> RP 180 or APD --P--> print density
+```
+
+| Matrix | What it does | Where it comes from |
+|---|---|---|
+| `C`, the crosstalk correction | Camera RGB to the three LED channels, before the logarithm | Measured: each LED captured alone |
+| `M`, the density matrix | The density the LED sees to a standard measure, RP 180 or APD | The light's measured spectrum, the film's dye spectra, the measure's response curves |
+| `P`, the print matrix | That measure to the density the print material's own layers read | The measure's response curves, the film's dye spectra, the print material's spectral sensitivity under the printer lamp |
+
+So `print density = P M D_LED`, and the density file is the point in the middle: it holds `M D_LED`, a standard
+measure, and nothing of a print material. `M` and `P` are each a least-squares 3×3 on a model of the film, from
+spectra alone ("The matrices" has how).
+
+**None of the three matrices is fitted to the film's chart.** The chart is what the ICC profiles of the picture
+conversion are built from: there, curves and a colour table are fitted so that the chart's patches come out as
+measured. The print emulation's matrices go from the light's measured spectrum and published spectra to the print.
+
+The chart then enters the print in two places, both through the bracket the search gives the frame:
+
+- **A level.** The frame's mid grey (stage 4) is the chart's mid grey patch on that bracket, which sets the print's
+  exposure, as the search's gains set its balance. Those are three offsets in density.
+- **Two slopes.** Since the bracket is used for the level, its 24 grey steps are used for the contrast of red and
+  blue against green as well: two numbers that scale two rows of `P`. They are fitted when the file is written and
+  go into the first matrix of the CLF; nothing is stored. `kApplyPrintSlopes` in `np_print.h` switches them off,
+  and the print is then the three matrices and the level alone.
+
+### The slopes
+
+On this film the three channels do not change together from thin to dense film, as the print reads them. The plot
+is the 24 grey steps of one bracket of Portra 400's chart, as Portra Endura reads their density, less the mid
+grey's: red changes 1.08 times as fast as green, and blue 0.96 times.
+
+![The grey steps of a bracket as the paper reads them](samples/slopes_grey_steps.png)
+
+Exposure and balance are offsets, so they make one level neutral, the mid grey. The other grey steps then print with
+a cast that runs one way in the highlights and the other way in the shadows. Two slopes, one scale on the red and
+one on the blue density difference from the mid grey (the same as scaling two rows of `P`), fitted by least squares
+so that the bracket's grey steps print neutral, take most of it out:
+
+![The grey steps printed without and with the slopes](samples/slopes_grey_steps_printed.png)
+
+Three things to know about them.
+
+- **They are a fit to one chart.** The slopes hold for the film batch, the development and the scan of the profile's
+  chart. Film from another lab may differ, and a new profile set then gives its own. They also differ between the
+  chart's own exposure brackets by more than their uncertainty, so two frames on neighbouring brackets are printed
+  with different slopes.
+- **A print film keeps its own grey scale.** A fit that makes the grey steps neutral cannot tell the film's part of
+  the drift from the print material's. In the model, a Vision 2383 print of a neutral scale runs from green in the
+  shadows to yellow in the highlights even with the films it was made for. So on 2383 the slopes applied are the
+  fit's divided by the print film's own (`own_slopes` in its file: what the same fit gives the neutral scales of the
+  four Vision3 film models that spektrafilm pairs with 2383, 0.878 and 1.125), and only the film's share is
+  corrected. Portra Endura has no such entry and takes the fitted slopes as they are.
+- **They do little to a picture.** On paper, in a blind comparison of 16 frames with and without the slopes, neither
+  was preferred (5 to 6, and 5 with no preference). Below, one frame each way.
+
+![One frame printed without and with slopes](samples/slopes_on_a_picture.jpg)
+
+The film's datasheet cannot stand in for the chart: the film's model and the film as scanned ask for different
+slopes, widely so for two of the three stocks.
+
+![Slopes from the film's model against slopes from the film's chart](samples/slopes_model_against_chart.png)
+
+The fit itself: the bracket's steps are printed about its mid grey, through the print's curves and dyes, with
+`S (pd_i - pd_mid)` as the density difference and one printer-light offset on red and one on blue; `S` and the two
+offsets minimise the CIELAB a\* and b\* of the steps by least squares. The offsets belong to the fit and are not
+used afterwards.
+
+| Choice | Value | What it does |
+|---|---|---|
+| Steps judged | Those that print between L\* 12 and 92 before the slopes | A step printed near black or near white has no colour to judge. |
+| Fewest steps | 12 | With fewer the slopes stay 1. |
+| Bounds of a slope | 0.6 to 1.5 | A slope that ends on a bound is recorded as such. |
+| Mid grey step | `gs10` | The chart's step nearest 18 % reflectance. |
 
 ## The density file
 
@@ -487,7 +567,7 @@ the second, with no offset.
 | `M` | LED density to Status M, RP 180 or APD | Fitted on the film model: the reading through each LED band, to the reading through the measure's response curves. Status M is then calibrated on the chart's grey steps | `bundle.json`, `density_matrices` |
 | `k` | Diagonal: the ADX channel factors 1.00, 0.92, 0.95 | SMPTE ST 2065-3. 1 for Status M and RP 180 | The file's encoding |
 | `P` | RP 180 or APD to the print material's own printing density | Fitted on the film model: the reading through the measure's response curves, to the reading through the print material's sensitivity under the printer lamp. One per film model, and one over all film models for any other film | `prints/<print>.json`, `to_print_density` |
-| `S` | Diagonal: the slopes on red and blue; green is 1 | Fitted per frame, below, then divided by the print material's own slopes (`own_slopes` in its file; 1 on paper) | The file's metadata, `print` |
+| `S` | Diagonal: the slopes on red and blue; green is 1 | Fitted per frame on the bracket's grey steps ("The slopes"), then divided by the print material's own slopes (`own_slopes` in its file; 1 on paper) | The file's metadata, `print` |
 | `X` | The print's XYZ under its viewing light to linear sRGB | The sRGB matrix times a CAT02 adaptation from the viewing light's white to D65 | `prints/<print>.json`, `xyz_to_linear_srgb` |
 
 For Portra 400, `M` for APD is
@@ -529,21 +609,8 @@ profile read them, `r_i`, at the bracket's exposure:
 d_i      = -log10(r_i (base exposure / bracket exposure) / profile film base)      light density of step i
 balance  = M [0, -log10 g, -log10 b]          what the gains do to the density, level included
 grey     = M d_mid + log10(E) M [1, 1, 1]     the frame's mid grey; d_mid is the chart's mid grey step
-pd_i     = P M d_i                            the steps as the print material reads them
+pd_i     = P M d_i                            the steps as the print material reads them, which S is fitted on
 ```
-
-**The slopes.** A film whose channels differ in contrast prints a grey scale that drifts in colour from shadows to
-highlights, and no printer-light setting removes that. `S` is fitted on `pd_i`: the steps are printed about the
-bracket's mid grey, through nodes 2 to 6 below with `S (pd_i - pd_mid)` as the density difference and one
-printer-light offset on red and one on blue. `S` and the two offsets minimise the CIELAB a\* and b\* of the steps.
-The offsets belong to the fit and are not used afterwards.
-
-| Choice | Value | What it does |
-|---|---|---|
-| Steps judged | Those that print between L\* 12 and 92 before the slopes | A step printed near black or near white has no colour to judge. |
-| Fewest steps | 12 | With fewer the slopes stay 1. |
-| Bounds of a slope | 0.6 to 1.5 | A slope that ends on a bound is recorded as such. |
-| Mid grey step | `gs10` | The chart's step nearest 18 % reflectance. |
 
 **The CLF**, on the file's code value `x` (the code over the largest code):
 
@@ -595,15 +662,8 @@ and channel factors.
 
 - **The print material is a model.** Its curves, dye spectra and sensitivity are spektrafilm's, the printer lamp is
   a 3200 K blackbody with no heat filter, and no result has been compared with a real print.
-- **Which part of the slopes is the film's.** A fit that makes the grey steps neutral takes out the print
-  material's own grey scale along with the film's. On Vision 2383, whose own grey scale runs from green in the
-  shadows to yellow in the highlights in the model, the slopes applied are therefore the fit's divided by the
-  material's own (`own_slopes`: what the same fit gives the neutral scales of the four Vision3 film models that
-  spektrafilm pairs with 2383; 0.878 and 1.125), so the print keeps the stock's look. Portra Endura has no such
-  entry and is printed neutral. Both are choices, made without a real print to compare with.
-- **The slopes change between brackets.** Each bracket's are fitted on its own 24 steps, and frames on neighbouring
-  brackets are printed with different slopes. One fit per stock, or slopes interpolated at the frame's own mid grey,
-  have not been tried on pictures.
+- **The slopes are a fit to one chart**, differ between its brackets, and on a print film are divided by a model's
+  figure for that film's own grey scale ("The slopes"). None of this has been judged against a real print.
+- **The values in the table of the slopes** (L\* 12 and 92, 12 steps, 0.6 and 1.5) are stated, not derived.
 - **A 3×3 for each density measure.** `M` and `P` are least-squares fits on a model of the film. Where the film's
   data ends (below about 400 nm, above about 700 nm) the nearest measured value is held.
-- **The values in the table of the slopes** (L\* 12 and 92, 12 steps, 0.6 and 1.5) are stated, not derived.

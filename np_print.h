@@ -192,6 +192,13 @@ bool load_print_material(const std::string& json_text, PrintMaterial& out, std::
 // CIELAB (L*, a*, b*) of the print of a log exposure per layer, under the material's viewing light.
 void print_lab(const PrintMaterial& m, const double log_e[3], double lab[3]);
 
+// Whether a frame's print takes slopes fitted on the chart's grey steps (fit_print_slopes). On: the print already
+// takes its level from the chart (the frame's mid grey) and its balance from the search, so the bracket's grey steps
+// are used for the contrast of red and blue against green as well. Off, the print's matrices are the whole of it
+// and the film's grey scale prints as the chain gives it. The fit holds for the film batch, development and scan of
+// the profile's chart.
+constexpr bool kApplyPrintSlopes = true;
+
 // The slopes on the red and the blue printing density (green stays 1), about the row grey_at, that make grey steps
 // print neutral: the steps (rows of the material's printing density) are printed with the row grey_at as an 18 % grey
 // and one printer-light setting; the slopes and the red and blue lights minimise the steps' a* and b*, over the steps
@@ -223,7 +230,8 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //             log10(E) in every light channel for the exposure E the search found. With the balance (the gains g and
 //             b, level included) it prints as the print's mid grey.
 //   slopes    fitted on that bracket's grey steps, as the print material reads them, about its mid grey, so that they
-//             print neutral (fit_print_slopes). 1 when the bracket has too few usable steps.
+//             print neutral (fit_print_slopes), then divided by the print material's own grey scale where it has one.
+//             1 when kApplyPrintSlopes is off or the bracket has too few usable steps.
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
 struct FramePrint {

@@ -842,7 +842,8 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
   const double shift = std::log10(p.exposure);
   for (int c = 0; c < 3; ++c) p.grey[c] = mid[c] + shift * (m[c * 3] + m[c * 3 + 1] + m[c * 3 + 2]);
-  const PrintSlopeFit fit = fit_print_slopes(material, pd, grey_mid);
+  // The slopes stay 1 unless the switch is on (np_print.h kApplyPrintSlopes): nothing is fitted to the chart.
+  const PrintSlopeFit fit = kApplyPrintSlopes ? fit_print_slopes(material, pd, grey_mid) : PrintSlopeFit();
   p.steps = (int)pd.size();
   p.steps_judged = fit.judged;
   p.fitted = fit.ok;
@@ -917,12 +918,15 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
        ". The mid grey is the chart's on the bracket " + xml(print.bracket) +
        (print.searched ? " and at the exposure the picture conversion's search gave this frame"
                        : " (no search: the middle bracket)") +
-       "; balanced, it prints as the print's mid grey. The slopes are " +
-       (!print.fitted ? "1: the bracket has too few usable grey steps"
-                      : (print.own_slopes[0] != 1.0 || print.own_slopes[2] != 1.0)
-                            ? "fitted on that bracket's grey steps so that they print neutral, then divided by this "
-                              "print material's own grey scale, so the print keeps the stock's look"
-                            : "fitted on that bracket's grey steps so that they print neutral") +
+       "; balanced, it prints as the print's mid grey" +
+       (!kApplyPrintSlopes
+            ? std::string(". Nothing is fitted to the film's chart: the slopes are 1")
+            : std::string(". The slopes are ") +
+                  (!print.fitted ? "1: the bracket has too few usable grey steps"
+                                 : (print.own_slopes[0] != 1.0 || print.own_slopes[2] != 1.0)
+                                       ? "fitted on that bracket's grey steps so that they print neutral, then divided "
+                                         "by this print material's own grey scale, so the print keeps the stock's look"
+                                       : "fitted on that bracket's grey steps so that they print neutral")) +
        ". The density file holds none of this. Add a constant to the three offsets of the first Matrix to print "
        "lighter (+) or darker (-), 0.30 a stop.</Description>\n";
   s += "  <Description>The 1D and 3D tables are derived by neg_process from the print profile of this material in "
@@ -977,28 +981,34 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"bracket_from", p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
-          {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
-          {"slopes_neutral", {p.slopes_neutral[0], p.slopes_neutral[1], p.slopes_neutral[2]}},
-          {"print_own_slopes", {p.own_slopes[0], p.own_slopes[1], p.own_slopes[2]}},
-          {"slopes_fitted", p.fitted},
-          {"slopes_at_bound", p.at_bound},
-          {"grey_steps", p.steps},
-          {"grey_steps_judged", p.steps_judged}};
-      if (p.fitted) {
-        one["grey_scale_chroma_before"] = p.chroma_before;
-        one["grey_scale_chroma_after"] = p.chroma_after;
+          {"slopes_applied", kApplyPrintSlopes}};
+      if (kApplyPrintSlopes) {
+        one["slopes"] = {p.slopes[0], p.slopes[1], p.slopes[2]};
+        one["slopes_neutral"] = {p.slopes_neutral[0], p.slopes_neutral[1], p.slopes_neutral[2]};
+        one["print_own_slopes"] = {p.own_slopes[0], p.own_slopes[1], p.own_slopes[2]};
+        one["slopes_fitted"] = p.fitted;
+        one["slopes_at_bound"] = p.at_bound;
+        one["grey_steps"] = p.steps;
+        one["grey_steps_judged"] = p.steps_judged;
+        if (p.fitted) {
+          one["grey_scale_chroma_before"] = p.chroma_before;
+          one["grey_scale_chroma_after"] = p.chroma_after;
+        }
       }
       materials[p.id] = one;
     }
     j["print"] = {
-        {"what", "how this frame prints on each print material: slopes_neutral are fitted, when the file is written, "
-                 "on the grey steps of the frame's exposure bracket in the film's profile, as the print material "
-                 "reads them, so that they print neutral; slopes, which the CLF applies, are those divided by "
-                 "print_own_slopes, the material's own grey scale (1 for a material that is printed neutral)"},
-        {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
-                    "balance = suggested_balance.density_offset + density_offset_mean_removed"},
+        {"what", "how this frame prints on each print material: the frame's mid grey, from the chart's mid grey on "
+                 "the frame's exposure bracket and the exposure the search found, lands on the print's mid grey. "
+                 "With slopes_applied, slopes_neutral are fitted, when the file is written, on that bracket's grey "
+                 "steps as the print material reads them, so that they print neutral, and slopes, which the CLF "
+                 "applies, are those divided by print_own_slopes, the material's own grey scale (1 for a material "
+                 "that is printed neutral)"},
         {"grey_scale_chroma", "mean C*ab of the bracket's judged grey steps as the CLF prints them, about the "
                               "bracket's mid grey: _before with no slopes, _after with the slopes applied"},
+        {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
+                    "slopes 1 unless slopes_applied, balance = suggested_balance.density_offset + "
+                    "density_offset_mean_removed"},
         {"applied", "no: the densities are as read. The CLF beside the file for each print material "
                     "(<output>.<print>.clf) applies the balance, the exposure and the slopes; apply them once, there "
                     "or by hand, not both"},
@@ -1023,9 +1033,9 @@ int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints) {
       remove_print_clfs(prints);
       return 1;
     }
-    log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, slopes %.3f %.3f %.3f%s)\n",
-             prints.paths[k].c_str(), print.name.c_str(), print.bracket.c_str(), print.slopes[0], print.slopes[1],
-             print.slopes[2], print.fitted ? "" : ", not fitted");
+    log_info("Wrote '%s': this file as a print on %s, sRGB (bracket %s, exposure %.3f, slopes %.3f %.3f %.3f)\n",
+             prints.paths[k].c_str(), print.name.c_str(), print.bracket.c_str(), print.exposure, print.slopes[0],
+             print.slopes[1], print.slopes[2]);
   }
   return 0;
 }
