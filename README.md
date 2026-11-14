@@ -262,4 +262,5 @@ negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backb
 binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other
 people's photographs, credited above. The print materials in `prints/*.json` derive from
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s print profiles and are under CC BY-SA 4.0
-(`prints/README.md`); the CLF files and pictures that `neg_process` makes with them are its output and are not.
+(`prints/README.md`); a CLF that `neg_process` writes with them carries that notice for its two tables, and the pictures made through
+one are free.

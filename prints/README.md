@@ -12,8 +12,9 @@ light, and the matrix from that XYZ to linear sRGB.
 
 **Licence.** These JSON files are under CC BY-SA 4.0, as the spektrafilm profiles they derive from
 ([licence text](https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt)); they were modified
-by Alpha Lam as `CHANGELOG.txt` records. The CLF files that `neg_process` writes with them, and the pictures made
-through those, are output of `neg_process` and are not under that licence.
+by Alpha Lam as `CHANGELOG.txt` records. A CLF that `neg_process` writes with them carries the same notice for its
+two tables, the curve per layer and the colour cube, which derive from this data; its matrices are computed and are
+not under that licence, and neither are the pictures made through a CLF.
 
 A file holds nothing measured on a film; a film's chart readings are in its profile set. The print materials are a
 model and have not been compared with a real print.
