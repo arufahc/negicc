@@ -98,7 +98,7 @@ struct BundleTarget {
   bool has_target_ev = false;
   double target_ev = 0.0;
   std::vector<float> patches_g;
-  // The chart's grey steps gs0, gs1, ... as the profile read them (R, G, B after the crosstalk correction, at this
+  // The chart's grey steps gs<N>, in the order of N, as the profile read them (R, G, B after the crosstalk correction, at this
   // target's exposure), and the position of the mid grey gs10 among them (-1 without one): what a print's slopes are
   // fitted on (np_density.h density_frame_print). Empty when a step lacks a channel.
   std::vector<std::array<double, 3>> grey_rgb;

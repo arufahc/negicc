@@ -285,10 +285,14 @@ PrintSlopeFit fit_print_slopes(const PrintMaterial& m, const std::vector<std::ar
   if (fit.judged < m.min_patches) return fit;
   lights_only(lights);
   double p[4] = {1.0, 1.0, lights[0], lights[1]};
-  fit.chroma_before = mean_chroma(p);
   const double lo[4] = {m.slope_lo, m.slope_lo, -1.0, -1.0}, hi[4] = {m.slope_hi, m.slope_hi, 1.0, 1.0};
   least_squares([&](const double* q, std::vector<double>& r) { chroma_residuals(q, r); }, 4, p, lo, hi);
-  fit.chroma_after = mean_chroma(p);
+  // The fit's own lights are not part of a CLF (the frame's balance takes their place): the record is of the steps
+  // printed with the slopes alone.
+  const double plain[4] = {1.0, 1.0, 0.0, 0.0}, applied[4] = {p[0], p[1], 0.0, 0.0};
+  fit.chroma_before = mean_chroma(plain);
+  fit.chroma_after = mean_chroma(applied);
+  for (int k = 0; k < 2; ++k) fit.at_bound |= p[k] <= m.slope_lo + 1e-9 || p[k] >= m.slope_hi - 1e-9;
   fit.slopes[0] = p[0];
   fit.slopes[2] = p[1];
   fit.ok = true;

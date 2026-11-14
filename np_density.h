@@ -107,16 +107,19 @@ struct DensityRecord {
 // The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.
 std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
 
-// The colour balance the picture conversion found for the frame, as offsets on the measure's density (zero sum).
-// False, and zeros, when the record has no balance.
-bool density_balance_offset(const DensityRecord& rec, double offset[3]);
+// The colour balance the picture conversion found for the frame, as offsets on the measure's density with their mean
+// taken out (zero sum), and that mean. The conversion multiplies the light's channels by E, E g and E b, so the whole
+// of what g and b do to the density is offset + mean in every channel: the zero-sum part is the colour, the mean is
+// level. False, and zeros, when the record has no balance.
+bool density_balance_offset(const DensityRecord& rec, double offset[3], double* mean = nullptr);
 
 // How one frame prints on one print material (np_print.h): computed when the file is written, from the bundle's chart
 // readings and the print material's data. Neither is stored in the other.
 //
 //   bracket   the exposure bracket the picture conversion's search gave the frame; without a search, the middle one.
 //   grey      the frame's mid grey as the measure's density: the chart's mid grey (gs10) on that bracket, denser by
-//             log10(E) in every light channel for the exposure E the search found. It prints as the print's mid grey.
+//             log10(E) in every light channel for the exposure E the search found. With the balance (the gains g and
+//             b, level included) it prints as the print's mid grey.
 //   slopes    fitted on that bracket's grey steps, as the print material reads them, about its mid grey, so that they
 //             print neutral (fit_print_slopes). 1 when the bracket has too few usable steps.
 //
@@ -131,8 +134,9 @@ struct FramePrint {
   double grey[3] = {0, 0, 0};
   double slopes[3] = {1, 1, 1};
   bool fitted = false;
+  bool at_bound = false;              // a slope ended on the fit's bound: clipped, not found
   int steps = 0, steps_judged = 0;
-  double chroma_before = 0.0, chroma_after = 0.0;
+  double chroma_before = 0.0, chroma_after = 0.0;   // of the judged steps as the CLF prints them: no slopes, slopes
   double grey_density = 0.70;
 };
 struct PrintMaterial;   // np_print.h
