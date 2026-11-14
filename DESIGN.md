@@ -220,3 +220,163 @@ They live in `input_curves.h`, and "How the estimates work" shows where most of 
   fallback and the highlight pullback were copied from negicc-station, which gives no reason for their values. None
   of them has been switched off on the test set, so how many frames each one changes is unknown. To do: measure the
   Effect of each, as for stages 2 and 4.
+
+# Design: the print of a density file
+
+How `neg_process` turns a Tri-LED scan into a density file (`-P rp180`, `-P apd`) and writes beside it a CLF that
+prints the file on a print material. This part lists the stages, the input of each, the spectral data each needs and
+the matrices that are computed and multiplied. The README says how to use the output.
+
+Two things are prepared ahead of time: the film's profile set and the print material's file. Two are computed when
+`neg_process` runs: the density of each pixel, and the CLF for the frame. A profile set holds nothing of a print
+material, and a print material's file holds nothing measured on a film.
+
+## The stages
+
+| # | Stage | When | Input | Output |
+|---|---|---|---|---|
+| A | Density matrices of a film and a light | When the profile set is built (negicc-station) | The light's spectrum, the film's dye spectra, the response curves of the density measures | `M`, one 3×3 per measure, in `bundle.json` |
+| B | A print material's file | Once per print material (negicc-station) | The print material's sensitivity, curves and dye spectra, a printer lamp, the film's dye spectra, the measures' response curves, the CIE observer and a viewing light | `prints/<print>.json` |
+| 1 | Scan to light density | Per pixel | Camera RGB, the flat field, the crosstalk correction, the film base | `D_light`: density in the red, green and blue of the LED |
+| 2 | Light density to a density measure | Per pixel | `D_light`, `M` | The density file: Status M, RP 180 or APD |
+| 3 | Balance and exposure | Per frame: stage 1 of the conversion, the Auto search | The frame | The bracket, the exposure `E`, the gains `g` and `b` |
+| 4 | Mid grey and slopes | Per frame | The 24 grey steps of that bracket from the profile set, `M`, the print material's file | `grey`, `S` |
+| 5 | Density to the print's printing density | CLF node 1 | The file's code values, `P`, `S`, the balance, `grey` | The density the print material reads |
+| 6 | Printing density to the print's exposure | CLF node 2 | The exposure that prints an 18 % grey | Log exposure per layer |
+| 7 | Exposure to dye amounts | CLF nodes 3 and 4: a range and a 1D table of 4096 points | The print's curve per layer | Three dye amounts |
+| 8 | Dye amounts to colour | CLF nodes 5 and 6: a scale and a 3D table of 45 points a side | The print's dye spectra and base, the observer under the viewing light | Linear sRGB |
+| 9 | Display | CLF node 7 | | sRGB |
+
+Stages 1 and 2 write the density file, and nothing after them changes a pixel of it. Stages 5 to 9 are the CLF
+(`<output>.<print>.clf`); stage 4 fills its first node. `np_density.cc` holds stages 1, 2, 4 and 5, and `np_print.cc`
+the print material: the fit of the slopes and nodes 2 to 7.
+
+## The spectral data
+
+All of it is on 380 to 780 nm at 1 nm. None of it is read per frame except by the print's colour table (stage 8),
+which uses what the print material's file already holds.
+
+| Data | Source | Used by | Kept in |
+|---|---|---|---|
+| The scanning light's spectrum, split into its three LED bands at 495 and 578 nm | A spectrometer reading of the light | A | `bundle.json`, `light_source` |
+| The film's three dye spectra and base, and its neutral scale as dye amounts against log exposure | spektrafilm's film profile | A, B | negicc-station |
+| The response curves of Status M, RP 180 (SMPTE RP 180, Table 1) and APD (SMPTE ST 2065-2) | The standards | A, B | negicc-station |
+| The print material's spectral sensitivity per layer | spektrafilm's print profile | B | negicc-station |
+| The printer lamp | A 3200 K blackbody, no heat filter | B | A constant |
+| The print material's curve per layer, its three dye spectra and base | spektrafilm's print profile | B, then 7 and 8 | `prints/<print>.json` |
+| The CIE 1931 2° observer, and D50 (paper) or D55 (print film) as the viewing light | The CIE tables | B, then 8 | `prints/<print>.json`, as their product |
+
+Measured on the scanner and not spectral: the crosstalk correction, the flat field, the film base, and the chart's
+grey steps at each of the seven exposure brackets, which are in `bundle.json`.
+
+## The matrices
+
+Densities are above the film base. "Fitted on the film model" means: 3000 sample colours of the film are drawn, dye
+amounts along its neutral scale between log exposure −1.5 and 1.0 with a log-normal colour variation; the spectral
+density of each sample is read with two sets of weights; the 3×3 is the least-squares fit from the first reading to
+the second, with no offset.
+
+| Symbol | From, to | How it is computed | Kept in |
+|---|---|---|---|
+| `C` | Camera RGB to the LED's channels | The inverse of the camera's response to each LED alone, each column scaled to its own channel | `bundle.json`, `crosstalk_profile` |
+| `B` | Diagonal: the film base to one level | The base level over the film base, per channel | Per frame |
+| `M` | LED density to Status M, RP 180 or APD | Fitted on the film model: the reading through each LED band, to the reading through the measure's response curves. Status M is then calibrated on the chart's grey steps | `bundle.json`, `density_matrices` |
+| `k` | Diagonal: the ADX channel factors 1.00, 0.92, 0.95 | SMPTE ST 2065-3. 1 for Status M and RP 180 | The file's encoding |
+| `P` | RP 180 or APD to the print material's own printing density | Fitted on the film model: the reading through the measure's response curves, to the reading through the print material's sensitivity under the printer lamp. One per film model, and one over all film models for any other film | `prints/<print>.json`, `to_print_density` |
+| `S` | Diagonal: the slopes on red and blue; green is 1 | Fitted per frame, below | The file's metadata, `print` |
+| `X` | The print's XYZ under its viewing light to linear sRGB | The sRGB matrix times a CAT02 adaptation from the viewing light's white to D65 | `prints/<print>.json`, `xyz_to_linear_srgb` |
+
+For Portra 400, `M` for APD is
+
+```
+ 1.488  -0.074   0.013
+-0.052   1.113  -0.045
+ 0.018  -0.029   1.009
+```
+
+and `P` from APD to Kodak Portra Endura is
+
+```
+ 0.896   0.058   0.013
+ 0.012   0.918   0.065
+ 0.025   0.055   0.876
+```
+
+`P` differs between the three stocks by at most 0.02 for APD and 0.09 for RP 180.
+
+## What is multiplied, in order
+
+**Per pixel**, the density file. `v` is the camera RGB after the flat field:
+
+```
+T        = B C v / base level                 transmittance relative to bare film, per LED channel
+D_light  = -log10(max(T, 0.0001))
+D        = M D_light                          the measure's density
+code     = offset + scale k D                 10 bits: 95 + 500 k D     16 bits: 1520 + 8000 k D
+```
+
+**Per frame.** The search gives the bracket and `E`, `g`, `b`. The profile set gives the bracket's grey steps as the
+profile read them, `r_i`, at the bracket's exposure:
+
+```
+d_i      = -log10(r_i (base exposure / bracket exposure) / profile film base)      light density of step i
+balance  = M [0, -log10 g, -log10 b]          what the gains do to the density, level included
+grey     = M d_mid + log10(E) M [1, 1, 1]     the frame's mid grey; d_mid is the chart's mid grey step
+pd_i     = P M d_i                            the steps as the print material reads them
+```
+
+**The slopes.** A film whose channels differ in contrast prints a grey scale that drifts in colour from shadows to
+highlights, and no printer-light setting removes that. `S` is fitted on `pd_i`: the steps are printed about the
+bracket's mid grey, through nodes 2 to 6 below with `S (pd_i - pd_mid)` as the density difference and one
+printer-light offset on red and one on blue. `S` and the two offsets minimise the CIELAB a\* and b\* of the steps.
+The offsets belong to the fit and are not used afterwards.
+
+| Choice | Value | What it does |
+|---|---|---|
+| Steps judged | Those that print between L\* 12 and 92 before the slopes | A step printed near black or near white has no colour to judge. |
+| Fewest steps | 12 | With fewer the slopes stay 1. |
+| Bounds of a slope | 0.6 to 1.5 | A slope that ends on a bound is recorded as such. |
+| Mid grey step | `gs10` | The chart's step nearest 18 % reflectance. |
+
+**The CLF**, on the file's code value `x` (the code over the largest code):
+
+```
+node 1    pd    = 0.70 + S P (D + balance - grey),    D = (x largest code - offset) / (scale k)
+node 2    logE  = aim - (pd - 0.70)                   aim: the exposure per layer that prints an 18 % grey
+node 3-4  a_c   = curve_c(logE_c)                     the print's curve per layer, held at the ends of its range
+node 5-6  t(w)  = 10^-(sum_c a_c dye_c(w) + base(w))  the print's transmittance or reflectance
+          XYZ   = sum_w t(w) light(w) observer(w) / sum_w light(w) y(w)
+          rgb   = X XYZ                               the 3D table holds rgb on a grid of (a_1, a_2, a_3)
+node 7    the sRGB curve
+```
+
+Node 1 is one 3×4 matrix. Its 3×3 part is `S P diag(largest code / (scale k))` and its offsets are
+`0.70 + S P (balance - grey - offset / (scale k))`. So between a camera pixel and the print's exposure the matrices
+multiplied are, in order, `C`, `B`, the logarithm, `M`, `k` into the file and out of it again, `P` and `S`; after the
+print's curves comes `X`. The frame's mid grey, balanced, lands on the printing density 0.70, where a Cineon file
+holds an 18 % grey (code 445 of 1023), and the print exposes that density as its own mid grey.
+
+## What depends on what
+
+| | The frame | The film stock | The print material | The scanner and its light |
+|---|---|---|---|---|
+| `C`, the flat field | | | | yes |
+| `B` | yes: the roll's film base | | | |
+| `M` | | yes: its dye spectra | | yes: the light's spectrum |
+| `P` | | a little: its dye spectra | yes | |
+| balance, `grey` | yes: the search | yes: the chart's mid grey per bracket | | |
+| `S` | through its bracket | yes: the chart's grey steps | yes | |
+| CLF nodes 2 to 7 | | | yes | |
+
+## What is not principled yet
+
+- **The print material is a model.** Its curves, dye spectra and sensitivity are spektrafilm's, the printer lamp is
+  a 3200 K blackbody with no heat filter, and no result has been compared with a real print.
+- **The slopes correct the print material too.** They make the grey steps neutral on the print, so they take out the
+  print material's own grey scale along with the film's.
+- **The slopes change between brackets.** Each bracket's are fitted on its own 24 steps, and frames on neighbouring
+  brackets are printed with different slopes. One fit per stock, or slopes interpolated at the frame's own mid grey,
+  have not been tried on pictures.
+- **A 3×3 for each density measure.** `M` and `P` are least-squares fits on a model of the film. Where the film's
+  data ends (below about 400 nm, above about 700 nm) the nearest measured value is held.
+- **The values in the table of the slopes** (L\* 12 and 92, 12 steps, 0.6 and 1.5) are stated, not derived.
