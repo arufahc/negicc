@@ -200,7 +200,7 @@ DanielE, 2026-07-11.
 The RAW files and the pictures belong to the photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
-## Density files and a print simulation
+## Density files and print emulation
 
 With an RGB-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
 place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `rp180` in a DPX is a Cineon file and
@@ -216,7 +216,7 @@ and Kodak Vision 2383 print film. Any tool that reads CLF renders the file throu
 The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
 how the print is computed.
 
-![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_simulation.jpg)
+![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 
 *Left to right: negicc's picture, the print on Portra Endura paper, the print on Vision 2383 film.*
 

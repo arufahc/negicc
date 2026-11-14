@@ -1,20 +1,18 @@
 # Design
 
-Two parts. The first is how `neg_process` turns a scan into a picture, under either light: the search for exposure
-and colour, the curve fit of a white-light scan, and the tone stage. The second is the other output of a tri-LED
-scan: the negative as a density file, and the CLF beside it that prints the file on a paper or a print film.
+`neg_process` was built in three steps, and this document follows them.
 
-- [The conversion to a picture](#design-the-conversion-to-a-picture)
-- [Density and its print](#design-density-and-its-print)
+1. **[The narrow-band LED conversion](#the-narrow-band-led-conversion).** The original design. Under a red, green
+   and blue LED light the film's curves are measured on a chart, at several exposure brackets. Converting a frame
+   is then a search: which bracket's profile, at what exposure and gains. The tone stage, added later for both
+   lights, sets the contrast.
+2. **[White light: the curve fit](#white-light-the-curve-fit).** Added on the first: scans under a white light,
+   and with them two more stages, which fit for each frame a correction of the green and blue gains and curves of
+   the profile.
+3. **[Print emulation](#print-emulation).** Added last, for narrow-band scans: the negative as a density file, and a
+   CLF beside it that prints the file on a paper or a print film.
 
-# Design: the conversion to a picture
-
-How `neg_process` converts a scan of a negative to a picture (`-P srgb`), and every choice it makes along the way.
-A white-light scan (`--light_source d65`) runs all four stages. A tri-LED scan (`--light_source tri`) runs stages 1
-and 4 only: its curves are the measured ones and are not fitted. `--fit_curves off` leaves out stages 2 and 3, and
-`--tone_stage off` leaves out stage 4.
-
-## The stages
+The first two make a picture (`-P srgb`) in four stages, numbered in the order they run:
 
 | # | Stage | What it decides | Where it acts |
 |---|---|---|---|
@@ -25,7 +23,14 @@ and 4 only: its curves are the measured ones and are not fitted. `--fit_curves o
 
 Every pixel goes through the conversion once. No stage converts finished pixels to another colour space and back.
 
-## How the estimates work
+A narrow-band scan (`--light_source tri`) runs stages 1 and 4. A white-light scan (`--light_source d65`) runs all
+four; `--fit_curves off` leaves out stages 2 and 3, and `--tone_stage off` leaves out stage 4.
+
+# The narrow-band LED conversion
+
+Stages 1 and 4. The profile's curves are the measured ones and are not fitted.
+
+## How the search scores a render
 
 **The intent field.** The search renders a small preview, and the intent network predicts, for each cell i of a
 grid over it, what a finished scan would show there: a mean mu_i = (mu_L, mu_a, mu_b) and an uncertainty sigma_i per
@@ -47,6 +52,66 @@ plus the penalties, the green gain on loss_a and the blue gain on loss_b. The re
 render at (E, g, b) -> network predicts mu, sigma -> search (E, g, b) against them -> repeat
 stop when |dE| + |dg| + |db| <= 0.02, or once the residual has passed its minimum (the best step is kept)
 ```
+
+## Reading the tables
+
+Each table lists the **choices** a stage makes: numbers that decide how the picture looks or how far an estimate is
+trusted. **Effect** is the number of frames, out of a 140-frame test set, that change visibly (mean ΔE above 1) when
+the choice is switched off, or halved or doubled where the table says so. It shows how much work a choice does, not
+whether the result is better. Bounds that only act when something goes wrong are listed in one line under each
+table. Iteration counts, step sizes and table sizes are left to the code.
+
+## Stage 1: Auto search
+
+For each candidate bracket, Auto renders the bracket's profile at a metered exposure, asks the intent network what
+the finished picture should look like, and then searches exposure and gains for the closest match. White-light scans
+use the same stage.
+
+| Choice | Value | What it does |
+|---|---|---|
+| Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
+| Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
+| Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
+| Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | How far a scene may run past a bracket's calibrated range, at either end, before the bracket is ruled out. |
+| Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
+| Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
+| Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
+| Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
+| Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
+| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto nudges exposure down by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
+| Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
+
+That makes eleven choices. None of them has been switched off on the 140-frame test set yet, so the table has no
+Effect column. The search also does not always converge to the same answer: where it ends depends on where it
+starts.
+
+## Stage 4: Tone stage
+
+The tone head predicts the shadow level, highlight level and tonal range that a lab scan of the frame would have.
+One lightness curve moves the image toward those values while holding the mid-tone where it is. The head needs one
+network inference, on the preview of the final render: the only inference after the search. The curve is applied to
+each pixel's linear sRGB value inside the conversion. The pixel's brightness follows the curve, and its colour is
+carried along unchanged.
+
+The stage runs after every bracket search with `-P srgb`, on white light and narrow-band alike. Where no curve fit
+runs (narrow-band, or `--fit_curves off`), it is planned on the search's own result and leaves that result's colour as it is.
+In a blind comparison on 20 narrow-band frames, the stage was preferred on 17 and the conversion without it on 2.
+
+| Choice | Value | What it does | Effect |
+|---|---|---|---|
+| Shadow move | 1.0 | Moves the shadows all the way to the predicted shadow level. | 60 at half |
+| Highlight move | 0.5 | Moves the highlights half way to the predicted highlight level. | 16 to 30 |
+| Range move | 0.5 | Moves the tonal range half way to the predicted range. | 38 to 61 |
+| Clip allowance | 0.5 % of pixels | If the curve would clip more than this share of pixels to white, the highlight and range moves are scaled back until it does not. | 14 |
+| Curve limits | Black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | How far each of the curve's four parameters may go. On most frames at least one of them sits on its limit. | — |
+
+# White light: the curve fit
+
+Stages 2 and 3, between the search and the tone stage. They exist for white light only: the search has chosen a
+bracket, an exposure and gains, and the fit then corrects the green and blue gains and the slopes of the green and
+blue curves, so that what the frame shows as neutral comes out grey.
+
+## How the fit estimates a cast
 
 **The neutral prediction.** A second head gives each cell p_i in [0, 1], the probability that it shows a neutral
 surface. The anchors are the cells that Auto's render puts between L\* 2 and L\* 92, and each is weighted by p squared:
@@ -103,44 +168,10 @@ is trusted closer than that.
 | The p² weighting | A choice: it is not derived from anything. |
 | The evidence half-mass 12, the systematic error of 1 a\* and the one-standard-error lean | Stated values. None of them is derived or fitted. |
 
-## Reading the tables
-
-Each table lists the **choices** a stage makes: numbers that decide how the picture looks or how far an estimate is
-trusted. **Effect** is the number of frames, out of a 140-frame test set, that change visibly (mean ΔE above 1) when
-the choice is switched off, or halved or doubled where the table says so. It shows how much work a choice does, not
-whether the result is better. Bounds that only act when something goes wrong are listed in one line under each
-table. Iteration counts, step sizes and table sizes are left to the code.
-
-## Stage 1: Auto search
-
-For each candidate bracket, Auto renders the bracket's profile at a metered exposure, asks the intent network what
-the finished picture should look like, and then searches exposure and gains for the closest match. Tri-LED scans use
-the same stage.
-
-| Choice | Value | What it does |
-|---|---|---|
-| Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
-| Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
-| Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
-| Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | How far a scene may run past a bracket's calibrated range, at either end, before the bracket is ruled out. |
-| Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
-| Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
-| Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
-| Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
-| Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
-| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto nudges exposure down by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
-| Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
-
-That makes eleven choices. The admissible-bracket rule, the overflow tolerances, the clip fallback and the highlight
-pullback were ported unchanged from negicc-station, so that both programs pick the same result. negicc-station
-records no reason for their values. None of the eleven has been switched off on the 140-frame test set, so the table
-has no Effect column. The search also does not always converge to the same answer: where it ends depends on where
-it starts.
-
 ## Stage 2: Curve fit
 
 One least-squares solve over four numbers: the green and blue gains, and the slopes of the green and blue input
-curves. It works on the anchor and intent terms described in "How the estimates work". Exposure is re-solved at
+curves. It works on the anchor and intent terms described in "How the fit estimates a cast". Exposure is re-solved at
 every step, so the median lightness stays where Auto put it.
 
 | Choice | Value | What it does | Effect |
@@ -168,25 +199,10 @@ freely. Only if its result is greener than Auto's does it run again with the exc
 | Tolerance | 0.5 a\* | A result up to this much greener than Auto's still counts as not greener. | 7 |
 | Shadow exemption | Full below L\* 10, fading out by L\* 20 | The guard does not apply in the deep shadows, so a magenta cast there can still be corrected toward green. | 10 |
 
-## Stage 4: Tone stage
+## Stage 3: Profile tables
 
-The tone head predicts the shadow level, highlight level and tonal range that a lab scan of the frame would have.
-One lightness curve moves the image toward those values while holding the mid-tone where it is. The head needs one
-network inference, on the preview of the final render: the only inference after the search. The curve is applied to
-each pixel's linear sRGB value inside the conversion. The pixel's brightness follows the curve, and its colour is
-carried along unchanged.
-
-The stage runs after every bracket search with `-P srgb`, on white light and tri-LED alike. Where no curve fit runs
-(tri-LED, or `--fit_curves off`), it is planned on the search's own result and leaves that result's colour as it is.
-In a blind comparison on 20 tri-LED frames, the stage was preferred on 17 and the conversion without it on 2.
-
-| Choice | Value | What it does | Effect |
-|---|---|---|---|
-| Shadow move | 1.0 | Moves the shadows all the way to the predicted shadow level. | 60 at half |
-| Highlight move | 0.5 | Moves the highlights half way to the predicted highlight level. | 16 to 30 |
-| Range move | 0.5 | Moves the tonal range half way to the predicted range. | 38 to 61 |
-| Clip allowance | 0.5 % of pixels | If the curve would clip more than this share of pixels to white, the highlight and range moves are scaled back until it does not. | 14 |
-| Curve limits | Black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | How far each of the curve's four parameters may go. On most frames at least one of them sits on its limit. | — |
+Nothing is decided here. The correction of stage 2 is written into the profile's green and blue input tables, so
+the one conversion of the pixels applies it.
 
 ## Count
 
@@ -202,7 +218,7 @@ In a blind comparison on 20 tri-LED frames, the stage was preferred on 17 and th
 Not counted as choices: the solver's constants. They set how the terms are scaled and solved rather than what the
 solve aims at: the guard's penalty weight 4 and its counting minimums, the 4 x 4 blocks of the standard error, the
 slope weight and the 25 in the slope moment, the residual scale 1/1.5, the slope ridge 1.5 and the lever factor.
-They live in `input_curves.h`, and "How the estimates work" shows where most of them enter.
+They live in `input_curves.h`, and "How the fit estimates a cast" shows where most of them enter.
 
 ## What is not principled yet
 
@@ -227,13 +243,13 @@ They live in `input_curves.h`, and "How the estimates work" shows where most of 
 - **The clip check** measures the whole export, film borders included, while the tone curve is planned on the inner
   crop.
 - **Stage 1's thresholds have no recorded basis.** The admissible-bracket rule, the overflow tolerances, the clip
-  fallback and the highlight pullback were copied from negicc-station, which gives no reason for their values. None
-  of them has been switched off on the test set, so how many frames each one changes is unknown. To do: measure the
-  Effect of each, as for stages 2 and 4.
+  fallback and the highlight pullback have no recorded reason for their values. None of them has been switched off
+  on the test set, so how many frames each one changes is unknown. To do: measure the Effect of each, as for stages
+  2 and 4.
 
-# Design: density and its print
+# Print emulation
 
-With a tri-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
+With a narrow-band LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
 place of a picture, for grading tools and film-print LUTs. Beside a printing density file (`rp180`, `apd`)
 `neg_process` also writes a CLF per print material, which renders the file as a print on that material. This part
 gives the stages from a scan to that print, what the density file holds and how good it is, the spectral data and
