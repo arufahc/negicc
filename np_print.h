@@ -193,14 +193,17 @@ struct PrintMaterial {
 //   the observer              the CIE 1931 2 degree observer (cie_tables.h) under D50 for a paper, D55 for a print
 //                             film (info.support), adapted to D65 with CAT02 for sRGB
 //   aim                       the exposure of each layer that prints an 18 % grey
-//   the print matrix          Q inv(F) for each measure of the bundle: F its film_to_measure (dye amounts to the
-//                             measure's density), Q the 3x3 from the film's dye amounts to the print's own density,
-//                             least squares on fixed sample colours of the bundle's film_model (every point of its
-//                             neutral scale between log exposure -1.5 and 1.0, each with 27 colour variations)
+//   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
+//                             no light_density_factors: F its film_to_measure (dye amounts to the measure's density),
+//                             L the bundle's light_to_film, M = F L diag(alpha) the measure's full matrix, and Q the
+//                             3x3 from the film's dye amounts to the print's own density, least squares on fixed
+//                             sample colours of the bundle's film_model (every point of its neutral scale between
+//                             log exposure -1.5 and 1.0, each with 27 colour variations). P M = Q L for every
+//                             measure, so the bracket's uncalibrated APD slopes apply once
 //
 // id names the material when the profile's info.stock does not. False with why in err; a bundle without a
 // film_model gives a material without matrices, which frame_print refuses.
-// py-ref: negicc_station/src/print_emulation.py (spektrafilm_print, film_to_print_density, PrintModel)
+// py-ref: negicc_station/src/print_emulation.py (spektrafilm_print, print_matrix, film_to_print_density, PrintModel)
 bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
                             PrintMaterial& out, std::string& err);
 

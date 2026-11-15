@@ -692,15 +692,35 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
     }
     m.aim[c] = e[c];
   }
-  // The print matrix of each measure, for this bundle's film: Q inv(F).
+  // The print matrix of each measure, for this bundle's film: Q inv(F), with any light_density_factors of the measure
+  // undone on the light's channels (Q inv(F) + Q L diag(1 / alpha - 1) inv(L) inv(F) = Q L inv(M)) so that P M = Q L
+  // for every measure and the bracket's uncalibrated APD slopes apply once.
+  // py-ref: negicc_station/src/print_emulation.py (print_matrix)
+  auto print_matrix = [](const double q[9], const DensityMatrix& dm, double p[9]) {
+    double inv_f[9];
+    if (!dm.present || !invert3(dm.film_to_measure, inv_f)) return false;
+    multiply3(q, inv_f, p);
+    const double* alpha = dm.light_density_factors;
+    if (alpha[0] == 1.0 && alpha[1] == 1.0 && alpha[2] == 1.0) return true;
+    double inv_l[9];
+    if (!invert3(dm.light_to_film, inv_l)) return false;
+    double ql[9], inv_lf[9], scaled[9], corr[9];
+    multiply3(q, dm.light_to_film, ql);
+    multiply3(inv_l, inv_f, inv_lf);
+    for (int r = 0; r < 3; ++r) {
+      const double d = 1.0 / alpha[r] - 1.0;
+      for (int c = 0; c < 3; ++c) scaled[r * 3 + c] = d * inv_lf[r * 3 + c];
+    }
+    multiply3(ql, scaled, corr);
+    for (int k = 0; k < 9; ++k) p[k] += corr[k];
+    return true;
+  };
   double q[9];
   if (bundle.film_model.present && film_to_print_density(bundle.film_model, response, q)) {
     for (int k = 0; k < kDensityMeasures; ++k) {
-      double inverse[9];
-      if (!bundle.density_matrix[k].present || !invert3(bundle.density_matrix[k].film_to_measure, inverse)) continue;
       PrintMaterial::ToPrint t;
+      if (!print_matrix(q, bundle.density_matrix[k], t.m.data())) continue;
       t.film = bundle.film_model.name;
-      multiply3(q, inverse, t.m.data());
       m.to_print[k].push_back(t);
     }
   }

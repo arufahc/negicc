@@ -541,9 +541,15 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         const nlohmann::json& f = node["light_density_factors"];
         if (!f.is_array() || f.size() != 3 || !f[0].is_number() || !f[1].is_number() || !f[2].is_number()) {
           throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
-                                   ".light_density_factors needs three numbers");
+                                   ".light_density_factors needs three positive numbers");
         }
-        for (int c = 0; c < 3; ++c) factor[c] = f[c].get<double>();
+        for (int c = 0; c < 3; ++c) {
+          factor[c] = f[c].get<double>();
+          if (!std::isfinite(factor[c]) || !(factor[c] > 0.0)) {
+            throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
+                                     ".light_density_factors needs three positive numbers");
+          }
+        }
       }
       for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
@@ -552,7 +558,11 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           out.m[r * 3 + c] = v * factor[c];
         }
       }
-      for (int k = 0; k < 9; ++k) out.film_to_measure[k] = film_to_measure[k];
+      for (int k = 0; k < 9; ++k) {
+        out.film_to_measure[k] = film_to_measure[k];
+        out.light_to_film[k] = light_to_film[k];
+      }
+      for (int c = 0; c < 3; ++c) out.light_density_factors[c] = factor[c];
       out.present = true;
       out.target_curves = node.value("target_curves", std::string());
     }

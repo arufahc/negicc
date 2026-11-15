@@ -149,6 +149,8 @@ struct DensityMatrix {
   bool present = false;
   double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   double film_to_measure[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // the measure's part alone
+  double light_to_film[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};     // the light's part alone
+  double light_density_factors[3] = {1.0, 1.0, 1.0};         // the calibration on the light's densities, when applied
   std::string target_curves;          // what defines the measure, as the bundle names it
 };
 
