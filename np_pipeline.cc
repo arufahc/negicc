@@ -2493,12 +2493,16 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // The film base is the zero of a density file. Read from a capture or the scan's rebate it is measured; taken from
     // the thinnest film of a frame with no unexposed film in view, or from the bundle's roll, it is an estimate, and
     // every density is off by its error, differently per channel and per frame.
+    // The remedy: a capture of unexposed film (--film_base) on TriLED; on white light, which takes no capture, a
+    // crop that shows the rebate.
+    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
+                                       : "give --film_base <capture of this roll's unexposed film>";
     if (!scan.film_base.found) {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
-               "roll's base; give --film_base <capture of this roll's unexposed film>\n");
+               "roll's base; %s\n", remedy);
     } else if (scan.film_base.source == "statistics") {
       log_warn("the film base was estimated from the thinnest film on this frame, which shows no rebate: the densities "
-               "are too low wherever the frame has no unexposed film; give --film_base <capture of unexposed film>\n");
+               "are too low wherever the frame has no unexposed film; %s\n", remedy);
     }
     {
       // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.
@@ -2665,6 +2669,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
         rec.curve_k[k] = s.input_curves.k[k];
         rec.curve_u_med[k] = s.input_curves.u_med[k];
         rec.curve_u_hold[k] = s.input_curves.u_hold(k);
+        rec.curve_ref[k] = s.input_curves.ref[k];
       }
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();

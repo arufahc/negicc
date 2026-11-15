@@ -575,21 +575,27 @@ as it does under the LED. The gains multiply the channels `D_white` is taken in,
 of "Derivations", and the frame matrix and the print are a narrow-band scan's.
 
 **The curve fit.** A white-light conversion has one stage more: the fit bends the green and blue input curves so
-that what the frame shows as neutral comes out grey. It acts on a channel's stops below the film base, `u = -D log2
-10`:
+that what the frame shows as neutral comes out grey. A film of density `D` reaches the profile's input as
 
 ```
-f(u) = u (1 + a + k tanh(u - u_med))          held below the densest cell; red has no curve
+w   = E g_c n0 10^-D                          n0 = 55000 / 65535, where the film base lands at E = g = 1
+v   = knee(w)                                 the soft knee at 0.95, the identity below it
+v'  = ref 2^f(log2(v / ref))                  below ref; red has no curve
+f(u) = u (1 + a + k tanh(u - u_med))          held below the densest cell
 ```
 
-The bracket's profile renders the chart's grey step `i`, of channel density `d_i`, as that grey. With the fitted
-curves, the film this frame renders as step `i` has the channel density `D_i` that solves
+where `ref` is the curve's pivot as the fit records it: the film base at `E g_c`, through the knee. The bracket's
+profile renders `v' = n0 10^-d_i` as the chart's grey step `i`. So the film this frame renders as step `i` is found
+by running that backwards: `f` by bisection (it is monotonic), the knee in closed form, then
+`D_c,i = -log10(w / (E g_c n0))`. While `E g_c ≤ 1.13` the knee does not reach the film base, `ref = E g_c n0`, and
+this reduces to
 
 ```
 f_c(u) = -(d_c,i + log10(E g_c)) log2 10      D_c,i = -u / log2 10
 ```
 
-That is the grey scale the fitted curves describe. It goes forward through `F L` to APD, where the frame's mid grey
+Above that the knee moves the pivot, and on 55 of the 145 scans of the experiments below it does: leaving it out
+moves their slopes by up to 0.2. The result is the grey scale the fitted curves describe. It goes forward through `F L` to APD, where the frame's mid grey
 is its mid step and the slopes are the regression of "Derivations" over its 24 steps:
 
 ```

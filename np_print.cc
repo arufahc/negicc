@@ -770,31 +770,40 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   return s;
 }
 
+// The soft knee the white-light conversion renders through (multi_target_optimizer.cc AUTO_KNEE).
+constexpr double kCurveKnee = 0.95;
+
 std::vector<std::array<double, 3>> fitted_grey_scale(const DensityRecord& rec,
                                                      const std::vector<std::array<double, 3>>& steps) {
-  const double log2_10 = std::log2(10.0);
-  const double gains[3] = {1.0, rec.balance_g, rec.balance_b};
+  const double n0 = (rec.bundle ? rec.bundle->normalization_target : 55000.0) / 65535.0;
+  const double gains[3] = {rec.balance_e, rec.balance_e * rec.balance_g, rec.balance_e * rec.balance_b};
+  // color_pipeline.h knee_compress inverted: the identity up to the knee, then knee + delta tanh((w - knee) / delta).
+  auto unknee = [](double v) {
+    if (v <= kCurveKnee) return v;
+    const double delta = 1.0 - kCurveKnee;
+    return kCurveKnee + delta * std::atanh(std::min((v - kCurveKnee) / delta, 0.998));   // knee_compress caps at 0.9999
+  };
   std::vector<std::array<double, 3>> out(steps.size());
   for (size_t i = 0; i < steps.size(); ++i) {
     for (int c = 0; c < 3; ++c) {
-      const double target = -(steps[i][c] + std::log10(rec.balance_e * gains[c])) * log2_10;
-      double u = target;
-      const int ch = c - 1;                       // the record's curves: green, blue
-      if (ch >= 0 && target < 0.0 && (rec.curve_a[ch] != 0.0 || rec.curve_k[ch] != 0.0)) {
-        // input_curves.h curve_stops, in double.
+      double v = n0 * std::pow(10.0, -steps[i][c]);      // what the profile renders as this step
+      const int ch = c - 1;                              // the record's curves: green, blue
+      if (ch >= 0 && rec.has_curves && (rec.curve_a[ch] != 0.0 || rec.curve_k[ch] != 0.0) && v < rec.curve_ref[ch]) {
+        // input_curves.h curve_stops, in double, inverted by bisection.
+        const double a = rec.curve_a[ch], k = rec.curve_k[ch], med = rec.curve_u_med[ch], hold = rec.curve_u_hold[ch];
         auto f = [&](double x) {
-          const double a = rec.curve_a[ch], k = rec.curve_k[ch], med = rec.curve_u_med[ch], hold = rec.curve_u_hold[ch];
           if (x < hold) return hold * (1.0 + a + k * std::tanh(hold - med)) + (x - hold);
           return x * (1.0 + a + k * std::tanh(x - med));
         };
+        const double target = std::log2(v / rec.curve_ref[ch]);
         double lo = -64.0, hi = 0.0;
         for (int it = 0; it < 80; ++it) {
           const double mid = 0.5 * (lo + hi);
           if (f(mid) < target) lo = mid; else hi = mid;
         }
-        u = 0.5 * (lo + hi);
+        v = rec.curve_ref[ch] * std::exp2(0.5 * (lo + hi));
       }
-      out[i][c] = -u / log2_10;
+      out[i][c] = -std::log10(unknee(v) / (gains[c] * n0));
     }
   }
   return out;
@@ -923,14 +932,17 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
        (balanced ? "" : " (no balance was found: none applied)") + ", and slopes " +
        num("%.4f %.4f %.4f", print.slopes[0], print.slopes[1], print.slopes[2]) +
        " about the frame's mid grey, density " + num("%.4f %.4f %.4f", print.grey[0], print.grey[1], print.grey[2]) +
-       ". The mid grey is the chart's on the bracket " + xml(print.bracket) +
-       (print.searched ? " and at the exposure the picture conversion's search gave this frame"
-                       : " (no search: the middle bracket)") +
-       "; balanced, it prints as the print's mid grey. " +
-       (print.fitted ? "The mid grey and the slopes are those of the grey scale this frame's fitted input curves "
-                       "describe: the slopes give it equal contrast in the three channels"
-                     : "The slopes are the bracket's in the film's profile: they give the film's grey scale equal "
-                       "contrast in the three channels") +
+       ". " +
+       (print.fitted
+            ? "The mid grey and the slopes are those of the grey scale the picture conversion renders on the bracket " +
+                  xml(print.bracket) + " with this frame's exposure, gains and fitted input curves: the mid grey "
+                  "prints as the print's mid grey, and the slopes give that grey scale equal contrast in the three "
+                  "channels"
+            : "The mid grey is the chart's on the bracket " + xml(print.bracket) +
+                  (print.searched ? " and at the exposure the picture conversion's search gave this frame"
+                                  : " (no search: the middle bracket)") +
+                  "; balanced, it prints as the print's mid grey. The slopes are the bracket's in the film's profile: "
+                  "they give the film's grey scale equal contrast in the three channels") +
        ". The density file holds none of this. Add a constant to the three offsets of the first Matrix to print "
        "lighter (+) or darker (-), 0.30 a stop.</Description>\n";
   s += "  <Description>The 1D and 3D tables are derived by neg_process from the print profile of this material in "

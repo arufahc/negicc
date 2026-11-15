@@ -100,11 +100,13 @@ struct DensityRecord {
   double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
   std::string balance_target;
   // The input curves the white-light conversion fitted for this frame (input_curves.h), green then blue: a slope
-  // term a and a bend k on the channel's stops below the film base, the bend's centre u_med, and u_hold below which
-  // the curve keeps a slope of 1. They are not applied to the densities; a print takes its mid grey and slopes from
-  // the grey scale they describe (fitted_grey_scale). has_curves is false for a narrow-band scan and when no fit ran.
+  // term a and a bend k on the channel's stops below its pivot ref (the film base in the profile's input, after the
+  // soft knee), the bend's centre u_med, and u_hold below which the curve keeps a slope of 1. They are not applied
+  // to the densities; a print takes its mid grey and slopes from the grey scale they describe (fitted_grey_scale).
+  // has_curves is false for a narrow-band scan and when no fit ran.
   bool has_curves = false;
   double curve_a[2] = {0, 0}, curve_k[2] = {0, 0}, curve_u_med[2] = {0, 0}, curve_u_hold[2] = {0, 0};
+  double curve_ref[2] = {1, 1};
   std::string tool_version;
   // The metadata's "print" block, as JSON text: how the frame prints on each print material
   // (DensityPrints::metadata_json). Empty: none.
@@ -237,14 +239,16 @@ struct FramePrint {
   double grey_density = 0.70;
 };
 // The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
-// the film base. The bracket's profile renders step i, of channel density d_i, as that grey. The conversion
-// multiplies the channels by E, E g and E b and bends green and blue by the record's curves, f(u) = u (1 + a + k
-// tanh(u - u_med)) on the stops u below the base, so the film rendered as step i has, in channel c,
+// the film base. The conversion takes a film of density D in channel c to the profile's input as
 //
-//     f_c(u) = -(d_c,i + log10(E g_c)) log2 10,     density = -u / log2 10
+//     w = E g_c n0 10^-D          n0 = normalization_target / 65535, where the film base lands at E = g = 1
+//     v = knee(w)                 color_pipeline.h knee_compress at kCurveKnee (the identity below it)
+//     v' = ref 2^f(log2(v / ref))  for v < ref; v' = v at and above it (red has no curve)
 //
-// (red has no curve and g = 1). The curve is the identity at and above the base and monotonic below it
-// (input_curves.h curve_shape_ok), so u is found by bisection.
+// with f(u) = u (1 + a + k tanh(u - u_med)), held below u_hold, and ref the curve's pivot as the fit recorded it
+// (knee(E g_c n0) at the film base). The bracket's profile renders v' = n0 10^-d_i as grey step i. So each step is
+// inverted: f by bisection (it is monotonic, input_curves.h curve_shape_ok), the knee in closed form, then
+// D = -log10(w / (E g_c n0)). Without curves and below the knee this is d_i + log10(E g_c).
 // py-ref: negicc_station/src/print_emulation.py (fitted_grey_scale)
 std::vector<std::array<double, 3>> fitted_grey_scale(const DensityRecord& rec,
                                                      const std::vector<std::array<double, 3>>& steps);
