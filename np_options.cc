@@ -23,12 +23,14 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <type_traits>
 
 #include "argparse/argparse.hpp"
+#include <nlohmann/json.hpp>
 #include "embedded_data.h"
 #include "libraw/libraw.h"
 #include "np_input.h"
@@ -689,6 +691,17 @@ int parse_options(int ac, char* av[], Options& o) {
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
     for (const std::string& id : o.prints) {
+      // A spektrafilm print profile given as a file is checked now, so a wrong file stops the run before it starts.
+      if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
+        std::ifstream file(id, std::ios::binary);
+        std::stringstream text;
+        text << file.rdbuf();
+        std::string why;
+        if (!check_spektrafilm_print(nlohmann::json::parse(text.str(), nullptr, false), why)) {
+          log_error("--print %s: %s\n", id.c_str(), why.c_str());
+          return 1;
+        }
+      }
       bool found = id == "all" || (is_print_file(id) && std::filesystem::is_regular_file(id));
       std::string names;
       for (const PrintMaterial& m : known) {

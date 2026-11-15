@@ -39,6 +39,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "profile_bundle.h"
 
 constexpr double kDensityMinT = 1e-4;   // the transmittance floor before the log (4.0 density)
@@ -185,6 +187,13 @@ struct PrintMaterial {
   double aim[3] = {0, 0, 0};
   double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
 };
+
+// Whether a parsed JSON is a spektrafilm profile of a print material neg_process can print with: info.stage
+// "printing", info.support paper or film (it picks the viewing light), each layer's density_curves rising with
+// exposure, and each layer's log_sensitivity peaking within 6 (log10) of the most sensitive layer's. False with why in
+// err. load_spektrafilm_print checks it, and --print checks a file given to it before the
+// run starts.
+bool check_spektrafilm_print(const nlohmann::json& j, std::string& err);
 
 // A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.
 // Computed here:
