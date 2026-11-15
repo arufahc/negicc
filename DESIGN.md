@@ -291,16 +291,19 @@ D        = M D_light                          the measure's density
 code     = offset + scale k D                 10 bits: 95 + 500 k D     16 bits: 1520 + 8000 k D
 ```
 
-**The density matrix, in two parts.** `M = F L`. `L` takes the density the LED sees to the film's three dye amounts
+**The density matrix, in two parts.** `M = F L` (for Status M when calibrated on the chart, `M = F L diag(α)` with
+`α` the `light_density_factors` on the LED channels). `L` takes the density the LED sees to the film's three dye amounts
 and depends on the light's spectrum and the film's dyes. `F` takes the dye amounts to the measure and depends on the
 film's dyes and the measure's response curves, not on the light. The two are kept apart in `bundle.json`, so a
 scanner with another light replaces `L` alone. Each is a least-squares 3×3 with no offset, on 3000 sample colours of
 a model of the film: dye amounts along its neutral scale between log exposure −1.5 and 1.0, with a log-normal colour
 variation.
 
-**The print matrix.** `P` takes a measure's density to the density the print material's own layers read: its
-spectral sensitivity under a printer lamp. It is computed when a file is written, from the print material's
-profile and the bundle's film model, as `P = Q F⁻¹` ("The print matrix").
+**The print matrix.** `P` takes a measure's density as written in the file to the density the print material's own
+layers read: its spectral sensitivity under a printer lamp. It is computed when a file is written, from the print
+material's profile and the bundle's film model, as `P = Q L M⁻¹` — `P = Q F⁻¹` when the measure has no
+`light_density_factors`, and with Status M's chart calibration undone when it has them so `P M = Q L` for every
+measure ("The print matrix").
 
 **Mid grey.** Each bracket of a profile set is one shot of the chart, and the profile set keeps the chart's 18 %
 grey patch of each bracket as the density the LED sees. The bracket's profile renders that density as mid grey at an
@@ -457,16 +460,22 @@ profile `neg_process` computes the observer under the viewing light (D50 for a p
 exposure that prints an 18 % grey, and the print matrix for the bundle's film.
 
 The response curves of the standard measures are not shipped, so the print matrix is not fitted against them. With
-`F` the measure's part of the density matrix (dye amounts to the measure's density) and `Q` the 3×3 from the film's
+`F` the measure's part of the density matrix (dye amounts to the measure's density), `L` the light's part, `α` the
+measure's `light_density_factors` (`1` unless Status M was calibrated on the chart), and `Q` the 3×3 from the film's
 dye amounts to the print's own density:
 
 ```
-P = Q F⁻¹
+P = Q F⁻¹ + Q L diag(α⁻¹ − 1) L⁻¹ F⁻¹ = Q L M⁻¹
 ```
+
+For RP 180, APD, white-light profiles and uncalibrated Status M (`α = 1`) the second term vanishes and `P = Q F⁻¹`.
+For a calibrated Status M file (`M = F L diag(α)`), it undoes `α` on the light's channels so that `P M = Q L` for
+every measure: Status M's chart calibration belongs to the Status M density readout alone, and the bracket's
+uncalibrated APD slopes apply once instead of on top of `α`.
 
 `Q` is a least-squares fit with no offset on fixed sample colours of the bundle's film model: every point of its
 neutral scale between log exposure −1.5 and 1.0, each with 27 colour variations (each dye amount times
-`exp(0.184 z)`, `z` = −1, 0, 1). For Portra Endura and Vision 2383 this `P` lies within 0.01 of a matrix fitted
+`exp(0.184 z)`, `z` = −1, 0, 1). For Portra Endura and Vision 2383 `Q F⁻¹` lies within 0.01 of a matrix fitted
 against the measure's response curves on 3000 drawn samples, which earlier versions stored.
 
 ## The crosstalk correction, measured and computed
@@ -516,7 +525,7 @@ The source, basis, storage and invalidation condition of each quantity in the ch
 | `B`, film base scale | The roll | Measured on each run: `--film_base`, the rebate, or the thinnest film | The density file's metadata | Every roll |
 | `L`, LED density to dye amounts | The light's spectrum, the film's dye spectra | Fitted on the film model | `bundle.json`, `light_to_film` | The light or the film stock changes |
 | `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
-| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | Computed when a file is written, as `Q F⁻¹` | A print material is added |
+| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly (and Status M's `α`, undone when present) | Fitted on the film model | Computed when a file is written, as `Q L M⁻¹` (`Q F⁻¹` when `α = 1`) | A print material is added |
 | Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
 | Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from the spektrafilm print profile | A print material is added |
