@@ -268,6 +268,10 @@ involved. The density file is the film as measured. The CLF holds everything tha
 `neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written. A
 white-light scan goes the same way with one more step, described under "White-light scans".
 
+On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): the print material's print ICC takes the
+place of the brackets' chart profiles, and Auto and the conversion render through it. "Direct sRGB output: the print
+ICC", after the density output's stages, specifies it.
+
 ## Pipeline
 
 | # | Stage | Function | Inputs |
@@ -306,14 +310,25 @@ material's profile and the bundle's film model, as `P = Q L M⁻¹` — `P = Q F
 `light_density_factors`, and with Status M's chart calibration undone when it has them so `P M = Q L` for every
 measure ("The print matrix").
 
+**The film's grey balance curve.** A narrow-band profile set keeps the film's grey scale as one curve per LED channel
+(`density_matrices.grey_balance_curves`): `G_c(d)` is the APD of the film's grey that has light density `d` in channel
+`c`. It comes from the chart's grey steps of all seven brackets (168 points): the red and the blue light density as a
+cubic in the green, least squares, carried on by its tangent past the end steps, then through the APD matrix. 501
+points per channel, light density −0.5 to 4.5 in steps of 0.01; a coarser table would do (251 points move a print by
+0.001 ΔE00 at most).
+
 **Mid grey.** Each bracket of a profile set is one shot of the chart, and the profile set keeps the chart's 18 %
-grey patch of each bracket as the density the LED sees. The bracket's profile renders that density as mid grey at an
-exposure of 1. The search's exposure `E` multiplies the LED channels, so for this frame the film that renders as mid
-grey is denser by `log10 E` in each:
+grey patch (gs10) of each bracket as the density the LED sees. On a narrow-band bundle the mid grey is the curve's grey
+with that patch's green APD, `A_mid`: `n_c = G_c⁻¹(A_mid)` (a white-light bundle, which has no curve, takes the patch
+itself). The bracket's profile renders that density as mid grey at an exposure of 1. The search's exposure `E`
+multiplies the LED channels, so for this frame the film that renders as mid grey is denser by `log10 E` in each:
 
 ```
-grey = M (bracket's mid grey + log10 E)
+grey = M (n + log10 E)
 ```
+
+The patch and the curve's grey differ by up to 0.03 light density (Portra 400, Target 1 red); taking the curve's keeps
+the CLF and the print ICC on one mid grey.
 
 **Balance.** The gains `g` and `b` multiply the green and blue LED channels, which in density is an offset:
 
@@ -321,16 +336,27 @@ grey = M (bracket's mid grey + log10 E)
 balance = M [0, -log10 g, -log10 b]
 ```
 
-**Slopes.** Over a bracket's 24 grey steps, the red and the blue density do not change as the green does. With
-`r_i` a step's density less the mid grey's, in Academy Printing Density:
+**Slopes.** Along the film's grey scale the red and the blue density do not change as the green does. On a
+narrow-band bundle the slopes are the curve's contrast at the bracket's mid grey: with `n(g)` the light densities of
+the curve's grey at green APD `g`,
+
+```
+k_c = sum_j M_cj dn_j/dg   at g = A_mid       dn_j/dg = 1 / G_j'(n_j), a central difference of one table step
+S   = (k_green / k_red, 1, k_green / k_blue)
+```
+
+A white-light bundle keeps each bracket's own: over its 24 grey steps, with `r_i` a step's density less the mid
+grey's, in Academy Printing Density,
 
 ```
 k_red = sum_i r_i,red r_i,green / sum_i r_i,green^2          (likewise k_blue)
 S     = (1 / k_red, 1, 1 / k_blue)
 ```
 
-Multiplied by `S`, the film's grey scale has equal contrast in the three channels. `S` is computed when the profile
-set is built and kept per bracket; a frame takes that of its bracket.
+Multiplied by `S`, the film's grey scale has equal contrast in the three channels. A frame takes those of its bracket.
+On Portra 400 the two differ by up to 0.045 in red (Target 6: 0.852 from the curve, 0.897 from the bracket's steps):
+the curve is fitted to all seven brackets, each bracket's steps to themselves. The print ICC uses the curve, so the
+CLF does too.
 
 ![The grey steps of a bracket in APD, and its slopes](samples/slopes_grey_steps.png)
 
@@ -397,7 +423,7 @@ These are errors against the model, not against the film.
 | Mid grey patch | `gs10` | The chart's step nearest 18 % reflectance. |
 | Mid grey lands on | 0.70 | Code 445 of a Cineon file, where Cineon holds the LAD patch. The constant cancels inside the CLF. |
 | Slopes measured in | APD | The standard measure in which equal steps are meant to print neutral. The same slopes serve a file in any measure. |
-| Slopes taken from | The frame's bracket | One pair per bracket, since the film's channels shift with exposure. |
+| Slopes taken from | The film's grey balance curve at the frame's bracket's mid grey (narrow-band); the bracket's own steps (white light) | One pair per bracket, since the film's channels shift with exposure. The print ICC uses the same curve. |
 | Slopes applied | After `P` | They scale two rows of the print matrix. |
 
 The slopes are the film's alone: no print material enters them, so a print material keeps its own grey scale. On
@@ -436,6 +462,72 @@ A CLF fits the one file it is named after: its first matrix holds that file's co
 factors. To print lighter or darker, add a constant to the three offsets of the first matrix; 0.30 is a stop. The
 balance, the exposure and the slopes are applied there and nowhere else. The CLF's two tables derive from
 spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the matrices are computed.
+
+## Direct sRGB output: the print ICC
+
+With `--print <print>` on a TriLED bundle and a picture output (`-P srgb`, or any other), the output is the print.
+Each bracket's chart profile is replaced, before anything reads it, by a print profile: the film printed on that
+material, shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three 4096-entry input curves, a
+45 × 45 × 45 table, identity output curves). Auto, the conversion and the output then run it as they run a chart
+profile. With a density output the same happens for the search (on the first material named; Portra Endura for
+`all`), and the file and its CLFs are written as in stages 1 to 4. Without `--print` the chart profiles render the
+scene, as before.
+
+| # | Stage | Function | Inputs |
+|---|---|---|---|
+| 1 | Bundle | One print ICC per print material, built when the profile set is saved (negicc-station `src/print_icc.py`): its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
+| 2 | Bracket profiles | For each bracket, the bundle's print ICC with that bracket's input curves written in (about 5 ms each). | The curve, the bracket's mid grey, the material's curve. |
+| 3 | Search | Stage 1 of the picture conversion, unchanged, on the bracket profiles of stage 2. | The frame. |
+| 4 | Conversion | The picture conversion with the chosen bracket's print profile. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
+
+**The chain.** For the profile's input `v` (the scan after the crosstalk correction, the film base at `n0 =
+normalization_target / 65535`, after the soft knee at 0.95), in each channel `c`:
+
+```
+dL_c     = -log10(unknee(v_c) / n0)                  light density
+alpha_c  = G_c(dL_c) - A_mid                         APD above the bracket's mid grey; equal in all channels on a grey
+pd       = 0.70 + Q L (w alpha),  w = M⁻¹ (1, 1, 1)  printing density (Q L = P M, "The print matrix")
+logE_c   = aim_c - (pd_c - 0.70)                     then the print as in "Derivations": dye amounts, XYZ
+XYZ_PCS  = XYZ (paper, under D50)  |  Bradford(D55 -> D50) XYZ (print film)
+```
+
+**Where the profile splits it.** A 3D table samples the paper's S-curve badly, so the curve goes into the input
+curves and the table keeps only colour:
+
+```
+curve_c(v)    = Paper_c(G_c(dL_c) - A_mid)
+table(a)      = the chain from alpha_c = Paper_c⁻¹(a_c)
+Paper_c(alpha) = curve_c(aim_c - k_c alpha) / top,   k = P (1, 1, 1)
+```
+
+`Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey (`top`: the curves' largest value,
+rounded up to 0.1; `P` the print matrix for APD). It is held strictly decreasing (1e-6 a step past the curve's flat
+ends), so it inverts the same way for every bracket, and the table has no bracket in it: one table serves all seven,
+and a bracket's profile differs from another's only in its curves.
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Input curves | 4096 entries, on `v` = 0 to 1 | As the chart profiles; they hold the knee's inverse, the film's grey balance and the paper's curve. |
+| Table | 45 points a side, XYZ D50 | The dyes' colour and the print matrix's mixing off the grey axis. Its sampling error is 0.04 ΔE00 on the chart. |
+| `Paper_c` table | alpha −3 to 5 in steps of 0.005 | Covers the paper from its white to its black. |
+| Grey balance curve | 501 points per channel | See "Derivations". |
+| Bundle ICC used when | its own curves equal those computed for its bracket, to one 16-bit code | Otherwise (a `--print` file, or a bundle built with another version of the math) the table is computed by `neg_process`, in about 0.3 s. |
+| Tone stage, shoulder | off | The print material's curve is the tone. `--tone_stage` with `--print` is refused. |
+| Picture output | one print material | A density output takes several, one CLF each. |
+| White light | density output only | Its curve fit composes into the chart profiles; its print is the density output's CLF. |
+
+**Checks.** On a Portra 400 frame (TriLED, frame 0057, Portra Endura):
+
+- The table and curves that `neg_process` writes equal the station's to the byte, for a built-in material and for one
+  given as a file, Vision 2383 (D55) included.
+- The CLF of the same frame, with its slopes and mid grey from the curve, is 0.42 ΔE00 from the print ICC on average
+  (95th percentile 0.60): the CLF's straight lines against the curve. With the bracket's own slopes and patch it was
+  0.99.
+- Without `--print` the output is bit-identical to `neg_process` before this change.
+
+The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose on Portra Endura:
+
+![negicc's picture and the eight print materials](samples/print_materials_triled.jpg)
 
 ## The spectral data
 
@@ -693,8 +785,13 @@ chart enters the print only through a bracket's mid grey and slopes. A scanner w
   blackbody, and no result has been compared with a real print.
 - **The slopes belong to one chart.** They hold for the film batch, the development and the scan the profile set
   was built from. Film from another lab may differ.
-- **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll.
-  Interpolating them at the frame's own mid grey has not been tried.
+- **Auto on a print searches with a model of pictures, not of prints.** The search's intent model was trained on
+  negicc's pictures. On some materials it pushes the print's exposure up: on a lake under a blue sky (TriLED frame
+  1004_0001), five of the eight materials went to Target 5 at E 0.38 and the sky washed out, where Portra Endura stayed at
+  the picture's exposure (E 1.13). The comparison above holds Endura's bracket, exposure and balance for all eight.
+- **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll. On a
+  narrow-band bundle they now come from one curve, so they could be taken at the frame's own mid grey; they are taken
+  at its bracket's, as the print ICC's mid grey is.
 - **The slopes remove part of the film's look.** A film's own drift of its greys from shadows to highlights is
   taken out with them. Whether a print should keep it has not been judged on pictures.
 - **Mid grey at 0.70, printed as an 18 % grey.** A Cineon scan has an 18 % card at 0.75, and a print to the LAD aim
