@@ -299,12 +299,11 @@ int parse_options(int ac, char* av[], Options& o) {
           "beside the file uses it.");
   parser.add_argument("--print")
     .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
-          "file). On a TriLED bundle the material's print ICC takes the place of the brackets' chart profiles, so "
-          "Auto and the conversion render the print: with -P srgb (or another picture output) the output is the "
-          "print. With a density output (-P statusm, rp180 or apd) the density file is written as before, the search "
-          "renders the print of the first material, and beside the file goes a CLF per material that renders it as "
-          "that print, as sRGB (<output>.<print>.clf); give it once per print material, or 'all' for those built "
-          "in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
+          "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto runs on "
+          "the chart profiles as always, and the conversion renders the chosen bracket's print ICC. With a density "
+          "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
+          "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
+          "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")

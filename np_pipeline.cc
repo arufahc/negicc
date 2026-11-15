@@ -790,11 +790,12 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
-  // --print. On a narrow-band bundle the print ICC of the print material (the first --print names; Portra Endura for
-  // 'all') replaces each bracket's chart profile before anything reads it: the search, the conversion and the output
-  // all render the print, for a picture output and for a density output's search alike. A density output still gets
-  // a print CLF per material, as before. On a white-light bundle the curve fit composes into the chart profiles, so
-  // its print is a density output's CLF alone.
+  // --print. The search (bracket, E, g, b) always runs on the chart profiles, as for the density output's CLF, whose
+  // frame matrix puts the search's mid grey on the print's. With a picture output on a narrow-band bundle the
+  // conversion then renders the chosen bracket's print profile: the bundle's print ICC with that bracket's curves
+  // (np_print.h bracket_print_profiles), built here for every bracket. A density output writes a CLF per material, as
+  // before. On a white-light bundle the curve fit composes into the chart profiles, so its print is a density
+  // output's CLF alone.
   if (!o.prints.empty()) {
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
@@ -806,8 +807,8 @@ int prepare(const Options& o, Setup& s) {
                 "(-P statusm, rp180 or apd) for its print CLF\n");
       return 1;
     }
-    if (!s.white_light) {
-      const std::string print = o.prints.front() == "all" ? std::string("kodak_portra_endura") : o.prints.front();
+    if (!s.white_light && !s.density) {
+      const std::string& print = o.prints.front();
       BracketPrints prints;
       std::string why;
       if (!bracket_print_profiles(bundle, print, prints, why)) {
@@ -815,24 +816,24 @@ int prepare(const Options& o, Setup& s) {
         return 1;
       }
       for (size_t i = 0; i < bundle.targets.size(); ++i) {
-        BundleTarget& t = bundle.targets[i];
-        t.icc_bytes = std::move(prints.icc[i]);
-        cmsHPROFILE h = cmsOpenProfileFromMem(t.icc_bytes.data(), (cmsUInt32Number)t.icc_bytes.size());
+        std::vector<uint8_t>& icc = prints.icc[i];
+        cmsHPROFILE h = cmsOpenProfileFromMem(icc.data(), (cmsUInt32Number)icc.size());
         ParsedFilmProfile prof;
         const bool ok = h && parse_film_profile_pipeline(h, prof);
         if (h) cmsCloseProfile(h);
         if (!ok) {
-          log_error("--print %s: the print ICC of %s cannot be read\n", print.c_str(), t.name.c_str());
+          log_error("--print %s: the print ICC of %s cannot be read\n", print.c_str(), bundle.targets[i].name.c_str());
           return 1;
         }
-        t.film_prof = std::move(prof);
-        t.film_prof.rebind_pointers();
+        s.print_profs.push_back(std::move(prof));
+        s.print_iccs.push_back(std::move(icc));
       }
+      for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
       s.print_id = prints.id;
       s.print_name = prints.name;
       s.print_from_bundle = prints.from_bundle;
-      log_info("Print: %s (%s), the print ICC %s: the search and the conversion render the print\n",
-               prints.name.c_str(), prints.id.c_str(),
+      log_info("Print: %s (%s), the print ICC %s: the search runs on the chart profiles, the conversion renders the "
+               "print\n", prints.name.c_str(), prints.id.c_str(),
                prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
     }
   }
@@ -2498,6 +2499,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
+  }
+  // A print: the search chose the bracket, E, g and b on the chart profiles; the conversion renders that bracket's
+  // print profile, which puts the same mid grey on the print's.
+  if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
+    c.film_prof = s.print_profs[c.bundle_target_idx];
+    c.film_prof.rebind_pointers();
+    c.embedded_icc = s.print_iccs[c.bundle_target_idx];
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
   if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {

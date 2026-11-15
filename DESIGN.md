@@ -268,8 +268,8 @@ involved. The density file is the film as measured. The CLF holds everything tha
 `neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written. A
 white-light scan goes the same way with one more step, described under "White-light scans".
 
-On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): the print material's print ICC takes the
-place of the brackets' chart profiles, and Auto and the conversion render through it. "Direct sRGB output: the print
+On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): Auto runs on the chart profiles as
+always, and the conversion renders the chosen bracket's print ICC in place of its chart profile. "Direct sRGB output: the print
 ICC", after the density output's stages, specifies it.
 
 ## Pipeline
@@ -466,19 +466,19 @@ spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the 
 ## Direct sRGB output: the print ICC
 
 With `--print <print>` on a TriLED bundle and a picture output (`-P srgb`, or any other), the output is the print.
-Each bracket's chart profile is replaced, before anything reads it, by a print profile: the film printed on that
-material, shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three 4096-entry input curves, a
-45 × 45 × 45 table, identity output curves). Auto, the conversion and the output then run it as they run a chart
-profile. With a density output the same happens for the search (on the first material named; Portra Endura for
-`all`), and the file and its CLFs are written as in stages 1 to 4. Without `--print` the chart profiles render the
-scene, as before.
+Auto chooses the bracket, the exposure and the gains on the chart profiles, as it does without `--print` and for a
+density output's CLF. The conversion then renders the chosen bracket's print profile in place of its chart profile:
+the film printed on that material, shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three
+4096-entry input curves, a 45 × 45 × 45 table, identity output curves). Its curves put the bracket's mid grey, moved
+by the search's exposure, on the print's mid grey, as the CLF's frame matrix does. A density output is written as in
+stages 1 to 4. Without `--print` the chart profiles render the scene, as before.
 
 | # | Stage | Function | Inputs |
 |---|---|---|---|
 | 1 | Bundle | One print ICC per print material, built when the profile set is saved (negicc-station `src/print_icc.py`): its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
 | 2 | Bracket profiles | For each bracket, the bundle's print ICC with that bracket's input curves written in (about 5 ms each). | The curve, the bracket's mid grey, the material's curve. |
-| 3 | Search | Stage 1 of the picture conversion, unchanged, on the bracket profiles of stage 2. | The frame. |
-| 4 | Conversion | The picture conversion with the chosen bracket's print profile. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
+| 3 | Search | Stage 1 of the picture conversion, unchanged, on the chart profiles. | The frame. |
+| 4 | Conversion | The picture conversion with the chosen bracket's print profile of stage 2. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
 
 **The chain.** For the profile's input `v` (the scan after the crosstalk correction, the film base at `n0 =
 normalization_target / 65535`, after the soft knee at 0.95), in each channel `c`:
@@ -524,8 +524,16 @@ and a bracket's profile differs from another's only in its curves.
   (95th percentile 0.60): the CLF's straight lines against the curve. With the bracket's own slopes and patch it was
   0.99.
 - Without `--print` the output is bit-identical to `neg_process` before this change.
+- On a lake under a blue sky (TriLED frame 1004_0001), the print profile against the CLF of the same frame, material
+  by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
 
-The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose on Portra Endura:
+**Why the search stays on the chart profiles.** A search on the print profiles was tried first. Its intent model was
+trained on negicc's pictures, and it chased the picture's colours through the paper's compressed highlights: on the
+lake, five of the eight materials went to Target 5 at E 0.38 where the scene's search chose Target 3 at E 1.14, and the
+sky washed out. On the chart profiles every material gets the scene's bracket, exposure and balance, and the print
+profile and the CLF agree.
+
+The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose:
 
 ![negicc's picture and the eight print materials](samples/print_materials_triled.jpg)
 
@@ -785,10 +793,9 @@ chart enters the print only through a bracket's mid grey and slopes. A scanner w
   blackbody, and no result has been compared with a real print.
 - **The slopes belong to one chart.** They hold for the film batch, the development and the scan the profile set
   was built from. Film from another lab may differ.
-- **Auto on a print searches with a model of pictures, not of prints.** The search's intent model was trained on
-  negicc's pictures. On some materials it pushes the print's exposure up: on a lake under a blue sky (TriLED frame
-  1004_0001), five of the eight materials went to Target 5 at E 0.38 and the sky washed out, where Portra Endura stayed at
-  the picture's exposure (E 1.13). The comparison above holds Endura's bracket, exposure and balance for all eight.
+- **A print's exposure is the picture's.** Auto chooses it on the chart profiles, so a print of every material
+  takes the scene's bracket, exposure and balance; no material moves it. Searching on the print itself overexposed it
+  ("Direct sRGB output: the print ICC").
 - **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll. On a
   narrow-band bundle they now come from one curve, so they could be taken at the frame's own mid grey; they are taken
   at its bracket's, as the print ICC's mid grey is.

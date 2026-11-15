@@ -301,9 +301,10 @@ void remove_print_clfs(const DensityPrints& prints);
 
 // ---- The print ICC: a frame printed as the picture conversion renders it ---------------------------------------------
 //
-// With --print on a narrow-band bundle, each bracket's chart profile is replaced by a print profile: the film printed
-// on the print material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input
-// curves, a 45^3 table, identity output curves), so the search, the conversion and the output run it as they run them.
+// With --print and a picture output on a narrow-band bundle, the search runs on the chart profiles and the conversion
+// renders the chosen bracket's print profile in place of its chart profile: the film printed on the print material,
+// shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3 table,
+// identity output curves), so the conversion and the output run it as they run them.
 // The bundle carries one print ICC per print material (print_profiles, built by negicc-station src/print_icc.py when
 // the bundle was saved); its table serves every bracket, and each bracket's three input curves are computed here:
 //

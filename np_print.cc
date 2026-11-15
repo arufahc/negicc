@@ -1154,8 +1154,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
     j["print"] = {
         {"what", "how this frame prints on each print material: the frame's mid grey lands on the print's mid grey, "
                  "and the slopes give the film's grey scale equal contrast in the three channels. The bracket and the "
-                 "exposure are the search's (on a TriLED bundle it rendered the print of the first material); the mid "
-                 "grey and the slopes are the film's grey balance curve's at the bracket's mid grey "
+                 "exposure are the search's; the mid grey and the slopes are the film's grey balance curve's at the bracket's mid grey "
                  "(density_matrices.grey_balance_curves), or the bracket's in the profile set "
                  "(density_matrices.brackets), or, for a white-light frame whose input curves were fitted, those of "
                  "the grey scale the fitted curves describe (grey_and_slopes_from)"},
