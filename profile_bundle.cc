@@ -642,15 +642,24 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   if (j.contains("print_profiles") && j["print_profiles"].is_object()) {
     for (auto it = j["print_profiles"].begin(); it != j["print_profiles"].end(); ++it) {
       const nlohmann::json& e = it.value();
-      if (!e.is_object() || !e.contains("icc_profile") || !e["icc_profile"].is_string()) continue;
+      if (!e.is_object()) continue;
       BundlePrint p;
       p.id = it.key();
       p.name = e.value("name", p.id);
       p.viewing_illuminant = e.value("viewing_illuminant", std::string());
       p.reference_bracket = e.value("reference_bracket", std::string());
-      const std::string file = e["icc_profile"].get<std::string>();
-      if (!read_file || !read_file(file, p.icc_bytes) || p.icc_bytes.size() < 132) {
-        throw std::runtime_error("profile bundle " + raw_path + ": cannot read print ICC " + file);
+      // A station bundle holds the ICC in base64; an exported one, in a file beside bundle.json.
+      if (e.contains("icc_profile_base64") && e["icc_profile_base64"].is_string()) {
+        if (!base64_decode(e["icc_profile_base64"].get<std::string>(), p.icc_bytes) || p.icc_bytes.size() < 132) {
+          throw std::runtime_error("profile bundle " + raw_path + ": the print ICC of " + p.id + " cannot be decoded");
+        }
+      } else if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
+        const std::string file = e["icc_profile"].get<std::string>();
+        if (!read_file || !read_file(file, p.icc_bytes) || p.icc_bytes.size() < 132) {
+          throw std::runtime_error("profile bundle " + raw_path + ": cannot read print ICC " + file);
+        }
+      } else {
+        continue;
       }
       bundle.prints.push_back(std::move(p));
     }
