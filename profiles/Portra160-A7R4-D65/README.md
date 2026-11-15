@@ -36,3 +36,20 @@ error on patches the profile never saw: each bracket's profile was rebuilt twice
 halves of the 264 colour patches, and checked on the half it left out. The 24 grey patches, which set the tone curves, stay in every build.
 That is the better guide to the error on colours in a real photograph. The profiles are not de-glared: removing the
 chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.
+
+## Dynamic range
+
+Range across each bracket's 24 grey patches (`gs0` to `gs23`) before the camera matrix (`bundle.json`'s patch values
+multiplied by the inverse of `profiling_input_transform.matrix` to recover raw sensor RGB), as 14-bit ADC bit depth
+(`log2(max - min)` out of `16384`) and contrast in stops (`log2(max / min)`).
+
+| Bracket | Profile | Shutter | Bit depth: R / G / B | Bit depth: mean | Stops: R / G / B | Stops: mean |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| −3 EV | `Target_1.icc` | 1/15s | 12.40 / 13.16 / 12.11 | 12.56 | 1.17 / 1.62 / 1.81 | 1.53 |
+| −2 EV | `Target_2.icc` | 1/15s | 12.59 / 13.31 / 12.21 | 12.70 | 1.47 / 1.99 / 2.23 | 1.89 |
+| −1 EV | `Target_3.icc` | 1/15s | 12.69 / 13.34 / 12.23 | 12.76 | 1.73 / 2.30 / 2.63 | 2.22 |
+| 0 EV | `Target_4.icc` | 1/13s | 13.09 / 13.69 / 12.52 | 13.10 | 2.04 / 2.69 / 3.06 | 2.60 |
+| +1 EV | `Target_5.icc` | 1/10s | 13.36 / 13.77 / 12.58 | 13.24 | 2.30 / 2.88 / 3.28 | 2.82 |
+| +2 EV | `Target_6.icc` | 1/8s | 13.39 / 13.64 / 12.43 | 13.15 | 2.36 / 2.91 / 3.36 | 2.88 |
+| +3 EV | `Target_7.icc` | 1/6s | 13.34 / 13.50 / 12.28 | 13.04 | 2.30 / 2.79 / 3.23 | 2.77 |
+| **Mean** | — | — | **12.98 / 13.49 / 12.34** | **12.93** | **1.91 / 2.45 / 2.80** | **2.39** |
