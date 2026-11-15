@@ -138,6 +138,9 @@ struct ParamSearchOptions {
   int pin_target = -1;
   unsigned pin_mask = 0;
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
+  // The brackets' profiles are print profiles (neg_process --print): screening sweeps a wider green gain
+  // (SolverConfig::wide_green), and the renders carry no highlight shoulder, as the print's conversion carries none.
+  bool print_profiles = false;
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.

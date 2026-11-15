@@ -58,6 +58,11 @@ struct SolverConfig {
   // The values pinned parameters (pin_mask) take in optimize_target_for_intent when it is given no start; with a
   // start they stay at the start's.
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
+  // A search on print profiles (--print): screening sweeps the green gain up to 1.64 in place of 1.28. A
+  // print rolls its highlights off to the paper's white and an overexposed print bleaches a cast away, so a bracket
+  // screened at too little green loses to an overexposed one before its gains can be refined (whitelab LEDGER
+  // 2026-11-15); the scene's search keeps its grids.
+  bool wide_green = false;
 };
 
 struct ShoulderResult {

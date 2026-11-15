@@ -790,12 +790,12 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
-  // --print. The search (bracket, E, g, b) always runs on the chart profiles, as for the density output's CLF, whose
-  // frame matrix puts the search's mid grey on the print's. With a picture output on a narrow-band bundle the
-  // conversion then renders the chosen bracket's print profile: the bundle's print ICC with that bracket's curves
-  // (np_print.h bracket_print_profiles), built here for every bracket. A density output writes a CLF per material, as
-  // before. On a white-light bundle the curve fit composes into the chart profiles, so its print is a density
-  // output's CLF alone.
+  // --print. With a picture output on a narrow-band bundle each bracket's chart profile is replaced by its print
+  // profile (the bundle's print ICC with that bracket's curves, np_print.h bracket_print_profiles) before the search,
+  // which then balances and exposes the print itself, with screening's wider green grid (SolverConfig::wide_green);
+  // the conversion renders the chosen bracket's print profile. A density output searches on the chart profiles and
+  // writes a CLF per material, as before. On a white-light bundle the curve fit composes into the chart profiles, so
+  // its print is a density output's CLF alone.
   if (!o.prints.empty()) {
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
@@ -829,11 +829,16 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
+      for (size_t i = 0; i < bundle.targets.size(); ++i) {
+        bundle.targets[i].icc_bytes = s.print_iccs[i];
+        bundle.targets[i].film_prof = s.print_profs[i];
+        bundle.targets[i].film_prof.rebind_pointers();
+      }
       s.print_id = prints.id;
       s.print_name = prints.name;
       s.print_from_bundle = prints.from_bundle;
-      log_info("Print: %s (%s), the print ICC %s: the search runs on the chart profiles, the conversion renders the "
-               "print\n", prints.name.c_str(), prints.id.c_str(),
+      log_info("Print: %s (%s), the print ICC %s: the search and the conversion render the print\n",
+               prints.name.c_str(), prints.id.c_str(),
                prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
     }
   }
@@ -1712,6 +1717,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+        opts.print_profiles = !s.print_profs.empty();
         if (s.pinned_search) {
           // --target, -E, --gain_g and --gain_b: held by the search and the curve fit, which solve the rest.
           opts.pin_target = s.manual_target_idx;
@@ -2015,6 +2021,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+      opts.print_profiles = !s.print_profs.empty();
       if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
                                     scan.auto_res)) {
         log_error("The conversion parameter search failed\n");
@@ -2279,7 +2286,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
     SolverConfig cfg;
     cfg.knee = c.knee;
-    cfg.shoulder_auto = s.is_bundle;  // the roll-off, as the bracket search renders it
+    cfg.shoulder_auto = s.is_bundle && s.print_profs.empty();  // the roll-off, as the bracket search renders it
+    cfg.wide_green = !s.print_profs.empty();
 
     const int max_iters = o.dino_iters;
     IntentGains user_gains{c.exposure_comp, c.gain_g, c.gain_b};
@@ -2500,8 +2508,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  // A print: the search chose the bracket, E, g and b on the chart profiles; the conversion renders that bracket's
-  // print profile, which puts the same mid grey on the print's.
+  // A print: the conversion renders the chosen bracket's print profile.
   if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
     c.film_prof = s.print_profs[c.bundle_target_idx];
     c.film_prof.rebind_pointers();
