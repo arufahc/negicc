@@ -107,6 +107,8 @@ struct Options {
   bool density = false;
   DensityMeasure density_measure = kDensityStatusM;
   bool output_dpx = false;
+  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
+  std::vector<std::string> prints;
   bool no_metadata = false;
 };
 

@@ -28,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "cie_tables.h"
 #include "embedded_data.h"
 #include "np_log.h"
 
@@ -451,21 +452,6 @@ bool read_vector(const nlohmann::json& j, std::vector<double>& out) {
   return true;
 }
 
-bool read_fixed(const nlohmann::json& j, double* out, size_t n) {
-  std::vector<double> v;
-  if (!read_vector(j, v) || v.size() != n) return false;
-  std::copy(v.begin(), v.end(), out);
-  return true;
-}
-
-bool read_3x3(const nlohmann::json& j, double out[9]) {
-  if (!j.is_array() || j.size() != 3) return false;
-  for (int r = 0; r < 3; ++r) {
-    if (!read_fixed(j[r], out + r * 3, 3)) return false;
-  }
-  return true;
-}
-
 // numpy.interp: linear between the points, the end values outside them.
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
   if (x <= xs.front()) return ys.front();
@@ -489,45 +475,234 @@ void amounts_to_xyz(const PrintMaterial& m, const double amount[3], double xyz[3
 
 }  // namespace
 
-bool load_print_material(const std::string& json_text, PrintMaterial& out, std::string& err) {
-  const nlohmann::json j = nlohmann::json::parse(json_text, nullptr, false);
-  if (!j.is_object() || j.value("schema", "") != "negicc.print_material/1") {
-    err = "not a negicc.print_material/1 JSON";
-    return false;
+namespace {
+
+// A column of spektrafilm data (numbers and nulls) on its own wavelengths w, resampled to 380-780 nm at 1 nm. Nulls
+// before the first and after the last number take the nearest number (hold) or `missing`; a null between numbers is
+// an error (density_matrices.py hold_gaps).
+bool resample_column(const nlohmann::json& rows, int column, const std::vector<double>& w, bool hold, double missing,
+                     bool as_power_of_ten, std::vector<double>& out) {
+  if (!rows.is_array() || rows.size() != w.size()) return false;
+  std::vector<double> v(w.size(), std::nan(""));
+  for (size_t i = 0; i < w.size(); ++i) {
+    const nlohmann::json& cell = column < 0 ? rows[i] : (rows[i].is_array() && (int)rows[i].size() > column
+                                                             ? rows[i][column] : nlohmann::json());
+    if (cell.is_number() && std::isfinite(cell.get<double>())) v[i] = cell.get<double>();
   }
-  PrintMaterial m;
-  m.id = j.value("id", "");
-  m.name = j.value("name", m.id);
-  m.viewing_illuminant = j.value("viewing_illuminant", "");
-  m.grey_density = j.value("print_grey_density", 0.70);
-  if (j.contains("to_print_density") && j["to_print_density"].is_object()) {
-    for (int k = 0; k < kDensityMeasures; ++k) {
-      const char* key = density_measure_key((DensityMeasure)k);
-      if (!j["to_print_density"].contains(key) || !j["to_print_density"][key].is_object()) continue;
-      for (auto it = j["to_print_density"][key].begin(); it != j["to_print_density"][key].end(); ++it) {
-        PrintMaterial::ToPrint t;
-        t.film = it.key();
-        if (read_3x3(it.value(), t.m.data())) m.to_print[k].push_back(t);
+  size_t first = 0, last = w.size();
+  while (first < w.size() && std::isnan(v[first])) ++first;
+  while (last > first && std::isnan(v[last - 1])) --last;
+  if (first == w.size()) return false;
+  if (hold) {
+    for (size_t i = first; i < last; ++i) {
+      if (std::isnan(v[i])) return false;
+    }
+    for (size_t i = 0; i < first; ++i) v[i] = v[first];
+    for (size_t i = last; i < w.size(); ++i) v[i] = v[last - 1];
+  }
+  for (double& x : v) x = std::isnan(x) ? missing : as_power_of_ten ? std::pow(10.0, x) : x;
+  out.resize(kCieSamples);
+  for (int i = 0; i < kCieSamples; ++i) out[i] = interp(w, v, kCieFirstNm + i);
+  return true;
+}
+
+void multiply3(const double a[9], const double b[9], double out[9]) {
+  double r[9];
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+  }
+  std::copy(r, r + 9, out);
+}
+
+bool invert3(const double m[9], double out[9]) {
+  const double det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                     m[2] * (m[3] * m[7] - m[4] * m[6]);
+  if (!std::isfinite(det) || std::fabs(det) < 1e-12) return false;
+  const double r[9] = {m[4] * m[8] - m[5] * m[7], m[2] * m[7] - m[1] * m[8], m[1] * m[5] - m[2] * m[4],
+                       m[5] * m[6] - m[3] * m[8], m[0] * m[8] - m[2] * m[6], m[2] * m[3] - m[0] * m[5],
+                       m[3] * m[7] - m[4] * m[6], m[1] * m[6] - m[0] * m[7], m[0] * m[4] - m[1] * m[3]};
+  for (int k = 0; k < 9; ++k) out[k] = r[k] / det;
+  return true;
+}
+
+// XYZ of the print for a log exposure of each layer.
+void exposure_to_xyz(const PrintMaterial& m, const double log_e[3], double xyz[3]) {
+  double amount[3];
+  for (int c = 0; c < 3; ++c) amount[c] = interp(m.log_exposure, m.curves[c], log_e[c]);
+  amounts_to_xyz(m, amount, xyz);
+}
+
+// Q: the 3x3 from a film's dye amounts to the density above the film base that response (rows R, G, B, 401 samples)
+// reads, least squares with no offset on the film model's fixed sample colours.
+bool film_to_print_density(const FilmModel& film, const std::vector<double> response[3], double q[9]) {
+  const double kSpread = 0.15 * std::sqrt(1.5);   // each dye amount times exp(kSpread z), z = -1, 0, 1
+  double sum[3] = {0, 0, 0}, base_density[3];
+  for (int c = 0; c < 3; ++c) {
+    double t = 0.0;
+    for (int w = 0; w < kCieSamples; ++w) {
+      sum[c] += response[c][w];
+      t += std::pow(10.0, -film.base[w]) * response[c][w];
+    }
+    if (!(sum[c] > 0.0)) return false;
+    base_density[c] = -std::log10(t / sum[c]);
+  }
+  double ata[9] = {0}, atd[9] = {0};            // sums of a a^T and of a d^T over the samples
+  std::vector<double> transmittance(kCieSamples);
+  for (size_t i = 0; i < film.log_exposure.size(); ++i) {
+    if (film.log_exposure[i] < -1.5 || film.log_exposure[i] > 1.0) continue;
+    for (int v = 0; v < 27; ++v) {
+      const int z[3] = {v / 9 - 1, v / 3 % 3 - 1, v % 3 - 1};
+      double a[3], d[3];
+      for (int c = 0; c < 3; ++c) a[c] = std::max(0.0, film.neutral[c][i] * std::exp(kSpread * z[c]));
+      for (int w = 0; w < kCieSamples; ++w) {
+        transmittance[w] = std::pow(
+            10.0, -(a[0] * film.dye[0][w] + a[1] * film.dye[1][w] + a[2] * film.dye[2][w] + film.base[w]));
+      }
+      for (int c = 0; c < 3; ++c) {
+        double t = 0.0;
+        for (int w = 0; w < kCieSamples; ++w) t += transmittance[w] * response[c][w];
+        d[c] = -std::log10(t / sum[c]) - base_density[c];
+      }
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          ata[r * 3 + c] += a[r] * a[c];
+          atd[r * 3 + c] += a[r] * d[c];
+        }
       }
     }
   }
-  bool ok = !m.id.empty() && j.contains("log_exposure") && read_vector(j["log_exposure"], m.log_exposure) &&
-            j.contains("curves") && j["curves"].is_array() && j["curves"].size() == 3 && j.contains("dye_density") &&
-            j["dye_density"].is_array() && j["dye_density"].size() == 3 && j.contains("base_density") &&
-            read_vector(j["base_density"], m.base) && j.contains("observer") && j["observer"].is_array() &&
-            j["observer"].size() == 3 && j.contains("white_xyz") && read_fixed(j["white_xyz"], m.white, 3) &&
-            j.contains("aim_log_exposure") && read_fixed(j["aim_log_exposure"], m.aim, 3) &&
-            j.contains("xyz_to_linear_srgb") && read_3x3(j["xyz_to_linear_srgb"], m.to_srgb);
-  for (int c = 0; ok && c < 3; ++c) {
-    ok = read_vector(j["curves"][c], m.curves[c]) && m.curves[c].size() == m.log_exposure.size() &&
-         read_vector(j["dye_density"][c], m.dye[c]) && m.dye[c].size() == m.base.size() &&
-         read_vector(j["observer"][c], m.observer[c]) && m.observer[c].size() == m.base.size();
+  double inverse[9], solved[9];
+  if (!invert3(ata, inverse)) return false;
+  multiply3(inverse, atd, solved);              // solved[k][c]: the weight of amount k in density c
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) q[r * 3 + c] = solved[c * 3 + r];
   }
-  ok = ok && m.log_exposure.size() >= 2 && !m.base.empty() &&
-       std::is_sorted(m.log_exposure.begin(), m.log_exposure.end()) && m.white[0] > 0 && m.white[1] > 0 && m.white[2] > 0;
-  if (!ok) {
-    err = "a field of the print material is missing or malformed";
+  return true;
+}
+
+}  // namespace
+
+bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
+                            PrintMaterial& out, std::string& err) {
+  const nlohmann::json j = nlohmann::json::parse(json_text, nullptr, false);
+  if (!j.is_object() || !j.contains("data") || !j["data"].is_object()) {
+    err = "not a spektrafilm profile (no data)";
     return false;
+  }
+  const nlohmann::json& d = j["data"];
+  const nlohmann::json info = j.contains("info") && j["info"].is_object() ? j["info"] : nlohmann::json::object();
+  if (info.contains("stage") && info["stage"].is_string() && info["stage"] != "printing") {
+    err = "a spektrafilm profile of a " + info["stage"].get<std::string>() + " stock, not of a print material";
+    return false;
+  }
+  PrintMaterial m;
+  m.id = info.value("stock", id);
+  m.name = info.value("name", m.id);
+  m.viewing_illuminant = info.value("support", std::string()) == "paper" ? "D50" : "D55";
+  std::vector<double> w, sensitivity[3];
+  bool ok = d.contains("wavelengths") && read_vector(d["wavelengths"], w) && w.size() >= 2 &&
+            std::is_sorted(w.begin(), w.end()) && d.contains("log_sensitivity") && d.contains("channel_density") &&
+            d.contains("base_density") && d.contains("log_exposure") && read_vector(d["log_exposure"], m.log_exposure) &&
+            m.log_exposure.size() >= 2 && std::is_sorted(m.log_exposure.begin(), m.log_exposure.end()) &&
+            d.contains("density_curves") && d["density_curves"].is_array() &&
+            d["density_curves"].size() == m.log_exposure.size() &&
+            resample_column(d["base_density"], -1, w, true, 0.0, false, m.base);
+  for (int c = 0; ok && c < 3; ++c) {
+    // A layer's sensitivity where the profile has none is zero; its dye spectrum is held at the nearest value.
+    ok = resample_column(d["log_sensitivity"], c, w, false, 0.0, true, sensitivity[c]) &&
+         resample_column(d["channel_density"], c, w, true, 0.0, false, m.dye[c]);
+    m.curves[c].resize(m.log_exposure.size());
+    for (size_t i = 0; ok && i < m.log_exposure.size(); ++i) {
+      const nlohmann::json& row = d["density_curves"][i];
+      ok = row.is_array() && row.size() == 3 && row[c].is_number() && std::isfinite(row[c].get<double>());
+      if (ok) m.curves[c][i] = row[c].get<double>();
+    }
+  }
+  if (!ok) {
+    err = "a field of the spektrafilm print profile is missing or malformed";
+    return false;
+  }
+  // What the print's own density is read with: each layer's sensitivity under the printer lamp, a 3200 K blackbody.
+  std::vector<double> response[3];
+  for (int c = 0; c < 3; ++c) {
+    response[c].resize(kCieSamples);
+    for (int i = 0; i < kCieSamples; ++i) {
+      const double metres = (kCieFirstNm + i) * 1e-9;
+      const double lamp = 1.0 / (std::pow(metres, 5) * (std::exp(1.4388e-2 / (metres * 3200.0)) - 1.0));
+      response[c][i] = sensitivity[c][i] * lamp;
+    }
+  }
+  // The observer under the viewing light, Y of the light 1; the print's white is the light itself.
+  const double* light = m.viewing_illuminant == "D50" ? kCieD50 : kCieD55;
+  const double* cmf[3] = {kCieXBar, kCieYBar, kCieZBar};
+  double light_y = 0.0;
+  for (int i = 0; i < kCieSamples; ++i) light_y += light[i] * kCieYBar[i];
+  for (int c = 0; c < 3; ++c) {
+    m.observer[c].resize(kCieSamples);
+    m.white[c] = 0.0;
+    for (int i = 0; i < kCieSamples; ++i) {
+      m.observer[c][i] = light[i] * cmf[c][i] / light_y;
+      m.white[c] += m.observer[c][i];
+    }
+  }
+  // XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02.
+  const double cat02[9] = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834};
+  const double xyz_to_srgb[9] = {3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
+                                 0.0415560, 0.0556434,  -0.2040259, 1.0572252};
+  const double d65[3] = {0.3127 / 0.3290, 1.0, (1.0 - 0.3127 - 0.3290) / 0.3290};
+  double cat_inverse[9], scaled[9];
+  invert3(cat02, cat_inverse);
+  for (int r = 0; r < 3; ++r) {
+    const double to = cat02[r * 3] * d65[0] + cat02[r * 3 + 1] * d65[1] + cat02[r * 3 + 2] * d65[2];
+    const double from = cat02[r * 3] * m.white[0] + cat02[r * 3 + 1] * m.white[1] + cat02[r * 3 + 2] * m.white[2];
+    for (int c = 0; c < 3; ++c) scaled[r * 3 + c] = cat02[r * 3 + c] * to / from;
+  }
+  multiply3(cat_inverse, scaled, scaled);
+  multiply3(xyz_to_srgb, scaled, m.to_srgb);
+  // aim: the exposure of each layer at which the print is an 18 % grey under its light. Newton's method on the three
+  // exposures, with the Jacobian by differences.
+  double e[3] = {0.0, 0.0, 0.0};
+  for (int iteration = 0; iteration < 50; ++iteration) {
+    double xyz[3], f[3], jac[9], inverse[9];
+    exposure_to_xyz(m, e, xyz);
+    double worst = 0.0;
+    for (int c = 0; c < 3; ++c) {
+      f[c] = xyz[c] - 0.18 * m.white[c];
+      worst = std::max(worst, std::fabs(f[c]));
+    }
+    if (worst < 1e-13) break;
+    for (int k = 0; k < 3; ++k) {
+      double moved[3] = {e[0], e[1], e[2]}, xyz2[3];
+      moved[k] += 1e-4;
+      exposure_to_xyz(m, moved, xyz2);
+      for (int c = 0; c < 3; ++c) jac[c * 3 + k] = (xyz2[c] - xyz[c]) / 1e-4;
+    }
+    if (!invert3(jac, inverse)) {
+      err = "the print's curves do not reach an 18 % grey";
+      return false;
+    }
+    for (int k = 0; k < 3; ++k) e[k] -= inverse[k * 3] * f[0] + inverse[k * 3 + 1] * f[1] + inverse[k * 3 + 2] * f[2];
+  }
+  double check[3];
+  exposure_to_xyz(m, e, check);
+  for (int c = 0; c < 3; ++c) {
+    if (!(std::fabs(check[c] - 0.18 * m.white[c]) < 1e-6)) {
+      err = "the print's curves do not reach an 18 % grey";
+      return false;
+    }
+    m.aim[c] = e[c];
+  }
+  // The print matrix of each measure, for this bundle's film: Q inv(F).
+  double q[9];
+  if (bundle.film_model.present && film_to_print_density(bundle.film_model, response, q)) {
+    for (int k = 0; k < kDensityMeasures; ++k) {
+      double inverse[9];
+      if (!bundle.density_matrix[k].present || !invert3(bundle.density_matrix[k].film_to_measure, inverse)) continue;
+      PrintMaterial::ToPrint t;
+      t.film = bundle.film_model.name;
+      multiply3(q, inverse, t.m.data());
+      m.to_print[k].push_back(t);
+    }
   }
   out = std::move(m);
   return true;
@@ -632,7 +807,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   const nlohmann::json fit_record = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
   const std::string film = fit_record.is_object() ? fit_record.value("film_dye_spectra", std::string()) : std::string();
   const PrintMaterial::ToPrint* to_print = material.to_print_for((int)rec.measure, film);
-  if (!to_print) return err = "the print material has no matrix for this measure", false;
+  if (!to_print) return err = "no print matrix for this measure and this film", false;
   if (bundle.targets.empty()) return err = "the bundle has no brackets", false;
   FramePrint p;
   p.id = material.id;
@@ -775,17 +950,79 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
   return s;
 }
 
-DensityPrints density_prints(const DensityRecord& rec, const std::string& output) {
-  DensityPrints out;
+bool is_print_file(const std::string& name) {
+  return name.find_first_of("/\\") != std::string::npos ||
+         (name.size() > 5 && name.substr(name.size() - 5) == ".json");
+}
+
+std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle) {
+  static const ProfileBundle no_bundle;
+  const std::string folder = "3rd_party/spektrafilm/profiles/";
+  std::vector<PrintMaterial> out;
   for (const EmbeddedFile& file : list_embedded_files()) {
     const std::string name = file.name;
-    if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
+    if (name.rfind(folder, 0) != 0 || name.size() < folder.size() + 6 || name.substr(name.size() - 5) != ".json") {
+      continue;
+    }
     PrintMaterial material;
+    std::string err;
+    if (!load_spektrafilm_print(std::string((const char*)file.data, file.size),
+                                name.substr(folder.size(), name.size() - folder.size() - 5),
+                                bundle ? *bundle : no_bundle, material, err)) {
+      log_warn("Print profile %s cannot be read: %s\n", name.c_str(), err.c_str());
+      continue;
+    }
+    out.push_back(std::move(material));
+  }
+  return out;
+}
+
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
+                             const std::vector<std::string>& print_ids) {
+  DensityPrints out;
+  if (print_ids.empty()) return out;
+  // The materials asked for: built-in ones by id (or all of them), and spektrafilm print profiles by path, whose
+  // matrices are computed here for the bundle's film.
+  const bool all = std::find(print_ids.begin(), print_ids.end(), "all") != print_ids.end();
+  std::vector<PrintMaterial> materials;
+  for (PrintMaterial& material : builtin_print_materials(rec.bundle)) {
+    if (all || std::find(print_ids.begin(), print_ids.end(), material.id) != print_ids.end()) {
+      materials.push_back(std::move(material));
+    }
+  }
+  for (const std::string& id : print_ids) {
+    if (!is_print_file(id)) continue;
+    std::ifstream file(id, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+    const size_t slash = id.find_last_of("/\\");
+    std::string stem = slash == std::string::npos ? id : id.substr(slash + 1);
+    if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
+    PrintMaterial material;
+    std::string err;
+    if (!file || !rec.bundle || !load_spektrafilm_print(text.str(), stem, *rec.bundle, material, err)) {
+      log_warn("No print CLF for %s: %s\n", id.c_str(), !file ? "cannot be read" : err.c_str());
+      continue;
+    }
+    materials.push_back(std::move(material));
+  }
+  if (!materials.empty() && (!rec.bundle || !rec.bundle->film_model.present)) {
+    log_warn("No print CLF: the profile bundle has no film_model, which a print's matrix is computed from: rebuild "
+             "it with the profile-building tools\n");
+    return out;
+  }
+  for (PrintMaterial& material : materials) {
     FramePrint print;
     std::string err;
-    if (!load_print_material(std::string((const char*)file.data, file.size), material, err) ||
-        !frame_print(rec, material, print, err)) {
-      log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
+    // Two materials of one id would share a CLF name: the first is kept.
+    const std::string path = output + "." + material.id + ".clf";
+    if (std::find(out.paths.begin(), out.paths.end(), path) != out.paths.end()) {
+      log_warn("--print names the print material %s twice: its CLF is written once, for the first\n",
+               material.id.c_str());
+      continue;
+    }
+    if (!frame_print(rec, material, print, err)) {
+      log_warn("No print CLF for %s: %s\n", material.id.c_str(), err.c_str());
       continue;
     }
     out.paths.push_back(output + "." + material.id + ".clf");
