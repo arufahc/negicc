@@ -536,11 +536,12 @@ reasons, both measured.
   picture (the paper rolls an overexposed sky off at L\* 89 where the picture's reaches 94) and bleaches the sky toward
   the paper's white, hiding the cast; an overexposed bracket (Target 5, E 0.38, against the scene's Target 3 at E 1.14)
   won screening on five of the eight materials. Sweeping the green gain up to 1.64 fixed that frame.
-- *The model wants a picture's highlights.* The intent model was trained on negicc's pictures. Asked what a print
-  should look like, it puts the highlights where a picture has them: on 50 TriLED frames at the scene's exposure it
-  wants the print's highlights 3.8 L\* lighter and its midtones 1.7 lighter (on the pictures themselves, -1.1 and -0.7).
-  The paper's shoulder holds a print's highlights below a picture's (75 against 80 L\* in the top third), and they rise
-  slowly with exposure while the midtones and shadows rise fast. The search's fixed-point loop, which re-predicts the
+- *The model asks a print for lighter highlights.* The intent model learnt from web scans of finished Portra 400
+  positives (negicc-station `designs/training_procedure_appearance_model.md`), and its L\* wish is known to follow the
+  preview it is shown. Shown a print, it asks for lighter highlights: on 50 TriLED frames at the scene's exposure it
+  wants the print's highlights 3.8 L\* lighter and its midtones 1.7 lighter (shown negicc's pictures of the same frames,
+  -1.1 and -0.7). The paper's shoulder holds a print's highlights below the picture's (75 against 80 L\* in the top
+  third), and they rise slowly with exposure while the midtones and shadows rise fast. The search's fixed-point loop, which re-predicts the
   field from each render, follows the model step by step (on 1004_0055 from E 0.68 to 0.48 in the search's units, half
   a stop, its residual falling at each step) until the highlights reach the picture's: on average +0.6 L\* from them,
   with the shadows 8.1 and the midtones 7.3 lighter than the picture's.
