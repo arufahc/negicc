@@ -441,13 +441,33 @@ is computed from the print material's file when a CLF is written.
 | Data | Specific to | Used for | Kept in |
 |---|---|---|---|
 | The scanning light as three LED spectra: each LED measured alone, or one spectrum with all LEDs on cut at 495 and 578 nm | The light | `L` | `bundle.json`, `light_source`: the all-on spectrum and the three (`led_spectra`) |
-| The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | Not shipped |
+| The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | `bundle.json`, `film_model` |
 | The response curves of Status M, RP 180 and APD | The standards | `F`, `P` | Not shipped |
-| The print material's spectral sensitivity | The print material | `P` | Not shipped |
+| The print material's spectral sensitivity | The print material | `P` | Not shipped; read from a spektrafilm print profile given to `--print` |
 | The print material's curve per layer, dye spectra and base | The print material | The print | `prints/<print>.json` |
-| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `prints/<print>.json`, as their product |
+| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `prints/<print>.json`, as their product; `cie_tables.h` |
 
 The camera has no spectral data here. The crosstalk correction stands in for its response curves.
+
+## A print material given as a file
+
+`--print <file>` takes a print profile of [spektrafilm](https://github.com/andreavolpato/spektrafilm) as published,
+and `neg_process` computes from it what a built-in print material has ready-made: the observer under the viewing
+light (D50 for a paper, D55 for a print film), the exposure that prints an 18 % grey, and the print matrix for the
+bundle's film.
+
+The response curves of the standard measures are not shipped, so the print matrix is not fitted against them. With
+`F` the measure's part of the density matrix (dye amounts to the measure's density) and `Q` the 3×3 from the film's
+dye amounts to the print's own density:
+
+```
+P = Q F⁻¹
+```
+
+`Q` is a least-squares fit with no offset on fixed sample colours of the bundle's film model: every point of its
+neutral scale between log exposure −1.5 and 1.0, each with 27 colour variations (each dye amount times
+`exp(0.184 z)`, `z` = −1, 0, 1). For the two built-in print materials this `P` lies within 0.01 of the stored one,
+which was fitted against the measure's response curves on 3000 drawn samples.
 
 ## The crosstalk correction, measured and computed
 
@@ -496,7 +516,7 @@ The source, basis, storage and invalidation condition of each quantity in the ch
 | `B`, film base scale | The roll | Measured on each run: `--film_base`, the rebate, or the thinnest film | The density file's metadata | Every roll |
 | `L`, LED density to dye amounts | The light's spectrum, the film's dye spectra | Fitted on the film model | `bundle.json`, `light_to_film` | The light or the film stock changes |
 | `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
-| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json` | A print material is added |
+| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json`; computed as `Q F⁻¹` for a print profile given as a file | A print material is added |
 | Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
 | Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |

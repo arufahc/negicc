@@ -295,7 +295,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "options; the colour balance the search finds is recorded in the file, not applied.");
   parser.add_argument("--print")
     .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
-          "print on this print material, as sRGB (<output>.<print>.clf). Give it once per print material, or 'all'. "
+          "print on this print material, as sRGB (<output>.<print>.clf). The print material is one built in, or the "
+          "path of a spektrafilm print profile (a .json file). Give it once per print material, or 'all' for those "
+          "built in. "
           "Without a name, --print lists the print materials built in. Without --print only the density file is "
           "written.")
     .append();
@@ -685,14 +687,15 @@ int parse_options(int ac, char* av[], Options& o) {
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
     for (const std::string& id : o.prints) {
-      bool found = id == "all";
+      bool found = id == "all" || (is_print_file(id) && std::filesystem::is_regular_file(id));
       std::string names;
       for (const PrintMaterial& m : known) {
         found = found || m.id == id;
         names += " " + m.id;
       }
       if (!found) {
-        log_error("--print %s: no such print material (built in:%s)\n", id.c_str(), names.c_str());
+        log_error("--print %s: no such print material (built in:%s; or the path of a spektrafilm print profile)\n",
+                  id.c_str(), names.c_str());
         return 1;
       }
     }

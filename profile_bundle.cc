@@ -552,6 +552,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           out.m[r * 3 + c] = v * factor[c];
         }
       }
+      for (int k = 0; k < 9; ++k) out.film_to_measure[k] = film_to_measure[k];
       out.present = true;
       out.target_curves = node.value("target_curves", std::string());
     }
@@ -579,6 +580,37 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         }
       }
     }
+  }
+
+  // The film stock's spectra, for a print material given as a file (np_print.h). A block that is not whole is left
+  // out: such a print then has no matrix and says so.
+  if (j.contains("film_model") && j["film_model"].is_object()) {
+    const nlohmann::json& fm = j["film_model"];
+    auto numbers = [](const nlohmann::json& a, std::vector<double>& out) {
+      if (!a.is_array()) return false;
+      out.clear();
+      for (const auto& v : a) {
+        if (!v.is_number() || !std::isfinite(v.get<double>())) return false;
+        out.push_back(v.get<double>());
+      }
+      return true;
+    };
+    FilmModel film;
+    film.name = fm.value("name", std::string());
+    bool ok = fm.contains("dye_density") && fm["dye_density"].is_array() && fm["dye_density"].size() == 3 &&
+              fm.contains("neutral_dye_amounts") && fm["neutral_dye_amounts"].is_array() &&
+              fm["neutral_dye_amounts"].size() == 3 && fm.contains("base_density") &&
+              numbers(fm["base_density"], film.base) && film.base.size() == 401 && fm.contains("log_exposure") &&
+              numbers(fm["log_exposure"], film.log_exposure) && film.log_exposure.size() >= 2 &&
+              fm.contains("wavelength_nm") && fm["wavelength_nm"].is_object() &&
+              fm["wavelength_nm"].value("start", 0.0) == 380.0 && fm["wavelength_nm"].value("step", 0.0) == 1.0;
+    for (int c = 0; ok && c < 3; ++c) {
+      ok = numbers(fm["dye_density"][c], film.dye[c]) && film.dye[c].size() == film.base.size() &&
+           numbers(fm["neutral_dye_amounts"][c], film.neutral[c]) &&
+           film.neutral[c].size() == film.log_exposure.size();
+    }
+    film.present = ok;
+    if (ok) bundle.film_model = std::move(film);
   }
 
   // The colour path the bundle was measured in. Bundles from before the field are camera_raw_rgb.
