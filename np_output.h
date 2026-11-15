@@ -134,6 +134,7 @@ struct Sidecar {
   std::string film_base_capture_json;
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
+  bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

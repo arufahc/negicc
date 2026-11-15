@@ -774,15 +774,17 @@ int prepare(const Options& o, Setup& s) {
                 "matrices are the bundle's\n", o.colorspace.c_str());
       return 1;
     }
-    if (s.white_light) {
-      log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not "
-                "supported\n", o.colorspace.c_str());
-      return 1;
-    }
     if (!bundle.density_matrix[o.density_measure].present) {
       log_error("The profile bundle %s has no density_matrices.%s: rebuild the bundle with negicc-station "
                 "(tools/fit_density_matrices.py), which fits the matrix from the light's spectrum\n",
                 bundle.path.c_str(), density_measure_key(o.density_measure));
+      return 1;
+    }
+    // The curve fit is white light's: on a TriLED bundle the curves are the measured ones, and an explicit
+    // --fit_curves is refused rather than ignored.
+    if (!s.white_light && o.fit_curves != Options::kFitCurvesAuto) {
+      log_error("--fit_curves does not apply to a density output from a TriLED bundle (-P %s): its curves are the "
+                "measured ones and are not fitted\n", o.colorspace.c_str());
       return 1;
     }
     s.density = true;
@@ -869,7 +871,9 @@ int prepare(const Options& o, Setup& s) {
   // srgb-g10 write; a custom -P goes through its ICC profile with LittleCMS, which the fit does not model, while the
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
-  const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
+  // A density output on white light fits as -P srgb does: the fit's result goes into the print CLF, not the pixels.
+  const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear" ||
+                               (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
@@ -1580,7 +1584,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // white-light bundle search.
       negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
       // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
-      const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
+      const int export_encoding = (o.colorspace == "srgb" || s.density) ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
       s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
       s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
       s.curves_base_prof.rebind_pointers();
@@ -2489,12 +2493,16 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // The film base is the zero of a density file. Read from a capture or the scan's rebate it is measured; taken from
     // the thinnest film of a frame with no unexposed film in view, or from the bundle's roll, it is an estimate, and
     // every density is off by its error, differently per channel and per frame.
+    // The remedy: a capture of unexposed film (--film_base) on TriLED; on white light, which takes no capture, a
+    // crop that shows the rebate.
+    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
+                                       : "give --film_base <capture of this roll's unexposed film>";
     if (!scan.film_base.found) {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
-               "roll's base; give --film_base <capture of this roll's unexposed film>\n");
+               "roll's base; %s\n", remedy);
     } else if (scan.film_base.source == "statistics") {
       log_warn("the film base was estimated from the thinnest film on this frame, which shows no rebate: the densities "
-               "are too low wherever the frame has no unexposed film; give --film_base <capture of unexposed film>\n");
+               "are too low wherever the frame has no unexposed film; %s\n", remedy);
     }
     {
       // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.
@@ -2653,6 +2661,17 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_b = (*c.station_params)[2];
       rec.balance_target = c.bundle_target_name;
     }
+    // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
+    if (s.white_light && s.input_curves.active()) {
+      rec.has_curves = true;
+      for (int k = 0; k < 2; ++k) {
+        rec.curve_a[k] = s.input_curves.a[k];
+        rec.curve_k[k] = s.input_curves.k[k];
+        rec.curve_u_med[k] = s.input_curves.u_med[k];
+        rec.curve_u_hold[k] = s.input_curves.u_hold(k);
+        rec.curve_ref[k] = s.input_curves.ref[k];
+      }
+    }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
     // The prints of the file (np_print.h), for the print materials --print names: how the frame prints on each,
     // recorded in the metadata, and the CLFs that go beside it. Without --print there are none.
@@ -2736,6 +2755,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
+  sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;

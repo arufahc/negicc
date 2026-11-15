@@ -291,8 +291,10 @@ int parse_options(int ac, char* av[], Options& o) {
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
           "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). apd is written "
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
-          "TriLED bundle whose density matrices were built in, and none of the exposure, gain, curve, tone or look "
-          "options; the colour balance the search finds is recorded in the file, not applied.");
+          "bundle whose density matrices were built in, TriLED or white light, and none of the exposure, gain, "
+          "curve, tone or look options; the colour balance the search finds is recorded in the file, not applied. "
+          "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
+          "beside the file uses it.");
   parser.add_argument("--print")
     .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
           "print on this print material, as sRGB (<output>.<print>.clf). The print material is one built in, or the "
@@ -715,9 +717,12 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
+  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
+  // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
+  // density output does not take.
   {
     struct Refused { const char* flag; bool used; };
-    const bool fit_set = parser.is_used("--fit_curves") && parser.get<std::string>("--fit_curves") != "auto";
+    const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
         {"--target", o.target_given},          {"-E", o.exposure_given},
@@ -735,15 +740,11 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
-  if (o.light_source == "d65") {
-    log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not supported\n",
-              o.colorspace.c_str());
-    return 1;
-  }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_print.h DensityRecord::has_balance).
-  o.fit_curves = Options::kFitCurvesOff;
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle the curve fit
+  // runs too (--fit_curves stays auto): its curves are not applied either, the print CLF takes its mid grey and
+  // slopes from them (np_print.h FramePrint). A narrow-band bundle has no curve fit.
   o.tone_stage = Options::kToneStageOff;
   return 0;
 }

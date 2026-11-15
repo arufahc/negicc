@@ -576,6 +576,22 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         if (it.value().is_object() && it.value().contains("grey_light_density") && it.value().contains("slopes") &&
             three(it.value()["grey_light_density"], bracket.grey_light) && three(it.value()["slopes"], bracket.slopes) &&
             bracket.slopes[0] > 0.0 && bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0) {
+          // The bracket's grey steps, when the bundle keeps them: all or none.
+          const nlohmann::json& node = it.value();
+          if (node.contains("grey_steps_light_density") && node["grey_steps_light_density"].is_array() &&
+              node.contains("grey_step_index") && node["grey_step_index"].is_number_integer()) {
+            bool ok = true;
+            for (const nlohmann::json& row : node["grey_steps_light_density"]) {
+              double v[3];
+              ok = ok && three(row, v);
+              if (ok) bracket.grey_steps.push_back({v[0], v[1], v[2]});
+            }
+            bracket.grey_step = node["grey_step_index"].get<int>();
+            if (!ok || bracket.grey_step < 0 || bracket.grey_step >= (int)bracket.grey_steps.size()) {
+              bracket.grey_steps.clear();
+              bracket.grey_step = -1;
+            }
+          }
           bundle.density_brackets.push_back(bracket);
         }
       }
