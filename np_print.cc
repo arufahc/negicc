@@ -452,21 +452,6 @@ bool read_vector(const nlohmann::json& j, std::vector<double>& out) {
   return true;
 }
 
-bool read_fixed(const nlohmann::json& j, double* out, size_t n) {
-  std::vector<double> v;
-  if (!read_vector(j, v) || v.size() != n) return false;
-  std::copy(v.begin(), v.end(), out);
-  return true;
-}
-
-bool read_3x3(const nlohmann::json& j, double out[9]) {
-  if (!j.is_array() || j.size() != 3) return false;
-  for (int r = 0; r < 3; ++r) {
-    if (!read_fixed(j[r], out + r * 3, 3)) return false;
-  }
-  return true;
-}
-
 // numpy.interp: linear between the points, the end values outside them.
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
   if (x <= xs.front()) return ys.front();
@@ -606,6 +591,10 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
   }
   const nlohmann::json& d = j["data"];
   const nlohmann::json info = j.contains("info") && j["info"].is_object() ? j["info"] : nlohmann::json::object();
+  if (info.contains("stage") && info["stage"].is_string() && info["stage"] != "printing") {
+    err = "a spektrafilm profile of a " + info["stage"].get<std::string>() + " stock, not of a print material";
+    return false;
+  }
   PrintMaterial m;
   m.id = info.value("stock", id);
   m.name = info.value("name", m.id);
@@ -719,50 +708,6 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
   return true;
 }
 
-bool load_print_material(const std::string& json_text, PrintMaterial& out, std::string& err) {
-  const nlohmann::json j = nlohmann::json::parse(json_text, nullptr, false);
-  if (!j.is_object() || j.value("schema", "") != "negicc.print_material/1") {
-    err = "not a negicc.print_material/1 JSON";
-    return false;
-  }
-  PrintMaterial m;
-  m.id = j.value("id", "");
-  m.name = j.value("name", m.id);
-  m.viewing_illuminant = j.value("viewing_illuminant", "");
-  m.grey_density = j.value("print_grey_density", 0.70);
-  if (j.contains("to_print_density") && j["to_print_density"].is_object()) {
-    for (int k = 0; k < kDensityMeasures; ++k) {
-      const char* key = density_measure_key((DensityMeasure)k);
-      if (!j["to_print_density"].contains(key) || !j["to_print_density"][key].is_object()) continue;
-      for (auto it = j["to_print_density"][key].begin(); it != j["to_print_density"][key].end(); ++it) {
-        PrintMaterial::ToPrint t;
-        t.film = it.key();
-        if (read_3x3(it.value(), t.m.data())) m.to_print[k].push_back(t);
-      }
-    }
-  }
-  bool ok = !m.id.empty() && j.contains("log_exposure") && read_vector(j["log_exposure"], m.log_exposure) &&
-            j.contains("curves") && j["curves"].is_array() && j["curves"].size() == 3 && j.contains("dye_density") &&
-            j["dye_density"].is_array() && j["dye_density"].size() == 3 && j.contains("base_density") &&
-            read_vector(j["base_density"], m.base) && j.contains("observer") && j["observer"].is_array() &&
-            j["observer"].size() == 3 && j.contains("white_xyz") && read_fixed(j["white_xyz"], m.white, 3) &&
-            j.contains("aim_log_exposure") && read_fixed(j["aim_log_exposure"], m.aim, 3) &&
-            j.contains("xyz_to_linear_srgb") && read_3x3(j["xyz_to_linear_srgb"], m.to_srgb);
-  for (int c = 0; ok && c < 3; ++c) {
-    ok = read_vector(j["curves"][c], m.curves[c]) && m.curves[c].size() == m.log_exposure.size() &&
-         read_vector(j["dye_density"][c], m.dye[c]) && m.dye[c].size() == m.base.size() &&
-         read_vector(j["observer"][c], m.observer[c]) && m.observer[c].size() == m.base.size();
-  }
-  ok = ok && m.log_exposure.size() >= 2 && !m.base.empty() &&
-       std::is_sorted(m.log_exposure.begin(), m.log_exposure.end()) && m.white[0] > 0 && m.white[1] > 0 && m.white[2] > 0;
-  if (!ok) {
-    err = "a field of the print material is missing or malformed";
-    return false;
-  }
-  out = std::move(m);
-  return true;
-}
-
 std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) {
   char buf[256];
   std::string s;
@@ -832,7 +777,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   const nlohmann::json fit_record = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
   const std::string film = fit_record.is_object() ? fit_record.value("film_dye_spectra", std::string()) : std::string();
   const PrintMaterial::ToPrint* to_print = material.to_print_for((int)rec.measure, film);
-  if (!to_print) return err = "the print material has no matrix for this measure", false;
+  if (!to_print) return err = "no print matrix for this measure and this film", false;
   if (bundle.targets.empty()) return err = "the bundle has no brackets", false;
   FramePrint p;
   p.id = material.id;
@@ -949,15 +894,21 @@ bool is_print_file(const std::string& name) {
          (name.size() > 5 && name.substr(name.size() - 5) == ".json");
 }
 
-std::vector<PrintMaterial> builtin_print_materials() {
+std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle) {
+  static const ProfileBundle no_bundle;
+  const std::string folder = "3rd_party/spektrafilm/profiles/";
   std::vector<PrintMaterial> out;
   for (const EmbeddedFile& file : list_embedded_files()) {
     const std::string name = file.name;
-    if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
+    if (name.rfind(folder, 0) != 0 || name.size() < folder.size() + 6 || name.substr(name.size() - 5) != ".json") {
+      continue;
+    }
     PrintMaterial material;
     std::string err;
-    if (!load_print_material(std::string((const char*)file.data, file.size), material, err)) {
-      log_warn("Print material %s cannot be read: %s\n", name.c_str(), err.c_str());
+    if (!load_spektrafilm_print(std::string((const char*)file.data, file.size),
+                                name.substr(folder.size(), name.size() - folder.size() - 5),
+                                bundle ? *bundle : no_bundle, material, err)) {
+      log_warn("Print profile %s cannot be read: %s\n", name.c_str(), err.c_str());
       continue;
     }
     out.push_back(std::move(material));
@@ -973,7 +924,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
   // matrices are computed here for the bundle's film.
   const bool all = std::find(print_ids.begin(), print_ids.end(), "all") != print_ids.end();
   std::vector<PrintMaterial> materials;
-  for (PrintMaterial& material : builtin_print_materials()) {
+  for (PrintMaterial& material : builtin_print_materials(rec.bundle)) {
     if (all || std::find(print_ids.begin(), print_ids.end(), material.id) != print_ids.end()) {
       materials.push_back(std::move(material));
     }
@@ -992,12 +943,12 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
       log_warn("No print CLF for %s: %s\n", id.c_str(), !file ? "cannot be read" : err.c_str());
       continue;
     }
-    if (!rec.bundle->film_model.present) {
-      log_warn("No print CLF for %s: the profile bundle has no film_model, which a print profile given as a file "
-               "needs: rebuild it with the profile-building tools\n", id.c_str());
-      continue;
-    }
     materials.push_back(std::move(material));
+  }
+  if (!materials.empty() && (!rec.bundle || !rec.bundle->film_model.present)) {
+    log_warn("No print CLF: the profile bundle has no film_model, which a print's matrix is computed from: rebuild "
+             "it with the profile-building tools\n");
+    return out;
   }
   for (PrintMaterial& material : materials) {
     FramePrint print;

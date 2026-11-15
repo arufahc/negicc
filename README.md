@@ -228,10 +228,10 @@ oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.
 ```
 
 With `--print <print>`, `neg_process` also writes a CLF transform beside the density file, and any tool that reads
-CLF renders the file through it as a print on that material. `--print` alone lists the print materials built in:
-Kodak Portra Endura paper (`kodak_portra_endura`) and Kodak Vision 2383 print film (`kodak_2383`). `<print>` may
-also be the path of a print profile of [spektrafilm](https://github.com/andreavolpato/spektrafilm), as published
-(a `.json` file). Without `--print` only the density file is written.
+CLF renders the file through it as a print on that material. The print materials are the print profiles of
+[spektrafilm](https://github.com/andreavolpato/spektrafilm): eight are built in (six papers, among them Kodak
+Portra Endura, and the print films Kodak Vision 2383 and 2393; `--print` alone lists them), and `<print>` may also
+be the path of another spektrafilm print profile. Without `--print` only the density file is written.
 The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
 how the print is computed.
 
@@ -280,9 +280,9 @@ profiles and a white D65 LED panel for the white-LED ones; the coloraid.de `R190
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx` is packed into the
 `neg_process` binary. It is Meta's, under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a
 binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other
-people's photographs, credited above. The print materials in `prints/*.json` derive from
-[spektrafilm](https://github.com/andreavolpato/spektrafilm)'s print profiles and are under CC BY-SA 4.0
-(`prints/README.md`); a CLF that `neg_process` writes with them carries that notice for its two tables, and the
-pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
+people's photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
+[spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
+(`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two
+tables, and the pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
 spektrafilm's film spectra, under the same licence; it covers that block only, not the rest of a bundle or its ICC
 profiles.
