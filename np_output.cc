@@ -562,6 +562,12 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else if (sc.is_bundle) {
     j["profile"] = {{"path", sc.profile_path}, {"type", "bundle"}, {"bundle_target", sc.bundle_target_name},
                     {"input_space", to_string(sc.input_space)}};
+    // --print: the brackets were rendered through a print material's print ICC (np_print.h), not the chart's.
+    if (!sc.print_id.empty()) {
+      j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
+                               {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
+                               {"curves", "computed for the bracket from the bundle's grey_balance_curves"}};
+    }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
   }
@@ -617,6 +623,8 @@ bool write_json_sidecar(const Sidecar& sc) {
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
+  // A print: the replay renders it too.
+  if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_id});
   // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
   // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
   if (!sc.density_json.empty()) {

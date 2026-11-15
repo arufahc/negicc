@@ -100,6 +100,10 @@ struct Setup {
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
+  // --print on a narrow-band bundle: the print material whose print ICC replaced each bracket's chart profile, so the
+  // search and the conversion render the print (np_print.h bracket_print_profiles); empty without.
+  std::string print_id, print_name;
+  bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;

@@ -234,6 +234,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
+      {"", "--print", 1, false},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -789,6 +790,52 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
+  // --print. On a narrow-band bundle the print ICC of the print material (the first --print names; Portra Endura for
+  // 'all') replaces each bracket's chart profile before anything reads it: the search, the conversion and the output
+  // all render the print, for a picture output and for a density output's search alike. A density output still gets
+  // a print CLF per material, as before. On a white-light bundle the curve fit composes into the chart profiles, so
+  // its print is a density output's CLF alone.
+  if (!o.prints.empty()) {
+    if (!s.is_bundle) {
+      log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
+                "computed for the bundle's film\n");
+      return 1;
+    }
+    if (s.white_light && !s.density) {
+      log_error("--print with a picture output needs a TriLED bundle; on a white-light bundle give a density output "
+                "(-P statusm, rp180 or apd) for its print CLF\n");
+      return 1;
+    }
+    if (!s.white_light) {
+      const std::string print = o.prints.front() == "all" ? std::string("kodak_portra_endura") : o.prints.front();
+      BracketPrints prints;
+      std::string why;
+      if (!bracket_print_profiles(bundle, print, prints, why)) {
+        log_error("--print %s: %s\n", print.c_str(), why.c_str());
+        return 1;
+      }
+      for (size_t i = 0; i < bundle.targets.size(); ++i) {
+        BundleTarget& t = bundle.targets[i];
+        t.icc_bytes = std::move(prints.icc[i]);
+        cmsHPROFILE h = cmsOpenProfileFromMem(t.icc_bytes.data(), (cmsUInt32Number)t.icc_bytes.size());
+        ParsedFilmProfile prof;
+        const bool ok = h && parse_film_profile_pipeline(h, prof);
+        if (h) cmsCloseProfile(h);
+        if (!ok) {
+          log_error("--print %s: the print ICC of %s cannot be read\n", print.c_str(), t.name.c_str());
+          return 1;
+        }
+        t.film_prof = std::move(prof);
+        t.film_prof.rebind_pointers();
+      }
+      s.print_id = prints.id;
+      s.print_name = prints.name;
+      s.print_from_bundle = prints.from_bundle;
+      log_info("Print: %s (%s), the print ICC %s: the search and the conversion render the print\n",
+               prints.name.c_str(), prints.id.c_str(),
+               prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
+    }
+  }
   if (s.white_light) {
     if (row_given[0] || row_given[1] || row_given[2]) {
       log_error("-r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
@@ -876,8 +923,14 @@ int prepare(const Options& o, Setup& s) {
                                (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
+  // A print (--print on a TriLED bundle) has its tone from the print material's own curve: no tone stage.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
-  const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb";
+  const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb" &&
+                           s.print_id.empty();
+  if ((tone_on || o.tone_replay_given) && !s.print_id.empty()) {
+    log_error("--tone_stage does not apply with --print: the print material's curve gives the print its tone\n");
+    return 1;
+  }
 
   // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
   // which picks the bracket, the exposure and the gains.
@@ -2446,7 +2499,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params) {
+  // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
+  if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {
     // The highlight roll-off of the conversion, as the bracket search measures it at its final parameters (on the
     // half-size frame), so given values (cli_equivalent) reproduce it: Auto's result and given values were measured
     // in decode, the single-bracket search above at its final E, g, b.
@@ -2756,6 +2810,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
   sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
+  sc.print_id = s.print_id;
+  sc.print_name = s.print_name;
+  sc.print_from_bundle = s.print_from_bundle;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;

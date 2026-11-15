@@ -135,6 +135,8 @@ struct Sidecar {
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
   bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
+  std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
+  bool print_from_bundle = false;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

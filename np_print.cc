@@ -914,12 +914,24 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   // The exposure E multiplies the light's channels before the bracket's profile reads them: the film that the
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
   // py-ref: negicc_station/src/print_emulation.py (frame_grey)
+  // A narrow-band bundle with the film's grey balance curve: the mid grey and the slopes are the curve's, as in its
+  // print ICCs (curve_grey, curve_slopes).
+  // py-ref: negicc_station/src/print_icc.py (curve_grey, curve_slopes)
   const double* m = rec.matrix->m;
   const double shift = std::log10(p.exposure);
+  double light[3] = {bracket->grey_light[0], bracket->grey_light[1], bracket->grey_light[2]};
+  for (int c = 0; c < 3; ++c) p.slopes[c] = bracket->slopes[c];
+  if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
+    curve_grey(bundle, *bracket, light);
+    curve_slopes(bundle, *bracket, p.slopes);
+    p.from_curve = true;
+  } else if (!bracket->has_slopes) {
+    return err = "the bundle has neither grey_balance_curves nor slopes for " + p.bracket +
+                 ": rebuild it with the profile-building tools", false;
+  }
   for (int c = 0; c < 3; ++c) {
     p.grey[c] = 0.0;
-    for (int k = 0; k < 3; ++k) p.grey[c] += m[c * 3 + k] * (bracket->grey_light[k] + shift);
-    p.slopes[c] = bracket->slopes[c];
+    for (int k = 0; k < 3; ++k) p.grey[c] += m[c * 3 + k] * (light[k] + shift);
   }
   // A white-light frame with fitted curves: the mid grey and the slopes of the grey scale those curves describe.
   // py-ref: negicc_station/src/print_emulation.py (frame_print)
@@ -1134,14 +1146,17 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
           {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
-          {"grey_and_slopes_from", p.fitted ? "the grey scale this frame's fitted input curves describe"
-                                            : "the bracket's entry in the profile set"}};
+          {"grey_and_slopes_from", p.fitted       ? "the grey scale this frame's fitted input curves describe"
+                                   : p.from_curve ? "the film's grey balance curve at the bracket's mid grey"
+                                                  : "the bracket's entry in the profile set"}};
       materials[p.id] = one;
     }
     j["print"] = {
         {"what", "how this frame prints on each print material: the frame's mid grey lands on the print's mid grey, "
                  "and the slopes give the film's grey scale equal contrast in the three channels. The bracket and the "
-                 "exposure are the search's; the mid grey and the slopes are the bracket's in the profile set "
+                 "exposure are the search's (on a TriLED bundle it rendered the print of the first material); the mid "
+                 "grey and the slopes are the film's grey balance curve's at the bracket's mid grey "
+                 "(density_matrices.grey_balance_curves), or the bracket's in the profile set "
                  "(density_matrices.brackets), or, for a white-light frame whose input curves were fitted, those of "
                  "the grey scale the fitted curves describe (grey_and_slopes_from)"},
         {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
@@ -1175,4 +1190,360 @@ int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints) {
              print.slopes[1], print.slopes[2]);
   }
   return 0;
+}
+
+// ---- The print ICC --------------------------------------------------------------------------------------------------
+
+namespace {
+
+// The value of a table on start + step i at x, linear, the end values outside it (numpy.interp on a uniform grid).
+double on_grid(const std::vector<double>& ys, double start, double step, double x) {
+  const double t = (x - start) / step;
+  if (t <= 0.0) return ys.front();
+  if (t >= (double)(ys.size() - 1)) return ys.back();
+  const size_t i = (size_t)t;
+  return ys[i] + (t - (double)i) * (ys[i + 1] - ys[i]);
+}
+
+std::vector<double> grey_grid(const GreyBalanceCurves& g) {
+  std::vector<double> x(g.apd[0].size());
+  for (size_t i = 0; i < x.size(); ++i) x[i] = g.start + g.step * (double)i;
+  return x;
+}
+
+// The print matrix for APD of a material, for the film of the bundle's density matrices; null when it has none.
+const double* apd_print_matrix(const ProfileBundle& bundle, const PrintMaterial& m) {
+  const nlohmann::json fit = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
+  const std::string film = fit.is_object() ? fit.value("film_dye_spectra", std::string()) : std::string();
+  const PrintMaterial::ToPrint* t = m.to_print_for(kDensityApd, film);
+  return t ? t->m.data() : nullptr;
+}
+
+void put_u16(std::vector<uint8_t>& b, double v01) {
+  const long q = std::lround(std::min(std::max(v01, 0.0), 1.0) * 65535.0);
+  b.push_back((uint8_t)(q >> 8));
+  b.push_back((uint8_t)(q & 255));
+}
+void put_u32(std::vector<uint8_t>& b, uint32_t v) {
+  for (int s = 24; s >= 0; s -= 8) b.push_back((uint8_t)(v >> s));
+}
+void put_s15(std::vector<uint8_t>& b, double v) { put_u32(b, (uint32_t)(int32_t)std::lround(v * 65536.0)); }
+uint32_t get_u32(const std::vector<uint8_t>& b, size_t o) {
+  return (uint32_t)b[o] << 24 | (uint32_t)b[o + 1] << 16 | (uint32_t)b[o + 2] << 8 | b[o + 3];
+}
+// The offset of an ICC's A2B0 lut16 tag, or 0.
+size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
+  if (icc.size() < 132) return 0;
+  const uint32_t n = get_u32(icc, 128);
+  for (uint32_t i = 0; i < n && 144 + 12 * i <= icc.size(); ++i) {
+    if (std::memcmp(icc.data() + 132 + 12 * i, "A2B0", 4) != 0) continue;
+    const size_t off = get_u32(icc, 136 + 12 * i);
+    if (off + 52 > icc.size() || std::memcmp(icc.data() + off, "mft2", 4) != 0 || icc[off + 8] != 3) return 0;
+    return off;
+  }
+  return 0;
+}
+
+constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
+constexpr double kPrintKnee = 0.95;   // the conversion's soft knee (profile_bundle.h kKnee), as the station writes it
+constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
+
+}  // namespace
+
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket) {
+  const double* m = bundle.density_matrix[kDensityApd].m;
+  return m[3] * bracket.grey_light[0] + m[4] * bracket.grey_light[1] + m[5] * bracket.grey_light[2];
+}
+
+void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]) {
+  const GreyBalanceCurves& g = bundle.grey_balance;
+  const std::vector<double> x = grey_grid(g);
+  const double a_mid = bracket_mid_apd(bundle, bracket);
+  for (int c = 0; c < 3; ++c) light[c] = interp(g.apd[c], x, a_mid);
+}
+
+void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]) {
+  const GreyBalanceCurves& g = bundle.grey_balance;
+  double n[3], inv[3], k[3] = {0, 0, 0};
+  curve_grey(bundle, bracket, n);
+  for (int c = 0; c < 3; ++c) {
+    const double d = (on_grid(g.apd[c], g.start, g.step, n[c] + g.step) -
+                      on_grid(g.apd[c], g.start, g.step, n[c] - g.step)) / (2.0 * g.step);
+    inv[c] = 1.0 / d;
+  }
+  const double* m = bundle.density_matrix[kDensityApd].m;
+  for (int c = 0; c < 3; ++c) k[c] = m[c * 3] * inv[0] + m[c * 3 + 1] * inv[1] + m[c * 3 + 2] * inv[2];
+  slopes[0] = k[1] / k[0];
+  slopes[1] = 1.0;
+  slopes[2] = k[1] / k[2];
+}
+
+PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
+  double top = 0.0;
+  for (int c = 0; c < 3; ++c)
+    for (double v : m.curves[c]) top = std::max(top, v);
+  top = std::ceil(top * 10.0) / 10.0;
+  PrintCurves out;
+  for (int c = 0; c < 3; ++c) {
+    const double k = p_apd[c * 3] + p_apd[c * 3 + 1] + p_apd[c * 3 + 2];
+    out[c].resize(kPaperAlphaPoints);
+    double run = INFINITY;
+    for (int i = 0; i < kPaperAlphaPoints; ++i) {
+      const double alpha = kPaperAlphaStart + kPaperAlphaStep * i;
+      run = std::min(run, interp(m.log_exposure, m.curves[c], m.aim[c] - k * alpha) / top);
+      out[c][i] = run - 1e-6 * i;
+    }
+  }
+  return out;
+}
+
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0) {
+  const double d = 1.0 - kPrintKnee;
+  PrintCurves out;
+  for (int c = 0; c < 3; ++c) {
+    out[c].resize(kPrintIccPoints);
+    double run = -INFINITY;
+    for (int i = 0; i < kPrintIccPoints; ++i) {
+      const double v = (double)i / (kPrintIccPoints - 1);
+      const double u = v <= kPrintKnee ? v
+                                       : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
+      const double dl = -std::log10(std::max(u, 1e-7) / n0);
+      const double alpha = on_grid(g.apd[c], g.start, g.step, dl) - a_mid;
+      run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
+      out[c][i] = run + 1e-9 * i;
+    }
+  }
+  return out;
+}
+
+std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
+                                const PrintCurves& paper) {
+  // Q L = P M and w = M^-1 (1, 1, 1).
+  double ql[9], inv[9], w[3];
+  for (int r = 0; r < 3; ++r)
+    for (int c = 0; c < 3; ++c)
+      ql[r * 3 + c] = p_apd[r * 3] * m_apd[c] + p_apd[r * 3 + 1] * m_apd[3 + c] + p_apd[r * 3 + 2] * m_apd[6 + c];
+  {
+    const double* a = m_apd;
+    const double det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) +
+                       a[2] * (a[3] * a[7] - a[4] * a[6]);
+    inv[0] = (a[4] * a[8] - a[5] * a[7]) / det;  inv[1] = (a[2] * a[7] - a[1] * a[8]) / det;
+    inv[2] = (a[1] * a[5] - a[2] * a[4]) / det;  inv[3] = (a[5] * a[6] - a[3] * a[8]) / det;
+    inv[4] = (a[0] * a[8] - a[2] * a[6]) / det;  inv[5] = (a[2] * a[3] - a[0] * a[5]) / det;
+    inv[6] = (a[3] * a[7] - a[4] * a[6]) / det;  inv[7] = (a[1] * a[6] - a[0] * a[7]) / det;
+    inv[8] = (a[0] * a[4] - a[1] * a[3]) / det;
+  }
+  for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] + inv[r * 3 + 1] + inv[r * 3 + 2];
+  // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film.
+  double pcs[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  if (m.viewing_illuminant != "D50") {
+    static const double B[9] = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
+    double src[3] = {m.white[0] / m.white[1], 1.0, m.white[2] / m.white[1]}, gain[3];
+    for (int r = 0; r < 3; ++r) {
+      const double to = B[r * 3] * kD50[0] + B[r * 3 + 1] * kD50[1] + B[r * 3 + 2] * kD50[2];
+      const double from = B[r * 3] * src[0] + B[r * 3 + 1] * src[1] + B[r * 3 + 2] * src[2];
+      gain[r] = to / from;
+    }
+    // inv(B) diag(gain) B, with inv(B) computed exactly rather than taken from the rounded table above.
+    double bi[9];
+    {
+      const double* a = B;
+      const double det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) +
+                         a[2] * (a[3] * a[7] - a[4] * a[6]);
+      bi[0] = (a[4] * a[8] - a[5] * a[7]) / det;  bi[1] = (a[2] * a[7] - a[1] * a[8]) / det;
+      bi[2] = (a[1] * a[5] - a[2] * a[4]) / det;  bi[3] = (a[5] * a[6] - a[3] * a[8]) / det;
+      bi[4] = (a[0] * a[8] - a[2] * a[6]) / det;  bi[5] = (a[2] * a[3] - a[0] * a[5]) / det;
+      bi[6] = (a[3] * a[7] - a[4] * a[6]) / det;  bi[7] = (a[1] * a[6] - a[0] * a[7]) / det;
+      bi[8] = (a[0] * a[4] - a[1] * a[3]) / det;
+    }
+    for (int r = 0; r < 3; ++r)
+      for (int c = 0; c < 3; ++c) {
+        double v = 0.0;
+        for (int k = 0; k < 3; ++k) v += bi[r * 3 + k] * gain[k] * B[k * 3 + c];
+        pcs[r * 3 + c] = v;
+      }
+  }
+  // The nodes' alpha: Paper_c inverted (it is decreasing, so read reversed).
+  std::vector<double> alpha_grid(kPaperAlphaPoints), node_alpha[3];
+  for (int i = 0; i < kPaperAlphaPoints; ++i) alpha_grid[kPaperAlphaPoints - 1 - i] = kPaperAlphaStart + kPaperAlphaStep * i;
+  for (int c = 0; c < 3; ++c) {
+    const std::vector<double> rev(paper[c].rbegin(), paper[c].rend());
+    for (int i = 0; i < kPrintIccCube; ++i)
+      node_alpha[c].push_back(interp(rev, alpha_grid, (double)i / (kPrintIccCube - 1)));
+  }
+  std::vector<double> out((size_t)kPrintIccCube * kPrintIccCube * kPrintIccCube * 3);
+  size_t o = 0;
+  for (int i = 0; i < kPrintIccCube; ++i)
+    for (int j = 0; j < kPrintIccCube; ++j)
+      for (int k = 0; k < kPrintIccCube; ++k) {
+        const double wa[3] = {node_alpha[0][i] * w[0], node_alpha[1][j] * w[1], node_alpha[2][k] * w[2]};
+        double amount[3], xyz[3];
+        for (int c = 0; c < 3; ++c) {
+          const double pd = m.grey_density + ql[c * 3] * wa[0] + ql[c * 3 + 1] * wa[1] + ql[c * 3 + 2] * wa[2];
+          amount[c] = interp(m.log_exposure, m.curves[c], m.aim[c] - (pd - m.grey_density));
+        }
+        amounts_to_xyz(m, amount, xyz);
+        for (int c = 0; c < 3; ++c) out[o++] = pcs[c * 3] * xyz[0] + pcs[c * 3 + 1] * xyz[1] + pcs[c * 3 + 2] * xyz[2];
+      }
+  return out;
+}
+
+std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
+                                     const std::string& description, const std::string& copyright) {
+  const int n = (int)curves[0].size();
+  std::vector<uint8_t> a2b0 = {'m', 'f', 't', '2', 0, 0, 0, 0, 3, 3, (uint8_t)kPrintIccCube, 0};
+  for (int i = 0; i < 9; ++i) put_s15(a2b0, i % 4 == 0 ? 1.0 : 0.0);
+  a2b0.push_back((uint8_t)(n >> 8));
+  a2b0.push_back((uint8_t)(n & 255));
+  a2b0.push_back(0);
+  a2b0.push_back(2);
+  for (int c = 0; c < 3; ++c)
+    for (double v : curves[c]) put_u16(a2b0, v);
+  for (double v : table) put_u16(a2b0, v / kPcsMax);
+  for (int c = 0; c < 3; ++c) {
+    put_u16(a2b0, 0.0);
+    put_u16(a2b0, 1.0);
+  }
+  std::vector<uint8_t> desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
+  put_u32(desc, (uint32_t)description.size() + 1);
+  desc.insert(desc.end(), description.begin(), description.end());
+  desc.insert(desc.end(), 1 + 8 + 3 + 67, 0);
+  std::vector<uint8_t> cprt = {'t', 'e', 'x', 't', 0, 0, 0, 0};
+  cprt.insert(cprt.end(), copyright.begin(), copyright.end());
+  cprt.push_back(0);
+  std::vector<uint8_t> wtpt = {'X', 'Y', 'Z', ' ', 0, 0, 0, 0};
+  for (double v : kD50) put_s15(wtpt, v);
+  const std::vector<std::pair<const char*, const std::vector<uint8_t>*>> tags = {
+      {"desc", &desc}, {"cprt", &cprt}, {"wtpt", &wtpt}, {"A2B0", &a2b0}};
+  std::vector<uint8_t> table_bytes, body;
+  const size_t start = 128 + 4 + 12 * tags.size();
+  for (const auto& t : tags) {
+    table_bytes.insert(table_bytes.end(), t.first, t.first + 4);
+    put_u32(table_bytes, (uint32_t)(start + body.size()));
+    put_u32(table_bytes, (uint32_t)t.second->size());
+    body.insert(body.end(), t.second->begin(), t.second->end());
+    while (body.size() % 4) body.push_back(0);
+  }
+  std::vector<uint8_t> icc;
+  put_u32(icc, (uint32_t)(start + body.size()));
+  put_u32(icc, 0);
+  put_u32(icc, 0x02400000);
+  for (const char* s : {"scnr", "RGB ", "XYZ "}) icc.insert(icc.end(), s, s + 4);
+  const std::time_t now = std::time(nullptr);
+  std::tm utc{};
+  gmtime_r(&now, &utc);
+  for (int v : {utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec}) {
+    icc.push_back((uint8_t)(v >> 8));
+    icc.push_back((uint8_t)(v & 255));
+  }
+  icc.insert(icc.end(), {'a', 'c', 's', 'p'});
+  icc.insert(icc.end(), 24, 0);
+  put_u32(icc, 0);
+  for (double v : kD50) put_s15(icc, v);
+  icc.insert(icc.end(), 48, 0);
+  put_u32(icc, (uint32_t)tags.size());
+  icc.insert(icc.end(), table_bytes.begin(), table_bytes.end());
+  icc.insert(icc.end(), body.begin(), body.end());
+  return icc;
+}
+
+bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) {
+  const size_t off = a2b0_lut16(icc);
+  if (!off) return false;
+  const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
+  if (n != curves[0].size() || off + 52 + 6 * n > icc.size()) return false;
+  std::vector<uint8_t> codes;
+  for (int c = 0; c < 3; ++c)
+    for (double v : curves[c]) put_u16(codes, v);
+  std::copy(codes.begin(), codes.end(), icc.begin() + (long)(off + 52));
+  return true;
+}
+
+bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
+                            std::string& err) {
+  if (!bundle.grey_balance.present) {
+    return err = "the profile bundle has no grey_balance_curves (a print ICC is computed from them): rebuild it with "
+                 "negicc-station", false;
+  }
+  if (!bundle.density_matrix[kDensityApd].present || !bundle.film_model.present) {
+    return err = "the profile bundle has no APD matrix or film_model: rebuild it with negicc-station", false;
+  }
+  // The material: a built-in one by id, or a spektrafilm print profile by path.
+  PrintMaterial material;
+  bool found = false;
+  if (is_print_file(print)) {
+    std::ifstream file(print, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+    if (!file) return err = "cannot be read", false;
+    const size_t slash = print.find_last_of("/\\");
+    std::string stem = slash == std::string::npos ? print : print.substr(slash + 1);
+    if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
+    if (!load_spektrafilm_print(text.str(), stem, bundle, material, err)) return false;
+    found = true;
+  } else {
+    const EmbeddedFile* f = find_embedded_file("3rd_party/spektrafilm/profiles/" + print + ".json");
+    if (f && !load_spektrafilm_print(std::string((const char*)f->data, f->size), print, bundle, material, err)) {
+      return false;
+    }
+    found = f != nullptr;
+  }
+  if (!found) return err = "no such print material", false;
+  const double* p = apd_print_matrix(bundle, material);
+  if (!p) return err = "no print matrix for the bundle's film", false;
+  const PrintCurves paper = paper_curve(material, p);
+  const double n0 = bundle.normalization_target / 65535.0;
+  auto bracket_of = [&](const std::string& name) -> const DensityBracket* {
+    for (const DensityBracket& b : bundle.density_brackets)
+      if (b.name == name) return &b;
+    return nullptr;
+  };
+  // The table: the bundle's print ICC's when its own curves are those computed here for its bracket (the same film,
+  // print material and math, to one 16-bit step), else computed here.
+  std::vector<uint8_t> base;
+  out = BracketPrints{};
+  out.id = material.id;
+  out.name = material.name;
+  for (const BundlePrint& bp : bundle.prints) {
+    if (is_print_file(print) || bp.id != print) continue;
+    const DensityBracket* ref = bracket_of(bp.reference_bracket);
+    const size_t off = a2b0_lut16(bp.icc_bytes);
+    if (!ref || !off) break;
+    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0);
+    const size_t n = (size_t)bp.icc_bytes[off + 48] << 8 | bp.icc_bytes[off + 49];
+    long worst = n == mine[0].size() ? 0 : 65535;
+    for (int c = 0; c < 3 && worst <= 1; ++c)
+      for (size_t i = 0; i < n; ++i) {
+        const size_t at = off + 52 + 2 * (c * n + i);
+        const long code = (long)bp.icc_bytes[at] << 8 | bp.icc_bytes[at + 1];
+        worst = std::max(worst, std::labs(code - std::lround(std::min(std::max(mine[c][i], 0.0), 1.0) * 65535.0)));
+      }
+    if (worst <= 1) {
+      base = bp.icc_bytes;
+      out.from_bundle = true;
+    } else {
+      log_warn("The bundle's print ICC for %s does not match its film and print material as computed now (curves "
+               "differ by %ld): its table is computed here\n", print.c_str(), worst);
+    }
+    break;
+  }
+  if (base.empty()) {
+    const DensityBracket* mid = bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
+    if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
+    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0),
+                           print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
+                           bundle.key + " printed on " + material.name + " (spektrafilm)",
+                           "Tables derived from spektrafilm's print profile (Andrea Volpato), CC BY-SA 4.0. Computed "
+                           "by neg_process.");
+  }
+  for (const BundleTarget& t : bundle.targets) {
+    const DensityBracket* b = bracket_of(t.name);
+    if (!b) return err = "the profile bundle has no density_matrices.brackets entry for " + t.name, false;
+    std::vector<uint8_t> icc = base;
+    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0))) {
+      return err = "the print ICC has no lut16 A2B0 to write curves into", false;
+    }
+    out.icc.push_back(std::move(icc));
+  }
+  return true;
 }

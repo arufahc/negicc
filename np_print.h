@@ -227,8 +227,10 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //
 //   grey      the frame's mid grey as the measure's density: the bracket's mid grey, denser by log10(E) in every
 //             light channel for the exposure E the search found. With the balance (the gains g and b, level
-//             included) it prints as the print's mid grey.
-//   slopes    the bracket's: they give the film's grey scale equal contrast in the three channels.
+//             included) it prints as the print's mid grey. A narrow-band bundle with the film's grey balance curve
+//             takes the curve's grey at the bracket's mid grey APD (curve_grey), as its print ICCs do.
+//   slopes    they give the film's grey scale equal contrast in the three channels: from the grey balance curve
+//             (curve_slopes), else the bracket's own.
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
 //
@@ -248,6 +250,7 @@ struct FramePrint {
   double grey[3] = {0, 0, 0};
   double slopes[3] = {1, 1, 1};
   bool fitted = false;                // grey and slopes are of the grey scale the frame's fitted curves describe
+  bool from_curve = false;            // grey and slopes are the film's grey balance curve's (curve_grey, curve_slopes)
   double grey_density = 0.70;
 };
 // The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
@@ -295,3 +298,62 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
 // Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
 void remove_print_clfs(const DensityPrints& prints);
+
+// ---- The print ICC: a frame printed as the picture conversion renders it ---------------------------------------------
+//
+// With --print on a narrow-band bundle, each bracket's chart profile is replaced by a print profile: the film printed
+// on the print material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input
+// curves, a 45^3 table, identity output curves), so the search, the conversion and the output run it as they run them.
+// The bundle carries one print ICC per print material (print_profiles, built by negicc-station src/print_icc.py when
+// the bundle was saved); its table serves every bracket, and each bracket's three input curves are computed here:
+//
+//     curve_c(v) = Paper_c(G_c(-log10(unknee(v) / n0)) - A_mid)
+//
+//   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
+//   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
+//   Paper_c   the dye amount layer c takes on a grey alpha above the mid grey: curve_c(aim_c - k_c alpha) / top,
+//             k = P (1, 1, 1) with P the material's print matrix for APD, top the curves' largest value rounded up
+//             to 0.1; held strictly decreasing (paper_curve)
+//   unknee    the inverse of the soft knee at kKnee the conversion applies before the profile
+//
+// and the table, at node a: alpha_c = Paper_c^-1(a_c), printing density 0.70 + Q L (w alpha) with w = M^-1 (1, 1, 1)
+// and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none for a paper).
+// A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is computed
+// here, gets its table computed here (print_table).
+// py-ref: negicc_station/src/print_icc.py
+constexpr int kPrintIccPoints = 4096;
+constexpr int kPrintIccCube = 45;
+constexpr double kPaperAlphaStart = -3.0, kPaperAlphaStep = 0.005;
+constexpr int kPaperAlphaPoints = 1601;
+using PrintCurves = std::array<std::vector<double>, 3>;
+
+// The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
+// The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
+// curve has it. A print CLF of a narrow-band bundle takes it as the frame's mid grey (frame_print).
+void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
+// The slopes a print CLF takes for the bracket from the curve: with n(g) the light densities of the curve's grey at
+// green APD g, k_c = sum_j M_cj dn_j/dg at the mid grey (dn_j/dg = 1 / G_j', G_j' a central difference of one step
+// of the curve's table), slopes = (k_green / k_red, 1, k_green / k_blue).
+void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]);
+// Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
+PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
+// A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0);
+// The table: kPrintIccCube^3 XYZ D50, red slowest.
+std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
+                                const PrintCurves& paper);
+// An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves).
+std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
+                                     const std::string& description, const std::string& copyright);
+// Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
+bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
+
+// The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
+struct BracketPrints {
+  std::string id, name;
+  bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here
+  std::vector<std::vector<uint8_t>> icc;       // per bundle.targets, in its order
+};
+bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
+                            std::string& err);

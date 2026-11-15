@@ -160,6 +160,9 @@ struct DensityMatrix {
 struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
+  // The bracket's own slopes, when the bundle keeps them (a white-light bundle, or one from before the grey balance
+  // curve); a narrow-band bundle with grey_balance_curves takes its slopes from the curve (np_print.h curve_slopes).
+  bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
   // Every grey step of the bracket as the light's density above the film base, and which of them is the mid grey
   // (grey_steps_light_density, grey_step_index). A white-light bundle has them: a frame's fitted input curves change
@@ -177,6 +180,22 @@ struct FilmModel {
   std::vector<double> dye[3], base;           // spectral densities, 401 samples
   std::vector<double> log_exposure;           // ascending
   std::vector<double> neutral[3];             // dye amounts along log_exposure
+};
+
+// The film's grey balance curve (density_matrices.grey_balance_curves, narrow-band bundles): for each light channel c,
+// apd[c][i] is the APD (Academy Printing Density) of the film's grey that has light density start + step i in
+// channel c, rising. From the chart's grey steps of every bracket (negicc-station src/print_icc.py).
+struct GreyBalanceCurves {
+  bool present = false;
+  double start = 0.0, step = 0.01;
+  std::vector<double> apd[3];
+};
+
+// One of a bundle's print ICCs (print_profiles): the film printed on a print material, for --print <id>. The ICC's
+// own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h).
+struct BundlePrint {
+  std::string id, name, viewing_illuminant, reference_bracket;
+  std::vector<uint8_t> icc_bytes;
 };
 
 struct ProfileBundle {
@@ -203,6 +222,8 @@ struct ProfileBundle {
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
   std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
+  GreyBalanceCurves grey_balance;                 // not present in a white-light bundle or one from before it
+  std::vector<BundlePrint> prints;                // the bundle's print ICCs, by print material id
   FilmModel film_model;                           // not present in a bundle from before the field
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)

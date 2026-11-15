@@ -583,9 +583,13 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (auto it = targets.begin(); it != targets.end(); ++it) {
         DensityBracket bracket;
         bracket.name = it.key();
-        if (it.value().is_object() && it.value().contains("grey_light_density") && it.value().contains("slopes") &&
-            three(it.value()["grey_light_density"], bracket.grey_light) && three(it.value()["slopes"], bracket.slopes) &&
-            bracket.slopes[0] > 0.0 && bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0) {
+        // The slopes are optional: a narrow-band bundle with the grey balance curve keeps none.
+        bracket.has_slopes = it.value().is_object() && it.value().contains("slopes") &&
+                             three(it.value()["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
+                             bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;
+        if (!bracket.has_slopes) bracket.slopes[0] = bracket.slopes[1] = bracket.slopes[2] = 1.0;
+        if (it.value().is_object() && it.value().contains("grey_light_density") &&
+            three(it.value()["grey_light_density"], bracket.grey_light)) {
           // The bracket's grey steps, when the bundle keeps them: all or none.
           const nlohmann::json& node = it.value();
           if (node.contains("grey_steps_light_density") && node["grey_steps_light_density"].is_array() &&
@@ -605,6 +609,50 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           bundle.density_brackets.push_back(bracket);
         }
       }
+    }
+  }
+
+  // The film's grey balance curve: three rising columns on one light-density grid. A block that is not whole is left
+  // out, and the bundle's prints then take the brackets' own slopes, if any.
+  if (j.contains("density_matrices") && j["density_matrices"].is_object() &&
+      j["density_matrices"].contains("grey_balance_curves") && j["density_matrices"]["grey_balance_curves"].is_object()) {
+    const nlohmann::json& g = j["density_matrices"]["grey_balance_curves"];
+    GreyBalanceCurves& gb = bundle.grey_balance;
+    bool ok = g.contains("light_density_start") && g["light_density_start"].is_number() &&
+              g.contains("light_density_step") && g["light_density_step"].is_number() && g.contains("apd") &&
+              g["apd"].is_array() && g["apd"].size() == 3;
+    if (ok) {
+      gb.start = g["light_density_start"].get<double>();
+      gb.step = g["light_density_step"].get<double>();
+      ok = gb.step > 0.0;
+    }
+    for (int c = 0; ok && c < 3; ++c) {
+      for (const auto& v : g["apd"][c]) {
+        ok = ok && v.is_number() && std::isfinite(v.get<double>()) &&
+             (gb.apd[c].empty() || v.get<double>() > gb.apd[c].back());
+        if (ok) gb.apd[c].push_back(v.get<double>());
+      }
+      ok = ok && gb.apd[c].size() >= 2 && gb.apd[c].size() == gb.apd[0].size();
+    }
+    gb.present = ok;
+    if (!ok) gb = GreyBalanceCurves{};
+  }
+
+  // The bundle's print ICCs, by print material: read as the brackets' profiles are.
+  if (j.contains("print_profiles") && j["print_profiles"].is_object()) {
+    for (auto it = j["print_profiles"].begin(); it != j["print_profiles"].end(); ++it) {
+      const nlohmann::json& e = it.value();
+      if (!e.is_object() || !e.contains("icc_profile") || !e["icc_profile"].is_string()) continue;
+      BundlePrint p;
+      p.id = it.key();
+      p.name = e.value("name", p.id);
+      p.viewing_illuminant = e.value("viewing_illuminant", std::string());
+      p.reference_bracket = e.value("reference_bracket", std::string());
+      const std::string file = e["icc_profile"].get<std::string>();
+      if (!read_file || !read_file(file, p.icc_bytes) || p.icc_bytes.size() < 132) {
+        throw std::runtime_error("profile bundle " + raw_path + ": cannot read print ICC " + file);
+      }
+      bundle.prints.push_back(std::move(p));
     }
   }
 

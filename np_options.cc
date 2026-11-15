@@ -298,12 +298,14 @@ int parse_options(int ac, char* av[], Options& o) {
           "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
           "beside the file uses it.");
   parser.add_argument("--print")
-    .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
-          "print on this print material, as sRGB (<output>.<print>.clf). The print material is one built in, or the "
-          "path of a spektrafilm print profile (a .json file). Give it once per print material, or 'all' for those "
-          "built in. "
-          "Without a name, --print lists the print materials built in. Without --print only the density file is "
-          "written.")
+    .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
+          "file). On a TriLED bundle the material's print ICC takes the place of the brackets' chart profiles, so "
+          "Auto and the conversion render the print: with -P srgb (or another picture output) the output is the "
+          "print. With a density output (-P statusm, rp180 or apd) the density file is written as before, the search "
+          "renders the print of the first material, and beside the file goes a CLF per material that renders it as "
+          "that print, as sRGB (<output>.<print>.clf); give it once per print material, or 'all' for those built "
+          "in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
+          "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
@@ -685,8 +687,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   if (parser.is_used("--print")) {
     o.prints = parser.get<std::vector<std::string>>("--print");
-    if (!o.density) {
-      log_error("--print takes a density output: give -P statusm, rp180 or apd\n");
+    // A picture output is one print: one material.
+    if (!o.density && (o.prints.size() != 1 || o.prints.front() == "all")) {
+      log_error("--print with a picture output renders one print: give one print material (a density output takes "
+                "several, or 'all', one CLF each)\n");
       return 1;
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
