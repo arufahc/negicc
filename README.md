@@ -234,7 +234,9 @@ how the print is computed.
 A white-LED scan takes the same options (`--light_source d65`). Its density is less exact than an RGB-LED scan's:
 no spectrum of the light is measured, so the scan's channels are taken to be linear Rec.2020. The film base comes
 from the scan itself, since `--film_base` with a capture is for RGB-LED scans. The curve fit runs as it does for a
-picture and changes no pixel of the density file; the CLF takes the frame's mid grey and slopes from it.
+picture and changes no pixel of the density file; the CLF takes the frame's mid grey and slopes from it. With
+`--fit_curves off` the CLF takes the mid grey and slopes of the frame's bracket in the profile set, as for an
+RGB-LED scan.
 
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 

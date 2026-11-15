@@ -780,6 +780,13 @@ int prepare(const Options& o, Setup& s) {
                 bundle.path.c_str(), density_measure_key(o.density_measure));
       return 1;
     }
+    // The curve fit is white light's: on a TriLED bundle the curves are the measured ones, and an explicit
+    // --fit_curves is refused rather than ignored.
+    if (!s.white_light && o.fit_curves != Options::kFitCurvesAuto) {
+      log_error("--fit_curves does not apply to a density output from a TriLED bundle (-P %s): its curves are the "
+                "measured ones and are not fitted\n", o.colorspace.c_str());
+      return 1;
+    }
     s.density = true;
   }
   if (s.white_light) {
@@ -2743,6 +2750,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
+  sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;

@@ -617,7 +617,8 @@ bool write_json_sidecar(const Sidecar& sc) {
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
-  // A density output takes no exposure, gains or bracket: its replay is the frame alone.
+  // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
+  // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
   if (!sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -625,6 +626,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
         cli.push_back(std::to_string(v));
     }
+    if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
   }
   j["cli_equivalent"] = cli;
 

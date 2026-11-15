@@ -285,7 +285,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
           "bundle whose density matrices were built in, TriLED or white light, and none of the exposure, gain, "
           "curve, tone or look options; the colour balance the search finds is recorded in the file, not applied. "
-          "On white light the curve fit runs as for a picture and only the print CLF beside the file uses it.");
+          "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
+          "beside the file uses it.");
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -679,9 +680,12 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
+  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
+  // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
+  // density output does not take.
   {
     struct Refused { const char* flag; bool used; };
-    const bool fit_set = parser.is_used("--fit_curves") && parser.get<std::string>("--fit_curves") != "auto";
+    const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
         {"--target", o.target_given},          {"-E", o.exposure_given},

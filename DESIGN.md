@@ -589,7 +589,7 @@ a file is written: 24 points through a 3×3 and a closed-form regression.
 | `F` | The narrow-band profile set's | It depends on the film and the measure alone. |
 | Offset in `L` | None | Bare film is zero in both readings. |
 | Film base | The scan's rebate, else the thinnest film in the frame | `--film_base` with a capture reads a narrow-band mosaic and is not available under white light. |
-| Curve fit | Run for a density output on white light | Its result goes into the first matrix alone. |
+| Curve fit | Run for a density output on white light; `--fit_curves off` turns it off | Its result goes into the first matrix alone. Off, the frame takes its bracket's mid grey and slopes. |
 
 **What carries it.** The profile builder writes `L` and the `brackets` entry into a white-light profile set, with
 every grey step of each bracket (`grey_steps_light_density`), which the fitted grey scale is worked out from.
