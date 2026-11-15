@@ -527,11 +527,27 @@ and a bracket's profile differs from another's only in its curves.
 - On a lake under a blue sky (TriLED frame 1004_0001), the print profile against the CLF of the same frame, material
   by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
 
-**Why the search stays on the chart profiles.** A search on the print profiles was tried first. Its intent model was
-trained on negicc's pictures, and it chased the picture's colours through the paper's compressed highlights: on the
-lake, five of the eight materials went to Target 5 at E 0.38 where the scene's search chose Target 3 at E 1.14, and the
-sky washed out. On the chart profiles every material gets the scene's bracket, exposure and balance, and the print
-profile and the CLF agree.
+**Why the search stays on the chart profiles.** A search on the print profiles overexposes the print, for two
+reasons, both measured.
+
+- *Screening's green gain.* Auto screens every metered bracket against one intent field, sweeping the green gain from
+  0.98 to 1.28, and refines only the best two. A frame that needs more green (TriLED 1004_0001, a lake under a blue
+  sky, needs about 1.5) is screened green-cast. On a print, overexposure costs about half as much in L\* as on the
+  picture (the paper rolls an overexposed sky off at L\* 89 where the picture's reaches 94) and bleaches the sky toward
+  the paper's white, hiding the cast; an overexposed bracket (Target 5, E 0.38, against the scene's Target 3 at E 1.14)
+  won screening on five of the eight materials. Sweeping the green gain up to 1.64 fixed that frame.
+- *The model wants a picture's highlights.* The intent model was trained on negicc's pictures. Asked what a print
+  should look like, it puts the highlights where a picture has them: on 50 TriLED frames at the scene's exposure it
+  wants the print's highlights 3.8 L\* lighter and its midtones 1.7 lighter (on the pictures themselves, -1.1 and -0.7).
+  The paper's shoulder holds a print's highlights below a picture's (75 against 80 L\* in the top third), and they rise
+  slowly with exposure while the midtones and shadows rise fast. The search's fixed-point loop, which re-predicts the
+  field from each render, follows the model step by step (on 1004_0055 from E 0.68 to 0.48 in the search's units, half
+  a stop, its residual falling at each step) until the highlights reach the picture's: on average +0.6 L\* from them,
+  with the shadows 8.1 and the midtones 7.3 lighter than the picture's.
+
+With the green grid widened, the print searched on the print lost blind A/B 40 to the print at the scene's search on 44
+of 50 TriLED frames (4 for, 2 no preference; Portra Endura): 7.5 L\* lighter on average, and washed out. On the chart
+profiles every material gets the scene's bracket, exposure and balance, and the print profile and the CLF agree.
 
 The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose:
 
