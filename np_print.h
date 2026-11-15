@@ -132,8 +132,8 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 
 // ---- The print of a density file ------------------------------------------------------------------------------------
 //
-// Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print material's
-// printing density -> its curves and dyes -> sRGB.
+// Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print
+// material's printing density -> its curves and dyes -> sRGB.
 //
 // A print material (a paper or a print film) and what is computed with it when a density file is written: one
 // matrix for the frame, and the print's curves and colour table as CLF nodes.
