@@ -99,6 +99,12 @@ struct DensityRecord {
   bool has_balance = false;
   double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
   std::string balance_target;
+  // The input curves the white-light conversion fitted for this frame (input_curves.h), green then blue: a slope
+  // term a and a bend k on the channel's stops below the film base, the bend's centre u_med, and u_hold below which
+  // the curve keeps a slope of 1. They are not applied to the densities; a print takes its mid grey and slopes from
+  // the grey scale they describe (fitted_grey_scale). has_curves is false for a narrow-band scan and when no fit ran.
+  bool has_curves = false;
+  double curve_a[2] = {0, 0}, curve_k[2] = {0, 0}, curve_u_med[2] = {0, 0}, curve_u_hold[2] = {0, 0};
   std::string tool_version;
   // The metadata's "print" block, as JSON text: how the frame prints on each print material
   // (DensityPrints::metadata_json). Empty: none.
@@ -198,6 +204,13 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //   slopes    the bracket's: they give the film's grey scale equal contrast in the three channels.
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
+//
+// A white-light frame has one thing more: the conversion fitted its green and blue input curves, so the film it
+// renders as the chart's grey steps is not the chart's own. Then the mid grey and the slopes come from the grey scale
+// the fitted curves describe (fitted_grey_scale), taken forward through the bundle's matrices: the slopes are the
+// regression the profile builder runs on a bracket's steps, here on the fitted ones, in Academy Printing Density,
+// and the mid grey is the fitted mid step. That is 24 points through a 3x3 and a closed-form regression; no pixel
+// goes back to the scan's channels.
 struct FramePrint {
   std::string id, name;               // the print material
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
@@ -207,8 +220,21 @@ struct FramePrint {
   double exposure = 1.0;
   double grey[3] = {0, 0, 0};
   double slopes[3] = {1, 1, 1};
+  bool fitted = false;                // grey and slopes are of the grey scale the frame's fitted curves describe
   double grey_density = 0.70;
 };
+// The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
+// the film base. The bracket's profile renders step i, of channel density d_i, as that grey. The conversion
+// multiplies the channels by E, E g and E b and bends green and blue by the record's curves, f(u) = u (1 + a + k
+// tanh(u - u_med)) on the stops u below the base, so the film rendered as step i has, in channel c,
+//
+//     f_c(u) = -(d_c,i + log10(E g_c)) log2 10,     density = -u / log2 10
+//
+// (red has no curve and g = 1). The curve is the identity at and above the base and monotonic below it
+// (input_curves.h curve_shape_ok), so u is found by bisection.
+// py-ref: negicc_station/src/print_emulation.py (fitted_grey_scale)
+std::vector<std::array<double, 3>> fitted_grey_scale(const DensityRecord& rec,
+                                                     const std::vector<std::array<double, 3>>& steps);
 // False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err);
 

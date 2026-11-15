@@ -283,8 +283,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
           "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). apd is written "
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
-          "TriLED bundle whose density matrices were built in, and none of the exposure, gain, curve, tone or look "
-          "options; the colour balance the search finds is recorded in the file, not applied.");
+          "bundle whose density matrices were built in, TriLED or white light, and none of the exposure, gain, "
+          "curve, tone or look options; the colour balance the search finds is recorded in the file, not applied. "
+          "On white light the curve fit runs as for a picture and only the print CLF beside the file uses it.");
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -698,15 +699,11 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
-  if (o.light_source == "d65") {
-    log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not supported\n",
-              o.colorspace.c_str());
-    return 1;
-  }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_print.h DensityRecord::has_balance).
-  o.fit_curves = Options::kFitCurvesOff;
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle the curve fit
+  // runs too (--fit_curves stays auto): its curves are not applied either, the print CLF takes its mid grey and
+  // slopes from them (np_print.h FramePrint). A narrow-band bundle has no curve fit.
   o.tone_stage = Options::kToneStageOff;
   return 0;
 }

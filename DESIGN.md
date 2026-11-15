@@ -262,10 +262,11 @@ They live in `input_curves.h`, and "Cast estimation" shows where most of them en
 
 # Print emulation
 
-`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
+`neg_process` writes a scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
 CLF that prints it on a paper or a print film. This part specifies both and lists every parameter involved. The
 density file is the film as measured. The CLF holds everything that turns it into a picture, and `neg_process` only looks its numbers up and
-multiplies them: nothing is fitted when a file is written.
+multiplies them: nothing is fitted when a file is written. A white-light scan goes the same way with one more step,
+described under "White-light scans".
 
 ## Pipeline
 
@@ -487,8 +488,8 @@ spectral data of the camera.
 
 ## White-light scans
 
-Not built: `neg_process` refuses a density output on a white-light profile set. This section specifies how a
-white-light scan gets a density file and its CLFs, and reports the experiments run so far.
+A white-light scan gets a density file and its CLFs as a narrow-band one does (`--light_source d65 -P apd`). This
+section says what differs, and reports the experiments behind it.
 
 **What differs.** A white-light scan is decoded to linear Rec.2020 channels: the camera's channels, balanced on the
 film base, through the camera's colour matrix. There is no crosstalk correction `C`, since there are no separate
@@ -590,11 +591,13 @@ a file is written: 24 points through a 3×3 and a closed-form regression.
 | Film base | The scan's rebate, else the thinnest film in the frame | `--film_base` with a capture reads a narrow-band mosaic and is not available under white light. |
 | Curve fit | Run for a density output on white light | Its result goes into the first matrix alone. |
 
-**What it needs to be built.** The profile builder writes `L` and the `brackets` entry into a white-light profile
-set; `neg_process` drops its two refusals, runs the curve fit for a white-light density output, and builds the first
-matrix from the fitted grey scale. No print material's file changes.
+**What carries it.** The profile builder writes `L` and the `brackets` entry into a white-light profile set, with
+every grey step of each bracket (`grey_steps_light_density`), which the fitted grey scale is worked out from.
+`neg_process` runs the curve fit for a white-light density output as for a picture, applies it to no pixel, and
+builds the first matrix from the fitted grey scale (`np_print.cc`: `fitted_grey_scale`, `frame_print`). The metadata
+says where a frame's mid grey and slopes came from (`grey_and_slopes_from`). No print material's file changes.
 
-**The experiments.** Both ran in a copy of `neg_process` with the refusals removed, on white-light scans whose film
+**The experiments.** Both ran in copies of `neg_process` from before this was built, on white-light scans whose film
 stocks are unknown, each on the Portra 400 profile set as the picture conversion runs them today.
 
 1. *The matrix fitted to the chart, with slopes fitted for print neutrality* (an earlier form of both): 137 scans
@@ -608,7 +611,7 @@ stocks are unknown, each on the Portra 400 profile set as the picture conversion
    differ by −0.15 to +0.17 in red and −0.23 to +0.06 in blue over the middle 80 % of frames. Against the picture
    conversion the print's median luminance is 0.12 stop darker on the median frame, with extremes of 1.3 stop darker
    and 1.0 lighter; without the fit the extremes are 2.9 darker and 0.3 lighter. A blind comparison is set up and not
-   yet voted on.
+   yet voted on. The build in this tree gives the same mid grey and slopes as that experiment's.
 
 **Limits.**
 
@@ -638,7 +641,8 @@ The source, basis, storage and invalidation condition of each quantity in the ch
 | `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
 | `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json` | A print material is added |
 | Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
-| `L` for white light (not built) | The film's dye spectra; the CIE observer under D65 as linear Rec.2020 | Fitted on the film model | A white-light `bundle.json`, `light_to_film` | The film stock changes |
+| `L` for white light | The film's dye spectra; the CIE observer under D65 as linear Rec.2020 | Fitted on the film model | A white-light `bundle.json`, `light_to_film` | The film stock changes |
+| Mid grey and slopes of a white-light frame | The bracket's grey steps and the frame's fitted curves | Computed when the file is written: the fitted grey scale through `F L` | The CLF's first matrix, the file's metadata | Every frame |
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
 | Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |
 

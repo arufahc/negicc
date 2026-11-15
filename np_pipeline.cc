@@ -774,11 +774,6 @@ int prepare(const Options& o, Setup& s) {
                 "matrices are the bundle's\n", o.colorspace.c_str());
       return 1;
     }
-    if (s.white_light) {
-      log_error("-P %s needs a TriLED bundle (--light_source tri): density from a white-light scan is not "
-                "supported\n", o.colorspace.c_str());
-      return 1;
-    }
     if (!bundle.density_matrix[o.density_measure].present) {
       log_error("The profile bundle %s has no density_matrices.%s: rebuild the bundle with negicc-station "
                 "(tools/fit_density_matrices.py), which fits the matrix from the light's spectrum\n",
@@ -869,7 +864,9 @@ int prepare(const Options& o, Setup& s) {
   // srgb-g10 write; a custom -P goes through its ICC profile with LittleCMS, which the fit does not model, while the
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
-  const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear";
+  // A density output on white light fits as -P srgb does: the fit's result goes into the print CLF, not the pixels.
+  const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear" ||
+                               (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
@@ -1580,7 +1577,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // white-light bundle search.
       negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
       // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
-      const int export_encoding = o.colorspace == "srgb" ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
+      const int export_encoding = (o.colorspace == "srgb" || s.density) ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
       s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
       s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
       s.curves_base_prof.rebind_pointers();
@@ -2652,6 +2649,16 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_g = (*c.station_params)[1];
       rec.balance_b = (*c.station_params)[2];
       rec.balance_target = c.bundle_target_name;
+    }
+    // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
+    if (s.white_light && s.input_curves.active()) {
+      rec.has_curves = true;
+      for (int k = 0; k < 2; ++k) {
+        rec.curve_a[k] = s.input_curves.a[k];
+        rec.curve_k[k] = s.input_curves.k[k];
+        rec.curve_u_med[k] = s.input_curves.u_med[k];
+        rec.curve_u_hold[k] = s.input_curves.u_hold(k);
+      }
     }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
     // The prints of the file (np_print.h): how the frame prints on each print material, recorded in the metadata,

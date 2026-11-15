@@ -217,7 +217,7 @@ If one of them is yours and you want it removed, open an issue.
 
 ## Density files and print emulation
 
-With an RGB-LED scan, `-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
+`-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
 place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `rp180` in a DPX is a Cineon file and
 `apd` in a TIFF is ADX16.
 
@@ -230,6 +230,11 @@ Beside the density file `neg_process` writes one CLF transform per print materia
 and Kodak Vision 2383 print film. Any tool that reads CLF renders the file through it as a print on that material.
 The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
 how the print is computed.
+
+A white-LED scan takes the same options (`--light_source d65`). Its density is less exact than an RGB-LED scan's:
+no spectrum of the light is measured, so the scan's channels are taken to be linear Rec.2020. The film base comes
+from the scan itself, since `--film_base` with a capture is for RGB-LED scans. The curve fit runs as it does for a
+picture and changes no pixel of the density file; the CLF takes the frame's mid grey and slopes from it.
 
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 
@@ -244,7 +249,7 @@ how the print is computed.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside the file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside the file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
