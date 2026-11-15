@@ -262,10 +262,10 @@ They live in `input_curves.h`, and "Cast estimation" shows where most of them en
 
 # Print emulation
 
-`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
-CLF that prints it on a paper or a print film. This part specifies both and lists every parameter involved. The
-density file is the film as measured. The CLF holds everything that turns it into a picture, and `neg_process` only looks its numbers up and
-multiplies them: nothing is fitted when a file is written.
+`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, with `--print`, a CLF
+beside the file that prints it on a paper or a print film. This part specifies both and lists every parameter
+involved. The density file is the film as measured. The CLF holds everything that turns it into a picture, and
+`neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written.
 
 ## Pipeline
 
@@ -276,7 +276,7 @@ multiplies them: nothing is fitted when a file is written.
 | 3 | Frame matrix | Places the frame on the print: its mid grey on the print's mid grey, its balance, and the slopes of its grey scale. One matrix, the first node of the CLF. | The search, the bracket's entry in the profile set, the print material's matrix. |
 | 4 | Print | The print material's response: its curve per layer, then its dyes under a viewing light, as sRGB. The other nodes of the CLF. | The print material's file. |
 
-A profile set holds nothing of a print material, and a print material's file (`prints/<print>.json`) holds nothing
+A profile set holds nothing of a print material, and a print material's file (a spektrafilm print profile) holds nothing
 measured on a film. `-P` picks one measure for a run. The code is `np_print.cc`.
 
 ## Derivations
@@ -299,8 +299,8 @@ a model of the film: dye amounts along its neutral scale between log exposure �
 variation.
 
 **The print matrix.** `P` takes a measure's density to the density the print material's own layers read: its
-spectral sensitivity under a printer lamp. It is fitted the same way, for each measure and each film model, and is
-in the print material's file.
+spectral sensitivity under a printer lamp. It is computed when a file is written, from the print material's
+profile and the bundle's film model, as `P = Q F⁻¹` ("The print matrix").
 
 **Mid grey.** Each bracket of a profile set is one shot of the chart, and the profile set keeps the chart's 18 %
 grey patch of each bracket as the density the LED sees. The bracket's profile renders that density as mid grey at an
@@ -422,7 +422,7 @@ The same frame without slopes and with its own, on each print material, beside t
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| Print materials | Kodak Portra Endura (paper), Kodak Vision 2383 (print film) | One CLF each, `<output>.<print>.clf`. |
+| Print materials | spektrafilm's print profiles: six papers and two print films built in, or a file | `--print <print>` writes the CLF of one, `<output>.<print>.clf`; repeated, or `all`, of several. `--print` alone lists them. Without it no CLF is written and stages 3 and 4 do not run. |
 | Printer lamp | 3200 K blackbody, no heat filter | With the material's sensitivity it defines the density the material reads. |
 | Viewing light | D50 for paper, D55 for print film | The print's colour is computed under it and adapted to D65 (CAT02) for sRGB. |
 | Curve table | 4096 points | The curve of each layer, as a 1D table. |
@@ -435,19 +435,39 @@ spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the 
 
 ## The spectral data
 
-All of it is on 380 to 780 nm at 1 nm, and all of it is used ahead of time, except that the print's colour table
-is computed from the print material's file when a CLF is written.
+All of it is on 380 to 780 nm at 1 nm. The film's and the light's are used ahead of time, when a profile set is
+built; the print material's is used when a CLF is written.
 
 | Data | Specific to | Used for | Kept in |
 |---|---|---|---|
 | The scanning light as three LED spectra: each LED measured alone, or one spectrum with all LEDs on cut at 495 and 578 nm | The light | `L` | `bundle.json`, `light_source`: the all-on spectrum and the three (`led_spectra`) |
-| The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | Not shipped |
+| The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | `bundle.json`, `film_model` |
 | The response curves of Status M, RP 180 and APD | The standards | `F`, `P` | Not shipped |
-| The print material's spectral sensitivity | The print material | `P` | Not shipped |
-| The print material's curve per layer, dye spectra and base | The print material | The print | `prints/<print>.json` |
-| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `prints/<print>.json`, as their product |
+| The print material's spectral sensitivity | The print material | `P` | The spektrafilm print profile |
+| The print material's curve per layer, dye spectra and base | The print material | The print | The spektrafilm print profile (`3rd_party/spektrafilm/profiles/`, or a file given to `--print`) |
+| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `cie_tables.h` |
 
 The camera has no spectral data here. The crosstalk correction stands in for its response curves.
+
+## The print matrix
+
+A print material is a print profile of [spektrafilm](https://github.com/andreavolpato/spektrafilm), read as
+published: eight are built in (`3rd_party/spektrafilm/profiles/`), and `--print <file>` takes any other. From the
+profile `neg_process` computes the observer under the viewing light (D50 for a paper, D55 for a print film), the
+exposure that prints an 18 % grey, and the print matrix for the bundle's film.
+
+The response curves of the standard measures are not shipped, so the print matrix is not fitted against them. With
+`F` the measure's part of the density matrix (dye amounts to the measure's density) and `Q` the 3×3 from the film's
+dye amounts to the print's own density:
+
+```
+P = Q F⁻¹
+```
+
+`Q` is a least-squares fit with no offset on fixed sample colours of the bundle's film model: every point of its
+neutral scale between log exposure −1.5 and 1.0, each with 27 colour variations (each dye amount times
+`exp(0.184 z)`, `z` = −1, 0, 1). For Portra Endura and Vision 2383 this `P` lies within 0.01 of a matrix fitted
+against the measure's response curves on 3000 drawn samples, which earlier versions stored.
 
 ## The crosstalk correction, measured and computed
 
@@ -496,10 +516,10 @@ The source, basis, storage and invalidation condition of each quantity in the ch
 | `B`, film base scale | The roll | Measured on each run: `--film_base`, the rebate, or the thinnest film | The density file's metadata | Every roll |
 | `L`, LED density to dye amounts | The light's spectrum, the film's dye spectra | Fitted on the film model | `bundle.json`, `light_to_film` | The light or the film stock changes |
 | `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
-| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | `prints/<print>.json` | A print material is added |
+| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly | Fitted on the film model | Computed when a file is written, as `Q F⁻¹` | A print material is added |
 | Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
 | Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
-| Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from `prints/<print>.json` | A print material is added |
+| Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from the spektrafilm print profile | A print material is added |
 
 `L`, `F` and `P` come from spectra alone: none is fitted to the film's chart, so the
 chart enters the print only through a bracket's mid grey and slopes. A scanner with another light replaces `L` and

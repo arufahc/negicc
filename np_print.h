@@ -132,16 +132,17 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 
 // ---- The print of a density file ------------------------------------------------------------------------------------
 //
-// Beside a printing density file goes one CLF per print material that prints it: density -> the print material's
-// printing density -> its curves and dyes -> sRGB.
+// Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print
+// material's printing density -> its curves and dyes -> sRGB.
 //
 // A print material (a paper or a print film) and what is computed with it when a density file is written: one
 // matrix for the frame, and the print's curves and colour table as CLF nodes.
 //
-// A print material is a data file, prints/<id>.json (schema negicc.print_material/1, written by negicc-station
-// src/print_emulation.py: print_material), built into neg_process. It holds the curve of each layer, the dye spectra and
-// base, the observer under the viewing light, and the 3x3 from each printing density measure to the density the
-// material reads itself. It holds nothing of a film stock, and a film's bundle holds nothing of a print material.
+// A print material is a print profile of spektrafilm (https://github.com/andreavolpato/spektrafilm), a JSON file read
+// as published: those under 3rd_party/spektrafilm/profiles/ are built into neg_process, and --print takes any other
+// by its path. The profile gives the curve of each layer, the dye spectra and base, and the layers' spectral
+// sensitivity; the rest is computed when it is loaded (load_spektrafilm_print), the print matrix for the film of the
+// bundle in use. A profile holds nothing of a film stock, and a film's bundle holds nothing of a print material.
 //
 // The model, for a log exposure of each layer:
 //     dye amounts   a_c = curve_c(logE_c)                                   (linear interpolation, held at the ends)
@@ -155,21 +156,18 @@ struct PrintMaterial {
   std::string id, name, viewing_illuminant;
   double grey_density = 0.70;                 // the printing density exposed as the print's mid grey
   // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
-  // Academy Printing Density): one per film model by its name (a bundle's density_matrices.film_dye_spectra) and
-  // "any" for other films.
+  // Academy Printing Density), for the film model named (the bundle's the material was loaded for).
   struct ToPrint {
     std::string film;
     std::array<double, 9> m;
   };
   std::vector<ToPrint> to_print[kDensityMeasures];
-  // The matrix for a film model, else the one for any film; null when the material has none for the measure.
+  // The matrix for a film model; null when the material has none for the measure and the film.
   const ToPrint* to_print_for(int measure, const std::string& film) const {
-    const ToPrint* any = nullptr;
     for (const ToPrint& t : to_print[measure]) {
       if (t.film == film) return &t;
-      if (t.film == "any") any = &t;
     }
-    return any;
+    return nullptr;
   }
   std::vector<double> log_exposure;           // ascending
   std::vector<double> curves[3];              // dye amount of each layer along log_exposure
@@ -180,8 +178,23 @@ struct PrintMaterial {
   double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
 };
 
-// Reads a print material's JSON. False with why in err.
-bool load_print_material(const std::string& json_text, PrintMaterial& out, std::string& err);
+// A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.
+// Computed here:
+//
+//   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
+//   the observer              the CIE 1931 2 degree observer (cie_tables.h) under D50 for a paper, D55 for a print
+//                             film (info.support), adapted to D65 with CAT02 for sRGB
+//   aim                       the exposure of each layer that prints an 18 % grey
+//   the print matrix          Q inv(F) for each measure of the bundle: F its film_to_measure (dye amounts to the
+//                             measure's density), Q the 3x3 from the film's dye amounts to the print's own density,
+//                             least squares on fixed sample colours of the bundle's film_model (every point of its
+//                             neutral scale between log exposure -1.5 and 1.0, each with 27 colour variations)
+//
+// id names the material when the profile's info.stock does not. False with why in err; a bundle without a
+// film_model gives a material without matrices, which frame_print refuses.
+// py-ref: negicc_station/src/print_emulation.py (spektrafilm_print, film_to_print_density, PrintModel)
+bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
+                            PrintMaterial& out, std::string& err);
 
 // The material as CLF nodes, to follow a Matrix that gives its printing density: Matrix (density -> log exposure) /
 // Range / LUT1D (the curve of each layer) / Matrix / LUT3D (dye amounts -> linear sRGB, cube points a side) /
@@ -201,7 +214,7 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 struct FramePrint {
   std::string id, name;               // the print material
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  std::string to_print_for;           // the film model the matrix is for, or "any"
+  std::string to_print_for;           // the film model the matrix is for
   std::string bracket;
   bool searched = false;              // the bracket and exposure come from the search
   double exposure = 1.0;
@@ -218,16 +231,25 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
 // place the balance, the exposure and the slopes are applied.
 std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
 
-// The prints of one density file: for every print material built into neg_process (prints/<id>.json), how the frame
-// prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
+// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
+// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
 // one file, its code scale, measure and channel factors).
+// The print materials built into neg_process (3rd_party/spektrafilm/profiles/<id>.json), in the order of their ids,
+// with their matrices for the film of bundle; without a bundle, or with one that has no film_model, they have no
+// matrix (enough to list them). One that cannot be read is left out, with a warning.
+std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle = nullptr);
+// Whether a --print value names a file (a spektrafilm print profile: a path, or a name ending in .json) and not a
+// built-in print material.
+bool is_print_file(const std::string& name);
+
 struct DensityPrints {
   std::vector<PrintMaterial> materials;
   std::vector<FramePrint> frames;
   std::vector<std::string> paths;
   std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
 };
-DensityPrints density_prints(const DensityRecord& rec, const std::string& output);
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
+                             const std::vector<std::string>& print_ids);
 // Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
 void remove_print_clfs(const DensityPrints& prints);

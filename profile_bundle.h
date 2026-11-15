@@ -147,6 +147,7 @@ const char* density_measure_key(DensityMeasure m);
 struct DensityMatrix {
   bool present = false;
   double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  double film_to_measure[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // the measure's part alone
   std::string target_curves;          // what defines the measure, as the bundle names it
 };
 
@@ -157,6 +158,17 @@ struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
   double slopes[3] = {1.0, 1.0, 1.0};
+};
+
+// The film stock's spectra (the bundle's film_model), on 380-780 nm at 1 nm: the spectral density of a unit amount
+// of each dye, the base, and the dye amounts along the film's neutral scale. A print material given as a file takes
+// its matrix from them (np_print.h load_spektrafilm_print).
+struct FilmModel {
+  bool present = false;
+  std::string name;
+  std::vector<double> dye[3], base;           // spectral densities, 401 samples
+  std::vector<double> log_exposure;           // ascending
+  std::vector<double> neutral[3];             // dye amounts along log_exposure
 };
 
 struct ProfileBundle {
@@ -183,6 +195,7 @@ struct ProfileBundle {
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
   std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
+  FilmModel film_model;                           // not present in a bundle from before the field
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
 };

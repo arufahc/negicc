@@ -222,12 +222,16 @@ place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `r
 `apd` in a TIFF is ADX16.
 
 ```sh
-bin_out/neg_process --film_stock portra400 --light_source tri -P apd --film_base base.ARW --roi auto -o scan.tif scan.ARW
+bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
+    --film_base base.ARW --roi auto -o scan.tif scan.ARW
 oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
 ```
 
-Beside the density file `neg_process` writes one CLF transform per print material, Kodak Portra Endura paper
-and Kodak Vision 2383 print film. Any tool that reads CLF renders the file through it as a print on that material.
+With `--print <print>`, `neg_process` also writes a CLF transform beside the density file, and any tool that reads
+CLF renders the file through it as a print on that material. The print materials are the print profiles of
+[spektrafilm](https://github.com/andreavolpato/spektrafilm): eight are built in (six papers, among them Kodak
+Portra Endura, and the print films Kodak Vision 2383 and 2393; `--print` alone lists them), and `<print>` may also
+be the path of another spektrafilm print profile. Without `--print` only the density file is written.
 The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
 how the print is computed.
 
@@ -244,7 +248,8 @@ how the print is computed.
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
-| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. Beside the file goes one CLF per print material (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print, sRGB. |
+| `-P statusm\|rp180\|apd` | Density above the film base in place of a picture (RGB LED only): Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
+| `--print <print>` | With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB. `<print>` is a built-in print material or the path of a spektrafilm print profile. Repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
@@ -275,7 +280,9 @@ profiles and a white D65 LED panel for the white-LED ones; the coloraid.de `R190
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx` is packed into the
 `neg_process` binary. It is Meta's, under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a
 binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other
-people's photographs, credited above. The print materials in `prints/*.json` derive from
-[spektrafilm](https://github.com/andreavolpato/spektrafilm)'s print profiles and are under CC BY-SA 4.0
-(`prints/README.md`); a CLF that `neg_process` writes with them carries that notice for its two tables, and the pictures made through
-one are free.
+people's photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
+[spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
+(`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two
+tables, and the pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
+spektrafilm's film spectra, under the same licence; it covers that block only, not the rest of a bundle or its ICC
+profiles.
