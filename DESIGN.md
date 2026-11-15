@@ -268,8 +268,8 @@ involved. The density file is the film as measured. The CLF holds everything tha
 `neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written. A
 white-light scan goes the same way with one more step, described under "White-light scans".
 
-On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): the print material's print ICC takes the
-place of the brackets' chart profiles, and Auto balances and exposes the print itself. "Direct sRGB output: the print
+On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): Auto runs on the chart profiles as
+always, and the conversion renders the chosen bracket's print ICC in place of its chart profile. "Direct sRGB output: the print
 ICC", after the density output's stages, specifies it.
 
 ## Pipeline
@@ -466,17 +466,18 @@ spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the 
 ## Direct sRGB output: the print ICC
 
 With `--print <print>` on a TriLED bundle and a picture output (`-P srgb`, or any other), the output is the print.
-Each bracket's chart profile is replaced, before the search, by a print profile: the film printed on that material,
-shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three 4096-entry input curves, a
-45 × 45 × 45 table, identity output curves). Auto then chooses the bracket, the exposure and the gains on the print
-itself, and the conversion renders the chosen bracket's print profile. A density output searches on the chart
-profiles and is written as in stages 1 to 4. Without `--print` the chart profiles render the scene, as before.
+Auto chooses the bracket, the exposure and the gains on the chart profiles, as it does without `--print` and for a
+density output's CLF. The conversion then renders the chosen bracket's print profile in place of its chart profile:
+the film printed on that material, shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three
+4096-entry input curves, a 45 × 45 × 45 table, identity output curves). Its curves put the bracket's mid grey, moved
+by the search's exposure, on the print's mid grey, as the CLF's frame matrix does. A density output is written as in
+stages 1 to 4. Without `--print` the chart profiles render the scene, as before.
 
 | # | Stage | Function | Inputs |
 |---|---|---|---|
 | 1 | Bundle | One print ICC per print material, built when the profile set is saved (negicc-station `src/print_icc.py`): its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
 | 2 | Bracket profiles | For each bracket, the bundle's print ICC with that bracket's input curves written in (about 5 ms each). | The curve, the bracket's mid grey, the material's curve. |
-| 3 | Search | Stage 1 of the picture conversion on the print profiles of stage 2, with a wider green gain at screening and no highlight shoulder in its renders (below). | The frame. |
+| 3 | Search | Stage 1 of the picture conversion, unchanged, on the chart profiles. | The frame. |
 | 4 | Conversion | The picture conversion with the chosen bracket's print profile of stage 2. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
 
 **The chain.** For the profile's input `v` (the scan after the crosstalk correction, the film base at `n0 =
@@ -523,25 +524,16 @@ and a bracket's profile differs from another's only in its curves.
   (95th percentile 0.60): the CLF's straight lines against the curve. With the bracket's own slopes and patch it was
   0.99.
 - Without `--print` the output is bit-identical to `neg_process` before this change.
-- At the scene's bracket, exposure and gains, the print profile against the CLF of the same frame (TriLED frame
-  1004_0001), material by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
+- On a lake under a blue sky (TriLED frame 1004_0001), the print profile against the CLF of the same frame, material
+  by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
 
-**The search on a print: screening's green gain.** Auto predicts one intent field from a bootstrap preview, screens
-every metered bracket against it (each with a short sweep of E, then of the green and the blue gain), and refines only
-the best two. Screening's green gain runs from 0.98 to 1.28. A frame that needs more green (the lake below needs about
-1.5) is screened green-cast. On the scene that costs little: the brighter brackets cost far more in L\*, the right
-bracket still wins screening and its loop then reaches the gain. On a print the brighter brackets cost about half as
-much (the paper rolls the highlights off to its white: an overexposed sky stops at L\* 89 where the scene's reaches 94),
-and overexposure bleaches the sky toward the paper's white, which hides the cast (a\* term 60 to 11). On the lake an
-overexposed bracket (Target 5, E 0.38) then beat the right one held at g 1.28, which never reached its loop; five of
-the eight materials printed with a washed-out sky. The right bracket with its gains refined scores 18.5 against the
-overexposed one's 55 on the same field: the intent model does not prefer the overexposed print. So a search on print
-profiles sweeps the green gain up to 1.64 at screening (`SolverConfig::wide_green`; the scene's search keeps its grid,
-bit for bit), and its renders carry no highlight shoulder, as the print's conversion carries none. On the lake every
-material then goes to Target 2 or 3 at E 1.11 to 1.22, with green gains of 1.58 to 1.66.
+**Why the search stays on the chart profiles.** A search on the print profiles was tried first. Its intent model was
+trained on negicc's pictures, and it chased the picture's colours through the paper's compressed highlights: on the
+lake, five of the eight materials went to Target 5 at E 0.38 where the scene's search chose Target 3 at E 1.14, and the
+sky washed out. On the chart profiles every material gets the scene's bracket, exposure and balance, and the print
+profile and the CLF agree.
 
-The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose on the scene (the
-same for all eight, so only the material changes):
+The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose:
 
 ![negicc's picture and the eight print materials](samples/print_materials_triled.jpg)
 
@@ -801,9 +793,9 @@ chart enters the print only through a bracket's mid grey and slopes. A scanner w
   blackbody, and no result has been compared with a real print.
 - **The slopes belong to one chart.** They hold for the film batch, the development and the scan the profile set
   was built from. Film from another lab may differ.
-- **Auto on a print uses a model of pictures.** Its intent model was trained on negicc's pictures; on a print it
-  works once screening reaches the gains (above), but it has not been trained on prints. Blind A/B 40 compares the
-  print searched on the print with the print at the scene's search (whitelab).
+- **A print's exposure is the picture's.** Auto chooses it on the chart profiles, so a print of every material
+  takes the scene's bracket, exposure and balance; no material moves it. Searching on the print itself overexposed it
+  ("Direct sRGB output: the print ICC").
 - **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll. On a
   narrow-band bundle they now come from one curve, so they could be taken at the frame's own mid grey; they are taken
   at its bracket's, as the print ICC's mid grey is.

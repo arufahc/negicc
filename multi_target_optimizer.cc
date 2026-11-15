@@ -719,7 +719,6 @@ class SearchFrame {
     pin_g_ = g;
     pin_b_ = b;
   }
-  void set_wide_green(bool on) { wide_green_ = on; }
 
   const InnerCrop& inner_crop() const { return crop_; }
   const FrameStats& stats() const { return stats_; }
@@ -866,7 +865,6 @@ class SearchFrame {
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
-    cfg.wide_green = wide_green_;
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
     if (pullback_search) {
       Enclosure enc;
@@ -1084,7 +1082,6 @@ class SearchFrame {
   float shoulder_fixed_ = 1.0f;
   unsigned pin_mask_ = 0;
   float pin_e_ = 1.0f, pin_g_ = 1.0f, pin_b_ = 1.0f;
-  bool wide_green_ = false;
   bool shoulder_auto_ = false;
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
@@ -1356,7 +1353,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
-  fr.set_shoulder(1.0f, !opts.print_profiles);  // the roll-off, measured by the fixed-point loop (none on a print)
+  fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
 
@@ -1390,7 +1387,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   const float boot_b = (opts.pin_mask & PIN_B) ? opts.pin_b : BOOTSTRAP_B;
   const float pin_e_search = white_light ? opts.pin_e : opts.pin_e * e_norm;
   fr.set_pins(opts.pin_mask, pin_e_search, opts.pin_g, opts.pin_b);
-  fr.set_wide_green(opts.print_profiles);
   if (pin_target && opts.pin_target >= (int)bundle.targets.size()) {
     std::cerr << "ERROR! The pinned bracket " << opts.pin_target << " is not in the bundle" << std::endl;
     return false;

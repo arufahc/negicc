@@ -241,11 +241,6 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   } else {
     g_cands_d = {0.98, 1.04, 1.10, 1.16, 1.22, 1.28};
   }
-  // A print search (SolverConfig::wide_green): the green grid carried on in its steps of 0.06 up to 1.64.
-  // py-ref: negicc_station/src/optimizer.py (optimize_target_for_intent, wide_green)
-  if (cfg.wide_green && !initial && !(pin_mask & PIN_G)) {
-    for (double g : {1.34, 1.40, 1.46, 1.52, 1.58, 1.64}) g_cands_d.push_back(g);
-  }
   if (pin_mask & PIN_B) {
     b_cands_d = {curr_b};
   } else if (initial) {

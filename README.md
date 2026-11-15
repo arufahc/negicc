@@ -257,13 +257,14 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
 ```
 
 Each RGB-LED profile set carries one print ICC per print material (`profiles/<film>-A7R4-TriLED/print_<print>.icc`,
-and its `README.md` gives the math). With `--print`, that ICC takes the place of the chart's profiles: the automatic
-search balances and exposes the print itself, and the paper's own curve sets the tone, so the toning step does not
-run. `neg_process` writes each exposure bracket's version of the ICC from the built-in one when it converts. A print
-profile given as a file gets its ICC computed. A white-LED scan takes `--print` with a density output only.
+and its `README.md` gives the math). The automatic search runs on the chart's profiles as usual; the conversion
+then renders the chosen bracket's print ICC in place of its chart profile, and the paper's own curve sets the tone,
+so the toning step does not run. `neg_process` writes each exposure bracket's version of the ICC from the built-in
+one when it converts. A print profile given as a file gets its ICC computed. The picture matches what the density
+file's CLF prints. A white-LED scan takes `--print` with a density output only.
 
-One RGB-LED negative of Portra 400 on every print material built in, all at the bracket, exposure and balance the
-search chose for negicc's picture, so only the print material changes:
+One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search
+chose:
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
@@ -280,7 +281,7 @@ and balance, so only the print material changes.*
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
-| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, and the search runs on it. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
+| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, at the bracket, exposure and gains the search chose on the scene. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
