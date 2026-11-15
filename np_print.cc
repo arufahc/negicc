@@ -714,17 +714,33 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
   return s;
 }
 
-DensityPrints density_prints(const DensityRecord& rec, const std::string& output) {
-  DensityPrints out;
+std::vector<PrintMaterial> builtin_print_materials() {
+  std::vector<PrintMaterial> out;
   for (const EmbeddedFile& file : list_embedded_files()) {
     const std::string name = file.name;
     if (name.rfind("prints/", 0) != 0 || name.size() < 6 || name.substr(name.size() - 5) != ".json") continue;
     PrintMaterial material;
+    std::string err;
+    if (!load_print_material(std::string((const char*)file.data, file.size), material, err)) {
+      log_warn("Print material %s cannot be read: %s\n", name.c_str(), err.c_str());
+      continue;
+    }
+    out.push_back(std::move(material));
+  }
+  return out;
+}
+
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
+                             const std::vector<std::string>& print_ids) {
+  DensityPrints out;
+  if (print_ids.empty()) return out;
+  const bool all = std::find(print_ids.begin(), print_ids.end(), "all") != print_ids.end();
+  for (PrintMaterial& material : builtin_print_materials()) {
+    if (!all && std::find(print_ids.begin(), print_ids.end(), material.id) == print_ids.end()) continue;
     FramePrint print;
     std::string err;
-    if (!load_print_material(std::string((const char*)file.data, file.size), material, err) ||
-        !frame_print(rec, material, print, err)) {
-      log_warn("No print CLF for %s: %s\n", name.c_str(), err.c_str());
+    if (!frame_print(rec, material, print, err)) {
+      log_warn("No print CLF for %s: %s\n", material.id.c_str(), err.c_str());
       continue;
     }
     out.paths.push_back(output + "." + material.id + ".clf");

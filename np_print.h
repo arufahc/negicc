@@ -132,7 +132,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 
 // ---- The print of a density file ------------------------------------------------------------------------------------
 //
-// Beside a printing density file goes one CLF per print material that prints it: density -> the print material's
+// Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print material's
 // printing density -> its curves and dyes -> sRGB.
 //
 // A print material (a paper or a print film) and what is computed with it when a density file is written: one
@@ -218,16 +218,21 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
 // place the balance, the exposure and the slopes are applied.
 std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
 
-// The prints of one density file: for every print material built into neg_process (prints/<id>.json), how the frame
-// prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
+// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, or
+// "all"; none gives no print), how the frame prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
 // one file, its code scale, measure and channel factors).
+// The print materials built into neg_process (prints/<id>.json), in the order of their ids. One that cannot be read
+// is left out, with a warning.
+std::vector<PrintMaterial> builtin_print_materials();
+
 struct DensityPrints {
   std::vector<PrintMaterial> materials;
   std::vector<FramePrint> frames;
   std::vector<std::string> paths;
   std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
 };
-DensityPrints density_prints(const DensityRecord& rec, const std::string& output);
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
+                             const std::vector<std::string>& print_ids);
 // Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
 void remove_print_clfs(const DensityPrints& prints);

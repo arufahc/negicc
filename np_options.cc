@@ -32,6 +32,7 @@
 #include "embedded_data.h"
 #include "libraw/libraw.h"
 #include "np_input.h"
+#include "np_print.h"
 #include "profile_bundle.h"
 
 // Four files of a 4-shot pixel shift: distinct, one group of four in shot order by the camera's group tags or, without
@@ -163,6 +164,13 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
 
 int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
+    // --print without a name lists the print materials built in, and does nothing else.
+    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+      for (const PrintMaterial& m : builtin_print_materials()) {
+        log_info("--print %s  (%s)\n", m.id.c_str(), m.name.c_str());
+      }
+      return -1;
+    }
     if (strcmp(av[i], "--list_profiles") == 0) {
       for (const std::string& key : list_embedded_bundles()) {
         // Every bundle listed is one that loads: the build runs this after linking, so a bundle the parser rejects
@@ -285,6 +293,12 @@ int parse_options(int ac, char* av[], Options& o) {
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
           "TriLED bundle whose density matrices were built in, and none of the exposure, gain, curve, tone or look "
           "options; the colour balance the search finds is recorded in the file, not applied.");
+  parser.add_argument("--print")
+    .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
+          "print on this print material, as sRGB (<output>.<print>.clf). Give it once per print material, or 'all'. "
+          "Without a name, --print lists the print materials built in. Without --print only the density file is "
+          "written.")
+    .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -661,6 +675,26 @@ int parse_options(int ac, char* av[], Options& o) {
     if (o.colorspace == density_measure_name((DensityMeasure)m)) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
+    }
+  }
+  if (parser.is_used("--print")) {
+    o.prints = parser.get<std::vector<std::string>>("--print");
+    if (!o.density) {
+      log_error("--print takes a density output: give -P statusm, rp180 or apd\n");
+      return 1;
+    }
+    const std::vector<PrintMaterial> known = builtin_print_materials();
+    for (const std::string& id : o.prints) {
+      bool found = id == "all";
+      std::string names;
+      for (const PrintMaterial& m : known) {
+        found = found || m.id == id;
+        names += " " + m.id;
+      }
+      if (!found) {
+        log_error("--print %s: no such print material (built in:%s)\n", id.c_str(), names.c_str());
+        return 1;
+      }
     }
   }
   if (!o.density) {

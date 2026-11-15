@@ -262,10 +262,10 @@ They live in `input_curves.h`, and "Cast estimation" shows where most of them en
 
 # Print emulation
 
-`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, beside the file, a
-CLF that prints it on a paper or a print film. This part specifies both and lists every parameter involved. The
-density file is the film as measured. The CLF holds everything that turns it into a picture, and `neg_process` only looks its numbers up and
-multiplies them: nothing is fitted when a file is written.
+`neg_process` writes a narrow-band scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, with `--print`, a CLF
+beside the file that prints it on a paper or a print film. This part specifies both and lists every parameter
+involved. The density file is the film as measured. The CLF holds everything that turns it into a picture, and
+`neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written.
 
 ## Pipeline
 
@@ -422,7 +422,7 @@ The same frame without slopes and with its own, on each print material, beside t
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| Print materials | Kodak Portra Endura (paper), Kodak Vision 2383 (print film) | One CLF each, `<output>.<print>.clf`. |
+| Print materials | Kodak Portra Endura (paper), Kodak Vision 2383 (print film) | `--print <print>` writes the CLF of one, `<output>.<print>.clf`; repeated, or `all`, of several. `--print` alone lists them. Without it no CLF is written and stages 3 and 4 do not run. |
 | Printer lamp | 3200 K blackbody, no heat filter | With the material's sensitivity it defines the density the material reads. |
 | Viewing light | D50 for paper, D55 for print film | The print's colour is computed under it and adapted to D65 (CAT02) for sRGB. |
 | Curve table | 4096 points | The curve of each layer, as a 1D table. |
