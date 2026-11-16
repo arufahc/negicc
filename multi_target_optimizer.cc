@@ -853,8 +853,8 @@ class SearchFrame {
   // preview with L* replaced by the frame's lightness wish.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
-    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h,
-                                                 stats_.grid_w, stats_.grid_h, mu.data(), sigma.data());
+    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h,
+                                                 engine_.patch_size(), mu.data(), sigma.data());
     residual_time_ += Clock::now() - t0;
     return err;
   }
