@@ -341,7 +341,11 @@ void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, do
 // Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
-PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0);
+// Diagnostic (print-icc-bracket-slopes, the owner's earlier design): the curve's contrast about the bracket's mid grey
+// scaled per channel so its tangent equals the bracket's stored slopes, scale_c = bracket slope_c / curve slope_c.
+void bracket_slope_scale(const ProfileBundle& bundle, const DensityBracket& bracket, double scale[3]);
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double scale[3]);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);
