@@ -1048,11 +1048,18 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
                   xml(print.bracket) + " with this frame's exposure, gains and fitted input curves: the mid grey "
                   "prints as the print's mid grey, and the slopes give that grey scale equal contrast in the three "
                   "channels"
-            : "The mid grey is the chart's on the bracket " + xml(print.bracket) +
-                  (print.searched ? " and at the exposure the picture conversion's search gave this frame"
-                                  : " (no search: the middle bracket)") +
-                  "; balanced, it prints as the print's mid grey. The slopes are the bracket's in the film's profile: "
-                  "they give the film's grey scale equal contrast in the three channels") +
+            : print.from_curve
+                  ? "The mid grey is the film's grey balance curve's grey at the green density of the chart's mid grey on "
+                    "the bracket " + xml(print.bracket) +
+                        (print.searched ? " and at the exposure the picture conversion's search gave this frame"
+                                        : " (no search: the middle bracket)") +
+                        "; balanced, it prints as the print's mid grey. The slopes are that curve's contrast there: "
+                        "they give the film's grey scale equal contrast in the three channels"
+                  : "The mid grey is the chart's on the bracket " + xml(print.bracket) +
+                        (print.searched ? " and at the exposure the picture conversion's search gave this frame"
+                                        : " (no search: the middle bracket)") +
+                        "; balanced, it prints as the print's mid grey. The slopes are the bracket's in the film's "
+                        "profile: they give the film's grey scale equal contrast in the three channels") +
        ". The density file holds none of this. Add a constant to the three offsets of the first Matrix to print "
        "lighter (+) or darker (-), 0.30 a stop.</Description>\n";
   s += "  <Description>The 1D and 3D tables are derived by neg_process from the print profile of this material in "
