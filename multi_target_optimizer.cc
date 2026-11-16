@@ -1529,7 +1529,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       os << "  metered " << name_of(d.cand.target_idx) << ": E " << fixed(d.e_met, 4) << " depth "
          << fixed(d.depth, 3, true) << "\n";
     }
-    os << "Auto: bootstrap from " << name_of(cand1.target_idx) << " at E " << fixed(e1_init, 4) << "\n";
+    os << "Auto: bootstrap from " << name_of(cand1.target_idx) << " at E " << fixed(e1_init, 4)
+       << (depths.empty() || pin_e ? " (the field is this render's)" : " (the deepest metered bracket; the field is the mean over every metered bracket's render)") << "\n";
     std::cout << os.str();
   }
 
@@ -1775,28 +1776,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
-      // The re-search window of each metered bracket: its calibrated range united with the infeasible window
-      // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
-      // so the pullback can reach the darker-than-metered side the first search could not.
+      // The re-search window of each metered bracket: its usable range, as in the main search (bracket_enclosure). The
+      // re-search differs from the main search by its penalties on E outside the calibrated range, not by its window.
       std::vector<Depth> depths_res;
       for (const auto& c : pool) {
         const auto d = std::find_if(depths.begin(), depths.end(),
                                     [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
         if (d == depths.end()) continue;
-        const float e_met = d->e_met;
-        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
-        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
-        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
-        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
-        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
-        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
-        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-        float lo = base_lo;
-        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
-        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
-        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
-        if (lo > hi) std::swap(lo, hi);
-        depths_res.push_back(metered(c, e_met, lo, hi));
+        depths_res.push_back(metered(c, d->e_met, c.search_lo, c.search_hi));
       }
       // The re-search's screening field: the mean over its metered brackets' renders, as the first one (the frame's
       // lightness wish stays the first field's).
