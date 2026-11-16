@@ -1335,6 +1335,12 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
 }
 
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0) {
+  const double zero[3] = {0, 0, 0};
+  return bracket_print_curves(g, paper, a_mid, n0, zero, zero);
+}
+
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double rel_a[3], const double rel_b[3]) {
   const double d = 1.0 - kPrintKnee;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {
@@ -1345,7 +1351,7 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
       const double u = v <= kPrintKnee ? v
                                        : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
       const double dl = -std::log10(std::max(u, 1e-7) / n0);
-      const double alpha = on_grid(g.apd[c], g.start, g.step, dl) - a_mid;
+      const double alpha = (on_grid(g.apd[c], g.start, g.step, dl) - a_mid) * (1.0 + rel_b[c]) + rel_a[c];
       run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
       out[c][i] = run + 1e-9 * i;
     }
@@ -1565,7 +1571,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* ref = bracket_of(bp.reference_bracket);
     const size_t off = a2b0_lut16(icc);
     if (!ref || !off) break;
-    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0);
+    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0, ref->rel_a, ref->rel_b);
     const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
     // The three input curves must lie inside the file: a truncated ICC is not read past its end.
     if (off + 52 + 6 * n > icc.size()) {
@@ -1592,7 +1598,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   if (base.empty()) {
     const DensityBracket* mid = bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
-    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0),
+    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0, mid->rel_a, mid->rel_b),
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
                            bundle.key + " printed on " + material.name + " (spektrafilm)",
                            "Tables derived from spektrafilm's print profile (Andrea Volpato), CC BY-SA 4.0. Computed "
@@ -1602,7 +1608,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* b = bracket_of(t.name);
     if (!b) return err = "the profile bundle has no density_matrices.brackets entry for " + t.name, false;
     std::vector<uint8_t> icc = base;
-    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0))) {
+    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0, b->rel_a, b->rel_b))) {
       return err = "the print ICC has no lut16 A2B0 to write curves into", false;
     }
     out.icc.push_back(std::move(icc));

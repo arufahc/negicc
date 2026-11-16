@@ -342,6 +342,10 @@ void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, do
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0);
+// Experimental (print-icc-relative): alpha_c = (G_c(dL_c) - A_mid)(1 + rel_b_c) + rel_a_c, the bracket's offset and tilt
+// relative to the curve (DensityBracket::rel_a, rel_b; zero when the bundle has none, which is the curve alone).
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double rel_a[3], const double rel_b[3]);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);

@@ -594,6 +594,11 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
                              three(it.value()["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
                              bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;
         if (!bracket.has_slopes) bracket.slopes[0] = bracket.slopes[1] = bracket.slopes[2] = 1.0;
+        if (it.value().is_object() && it.value().contains("grey_relative") && it.value()["grey_relative"].is_object()) {
+          const nlohmann::json& gr = it.value()["grey_relative"];
+          bracket.has_relative = gr.contains("a") && gr.contains("b") && three(gr["a"], bracket.rel_a) &&
+                                 three(gr["b"], bracket.rel_b);
+        }
         if (it.value().is_object() && it.value().contains("grey_light_density") &&
             three(it.value()["grey_light_density"], bracket.grey_light)) {
           // The bracket's grey steps, when the bundle keeps them: all or none.

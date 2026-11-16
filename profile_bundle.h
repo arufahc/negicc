@@ -164,6 +164,11 @@ struct DensityBracket {
   // curve); a narrow-band bundle with grey_balance_curves takes its slopes from the curve (np_print.h curve_slopes).
   bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
+  // Experimental (print-icc-relative, the print-search experiment's third arm): the bracket's grey scale relative to the
+  // grey balance curve, fitted over its grey steps: each step's residual from the curve r_c = G_green - G_c (in the
+  // curve's APD) = a_c + b_c (G_c - A_mid). density_matrices.brackets.targets.<bracket>.grey_relative {a, b}.
+  bool has_relative = false;
+  double rel_a[3] = {0.0, 0.0, 0.0}, rel_b[3] = {0.0, 0.0, 0.0};
   // Every grey step of the bracket as the light's density above the film base, and which of them is the mid grey
   // (grey_steps_light_density, grey_step_index). A white-light bundle has them: a frame's fitted input curves change
   // which film renders as each step (np_print.h fitted_grey_scale). Empty in a narrow-band bundle.
