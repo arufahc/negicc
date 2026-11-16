@@ -104,6 +104,7 @@ struct Setup {
   // (np_print.h bracket_print_profiles, in bundle.targets' order). The search runs on the chart profiles; the
   // conversion renders the chosen bracket's print profile. Empty without.
   std::string print_id, print_name;
+  std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
   std::vector<ParsedFilmProfile> print_profs;
   std::vector<std::vector<uint8_t>> print_iccs;

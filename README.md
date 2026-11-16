@@ -314,5 +314,7 @@ people's photographs, credited above. The print profiles in `3rd_party/spektrafi
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
 (`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two
 tables, and the pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
-spektrafilm's film spectra, under the same licence; it covers that block only, not the rest of a bundle or its ICC
-profiles.
+spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each RGB-LED profile set
+(`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
+The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
+the pictures made with a print ICC.

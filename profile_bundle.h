@@ -192,10 +192,12 @@ struct GreyBalanceCurves {
 };
 
 // One of a bundle's print ICCs (print_profiles): the film printed on a print material, for --print <id>. The ICC's
-// own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h).
+// own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h). The ICC itself
+// is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without --print
+// does not keep, and a missing one refuses only the print that needs it.
 struct BundlePrint {
   std::string id, name, viewing_illuminant, reference_bracket;
-  std::vector<uint8_t> icc_bytes;
+  std::function<bool(std::vector<uint8_t>& icc, std::string& err)> read_icc;
 };
 
 struct ProfileBundle {

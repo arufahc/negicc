@@ -436,7 +436,8 @@ void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, st
 }
 
 static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
-                                 const BundleFileReader& read_file, ProfileBundle& bundle);
+                                 const BundleFileReader& read_file, ProfileBundle& bundle,
+                                 const std::string& json_file = "");
 
 // nlohmann's errors do not name the file, so they are rethrown with it.
 static nlohmann::json parse_bundle_json(const char* begin, const char* end, const std::string& name) {
@@ -478,15 +479,20 @@ void load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
 
   // ICC profiles of a split bundle (profiles/<Key>/bundle.json) sit next to it.
   const fs::path dir = opened.parent_path();
-  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+  // Copied into the bundle's print ICC readers (BundlePrint::read_icc), which outlive this call.
+  const BundleFileReader read_file = [dir](const std::string& name, std::vector<uint8_t>& out) {
     return read_file_bytes(dir / name, out);
   };
   const char* begin = reinterpret_cast<const char*>(json_bytes.data());
-  parse_profile_bundle(parse_bundle_json(begin, begin + json_bytes.size(), raw_path), raw_path, read_file, bundle);
+  parse_profile_bundle(parse_bundle_json(begin, begin + json_bytes.size(), raw_path), raw_path, read_file, bundle,
+                       opened.string());
 }
 
+// json_file: the file the bundle was read from (empty for one read from memory), which a station bundle's print ICCs
+// are read from again when a print asks for one.
 static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
-                                 const BundleFileReader& read_file, ProfileBundle& bundle) {
+                                 const BundleFileReader& read_file, ProfileBundle& bundle,
+                                 const std::string& json_file) {
   bundle.path = raw_path;
   if (j.contains("export") && j["export"].is_object()) {
     bundle.key = j["export"].value("bundle_key", "");
@@ -613,7 +619,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   }
 
   // The film's grey balance curve: three rising columns on one light-density grid. A block that is not whole is left
-  // out, and the bundle's prints then take the brackets' own slopes, if any.
+  // out, with a warning (a print then says the bundle has no grey balance curve).
   if (j.contains("density_matrices") && j["density_matrices"].is_object() &&
       j["density_matrices"].contains("grey_balance_curves") && j["density_matrices"]["grey_balance_curves"].is_object()) {
     const nlohmann::json& g = j["density_matrices"]["grey_balance_curves"];
@@ -635,28 +641,62 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       ok = ok && gb.apd[c].size() >= 2 && gb.apd[c].size() == gb.apd[0].size();
     }
     gb.present = ok;
-    if (!ok) gb = GreyBalanceCurves{};
+    if (!ok) {
+      gb = GreyBalanceCurves{};
+      log_warn("Profile bundle %s: density_matrices.grey_balance_curves is not whole (a start, a positive step and "
+               "three rising columns of one length): left out\n", raw_path.c_str());
+    }
   }
 
-  // The bundle's print ICCs, by print material: read as the brackets' profiles are.
+  // The bundle's print ICCs, by print material: where each is, read when a print asks for it (BundlePrint).
   if (j.contains("print_profiles") && j["print_profiles"].is_object()) {
+    auto text = [](const nlohmann::json& e, const char* key, const std::string& fallback) {
+      return e.contains(key) && e[key].is_string() ? e[key].get<std::string>() : fallback;
+    };
     for (auto it = j["print_profiles"].begin(); it != j["print_profiles"].end(); ++it) {
       const nlohmann::json& e = it.value();
       if (!e.is_object()) continue;
       BundlePrint p;
       p.id = it.key();
-      p.name = e.value("name", p.id);
-      p.viewing_illuminant = e.value("viewing_illuminant", std::string());
-      p.reference_bracket = e.value("reference_bracket", std::string());
-      // A station bundle holds the ICC in base64; an exported one, in a file beside bundle.json.
-      if (e.contains("icc_profile_base64") && e["icc_profile_base64"].is_string()) {
-        if (!base64_decode(e["icc_profile_base64"].get<std::string>(), p.icc_bytes) || p.icc_bytes.size() < 132) {
-          throw std::runtime_error("profile bundle " + raw_path + ": the print ICC of " + p.id + " cannot be decoded");
-        }
-      } else if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
+      p.name = text(e, "name", p.id);
+      p.viewing_illuminant = text(e, "viewing_illuminant", "");
+      p.reference_bracket = text(e, "reference_bracket", "");
+      const std::string where = "profile bundle " + raw_path;
+      if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
+        // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
         const std::string file = e["icc_profile"].get<std::string>();
-        if (!read_file || !read_file(file, p.icc_bytes) || p.icc_bytes.size() < 132) {
-          throw std::runtime_error("profile bundle " + raw_path + ": cannot read print ICC " + file);
+        p.read_icc = [read_file, file, where](std::vector<uint8_t>& icc, std::string& err) {
+          if (read_file && read_file(file, icc) && icc.size() >= 132) return true;
+          return err = where + ": cannot read print ICC " + file, false;
+        };
+      } else if (e.contains("icc_profile_base64") && e["icc_profile_base64"].is_string()) {
+        // A station bundle: the base64 in its JSON. Read from the file again when asked (the JSON is not kept); a
+        // bundle read from memory has no file, so its ICC is decoded now and held.
+        const std::string id = p.id;
+        auto decode = [id, where](const nlohmann::json& entry, std::vector<uint8_t>& icc, std::string& err) {
+          if (entry.is_object() && entry.contains("icc_profile_base64") && entry["icc_profile_base64"].is_string() &&
+              base64_decode(entry["icc_profile_base64"].get<std::string>(), icc) && icc.size() >= 132) {
+            return true;
+          }
+          return err = where + ": the print ICC of " + id + " cannot be decoded", false;
+        };
+        if (!json_file.empty()) {
+          p.read_icc = [json_file, id, where, decode](std::vector<uint8_t>& icc, std::string& err) {
+            std::vector<uint8_t> bytes;
+            if (!read_file_bytes(json_file, bytes)) return err = where + ": cannot be read again", false;
+            const nlohmann::json again = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            if (again.is_discarded() || !again.contains("print_profiles") || !again["print_profiles"].is_object() ||
+                !again["print_profiles"].contains(id)) {
+              return err = where + ": the print ICC of " + id + " is no longer in it", false;
+            }
+            return decode(again["print_profiles"][id], icc, err);
+          };
+        } else {
+          std::vector<uint8_t> bytes;
+          std::string err;
+          if (!decode(e, bytes, err)) throw std::runtime_error(err);
+          auto held = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+          p.read_icc = [held](std::vector<uint8_t>& icc, std::string&) { return icc = *held, true; };
         }
       } else {
         continue;

@@ -127,7 +127,7 @@ To judge a render, something has to turn the picture into one colour per patch o
 
 | Who | What it computes for a patch |
 |---|---|
-| The adapter's training (negicc-station `training/extract.py`, `patch_lab_targets`) | The picture resampled in linear light by area average to the network's input size, CIELAB per pixel, mean over the patch's 16 by 16 pixels |
+| The adapter's training (the profile-building tools' target extraction) | The picture resampled in linear light by area average to the network's input size, CIELAB per pixel, mean over the patch's 16 by 16 pixels |
 | The residual, before | A bilinear resize of the preview straight to the grid: two by two pixels at the patch centre, of a preview 2,400 to 2,900 pixels wide |
 | The (E, g, b) optimiser (`intent_loss`) | The negative's camera RGB averaged over the patch, then rendered |
 
@@ -541,7 +541,7 @@ stages 1 to 4. Without `--print` the chart profiles render the scene, as before.
 
 | # | Stage | Function | Inputs |
 |---|---|---|---|
-| 1 | Bundle | One print ICC per print material, built when the profile set is saved (negicc-station `src/print_icc.py`): its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
+| 1 | Bundle | One print ICC per print material, built when the profile set is saved by the profile-building tools: its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
 | 2 | Bracket profiles | For each bracket, the bundle's print ICC with that bracket's input curves written in (about 5 ms each). | The curve, the bracket's mid grey, the material's curve. |
 | 3 | Search | Stage 1 of the picture conversion, unchanged, on the chart profiles. | The frame. |
 | 4 | Conversion | The picture conversion with the chosen bracket's print profile of stage 2. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
@@ -584,7 +584,7 @@ and a bracket's profile differs from another's only in its curves.
 
 **Checks.** On a Portra 400 frame (TriLED, frame 0057, Portra Endura):
 
-- The table and curves that `neg_process` writes equal the station's to the byte, for a built-in material and for one
+- The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the byte, for a built-in material and for one
   given as a file, Vision 2383 (D55) included.
 - The CLF of the same frame, with its slopes and mid grey from the curve, is 0.42 ΔE00 from the print ICC on average
   (95th percentile 0.60): the CLF's straight lines against the curve. With the bracket's own slopes and patch it was
@@ -594,7 +594,9 @@ and a bracket's profile differs from another's only in its curves.
   by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
 
 **Why the search stays on the chart profiles.** A search on the print profiles overexposes the print, for two
-reasons, both measured.
+reasons, both measured with the Portra 400 intent adapter trained on 400 web scans, the one negicc #96 replaced, and on
+the search before negicc #97 and #101. They are to be measured again on today's search once the adapters of #99 are
+settled; until then they describe that adapter and that search.
 
 - *Screening's green gain.* Auto screens every metered bracket against one intent field, sweeping the green gain from
   0.98 to 1.28, and refines only the best two. A frame that needs more green (TriLED 1004_0001, a lake under a blue
@@ -603,7 +605,7 @@ reasons, both measured.
   the paper's white, hiding the cast; an overexposed bracket (Target 5, E 0.38, against the scene's Target 3 at E 1.14)
   won screening on five of the eight materials. Sweeping the green gain up to 1.64 fixed that frame.
 - *The model asks a print for lighter highlights.* The intent model learnt from web scans of finished Portra 400
-  positives (negicc-station `designs/training_procedure_appearance_model.md`), and its L\* wish is known to follow the
+  positives, and its L\* wish is known to follow the
   preview it is shown. Shown a print, it asks for lighter highlights: on 50 TriLED frames at the scene's exposure it
   wants the print's highlights 3.8 L\* lighter and its midtones 1.7 lighter (shown negicc's pictures of the same frames,
   -1.1 and -0.7). The paper's shoulder holds a print's highlights below the picture's (75 against 80 L\* in the top

@@ -345,15 +345,23 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);
-// An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves).
+// An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves),
+// dated date (year, month, day, hour, minute, second), so the same inputs give the same bytes.
 std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
-                                     const std::string& description, const std::string& copyright);
+                                     const std::string& description, const std::string& copyright,
+                                     const std::array<int, 6>& date);
+// The date a bundle's print ICCs carry: its station file's timestamp (profile_<Key>_<YYYYMMDD>_<HHMMSS>), else
+// 2026-01-01 00:00:00.
+std::array<int, 6> bundle_date(const ProfileBundle& bundle);
+// The SHA-256 of bytes, as 64 lowercase hex digits.
+std::string sha256_hex(const std::string& bytes);
 // Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
 
 // The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
 struct BracketPrints {
   std::string id, name;
+  std::string file, file_sha256;               // a material given as a file: its path as given and its SHA-256
   bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here
   std::vector<std::vector<uint8_t>> icc;       // per bundle.targets, in its order
 };

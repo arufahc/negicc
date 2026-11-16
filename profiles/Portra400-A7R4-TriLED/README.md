@@ -110,5 +110,4 @@ Paper_c is the dye amount layer c takes on a grey alpha above the mid grey (top:
 up to 0.1; P: the print matrix for Academy Printing Density, so P M = Q L). The paper's S-curve is then in the input
 curves, and the table holds only the dyes' colour and the print matrix's mixing off the grey axis. The table has no
 bracket in it: every bracket's profile is this table with its own curves.
-
-Built by negicc-station `src/print_icc.py` when the bundle was saved.
+<!-- end of print profiles -->

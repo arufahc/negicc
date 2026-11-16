@@ -1275,7 +1275,7 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
 }
 
 constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
-constexpr double kPrintKnee = 0.95;   // the conversion's soft knee (profile_bundle.h kKnee), as the station writes it
+constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
 constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
 
 }  // namespace
@@ -1418,8 +1418,27 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
   return out;
 }
 
+std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
+  // The station's file name ends in _YYYYMMDD_HHMMSS (profile_<Key>_<date>_<time>.json), as the bundle's own print
+  // ICCs are dated (density_matrices.py add_print_profiles); 2026-01-01 00:00:00 when it does not.
+  std::string stem = bundle.source_file;
+  const size_t slash = stem.find_last_of("/\\");
+  if (slash != std::string::npos) stem = stem.substr(slash + 1);
+  if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
+  std::array<int, 6> d = {2026, 1, 1, 0, 0, 0};
+  if (stem.size() >= 16 && stem[stem.size() - 16] == '_' && stem[stem.size() - 7] == '_') {
+    const std::string t = stem.substr(stem.size() - 15, 8) + stem.substr(stem.size() - 6);
+    if (std::all_of(t.begin(), t.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+      d = {std::stoi(t.substr(0, 4)), std::stoi(t.substr(4, 2)), std::stoi(t.substr(6, 2)), std::stoi(t.substr(8, 2)),
+           std::stoi(t.substr(10, 2)), std::stoi(t.substr(12, 2))};
+    }
+  }
+  return d;
+}
+
 std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
-                                     const std::string& description, const std::string& copyright) {
+                                     const std::string& description, const std::string& copyright,
+                                     const std::array<int, 6>& date) {
   const int n = (int)curves[0].size();
   std::vector<uint8_t> a2b0 = {'m', 'f', 't', '2', 0, 0, 0, 0, 3, 3, (uint8_t)kPrintIccCube, 0};
   for (int i = 0; i < 9; ++i) put_s15(a2b0, i % 4 == 0 ? 1.0 : 0.0);
@@ -1459,10 +1478,7 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   put_u32(icc, 0);
   put_u32(icc, 0x02400000);
   for (const char* s : {"scnr", "RGB ", "XYZ "}) icc.insert(icc.end(), s, s + 4);
-  const std::time_t now = std::time(nullptr);
-  std::tm utc{};
-  gmtime_r(&now, &utc);
-  for (int v : {utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec}) {
+  for (int v : date) {
     icc.push_back((uint8_t)(v >> 8));
     icc.push_back((uint8_t)(v & 255));
   }
@@ -1493,23 +1509,19 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
                             std::string& err) {
   if (!bundle.grey_balance.present) {
     return err = "the profile bundle has no grey_balance_curves (a print ICC is computed from them): rebuild it with "
-                 "negicc-station", false;
+                 "the profile-building tools", false;
   }
   if (!bundle.density_matrix[kDensityApd].present || !bundle.film_model.present) {
-    return err = "the profile bundle has no APD matrix or film_model: rebuild it with negicc-station", false;
+    return err = "the profile bundle has no APD matrix or film_model: rebuild it with the profile-building tools", false;
   }
   // The material: a built-in one by id, or a spektrafilm print profile by path.
   PrintMaterial material;
   bool found = false;
+  std::string file_text;
   if (is_print_file(print)) {
-    std::ifstream file(print, std::ios::binary);
-    std::stringstream text;
-    text << file.rdbuf();
-    if (!file) return err = "cannot be read", false;
-    const size_t slash = print.find_last_of("/\\");
-    std::string stem = slash == std::string::npos ? print : print.substr(slash + 1);
-    if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
-    if (!load_spektrafilm_print(text.str(), stem, bundle, material, err)) return false;
+    std::string stem;
+    if (!read_print_file(print, file_text, stem, err)) return false;
+    if (!load_spektrafilm_print(file_text, stem, bundle, material, err)) return false;
     found = true;
   } else {
     const EmbeddedFile* f = find_embedded_file("3rd_party/spektrafilm/profiles/" + print + ".json");
@@ -1534,22 +1546,35 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   out = BracketPrints{};
   out.id = material.id;
   out.name = material.name;
+  if (is_print_file(print)) {
+    out.file = print;
+    out.file_sha256 = sha256_hex(file_text);
+  }
   for (const BundlePrint& bp : bundle.prints) {
     if (is_print_file(print) || bp.id != print) continue;
+    // Read now, when the print asks for it (BundlePrint).
+    std::vector<uint8_t> icc;
+    if (!bp.read_icc || !bp.read_icc(icc, err)) return false;
     const DensityBracket* ref = bracket_of(bp.reference_bracket);
-    const size_t off = a2b0_lut16(bp.icc_bytes);
+    const size_t off = a2b0_lut16(icc);
     if (!ref || !off) break;
     const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0);
-    const size_t n = (size_t)bp.icc_bytes[off + 48] << 8 | bp.icc_bytes[off + 49];
+    const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
+    // The three input curves must lie inside the file: a truncated ICC is not read past its end.
+    if (off + 52 + 6 * n > icc.size()) {
+      log_warn("The bundle's print ICC for %s is cut short (%zu bytes): its table is computed here\n", print.c_str(),
+               icc.size());
+      break;
+    }
     long worst = n == mine[0].size() ? 0 : 65535;
     for (int c = 0; c < 3 && worst <= 1; ++c)
       for (size_t i = 0; i < n; ++i) {
         const size_t at = off + 52 + 2 * (c * n + i);
-        const long code = (long)bp.icc_bytes[at] << 8 | bp.icc_bytes[at + 1];
+        const long code = (long)icc[at] << 8 | icc[at + 1];
         worst = std::max(worst, std::labs(code - std::lround(std::min(std::max(mine[c][i], 0.0), 1.0) * 65535.0)));
       }
     if (worst <= 1) {
-      base = bp.icc_bytes;
+      base = std::move(icc);
       out.from_bundle = true;
     } else {
       log_warn("The bundle's print ICC for %s does not match its film and print material as computed now (curves "
@@ -1564,7 +1589,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
                            bundle.key + " printed on " + material.name + " (spektrafilm)",
                            "Tables derived from spektrafilm's print profile (Andrea Volpato), CC BY-SA 4.0. Computed "
-                           "by neg_process.");
+                           "by neg_process.", bundle_date(bundle));
   }
   for (const BundleTarget& t : bundle.targets) {
     const DensityBracket* b = bracket_of(t.name);
@@ -1576,4 +1601,46 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     out.icc.push_back(std::move(icc));
   }
   return true;
+}
+
+// FIPS 180-4 SHA-256.
+std::string sha256_hex(const std::string& bytes) {
+  static const uint32_t k[64] = {
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,
+      0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+      0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8,
+      0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819,
+      0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+      0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+      0xc67178f2};
+  uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+  std::string m = bytes;
+  const uint64_t bits = (uint64_t)bytes.size() * 8;
+  m.push_back((char)0x80);
+  while (m.size() % 64 != 56) m.push_back(0);
+  for (int i = 7; i >= 0; --i) m.push_back((char)(bits >> (8 * i)));
+  auto rotr = [](uint32_t x, int n) { return (x >> n) | (x << (32 - n)); };
+  for (size_t block = 0; block < m.size(); block += 64) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; ++i) {
+      w[i] = (uint32_t)(uint8_t)m[block + 4 * i] << 24 | (uint32_t)(uint8_t)m[block + 4 * i + 1] << 16 |
+             (uint32_t)(uint8_t)m[block + 4 * i + 2] << 8 | (uint32_t)(uint8_t)m[block + 4 * i + 3];
+    }
+    for (int i = 16; i < 64; ++i) {
+      const uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      const uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int i = 0; i < 64; ++i) {
+      const uint32_t t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
+      const uint32_t t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+      hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  }
+  char out[65];
+  for (int i = 0; i < 8; ++i) std::snprintf(out + 8 * i, 9, "%08x", h[i]);
+  return std::string(out, 64);
 }

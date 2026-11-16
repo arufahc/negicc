@@ -834,6 +834,8 @@ int prepare(const Options& o, Setup& s) {
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
       s.print_id = prints.id;
       s.print_name = prints.name;
+      s.print_file = prints.file;
+      s.print_file_sha256 = prints.file_sha256;
       s.print_from_bundle = prints.from_bundle;
       log_info("Print: %s (%s), the print ICC %s: the search runs on the chart profiles, the conversion renders the "
                "print\n", prints.name.c_str(), prints.id.c_str(),
@@ -2839,6 +2841,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
   sc.print_id = s.print_id;
   sc.print_name = s.print_name;
+  sc.print_file = s.print_file;
+  sc.print_file_sha256 = s.print_file_sha256;
   sc.print_from_bundle = s.print_from_bundle;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;

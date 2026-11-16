@@ -136,6 +136,7 @@ struct Sidecar {
   std::string density_json;
   bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
   std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
+  std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
   bool print_from_bundle = false;
 };
 

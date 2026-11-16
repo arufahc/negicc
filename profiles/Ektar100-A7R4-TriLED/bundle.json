@@ -21616,7 +21616,9 @@
    "not_applied": "a factor lies more than 0.1 from 1: this film or this scan differs from the film model by more than two factors should hide"
   },
   "brackets": {
-   "what": "per exposure bracket of the profile: the chart's mid grey as the light's density above the film base (a print's slopes come from grey_balance_curves)",
+   "what": "per exposure bracket of the profile: the chart's mid grey as the light's density above the film base, and the slopes that give the film's grey scale equal contrast in the three channels",
+   "slopes_in": "academy_printing_density",
+   "slopes_formula": "1 / (least-squares ratio of the red, or blue, to the green density of the bracket's grey steps, each less the mid grey's)",
    "grey_step": "gs10",
    "targets": {
     "Target 1": {
@@ -21624,6 +21626,11 @@
       0.18739,
       0.19686,
       0.39903
+     ],
+     "slopes": [
+      0.8288,
+      1.0,
+      0.8304
      ],
      "grey_steps": 24
     },
@@ -21633,6 +21640,11 @@
       0.32466,
       0.53326
      ],
+     "slopes": [
+      0.8588,
+      1.0,
+      0.9565
+     ],
      "grey_steps": 24
     },
     "Target 3": {
@@ -21640,6 +21652,11 @@
       0.44165,
       0.45522,
       0.66569
+     ],
+     "slopes": [
+      0.9163,
+      1.0,
+      1.1315
      ],
      "grey_steps": 24
     },
@@ -21649,6 +21666,11 @@
       0.65049,
       0.8093
      ],
+     "slopes": [
+      0.9834,
+      1.0,
+      1.2902
+     ],
      "grey_steps": 24
     },
     "Target 5": {
@@ -21656,6 +21678,11 @@
       0.72462,
       0.86168,
       0.955
+     ],
+     "slopes": [
+      1.0838,
+      1.0,
+      1.3356
      ],
      "grey_steps": 24
     },
@@ -21665,6 +21692,11 @@
       1.01407,
       1.07969
      ],
+     "slopes": [
+      1.1578,
+      1.0,
+      1.3455
+     ],
      "grey_steps": 24
     },
     "Target 7": {
@@ -21672,6 +21704,11 @@
       0.97463,
       1.18477,
       1.22984
+     ],
+     "slopes": [
+      1.1795,
+      1.0,
+      1.2943
      ],
      "grey_steps": 24
     }
@@ -25862,7 +25899,7 @@
    "spektrafilm_sha256": "0db98e5b8e2ed5248696e62bc39b7f21459a8812d64049b1275d7be995af873b",
    "reference_bracket": "Target 4",
    "icc_profile": "print_fujifilm_crystal_archive_typeii.icc",
-   "icc_profile_sha256": "22df0e5e6418e4158ee1fa82536743d0e338d1953bd5ee2461121b03af6296f1"
+   "icc_profile_sha256": "8cada5ae46289938f15d22bf24a1adfbe5cebf65c4332cdf52456c06c8590b64"
   },
   "kodak_2383": {
    "name": "Kodak Vision 2383",
@@ -25870,7 +25907,7 @@
    "spektrafilm_sha256": "eb7fdfa3b75a909bf5c400802f7401160c8017ed1ac3e8e0d1c8448d56fbe184",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2383.icc",
-   "icc_profile_sha256": "1b3473b876f1041e2972ee2e3c352c17953782550d86ebd903d238f3d2a2ab95"
+   "icc_profile_sha256": "0db461b943f51d8da5ad9a0e764175902572c6e2e8476aa32e7d566f0dba2e26"
   },
   "kodak_2393": {
    "name": "Kodak Vision Premier 2393",
@@ -25878,7 +25915,7 @@
    "spektrafilm_sha256": "b564aece5e9fe43a5c7878d661a8c260c9f73a647a55899596c78487c79678dc",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2393.icc",
-   "icc_profile_sha256": "7555eaa721c5e54244ffec2a6b644e151332c413508dac1a0e46cecc21b8983c"
+   "icc_profile_sha256": "272063e522e52551165d5f4cdbd136c3c24bdad1933e074074bd5f35eb49f3b8"
   },
   "kodak_ektacolor_edge": {
    "name": "Kodak Ektacolor Edge",
@@ -25886,7 +25923,7 @@
    "spektrafilm_sha256": "5db23694d478c35cc0f96d42f94da79e552b2f8eb0853767449a24ac0f0f890e",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ektacolor_edge.icc",
-   "icc_profile_sha256": "571642c5390a97ea472f1d39850602de227bbbd1366995a1c7dc401df5dd008a"
+   "icc_profile_sha256": "9bed17dac7a9329d7fbf5fbf8895195866fd1ed25bc894ab1407bf836e80a3d2"
   },
   "kodak_endura_premier": {
    "name": "Kodak Professional Endura Premier",
@@ -25894,7 +25931,7 @@
    "spektrafilm_sha256": "fd37807d61eb730cda54e85d36640e35a0f8da58666bfc6aa83db888b2e364c2",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_endura_premier.icc",
-   "icc_profile_sha256": "b140722ee7f3b4ac06daff0c8b46e90975c5194564e0d1e6f77433f761430707"
+   "icc_profile_sha256": "ce085d955067349c86ea8b8a69a49a58b9e4509fe464ecc170b348a31894379d"
   },
   "kodak_portra_endura": {
    "name": "Kodak Professional Portra Endura",
@@ -25902,7 +25939,7 @@
    "spektrafilm_sha256": "e3bb6069e02d088d8080d38ce28035816038f62786e2aff9176bf4aeeb4820a0",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_portra_endura.icc",
-   "icc_profile_sha256": "d21b8d7b2aad157f27244e03050ffd77888c09468f87e6f6c9676671d77fbf36"
+   "icc_profile_sha256": "3314506d8fe523c76b9959fe2d07ded39c84e3f30b70444aaa54c3e28906d97d"
   },
   "kodak_supra_endura": {
    "name": "Kodak Professional Supra Endura",
@@ -25910,7 +25947,7 @@
    "spektrafilm_sha256": "3a0928013effbb33e81acd01db426937faa3a12021a267c54b4d96e916286bd6",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_supra_endura.icc",
-   "icc_profile_sha256": "d4c935bda9d22283857fc4ac0e977813b3dc67aa95a667cec2ecc83081c81f8d"
+   "icc_profile_sha256": "c0dcccc6eefd82632622eb773aabab09ad742512d05c20768495ed818152bf0d"
   },
   "kodak_ultra_endura": {
    "name": "Kodak Professional Ultra Endura",
@@ -25918,16 +25955,16 @@
    "spektrafilm_sha256": "319fa2514e9a6809fd09ce587c4f714effc035e7f9ebaeb3b55d9bc1b52c2a72",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ultra_endura.icc",
-   "icc_profile_sha256": "2b62d4662d2dcf560f5609824ccc240035fc939f39f86694b6eac7f9b79f4bc8"
+   "icc_profile_sha256": "179f5265f68c44e4f2acf2aef7f66be072c6d001f6acdf61fab638208a255a1f"
   }
  },
  "export": {
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "9cde20e2b388b06fd69b164b18843551495cf8a79fcb04631205be303c8c86ea",
+  "source_sha256": "b78bec9c49128b143d47996fdb380b965b8116f6a8f39d7d6aa151d721776dc2",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "40be3c7feb0b5407725319344ff3a46260127be7"
+  "station_commit": "07d5e7de990d46d5d8f3637a838dbb81e2c2663d"
  }
 }

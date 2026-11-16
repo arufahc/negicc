@@ -567,6 +567,11 @@ bool write_json_sidecar(const Sidecar& sc) {
       j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
                                {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
                                {"curves", "computed for the bracket from the bundle's grey_balance_curves"}};
+      // A material given as a file: which file, and its content, so the replay can be checked against it.
+      if (!sc.print_file.empty()) {
+        j["profile"]["print"]["file"] = sc.print_file;
+        j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
+      }
     }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
@@ -623,8 +628,9 @@ bool write_json_sidecar(const Sidecar& sc) {
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
-  // A print: the replay renders it too.
-  if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_id});
+  // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
+  // built-in material's, or none).
+  if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
   // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
   // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
   if (!sc.density_json.empty()) {

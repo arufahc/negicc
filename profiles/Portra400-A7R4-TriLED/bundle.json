@@ -21607,7 +21607,9 @@
    ]
   },
   "brackets": {
-   "what": "per exposure bracket of the profile: the chart's mid grey as the light's density above the film base (a print's slopes come from grey_balance_curves)",
+   "what": "per exposure bracket of the profile: the chart's mid grey as the light's density above the film base, and the slopes that give the film's grey scale equal contrast in the three channels",
+   "slopes_in": "academy_printing_density",
+   "slopes_formula": "1 / (least-squares ratio of the red, or blue, to the green density of the bracket's grey steps, each less the mid grey's)",
    "grey_step": "gs10",
    "targets": {
     "Target 1": {
@@ -21615,6 +21617,11 @@
       0.2119,
       0.278,
       0.29262
+     ],
+     "slopes": [
+      0.9159,
+      1.0,
+      0.9817
      ],
      "grey_steps": 24
     },
@@ -21624,6 +21631,11 @@
       0.41649,
       0.45144
      ],
+     "slopes": [
+      0.9082,
+      1.0,
+      0.9792
+     ],
      "grey_steps": 24
     },
     "Target 3": {
@@ -21631,6 +21643,11 @@
       0.4439,
       0.5023,
       0.53235
+     ],
+     "slopes": [
+      0.9106,
+      1.0,
+      0.9926
      ],
      "grey_steps": 24
     },
@@ -21640,6 +21657,11 @@
       0.70686,
       0.75503
      ],
+     "slopes": [
+      0.8946,
+      1.0,
+      1.0071
+     ],
      "grey_steps": 24
     },
     "Target 5": {
@@ -21647,6 +21669,11 @@
       0.70367,
       0.84779,
       0.89662
+     ],
+     "slopes": [
+      0.8904,
+      1.0,
+      0.9993
      ],
      "grey_steps": 24
     },
@@ -21656,6 +21683,11 @@
       1.0293,
       1.08693
      ],
+     "slopes": [
+      0.8973,
+      1.0,
+      1.0079
+     ],
      "grey_steps": 24
     },
     "Target 7": {
@@ -21663,6 +21695,11 @@
       0.98941,
       1.16401,
       1.23988
+     ],
+     "slopes": [
+      0.8708,
+      1.0,
+      0.9869
      ],
      "grey_steps": 24
     }
@@ -25853,7 +25890,7 @@
    "spektrafilm_sha256": "0db98e5b8e2ed5248696e62bc39b7f21459a8812d64049b1275d7be995af873b",
    "reference_bracket": "Target 4",
    "icc_profile": "print_fujifilm_crystal_archive_typeii.icc",
-   "icc_profile_sha256": "f619a5da2b255ec03e788a6aec33ee922f4c89dfb4964a6ef2276178716d6f0e"
+   "icc_profile_sha256": "8782a9bf37365fbcb2a1aecf055c81114c387e287101d62b28e79ac50ef3a22d"
   },
   "kodak_2383": {
    "name": "Kodak Vision 2383",
@@ -25861,7 +25898,7 @@
    "spektrafilm_sha256": "eb7fdfa3b75a909bf5c400802f7401160c8017ed1ac3e8e0d1c8448d56fbe184",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2383.icc",
-   "icc_profile_sha256": "bcaba4775d2819ee5ffd720f9ef9a02acd71b6e116ce88258b5ecfe0fa0e9549"
+   "icc_profile_sha256": "044baa82fc39fe8f16ea7b149d3b74c7d6ad27f33bf5798e6df538b2f4191932"
   },
   "kodak_2393": {
    "name": "Kodak Vision Premier 2393",
@@ -25869,7 +25906,7 @@
    "spektrafilm_sha256": "b564aece5e9fe43a5c7878d661a8c260c9f73a647a55899596c78487c79678dc",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2393.icc",
-   "icc_profile_sha256": "fec63d4d6a4ce717e3921eedab8b443452f23bbb4184c1382e81cd51ac3a95f5"
+   "icc_profile_sha256": "6b1f6777facd5ae95cb7b1b534dfbe1f3da6f56a130e6b8ba0ddf7d836e66287"
   },
   "kodak_ektacolor_edge": {
    "name": "Kodak Ektacolor Edge",
@@ -25877,7 +25914,7 @@
    "spektrafilm_sha256": "5db23694d478c35cc0f96d42f94da79e552b2f8eb0853767449a24ac0f0f890e",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ektacolor_edge.icc",
-   "icc_profile_sha256": "3c0f3e5034895c40d48d0ada473ff2fe5bf71e346d2777494bd6a4d28a7927e0"
+   "icc_profile_sha256": "8eb3db0a7234ea6ebbf5a562658a551de327c9535041adba3401c86c3eb1422f"
   },
   "kodak_endura_premier": {
    "name": "Kodak Professional Endura Premier",
@@ -25885,7 +25922,7 @@
    "spektrafilm_sha256": "fd37807d61eb730cda54e85d36640e35a0f8da58666bfc6aa83db888b2e364c2",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_endura_premier.icc",
-   "icc_profile_sha256": "f13e31bafcd498adf89adf8991e66139eb1a9f0343000974df9f8618f8ef24c2"
+   "icc_profile_sha256": "bc4edeed641fef16dcecce7f1399fc5bfc7e9a300c2a3bfe1f0dcbd51410cf97"
   },
   "kodak_portra_endura": {
    "name": "Kodak Professional Portra Endura",
@@ -25893,7 +25930,7 @@
    "spektrafilm_sha256": "e3bb6069e02d088d8080d38ce28035816038f62786e2aff9176bf4aeeb4820a0",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_portra_endura.icc",
-   "icc_profile_sha256": "68b896fb32690310de494e50d0ca3602e4d5eb27c1473263b907f763623f67fb"
+   "icc_profile_sha256": "666f6c1571d917982a916f13c33f6ae5eef16b393c51f7c519d18adcc6fbd14e"
   },
   "kodak_supra_endura": {
    "name": "Kodak Professional Supra Endura",
@@ -25901,7 +25938,7 @@
    "spektrafilm_sha256": "3a0928013effbb33e81acd01db426937faa3a12021a267c54b4d96e916286bd6",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_supra_endura.icc",
-   "icc_profile_sha256": "3e8681525e5725818f5faa40f8b6f2ad9967caa6ba3c30eb4523d39ac2710c71"
+   "icc_profile_sha256": "0971731b4723f98af32b17f3186fe0f28ef15c2d29b552d8f3c0a1bac1245e26"
   },
   "kodak_ultra_endura": {
    "name": "Kodak Professional Ultra Endura",
@@ -25909,16 +25946,16 @@
    "spektrafilm_sha256": "319fa2514e9a6809fd09ce587c4f714effc035e7f9ebaeb3b55d9bc1b52c2a72",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ultra_endura.icc",
-   "icc_profile_sha256": "0d597994d468927837bc1c2853671be653ddbaa7486bfba21b60de08880e5053"
+   "icc_profile_sha256": "eae62b481f1e2740e140470c00eca4baf00287fc90b5ef5f5a3ce960d8e5b2ae"
   }
  },
  "export": {
   "bundle_key": "Portra400-A7R4-TriLED",
   "stock_key": "portra400",
   "source_file": "profile_Portra400-A7R4-TriLED_20261003_172952.json",
-  "source_sha256": "f2198be91c2690d8e991fddbc3dffb2b8043e012dc4694c88a42996b918a91a9",
+  "source_sha256": "ee2e336e71e1a8933b903d2e73a4cbab725e18796a8134805f837525e25576ce",
   "adapter": "models/dinov3-small_portra400",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "40be3c7feb0b5407725319344ff3a46260127be7"
+  "station_commit": "07d5e7de990d46d5d8f3637a838dbb81e2c2663d"
  }
 }
