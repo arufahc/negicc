@@ -119,6 +119,9 @@ struct Enclosure {
   float e_min = 0, e_max = 0;
   float search_lo = 0, search_hi = 0;  // the range E is searched in
   float e_center = 0;                  // sqrt(e_min * e_max)
+  // The usable range inverted (u_min above u_max): no E keeps both ends of the scene within the highlight and shadow
+  // tolerance, so the search window is the set of compromises between them; see pull_centre().
+  bool usable_inverted = false;
   float slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
   float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the scene's contrast ratio over the bracket's
 };
@@ -126,6 +129,18 @@ struct Enclosure {
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
 // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
 // station's copy follows in the station change that moves its negicc pin.)
+bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r);
+
+// The centre the search's exposure penalty pulls E toward (compute_penalties: 5 log2(E / centre)^2), or 0 for none.
+// For a bracket whose usable range is inverted (the scene overflows it by more than the two tolerances together) there
+// is no pull. Its window, ordered, runs from E = e_max x 2^1.2, where the shadows sit exactly at their tolerance and the
+// highlights carry all the overflow, to E = e_min / 2^1.5, where the reverse holds; outside it one end is sacrificed
+// more than needed while the other is already inside. Where to stand among those compromises is the question the intent
+// field answers, so inside the window the field decides E, with the white-clip penalty kept and the window's two ends as
+// its bounds. A pull toward e_center answered it with "split the overflow equally in log E": on a night scene of 8.1 EV
+// (8dda4a7e7e) that put E in the middle of the scene's log range, a picture with a median of L* 2.
+float pull_centre(const Enclosure& c) { return c.usable_inverted ? 0.0f : c.e_center; }
+
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
   if (tgt.patches_g.empty()) return false;
   const float tgt_min = tgt.tgt_min_g, tgt_max = tgt.tgt_max_g;
@@ -144,6 +159,7 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
   // Every bracket, feasible or not, is searched over its usable range: no window that differs between brackets, so
   // no bracket wins or loses because its window let it reach a lightness another's did not (DESIGN.md, "One
   // lightness wish per frame"). The order is kept for an inadmissible bracket, whose range can invert.
+  r.usable_inverted = u_min > u_max;
   r.search_lo = std::min(u_min, u_max);
   r.search_hi = std::max(u_min, u_max);
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
@@ -1613,7 +1629,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       s.result.e_lo = lo;
       s.result.e_hi = hi;
       s.result.e_metered = e_met;
-      const float eb[3] = {lo, hi, c.e_center};
+      const float eb[3] = {lo, hi, pull_centre(c)};
       s.result.intent_loss = fr.search(c.target_idx, mu, sigma, nullptr, eb, s.result.params, pullback_search);
       rows.push_back(s);
     };
@@ -1647,7 +1663,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   auto trust_bounds = [](const Screened& c, float eb[3]) {
     eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0f, -0.5f));
     eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0f, 0.5f));
-    eb[2] = c.enclosure.e_center;
+    eb[2] = pull_centre(c.enclosure);
   };
   auto tournament = [&](const std::vector<Screened>& rows, bool pullback_search, std::vector<FixedPointResult>& runs) {
     for (size_t i = 0; i < std::min<size_t>(2, rows.size()); ++i) {
