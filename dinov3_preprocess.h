@@ -11,8 +11,10 @@
 void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
                                      uint8_t* dst, int dst_w, int dst_h);
 
-// cv2.resize(..., interpolation=cv2.INTER_LINEAR) on 8-bit RGB (the fixed-point SIMD path).
+// cv2.resize(..., interpolation=cv2.INTER_LINEAR) on 8-bit RGB (the fixed-point SIMD path): a bilinear point sample.
 // py-ref: negicc_station/src/per_target_conversion.py:217-222 @ 2f7ee4a (self_consistency_residual)
+// Since negicc#101 the search's residual no longer uses it (it reads trained_cells_lab, dinov3_auto_solver.h); it is
+// kept for negicc-station's parity test of this resize (src/test_dinov3_preprocess.cpp).
 void cv_linear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
                           uint8_t* dst, int dst_w, int dst_h);
 

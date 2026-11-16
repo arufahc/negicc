@@ -23,7 +23,7 @@
   "parameters": 595590,
   "in_dim": 768,
   "hidden_dim": 384,
-  "export_date": "2026-10-01T00:19:14.378498+00:00",
+  "export_date": "2026-11-15T18:28:35.844109+00:00",
   "input_dimensions": {
     "batch_size": "variable",
     "num_patches": "variable_native_aspect (e.g. 672 for 3:2, 768 for 4:3, 1024 for 1:1)",
@@ -62,19 +62,18 @@
     ]
   },
   "metrics": {
-    "epoch": 60,
-    "val_loss": 1.764565348625183,
-    "val_mae": 4.130506992340088,
-    "val_mae_L": 3.747722864151001,
-    "val_mae_ab": 4.321903228759766,
-    "train_loss": 1.7574438878943104,
-    "train_mae": 4.102119767952644,
-    "uncertainty_dr": 42.52,
+    "epoch": 10,
+    "val_loss": 1.9997269862941256,
+    "val_mae": 4.2903468184594615,
+    "val_mae_L": 4.149345157861153,
+    "val_mae_ab": 4.360846092452655,
+    "train_loss": 1.7409307719763873,
+    "train_mae": 3.6701155388494064,
+    "mean_sigma": 4.014597179413478,
     "profile": "portra400",
     "backbone": "dinov3-small",
     "in_dim": 768,
-    "hidden_dim": 384,
-    "aspect_mode": "approach_1_native_aspect_bicubic"
+    "hidden_dim": 384
   },
   "acceptance_gates": {
     "gates": {
@@ -89,5 +88,78 @@
     "torchscript": "adapter.torchscript",
     "adapter_onnx": "adapter.onnx",
     "metadata": "metadata.json"
-  }
+  },
+  "stock_key": "portra400",
+  "source_profile_bundle": "Portra400-A7R4-TriLED",
+  "source_profile_json": "profile_Portra400-A7R4-TriLED_20261003_172952.json",
+  "source_profile_sha256": "71ab36e939c6f3b010e93936b491d9e2a6bf2299f567d440b3ea47b626e5246f",
+  "associated_profiles": [
+    "profile_Portra400-A7R4-D65_20261004_002832.json",
+    "profile_Portra400-A7R4-TriLED_20261003_172952.json"
+  ],
+  "training_regime": "clean_s0_unperturbed_web_corpus",
+  "split_mode": "photographer",
+  "split_hash": "72ded7f18932",
+  "split_seed": 42,
+  "corpus_manifest": "portra400.json",
+  "corpus_manifest_sha256": "b038cb3b111dd9a76a2a730e422a153bb49fec9033d5d4a6763adbc6236da930",
+  "feature_cache_sha256": "abe7286b4b83fd6c8690d1a9dafeef9e39a032fd1149d43c9b4260e222a47095",
+  "n_train_photos": 2908,
+  "n_val_photos": 365,
+  "n_train_tokens": 2355168,
+  "n_val_tokens": 287904,
+  "selected_seed": 43,
+  "seeds_evaluated": [
+    42,
+    43,
+    44
+  ],
+  "seed_summary": {
+    "val_loss_mean": 2.0169958702159625,
+    "val_loss_std": 0.014691003198463991,
+    "val_mae_L_mean": 4.365519907319847,
+    "val_mae_L_std": 0.17334198078095403,
+    "val_mae_ab_mean": 4.403971301025762,
+    "val_mae_ab_std": 0.038205355929350086
+  },
+  "seed_runs": [
+    {
+      "seed": 42,
+      "best_epoch": 8,
+      "val_loss": 2.0156264330024545,
+      "val_mae": 4.38939661273191,
+      "val_mae_L": 4.3734947367616535,
+      "val_mae_ab": 4.397344614408196,
+      "train_loss": 1.8720117299089833,
+      "train_mae": 4.106021786084646,
+      "checkpoint_sha256": "daf419d567c7a88fd58161ba8b6b788036fd6fb9f3272bdf1c6fe2de6e5dcef9",
+      "all_gates_passed": true
+    },
+    {
+      "seed": 43,
+      "best_epoch": 10,
+      "val_loss": 1.9997269862941256,
+      "val_mae": 4.2903468184594615,
+      "val_mae_L": 4.149345157861153,
+      "val_mae_ab": 4.360846092452655,
+      "train_loss": 1.7409307719763873,
+      "train_mae": 3.6701155388494064,
+      "checkpoint_sha256": "4236e79fa06fcd6691f1669eab9869eebf8b247d2d490e3243e1f178bd192b2a",
+      "all_gates_passed": true
+    },
+    {
+      "seed": 44,
+      "best_epoch": 7,
+      "val_loss": 2.0356341913513067,
+      "val_mae": 4.493722258136711,
+      "val_mae_L": 4.573719827336736,
+      "val_mae_ab": 4.453723196216433,
+      "train_loss": 1.9045850120421155,
+      "train_mae": 4.252589570780963,
+      "checkpoint_sha256": "2ebb77dff47cb453473236a6aeaae1e21fd148b8f2af4394dab346b246c445b1",
+      "all_gates_passed": true
+    }
+  ],
+  "git_commit": "17fb90f445cc69a27094123826940cfb3bf55975",
+  "hostname": "wp0"
 }

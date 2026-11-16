@@ -31,3 +31,20 @@ error on patches the profile never saw: each bracket's profile was rebuilt twice
 halves of the 264 colour patches, and checked on the half it left out. The 24 grey patches, which set the tone curves, stay in every build.
 That is the better guide to the error on colours in a real photograph. The profiles are not de-glared: removing the
 chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.
+
+## Dynamic range
+
+Range across each bracket's 24 grey patches (`gs0` to `gs23`) before crosstalk correction (`bundle.json`'s patch values
+multiplied by the inverse of `crosstalk_correction_matrix`), as 14-bit ADC bit depth (`log2(max - min)` out of `16384`)
+and contrast in stops (`log2(max / min)`).
+
+| Bracket | Profile | Shutter | Bit depth: R / G / B | Bit depth: mean | Stops: R / G / B | Stops: mean |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| −3 EV | `Target_1.icc` | 1/10s | 12.83 / 13.00 / 13.00 | 12.94 | 1.65 / 1.93 / 2.19 | 1.92 |
+| −2 EV | `Target_2.icc` | 1/8s | 13.25 / 13.36 / 13.25 | 13.29 | 2.01 / 2.32 / 2.47 | 2.27 |
+| −1 EV | `Target_3.icc` | 1/8s | 13.30 / 13.33 / 13.07 | 13.23 | 2.34 / 2.70 / 2.70 | 2.58 |
+| 0 EV | `Target_4.icc` | 1/6s | 13.56 / 13.53 / 13.15 | 13.42 | 2.63 / 3.02 / 2.90 | 2.85 |
+| +1 EV | `Target_5.icc` | 1/5s | 13.50 / 13.37 / 13.00 | 13.29 | 2.66 / 3.11 / 3.02 | 2.93 |
+| +2 EV | `Target_6.icc` | 1/4s | 13.46 / 13.33 / 12.96 | 13.25 | 2.58 / 3.12 / 3.09 | 2.93 |
+| +3 EV | `Target_7.icc` | 1/3s | 13.24 / 13.13 / 12.77 | 13.05 | 2.39 / 3.00 / 3.01 | 2.80 |
+| **Mean** | — | — | **13.30 / 13.30 / 13.03** | **13.21** | **2.32 / 2.74 / 2.77** | **2.61** |
