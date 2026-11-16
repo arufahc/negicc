@@ -72,7 +72,9 @@ use the same stage.
 | Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
 | Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
 | Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
+| Lightness wish | One per frame | Every full search scores and searches L\* against the lightness the network asked for on the first render; a\* and b\* are asked again on each step's render. See "One lightness wish per frame" below. |
 | Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | The margin by which a scene may exceed a bracket's calibrated range, at either end, before the bracket is ruled out. |
+| Search window | At least 0.6 stop past the calibrated range | A bracket that cannot hold the scene is searched 0.6 to 0.85 stop either side of its centre; one that can is searched over its calibrated range plus 0.6 stop on the highlight side. One value for both, so every bracket can reach the same lightness. |
 | Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
 | Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
 | Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
@@ -81,9 +83,31 @@ use the same stage.
 | Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
 | Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
 
-That makes eleven parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
+That makes thirteen parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
 Effect column. The search also does not always converge to the same answer: where it ends depends on where it
 starts.
+
+### One lightness wish per frame
+
+The lightness the network asks for follows the picture it is shown: shown a lighter render it accepts a lighter one,
+shown a darker render a darker one. The screening scores every bracket against one prediction, so the two finalists
+start at about the same lightness (1.3 to 1.8 L\* apart on average). The full search used to ask the network again
+on each step's render, L\* included, and the residual of each finalist was measured against its own predictions. Each
+finalist's exposure then walked its own way within the trust region, and the residuals, measured against different
+predictions, could not say which lightness was right: a small difference in residual picked between two pictures 10
+to 14 L\* apart. On one frame both finalists started near L\* 47; one ended at 35 and won by a residual of 8.43
+against 8.79. Retraining the intent adapter moved such picks by up to 14 L\*.
+
+Now every full search of the frame, the highlight pullback's included, holds L\* to the first prediction and asks
+again only for a\* and b\*, whose prediction has a usable fixed point. A bracket that can hold the whole scene used to
+stop at its highlight limit while one that cannot could go up to 1.5 stops past its own; both now get the same
+0.6-stop minimum window, so a bracket does not win only because it was allowed to go lighter.
+
+Measured on 55 TriLED and 145 white-LED frames, with no parameter tuned: the finalists' average gap fell from 2.3 to
+1.7 L\* on TriLED and from 3.5 to 1.2 L\* on white LED (gaps above 10 L\*: 6 to 0). Rendering the 30 frames where
+two adapter checkpoints differed most, the checkpoints' results moved apart by more than 5 L\* on 15 frames before
+and on none after. The output is 0.2 L\* lighter on TriLED and 1.2 L\* lighter on white LED on average. In a blind
+comparison on the 30 frames that changed most, the owner preferred neither (12 : 15, 3 no preference).
 
 ## Stage 4: Tone stage
 

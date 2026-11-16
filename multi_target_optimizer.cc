@@ -107,12 +107,13 @@ using negicc::compute_inner_crop;
 //
 //   e_min = g_min / g_lo * k,   e_max = g_max / g_hi * k,   k = reference exposure / the bracket's exposure.
 //
-// With e_min <= e_max (feasible) every E in between keeps the whole scene calibrated, and that is the range E is
-// searched in. Otherwise the scene spans more than the bracket, and the search gets a window of 0.60 to 0.85 stop
-// either side of e_center (within 1.5 stops of highlight and 1.2 stops of shadow tolerance): the wider the scene's
-// overflow, the wider the window (0.6 stop per stop of overflow), so E can trade highlights against shadows. The
-// tolerances let a scene overflow the calibration a little; their values are kept from negicc-station, which records
-// no reason for them.
+// With e_min <= e_max (feasible) every E in between keeps the whole scene calibrated; the search may go up to
+// WINDOW_MIN_EV past e_min (lighter), as far as the narrowest window of an infeasible bracket reaches, so that
+// every bracket can follow the same lightness wish (DESIGN.md, "One lightness wish per frame"). Otherwise the scene
+// spans more than the bracket, and the search gets a window of 0.60 to 0.85 stop either side of e_center (within 1.5
+// stops of highlight and 1.2 stops of shadow tolerance): the wider the scene's overflow, the wider the window (0.6
+// stop per stop of overflow), so E can trade highlights against shadows. The tolerances let a scene overflow the
+// calibration a little; their values are kept from negicc-station, which records no reason for them.
 struct Enclosure {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   bool feasible = false;    // e_min <= e_max
@@ -123,6 +124,10 @@ struct Enclosure {
   float slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
   float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the scene's contrast ratio over the bracket's
 };
+
+// The narrowest search window either side of a bracket's range, in stops: an infeasible bracket's window around
+// e_center, and how far past e_min a feasible bracket may go. One value for both, kept from negicc-station.
+constexpr float WINDOW_MIN_EV = 0.60f;
 
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
@@ -141,10 +146,10 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
   const float usable_capacity_ev = std::log2(tgt_max / tgt_min) + usable_hi_ev + usable_sh_ev;
   r.admissible = std::log2(g_hi / g_lo) <= usable_capacity_ev;
   if (r.feasible) {
-    r.search_lo = r.e_min;
+    r.search_lo = std::max(u_min, r.e_min * std::pow(2.0f, -WINDOW_MIN_EV));
     r.search_hi = r.e_max;
   } else {
-    const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
+    const float margin_ev = std::max(WINDOW_MIN_EV, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
     r.search_lo = std::max(u_min, r.e_center * std::pow(2.0f, -margin_ev));
     r.search_hi = std::min(u_max, r.e_center * std::pow(2.0f, margin_ev));
     // The usable range can cut the window from both sides past each other (u_min above e_center * 2^margin, or u_max
@@ -788,6 +793,18 @@ class SearchFrame {
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
   // The tone heads' input from the last predict() (FixedPointResult::tone_features; empty without the token spread).
   const std::vector<float>& last_tone_features() const { return last_tone_features_; }
+  // The frame's one lightness wish: the L* channel (mu and sigma) of the bootstrap field. Every fixed-point loop
+  // scores and searches L* against it, while a* and b* are re-predicted from each step's render (DESIGN.md, "One
+  // lightness wish per frame").
+  void set_lightness_wish(const std::vector<float>& mu, const std::vector<float>& sigma) {
+    const size_t n = mu.size() / 3;
+    wish_mu_l_.resize(n);
+    wish_sigma_l_.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+      wish_mu_l_[i] = mu[i * 3];
+      wish_sigma_l_[i] = sigma[i * 3];
+    }
+  }
 
   // The inner crop rendered to 8-bit sRGB through the tables pd (a bracket's profile with changed input tables) at
   // params, then resampled to DINOv3's input size as the engine resamples it (net_w x net_h pixels).
@@ -918,6 +935,16 @@ class SearchFrame {
       if (shoulder_auto_) curr.shoulder = measure_shoulder(target_idx, curr, &cur_q995);
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
+      // The L* the model asks for follows the picture it is shown, so a loop re-predicting L* from its own render
+      // drifts lighter or darker by itself, and residuals measured against different fields cannot rank lightness:
+      // two finalists that screening placed at the same L* ended 10-14 L* apart and the lower residual picked one.
+      // L* is held to the frame's one wish; a* and b* keep the re-prediction.
+      if (wish_mu_l_.size() * 3 == mu.size()) {
+        for (size_t i = 0; i < wish_mu_l_.size(); ++i) {
+          mu[i * 3] = wish_mu_l_[i];
+          sigma[i * 3] = wish_sigma_l_[i];
+        }
+      }
       const float err = residual(preview, mu, sigma);
       if (!have_best || err < best_err) {
         have_best = true;
@@ -1086,6 +1113,7 @@ class SearchFrame {
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
+  std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1516,6 +1544,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   std::vector<float> mu1, sig1;
   fr.render_preview(cand1.target_idx, {e1_init, boot_g, boot_b}, preview);
   if (!fr.predict(preview, mu1, sig1)) return false;
+  fr.set_lightness_wish(mu1, sig1);
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
   // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
@@ -1737,7 +1766,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         const float e_met = d->e_met;
         const float u_min = c.e_min * std::pow(2.0f, -1.5f);
         const float u_max = c.e_max * std::pow(2.0f, 1.2f);
-        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
+        const float margin_ev = std::max(WINDOW_MIN_EV, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
         const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
         const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
         const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
