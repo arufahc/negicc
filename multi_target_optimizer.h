@@ -148,6 +148,10 @@ struct ParamSearchOptions {
   // at each as the fixed-point loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as
   // the residual reads them and as the training targets are made) and optimiser_cells (what intent_loss scores at
   // those parameters, before the per-bracket correction).
+  // The print experiment's Way 2S (--print_search fullwish): the frame's one lightness wish is predicted from the
+  // same metered renders through this bundle's profiles (the chart's) instead of the searched bundle's (the print's);
+  // the screening field stays the searched bundle's. Null: the searched bundle's own wish.
+  const ProfileBundle* wish_bundle = nullptr;
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};

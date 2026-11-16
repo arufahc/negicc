@@ -832,7 +832,7 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
-      if (o.print_search != "scene") {
+      if (o.print_search != "scene") {   // gb, full, fullwish
         s.print_bundle = bundle;
         for (size_t i = 0; i < bundle.targets.size(); ++i) {
           s.print_bundle.targets[i].film_prof = s.print_profs[i];
@@ -1527,8 +1527,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // searches g and b on the print after the scene's search (search_print_gains).
   auto run_bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                const ParamSearchOptions& opts) -> bool {
-    const bool print_full = !s.print_profs.empty() && o.print_search == "full";
-    if (!search_conversion_params(print_full ? s.print_bundle : bundle, s.engine, frame, scan_shutter_s, scan_iso, opts,
+    const bool print_full = !s.print_profs.empty() && (o.print_search == "full" || o.print_search == "fullwish");
+    ParamSearchOptions o2 = opts;
+    if (!s.print_profs.empty() && o.print_search == "fullwish") o2.wish_bundle = &bundle;
+    if (!search_conversion_params(print_full ? s.print_bundle : bundle, s.engine, frame, scan_shutter_s, scan_iso, o2,
                                   scan.auto_res)) {
       return false;
     }

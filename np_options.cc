@@ -310,7 +310,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Experimental (the print experiment, whitelab ledger 2026-11-16): how a print with a picture output is "
           "searched. scene (default): Auto on the chart profiles, the print rendered at its result. gb: Auto on the "
           "chart profiles for the bracket, E and the lightness wish, then g and b searched on the print against the "
-          "scene's final field (a* and b* only). full: the whole search on the print profiles.")
+          "scene's final field (a* and b* only). full: the whole search on the print profiles. fullwish: as full, with the "
+          "frame's lightness wish predicted from the chart profiles' renders.")
     .default_value(std::string("scene"));
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
@@ -720,8 +721,8 @@ int parse_options(int ac, char* av[], Options& o) {
     }
   }
   o.print_search = parser.get<std::string>("--print_search");
-  if (o.print_search != "scene" && o.print_search != "gb" && o.print_search != "full") {
-    log_error("--print_search takes scene, gb or full\n");
+  if (o.print_search != "scene" && o.print_search != "gb" && o.print_search != "full" && o.print_search != "fullwish") {
+    log_error("--print_search takes scene, gb, full or fullwish\n");
     return 1;
   }
   if (o.print_search != "scene" && !parser.is_used("--print")) {

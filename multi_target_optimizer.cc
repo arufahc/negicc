@@ -1642,6 +1642,38 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   };
   if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
+  // Way 2S (ParamSearchOptions::wish_bundle): the same metered renders through the wish bundle's profiles, their mean
+  // field's L* set as the frame's lightness wish; its inferences are added to this search's count.
+  if (opts.wish_bundle) {
+    ParamSearchResult wscratch;
+    SearchFrame fw(*opts.wish_bundle, engine, false, opts.max_steps, wscratch);
+    fw.set_shoulder(1.0f, true);
+    fw.set_frame(frame, opts.crop_ratio);
+    const FrameScale wscale = frame_scale(*opts.wish_bundle, scan_shutter_s, scan_iso, opts);
+    fw.set_frame_matrix(wscale.frame_matrix, wscale.e_norm);
+    std::vector<std::pair<int, float>> renders;
+    if (depths.empty() || pin_e) {
+      renders.push_back({cand1.target_idx, e1_init});
+    } else {
+      for (const auto& d : depths) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
+    }
+    std::vector<float> mw, sw, m, sg;
+    for (size_t k = 0; k < renders.size(); ++k) {
+      fw.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
+      if (!fw.predict(preview, m, sg)) return false;
+      if (k == 0) {
+        mw.assign(m.size(), 0.0f);
+        sw.assign(sg.size(), 0.0f);
+      }
+      for (size_t i = 0; i < m.size(); ++i) {
+        mw[i] += m[i] / renders.size();
+        sw[i] += sg[i] / renders.size();
+      }
+    }
+    fr.set_lightness_wish(mw, sw);
+    out.inferences += wscratch.inferences;
+    if (verbose) std::cout << "Auto: the lightness wish from the wish bundle's renders (" << renders.size() << ")\n";
+  }
 
   // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
   if (!opts.probe_path.empty()) {
