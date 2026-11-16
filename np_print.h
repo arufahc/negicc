@@ -341,7 +341,10 @@ void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, do
 // Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
-PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0);
+// The offset per channel that puts the bracket's own gs10 patch at the print's 18 % grey: G_c(the patch's light
+// density in channel c), for alpha_c = G_c(dL_c) - off_c.
+void bracket_patch_apd(const ProfileBundle& bundle, const DensityBracket& bracket, double off[3]);
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, const double a_off[3], double n0);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);

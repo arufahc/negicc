@@ -945,7 +945,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   double light[3] = {bracket->grey_light[0], bracket->grey_light[1], bracket->grey_light[2]};
   for (int c = 0; c < 3; ++c) p.slopes[c] = bracket->slopes[c];
   if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
-    curve_grey(bundle, *bracket, light);
+    // The bracket's own patch is the mid grey (it prints as the print's 18 % grey); the slopes are the curve's.
     curve_slopes(bundle, *bracket, p.slopes);
     p.from_curve = true;
   } else if (!bracket->has_slopes) {
@@ -1327,7 +1327,12 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
   return out;
 }
 
-PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0) {
+void bracket_patch_apd(const ProfileBundle& bundle, const DensityBracket& bracket, double off[3]) {
+  const GreyBalanceCurves& g = bundle.grey_balance;
+  for (int c = 0; c < 3; ++c) off[c] = on_grid(g.apd[c], g.start, g.step, bracket.grey_light[c]);
+}
+
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, const double a_off[3], double n0) {
   const double d = 1.0 - kPrintKnee;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {
@@ -1338,7 +1343,7 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
       const double u = v <= kPrintKnee ? v
                                        : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
       const double dl = -std::log10(std::max(u, 1e-7) / n0);
-      const double alpha = on_grid(g.apd[c], g.start, g.step, dl) - a_mid;
+      const double alpha = on_grid(g.apd[c], g.start, g.step, dl) - a_off[c];
       run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
       out[c][i] = run + 1e-9 * i;
     }
@@ -1558,7 +1563,9 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* ref = bracket_of(bp.reference_bracket);
     const size_t off = a2b0_lut16(icc);
     if (!ref || !off) break;
-    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0);
+    double ref_off[3];
+    bracket_patch_apd(bundle, *ref, ref_off);
+    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, ref_off, n0);
     const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
     // The three input curves must lie inside the file: a truncated ICC is not read past its end.
     if (off + 52 + 6 * n > icc.size()) {
@@ -1585,7 +1592,9 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   if (base.empty()) {
     const DensityBracket* mid = bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
-    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0),
+    double off[3];
+    bracket_patch_apd(bundle, *mid, off);
+    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, off, n0),
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
                            bundle.key + " printed on " + material.name + " (spektrafilm)",
                            "Tables derived from spektrafilm's print profile (Andrea Volpato), CC BY-SA 4.0. Computed "
@@ -1595,7 +1604,9 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* b = bracket_of(t.name);
     if (!b) return err = "the profile bundle has no density_matrices.brackets entry for " + t.name, false;
     std::vector<uint8_t> icc = base;
-    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0))) {
+    double off[3];
+    bracket_patch_apd(bundle, *b, off);
+    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, off, n0))) {
       return err = "the print ICC has no lut16 A2B0 to write curves into", false;
     }
     out.icc.push_back(std::move(icc));
