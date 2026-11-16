@@ -72,18 +72,53 @@ use the same stage.
 | Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
 | Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
 | Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
+| Bootstrap field | Mean over every metered bracket | Every bracket that meters is rendered at its metered exposure and the network's predictions are averaged. The screening uses this field, and its L\* is the frame's lightness wish. |
+| Lightness wish | One per frame | Every full search scores and searches L\* against the bootstrap field's L\*; a\* and b\* are asked again on each step's render. See "One lightness wish per frame" below. |
 | Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | The margin by which a scene may exceed a bracket's calibrated range, at either end, before the bracket is ruled out. |
+| Search window | The usable range, for every bracket | Every bracket is searched over its calibrated range widened by the overflow allowance above, whether or not it can hold the whole scene. No bracket wins or loses because its window let it reach a lightness another's did not. |
 | Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
 | Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
 | Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
 | Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
 | Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
-| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or re-runs the search with wider limits when the scene does not fit the bracket. Dark or backlit frames are left alone, so the subject is not sunk. |
+| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or, when the scene does not fit the bracket, re-runs the search with penalties on exposure outside the calibrated range (over the same usable range as the first search). Dark or backlit frames are left alone, so the subject is not sunk. |
 | Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
 
-That makes eleven parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
+That makes fourteen parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
 Effect column. The search also does not always converge to the same answer: where it ends depends on where it
 starts.
+
+### One lightness wish per frame
+
+The lightness the network asks for follows the picture it is shown: shown a lighter render it accepts a lighter one,
+shown a darker render a darker one. Three things let that turn into jumps of 10 to 14 L\* between brackets.
+
+- **Each finalist answered to itself.** The full search asked the network again on each step's render, L\* included,
+  and measured each finalist's residual against its own predictions. Each finalist's exposure walked its own way, and
+  residuals measured against different predictions could not say which lightness was right. On one frame both
+  finalists started near L\* 47; one ended at 35 and won by a residual of 8.43 against 8.79.
+- **One bracket set the target.** The first prediction came from the render of the bracket that metered deepest, and
+  on 112 of 200 frames the two deepest were within 0.02 stop: a 1 % tighter crop could swap them and move the result.
+- **The windows differed.** A bracket that could hold the scene was searched over its calibrated range only, one that
+  could not over a window around its centre, so one bracket could reach a lightness another could not.
+
+Now the first prediction is the mean over every metered bracket's render, which has no switch between brackets; every
+full search of the frame, the highlight pullback's included, holds L\* to that mean and asks again only for a\* and
+b\*, whose prediction has a usable fixed point; and every bracket is searched over the same kind of range, its usable
+range.
+
+Measured on 55 TriLED and 145 white-LED frames with the shipped adapter, no parameter tuned (master → now):
+
+| | TriLED | White LED |
+|---|---|---|
+| Finalists' L\* gap, mean / frames over 5 | 2.50 / 8 → 0.73 / 0 | 3.49 / 36 → 1.17 / 7 |
+| A 1 % or 2 % tighter crop moves the result over 3 L\* | 5 → 0 of 110 | 35 → 15 of 290 |
+| Swapping the adapter checkpoint moves the result over 5 L\* | 0 → 0 | 13 → 3 |
+| Output lightness | −0.33 L\* | +1.25 L\* |
+| Auto's time (one frame at a time, wp0 CPU) | 5.1 → 7.3 s | 4.2 → 6.5 s |
+
+The time grows with the extra inferences, one per metered bracket. On white LED some frames still move: there the
+brackets render the scene quite differently and the network does not separate them clearly.
 
 ## Stage 4: Tone stage
 

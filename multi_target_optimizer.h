@@ -38,15 +38,16 @@ struct RgbImage {
 // convert anything: on the half-size analysis decode of one frame it picks the calibration bracket of a profile
 // bundle and the exposure E and gains g, b that neg_process then converts the full image with.
 //
-//   1. Enclosure: bound each bracket's E so the scene's green range lands inside the green range the bracket's
-//      patches were calibrated over.
-//   2. Bootstrap: meter each admissible bracket so the scene's log-average renders at L* 50, render the bracket
-//      metered deepest inside its bounds (when none meters, the bracket whose range the scene fills best) and let
-//      DINOv3 predict an intent field from that render.
-//   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against that
-//      one intent field.
+//   1. Enclosure: each bracket's calibrated range of E (the scene's green range inside the green range its patches
+//      were calibrated over) and its usable range, the calibrated range widened by the highlight and shadow
+//      tolerance; every bracket is searched over its usable range.
+//   2. Bootstrap: meter each admissible bracket so the scene's log-average renders at L* 50, render every metered
+//      bracket at its metered E (when none meters, the bracket whose range the scene fills best) and average the
+//      intent fields DINOv3 predicts from those renders: the bootstrap field. Its L* is the frame's one lightness wish.
+//   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against the
+//      bootstrap field.
 //   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (on TriLED
-//      among the converged ones, when any converged).
+//      among the converged ones, when any converged). The loops hold L* to the frame's lightness wish.
 //   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
@@ -57,7 +58,8 @@ struct RgbImage {
 // measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
 // parameters, after the clip fallback and the pullback have moved E (and possibly the bracket) past the loop that
 // froze it, so the written image's shoulder matches its highlights. The intent field the result carries
-// (ParamSearchResult::intent_mu) stays the one the chosen loop step predicted, at intent_params.
+// (ParamSearchResult::intent_mu) is the one the chosen loop step was scored against, at intent_params: its L* is the
+// frame's lightness wish, its a* and b* the step's own prediction.
 //
 // The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
 // should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
@@ -155,13 +157,14 @@ struct ScreeningResult {
 };
 
 // Step 4, one row for each of the best two screened brackets: its fixed-point loop. Each step renders the frame at
-// the current (E, g, b), runs DINOv3 on the render (one inference), measures the residual and searches the next
-// (E, g, b) against that render's own intent field. The row keeps the step with the lowest residual.
+// the current (E, g, b), runs DINOv3 on the render (one inference), replaces the predicted L* with the frame's
+// lightness wish, measures the residual and searches the next (E, g, b) against that field. The row keeps the step
+// with the lowest residual.
 struct FixedPointResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   ConversionParams params;  // (E, g, b) of the best step, E in the search's units
-  // The self-consistency residual of that step: z2 of the render against the field DINOv3 predicts from the same
-  // render. Low when the render already looks the way DINOv3 expects the image to look.
+  // The residual of that step: z2 of the render against the field it was scored against (L* the frame's lightness
+  // wish, a* and b* predicted from the same render). Low when the render already looks the way DINOv3 expects.
   float residual = 0;
   FixedPointStatus status = FixedPointStatus::kMaxIters;
   int steps = 0;  // render -> DINOv3 -> search steps run, one inference each

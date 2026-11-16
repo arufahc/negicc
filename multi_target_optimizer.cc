@@ -107,12 +107,10 @@ using negicc::compute_inner_crop;
 //
 //   e_min = g_min / g_lo * k,   e_max = g_max / g_hi * k,   k = reference exposure / the bracket's exposure.
 //
-// With e_min <= e_max (feasible) every E in between keeps the whole scene calibrated, and that is the range E is
-// searched in. Otherwise the scene spans more than the bracket, and the search gets a window of 0.60 to 0.85 stop
-// either side of e_center (within 1.5 stops of highlight and 1.2 stops of shadow tolerance): the wider the scene's
-// overflow, the wider the window (0.6 stop per stop of overflow), so E can trade highlights against shadows. The
-// tolerances let a scene overflow the calibration a little; their values are kept from negicc-station, which records
-// no reason for them.
+// With e_min <= e_max (feasible) every E in between keeps the whole scene calibrated. The search may go beyond the
+// calibrated range by the usable tolerance, 1.5 stops on the highlight side and 1.2 on the shadow side, on every
+// bracket alike: u_min = e_min / 2^1.5 .. u_max = e_max * 2^1.2. The same tolerances decide whether a bracket is
+// admissible at all; their values are kept from negicc-station, which records no reason for them.
 struct Enclosure {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   bool feasible = false;    // e_min <= e_max
@@ -125,6 +123,8 @@ struct Enclosure {
 };
 
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
+// (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
+// station's copy follows in the station change that moves its negicc pin.)
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
   if (tgt.patches_g.empty()) return false;
   const float tgt_min = tgt.tgt_min_g, tgt_max = tgt.tgt_max_g;
@@ -140,17 +140,11 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
   const float u_max = r.e_max * std::pow(2.0f, usable_sh_ev);
   const float usable_capacity_ev = std::log2(tgt_max / tgt_min) + usable_hi_ev + usable_sh_ev;
   r.admissible = std::log2(g_hi / g_lo) <= usable_capacity_ev;
-  if (r.feasible) {
-    r.search_lo = r.e_min;
-    r.search_hi = r.e_max;
-  } else {
-    const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(r.slack_ev)));
-    r.search_lo = std::max(u_min, r.e_center * std::pow(2.0f, -margin_ev));
-    r.search_hi = std::min(u_max, r.e_center * std::pow(2.0f, margin_ev));
-    // The usable range can cut the window from both sides past each other (u_min above e_center * 2^margin, or u_max
-    // below e_center / 2^margin): ordered here, so no caller searches an inverted window.
-    if (r.search_lo > r.search_hi) std::swap(r.search_lo, r.search_hi);
-  }
+  // Every bracket, feasible or not, is searched over its usable range: no window that differs between brackets, so
+  // no bracket wins or loses because its window let it reach a lightness another's did not (DESIGN.md, "One
+  // lightness wish per frame"). The order is kept for an inadmissible bracket, whose range can invert.
+  r.search_lo = std::min(u_min, u_max);
+  r.search_hi = std::max(u_min, u_max);
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
   return true;
 }
@@ -788,6 +782,18 @@ class SearchFrame {
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
   // The tone heads' input from the last predict() (FixedPointResult::tone_features; empty without the token spread).
   const std::vector<float>& last_tone_features() const { return last_tone_features_; }
+  // The frame's one lightness wish: the L* channel (mu and sigma) of the bootstrap field. Every fixed-point loop
+  // scores and searches L* against it, while a* and b* are re-predicted from each step's render (DESIGN.md, "One
+  // lightness wish per frame").
+  void set_lightness_wish(const std::vector<float>& mu, const std::vector<float>& sigma) {
+    const size_t n = mu.size() / 3;
+    wish_mu_l_.resize(n);
+    wish_sigma_l_.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+      wish_mu_l_[i] = mu[i * 3];
+      wish_sigma_l_[i] = sigma[i * 3];
+    }
+  }
 
   // The inner crop rendered to 8-bit sRGB through the tables pd (a bracket's profile with changed input tables) at
   // params, then resampled to DINOv3's input size as the engine resamples it (net_w x net_h pixels).
@@ -843,7 +849,8 @@ class SearchFrame {
     return true;
   }
 
-  // The self-consistency residual of a preview against the field predicted from it (FixedPointResult::residual).
+  // The residual of a preview against a field (FixedPointResult::residual): in the loops, the field predicted from the
+  // preview with L* replaced by the frame's lightness wish.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
     const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h,
@@ -896,6 +903,8 @@ class SearchFrame {
   // kept within the trust region e_bounds = {lo, hi, centre}; outside pullback_search the search's penalty pulls E
   // toward the centre. An inverted region is ordered and centred on its midpoint. pullback_search as for search().
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
+  // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
+  // station's copy follows in the station change that moves its negicc pin.)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) {
@@ -918,6 +927,16 @@ class SearchFrame {
       if (shoulder_auto_) curr.shoulder = measure_shoulder(target_idx, curr, &cur_q995);
       render_preview(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
+      // The L* the model asks for follows the picture it is shown, so a loop re-predicting L* from its own render
+      // drifts lighter or darker by itself, and residuals measured against different fields cannot rank lightness:
+      // two finalists that screening placed at the same L* ended 10-14 L* apart and the lower residual picked one.
+      // L* is held to the frame's one wish; a* and b* keep the re-prediction.
+      if (wish_mu_l_.size() * 3 == mu.size()) {
+        for (size_t i = 0; i < wish_mu_l_.size(); ++i) {
+          mu[i * 3] = wish_mu_l_[i];
+          sigma[i * 3] = wish_sigma_l_[i];
+        }
+      }
       const float err = residual(preview, mu, sigma);
       if (!have_best || err < best_err) {
         have_best = true;
@@ -981,7 +1000,7 @@ class SearchFrame {
     return true;
   }
 
-  // Re-scores the best step with its x_hi and with the shoulder off against the field DINOv3 predicted from it. The
+  // Re-scores the best step with its x_hi and with the shoulder off against the field it was scored against. The
   // guard compares the L* loss alone: the shoulder removes lightness, so a 2% worse mean of L*, a*, b* would be about
   // 6% on L* (the a* and b* terms barely move). The penalties do not depend on the shoulder. The shoulder is kept either
   // way: the guard is only recorded when the loss is more than 2% worse, so the evaluation sees how often it disagrees.
@@ -1086,6 +1105,7 @@ class SearchFrame {
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
+  std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1334,8 +1354,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 }
 
 // Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
-// profile bundle, the intent engine, the scan and its exposure; screens the brackets against the intent field, runs
-// the best through a fixed-point tournament (predicting the field again as the render changes), moves to a denser
+// profile bundle, the intent engine, the scan and its exposure; screens the brackets against the bootstrap field (the
+// mean over every metered bracket's render), runs the best through a fixed-point tournament (predicting a* and b*
+// again as the render changes, L* held to the frame's lightness wish), moves to a denser
 // bracket or pulls E back where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket,
 // (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
 // white-light stages (run_white_light_fit).
@@ -1508,14 +1529,43 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       os << "  metered " << name_of(d.cand.target_idx) << ": E " << fixed(d.e_met, 4) << " depth "
          << fixed(d.depth, 3, true) << "\n";
     }
-    os << "Auto: bootstrap from " << name_of(cand1.target_idx) << " at E " << fixed(e1_init, 4) << "\n";
+    os << "Auto: bootstrap from " << name_of(cand1.target_idx) << " at E " << fixed(e1_init, 4)
+       << (depths.empty() || pin_e ? " (the field is this render's)" : " (the deepest metered bracket; the field is the mean over every metered bracket's render)") << "\n";
     std::cout << os.str();
   }
 
+  // The bootstrap field: the mean of the fields predicted from every metered bracket's render at its metered E (the
+  // deepest bracket alone when E is pinned or none metered). A field from one bracket depended on which bracket was
+  // deepest, and the two deepest are often within 0.02 stop of each other: a 1 % tighter crop could swap them and move
+  // the result by several L*. The mean has no such switch. It is the screening's field and the frame's lightness wish.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
-  fr.render_preview(cand1.target_idx, {e1_init, boot_g, boot_b}, preview);
-  if (!fr.predict(preview, mu1, sig1)) return false;
+  auto mean_field = [&](const std::vector<Depth>& ds, const Enclosure& alone, float e_alone, std::vector<float>& mu,
+                        std::vector<float>& sig) {
+    std::vector<std::pair<int, float>> renders;
+    if (ds.empty() || pin_e) {
+      renders.push_back({alone.target_idx, e_alone});
+    } else {
+      for (const auto& d : ds) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
+    }
+    std::vector<float> m, sg;
+    for (size_t k = 0; k < renders.size(); ++k) {
+      fr.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
+      if (!fr.predict(preview, m, sg)) return false;
+      if (k == 0) {
+        mu.assign(m.size(), 0.0f);
+        sig.assign(sg.size(), 0.0f);
+      }
+      for (size_t i = 0; i < m.size(); ++i) {
+        mu[i] += m[i] / renders.size();
+        sig[i] += sg[i] / renders.size();
+      }
+    }
+    if (verbose) std::cout << "Auto: bootstrap field averaged over " << renders.size() << " render(s)\n";
+    return true;
+  };
+  if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
+  fr.set_lightness_wish(mu1, sig1);
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
   // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
@@ -1726,40 +1776,21 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
-      // The re-search window of each metered bracket: its calibrated range united with the infeasible window
-      // (bracket_enclosure), its upper end raised to at least 0.2 stop above its metered E (within the usable range),
-      // so the pullback can reach the darker-than-metered side the first search could not.
+      // The re-search window of each metered bracket: its usable range, as in the main search (bracket_enclosure). The
+      // re-search differs from the main search by its penalties on E outside the calibrated range, not by its window.
       std::vector<Depth> depths_res;
       for (const auto& c : pool) {
         const auto d = std::find_if(depths.begin(), depths.end(),
                                     [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
         if (d == depths.end()) continue;
-        const float e_met = d->e_met;
-        const float u_min = c.e_min * std::pow(2.0f, -1.5f);
-        const float u_max = c.e_max * std::pow(2.0f, 1.2f);
-        const float margin_ev = std::max(0.60f, std::min(0.85f, 0.60f * std::fabs(c.slack_ev)));
-        const float win_lo = std::max(u_min, c.e_center * std::pow(2.0f, -margin_ev));
-        const float win_hi = std::min(u_max, c.e_center * std::pow(2.0f, margin_ev));
-        const float base_lo = c.feasible ? std::min(c.e_min, win_lo) : win_lo;
-        const float base_hi = c.feasible ? std::max(c.e_max, win_hi) : win_hi;
-        float lo = base_lo;
-        float hi = std::max(base_hi, std::min(u_max, e_met * std::pow(2.0f, 0.20f)));
-        // On an infeasible bracket the window can cross (win_lo > win_hi when the centre's margin falls outside
-        // [u_min, u_max]); std::clamp below needs lo <= hi, and the depth would be measured on a reversed window.
-        if (lo > hi) std::swap(lo, hi);
-        depths_res.push_back(metered(c, e_met, lo, hi));
+        depths_res.push_back(metered(c, d->e_met, c.search_lo, c.search_hi));
       }
-      // A new bootstrap field when the deepest bracket or its E changed (else the first one is the same field).
+      // The re-search's screening field: the mean over its metered brackets' renders, as the first one (the frame's
+      // lightness wish stays the first field's).
       std::vector<float> mu_res = mu1, sig_res = sig1;
       if (!depths_res.empty()) {
         deepest_first(depths_res);
-        const Enclosure cand_res = depths_res[0].cand;
-        const float e_res_init = std::clamp(depths_res[0].e_met, depths_res[0].lo, depths_res[0].hi);
-        if (cand_res.target_idx != cand1.target_idx || std::fabs(e_res_init - e1_init) > 1e-4f) {
-          std::vector<uint8_t> preview_res;
-          fr.render_preview(cand_res.target_idx, {e_res_init, boot_g, boot_b}, preview_res);
-          if (!fr.predict(preview_res, mu_res, sig_res)) return false;
-        }
+        if (!mean_field(depths_res, depths_res[0].cand, depths_res[0].e_met, mu_res, sig_res)) return false;
       }
       std::vector<FixedPointResult> res_adaptive;
       if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
