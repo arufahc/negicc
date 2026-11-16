@@ -718,20 +718,47 @@ class SearchFrame {
 
   const InnerCrop& inner_crop() const { return crop_; }
   // For --probe_intent, three readings of a preview on the intent grid (3 values per cell, row-major):
-  // patch_lab: what the network is trained to predict: the preview resized as the engine resizes it (to grid x patch
-  //   pixels), CIELAB per pixel, averaged over each patch;
+  // patch_lab: what the network is trained to predict, made as its training targets are (patch_lab_targets): the
+  //   preview resampled in linear light by area average (fractional box) to grid x patch pixels, CIELAB per pixel,
+  //   averaged over each patch;
   // point_lab: what residual() reads: a bilinear point sample of the encoded preview at each cell's centre (OpenCV's
   //   INTER_LINEAR, about two by two pixels of a preview thousands of pixels wide), then CIELAB.
   std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
     const int gw = stats_.grid_w, gh = stats_.grid_h, P = engine_.patch_size(), W = gw * P, H = gh * P;
-    std::vector<uint8_t> img((size_t)W * H * 3);
-    antialiased_bilinear_resize_rgb(preview.data(), crop_.w, crop_.h, crop_.w * 3, img.data(), W, H);
-    std::vector<double> acc((size_t)gw * gh * 3, 0.0);
-    for (int y = 0; y < H; ++y) {
-      for (int x = 0; x < W; ++x) {
-        const uint8_t* q = &img[((size_t)y * W + x) * 3];
-        const negicc::Lab c = negicc::srgb_to_lab({q[0] / 255.0f, q[1] / 255.0f, q[2] / 255.0f});
-        double* a = &acc[((size_t)(y / P) * gw + x / P) * 3];
+    float lut[256];
+    for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
+    const float sx = crop_.w / float(W), sy = crop_.h / float(H);
+    std::vector<float> tmp((size_t)crop_.h * W * 3);  // horizontal pass, linear light
+    for (int y = 0; y < crop_.h; ++y) {
+      const uint8_t* row = &preview[(size_t)y * crop_.w * 3];
+      for (int dx = 0; dx < W; ++dx) {
+        const float x0 = dx * sx, x1 = (dx + 1) * sx;
+        const int xs = (int)std::floor(x0), xe = std::min<int>(crop_.w, (int)std::ceil(x1));
+        float acc[3] = {0, 0, 0}, wsum = 0.0f;
+        for (int xx = xs; xx < xe; ++xx) {
+          const float w = std::min(x1, xx + 1.0f) - std::max(x0, (float)xx);
+          if (w <= 0.0f) continue;
+          for (int c = 0; c < 3; ++c) acc[c] += lut[row[xx * 3 + c]] * w;
+          wsum += w;
+        }
+        for (int c = 0; c < 3; ++c) tmp[((size_t)y * W + dx) * 3 + c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
+      }
+    }
+    std::vector<double> acc((size_t)gw * gh * 3, 0.0);  // vertical pass, CIELAB per pixel, summed per patch
+    for (int dy = 0; dy < H; ++dy) {
+      const float y0 = dy * sy, y1 = (dy + 1) * sy;
+      const int ys = (int)std::floor(y0), ye = std::min<int>(crop_.h, (int)std::ceil(y1));
+      for (int dx = 0; dx < W; ++dx) {
+        float a3[3] = {0, 0, 0}, wsum = 0.0f;
+        for (int yy = ys; yy < ye; ++yy) {
+          const float w = std::min(y1, yy + 1.0f) - std::max(y0, (float)yy);
+          if (w <= 0.0f) continue;
+          for (int c = 0; c < 3; ++c) a3[c] += tmp[((size_t)yy * W + dx) * 3 + c] * w;
+          wsum += w;
+        }
+        const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
+        const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
+        double* a = &acc[((size_t)(dy / P) * gw + dx / P) * 3];
         a[0] += c.L;
         a[1] += c.a;
         a[2] += c.b;
