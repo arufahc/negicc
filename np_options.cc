@@ -720,6 +720,17 @@ int parse_options(int ac, char* av[], Options& o) {
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
     for (const std::string& id : o.prints) {
+      // A spektrafilm print profile given as a file is loaded now, without a bundle (every check of the real load
+      // runs; only the matrices for the bundle's film wait for the conversion), so a wrong file stops the run before
+      // it starts.
+      if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
+        std::string text, stem, why;
+        PrintMaterial material;
+        if (!read_print_file(id, text, stem, why) || !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
+          log_error("--print %s: %s\n", id.c_str(), why.c_str());
+          return 1;
+        }
+      }
       bool found = id == "all" || (is_print_file(id) && std::filesystem::is_regular_file(id));
       std::string names;
       for (const PrintMaterial& m : known) {
