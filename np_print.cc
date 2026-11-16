@@ -947,6 +947,10 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
     curve_grey(bundle, *bracket, light);
     curve_slopes(bundle, *bracket, p.slopes);
+    // The bracket-slopes arm: the curve's mid grey with the bracket's own stored slopes, as its print ICC takes them.
+    if (bracket->has_slopes) {
+      for (int c = 0; c < 3; ++c) p.slopes[c] = bracket->slopes[c];
+    }
     p.from_curve = true;
   } else if (!bracket->has_slopes) {
     return err = "the bundle has neither grey_balance_curves nor slopes for " + p.bracket +
