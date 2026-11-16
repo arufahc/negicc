@@ -582,6 +582,14 @@ bool film_to_print_density(const FilmModel& film, const std::vector<double> resp
 
 }  // namespace
 
+namespace {
+
+// Whether a parsed JSON is a spektrafilm profile of a print material neg_process can print with: info.stage
+// "printing", info.support paper or film (it picks the viewing light), log_exposure ascending with one row of
+// density_curves per value, each layer's curve rising with exposure, and each layer's log_sensitivity peaking within 6
+// (log10) of the most sensitive layer's. False with why in err. Only load_spektrafilm_print calls it, so one reader
+// holds every rule.
+// py-ref: negicc_station/src/print_emulation.py (check_spektrafilm_print)
 bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
   if (!j.is_object() || !j.contains("data") || !j["data"].is_object()) return err = "not a spektrafilm profile (no data)", false;
   if (!j.contains("info") || !j["info"].is_object()) return err = "a spektrafilm profile without info", false;
@@ -598,15 +606,26 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
     return err = "a spektrafilm print profile whose info.support is '" + support +
                  "', not paper or film: the viewing light is chosen by it", false;
   }
-  // Each layer's curve rises with exposure: by kMinCurveRise over the profile, never falling by more than
-  // kMaxCurveDip between points (spektrafilm's curves wobble by about 0.0003 where the print is at its minimum).
+  // The exposure axis the curves are judged against: ascending, one value per row of density_curves.
   const nlohmann::json& d = j["data"];
   if (!d.contains("density_curves") || !d["density_curves"].is_array() || d["density_curves"].size() < 2) {
     return err = "a spektrafilm print profile without density_curves", false;
   }
+  std::vector<double> log_exposure;
+  if (!d.contains("log_exposure") || !read_vector(d["log_exposure"], log_exposure) ||
+      log_exposure.size() != d["density_curves"].size()) {
+    return err = "log_exposure of the spektrafilm print profile is missing or not one value per row of density_curves", false;
+  }
+  if (!std::is_sorted(log_exposure.begin(), log_exposure.end())) {
+    return err = "log_exposure of the spektrafilm print profile is not in ascending order", false;
+  }
+  // Each layer's curve rises with exposure: by kMinCurveRise over the profile, and never more than kMaxCurveDip below
+  // its highest value so far, which does not depend on how finely the curve is sampled. In spektrafilm's eight
+  // published print profiles the largest step down is 0.00093 and the largest fall below the running maximum 0.0025,
+  // where the print is at its minimum density.
   constexpr double kMinCurveRise = 0.5, kMaxCurveDip = 0.02;
   for (int c = 0; c < 3; ++c) {
-    double first = 0.0, last = 0.0, prev = 0.0;
+    double first = 0.0, last = 0.0, highest = -INFINITY;
     for (size_t i = 0; i < d["density_curves"].size(); ++i) {
       const nlohmann::json& row = d["density_curves"][i];
       if (!row.is_array() || row.size() != 3 || !row[c].is_number() || !std::isfinite(row[c].get<double>())) {
@@ -614,24 +633,26 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
       }
       const double v = row[c].get<double>();
       if (i == 0) first = v;
-      if (i > 0 && v < prev - kMaxCurveDip) {
+      if (v < highest - kMaxCurveDip) {
         return err = "layer " + std::to_string(c) + "'s curve of the spektrafilm print profile falls with exposure", false;
       }
-      prev = last = v;
+      highest = std::max(highest, v);
+      last = v;
     }
     if (!(last - first > kMinCurveRise)) {
       return err = "layer " + std::to_string(c) + "'s curve of the spektrafilm print profile does not rise with exposure", false;
     }
   }
   // Each layer is sensitive somewhere: its peak log sensitivity within kMaxSensitivityGap (log10) of the most
-  // sensitive layer's, so no layer of the print is blind to the printer's light.
+  // sensitive layer's, so no layer of the print is blind to the printer's light. A row is read as the load reads it
+  // (resample_column): the layer's column, whatever follows it.
   constexpr double kMaxSensitivityGap = 6.0;
   if (!d.contains("log_sensitivity") || !d["log_sensitivity"].is_array()) {
     return err = "a spektrafilm print profile without log_sensitivity", false;
   }
   double peak[3] = {-INFINITY, -INFINITY, -INFINITY};
   for (const nlohmann::json& row : d["log_sensitivity"]) {
-    for (int c = 0; row.is_array() && row.size() == 3 && c < 3; ++c) {
+    for (int c = 0; row.is_array() && c < (int)std::min<size_t>(3, row.size()); ++c) {
       if (row[c].is_number() && std::isfinite(row[c].get<double>())) peak[c] = std::max(peak[c], row[c].get<double>());
     }
   }
@@ -644,34 +665,36 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
   return true;
 }
 
+// info.<key> when it is a string, else fallback: spektrafilm writes nulls in info (target_print is null in all eight
+// published print profiles), and json::value throws on a key that is there with another type.
+std::string info_string(const nlohmann::json& info, const char* key, const std::string& fallback) {
+  return info.contains(key) && info[key].is_string() ? info[key].get<std::string>() : fallback;
+}
+
+}  // namespace
+
 bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
                             PrintMaterial& out, std::string& err) {
   const nlohmann::json j = nlohmann::json::parse(json_text, nullptr, false);
+  if (j.is_discarded()) return err = "not a spektrafilm profile (not JSON)", false;
   if (!check_spektrafilm_print(j, err)) return false;
   const nlohmann::json& d = j["data"];
   const nlohmann::json& info = j["info"];
   PrintMaterial m;
-  m.id = info.value("stock", id);
-  m.name = info.value("name", m.id);
+  m.id = info_string(info, "stock", id);
+  m.name = info_string(info, "name", m.id);
   m.viewing_illuminant = info["support"] == "paper" ? "D50" : "D55";
   std::vector<double> w, sensitivity[3];
   bool ok = d.contains("wavelengths") && read_vector(d["wavelengths"], w) && w.size() >= 2 &&
             std::is_sorted(w.begin(), w.end()) && d.contains("log_sensitivity") && d.contains("channel_density") &&
-            d.contains("base_density") && d.contains("log_exposure") && read_vector(d["log_exposure"], m.log_exposure) &&
-            m.log_exposure.size() >= 2 && std::is_sorted(m.log_exposure.begin(), m.log_exposure.end()) &&
-            d.contains("density_curves") && d["density_curves"].is_array() &&
-            d["density_curves"].size() == m.log_exposure.size() &&
+            d.contains("base_density") && read_vector(d["log_exposure"], m.log_exposure) &&
             resample_column(d["base_density"], -1, w, true, 0.0, false, m.base);
   for (int c = 0; ok && c < 3; ++c) {
     // A layer's sensitivity where the profile has none is zero; its dye spectrum is held at the nearest value.
     ok = resample_column(d["log_sensitivity"], c, w, false, 0.0, true, sensitivity[c]) &&
          resample_column(d["channel_density"], c, w, true, 0.0, false, m.dye[c]);
-    m.curves[c].resize(m.log_exposure.size());
-    for (size_t i = 0; ok && i < m.log_exposure.size(); ++i) {
-      const nlohmann::json& row = d["density_curves"][i];
-      ok = row.is_array() && row.size() == 3 && row[c].is_number() && std::isfinite(row[c].get<double>());
-      if (ok) m.curves[c][i] = row[c].get<double>();
-    }
+    m.curves[c].resize(m.log_exposure.size());   // the check has read every value as a finite number
+    for (size_t i = 0; i < m.log_exposure.size(); ++i) m.curves[c][i] = d["density_curves"][i][c].get<double>();
   }
   if (!ok) {
     err = "a field of the spektrafilm print profile is missing or malformed";
@@ -1064,6 +1087,19 @@ std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle) 
   return out;
 }
 
+bool read_print_file(const std::string& path, std::string& text, std::string& stem, std::string& err) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return err = "cannot be read", false;
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  if (file.bad()) return err = "cannot be read", false;
+  text = buffer.str();
+  const size_t slash = path.find_last_of("/\\");
+  stem = slash == std::string::npos ? path : path.substr(slash + 1);
+  if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
+  return true;
+}
+
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids) {
   DensityPrints out;
@@ -1079,16 +1115,11 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
   }
   for (const std::string& id : print_ids) {
     if (!is_print_file(id)) continue;
-    std::ifstream file(id, std::ios::binary);
-    std::stringstream text;
-    text << file.rdbuf();
-    const size_t slash = id.find_last_of("/\\");
-    std::string stem = slash == std::string::npos ? id : id.substr(slash + 1);
-    if (stem.size() > 5 && stem.substr(stem.size() - 5) == ".json") stem.resize(stem.size() - 5);
+    std::string text, stem, err;
     PrintMaterial material;
-    std::string err;
-    if (!file || !rec.bundle || !load_spektrafilm_print(text.str(), stem, *rec.bundle, material, err)) {
-      log_warn("No print CLF for %s: %s\n", id.c_str(), !file ? "cannot be read" : err.c_str());
+    if (!read_print_file(id, text, stem, err) || !rec.bundle ||
+        !load_spektrafilm_print(text, stem, *rec.bundle, material, err)) {
+      log_warn("No print CLF for %s: %s\n", id.c_str(), err.empty() ? "no profile bundle" : err.c_str());
       continue;
     }
     materials.push_back(std::move(material));
