@@ -717,9 +717,31 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
-  // The preview's L*a*b* on the intent grid, as residual() measures it: linear-light resize to grid_w x grid_h, then
-  // sRGB to CIELAB per cell (3 values per cell, row-major). For --probe_intent.
-  std::vector<float> grid_lab(const std::vector<uint8_t>& preview) const {
+  // For --probe_intent, three readings of a preview on the intent grid (3 values per cell, row-major):
+  // patch_lab: what the network is trained to predict: the preview resized as the engine resizes it (to grid x patch
+  //   pixels), CIELAB per pixel, averaged over each patch;
+  // point_lab: what residual() reads: a bilinear point sample of the encoded preview at each cell's centre (OpenCV's
+  //   INTER_LINEAR, about two by two pixels of a preview thousands of pixels wide), then CIELAB.
+  std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
+    const int gw = stats_.grid_w, gh = stats_.grid_h, P = engine_.patch_size(), W = gw * P, H = gh * P;
+    std::vector<uint8_t> img((size_t)W * H * 3);
+    antialiased_bilinear_resize_rgb(preview.data(), crop_.w, crop_.h, crop_.w * 3, img.data(), W, H);
+    std::vector<double> acc((size_t)gw * gh * 3, 0.0);
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        const uint8_t* q = &img[((size_t)y * W + x) * 3];
+        const negicc::Lab c = negicc::srgb_to_lab({q[0] / 255.0f, q[1] / 255.0f, q[2] / 255.0f});
+        double* a = &acc[((size_t)(y / P) * gw + x / P) * 3];
+        a[0] += c.L;
+        a[1] += c.a;
+        a[2] += c.b;
+      }
+    }
+    std::vector<float> lab(acc.size());
+    for (size_t i = 0; i < acc.size(); ++i) lab[i] = (float)(acc[i] / ((double)P * P));
+    return lab;
+  }
+  std::vector<float> point_lab(const std::vector<uint8_t>& preview) const {
     const int gw = stats_.grid_w, gh = stats_.grid_h;
     std::vector<uint8_t> resized((size_t)gw * gh * 3);
     cv_linear_resize_rgb(preview.data(), crop_.w, crop_.h, crop_.w * 3, resized.data(), gw, gh);
@@ -730,6 +752,18 @@ class SearchFrame {
       lab[i * 3 + 1] = c.a;
       lab[i * 3 + 2] = c.b;
     }
+    return lab;
+  }
+  // What intent_loss scores at these parameters: the patch-averaged camera-RGB grid (stats_.grid) rendered as the
+  // (E, g, b) optimiser renders it.
+  std::vector<float> optimiser_lab(int target_idx, const ConversionParams& cp) const {
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    cfg.shoulder = cp.shoulder;
+    const int n = stats_.grid_w * stats_.grid_h;
+    std::vector<float> lab((size_t)n * 3);
+    intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
     return lab;
   }
   const FrameStats& stats() const { return stats_; }
@@ -1599,11 +1633,13 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     auto record = [&](const char* kind, int set_idx, float stop, int target_idx, const ConversionParams& cp) -> bool {
       fr.render_preview(target_idx, cp, pv);
       if (!fr.predict(pv, mu, sg)) return false;
-      const std::vector<float> lab = fr.grid_lab(pv);
+      const std::vector<float> lab = fr.patch_lab(pv), pts = fr.point_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
       recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
                       {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
                       {"shoulder", cp.shoulder}, {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)},
-                      {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}});
+                      {"residual_render", mean3(pts)}, {"optimiser_render", mean3(opt)},
+                      {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}, {"residual_cells", pts},
+                      {"optimiser_cells", opt}});
       return true;
     };
     int k = 0;
