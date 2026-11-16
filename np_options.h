@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -79,6 +80,12 @@ struct Options {
   double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
+  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops "s,...": a measurement aid for negicc-station's
+  // goal harness (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
+  // FILE and neg_process stops without converting.
+  std::string probe_intent;
+  std::vector<std::array<float, 4>> probe_params;
+  std::vector<float> probe_stops = {0.0f};
   bool dino_iters_given = false;
 
   // Fitted G/B input curves (input_curves.h). --fit_curves auto (the default) fits them on every white-light bundle

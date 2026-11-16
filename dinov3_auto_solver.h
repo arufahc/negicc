@@ -121,6 +121,11 @@ struct DinoSolveResult {
 void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
                          uint16_t* dst, int dst_w, int dst_h);
 
+// The L*a*b* intent_loss scores for one candidate: each pixel of the camera-RGB grid rendered at cand as the loss
+// renders it (displayed value, after the shoulder), n_px x 3 values into lab_out. For neg_process's --probe_intent.
+void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
+                  const IntentGains& cand, float* lab_out);
+
 // Batched loss calculation across candidate matrices
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out);

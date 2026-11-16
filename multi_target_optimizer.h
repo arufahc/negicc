@@ -140,6 +140,17 @@ struct ParamSearchOptions {
   int pin_target = -1;
   unsigned pin_mask = 0;
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
+  // neg_process's --probe_intent (a measurement aid for negicc-station's goal harness): when probe_path is set, the
+  // search writes what the intent network predicts from chosen renders to that JSON file and stops after its
+  // bootstrap, before screening (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the
+  // bootstrap's gains (and at the E its window clamps it to, where that differs), then every probe_params set (target
+  // index, E in the search's units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured
+  // at each as the fixed-point loop measures it. Each render's cells are recorded three ways: render_cells (made as the
+  // training targets are: linear-light area resample to grid x patch, CIELAB per pixel, mean per patch), residual_cells (the point
+  // samples residual() reads) and optimiser_cells (what intent_loss scores at those parameters).
+  std::string probe_path;
+  std::vector<std::array<float, 4>> probe_params;
+  std::vector<float> probe_stops = {0.0f};
 };
 
 // Step 3, one row per metered bracket: one coordinate descent of (E, g, b) against the bootstrap intent field.
@@ -233,6 +244,7 @@ struct ParamSearchResult {
   // DINOv3 inferences of the whole search: the bootstraps and every fixed-point step (the clip fallback's and the
   // pullback's included).
   int inferences = 0;
+  bool probed = false;  // --probe_intent: the search wrote its probe file and stopped (ParamSearchOptions::probe_path)
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };

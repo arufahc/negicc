@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -31,6 +32,7 @@
 #include "dinov3_auto_solver.h"
 #include "dinov3_preprocess.h"
 #include "profile_bundle.h"
+#include "nlohmann/json.hpp"
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {
@@ -715,6 +717,82 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
+  // For --probe_intent, three readings of a preview on the intent grid (3 values per cell, row-major):
+  // patch_lab: what the network is trained to predict, made as its training targets are (patch_lab_targets): the
+  //   preview resampled in linear light by area average (fractional box) to grid x patch pixels, CIELAB per pixel,
+  //   averaged over each patch;
+  // point_lab: what residual() reads: a bilinear point sample of the encoded preview at each cell's centre (OpenCV's
+  //   INTER_LINEAR, about two by two pixels of a preview thousands of pixels wide), then CIELAB.
+  std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
+    const int gw = stats_.grid_w, gh = stats_.grid_h, P = engine_.patch_size(), W = gw * P, H = gh * P;
+    float lut[256];
+    for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
+    const float sx = crop_.w / float(W), sy = crop_.h / float(H);
+    std::vector<float> tmp((size_t)crop_.h * W * 3);  // horizontal pass, linear light
+    for (int y = 0; y < crop_.h; ++y) {
+      const uint8_t* row = &preview[(size_t)y * crop_.w * 3];
+      for (int dx = 0; dx < W; ++dx) {
+        const float x0 = dx * sx, x1 = (dx + 1) * sx;
+        const int xs = (int)std::floor(x0), xe = std::min<int>(crop_.w, (int)std::ceil(x1));
+        float acc[3] = {0, 0, 0}, wsum = 0.0f;
+        for (int xx = xs; xx < xe; ++xx) {
+          const float w = std::min(x1, xx + 1.0f) - std::max(x0, (float)xx);
+          if (w <= 0.0f) continue;
+          for (int c = 0; c < 3; ++c) acc[c] += lut[row[xx * 3 + c]] * w;
+          wsum += w;
+        }
+        for (int c = 0; c < 3; ++c) tmp[((size_t)y * W + dx) * 3 + c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
+      }
+    }
+    std::vector<double> acc((size_t)gw * gh * 3, 0.0);  // vertical pass, CIELAB per pixel, summed per patch
+    for (int dy = 0; dy < H; ++dy) {
+      const float y0 = dy * sy, y1 = (dy + 1) * sy;
+      const int ys = (int)std::floor(y0), ye = std::min<int>(crop_.h, (int)std::ceil(y1));
+      for (int dx = 0; dx < W; ++dx) {
+        float a3[3] = {0, 0, 0}, wsum = 0.0f;
+        for (int yy = ys; yy < ye; ++yy) {
+          const float w = std::min(y1, yy + 1.0f) - std::max(y0, (float)yy);
+          if (w <= 0.0f) continue;
+          for (int c = 0; c < 3; ++c) a3[c] += tmp[((size_t)yy * W + dx) * 3 + c] * w;
+          wsum += w;
+        }
+        const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
+        const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
+        double* a = &acc[((size_t)(dy / P) * gw + dx / P) * 3];
+        a[0] += c.L;
+        a[1] += c.a;
+        a[2] += c.b;
+      }
+    }
+    std::vector<float> lab(acc.size());
+    for (size_t i = 0; i < acc.size(); ++i) lab[i] = (float)(acc[i] / ((double)P * P));
+    return lab;
+  }
+  std::vector<float> point_lab(const std::vector<uint8_t>& preview) const {
+    const int gw = stats_.grid_w, gh = stats_.grid_h;
+    std::vector<uint8_t> resized((size_t)gw * gh * 3);
+    cv_linear_resize_rgb(preview.data(), crop_.w, crop_.h, crop_.w * 3, resized.data(), gw, gh);
+    std::vector<float> lab((size_t)gw * gh * 3);
+    for (int i = 0; i < gw * gh; ++i) {
+      const negicc::Lab c = negicc::srgb_to_lab({resized[i * 3] / 255.0f, resized[i * 3 + 1] / 255.0f, resized[i * 3 + 2] / 255.0f});
+      lab[i * 3] = c.L;
+      lab[i * 3 + 1] = c.a;
+      lab[i * 3 + 2] = c.b;
+    }
+    return lab;
+  }
+  // What intent_loss scores at these parameters: the patch-averaged camera-RGB grid (stats_.grid) rendered as the
+  // (E, g, b) optimiser renders it.
+  std::vector<float> optimiser_lab(int target_idx, const ConversionParams& cp) const {
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    cfg.shoulder = cp.shoulder;
+    const int n = stats_.grid_w * stats_.grid_h;
+    std::vector<float> lab((size_t)n * 3);
+    intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
+    return lab;
+  }
   const FrameStats& stats() const { return stats_; }
   const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
@@ -1566,6 +1644,62 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   };
   if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
+
+  // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
+  if (!opts.probe_path.empty()) {
+    nlohmann::json recs = nlohmann::json::array();
+    std::vector<uint8_t> pv;
+    std::vector<float> mu, sg;
+    auto mean3 = [](const std::vector<float>& v) {
+      double s[3] = {0, 0, 0};
+      const size_t n = v.size() / 3;
+      for (size_t i = 0; i < n; ++i)
+        for (int c = 0; c < 3; ++c) s[c] += v[i * 3 + c];
+      return std::vector<double>{s[0] / n, s[1] / n, s[2] / n};
+    };
+    auto record = [&](const char* kind, int set_idx, float stop, int target_idx, const ConversionParams& cp) -> bool {
+      fr.render_preview(target_idx, cp, pv);
+      if (!fr.predict(pv, mu, sg)) return false;
+      const std::vector<float> lab = fr.patch_lab(pv), pts = fr.point_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
+      recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
+                      {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
+                      {"shoulder", cp.shoulder}, {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)},
+                      {"residual_render", mean3(pts)}, {"optimiser_render", mean3(opt)},
+                      {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}, {"residual_cells", pts},
+                      {"optimiser_cells", opt}});
+      return true;
+    };
+    int k = 0;
+    for (const auto& d : depths) {
+      if (!record("metered", k, 0.0f, d.cand.target_idx, {d.e_met, boot_g, boot_b})) return false;
+      const float ec = std::clamp(d.e_met, d.lo, d.hi);
+      if (ec != d.e_met && !record("metered_clamped", k, 0.0f, d.cand.target_idx, {ec, boot_g, boot_b})) return false;
+      ++k;
+    }
+    for (size_t si = 0; si < opts.probe_params.size(); ++si) {
+      const auto& p = opts.probe_params[si];
+      const int t = (int)p[0];
+      if (t < 0 || t >= (int)bundle.targets.size()) continue;
+      for (const float stop : opts.probe_stops) {
+        ConversionParams cp{p[1] * std::pow(2.0f, stop), p[2], p[3]};
+        float q995 = 0.0f;
+        cp.shoulder = fr.measure_shoulder(t, cp, &q995);
+        if (!record("params", (int)si, stop, t, cp)) return false;
+      }
+    }
+    const nlohmann::json doc = {{"grid_w", stats.grid_w}, {"grid_h", stats.grid_h}, {"e_norm", out.e_norm},
+                                {"has_crosstalk", bundle.has_crosstalk}, {"bootstrap_target", cand1.target_idx},
+                                {"bootstrap_e", e1_init}, {"records", recs}};
+    std::ofstream f(opts.probe_path);
+    if (!f) {
+      std::cerr << "ERROR! Cannot write the probe file " << opts.probe_path << std::endl;
+      return false;
+    }
+    f << doc.dump() << "\n";
+    out.probed = true;
+    if (verbose) std::cout << "Auto: probe: " << recs.size() << " renders written to " << opts.probe_path << "\n";
+    return true;
+  }
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
   // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
