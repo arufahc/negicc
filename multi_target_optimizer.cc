@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -120,6 +121,9 @@ struct Enclosure {
   float e_min = 0, e_max = 0;
   float search_lo = 0, search_hi = 0;  // the range E is searched in
   float e_center = 0;                  // sqrt(e_min * e_max)
+  // The usable range inverted (u_min above u_max): no E keeps both ends of the scene within the highlight and shadow
+  // tolerance, so the search window is the set of compromises between them; see pull_centre().
+  bool usable_inverted = false;
   float slack_ev = 0;                  // log2(e_max / e_min): spare stops, negative when not feasible
   float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the scene's contrast ratio over the bracket's
 };
@@ -127,6 +131,18 @@ struct Enclosure {
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
 // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
 // station's copy follows in the station change that moves its negicc pin.)
+bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r);
+
+// The centre the search's exposure penalty pulls E toward (compute_penalties: 5 log2(E / centre)^2), or 0 for none.
+// For a bracket whose usable range is inverted (the scene overflows it by more than the two tolerances together) there
+// is no pull. Its window, ordered, runs from E = e_max x 2^1.2, where the shadows sit exactly at their tolerance and the
+// highlights carry all the overflow, to E = e_min / 2^1.5, where the reverse holds; outside it one end is sacrificed
+// more than needed while the other is already inside. Where to stand among those compromises is the question the intent
+// field answers, so inside the window the field decides E, with the white-clip penalty kept and the window's two ends as
+// its bounds. A pull toward e_center answered it with "split the overflow equally in log E": on a night scene of 8.1 EV
+// (8dda4a7e7e) that put E in the middle of the scene's log range, a picture with a median of L* 2.
+float pull_centre(const Enclosure& c) { return c.usable_inverted ? 0.0f : c.e_center; }
+
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
   if (tgt.patches_g.empty()) return false;
   const float tgt_min = tgt.tgt_min_g, tgt_max = tgt.tgt_max_g;
@@ -145,6 +161,7 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
   // Every bracket, feasible or not, is searched over its usable range: no window that differs between brackets, so
   // no bracket wins or loses because its window let it reach a lightness another's did not (DESIGN.md, "One
   // lightness wish per frame"). The order is kept for an inadmissible bracket, whose range can invert.
+  r.usable_inverted = u_min > u_max;
   r.search_lo = std::min(u_min, u_max);
   r.search_hi = std::max(u_min, u_max);
   r.fill_ratio = (g_hi / g_lo) / (tgt_max / tgt_min);
@@ -398,6 +415,8 @@ bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, floa
 // longer side scaled to the engine's max_size, each side rounded to whole patches of patch_size pixels, so
 // grid_w x grid_h patches (32 x 21 for a 3:2 landscape crop at 512 and 16).
 // py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
+// (Since negicc#101 the search uses this grid only for the optimiser's cells, corrected per bracket by the trained cells
+// of its last preview (update_correction); the station's copy of that correction follows when its negicc pin moves.)
 struct FrameStats {
   float g_lo = 0.0f, g_hi = 0.0f;
   float log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
@@ -717,68 +736,11 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
-  // For --probe_intent, three readings of a preview on the intent grid (3 values per cell, row-major):
-  // patch_lab: what the network is trained to predict, made as its training targets are (patch_lab_targets): the
-  //   preview resampled in linear light by area average (fractional box) to grid x patch pixels, CIELAB per pixel,
-  //   averaged over each patch;
-  // point_lab: what residual() reads: a bilinear point sample of the encoded preview at each cell's centre (OpenCV's
-  //   INTER_LINEAR, about two by two pixels of a preview thousands of pixels wide), then CIELAB.
+  // For --probe_intent: the preview's trained cells (trained_cells_lab), what the residual reads and what the network is
+  // trained to predict.
   std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
-    const int gw = stats_.grid_w, gh = stats_.grid_h, P = engine_.patch_size(), W = gw * P, H = gh * P;
-    float lut[256];
-    for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
-    const float sx = crop_.w / float(W), sy = crop_.h / float(H);
-    std::vector<float> tmp((size_t)crop_.h * W * 3);  // horizontal pass, linear light
-    for (int y = 0; y < crop_.h; ++y) {
-      const uint8_t* row = &preview[(size_t)y * crop_.w * 3];
-      for (int dx = 0; dx < W; ++dx) {
-        const float x0 = dx * sx, x1 = (dx + 1) * sx;
-        const int xs = (int)std::floor(x0), xe = std::min<int>(crop_.w, (int)std::ceil(x1));
-        float acc[3] = {0, 0, 0}, wsum = 0.0f;
-        for (int xx = xs; xx < xe; ++xx) {
-          const float w = std::min(x1, xx + 1.0f) - std::max(x0, (float)xx);
-          if (w <= 0.0f) continue;
-          for (int c = 0; c < 3; ++c) acc[c] += lut[row[xx * 3 + c]] * w;
-          wsum += w;
-        }
-        for (int c = 0; c < 3; ++c) tmp[((size_t)y * W + dx) * 3 + c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
-      }
-    }
-    std::vector<double> acc((size_t)gw * gh * 3, 0.0);  // vertical pass, CIELAB per pixel, summed per patch
-    for (int dy = 0; dy < H; ++dy) {
-      const float y0 = dy * sy, y1 = (dy + 1) * sy;
-      const int ys = (int)std::floor(y0), ye = std::min<int>(crop_.h, (int)std::ceil(y1));
-      for (int dx = 0; dx < W; ++dx) {
-        float a3[3] = {0, 0, 0}, wsum = 0.0f;
-        for (int yy = ys; yy < ye; ++yy) {
-          const float w = std::min(y1, yy + 1.0f) - std::max(y0, (float)yy);
-          if (w <= 0.0f) continue;
-          for (int c = 0; c < 3; ++c) a3[c] += tmp[((size_t)yy * W + dx) * 3 + c] * w;
-          wsum += w;
-        }
-        const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
-        const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
-        double* a = &acc[((size_t)(dy / P) * gw + dx / P) * 3];
-        a[0] += c.L;
-        a[1] += c.a;
-        a[2] += c.b;
-      }
-    }
-    std::vector<float> lab(acc.size());
-    for (size_t i = 0; i < acc.size(); ++i) lab[i] = (float)(acc[i] / ((double)P * P));
-    return lab;
-  }
-  std::vector<float> point_lab(const std::vector<uint8_t>& preview) const {
-    const int gw = stats_.grid_w, gh = stats_.grid_h;
-    std::vector<uint8_t> resized((size_t)gw * gh * 3);
-    cv_linear_resize_rgb(preview.data(), crop_.w, crop_.h, crop_.w * 3, resized.data(), gw, gh);
-    std::vector<float> lab((size_t)gw * gh * 3);
-    for (int i = 0; i < gw * gh; ++i) {
-      const negicc::Lab c = negicc::srgb_to_lab({resized[i * 3] / 255.0f, resized[i * 3 + 1] / 255.0f, resized[i * 3 + 2] / 255.0f});
-      lab[i * 3] = c.L;
-      lab[i * 3 + 1] = c.a;
-      lab[i * 3 + 2] = c.b;
-    }
+    std::vector<float> lab((size_t)stats_.grid_w * stats_.grid_h * 3);
+    trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(), lab.data());
     return lab;
   }
   // What intent_loss scores at these parameters: the patch-averaged camera-RGB grid (stats_.grid) rendered as the
@@ -800,6 +762,26 @@ class SearchFrame {
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
+  // The optimiser's correction for one bracket (DESIGN.md, "The picture the search scores"): intent_loss renders the
+  // patch-averaged camera RGB, and rendering an average is not the average of the render, so its cells read darker
+  // than the picture's (2.1 L* on TriLED, 1.7 on white LED, differently per frame) and bluer. After each preview of a
+  // bracket, the trained cells of that preview minus the optimiser's cells at the same parameters are kept, and the
+  // bracket's next search() aims the optimiser at the field minus that difference, so that at the fixed point the
+  // picture, not the optimiser's reading of it, matches the field.
+  void update_correction(int target_idx, const ConversionParams& params, const std::vector<uint8_t>& preview) {
+    const int n = stats_.grid_w * stats_.grid_h;
+    std::vector<float> picture((size_t)n * 3), optimiser((size_t)n * 3);
+    trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(), picture.data());
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    cfg.shoulder = params.shoulder;
+    intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {params.e, params.g, params.b}, optimiser.data());
+    std::vector<float>& c = correction_[target_idx];
+    c.resize(picture.size());
+    for (size_t i = 0; i < picture.size(); ++i) c[i] = picture[i] - optimiser[i];
+  }
+
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
@@ -931,8 +913,8 @@ class SearchFrame {
   // preview with L* replaced by the frame's lightness wish.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
-    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h,
-                                                 stats_.grid_w, stats_.grid_h, mu.data(), sigma.data());
+    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h,
+                                                 engine_.patch_size(), mu.data(), sigma.data());
     residual_time_ += Clock::now() - t0;
     return err;
   }
@@ -943,6 +925,9 @@ class SearchFrame {
   // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
   // searches g and b on wider grids (dinov3_auto_solver.cc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
+  // (Differs from that reference since negicc#101: the field the optimiser aims at is corrected per bracket by the
+  // picture its last preview gave (update_correction), and a bracket whose usable range is inverted gets no centre
+  // pull (pull_centre); the station's copy follows when its negicc pin moves.)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
                 bool pullback_search = false) {
@@ -969,8 +954,17 @@ class SearchFrame {
       init = {(pin_mask_ & PIN_E) ? pin_e_ : initial->e, (pin_mask_ & PIN_G) ? pin_g_ : initial->g,
               (pin_mask_ & PIN_B) ? pin_b_ : initial->b};
     }
+    // The field the optimiser aims at: the field minus this bracket's last measured correction (update_correction).
+    std::vector<float> mu_aim;
+    const float* mu_opt = mu.data();
+    const auto corr = correction_.find(target_idx);
+    if (corr != correction_.end() && corr->second.size() == mu.size()) {
+      mu_aim.resize(mu.size());
+      for (size_t i = 0; i < mu.size(); ++i) mu_aim[i] = mu[i] - corr->second[i];
+      mu_opt = mu_aim.data();
+    }
     const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
-                                                  stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
+                                                  stats_.grid_h, mu_opt, sigma.data(), initial ? &init : nullptr,
                                                   e_bounds, pin_mask_, res);
     out = {res.e, res.g, res.b, cfg.shoulder};
     search_time_ += Clock::now() - t0;
@@ -979,16 +973,15 @@ class SearchFrame {
 
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
   // kept within the trust region e_bounds = {lo, hi, centre}; outside pullback_search the search's penalty pulls E
-  // toward the centre. An inverted region is ordered and centred on its midpoint. pullback_search as for search().
+  // toward the caller's centre (none when it is 0). pullback_search as for search(). Every caller passes an ordered
+  // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
+  // an unordered one is ordered here and keeps the caller's centre.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
   // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
   // station's copy follows in the station change that moves its negicc pin.)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
-    if (e_bounds[0] > e_bounds[1]) {
-      std::swap(e_bounds[0], e_bounds[1]);
-      e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
-    }
+    if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
     ConversionParams curr = start, best;
     curr.shoulder = shoulder_of(start);
     float prev_err = std::numeric_limits<float>::infinity();
@@ -1004,6 +997,7 @@ class SearchFrame {
       // x_hi from the pre-shoulder render at the incoming parameters; held through this iteration's search.
       if (shoulder_auto_) curr.shoulder = measure_shoulder(target_idx, curr, &cur_q995);
       render_preview(target_idx, curr, preview);
+      update_correction(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
       // The L* the model asks for follows the picture it is shown, so a loop re-predicting L* from its own render
       // drifts lighter or darker by itself, and residuals measured against different fields cannot rank lightness:
@@ -1183,6 +1177,7 @@ class SearchFrame {
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
+  std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
   std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
 };
 
@@ -1629,6 +1624,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::vector<float> m, sg;
     for (size_t k = 0; k < renders.size(); ++k) {
       fr.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
+      fr.update_correction(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
       if (!fr.predict(preview, m, sg)) return false;
       if (k == 0) {
         mu.assign(m.size(), 0.0f);
@@ -1660,12 +1656,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     auto record = [&](const char* kind, int set_idx, float stop, int target_idx, const ConversionParams& cp) -> bool {
       fr.render_preview(target_idx, cp, pv);
       if (!fr.predict(pv, mu, sg)) return false;
-      const std::vector<float> lab = fr.patch_lab(pv), pts = fr.point_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
+      const std::vector<float> lab = fr.patch_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
       recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
                       {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
                       {"shoulder", cp.shoulder}, {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)},
-                      {"residual_render", mean3(pts)}, {"optimiser_render", mean3(opt)},
-                      {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}, {"residual_cells", pts},
+                      {"optimiser_render", mean3(opt)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab},
                       {"optimiser_cells", opt}});
       return true;
     };
@@ -1714,7 +1709,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       s.result.e_lo = lo;
       s.result.e_hi = hi;
       s.result.e_metered = e_met;
-      const float eb[3] = {lo, hi, c.e_center};
+      const float eb[3] = {lo, hi, pull_centre(c)};
       s.result.intent_loss = fr.search(c.target_idx, mu, sigma, nullptr, eb, s.result.params, pullback_search);
       rows.push_back(s);
     };
@@ -1748,7 +1743,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   auto trust_bounds = [](const Screened& c, float eb[3]) {
     eb[0] = std::max(c.result.e_lo, c.result.params.e * std::pow(2.0f, -0.5f));
     eb[1] = std::min(c.result.e_hi, c.result.params.e * std::pow(2.0f, 0.5f));
-    eb[2] = c.enclosure.e_center;
+    eb[2] = pull_centre(c.enclosure);
   };
   auto tournament = [&](const std::vector<Screened>& rows, bool pullback_search, std::vector<FixedPointResult>& runs) {
     for (size_t i = 0; i < std::min<size_t>(2, rows.size()); ++i) {

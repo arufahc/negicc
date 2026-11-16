@@ -78,7 +78,7 @@ use the same stage.
 | Search window | The usable range, for every bracket | Every bracket is searched over its calibrated range widened by the overflow allowance above, whether or not it can hold the whole scene. No bracket wins or loses because its window let it reach a lightness another's did not. |
 | Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
 | Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
-| Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. |
+| Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre (none for a bracket whose usable range is inverted) | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. A bracket that cannot hold the scene within its tolerances has no centre to prefer; see "The picture the search scores". |
 | Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
 | Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
 | Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or, when the scene does not fit the bracket, re-runs the search with penalties on exposure outside the calibrated range (over the same usable range as the first search). Dark or backlit frames are left alone, so the subject is not sunk. |
@@ -119,6 +119,37 @@ Measured on 55 TriLED and 145 white-LED frames with the shipped adapter, no para
 
 The time grows with the extra inferences, one per metered bracket. On white LED some frames still move: there the
 brackets render the scene quite differently and the network does not separate them clearly.
+
+### The picture the search scores
+
+To judge a render, something has to turn the picture into one colour per patch of the network's grid (32 by 21 for a
+3:2 frame). Three definitions were in use:
+
+| Who | What it computes for a patch |
+|---|---|
+| The adapter's training (negicc-station `training/extract.py`, `patch_lab_targets`) | The picture resampled in linear light by area average to the network's input size, CIELAB per pixel, mean over the patch's 16 by 16 pixels |
+| The residual, before | A bilinear resize of the preview straight to the grid: two by two pixels at the patch centre, of a preview 2,400 to 2,900 pixels wide |
+| The (E, g, b) optimiser (`intent_loss`) | The negative's camera RGB averaged over the patch, then rendered |
+
+- **The point samples were mostly film grain.** Per cell they sat 5.7 L\* (TriLED) and 4.8 L\* (white LED) from the trained cells, against a sigma of 3.8 and 4.5. That made the squared L\* residual about three times what the picture earns, and a crop one per cent tighter moved every sample onto other grains.
+- **Rendering an average is not the average of the render.** A negative's bright grains render dark and its dark grains bright, by a curve. So the optimiser's cells read darker than the picture's, 2.1 L\* (TriLED) and 1.7 L\* (white LED) on average and differently per frame (sd 1.2 to 1.3), and about 1 b\* bluer.
+
+Now:
+
+- **The residual reads the trained cells** (`trained_cells_lab`), the same definition as the training targets. It ranks the finalists and decides when a loop has converged. Its formula is unchanged.
+- **The optimiser keeps its cells but is corrected per bracket.** After each preview of a bracket (the bootstrap renders, every fixed-point step, the pullback's re-search renders), the difference between the trained cells of that preview and the optimiser's cells at the same parameters is kept. The bracket's next optimisation aims at the field minus that difference.
+  - **Why the fixed point is the picture's:** if the loop stops at parameters p, the last correction was measured at p. Matching the optimiser's cells at p to the field minus (picture − optimiser) at p is matching the picture at p to the field.
+  - **The field passed on is uncorrected:** the field kept for the sidecar and the later stages is the network's own.
+- **A bracket whose usable range is inverted gets no centre pull** (`pull_centre`). When the scene overflows a bracket by more than the two tolerances together (1.5 + 1.2 stops), no E keeps both ends within tolerance.
+  - **The window is the set of compromises.** At its light end the shadows sit exactly at their tolerance and the highlights carry all the overflow; at its dark end the reverse.
+  - **The field decides where to stand,** with the white-clip penalty kept and the window's two ends as bounds. The pull toward the bracket's centre had answered "split the overflow equally in log E". On a night scene of 8.1 EV (`8dda4a7e7e`) that meant a picture with a median of L\* 2.
+
+On 55 TriLED and 145 white-LED frames, shipped adapter, against the search before:
+- **Lightness self-prediction on the trained cells:** TriLED 4.54 → 3.75 L\*; colour self-prediction lower on both lights.
+- **Crop test** (frames moving over 3 L\* under a 1 % or 2 % tighter crop): white LED 10 → 5, TriLED none.
+- **Finalists more than 5 L\* apart:** 7 → 2.
+- **The pictures:** TriLED 1.3 L\* darker and 1.2 b\* yellower; white LED 0.9 L\* darker.
+- **Against the owner's exports:** lightness gets closer (4.8 → 3.5 L\* lighter than the exports) and b\* about 1 further.
 
 ## Stage 4: Tone stage
 

@@ -419,21 +419,64 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
   return (float)score;
 }
 
-float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh,
-                                const float* mu, const float* sigma) {
-  std::vector<uint8_t> resized(gw * gh * 3);
-  cv_linear_resize_rgb(preview_u8, w, h, w * 3, resized.data(), gw, gh);
+void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch, float* lab_out) {
+  const int W = gw * patch, H = gh * patch;
+  float lut[256];
+  for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
+  const float sx = w / float(W), sy = h / float(H);
+  std::vector<float> tmp((size_t)h * W * 3);  // horizontal pass, linear light
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < h; ++y) {
+    const uint8_t* row = preview_u8 + (size_t)y * w * 3;
+    for (int dx = 0; dx < W; ++dx) {
+      const float x0 = dx * sx, x1 = (dx + 1) * sx;
+      const int xs = (int)std::floor(x0), xe = std::min(w, (int)std::ceil(x1));
+      float acc[3] = {0, 0, 0}, wsum = 0.0f;
+      for (int xx = xs; xx < xe; ++xx) {
+        const float wt = std::min(x1, xx + 1.0f) - std::max(x0, (float)xx);
+        if (wt <= 0.0f) continue;
+        for (int c = 0; c < 3; ++c) acc[c] += lut[row[xx * 3 + c]] * wt;
+        wsum += wt;
+      }
+      float* o = &tmp[((size_t)y * W + dx) * 3];
+      for (int c = 0; c < 3; ++c) o[c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
+    }
+  }
+  std::vector<double> acc((size_t)gw * gh * 3, 0.0);  // vertical pass, CIELAB per pixel, summed per patch
+  for (int dy = 0; dy < H; ++dy) {
+    const float y0 = dy * sy, y1 = (dy + 1) * sy;
+    const int ys = (int)std::floor(y0), ye = std::min(h, (int)std::ceil(y1));
+    for (int dx = 0; dx < W; ++dx) {
+      float a3[3] = {0, 0, 0}, wsum = 0.0f;
+      for (int yy = ys; yy < ye; ++yy) {
+        const float wt = std::min(y1, yy + 1.0f) - std::max(y0, (float)yy);
+        if (wt <= 0.0f) continue;
+        const float* q = &tmp[((size_t)yy * W + dx) * 3];
+        for (int c = 0; c < 3; ++c) a3[c] += q[c] * wt;
+        wsum += wt;
+      }
+      const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
+      const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
+      double* a = &acc[((size_t)(dy / patch) * gw + dx / patch) * 3];
+      a[0] += c.L;
+      a[1] += c.a;
+      a[2] += c.b;
+    }
+  }
+  const double inv_n = 1.0 / ((double)patch * patch);
+  for (size_t i = 0; i < acc.size(); ++i) lab_out[i] = (float)(acc[i] * inv_n);
+}
 
-  double sum_res = 0.0;
+float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch,
+                                const float* mu, const float* sigma) {
   const int n = gw * gh;
+  std::vector<float> lab((size_t)n * 3);
+  trained_cells_lab(preview_u8, w, h, gw, gh, patch, lab.data());
+  double sum_res = 0.0;
   for (int i = 0; i < n; ++i) {
-    const Rgb c = { resized[i * 3 + 0] / 255.0f,
-                    resized[i * 3 + 1] / 255.0f,
-                    resized[i * 3 + 2] / 255.0f };
-    const Lab lab = negicc::srgb_to_lab(c);
-    const float dL = (lab.L - mu[i * 3 + 0]) / sigma[i * 3 + 0];
-    const float da = (lab.a - mu[i * 3 + 1]) / sigma[i * 3 + 1];
-    const float db = (lab.b - mu[i * 3 + 2]) / sigma[i * 3 + 2];
+    const float dL = (lab[i * 3 + 0] - mu[i * 3 + 0]) / sigma[i * 3 + 0];
+    const float da = (lab[i * 3 + 1] - mu[i * 3 + 1]) / sigma[i * 3 + 1];
+    const float db = (lab[i * 3 + 2] - mu[i * 3 + 2]) / sigma[i * 3 + 2];
     sum_res += (dL * dL + da * da + db * db) / 3.0;
   }
   return (float)(sum_res / n);
@@ -684,7 +727,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
 
     out.status = "PINNED";
     out.best_iteration = 0;
-    out.best_residual = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h,
+    out.best_residual = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h, eng.patch_size(),
                                                   inf.mu.data(), inf.sigma.data());
     out.solved_relative = {1.0f, 1.0f, 1.0f};
     out.solved_absolute = user_gains;
@@ -746,7 +789,7 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
 
     const double t0_resid = omp_get_wtime();
-    const double err = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h,
+    const double err = self_consistency_residual(preview_u8.data(), w, h, grid_w, grid_h, eng.patch_size(),
                                                  inf.mu.data(), inf.sigma.data());
     out.timing_residual_ms += (omp_get_wtime() - t0_resid) * 1000.0;
 

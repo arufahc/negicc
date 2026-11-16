@@ -145,9 +145,9 @@ struct ParamSearchOptions {
   // bootstrap, before screening (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the
   // bootstrap's gains (and at the E its window clamps it to, where that differs), then every probe_params set (target
   // index, E in the search's units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured
-  // at each as the fixed-point loop measures it. Each render's cells are recorded three ways: render_cells (made as the
-  // training targets are: linear-light area resample to grid x patch, CIELAB per pixel, mean per patch), residual_cells (the point
-  // samples residual() reads) and optimiser_cells (what intent_loss scores at those parameters).
+  // at each as the fixed-point loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as
+  // the residual reads them and as the training targets are made) and optimiser_cells (what intent_loss scores at
+  // those parameters, before the per-bracket correction).
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
