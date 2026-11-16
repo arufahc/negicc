@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -722,6 +723,26 @@ class SearchFrame {
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
+  // The optimiser's correction for one bracket (DESIGN.md, "The picture the search scores"): intent_loss renders the
+  // patch-averaged camera RGB, and rendering an average is not the average of the render, so its cells read darker
+  // than the picture's (2.1 L* on TriLED, 1.7 on white LED, differently per frame) and bluer. After each preview of a
+  // bracket, the trained cells of that preview minus the optimiser's cells at the same parameters are kept, and the
+  // bracket's next search() aims the optimiser at the field minus that difference, so that at the fixed point the
+  // picture, not the optimiser's reading of it, matches the field.
+  void update_correction(int target_idx, const ConversionParams& params, const std::vector<uint8_t>& preview) {
+    const int n = stats_.grid_w * stats_.grid_h;
+    std::vector<float> picture((size_t)n * 3), optimiser((size_t)n * 3);
+    trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(), picture.data());
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    cfg.shoulder = params.shoulder;
+    intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {params.e, params.g, params.b}, optimiser.data());
+    std::vector<float>& c = correction_[target_idx];
+    c.resize(picture.size());
+    for (size_t i = 0; i < picture.size(); ++i) c[i] = picture[i] - optimiser[i];
+  }
+
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
@@ -891,8 +912,17 @@ class SearchFrame {
       init = {(pin_mask_ & PIN_E) ? pin_e_ : initial->e, (pin_mask_ & PIN_G) ? pin_g_ : initial->g,
               (pin_mask_ & PIN_B) ? pin_b_ : initial->b};
     }
+    // The field the optimiser aims at: the field minus this bracket's last measured correction (update_correction).
+    std::vector<float> mu_aim;
+    const float* mu_opt = mu.data();
+    const auto corr = correction_.find(target_idx);
+    if (corr != correction_.end() && corr->second.size() == mu.size()) {
+      mu_aim.resize(mu.size());
+      for (size_t i = 0; i < mu.size(); ++i) mu_aim[i] = mu[i] - corr->second[i];
+      mu_opt = mu_aim.data();
+    }
     const float loss = optimize_target_for_intent(cfg, input_matrix_, stats_.grid.data(), stats_.grid_w,
-                                                  stats_.grid_h, mu.data(), sigma.data(), initial ? &init : nullptr,
+                                                  stats_.grid_h, mu_opt, sigma.data(), initial ? &init : nullptr,
                                                   e_bounds, pin_mask_, res);
     out = {res.e, res.g, res.b, cfg.shoulder};
     search_time_ += Clock::now() - t0;
@@ -926,6 +956,7 @@ class SearchFrame {
       // x_hi from the pre-shoulder render at the incoming parameters; held through this iteration's search.
       if (shoulder_auto_) curr.shoulder = measure_shoulder(target_idx, curr, &cur_q995);
       render_preview(target_idx, curr, preview);
+      update_correction(target_idx, curr, preview);
       if (!predict(preview, mu, sigma)) return false;
       // The L* the model asks for follows the picture it is shown, so a loop re-predicting L* from its own render
       // drifts lighter or darker by itself, and residuals measured against different fields cannot rank lightness:
@@ -1105,6 +1136,7 @@ class SearchFrame {
   Clock::duration render_time_{}, infer_time_{}, search_time_{}, residual_time_{};  // added up per measurement
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
+  std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
   std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
 };
 
@@ -1551,6 +1583,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::vector<float> m, sg;
     for (size_t k = 0; k < renders.size(); ++k) {
       fr.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
+      fr.update_correction(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
       if (!fr.predict(preview, m, sg)) return false;
       if (k == 0) {
         mu.assign(m.size(), 0.0f);

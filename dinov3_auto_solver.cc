@@ -78,6 +78,20 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
   }
 }
 
+void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
+                  const IntentGains& cand, float* lab_out) {
+  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
+  float m[9];
+  negicc::candidate_matrix(merged, cand.e, cand.g, cand.b, m);
+  for (int i = 0; i < n_px; ++i) {
+    const negicc::Rgb lin = negicc::convert_pixel_linear(pc, m, grid_rgb16 + i * 3);
+    const negicc::Lab lab = negicc::linear_srgb_to_lab(negicc::to_display(pc, lin));
+    lab_out[i * 3] = lab.L;
+    lab_out[i * 3 + 1] = lab.a;
+    lab_out[i * 3 + 2] = lab.b;
+  }
+}
+
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out) {
   const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
