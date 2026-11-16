@@ -32,6 +32,23 @@ halves of the 264 colour patches, and checked on the half it left out. The 24 gr
 That is the better guide to the error on colours in a real photograph. The profiles are not de-glared: removing the
 chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.
 
+## Dynamic range
+
+Range across each bracket's 24 grey patches (`gs0` to `gs23`) before crosstalk correction (`bundle.json`'s patch values
+multiplied by the inverse of `crosstalk_correction_matrix`), as 14-bit ADC bit depth (`log2(max - min)` out of `16384`)
+and contrast in stops (`log2(max / min)`).
+
+| Bracket | Profile | Shutter | Bit depth: R / G / B | Bit depth: mean | Stops: R / G / B | Stops: mean |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| −3 EV | `Target_1.icc` | 1/8s | 12.78 / 13.23 / 13.10 | 13.04 | 1.29 / 1.75 / 1.87 | 1.63 |
+| −2 EV | `Target_2.icc` | 1/8s | 12.97 / 13.36 / 13.21 | 13.18 | 1.63 / 2.17 / 2.32 | 2.04 |
+| −1 EV | `Target_3.icc` | 1/8s | 13.07 / 13.38 / 13.22 | 13.22 | 1.93 / 2.52 / 2.73 | 2.40 |
+| 0 EV | `Target_4.icc` | 1/6s | 13.45 / 13.71 / 13.48 | 13.55 | 2.29 / 2.96 / 3.18 | 2.81 |
+| +1 EV | `Target_5.icc` | 1/5s | 13.72 / 13.78 / 13.55 | 13.68 | 2.63 / 3.20 / 3.41 | 3.08 |
+| +2 EV | `Target_6.icc` | 1/4s | 13.74 / 13.64 / 13.40 | 13.59 | 2.71 / 3.26 / 3.49 | 3.15 |
+| +3 EV | `Target_7.icc` | 1/3s | 13.63 / 13.46 / 13.22 | 13.44 | 2.64 / 3.13 / 3.35 | 3.04 |
+| **Mean** | — | — | **13.34 / 13.51 / 13.31** | **13.39** | **2.16 / 2.71 / 2.91** | **2.59** |
+
 <!-- print profiles: written by tools/export_negicc_data.py -->
 ## Print profiles
 

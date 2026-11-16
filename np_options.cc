@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <array>
+#include <cstdio>
 #include "np_log.h"
 #include "np_options.h"
 
@@ -23,14 +25,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <type_traits>
 
 #include "argparse/argparse.hpp"
-#include <nlohmann/json.hpp>
 #include "embedded_data.h"
 #include "libraw/libraw.h"
 #include "np_input.h"
@@ -359,6 +359,19 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
+  parser.add_argument("--probe_intent")
+    .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "
+          "of this frame to this JSON file and stop without converting. Renders every metered bracket at its metered "
+          "exposure, then each --probe_params set at each --probe_stops offset. Needs a bundle search (no pins).")
+    .default_value(std::string(""));
+  parser.add_argument("--probe_params")
+    .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target index, E in the search's units).")
+    .default_value(std::string(""));
+  parser.add_argument("--probe_stops")
+    .help("With --probe_intent: exposure offsets in stops applied to each --probe_params set, e.g. -0.5 0 0.5.")
+    .nargs(1, 16)
+    .scan<'g', float>()
+    .default_value(std::vector<float>{0.0f});
   parser.add_argument("--dino_iters")
     .help("Maximum iterations for DINOv3 parameter solving: the fixed-point steps of each bracket in the parameter "
           "search (defaults to 8), else the solver's iterations (defaults to 4).")
@@ -444,6 +457,22 @@ int parse_options(int ac, char* av[], Options& o) {
   if (files.size() == 4 && !check_pixel_shift_files(files)) return 1;
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
+  o.probe_intent = parser.get<std::string>("--probe_intent");
+  {
+    std::stringstream all(parser.get<std::string>("--probe_params"));
+    std::string item;
+    while (std::getline(all, item, ';')) {
+      std::array<float, 4> p{};
+      if (item.empty()) continue;
+      if (std::sscanf(item.c_str(), "%f,%f,%f,%f", &p[0], &p[1], &p[2], &p[3]) != 4) {
+        log_error("--probe_params: \"%s\" is not target,E,g,b\n", item.c_str());
+        return 1;
+      }
+      o.probe_params.push_back(p);
+    }
+    o.probe_stops = parser.get<std::vector<float>>("--probe_stops");
+    if (o.probe_stops.empty()) o.probe_stops.push_back(0.0f);
+  }
   if (o.dino_iters <= 0) {
     log_error("--dino_iters must be positive (got %d)\n", o.dino_iters);
     return 1;
@@ -694,13 +723,13 @@ int parse_options(int ac, char* av[], Options& o) {
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
     for (const std::string& id : o.prints) {
-      // A spektrafilm print profile given as a file is checked now, so a wrong file stops the run before it starts.
+      // A spektrafilm print profile given as a file is loaded now, without a bundle (every check of the real load
+      // runs; only the matrices for the bundle's film wait for the conversion), so a wrong file stops the run before
+      // it starts.
       if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
-        std::ifstream file(id, std::ios::binary);
-        std::stringstream text;
-        text << file.rdbuf();
-        std::string why;
-        if (!check_spektrafilm_print(nlohmann::json::parse(text.str(), nullptr, false), why)) {
+        std::string text, stem, why;
+        PrintMaterial material;
+        if (!read_print_file(id, text, stem, why) || !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
           log_error("--print %s: %s\n", id.c_str(), why.c_str());
           return 1;
         }

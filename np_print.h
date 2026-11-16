@@ -39,8 +39,6 @@
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
-
 #include "profile_bundle.h"
 
 constexpr double kDensityMinT = 1e-4;   // the transmittance floor before the log (4.0 density)
@@ -188,13 +186,6 @@ struct PrintMaterial {
   double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
 };
 
-// Whether a parsed JSON is a spektrafilm profile of a print material neg_process can print with: info.stage
-// "printing", info.support paper or film (it picks the viewing light), each layer's density_curves rising with
-// exposure, and each layer's log_sensitivity peaking within 6 (log10) of the most sensitive layer's. False with why in
-// err. load_spektrafilm_print checks it, and --print checks a file given to it before the
-// run starts.
-bool check_spektrafilm_print(const nlohmann::json& j, std::string& err);
-
 // A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.
 // Computed here:
 //
@@ -210,7 +201,13 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err);
 //                             log exposure -1.5 and 1.0, each with 27 colour variations). P M = Q L for every
 //                             measure, so the bracket's uncalibrated APD slopes apply once
 //
-// id names the material when the profile's info.stock does not. False with why in err; a bundle without a
+// The profile is checked first: info.stage "printing", info.support paper or film (it picks the viewing light),
+// log_exposure ascending with one row of density_curves per value, each layer's curve rising with exposure (by more
+// than 0.5 over the profile, never more than 0.02 below its highest value so far) and each layer's log_sensitivity
+// peaking within 6 (log10) of the most sensitive layer's. --print loads a file given to it at option time, without a
+// bundle, so every rule here stops a wrong file before any frame is converted.
+//
+// id names the material when the profile's info.stock is not a string. False with why in err; a bundle without a
 // film_model gives a material without matrices, which frame_print refuses.
 // py-ref: negicc_station/src/print_emulation.py (spektrafilm_print, print_matrix, film_to_print_density, PrintModel)
 bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
@@ -286,6 +283,10 @@ std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle =
 // Whether a --print value names a file (a spektrafilm print profile: a path, or a name ending in .json) and not a
 // built-in print material.
 bool is_print_file(const std::string& name);
+
+// The text of a spektrafilm print profile given as a file, and its stem (the name without folder and .json), the id of
+// a profile without info.stock. False with "cannot be read" in err for a file that cannot be opened or read.
+bool read_print_file(const std::string& path, std::string& text, std::string& stem, std::string& err);
 
 struct DensityPrints {
   std::vector<PrintMaterial> materials;

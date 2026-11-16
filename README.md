@@ -300,8 +300,6 @@ and balance, so only the print material changes.*
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. |
 
-`--tint_trim` was removed. If you replay an older sidecar's command line, drop it.
-
 ## Hardware the profiles were made with
 
 Sony A7R IV (`ILCE-7RM4`); a [Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) RGB LED light for the RGB-LED
