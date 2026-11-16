@@ -105,6 +105,12 @@ struct Setup {
   // conversion renders the chosen bracket's print profile. Empty without.
   std::string print_id, print_name;
   std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
+  // --print_search gb or full (experimental): the bundle with every bracket's profile replaced by its print profile;
+  // for gb, the scene's g and b before the print's search and that search's steps.
+  ProfileBundle print_bundle;
+  float print_scene_g = 0.0f, print_scene_b = 0.0f;
+  int print_gb_steps = 0;
+  bool print_gb_converged = false;
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
   std::vector<ParsedFilmProfile> print_profs;
   std::vector<std::vector<uint8_t>> print_iccs;

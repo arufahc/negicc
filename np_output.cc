@@ -572,6 +572,17 @@ bool write_json_sidecar(const Sidecar& sc) {
         j["profile"]["print"]["file"] = sc.print_file;
         j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
       }
+      // --print_search (experimental): how the print was searched, and for gb how far it moved the scene's gains.
+      if (!sc.print_search.empty() && sc.print_search != "scene") {
+        j["profile"]["print"]["search"] = sc.print_search;
+        if (sc.print_search == "gb" && sc.print_scene_g > 0.0f && sc.print_scene_b > 0.0f) {
+          j["profile"]["print"]["scene_gains"] = {num(sc.print_scene_g, "%.9g"), num(sc.print_scene_b, "%.9g")};
+          j["profile"]["print"]["gains_stops"] = {num(std::log2(sc.print_g / sc.print_scene_g), "%.6g"),
+                                                  num(std::log2(sc.print_b / sc.print_scene_b), "%.6g")};
+          j["profile"]["print"]["gb_steps"] = sc.print_gb_steps;
+          j["profile"]["print"]["gb_converged"] = sc.print_gb_converged;
+        }
+      }
     }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
