@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -32,6 +33,7 @@
 #include "dinov3_auto_solver.h"
 #include "dinov3_preprocess.h"
 #include "profile_bundle.h"
+#include "nlohmann/json.hpp"
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {
@@ -413,6 +415,8 @@ bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, floa
 // longer side scaled to the engine's max_size, each side rounded to whole patches of patch_size pixels, so
 // grid_w x grid_h patches (32 x 21 for a 3:2 landscape crop at 512 and 16).
 // py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
+// (Since negicc#101 the search uses this grid only for the optimiser's cells, corrected per bracket by the trained cells
+// of its last preview (update_correction); the station's copy of that correction follows when its negicc pin moves.)
 struct FrameStats {
   float g_lo = 0.0f, g_hi = 0.0f;
   float log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
@@ -732,6 +736,25 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
+  // For --probe_intent: the preview's trained cells (trained_cells_lab), what the residual reads and what the network is
+  // trained to predict.
+  std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
+    std::vector<float> lab((size_t)stats_.grid_w * stats_.grid_h * 3);
+    trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(), lab.data());
+    return lab;
+  }
+  // What intent_loss scores at these parameters: the patch-averaged camera-RGB grid (stats_.grid) rendered as the
+  // (E, g, b) optimiser renders it.
+  std::vector<float> optimiser_lab(int target_idx, const ConversionParams& cp) const {
+    SolverConfig cfg;
+    cfg.prof = &bundle_.targets[target_idx].film_prof.data;
+    cfg.knee = AUTO_KNEE;
+    cfg.shoulder = cp.shoulder;
+    const int n = stats_.grid_w * stats_.grid_h;
+    std::vector<float> lab((size_t)n * 3);
+    intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
+    return lab;
+  }
   const FrameStats& stats() const { return stats_; }
   const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
@@ -902,6 +925,9 @@ class SearchFrame {
   // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
   // searches g and b on wider grids (dinov3_auto_solver.cc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
+  // (Differs from that reference since negicc#101: the field the optimiser aims at is corrected per bracket by the
+  // picture its last preview gave (update_correction), and a bracket whose usable range is inverted gets no centre
+  // pull (pull_centre); the station's copy follows when its negicc pin moves.)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
                 bool pullback_search = false) {
@@ -947,16 +973,15 @@ class SearchFrame {
 
   // The fixed-point loop of bracket target_idx (FixedPointResult), from start (its screening result) with E
   // kept within the trust region e_bounds = {lo, hi, centre}; outside pullback_search the search's penalty pulls E
-  // toward the centre. An inverted region is ordered and centred on its midpoint. pullback_search as for search().
+  // toward the caller's centre (none when it is 0). pullback_search as for search(). Every caller passes an ordered
+  // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
+  // an unordered one is ordered here and keeps the caller's centre.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
   // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
   // station's copy follows in the station change that moves its negicc pin.)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
-    if (e_bounds[0] > e_bounds[1]) {
-      std::swap(e_bounds[0], e_bounds[1]);
-      e_bounds[2] = (e_bounds[0] + e_bounds[1]) / 2.0f;
-    }
+    if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
     ConversionParams curr = start, best;
     curr.shoulder = shoulder_of(start);
     float prev_err = std::numeric_limits<float>::infinity();
@@ -1615,6 +1640,61 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   };
   if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
+
+  // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
+  if (!opts.probe_path.empty()) {
+    nlohmann::json recs = nlohmann::json::array();
+    std::vector<uint8_t> pv;
+    std::vector<float> mu, sg;
+    auto mean3 = [](const std::vector<float>& v) {
+      double s[3] = {0, 0, 0};
+      const size_t n = v.size() / 3;
+      for (size_t i = 0; i < n; ++i)
+        for (int c = 0; c < 3; ++c) s[c] += v[i * 3 + c];
+      return std::vector<double>{s[0] / n, s[1] / n, s[2] / n};
+    };
+    auto record = [&](const char* kind, int set_idx, float stop, int target_idx, const ConversionParams& cp) -> bool {
+      fr.render_preview(target_idx, cp, pv);
+      if (!fr.predict(pv, mu, sg)) return false;
+      const std::vector<float> lab = fr.patch_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
+      recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
+                      {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
+                      {"shoulder", cp.shoulder}, {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)},
+                      {"optimiser_render", mean3(opt)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab},
+                      {"optimiser_cells", opt}});
+      return true;
+    };
+    int k = 0;
+    for (const auto& d : depths) {
+      if (!record("metered", k, 0.0f, d.cand.target_idx, {d.e_met, boot_g, boot_b})) return false;
+      const float ec = std::clamp(d.e_met, d.lo, d.hi);
+      if (ec != d.e_met && !record("metered_clamped", k, 0.0f, d.cand.target_idx, {ec, boot_g, boot_b})) return false;
+      ++k;
+    }
+    for (size_t si = 0; si < opts.probe_params.size(); ++si) {
+      const auto& p = opts.probe_params[si];
+      const int t = (int)p[0];
+      if (t < 0 || t >= (int)bundle.targets.size()) continue;
+      for (const float stop : opts.probe_stops) {
+        ConversionParams cp{p[1] * std::pow(2.0f, stop), p[2], p[3]};
+        float q995 = 0.0f;
+        cp.shoulder = fr.measure_shoulder(t, cp, &q995);
+        if (!record("params", (int)si, stop, t, cp)) return false;
+      }
+    }
+    const nlohmann::json doc = {{"grid_w", stats.grid_w}, {"grid_h", stats.grid_h}, {"e_norm", out.e_norm},
+                                {"has_crosstalk", bundle.has_crosstalk}, {"bootstrap_target", cand1.target_idx},
+                                {"bootstrap_e", e1_init}, {"records", recs}};
+    std::ofstream f(opts.probe_path);
+    if (!f) {
+      std::cerr << "ERROR! Cannot write the probe file " << opts.probe_path << std::endl;
+      return false;
+    }
+    f << doc.dump() << "\n";
+    out.probed = true;
+    if (verbose) std::cout << "Auto: probe: " << recs.size() << " renders written to " << opts.probe_path << "\n";
+    return true;
+  }
 
   // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
   // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
