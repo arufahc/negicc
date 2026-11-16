@@ -1,0 +1,13 @@
+name = "negicc"
+version = "0.1.0"
+defaultTargets = ["Negicc"]
+
+# Mathlib is pinned to an exact commit: the one its tag v4.36.0 names. That tag is built with
+# the Lean release in `lean-toolchain`, so `lake exe cache get` downloads compiled Mathlib.
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4.git"
+rev = "fc4f59e577feb1a4956671bc04ac18aaaf8cd842"
+
+[[lean_lib]]
+name = "Negicc"
