@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -142,6 +143,12 @@ struct Sidecar {
   int print_gb_steps = 0;
   bool print_gb_converged = false;
   bool print_from_bundle = false;
+  // --print_a or --print_search continuous: the print's mid grey A (NaN: the bracket's own), and the search's record.
+  double print_a = NAN, print_a0 = NAN, print_boot_h = 0.0;
+  double print_bracket_a_mid = NAN;   // the chosen bracket's own mid grey A_mid
+  int print_cont_steps = 0;
+  bool print_cont_converged = false;
+  float print_above_knee = 0.0f, print_wish_l = 0.0f;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

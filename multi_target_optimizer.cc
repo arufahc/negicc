@@ -2764,3 +2764,193 @@ bool search_print_gains(const ProfileBundle& print_bundle, DinoV3Engine& engine,
   out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
   return true;
 }
+
+bool search_print_continuous(const ProfileBundle& print_bundle, const ContinuousPrint& cp, DinoV3Engine& engine,
+                             const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                             const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr) {
+  const Clock::time_point t0 = Clock::now();
+  cr = ContinuousPrintResult{};
+  if (print_bundle.targets.empty() || !print_bundle.has_crosstalk || !cp.set_curves_at || !cp.green_apd ||
+      !(cp.a_hi > cp.a_lo)) {
+    std::cerr << "ERROR! The continuous print search needs a TriLED bundle's print" << std::endl;
+    return false;
+  }
+  constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
+  ProfileBundle pb = print_bundle;   // its one target carries the print at the current A
+  pb.targets.resize(1);
+  pb.targets[0].film_prof.rebind_pointers();
+  ParsedFilmProfile& prof = pb.targets[0].film_prof;
+  out = ParamSearchResult{};
+  SearchFrame fr(pb, engine, opts.verbose, opts.max_steps, out);
+  fr.set_shoulder(1.0f, false);   // a print keeps no highlight shoulder (the paper rolls off to its white)
+  fr.set_frame(frame, opts.crop_ratio);
+  const FrameScale scale = frame_scale(pb, (float)scan_shutter_s, (float)scan_iso, opts);
+  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
+  const float e_norm = fr.e_norm();
+  out.e_norm = e_norm;
+  for (int i = 0; i < 9; ++i) out.input_matrix[i] = scale.frame_matrix[i] / e_norm;
+  for (int r = 0; r < 3; ++r) {
+    out.row_scale[r] = (scale.fb[r] > 0 ? (pb.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm;
+  }
+  const float E = 1.0f;
+  float m[9];
+  negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
+  // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).
+  {
+    const InnerCrop& c = fr.crop();
+    long above = 0, total = 0;
+    uint16_t px[3];
+    for (int y = c.y0; y < c.y0 + c.h; y += 4)
+      for (int x = c.x0; x < c.x0 + c.w; x += 4) {
+        frame.sample(x, y, px);
+        float u = 0.0f;
+        for (int r = 0; r < 3; ++r) u = std::max(u, (m[r * 3] * px[0] + m[r * 3 + 1] * px[1] + m[r * 3 + 2] * px[2]) / 65535.0f);
+        above += u > AUTO_KNEE;
+        ++total;
+      }
+    cr.above_knee = total ? (float)above / total : 0.0f;
+  }
+  // A0: the median over the grid cells of G_green(dL_green).
+  const FrameStats& st = fr.stats();
+  const size_t n = st.grid.size() / 3;
+  std::vector<double> ga(n);
+  for (size_t i = 0; i < n; ++i) {
+    const double u = (m[3] * st.grid[i * 3] + m[4] * st.grid[i * 3 + 1] + m[5] * st.grid[i * 3 + 2]) / 65535.0;
+    ga[i] = cp.green_apd(-std::log10(std::max(u, 1e-7) / cp.n0));
+  }
+  std::nth_element(ga.begin(), ga.begin() + (long)(n / 2), ga.end());
+  const double a0 = std::clamp(ga[n / 2], cp.a_lo, cp.a_hi);
+  cr.a0 = a0;
+  // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
+  std::vector<uint8_t> preview;
+  std::vector<float> mu1, sig1, mu, sg;
+  std::vector<double> boot = {a0};
+  if (cp.boot_h > 0.0) boot = {a0 - cp.boot_h, a0, a0 + cp.boot_h};
+  for (size_t k = 0; k < boot.size(); ++k) {
+    cp.set_curves_at(std::clamp(boot[k], cp.a_lo, cp.a_hi), prof);
+    fr.render_preview(0, {E, 1.0f, 1.0f}, preview);
+    if (!fr.predict(preview, mu, sg)) return false;
+    if (k == 0) {
+      mu1.assign(mu.size(), 0.0f);
+      sig1.assign(sg.size(), 0.0f);
+    }
+    for (size_t i = 0; i < mu.size(); ++i) {
+      mu1[i] += mu[i] / boot.size();
+      sig1[i] += sg[i] / boot.size();
+    }
+  }
+  {
+    double s = 0.0;
+    for (size_t i = 0; i < n; ++i) s += mu1[i * 3];
+    cr.wish_mean_l = (float)(s / n);
+  }
+  if (opts.verbose) {
+    std::cout << "Print (continuous): A0 " << a0 << " (range " << cp.a_lo << " to " << cp.a_hi << "), above the knee at E = 1: "
+              << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)\n";
+  }
+  // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field (the optimiser's wide
+  // grids, as the scene search screens its brackets).
+  fr.set_pins(PIN_E, E, 1.0f, 1.0f);
+  float e_bounds[3] = {E, E, E};
+  ConversionParams curr{E, 1.0f, 1.0f, 1.0f};
+  {
+    cp.set_curves_at(a0, prof);
+    ConversionParams scr;
+    fr.search(0, mu1, sig1, nullptr, e_bounds, scr);
+    curr.g = scr.g;
+    curr.b = scr.b;
+  }
+  ConversionParams best = curr;
+  double a = a0, best_a = a0;
+  float best_err = INFINITY, prev_err = INFINITY;
+  std::vector<float> best_mu, best_sg;
+  bool stop_next = false;
+  for (int it = 0; it < std::max(1, opts.max_steps); ++it) {
+    cp.set_curves_at(a, prof);
+    fr.render_preview(0, curr, preview);
+    fr.update_correction(0, curr, preview);
+    if (!fr.predict(preview, mu, sg)) return false;
+    for (size_t i = 0; i < n; ++i) {
+      mu[i * 3] = mu1[i * 3];
+      sg[i * 3] = sig1[i * 3];
+    }
+    const float err = fr.residual(preview, mu, sg);
+    cr.steps = it + 1;
+    if (err < best_err) {
+      best_err = err;
+      best = curr;
+      best_a = a;
+      best_mu = mu;
+      best_sg = sg;
+    }
+    if (opts.verbose) {
+      std::cout << "  continuous step " << it + 1 << ": A " << a << " g " << curr.g << " b " << curr.b << " residual " << err << "\n";
+    }
+    if (stop_next || (std::isfinite(prev_err) && std::fabs(err - prev_err) <= TOL_REL_ERR * prev_err)) {
+      cr.converged = true;
+      break;
+    }
+    prev_err = err;
+    // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned).
+    ConversionParams gb;
+    auto loss = [&](double x, ConversionParams& p) {
+      cp.set_curves_at(x, prof);
+      return fr.search(0, mu, sg, &curr, e_bounds, p);
+    };
+    // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range.
+    auto clampA = [&](double x) { return std::clamp(x, cp.a_lo, cp.a_hi); };
+    double xm = clampA(a);
+    float fm = loss(xm, gb);
+    double xl = clampA(xm - kContinuousStep), xr = clampA(xm + kContinuousStep);
+    float fl = loss(xl, gb), fr_ = loss(xr, gb);
+    while (fl < fm && xl > cp.a_lo) {
+      xr = xm; fr_ = fm; xm = xl; fm = fl;
+      xl = clampA(xm - kContinuousStep);
+      fl = loss(xl, gb);
+    }
+    while (fr_ < fm && xr < cp.a_hi) {
+      xl = xm; fl = fm; xm = xr; fm = fr_;
+      xr = clampA(xm + kContinuousStep);
+      fr_ = loss(xr, gb);
+    }
+    double lo = std::min(xl, xm), hi = std::max(xr, xm);
+    const double phi = 0.6180339887498949;
+    double x1 = hi - phi * (hi - lo), x2 = lo + phi * (hi - lo);
+    float f1 = loss(x1, gb), f2 = loss(x2, gb);
+    while (hi - lo > kContinuousTol) {
+      if (f1 <= f2) {
+        hi = x2; x2 = x1; f2 = f1; x1 = hi - phi * (hi - lo); f1 = loss(x1, gb);
+      } else {
+        lo = x1; x1 = x2; f1 = f2; x2 = lo + phi * (hi - lo); f2 = loss(x2, gb);
+      }
+    }
+    const double next_a = 0.5 * (lo + hi);
+    ConversionParams next;
+    loss(next_a, next);
+    const float move = (float)(std::fabs(next_a - a) / kStop) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
+    a = next_a;
+    curr.g = next.g;
+    curr.b = next.b;
+    stop_next = move <= TOL_PARAM;   // the moved parameters are rendered and scored once more
+  }
+  cp.set_curves_at(best_a, prof);
+  int nearest = 0;
+  for (size_t i = 0; i < cp.a_mid.size(); ++i)
+    if (std::fabs(cp.a_mid[i] - best_a) < std::fabs(cp.a_mid[nearest] - best_a)) nearest = (int)i;
+  out.target_idx = nearest;
+  out.target_name = print_bundle.targets[nearest].name;
+  out.params = {E / e_norm, best.g, best.b, best.shoulder};
+  out.residual = best_err;
+  out.status = cr.converged ? FixedPointStatus::kConverged : FixedPointStatus::kMaxIters;
+  out.intent_mu = best_mu;
+  out.intent_sigma = best_sg;
+  out.intent_grid_w = st.grid_w;
+  out.intent_grid_h = st.grid_h;
+  out.intent_params = best;
+  out.g_lo = st.g_lo;
+  out.g_hi = st.g_hi;
+  cr.a = best_a;
+  fr.write_timings();
+  out.total_time = Clock::now() - t0;
+  return true;
+}

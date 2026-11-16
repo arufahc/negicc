@@ -1518,6 +1518,41 @@ bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) 
   return true;
 }
 
+void PrintContinuum::relative_at(double a, double ra[3], double rb[3]) const {
+  // The bracket nearest A gives its own terms as they are (the owner's choice: the discrete terms from the brackets
+  // first; interpolating them in A is a later question).
+  for (int c = 0; c < 3; ++c) ra[c] = rb[c] = 0.0;
+  if (a_mid.empty()) return;
+  size_t k = 0;
+  for (size_t i = 1; i < a_mid.size(); ++i)
+    if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = i;
+  for (int c = 0; c < 3; ++c) {
+    ra[c] = rel_a[k][c];
+    rb[c] = rel_b[k][c];
+  }
+}
+
+PrintCurves PrintContinuum::curves_at(double a) const {
+  double ra[3], rb[3];
+  relative_at(a, ra, rb);
+  return bracket_print_curves(g, paper, a, n0, ra, rb);
+}
+
+void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof) const {
+  const PrintCurves cv = curves_at(a);
+  for (int c = 0; c < 3; ++c) {
+    prof.in_trc[c].resize(cv[c].size());
+    for (size_t i = 0; i < cv[c].size(); ++i)
+      prof.in_trc[c][i] = (float)std::lround(std::min(std::max(cv[c][i], 0.0), 1.0) * 65535.0) / 65535.0f;
+    prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
+  }
+  prof.rebind_pointers();
+}
+
+double PrintContinuum::green_apd(double dl) const { return on_grid(g.apd[1], g.start, g.step, dl); }
+double PrintContinuum::a_lo() const { return *std::min_element(g.apd[1].begin(), g.apd[1].end()); }
+double PrintContinuum::a_hi() const { return *std::max_element(g.apd[1].begin(), g.apd[1].end()); }
+
 bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
                             std::string& err) {
   if (!bundle.grey_balance.present) {
@@ -1612,7 +1647,13 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
       return err = "the print ICC has no lut16 A2B0 to write curves into", false;
     }
     out.icc.push_back(std::move(icc));
+    out.continuum.a_mid.push_back(bracket_mid_apd(bundle, *b));
+    out.continuum.rel_a.push_back({b->rel_a[0], b->rel_a[1], b->rel_a[2]});
+    out.continuum.rel_b.push_back({b->rel_b[0], b->rel_b[1], b->rel_b[2]});
   }
+  out.continuum.g = bundle.grey_balance;
+  out.continuum.paper = paper;
+  out.continuum.n0 = n0;
   return true;
 }
 

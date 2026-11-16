@@ -362,8 +362,32 @@ std::string sha256_hex(const std::string& bytes);
 // Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
 
+// The print at a continuous mid grey A (--print_search continuous, --print_a; experimental): the bracket's input curves
+// with A in place of its A_mid, and the relative terms as functions of A,
+//
+//     curve_c(v) = Paper_c((G_c(-log10(unknee(v) / n0)) - A) (1 + b_c(A)) + a_c(A))
+//
+// a_c(A), b_c(A) the terms of the bracket whose A_mid is nearest A, as they are (the discrete terms from the brackets;
+// interpolating them in A is a later question); zero on a bundle without grey_relative. At A = A_mid of a bracket the curves are that bracket's, and so, quantised
+// to 16 bits as the ICC holds them, is the profile (set_curves_at).
+struct PrintContinuum {
+  GreyBalanceCurves g;
+  PrintCurves paper;
+  double n0 = 1.0;
+  std::vector<double> a_mid;                         // per bundle.targets, in its order
+  std::vector<std::array<double, 3>> rel_a, rel_b;   // per bundle.targets (zeros without grey_relative)
+  void relative_at(double a, double ra[3], double rb[3]) const;
+  PrintCurves curves_at(double a) const;
+  // Writes the curves at A into a print profile's input tables (code / 65535 of the 16-bit codes the ICC would hold).
+  void set_curves_at(double a, ParsedFilmProfile& prof) const;
+  double green_apd(double dl) const;                 // G_green at light density dl
+  double a_lo() const;                               // the range of A: the curve's green APD range
+  double a_hi() const;
+};
+
 // The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
 struct BracketPrints {
+  PrintContinuum continuum;                    // the print at a continuous A (PrintContinuum)
   std::string id, name;
   std::string file, file_sha256;               // a material given as a file: its path as given and its SHA-256
   bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here

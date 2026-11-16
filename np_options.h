@@ -19,6 +19,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -116,7 +117,9 @@ struct Options {
   bool output_dpx = false;
   // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
   std::vector<std::string> prints;
-  std::string print_search = "scene";   // --print_search (experimental): scene, gb or full
+  std::string print_search = "scene";   // --print_search (experimental): scene, gb, full, fullwish or continuous
+  double print_a = NAN;                 // --print_a (experimental): the print at this mid grey A, not a bracket's
+  double print_boot_h = 0.150515;       // --print_boot_h (experimental): the continuous search's bootstrap spread
   bool no_metadata = false;
 };
 

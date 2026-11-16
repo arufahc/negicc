@@ -839,6 +839,18 @@ int prepare(const Options& o, Setup& s) {
           s.print_bundle.targets[i].film_prof.rebind_pointers();
         }
       }
+      s.print_cont = prints.continuum;
+      s.print_a = o.print_a;
+      {
+        const PrintContinuum* pc = &s.print_cont;
+        s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
+        s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
+        s.print_cp.n0 = pc->n0;
+        s.print_cp.a_lo = pc->a_lo();
+        s.print_cp.a_hi = pc->a_hi();
+        s.print_cp.a_mid = pc->a_mid;
+        s.print_cp.boot_h = o.print_boot_h;
+      }
       s.print_id = prints.id;
       s.print_name = prints.name;
       s.print_file = prints.file;
@@ -1530,6 +1542,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const bool print_full = !s.print_profs.empty() && (o.print_search == "full" || o.print_search == "fullwish");
     ParamSearchOptions o2 = opts;
     if (!s.print_profs.empty() && o.print_search == "fullwish") o2.wish_bundle = &bundle;
+    if (!s.print_profs.empty() && o.print_search == "continuous") {
+      if (!search_print_continuous(s.print_bundle, s.print_cp, s.engine, frame, scan_shutter_s, scan_iso, opts,
+                                   scan.auto_res, s.print_cr)) {
+        return false;
+      }
+      s.print_a = s.print_cr.a;
+      log_info("Print search (continuous): A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; wish L* %.2f; "
+               "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
+               scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
+               s.print_cr.converged ? "" : ", not converged", s.print_cr.wish_mean_l, 100.0 * s.print_cr.above_knee);
+      return true;
+    }
     if (!search_conversion_params(print_full ? s.print_bundle : bundle, s.engine, frame, scan_shutter_s, scan_iso, o2,
                                   scan.auto_res)) {
       return false;
@@ -2561,6 +2585,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.film_prof = s.print_profs[c.bundle_target_idx];
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
+    if (std::isfinite(s.print_a)) {   // the print at its continuous mid grey (--print_a, --print_search continuous)
+      s.print_cont.set_curves_at(s.print_a, c.film_prof);
+      set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+    }
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
   if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {
@@ -2882,6 +2910,17 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_scene_b = s.print_scene_b;
   sc.print_gb_steps = s.print_gb_steps;
   sc.print_gb_converged = s.print_gb_converged;
+  if (!s.print_profs.empty()) sc.print_a = s.print_a;
+  if (!s.print_profs.empty() && c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
+    sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
+  if (!s.print_profs.empty() && o.print_search == "continuous") {
+    sc.print_a0 = s.print_cr.a0;
+    sc.print_boot_h = o.print_boot_h;
+    sc.print_cont_steps = s.print_cr.steps;
+    sc.print_cont_converged = s.print_cr.converged;
+    sc.print_above_knee = s.print_cr.above_knee;
+    sc.print_wish_l = s.print_cr.wish_mean_l;
+  }
   if (scan.has_auto_res) {
     sc.print_g = scan.auto_res.params.g;
     sc.print_b = scan.auto_res.params.b;

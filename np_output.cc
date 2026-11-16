@@ -582,7 +582,17 @@ bool write_json_sidecar(const Sidecar& sc) {
           j["profile"]["print"]["gb_steps"] = sc.print_gb_steps;
           j["profile"]["print"]["gb_converged"] = sc.print_gb_converged;
         }
+        if (sc.print_search == "continuous") {
+          j["profile"]["print"]["a0"] = num(sc.print_a0, "%.9g");
+          j["profile"]["print"]["boot_h"] = num(sc.print_boot_h, "%.9g");
+          j["profile"]["print"]["wish_L"] = num(sc.print_wish_l, "%.6g");
+          j["profile"]["print"]["steps"] = sc.print_cont_steps;
+          j["profile"]["print"]["converged"] = sc.print_cont_converged;
+          j["profile"]["print"]["above_knee"] = num(sc.print_above_knee, "%.6g");
+        }
       }
+      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.9g");
+      if (std::isfinite(sc.print_bracket_a_mid)) j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
     }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
@@ -609,6 +619,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       cli.push_back(std::to_string(v));
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  if (std::isfinite(sc.print_a)) cli.insert(cli.end(), {"--print_a", num_str((float)sc.print_a, "%.9g")});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.

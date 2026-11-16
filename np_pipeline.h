@@ -112,6 +112,12 @@ struct Setup {
   int print_gb_steps = 0;
   bool print_gb_converged = false;
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
+  // --print_a or --print_search continuous: the print at a continuous mid grey (np_print.h PrintContinuum), its A
+  // (NaN: the bracket's own) and the continuous search's record.
+  PrintContinuum print_cont;
+  ContinuousPrint print_cp;
+  double print_a = NAN;
+  ContinuousPrintResult print_cr;
   std::vector<ParsedFilmProfile> print_profs;
   std::vector<std::vector<uint8_t>> print_iccs;
   bool has_crosstalk = false;

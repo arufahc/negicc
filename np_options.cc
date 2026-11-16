@@ -311,8 +311,19 @@ int parse_options(int ac, char* av[], Options& o) {
           "searched. scene (default): Auto on the chart profiles, the print rendered at its result. gb: Auto on the "
           "chart profiles for the bracket, E and the lightness wish, then g and b searched on the print against the "
           "scene's final field (a* and b* only). full: the whole search on the print profiles. fullwish: as full, with the "
-          "frame's lightness wish predicted from the chart profiles' renders.")
+          "frame's lightness wish predicted from the chart profiles' renders. continuous (TriLED): the print's mid grey A searched "
+          "as a continuous variable in place of the bracket, E held at 1, A0 metered once, the lightness wish from "
+          "one bootstrap set, then a fixed point over (A, g, b).")
     .default_value(std::string("scene"));
+  parser.add_argument("--print_a")
+    .help("Experimental: render the print at this mid grey A (green APD) in place of the bracket's own, as the "
+          "continuous print search reports it (with -E, --gain_g, --gain_b and --target, its cli_equivalent).")
+    .scan<'g', double>();
+  parser.add_argument("--print_boot_h")
+    .help("Experimental: the continuous print search's bootstrap renders at A0 - h, A0, A0 + h (A0 alone with 0); "
+          "default log10(2) / 2, half a stop of printing exposure.")
+    .scan<'g', double>()
+    .default_value(0.150515);
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -721,8 +732,21 @@ int parse_options(int ac, char* av[], Options& o) {
     }
   }
   o.print_search = parser.get<std::string>("--print_search");
-  if (o.print_search != "scene" && o.print_search != "gb" && o.print_search != "full" && o.print_search != "fullwish") {
-    log_error("--print_search takes scene, gb, full or fullwish\n");
+  if (o.print_search != "scene" && o.print_search != "gb" && o.print_search != "full" && o.print_search != "fullwish" &&
+      o.print_search != "continuous") {
+    log_error("--print_search takes scene, gb, full, fullwish or continuous\n");
+    return 1;
+  }
+  if (parser.is_used("--print_a")) {
+    o.print_a = parser.get<double>("--print_a");
+    if (!std::isfinite(o.print_a) || !parser.is_used("--print")) {
+      log_error("--print_a takes a finite mid grey and needs --print with a picture output\n");
+      return 1;
+    }
+  }
+  o.print_boot_h = parser.get<double>("--print_boot_h");
+  if (!(o.print_boot_h >= 0.0) || !std::isfinite(o.print_boot_h)) {
+    log_error("--print_boot_h takes a spread of 0 or more\n");
     return 1;
   }
   if (o.print_search != "scene" && !parser.is_used("--print")) {
