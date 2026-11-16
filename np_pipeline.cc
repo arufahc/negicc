@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <cstdlib>
+#include <cstdio>
 #include "np_log.h"
 #include "np_pipeline.h"
 
@@ -234,6 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
+      {"", "--probe_intent", 1, true},    {"", "--probe_params", 1, true},      {"", "--probe_stops", -1, true},
   };
   auto is_number = [](const std::string& t) {
     char* e = nullptr;
@@ -1668,9 +1671,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           opts.pin_g = o.gain_g;
           opts.pin_b = o.gain_b;
         }
+        opts.probe_path = o.probe_intent;
+        opts.probe_params = o.probe_params;
+        opts.probe_stops = o.probe_stops;
         if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
           log_error("The conversion parameter search failed\n");
           return false;
+        }
+        if (scan.auto_res.probed) {  // --probe_intent: the probe file is written and closed; nothing is converted
+          std::fflush(stdout);
+          std::fflush(stderr);
+          std::_Exit(0);  // without static teardown: the inference engine's threads are still alive here
         }
         scan.has_auto_res = true;
         if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
@@ -1961,11 +1972,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+      opts.probe_path = o.probe_intent;
+      opts.probe_params = o.probe_params;
+      opts.probe_stops = o.probe_stops;
       if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
                                     scan.auto_res)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
+      }
+      if (scan.auto_res.probed) {  // --probe_intent: the probe file is written and closed; nothing is converted
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(0);  // without static teardown: the inference engine's threads are still alive here
       }
       scan.has_auto_res = true;
       if (!stages_after_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
