@@ -114,7 +114,23 @@ enum class ClipFallbackOutcome {
 };
 const char* to_string(ClipFallbackOutcome outcome);
 
+// The passes over the frame the bundle search renders (negicc-station designs/plan_search_binding.md): the preview of
+// the inner crop and the clip statistics (the roll-off's 99.5 % point, white-clip shares). The defaults are
+// negicc::cpu_render and negicc::cpu_highlight_clip; a caller that renders the same pipeline elsewhere (the station's
+// GPU) overrides them. The search owns every buffer: out is sized before each call and must be filled before it
+// returns, and in_view and cfg's tables are valid for the whole search, so a renderer may keep copies keyed by them
+// until the search returns and no pointer after. bind_frame is called once per search, before any pass, with the
+// frame the passes crop. A failed pass throws std::runtime_error; the search then stops and returns false.
+struct PreviewRenderer {
+  virtual ~PreviewRenderer() = default;
+  virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }
+  virtual void render(const negicc::RenderArgs& a) { negicc::cpu_render(a); }
+  virtual void highlight_clip(const negicc::HighlightClipArgs& a) { negicc::cpu_highlight_clip(a); }
+};
+
 struct ParamSearchOptions {
+  // The passes over the frame (PreviewRenderer); null: the CPU's, as neg_process runs.
+  PreviewRenderer* renderer = nullptr;
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
   int max_steps = 8;         // the most steps of each bracket's fixed-point loop (neg_process's --dino_iters)
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's. Set
@@ -280,10 +296,12 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr,
+                           PreviewRenderer* renderer = nullptr);
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr,
+                           PreviewRenderer* renderer = nullptr);
 
 struct KnobSolveResult {
   float e = 1.0f, g = 1.0f, b = 1.0f;
