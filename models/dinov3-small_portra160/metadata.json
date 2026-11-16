@@ -23,7 +23,7 @@
   "parameters": 595590,
   "in_dim": 768,
   "hidden_dim": 384,
-  "export_date": "2026-10-19T01:44:42.081257+00:00",
+  "export_date": "2026-11-16T03:38:41.785515+00:00",
   "input_dimensions": {
     "batch_size": "variable",
     "num_patches": "variable_native_aspect (e.g. 672 for 3:2, 768 for 4:3, 1024 for 1:1)",
@@ -62,14 +62,14 @@
     ]
   },
   "metrics": {
-    "epoch": 13,
-    "val_loss": 2.1527576948671396,
-    "val_mae": 4.810712821319576,
-    "val_mae_L": 4.58664793728132,
-    "val_mae_ab": 4.92274508564908,
-    "train_loss": 1.7373441450445501,
-    "train_mae": 3.6631984269941174,
-    "mean_sigma": 3.4631168816108717,
+    "epoch": 15,
+    "val_loss": 2.158803867798742,
+    "val_mae": 5.077070474398154,
+    "val_mae_L": 4.82846244036027,
+    "val_mae_ab": 5.201378900623982,
+    "train_loss": 1.8624397713858802,
+    "train_mae": 4.13611532228487,
+    "mean_sigma": 3.81758206831194,
     "profile": "portra160",
     "backbone": "dinov3-small",
     "in_dim": 768,
@@ -78,10 +78,10 @@
   "acceptance_gates": {
     "gates": {
       "gate_val_loss_le_2_30": true,
-      "gate_mae_ab_le_5_00": true,
+      "gate_mae_ab_le_5_00": false,
       "gate_mae_L_le_8_00": true
     },
-    "all_passed": true
+    "all_passed": false
   },
   "exported_files": {
     "pytorch_weights": "model.pt",
@@ -90,9 +90,9 @@
     "metadata": "metadata.json"
   },
   "stock_key": "portra160",
-  "source_profile_bundle": "Portra160-A7R4-D65",
-  "source_profile_json": "profile_Portra160-A7R4-D65_20261004_010719.json",
-  "source_profile_sha256": "fcc90a58b0a55085b686aa2f7de4903561a9eadc1703414e804b6a1767e8a8b4",
+  "source_profile_bundle": "Portra160-A7R4-TriLED",
+  "source_profile_json": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
+  "source_profile_sha256": "7925318d4dc7e8c491483ea45ff6682d41afd8bc545446dc5b50e4ecfcf3aab7",
   "associated_profiles": [
     "profile_Portra160-A7R4-D65_20261004_010719.json",
     "profile_Portra160-A7R4-TriLED_20261003_190751.json"
@@ -108,58 +108,60 @@
   "n_val_photos": 282,
   "n_train_tokens": 1420800,
   "n_val_tokens": 235808,
-  "selected_seed": 43,
+  "epochs": 15,
+  "checkpoint": "final",
+  "selected_seed": 42,
   "seeds_evaluated": [
     42,
     43,
     44
   ],
   "seed_summary": {
-    "val_loss_mean": 2.161167146684292,
-    "val_loss_std": 0.006011847231580725,
-    "val_mae_L_mean": 4.931559596676653,
-    "val_mae_L_std": 0.24402101965666695,
-    "val_mae_ab_mean": 4.959102927735234,
-    "val_mae_ab_std": 0.025763913964904135
+    "val_loss_mean": 2.1591209626216146,
+    "val_loss_std": 0.00026392758256496454,
+    "val_mae_L_mean": 4.834839753737501,
+    "val_mae_L_std": 0.009314863826355197,
+    "val_mae_ab_mean": 5.120650291701705,
+    "val_mae_ab_std": 0.05760239602048911
   },
   "seed_runs": [
     {
       "seed": 42,
-      "best_epoch": 12,
-      "val_loss": 2.164288220986014,
-      "val_mae": 5.024174025689978,
-      "val_mae_L": 5.1138311006398744,
-      "val_mae_ab": 4.979343252017647,
-      "train_loss": 1.8423039059166435,
-      "train_mae": 4.030549196982169,
-      "checkpoint_sha256": "d86416d9c9dc92900b2283f2eb1abbbd6b95fe502fb34574b50536662cff5dc1",
-      "all_gates_passed": true
+      "best_epoch": 15,
+      "val_loss": 2.158803867798742,
+      "val_mae": 5.077070474398154,
+      "val_mae_L": 4.82846244036027,
+      "val_mae_ab": 5.201378900623982,
+      "train_loss": 1.8624397713858802,
+      "train_mae": 4.13611532228487,
+      "checkpoint_sha256": "35b847708597288a8694ebb5be2579fc19debf1b4dc6e848fb24cd504921d4d3",
+      "all_gates_passed": false
     },
     {
       "seed": 43,
-      "best_epoch": 13,
-      "val_loss": 2.1527576948671396,
-      "val_mae": 4.810712821319576,
-      "val_mae_L": 4.58664793728132,
-      "val_mae_ab": 4.92274508564908,
-      "train_loss": 1.7373441450445501,
-      "train_mae": 3.6631984269941174,
-      "checkpoint_sha256": "fbbc0815de8a74073c22ed32820d5117c3bfafb6685856ad2e38ebcf8de01642",
-      "all_gates_passed": true
+      "best_epoch": 15,
+      "val_loss": 2.1591089966663075,
+      "val_mae": 4.996560811187603,
+      "val_mae_L": 4.848010766747234,
+      "val_mae_ab": 5.070840204210161,
+      "train_loss": 1.8144577886392403,
+      "train_mae": 3.9530079109604292,
+      "checkpoint_sha256": "8e9ca33f600fe1425cb36c8f37af0a80ac2a7165224ae5cf6cf0d7b9ee913aaf",
+      "all_gates_passed": false
     },
     {
       "seed": 44,
-      "best_epoch": 11,
-      "val_loss": 2.166455524199723,
-      "val_mae": 5.0148803221352765,
-      "val_mae_L": 5.094199752108765,
-      "val_mae_ab": 4.9752204455389775,
-      "train_loss": 1.833489233008376,
-      "train_mae": 3.982566196939967,
-      "checkpoint_sha256": "7590a4738881c9bd48496911714012b73689bb050e1d62fe24f2aa0ec2ee3aad",
-      "all_gates_passed": true
+      "best_epoch": 15,
+      "val_loss": 2.159450023399795,
+      "val_mae": 5.002504656379235,
+      "val_mae_L": 4.828046054104999,
+      "val_mae_ab": 5.089731770270973,
+      "train_loss": 1.8122467348167488,
+      "train_mae": 3.945210513982687,
+      "checkpoint_sha256": "c38e7e71f274909f308ac9b910fd178a5a4b5a5688b0f8fa7b015b4915c11380",
+      "all_gates_passed": false
     }
   ],
-  "git_commit": "8337d59f4cde1e6048a4241473b1e2df21e5a3dc",
+  "git_commit": "5391116f7109b920e0f6df368f6d0eb98647720d",
   "hostname": "wp0"
 }
