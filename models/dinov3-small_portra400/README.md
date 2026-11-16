@@ -8,7 +8,11 @@ the conversion closest to it.
   per patch). The backbone is not trained.
 - Model: a small MLP (595,590 parameters) giving mu and log variance.
 - Training data: 2908 photographs of Kodak Portra 400.
-- Validation error: 4.15 L*, 4.36 a*b* (mean absolute) on the photos the epoch and the seed were chosen with; 5.20 L*,
-  4.74 a*b* on 373 photos by 24 photographers held out from both.
+- Validation error: 4.30 L*, 4.33 a*b* (mean absolute) on the validation photographers the seed was chosen with.
+- Training: cosine schedule over 15 epochs, final epoch kept, loss weighted per patch; seed 42 of 42, 43, 44 by the
+  calibrated validation loss. Sigma calibrated per channel on the validation photographers (scale 1.34, 1.36, 1.34 for
+  L*, a*, b*, folded into the variance head's bias); the mean is not changed.
+- Held-out photographers (in neither training nor validation): mean absolute error 4.30 L* per photographer;
+  mean signed error -0.02 L*, +0.04 a*, +0.18 b*.
 
 `metadata.json` has the full settings and metrics.

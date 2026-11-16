@@ -832,6 +832,13 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
+      if (o.print_search != "scene") {
+        s.print_bundle = bundle;
+        for (size_t i = 0; i < bundle.targets.size(); ++i) {
+          s.print_bundle.targets[i].film_prof = s.print_profs[i];
+          s.print_bundle.targets[i].film_prof.rebind_pointers();
+        }
+      }
       s.print_id = prints.id;
       s.print_name = prints.name;
       s.print_file = prints.file;
@@ -1516,6 +1523,32 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.has_rolloff = true;
     return true;
   };
+  // The bundle search, and with --print_search (experimental) the print's: full searches on the print profiles; gb
+  // searches g and b on the print after the scene's search (search_print_gains).
+  auto run_bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                               const ParamSearchOptions& opts) -> bool {
+    const bool print_full = !s.print_profs.empty() && o.print_search == "full";
+    if (!search_conversion_params(print_full ? s.print_bundle : bundle, s.engine, frame, scan_shutter_s, scan_iso, opts,
+                                  scan.auto_res)) {
+      return false;
+    }
+    if (!s.print_profs.empty() && o.print_search == "gb" && !scan.auto_res.probed) {
+      s.print_scene_g = scan.auto_res.params.g;
+      s.print_scene_b = scan.auto_res.params.b;
+      PrintGainsResult pg;
+      if (!search_print_gains(s.print_bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res, pg)) {
+        return false;
+      }
+      scan.auto_res.params.g = pg.g;
+      scan.auto_res.params.b = pg.b;
+      s.print_gb_steps = pg.steps;
+      s.print_gb_converged = pg.converged;
+      log_info("Print search (gb): g %.4f -> %.4f, b %.4f -> %.4f (%+.3f, %+.3f stops), %d steps%s\n", s.print_scene_g,
+               pg.g, s.print_scene_b, pg.b, std::log2(pg.g / s.print_scene_g), std::log2(pg.b / s.print_scene_b),
+               pg.steps, pg.converged ? "" : ", not converged");
+    }
+    return true;
+  };
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
   // g, b on the combined profile the curves were replayed into) in place of the search.
   auto restore_cached_auto = [&]() {
@@ -1730,7 +1763,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
-        if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
+        if (!run_bundle_search(frame, scan_shutter_s, scan_iso, opts)) {
           log_error("The conversion parameter search failed\n");
           return false;
         }
@@ -2031,8 +2064,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
-      if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
-                                    scan.auto_res)) {
+      if (!run_bundle_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
@@ -2843,6 +2875,15 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_name = s.print_name;
   sc.print_file = s.print_file;
   sc.print_file_sha256 = s.print_file_sha256;
+  sc.print_search = s.print_profs.empty() ? "" : o.print_search;
+  sc.print_scene_g = s.print_scene_g;
+  sc.print_scene_b = s.print_scene_b;
+  sc.print_gb_steps = s.print_gb_steps;
+  sc.print_gb_converged = s.print_gb_converged;
+  if (scan.has_auto_res) {
+    sc.print_g = scan.auto_res.params.g;
+    sc.print_b = scan.auto_res.params.b;
+  }
   sc.print_from_bundle = s.print_from_bundle;
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
