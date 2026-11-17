@@ -617,7 +617,17 @@ were constructed"). The print's lightness is searched once and continuously, in 
      given values, the density file (written against the raised base), its print searches and CLFs, so the CLF still
      prints the picture's print and a replay reproduces it. The sidecar records the base as found and k
      (`film_base.print_floor`, `profile.print.search.base_factor`), and the warning on an estimated base says by how
-     much it was raised. Without `--print`, nothing changes. So the same frame's density file differs with and without
+     much it was raised. The floor reads the picture's frame: the given `--roi` (or `--roi auto`'s), else, with no
+     `--roi`, the frame detector's crop when the detection is at or above `kBaseMinFrameConf` (0.5, the level the base
+     takes the detector's patch at), else the whole scan; the sidecar records which (`film_base.print_floor.frame`,
+     with the detection's confidence). Without a frame the scan's bare light (the holder's gaps, perforations, the
+     strip's edges) lies in the crop and reads as the thinnest film: on the 50 TriLED test frames without `--roi`, the
+     whole scan raised the factor on 27 of them, by up to 2.5x, where the detected frame agrees with the frame's own
+     `--roi` within 2 % on 47 (at most 2.4 %, 1004_0026; every detection at 0.68 or above). Light inside the frame
+     (perforations within a `--roi`) is not masked, since the detector's light mask also takes thin film for light, and
+     the record's factor shows what was read. The print's search itself reads the search frame, which without `--roi`
+     is the whole scan, bare light included: there the floor's frame and the search's crop differ, and such a print
+     meters and balances on the light too (give `--roi` or `--roi auto`). Without `--print`, nothing changes. So the same frame's density file differs with and without
      `--print` when its base is an estimate (written against the raised base with it, against the base as found
      without it), and the sidecar says which (`film_base.print_floor`). `make check_print` checks the
      arithmetic on synthetic frames, the branch with no base read from the scan included (the bundle's base scaled
@@ -626,10 +636,12 @@ were constructed"). The print's lightness is searched once and continuously, in 
      the base read at n0 / e_norm, 0.82 to 3.30 on the test frames. Taking the base's level in full instead, an
      estimated base far below the film's thinnest areas cut the shadows: 1006_0007 on its estimate (0.31 of its capture
      in green) had 60 % of its crop past the knee and its shadows went to one flat tone.
-   - **What the rule gives** (station `designs/print_search_ways.md`, "Option 1 evaluated"): on the 50 frames with the
-     base a default run finds, no frame has more than 1 % of the crop past the cut, against 10 with the estimate taken
-     as it is. The print is 0.87 ΔE00 from the capture's print over its darkest third (0.46 where the frame shows a
-     readable rebate). The harness's measures match the capture's: colour self-prediction within its intervals, 9
+   - **What the rule gives** (station `designs/print_search_ways.md`, "Option 1 evaluated", and its ship check): on the
+     50 frames with the base a default run finds, no frame has more than 1 % of the crop past the cut, against 3 with
+     the estimate taken as it is (both with the gains in the curves, as shipped; 13 with the gains in the matrix). The
+     print is 0.91 ΔE00 from the capture's print over its darkest third and 1.12 over the frame (0.88 on the 46
+     statistics bases, 1.20 on the 4 rebates); the reference is the print made with the owner's capture of the roll's
+     unexposed film, read over the rectangle the goal harness's manifest gives. The harness's measures match the capture's: colour self-prediction within its intervals, 9
      frames moving over 1 L\* under a 1 % or 2 % tighter crop (8 with the captures) and none over 3, and 48 of 50
      searches converged (44). k is above 1 on 33 of the 50 frames, from 1.000 to 5.84, and moves 0.45 % on average
      under the tighter crops.
@@ -658,7 +670,8 @@ There is no tournament between brackets, no bracket fallback and no highlight pu
 scene's pullback reads a bracket's chart ceiling, which a print does not have (its white is the paper's). The
 sidecar's `profile.print` records `a`, the nearest bracket's own `bracket_a_mid`, and the search (`a0`, the wish,
 the steps, the share of the crop above the knee at the bootstrap, and `past_knee_pct` and `past_cut_pct`: per
-channel, the shares past the knee and past the cut at the final settings, gains included); `auto.target` is the
+channel, the shares of the crop past the knee and past the cut at E, with the matrix at E alone; the gains act after
+the knee, and E is held, so the two belong to the frame and its film base, not to the search); `auto.target` is the
 nearest bracket. The comparison of
 this search with the earlier ones (the scene's search with the print rendered at its result, g and b on the print,
 the whole bracket search on the print) is negicc-station's `designs/print_search_ways.md`.
@@ -762,23 +775,33 @@ it: a gain under 1 no longer pulls a channel back under the knee. With a grossly
 previews, which keep the gains in the matrix, are 10 ΔE00 from the picture. The owner's rule (step 1) holds such a base no
 darker than the picture's thinnest film, and with it 1006_0007 prints without a cut.
 
-**Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
-the bundles carrying each bracket's own tilt) unless said otherwise:
+**Checks.** On Portra 400 frames (TriLED), through the bundles carrying each bracket's own tilt; each bullet names the
+commit it was run at (on wp0, x86-64, CPU):
 
 - `make check_print` (check_print.cc; not an option of neg_process, the owner's decision of 2026-11-17 on the two
   self-check flags: "Remove them") checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
   order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
-  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11). The same program checks the floor, `print_floor_base`, on synthetic frames (4 of 4).
+  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11). (Run at this head.) The same program checks the floor, `print_floor_base`, on synthetic frames (5 of 5): four grey (a found base, none
+  found, a raised base, film all denser than the base) and one coloured, through a crosstalk that is not symmetric with
+  a patch thin in blue, which tells the largest channel from another, the matrix from its transpose, and the base's
+  colour kept from one value for all.
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
-  (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured before the tilts shipped).
-- Re-running a print's `cli_equivalent` (the frame and `--print`: no given values) reproduces it to the byte; for the
-  picture this re-runs the print's search, deterministic on the same inputs (and the raised base is derived again from
-  the same scan).
-- The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
+  (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured at the continuous search's commit, before
+  the tilts shipped).
+- Re-running a print's `cli_equivalent` (the frame and `--print`: no given values) reproduces it to the byte on 50 of
+  50 at this head: it re-runs the network and the print's search, deterministic on the same build, machine and backend
+  (and the raised base is derived again from the same scan). The claim covers that much: a different compiler, CPU
+  architecture or backend can round differently, and on the Jetson (aarch64) neither its CPU nor its GPU backend is
+  claimed to reproduce wp0's picture to the byte (the Orin's own replay and its distance from wp0's print: to be measured in this pull request). A density output's `cli_equivalent` carries the `--print`
+  materials as given, since with `--print` the file is written against the raised base: replayed, it writes the same
+  file and the same CLFs (1006_0007, k 5.84, and 1004_0001, k 2.25; without `--print` in the line, master's replay
+  wrote a different file and no CLF).
+- (At 156002b, when the bundles with each bracket's own tilt were exported:) the table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte: through the shipped bundles every one of the 50 frames' prints takes "the bundle's print ICC" (the
   computed reference bracket's curves equal the bundle's), and earlier for a material given as a file, Vision 2383
   (D55) included.
-- The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`), on the 50
+- (With their captures at c656deb; on the base a default run finds at d2662d3, the ship check; this head's pictures, density
+  pixels and CLFs are byte-identical to those on 50 of 50:) the picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`), on the 50
   TriLED test frames through the shipped bundles (each bracket's own tilt), Portra Endura. With their captures: 0.37
   ΔE00 in the median frame, 0.61 at its 95th percentile, the CLF's straight lines against the curve; 48 of 50 within
   0.5 / 1.0. On the base a default run finds, with the base held no darker than the picture's thinnest film (step 1):

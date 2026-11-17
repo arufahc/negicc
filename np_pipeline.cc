@@ -1663,9 +1663,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
       // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
       // Also whatever the base's source: a rebate read on clipped film (a long scan) is a measured base in name only,
-      // and a gain can put a channel's thin film past the cut. kPrintCutWarnShare: the share of the crop past the cut
-      // in a channel from which the print says so (new constant, 1 %: on the 50 TriLED test frames with their captures,
-      // the base rule's prints pass it on 2, and every crushed print found so far is above it).
+      // and film thinner than the base passes the knee at E. kPrintCutWarnShare: the share of the crop past the cut in a
+      // channel from which the print says so (new constant, 1 %). On the 50 TriLED test frames no print reaches it now,
+      // with their captures or on the base a default run finds (the gains act after the knee, and a base not a capture
+      // is held no darker than the thinnest film); every crushed print found before was above it (6 frames with the
+      // gains in the matrix, up to 60 % past the knee on 1006_0007's estimate taken as it is).
       constexpr double kPrintCutWarnShare = 0.01;
       int c = 0;
       for (int k = 1; k < 3; ++k)
@@ -1736,13 +1738,33 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // whole conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
   // derives the same; a capture (given, or a capture's values kept from an earlier run) is taken as it is, and so is
   // any base without --print. Called once per conversion, with the frame, before the search.
-  auto floor_print_base = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
+  //
+  // The floor reads the picture's frame: the search's frame when a --roi is given (or --roi auto's), else the frame
+  // detector's crop of the half-size image |half| when the detection ran and is at or above kBaseMinFrameConf (the
+  // level the film base takes the detector's patch at), else the whole scan. Without a frame the scan's bare light
+  // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film: on the
+  // 50 TriLED test frames without --roi it raised the factor on 27, by up to 2.5x (station designs/print_search_ways.md).
+  // Light inside the frame is not masked (the detector's light mask takes thin film for light on some frames); the
+  // record's factor and frame show what was read. The print's search itself reads the search frame (without --roi, the
+  // whole scan). A caller that gains a print (negicc-station) chooses the frame here, as this does.
+  auto floor_print_base = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
+                              double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
     if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
       return;
+    negicc::RgbView floor_frame = frame;
+    scan.print_floor_frame = scan.has_roi ? "roi" : "whole_scan";
+    scan.print_floor_frame_conf = det ? det->conf : -1.0f;
+    if (!scan.has_roi && det && det->ok && det->conf >= negicc::kBaseMinFrameConf) {
+      int b[4] = {det->crop[0] / 2, det->crop[1] / 2, std::max(1, (det->crop[0] + det->crop[2]) / 2 - det->crop[0] / 2),
+                  std::max(1, (det->crop[1] + det->crop[3]) / 2 - det->crop[1] / 2)};
+      clamp_rect(b, half.width, half.height);
+      floor_frame = half.crop_and_orient(b[0], b[1], b[2], b[3], scan.rot_cw, scan.hflip, scan.vflip);
+      scan.print_floor_frame = "detected";
+    }
     double fb[3], raised_rgb[3];
     const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
-    const float k = print_floor_base(s.bundle, frame, ParamSearchOptions{}.crop_ratio,
+    const float k = print_floor_base(s.bundle, floor_frame, ParamSearchOptions{}.crop_ratio,
                                      scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb, raised_rgb);
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
@@ -1779,6 +1801,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The frame detection the film base reads with a given --roi on the white-light decode (find_frame, below).
   FrameDetection base_det;
   bool has_base_det = false;
+  // The CFA path's frame detection for the film base (below), kept for the print's floor (floor_print_base).
+  FrameDetection floor_det;
+  bool has_floor_det = false;
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
   int det_sensor_w = 0, det_sensor_h = 0;
   // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
@@ -1921,7 +1946,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      floor_print_base(frame, scan_shutter_s, scan_iso);
+      // This path runs the frame detector only for --roi auto (then the frame is given); without it the floor reads the
+      // whole scan, or the white-light base's detection (white light takes no floor).
+      floor_print_base(frame, half_view, (o.roi_auto && scan.frame_det.ok) ? &scan.frame_det : nullptr, scan_shutter_s, scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -2183,6 +2210,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (o.film_format_given) base_params.format = o.film_format;  // else every format, as the station
       if (has_det) detect_film_frame(mosaic, base_params, base_det);
       detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
+      if (has_det) {
+        floor_det = base_det;
+        has_floor_det = true;
+      }
     }
 
     // Step 3: Crop, rotate, flip & inline ROI search on the zero-copy view.
@@ -2234,7 +2265,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      floor_print_base(search_half_view, scan_shutter_s, scan_iso);
+      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, scan_shutter_s, scan_iso);
     }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
@@ -3079,11 +3110,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_floor_applied = scan.print_floor_applied;
   sc.print_floor_found_source = scan.print_floor_found_source;
   sc.print_floor_k = scan.print_floor_k;
+  sc.print_floor_frame = scan.print_floor_frame;
+  sc.print_floor_frame_conf = scan.print_floor_frame_conf;
   for (int k = 0; k < 3; ++k) sc.print_floor_found_rgb[k] = scan.print_floor_found_rgb[k];
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
   sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
+  if (s.density) sc.density_prints = o.prints;
   sc.print_id = s.print_id;
   sc.print_name = s.print_name;
   sc.print_file = s.print_file;
