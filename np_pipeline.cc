@@ -3080,6 +3080,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_above_knee = s.print_cr.above_knee;
       for (int c = 0; c < 3; ++c) sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
       for (int c = 0; c < 3; ++c) sc.print_past_cut_ug[c] = s.print_cr.past_cut_ug[c];
+      sc.print_floor_k = s.print_cr.floor_k;
       for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
       for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;
