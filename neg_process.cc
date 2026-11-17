@@ -15,6 +15,7 @@
 
 #include "np_options.h"
 #include <cstdio>
+#include "multi_target_optimizer.h"
 #include <string>
 
 #include "np_pipeline.h"
@@ -63,14 +64,16 @@
 // mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
-  // A self-check of the print's bracket term (np_print.h print_tilt_at), before any option is read.
+  // The print's self-checks, before any option is read: its bracket term (np_print.h print_tilt_at) and its floor on a
+  // base that is not a capture (multi_target_optimizer.h print_floor_base).
   for (int i = 1; i < ac; ++i) {
-    if (std::string(av[i]) != "--check_print_tilt") continue;
+    const std::string a = av[i];
+    if (a != "--check_print_tilt" && a != "--check_print_floor") continue;
     if (ac != 2) {
-      std::fprintf(stderr, "ERROR! --check_print_tilt is given alone: it runs the self-check and converts nothing\n");
+      std::fprintf(stderr, "ERROR! %s is given alone: it runs the self-check and converts nothing\n", a.c_str());
       return 1;
     }
-    return print_tilt_selfcheck() == 0 ? 0 : 1;
+    return (a == "--check_print_tilt" ? print_tilt_selfcheck() : print_floor_selfcheck()) == 0 ? 0 : 1;
   }
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;

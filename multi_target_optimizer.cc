@@ -2767,6 +2767,61 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
   return k;
 }
 
+float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
+                       double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]) {
+  if (found) {
+    for (int c = 0; c < 3; ++c) base_in[c] = found[c];
+  } else {
+    const double fb_t = bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(bundle.film_base_shutter);
+    const double ratio = (scan_shutter_s * (scan_iso / 100.0)) / (fb_t * (bundle.film_base_iso / 100.0));
+    for (int c = 0; c < 3; ++c) base_in[c] = bundle.film_base_avg_d[c] * ratio;
+  }
+  const float k = print_base_floor(bundle, frame, crop_ratio, base_in);
+  for (int c = 0; c < 3; ++c) base_out[c] = base_in[c] * k;
+  return k;
+}
+
+int print_floor_selfcheck() {
+  // A 64 x 64 frame of uniform film with a thin patch; identity crosstalk; the inner crop is the whole frame (ratio 1).
+  ProfileBundle b;
+  for (int i = 0; i < 9; ++i) b.crosstalk_matrix_d[i] = (i % 4 == 0) ? 1.0 : 0.0;
+  b.film_base_shutter = "1/10s";
+  b.film_base_iso = 100.0f;
+  for (int c = 0; c < 3; ++c) b.film_base_avg_d[c] = 1000.0;
+  const int w = 64, h = 64;
+  std::vector<uint16_t> px((size_t)w * h * 3);
+  auto frame_with = [&](uint16_t film, uint16_t thin, int thin_rows) {
+    for (int y = 0; y < h; ++y)
+      for (int x = 0; x < w; ++x)
+        for (int c = 0; c < 3; ++c) px[((size_t)y * w + x) * 3 + c] = (y < thin_rows) ? thin : film;
+    return negicc::RgbView::from_interleaved_rgb(px.data(), w, h, 3);
+  };
+  struct Case { const char* what; uint16_t film, thin; int rows; bool found; double base, shutter, k_want, base_want; };
+  const Case cases[] = {
+      // A found base of 1000; a quarter of the frame at 1500: the 99.5 % point reads 1.5 -> k 1.5, base 1500.
+      {"found base, a quarter of the frame 1.5x thinner than it", 600, 1500, 16, true, 1000.0, 0.125, 1.5, 1500.0},
+      // None found: the bundle's 1000 at 1/10 s scaled once to the 1/8 s scan, 1250; the thin patch at 2500 -> k 2.
+      {"no base found: the bundle's, scaled once (1/10 s to 1/8 s), then raised", 600, 2500, 16, false, 0.0, 0.125, 2.0, 2500.0},
+      // A base already raised (1500) on the first frame: k 1, the base unchanged.
+      {"a raised base again: k 1", 600, 1500, 16, true, 1500.0, 0.125, 1.0, 1500.0},
+      // All film denser than the base: k 1.
+      {"film all denser than the base: k 1", 600, 900, 64, true, 1000.0, 0.125, 1.0, 1000.0},
+  };
+  int failed = 0;
+  for (const Case& c : cases) {
+    const negicc::RgbView f = frame_with(c.film, c.thin, c.rows);
+    const double found[3] = {c.base, c.base, c.base};
+    double in[3], out[3];
+    const float k = print_floor_base(b, f, 1.0f, c.found ? found : nullptr, c.shutter, 100.0, in, out);
+    const bool ok = std::fabs(k - c.k_want) < 1e-4 && std::fabs(out[0] - c.base_want) < 1e-6 * c.base_want + 1e-3 &&
+                    out[1] == out[0] && out[2] == out[0];
+    failed += !ok;
+    std::printf("%s %s: k %.4f, base %.1f -> %.1f (expected k %.4f, base %.1f)\n", ok ? "ok  " : "FAIL", c.what, k, in[0], out[0],
+                c.k_want, c.base_want);
+  }
+  return failed;
+}
+
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                              const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr) {

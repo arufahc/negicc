@@ -551,7 +551,9 @@ bool write_json_sidecar(const Sidecar& sc) {
   // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's thinnest
   // film (print_base_floor); the base as found and the factor.
   if (sc.print_floor_applied) {
-    fb["print_floor"] = {{"found_source", sc.print_floor_found_source},
+    fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is scaled to it; "
+                                    "film_base_rgb is the bundle's at its own exposure when nothing was raised)"},
+                         {"found_source", sc.print_floor_found_source},
                          {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"), num(sc.print_floor_found_rgb[1], "%.10g"),
                                         num(sc.print_floor_found_rgb[2], "%.10g")}},
                          {"factor", num(sc.print_floor_k, "%.6g")}};

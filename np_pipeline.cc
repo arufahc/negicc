@@ -902,8 +902,8 @@ int prepare(const Options& o, Setup& s) {
       s.print_file = prints.file;
       s.print_file_sha256 = prints.file_sha256;
       s.print_from_bundle = prints.from_bundle;
-      log_info("Print: %s (%s), the print ICC %s: the search runs on the chart profiles, the conversion renders the "
-               "print\n", prints.name.c_str(), prints.id.c_str(),
+      log_info("Print: %s (%s), the print ICC %s: with a picture output the print's own search runs on the print profile "
+               "(no chart profile) and the conversion renders the print\n", prints.name.c_str(), prints.id.c_str(),
                prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
     }
   }
@@ -1688,6 +1688,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
                  raised, 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+      } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
+        log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
+                 "base (a long scan clips unexposed film); give --film_base <capture of this roll's unexposed film>\n",
+                 scan.film_base.source.c_str(), raised);
       } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
         log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
                  "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
@@ -1741,18 +1745,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
     if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
       return;
-    double fb[3];
-    std::string src;
-    if (scan.film_base.found) {
-      for (int c = 0; c < 3; ++c) fb[c] = scan.film_base.rgb[c];
-      src = scan.film_base.source;
-    } else {  // the bundle's base scaled by the exposures, as the conversion takes it (frame_scale)
-      const double fb_t = s.bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(s.bundle.film_base_shutter);
-      const double ratio = (scan_shutter_s * (scan_iso / 100.0)) / (fb_t * (s.bundle.film_base_iso / 100.0));
-      for (int c = 0; c < 3; ++c) fb[c] = s.bundle.film_base_avg_d[c] * ratio;
-      src = "bundle";
-    }
-    const float k = print_base_floor(s.bundle, frame, ParamSearchOptions{}.crop_ratio, fb);
+    double fb[3], raised_rgb[3];
+    const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
+    const float k = print_floor_base(s.bundle, frame, ParamSearchOptions{}.crop_ratio,
+                                     scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb, raised_rgb);
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
     scan.print_floor_k = k;
@@ -1763,7 +1759,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         scan.film_base.found = true;
         scan.film_base.source = "bundle";
       }
-      for (int c = 0; c < 3; ++c) scan.film_base.rgb[c] = fb[c] * k;
+      for (int c = 0; c < 3; ++c) scan.film_base.rgb[c] = raised_rgb[c];
       log_info("Film base for the print: %s, raised %.4fx to be no darker than the picture's thinnest film "
                "(R=%.1f G=%.1f B=%.1f)\n", src.c_str(), k, scan.film_base.rgb[0], scan.film_base.rgb[1], scan.film_base.rgb[2]);
     }
@@ -2829,6 +2825,12 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     } else if (scan.film_base.source == "statistics") {
       log_warn("the film base was estimated from the thinnest film on this frame, which shows no rebate: the densities "
                "are too low wherever the frame has no unexposed film; %s\n", remedy);
+    }
+    if (scan.print_floor_applied && scan.print_floor_k > 1.0f) {
+      log_warn("with --print, the density file is written against the film base raised %.3fx (from the %s's) to be no "
+               "darker than the picture's thinnest film, as the print takes it, so that the CLF prints the picture's print; "
+               "the same frame without --print is written against the base as found (the sidecar's film_base.print_floor)\n",
+               scan.print_floor_k, scan.print_floor_found_source.c_str());
     }
     {
       // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.

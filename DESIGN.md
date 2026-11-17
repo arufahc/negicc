@@ -617,7 +617,11 @@ were constructed"). The print's lightness is searched once and continuously, in 
      given values, the density file (written against the raised base), its print searches and CLFs, so the CLF still
      prints the picture's print and a replay reproduces it. The sidecar records the base as found and k
      (`film_base.print_floor`, `profile.print.search.base_factor`), and the warning on an estimated base says by how
-     much it was raised. Without `--print`, nothing changes.
+     much it was raised. Without `--print`, nothing changes. So the same frame's density file differs with and without
+     `--print` when its base is an estimate (written against the raised base with it, against the base as found
+     without it), and the sidecar says which (`film_base.print_floor`). `neg_process --check_print_floor` checks the
+     arithmetic on synthetic frames, the branch with no base read from the scan included (the bundle's base scaled
+     once by the exposures, then raised).
    - **Why:** E held at 1 in reference units (the rule before) made the print depend on how long the scan was exposed:
      the base read at n0 / e_norm, 0.82 to 3.30 on the test frames. Taking the base's level in full instead, an
      estimated base far below the film's thinnest areas cut the shadows: 1006_0007 on its estimate (0.31 of its capture
@@ -705,12 +709,20 @@ and is cut, so the bluest bases, Ultra Endura and Endura Premier, lost their tin
 then a little below white; that is the alternative if the tint is wanted.) The per-component scaling is the ICC's
 own media-relative colorimetry rather than a Bradford adaptation from the base to D50, so that a colour-managed
 viewer given the absolute profile and the relative intent would show the same picture. The bundle's print ICC
-itself stays absolute (its table as built, `wtpt` D50); the scaling is made when the print profile is loaded, and
-the profile an output embeds carries the scaled table, with the paper's XYZ in its `wtpt`, so it is what the ICC
-means by a media-relative profile: a viewer on the relative intent shows the exported picture, and on the absolute
-intent gets the paper's own white and tint back (negicc reads only the A2B0). The print CLF is
-media-relative the same way, the paper's colour (each layer at its least dye) scaled to the viewing light's white.
-The sidecar records `profile.print.white` and `paper_white_xyz`.
+itself stays absolute (its table as built, `wtpt` D50); the scaling is made when the print profile is loaded.
+Which profile an output embeds depends on the output:
+- **No output space** (the print profile embedded, the picture left in its input space): the embedded print profile
+  carries the scaled table, with the paper's XYZ in its `wtpt`, so it is what the ICC means by a media-relative
+  profile: a viewer on the relative intent shows the exported picture, and on the absolute intent gets the paper's
+  own white and tint back (negicc reads only the A2B0).
+- **An output space** (`-P srgb` and the others): the picture is converted to that space and the file embeds the
+  space's profile (Elle's sRGB V2 for `-P srgb`, colorants summing to D50, `wtpt` D65). The paper's white, at D50 after
+  the scaling, lands at linear 1.00008 / 1.00003 / 0.99938, so 65535 / 65535 / 65517 in a 16-bit file, 0.03 ΔE from
+  the profile's white: the textbook Bradford and sRGB constants differ from the inverse of Elle's colorants in the
+  fourth decimal, the same for every conversion. The paper's own XYZ is then in the sidecar only.
+
+The print CLF is media-relative the same way, the paper's colour (each layer at its least dye) scaled to the viewing
+light's white. The sidecar records `profile.print.white` and `paper_white_xyz`.
 
 Why it matters to the search: the intent network names nearly the same lightness whatever white it is shown (its
 prediction moves 0.09 to 0.10 L\* per L\* of a uniform scaling), so a print shown against a perfect white, 2.8 L\*
@@ -1043,9 +1055,9 @@ chart enters the print only through a bracket's mid grey and slopes. A scanner w
   blackbody, and no result has been compared with a real print.
 - **The slopes belong to one chart.** They hold for the film batch, the development and the scan the profile set
   was built from. Film from another lab may differ.
-- **A print's exposure is the picture's.** Auto chooses it on the chart profiles, so a print of every material
-  takes the scene's bracket, exposure and balance; no material moves it. Searching on the print itself overexposed it
-  ("Direct sRGB output: the print ICC").
+- **A print's exposure is its own search's.** With a picture output only the print's own search runs, on the print
+  profile (no chart profile): its mid grey `A`, g and b ("The print's search"). A density output's CLF per material
+  follows from the same search on that material.
 - **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll. On a
   narrow-band bundle they now come from one curve, so they could be taken at the frame's own mid grey; they are taken
   at its bracket's, as the print ICC's mid grey is.

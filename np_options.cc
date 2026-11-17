@@ -308,8 +308,13 @@ int parse_options(int ac, char* av[], Options& o) {
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
-  // neg_process --check_print_tilt alone (read in main, before these options): a self-check of the print's bracket
-  // term, print_tilt_at in both forms; it is listed here for --help.
+  // neg_process --check_print_tilt and --check_print_floor alone (read in main, before these options): the print's
+  // self-checks; they are listed here for --help.
+  parser.add_argument("--check_print_floor")
+    .help("Check aid, given alone: a self-check of the print's floor on a film base that is not a capture "
+          "(print_floor_base) on synthetic frames: a found base, none found (the bundle's, scaled once by the exposures), "
+          "a raised base, film all denser than the base; prints each case and exits 1 if one fails.")
+    .flag();
   parser.add_argument("--check_print_tilt")
     .help("Check aid, given alone: a self-check of the print's bracket term (np_print.h print_tilt_at, both forms, on "
           "brackets given out of order); prints each case and exits 1 if one fails.")
@@ -773,6 +778,12 @@ int parse_options(int ac, char* av[], Options& o) {
         return 1;
       }
     }
+  }
+  if (!o.prints.empty() && std::isfinite(o.print_a) && !o.density &&
+      !(o.target_given && o.exposure_given && o.gain_g_given && o.gain_b_given)) {
+    log_error("--print_a sets the print's mid grey for given values: it needs --target, -E, --gain_g and --gain_b with it "
+              "(a print's cli_equivalent); with Auto the print's search finds A itself\n");
+    return 1;
   }
   if (!o.density) {
     if (ext == ".dpx") {

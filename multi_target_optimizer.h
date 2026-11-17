@@ -381,6 +381,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // X the bundle's crosstalk matrix and fb the base in the conversion's film base space (fb_c reads n0 at the print's E).
 // The base the print takes is fb k, its colour kept; on a base already raised k is 1. Every 4th pixel each way.
 float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
+// The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
+// found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
+// conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times k) at the scan's
+// exposure, in the conversion's film base space, and returns k.
+float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
+                       double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
+// neg_process --check_print_floor: print_floor_base on synthetic frames (a found base, none found, a raised base, film all
+// denser than the base). Returns the number of failed cases.
+int print_floor_selfcheck();
 
 struct ContinuousPrint {
   std::function<void(double a, ParsedFilmProfile& prof)> set_curves_at;   // the print's input tables at A
