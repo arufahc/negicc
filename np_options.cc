@@ -308,6 +308,12 @@ int parse_options(int ac, char* av[], Options& o) {
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
+  // neg_process --check_print_tilt alone (read in main, before these options): a self-check of the print's bracket
+  // term, print_tilt_at in both forms; it is listed here for --help.
+  parser.add_argument("--check_print_tilt")
+    .help("Check aid, given alone: a self-check of the print's bracket term (np_print.h print_tilt_at, both forms, on "
+          "brackets given out of order); prints each case and exits 1 if one fails.")
+    .flag();
   parser.add_argument("--print_a")
     .help("With --print on a TriLED bundle and given values (--target, -E, --gain_g, --gain_b): render the print at "
           "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "

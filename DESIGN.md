@@ -646,7 +646,7 @@ material is refused, and so is a white-light bundle, whose density output takes 
 staying as read and the file carrying no `suggested_balance` (no scene search ran): the CLF written from a print picture's
 `cli_equivalent` equals the one the Auto density run wrote, byte for byte. The density file's metadata lists each
 material's `mid_grey_a` and gains. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
-the picture (CIEDE2000 at 1000 px).
+the picture (CIEDE2000 at 1000 px). Through a bundle carrying tilts the two agree as without (1004_0001 and 1004_0014, 0.36 ΔE00 mean).
 
 **When the print's search cannot run.** `--print` with a picture output needs a TriLED bundle with the film's grey
 balance curve. A white-light bundle is refused ("--print with a picture output needs a TriLED bundle; on a
@@ -705,6 +705,9 @@ Vision 2393 slightly yellow); relative to the paper they render neutral, at the 
 
 **Checks.** On Portra 400 frames (TriLED):
 
+- `neg_process --check_print_tilt` checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
+  order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
+  beyond the end ones (10 of 10).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura).
 - An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.

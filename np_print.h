@@ -123,6 +123,7 @@ struct DensityRecord {
     int steps = 0;
     double last_move[3] = {0, 0, 0};    // |dA| in stops, |dg|, |db| of the search's last step
     double above_knee = 0.0;            // the crop's share above the knee at E = 1
+    std::string stopped_by;             // parameters, residual or steps
   };
   std::map<std::string, PrintSearch> print_search;
 };
@@ -269,6 +270,7 @@ struct FramePrint {
   bool given = false, converged = false;
   int steps = 0;
   double last_move[3] = {0, 0, 0}, above_knee = 0.0;
+  std::string stopped_by;
   double grey_density = 0.70;
 };
 // The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above

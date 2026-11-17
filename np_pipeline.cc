@@ -1640,6 +1640,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.steps = cr.steps;
       for (int c = 0; c < 3; ++c) ps.last_move[c] = cr.last_move[c];
       ps.above_knee = cr.above_knee;
+      ps.stopped_by = cr.stopped_by;
       s.density_print_search[prints.id] = ps;
       log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
                ps.bracket.c_str(), ps.g, ps.b);
