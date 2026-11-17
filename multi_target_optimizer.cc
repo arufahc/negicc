@@ -756,8 +756,6 @@ class SearchFrame {
     return lab;
   }
   const FrameStats& stats() const { return stats_; }
-  const InnerCrop& crop() const { return crop_; }
-  int patch_size() const { return engine_.patch_size(); }
   const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
@@ -1642,38 +1640,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   };
   if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
-  // Way 2S (ParamSearchOptions::wish_bundle): the same metered renders through the wish bundle's profiles, their mean
-  // field's L* set as the frame's lightness wish; its inferences are added to this search's count.
-  if (opts.wish_bundle) {
-    ParamSearchResult wscratch;
-    SearchFrame fw(*opts.wish_bundle, engine, false, opts.max_steps, wscratch);
-    fw.set_shoulder(1.0f, true);
-    fw.set_frame(frame, opts.crop_ratio);
-    const FrameScale wscale = frame_scale(*opts.wish_bundle, scan_shutter_s, scan_iso, opts);
-    fw.set_frame_matrix(wscale.frame_matrix, wscale.e_norm);
-    std::vector<std::pair<int, float>> renders;
-    if (depths.empty() || pin_e) {
-      renders.push_back({cand1.target_idx, e1_init});
-    } else {
-      for (const auto& d : depths) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
-    }
-    std::vector<float> mw, sw, m, sg;
-    for (size_t k = 0; k < renders.size(); ++k) {
-      fw.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
-      if (!fw.predict(preview, m, sg)) return false;
-      if (k == 0) {
-        mw.assign(m.size(), 0.0f);
-        sw.assign(sg.size(), 0.0f);
-      }
-      for (size_t i = 0; i < m.size(); ++i) {
-        mw[i] += m[i] / renders.size();
-        sw[i] += sg[i] / renders.size();
-      }
-    }
-    fr.set_lightness_wish(mw, sw);
-    out.inferences += wscratch.inferences;
-    if (verbose) std::cout << "Auto: the lightness wish from the wish bundle's renders (" << renders.size() << ")\n";
-  }
 
   // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
   if (!opts.probe_path.empty()) {
@@ -2697,70 +2663,5 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   if (bundle.has_crosstalk) p.e *= fr.e_norm();
   std::vector<float> features = res.intent_tone_features;
   plan_tone_on_render(fr, pd, p, &tone_head, encoding, features, out);
-  return true;
-}
-
-bool search_print_gains(const ProfileBundle& print_bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
-                        double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                        const ParamSearchResult& scene, PrintGainsResult& out) {
-  const Clock::time_point t0 = Clock::now();
-  out = PrintGainsResult{};
-  const int idx = scene.target_idx;
-  if (idx < 0 || idx >= (int)print_bundle.targets.size()) {
-    std::cerr << "ERROR! The print's gains need the bracket of a finished search" << std::endl;
-    return false;
-  }
-  ParamSearchResult scratch;  // the inferences and timings of this frame: not reported
-  SearchFrame fr(print_bundle, engine, opts.verbose, opts.max_steps, scratch);
-  fr.set_shoulder(scene.params.shoulder, false);   // the scene's roll-off, as the conversion renders the print with
-  fr.set_frame(frame, opts.crop_ratio);
-  const FrameScale scale = frame_scale(print_bundle, (float)scan_shutter_s, (float)scan_iso, opts);
-  fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
-  const size_t n = fr.stats().grid.size() / 3;
-  if (scene.intent_mu.size() != n * 3 || scene.intent_sigma.size() != n * 3 || n == 0) {
-    std::cerr << "ERROR! The scene's intent field does not match the frame's grid" << std::endl;
-    return false;
-  }
-  std::vector<float> mu = scene.intent_mu, sigma = scene.intent_sigma;
-  for (size_t i = 0; i < n; ++i) sigma[i * 3] = INFINITY;   // the L* channel carries no weight: lightness is the scene's
-  fr.set_pins(PIN_E, scene.params.e, 1.0f, 1.0f);
-  const float e_bounds[3] = {scene.params.e, scene.params.e, scene.params.e};
-  // Each print preview is scored as the scene's fixed-point loop scores its steps: the residual of its trained cells
-  // against the field (here a* and b* only); the step with the lowest is kept, so a loop that circles between
-  // neighbouring grid points ends on the best of them.
-  ConversionParams curr = scene.params, best = scene.params;
-  float best_res = INFINITY;
-  std::vector<uint8_t> preview;
-  const int steps = std::max(1, opts.max_steps);
-  const InnerCrop& crop = fr.crop();
-  const FrameStats& st = fr.stats();
-  for (int k = 0; k <= steps; ++k) {
-    fr.render_preview(idx, curr, preview);
-    const float res = self_consistency_residual(preview.data(), crop.w, crop.h, st.grid_w, st.grid_h, fr.patch_size(),
-                                                mu.data(), sigma.data());
-    if (res < best_res) {
-      best_res = res;
-      best = curr;
-    }
-    if (k == steps) break;   // the last step's result is scored, not searched from
-    fr.update_correction(idx, curr, preview);
-    ConversionParams next;
-    fr.search(idx, mu, sigma, &curr, e_bounds, next);
-    out.steps = k + 1;
-    if (opts.verbose) {
-      std::cout << "  print gains step " << k + 1 << ": g " << curr.g << " -> " << next.g << ", b " << curr.b << " -> "
-                << next.b << " (a*b* residual of the step's preview " << res << ")" << std::endl;
-    }
-    if (next.g == curr.g && next.b == curr.b) {
-      out.converged = true;
-      break;
-    }
-    curr.g = next.g;
-    curr.b = next.b;
-  }
-  out.g = best.g;
-  out.b = best.b;
-  out.residual = best_res;
-  out.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
   return true;
 }

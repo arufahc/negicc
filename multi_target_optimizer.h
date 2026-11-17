@@ -148,10 +148,6 @@ struct ParamSearchOptions {
   // at each as the fixed-point loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as
   // the residual reads them and as the training targets are made) and optimiser_cells (what intent_loss scores at
   // those parameters, before the per-bracket correction).
-  // The print experiment's Way 2S (--print_search fullwish): the frame's one lightness wish is predicted from the
-  // same metered renders through this bundle's profiles (the chart's) instead of the searched bundle's (the print's);
-  // the screening field stays the searched bundle's. Null: the searched bundle's own wish.
-  const ProfileBundle* wish_bundle = nullptr;
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
@@ -313,23 +309,6 @@ float knob_grey_miss_stops(float brightness_stops, float grey_L);
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
-
-// Way 1P of the print experiment (--print_search gb; whitelab ledger 2026-11-16, "Print experiment design"): after the
-// scene's search, g and b searched on the print. print_bundle is the bundle with every bracket's profile replaced by its
-// print profile. The bracket and E are held at scene's, and the field at scene's final field (intent_mu, intent_sigma):
-// it is not predicted again from print previews. Only a* and b* are scored (the L* channel carries no weight). Each
-// step renders the print preview, measures the optimiser's correction on it (DESIGN.md, "The picture the search
-// scores") and searches g and b again, until they stop moving or after opts.max_steps steps.
-struct PrintGainsResult {
-  float g = 1.0f, b = 1.0f;   // the print's gains (the scene's are scene.params.g, .b)
-  int steps = 0;
-  bool converged = false;
-  float residual = 0.0f;      // the kept step's a*b* residual against the scene's field
-  double time_ms = 0.0;
-};
-bool search_print_gains(const ProfileBundle& print_bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
-                        double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                        const ParamSearchResult& scene, PrintGainsResult& out);
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,

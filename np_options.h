@@ -116,7 +116,6 @@ struct Options {
   bool output_dpx = false;
   // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
   std::vector<std::string> prints;
-  std::string print_search = "scene";   // --print_search (experimental): scene, gb or full
   bool no_metadata = false;
 };
 

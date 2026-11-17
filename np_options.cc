@@ -306,13 +306,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
-  parser.add_argument("--print_search")
-    .help("Experimental (the print experiment, whitelab ledger 2026-11-16): how a print with a picture output is "
-          "searched. scene (default): Auto on the chart profiles, the print rendered at its result. gb: Auto on the "
-          "chart profiles for the bracket, E and the lightness wish, then g and b searched on the print against the "
-          "scene's final field (a* and b* only). full: the whole search on the print profiles. fullwish: as full, with the "
-          "frame's lightness wish predicted from the chart profiles' renders.")
-    .default_value(std::string("scene"));
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -719,15 +712,6 @@ int parse_options(int ac, char* av[], Options& o) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
     }
-  }
-  o.print_search = parser.get<std::string>("--print_search");
-  if (o.print_search != "scene" && o.print_search != "gb" && o.print_search != "full" && o.print_search != "fullwish") {
-    log_error("--print_search takes scene, gb, full or fullwish\n");
-    return 1;
-  }
-  if (o.print_search != "scene" && !parser.is_used("--print")) {
-    log_error("--print_search %s needs --print with a picture output\n", o.print_search.c_str());
-    return 1;
   }
   if (parser.is_used("--print")) {
     o.prints = parser.get<std::vector<std::string>>("--print");
