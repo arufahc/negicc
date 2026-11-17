@@ -330,7 +330,8 @@ void remove_print_clfs(const DensityPrints& prints);
 constexpr const char* kPrintIccCopyright =
     "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
     "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
-    "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt";
+    "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
+    "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
 constexpr int kPrintIccCube = 45;
 constexpr double kPaperAlphaStart = -3.0, kPaperAlphaStep = 0.005;
