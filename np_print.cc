@@ -928,10 +928,23 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   p.grey_density = material.grey_density;
   for (int k = 0; k < 9; ++k) p.to_print[k] = to_print->m[k];
   p.to_print_for = to_print->film;
-  // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure.
+  // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure. A TriLED frame's
+  // material with its own print search takes that search's A, E and gains (below).
   p.searched = rec.has_balance && rec.balance_e > 0.0;
   p.bracket = p.searched ? rec.balance_target : bundle.targets[bundle.targets.size() / 2].name;
   p.exposure = p.searched ? rec.balance_e : 1.0;
+  const auto own = rec.print_search.find(material.id);
+  const bool by_print = own != rec.print_search.end() && bundle.grey_balance.present &&
+                        bundle.density_matrix[kDensityApd].present;
+  if (by_print) {
+    p.searched = true;
+    p.print_searched = true;
+    p.bracket = own->second.bracket;
+    p.exposure = own->second.e;
+    p.a = own->second.a;
+    p.gain_g = own->second.g;
+    p.gain_b = own->second.b;
+  }
   const DensityBracket* bracket = nullptr;
   for (const DensityBracket& b : bundle.density_brackets) {
     if (b.name == p.bracket) bracket = &b;
@@ -950,7 +963,15 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   const double shift = std::log10(p.exposure);
   double light[3] = {bracket->grey_light[0], bracket->grey_light[1], bracket->grey_light[2]};
   for (int c = 0; c < 3; ++c) p.slopes[c] = bracket->slopes[c];
-  if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
+  if (by_print) {
+    // The print at its own search's mid grey A, as the picture conversion renders it: the curve's grey and tangent at
+    // A, and the tilt of the bracket nearest A.
+    curve_grey_at(bundle, p.a, light);
+    curve_slopes_at(bundle, p.a, p.slopes);
+    const DensityBracket* nb = nearest_bracket(bundle, p.a);
+    for (int c = 0; c < 3; ++c) p.slopes[c] *= 1.0 + (nb ? nb->tilt[c] : 0.0);
+    p.from_curve = true;
+  } else if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
     curve_grey(bundle, *bracket, light);
     curve_slopes(bundle, *bracket, p.slopes);
     // The bracket's tilt relative to the curve, as its print ICC's curves take it: (G_c - A_mid)(1 + b_c) has the
@@ -1008,7 +1029,14 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
   const DensityEncoding& e = rec.encoding;
   const double max_code = (double)e.max_code();
   double bal[3], bal_mean = 0.0;
-  const bool balanced = density_balance_offset(rec, bal, &bal_mean);
+  DensityRecord own = rec;   // the material's own print search: its gains in place of the picture conversion's
+  if (print.print_searched) {
+    own.has_balance = true;
+    own.balance_e = print.exposure;
+    own.balance_g = print.gain_g;
+    own.balance_b = print.gain_b;
+  }
+  const bool balanced = density_balance_offset(own, bal, &bal_mean);
   for (double& v : bal) v += bal_mean;
   double a[9], b[3];
   for (int i = 0; i < 3; ++i) {
@@ -1189,13 +1217,19 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
           {"to_print_density_for", p.to_print_for},
           {"bracket", p.bracket},
-          {"bracket_from", p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
+          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
+                           : p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
           {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
-          {"grey_and_slopes_from", p.fitted       ? "the grey scale this frame's fitted input curves describe"
+          {"grey_and_slopes_from", p.print_searched ? "the film's grey balance curve at the print's own mid grey A"
+                                   : p.fitted       ? "the grey scale this frame's fitted input curves describe"
                                    : p.from_curve ? "the film's grey balance curve at the bracket's mid grey"
                                                   : "the bracket's entry in the profile set"}};
+      if (p.print_searched) {
+        one["mid_grey_a"] = p.a;
+        one["gains"] = {p.gain_g, p.gain_b};
+      }
       materials[p.id] = one;
     }
     j["print"] = {
@@ -1301,17 +1335,31 @@ double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracke
   return m[3] * bracket.grey_light[0] + m[4] * bracket.grey_light[1] + m[5] * bracket.grey_light[2];
 }
 
-void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]) {
+void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]) {
   const GreyBalanceCurves& g = bundle.grey_balance;
   const std::vector<double> x = grey_grid(g);
-  const double a_mid = bracket_mid_apd(bundle, bracket);
-  for (int c = 0; c < 3; ++c) light[c] = interp(g.apd[c], x, a_mid);
+  for (int c = 0; c < 3; ++c) light[c] = interp(g.apd[c], x, a);
+}
+
+void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]) {
+  curve_grey_at(bundle, bracket_mid_apd(bundle, bracket), light);
+}
+
+const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a) {
+  const DensityBracket* best = nullptr;
+  for (const DensityBracket& b : bundle.density_brackets)
+    if (!best || std::fabs(bracket_mid_apd(bundle, b) - a) < std::fabs(bracket_mid_apd(bundle, *best) - a)) best = &b;
+  return best;
 }
 
 void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]) {
+  curve_slopes_at(bundle, bracket_mid_apd(bundle, bracket), slopes);
+}
+
+void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]) {
   const GreyBalanceCurves& g = bundle.grey_balance;
   double n[3], inv[3], k[3] = {0, 0, 0};
-  curve_grey(bundle, bracket, n);
+  curve_grey_at(bundle, a, n);
   for (int c = 0; c < 3; ++c) {
     const double d = (on_grid(g.apd[c], g.start, g.step, n[c] + g.step) -
                       on_grid(g.apd[c], g.start, g.step, n[c] - g.step)) / (2.0 * g.step);

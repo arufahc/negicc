@@ -36,6 +36,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,14 @@ struct DensityRecord {
   // The metadata's "print" block, as JSON text: how the frame prints on each print material
   // (DensityPrints::metadata_json). Empty: none.
   std::string print_json;
+  // A TriLED frame with --print: each material's own print search (np_pipeline; search_print_continuous), by material
+  // id: its mid grey A, E (the -E units), g, b and the nearest bracket. Its CLF prints the frame as the picture
+  // conversion would print it on that material. Empty: the CLFs take the picture conversion's search (white light).
+  struct PrintSearch {
+    double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
+    std::string bracket;
+  };
+  std::map<std::string, PrintSearch> print_search;
 };
 // The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.
 std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
@@ -248,6 +257,10 @@ struct FramePrint {
   double slopes[3] = {1, 1, 1};
   bool fitted = false;                // grey and slopes are of the grey scale the frame's fitted curves describe
   bool from_curve = false;            // grey and slopes are the film's grey balance curve's (curve_grey, curve_slopes)
+  // The material's own print search (DensityRecord::print_search): the mid grey A the grey and slopes are taken at,
+  // and its gains, which the CLF's balance applies in place of the picture conversion's.
+  bool print_searched = false;
+  double a = NAN, gain_g = 1.0, gain_b = 1.0;
   double grey_density = 0.70;
 };
 // The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
@@ -340,6 +353,11 @@ using PrintCurves = std::array<std::vector<double>, 3>;
 
 // The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
 double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
+// curve_grey and curve_slopes at a mid grey A (green APD) in place of a bracket's.
+void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
+void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
+// The bracket whose mid grey is nearest A (null without brackets).
+const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
 // The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
 // curve has it. A print CLF of a narrow-band bundle takes it as the frame's mid grey (frame_print).
 void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);

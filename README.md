@@ -260,7 +260,9 @@ Each RGB-LED profile set carries one print ICC per print material (`profiles/<fi
 and its `README.md` gives the math). The automatic search runs on the print itself: its printing exposure is one
 continuous level, then the colour balance, and the paper's own curve sets the tone, so the toning step does not run.
 The print is shown relative to its paper, the paper's base at the display's white. A print profile given as a file
-gets its ICC computed. The density file's CLF prints the same material, relative to its paper too. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
+gets its ICC computed. With a density output, each material's CLF prints the frame as the picture would: `--print` runs the print's
+search for each material it writes a CLF for (about 9 s each), and a print's `cli_equivalent` given to a density
+output writes the same CLF. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
 set saved before it had a grey balance curve cannot print.
 
 One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search

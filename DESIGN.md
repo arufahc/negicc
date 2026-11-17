@@ -633,6 +633,18 @@ print profile (`A = A_mid` of `--target`) at the given E, g and b, so a picture'
 frame's units, the gains, and the nearest bracket as `--target`), and replays the print to the bit. A run reused with
 the knobs (`--brightness`, `--tint`, `--warmth`) keeps the recorded `A`.
 
+**The density output's CLF prints the same print.** A density output with `--print` on a TriLED bundle runs the
+print's search for each material it writes a CLF for (about 8 inferences and 9 s each), and that material's CLF
+carries its result in the existing nodes: the first matrix's mid grey and offsets from the curve's grey at the
+search's `A` (with its E), the density offsets from its g and b, the slopes from the curve's tangent at `A` times
+`1 + b_c` of the nearest bracket, and the media-relative white. The scene's search still runs first: the file's
+`suggested_balance` records it, as without `--print`. A density output without `--print` runs no print search. The
+print's given values (a picture's `cli_equivalent`: `--print_a`, `--target`, `-E`, `--gain_g`, `--gain_b`) set every
+material's CLF numbers in place of its search, the densities staying as read: the CLF written from a print picture's
+`cli_equivalent` equals the one the Auto density run wrote, byte for byte. The density file's metadata lists each
+material's `mid_grey_a` and gains. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
+the picture (CIEDE2000 at 1000 px).
+
 **When the print's search cannot run.** `--print` with a picture output needs a TriLED bundle with the film's grey
 balance curve. A white-light bundle is refused ("--print with a picture output needs a TriLED bundle; on a
 white-light bundle give a density output"), and so is a TriLED bundle saved before grey balance curves ("the profile
@@ -690,8 +702,11 @@ Vision 2393 slightly yellow); relative to the paper they render neutral, at the 
 - An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte, for a built-in material and for one given as a file, Vision 2383 (D55) included.
-- The CLF of a frame, with its slopes and mid grey from the curve, is 0.42 ΔE00 from the print ICC on average (95th
-  percentile 0.60), on frame 0057, Portra Endura: the CLF's straight lines against the curve.
+- The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`): on frames
+  1004_0001 and 1004_0014, Portra Endura 0.37 ΔE00 on average (95th percentile 0.91 and 0.75), Vision 2383 0.32 and
+  0.38 (0.71 and 0.84): the CLF's straight lines against the curve. On frame 1006_0003 the two differ where the
+  picture's input passes the soft knee at E = 1 (1.2 and 2.1 on average, 95th percentiles 6 and 11): the picture
+  clips there and the density file does not; that roll's frames put more than 1 % of their crop above the knee.
 - Without `--print` the output is bit-identical to `neg_process` before this change.
 
 **Before the print's own search.** The print was first rendered at the scene's search (its bracket, E and balance on

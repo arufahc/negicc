@@ -665,6 +665,26 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   return ok;
 }
 
+// The paper's white (the owner's choice, "paper white is display white"): a print profile made media-relative, as the
+// ICC defines it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of
+// X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white and no
+// channel passes 1 (its tint is not shown). The bundle's print ICC itself stays absolute. paper_xyz gets the base.
+static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
+  constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
+  const double d50[3] = {0.9642, 1.0, 0.8249};
+  size_t best = 0;
+  for (size_t i = 1; i < p.clut.size(); i += 3)
+    if (p.clut[i] > p.clut[best * 3 + 1]) best = i / 3;
+  double base[3], k[3];
+  for (int c = 0; c < 3; ++c) {
+    base[c] = p.clut[best * 3 + c] * kPcsMax;
+    k[c] = d50[c] / base[c];
+    if (paper_xyz) paper_xyz[c] = base[c];
+  }
+  for (size_t i = 0; i < p.clut.size(); ++i) p.clut[i] *= (float)k[i % 3];
+  p.rebind_pointers();
+}
+
 int prepare(const Options& o, Setup& s) {
   if (!o.flat.empty()) {
     try {
@@ -838,27 +858,13 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
-      // The paper's white (the owner's choice, "paper white is display white"): the print is media-relative. The
-      // lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of X, Y and Z of
-      // every node is scaled by D50's over the base's, the ICC's own media-relative colorimetry, so the base is exactly
-      // the display's white and no channel passes 1 (its tint is not shown). The bundle's print ICC itself stays
-      // absolute; the profile an output embeds carries the scaled table.
+      // The paper's white (the owner's choice, "paper white is display white"): the print is media-relative
+      // (to_paper_white); the profile an output embeds carries the same scaled table.
+      for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p, s.print_paper_xyz);
       {
-        constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
-        const double d50[3] = {0.9642, 1.0, 0.8249};
-        const std::vector<float>& t = s.print_profs.front().clut;
-        size_t best = 0;
-        for (size_t i = 1; i < t.size(); i += 3)
-          if (t[i] > t[best * 3 + 1]) best = i / 3;
         double k[3];
-        for (int c = 0; c < 3; ++c) {
-          s.print_paper_xyz[c] = t[best * 3 + c] * kPcsMax;
-          k[c] = d50[c] / s.print_paper_xyz[c];
-        }
-        for (ParsedFilmProfile& p : s.print_profs) {
-          for (size_t i = 0; i < p.clut.size(); ++i) p.clut[i] *= (float)k[i % 3];
-          p.rebind_pointers();
-        }
+        const double d50[3] = {0.9642, 1.0, 0.8249};
+        for (int c = 0; c < 3; ++c) k[c] = d50[c] / s.print_paper_xyz[c];
         for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, k);
       }
       s.print_cont = prints.continuum;
@@ -1559,10 +1565,72 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
   // g, b on the combined profile the curves were replayed into) in place of the search.
   // The bundle search: on a print (--print with a picture output) the print's own search, the scene's otherwise.
+  // A TriLED density run with --print: each material's own print search, so that its CLF prints the frame as the
+  // picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's suggested
+  // balance, as without --print.
+  auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                                    const ParamSearchOptions& opts) -> bool {
+    std::vector<std::string> ids;
+    for (const std::string& id : o.prints) {
+      if (id == "all") {
+        for (const PrintMaterial& m : builtin_print_materials(&bundle)) ids.push_back(m.id);
+      } else {
+        ids.push_back(id);
+      }
+    }
+    for (const std::string& id : ids) {
+      BracketPrints prints;
+      std::string why;
+      if (!bracket_print_profiles(bundle, id, prints, why)) {
+        log_warn("No print search for %s: %s\n", id.c_str(), why.c_str());
+        continue;
+      }
+      if (s.density_print_search.count(prints.id)) continue;
+      std::vector<uint8_t>& icc = prints.icc[prints.icc.size() / 2];
+      cmsHPROFILE h = cmsOpenProfileFromMem(icc.data(), (cmsUInt32Number)icc.size());
+      ParsedFilmProfile prof;
+      const bool ok = h && parse_film_profile_pipeline(h, prof);
+      if (h) cmsCloseProfile(h);
+      if (!ok) {
+        log_warn("No print search for %s: its print ICC cannot be read\n", id.c_str());
+        continue;
+      }
+      prof.rebind_pointers();
+      to_paper_white(prof);
+      const PrintContinuum& pc = prints.continuum;
+      ContinuousPrint cp;
+      cp.set_curves_at = [&pc](double a, ParsedFilmProfile& p) { pc.set_curves_at(a, p); };
+      cp.green_apd = [&pc](double dl) { return pc.green_apd(dl); };
+      cp.n0 = pc.n0;
+      cp.a_lo = pc.a_lo();
+      cp.a_hi = pc.a_hi();
+      cp.a_mid = pc.a_mid;
+      ParamSearchResult res;
+      ContinuousPrintResult cr;
+      if (!search_print_continuous(bundle, prof, cp, s.engine, frame, scan_shutter_s, scan_iso, opts, res, cr)) {
+        return false;
+      }
+      DensityRecord::PrintSearch ps;
+      ps.a = cr.a;
+      ps.e = res.params.e;
+      ps.g = res.params.g;
+      ps.b = res.params.b;
+      ps.bracket = res.target_name;
+      s.density_print_search[prints.id] = ps;
+      log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
+               ps.bracket.c_str(), ps.g, ps.b);
+    }
+    return true;
+  };
   auto bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                            const ParamSearchOptions& opts) -> bool {
     if (s.print_profs.empty()) {
-      return search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res);
+      if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) return false;
+      if (s.density && !s.white_light && !o.prints.empty() && !scan.auto_res.probed &&
+          !density_print_searches(frame, scan_shutter_s, scan_iso, opts)) {
+        return false;
+      }
+      return true;
     }
     if (!search_print_continuous(bundle, s.print_profs[s.print_profs.size() / 2], s.print_cp, s.engine, frame,
                                  scan_shutter_s, scan_iso, opts, scan.auto_res, s.print_cr)) {
@@ -2806,6 +2874,31 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_g = (*c.station_params)[1];
       rec.balance_b = (*c.station_params)[2];
       rec.balance_target = c.bundle_target_name;
+    }
+    rec.print_search = s.density_print_search;
+    // A print's given values (a picture's cli_equivalent) set every material's CLF numbers, in place of its search.
+    if (o.density_print_given && !s.white_light && s.manual_target_idx >= 0 &&
+        s.manual_target_idx < (int)s.bundle.targets.size()) {
+      std::vector<std::string> ids;
+      for (const std::string& id : o.prints) {
+        if (id == "all") {
+          for (const PrintMaterial& m : builtin_print_materials(&s.bundle)) ids.push_back(m.id);
+        } else {
+          ids.push_back(id);
+        }
+      }
+      for (const std::string& id : ids) {
+        BracketPrints bp;
+        std::string why;
+        if (!bracket_print_profiles(s.bundle, id, bp, why)) continue;
+        DensityRecord::PrintSearch ps;
+        ps.a = o.print_a;
+        ps.e = o.exposure_comp;
+        ps.g = o.gain_g;
+        ps.b = o.gain_b;
+        ps.bracket = s.bundle.targets[s.manual_target_idx].name;
+        rec.print_search[bp.id] = ps;
+      }
     }
     // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
     if (s.white_light && s.input_curves.active()) {

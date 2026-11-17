@@ -779,13 +779,22 @@ int parse_options(int ac, char* av[], Options& o) {
   // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
   // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
   // density output does not take.
+  // A print's given values (a picture's cli_equivalent: --print_a with --target, -E, --gain_g and --gain_b) set the
+  // print CLFs' numbers on a density output, in place of each material's print search; the densities stay as read.
+  o.density_print_given = !o.prints.empty() && std::isfinite(o.print_a) && o.target_given && o.exposure_given &&
+                          o.gain_g_given && o.gain_b_given;
+  if (!o.prints.empty() && std::isfinite(o.print_a) && !o.density_print_given) {
+    log_error("--print_a on a density output needs --target, -E, --gain_g and --gain_b with it (a print's "
+              "cli_equivalent): they set the print CLFs' numbers\n");
+    return 1;
+  }
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given},          {"-E", o.exposure_given},
-        {"--gain_g", o.gain_g_given},          {"--gain_b", o.gain_b_given},
+        {"--target", o.target_given && !o.density_print_given},  {"-E", o.exposure_given && !o.density_print_given},
+        {"--gain_g", o.gain_g_given && !o.density_print_given},  {"--gain_b", o.gain_b_given && !o.density_print_given},
         {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
         {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
         {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
