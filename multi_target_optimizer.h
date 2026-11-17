@@ -381,6 +381,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // X the bundle's crosstalk matrix and fb the base in the conversion's film base space (fb_c reads n0 at the print's E).
 // The base the print takes is fb k, its colour kept; on a base already raised k is 1. Every 4th pixel each way.
 float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
+// The share of the inner crop of |frame| (every 4th pixel each way, as print_base_floor reads it) thinner than the base
+// |fb| in some channel ((X px)_c / fb_c above 1): with fb the base after the floor, the share of a crop thinner than the
+// picture's thinnest film (a print searched on the whole scan meets the holder's light so).
+double print_share_thinner(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
 // The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
 // found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
 // conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times k) at the scan's

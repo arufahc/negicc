@@ -1679,21 +1679,26 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
         std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film", scan.print_floor_k);
       if (estimate) {
-        log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the crop is past the "
+        // With no --roi the shares are of the search's crop, the whole scan with the holder's light (said above).
+        log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the %s is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
                  "of this roll's unexposed film>\n",
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
-                 raised, 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+                 raised, 100.0 * s.print_cr.past_knee[c],
+                 scan.print_noroi_warned ? "search's crop (the whole scan, the light included)" : "crop",
+                 100.0 * s.print_cr.past_cut[c], name);
       } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
         log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
                  "base (a long scan clips unexposed film); give --film_base <capture of this roll's unexposed film>\n",
                  scan.film_base.source.c_str(), raised);
       } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
-        log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
+        log_warn("%.2f %% of the %s is past the cut (no detail kept) in %s at the print's settings, with the film base "
                  "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
                  "<capture of this roll's unexposed film> if this is not one\n",
-                 100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str());
+                 100.0 * s.print_cr.past_cut[c],
+                 scan.print_noroi_warned ? "search's crop (the whole scan, the light included)" : "crop", name,
+                 scan.film_base.source.c_str());
       }
     }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
@@ -1769,6 +1774,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
     scan.print_floor_k = k;
+    // No --roi: the print's search reads the whole scan, and what of its crop is thinner than the picture's thinnest film
+    // (the base after the floor) is said, above the percentile's own margin (100 - kBasePercentile %).
+    if (!scan.has_roi) {
+      scan.print_noroi_thin_share = print_share_thinner(s.bundle, frame, ParamSearchOptions{}.crop_ratio, raised_rgb);
+      if (100.0 * scan.print_noroi_thin_share > 100.0 - negicc::kBasePercentile) {
+        scan.print_noroi_warned = true;
+        log_warn("no --roi: the print's search reads the whole scan, the holder's light included (%.2f %% of its crop is "
+                 "thinner than the picture's thinnest film); give --roi or --roi auto\n",
+                 100.0 * scan.print_noroi_thin_share);
+      }
+    }
     for (int c = 0; c < 3; ++c) scan.print_floor_found_rgb[c] = fb[c];
     if (k > 1.0f) {
       if (!scan.film_base.found) {

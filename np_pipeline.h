@@ -260,6 +260,10 @@ struct Scan {
   // detection's confidence when one ran (else -1).
   std::string print_floor_frame;
   float print_floor_frame_conf = -1.0f;
+  // No --roi: the share of the search's crop (the whole scan) thinner than the picture's thinnest film (the base after
+  // the floor), and whether the print said so (above 100 - kBasePercentile %).
+  double print_noroi_thin_share = 0.0;
+  bool print_noroi_warned = false;
   bool has_base_capture = false;
   FilmBaseCapture base_capture;
   std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)

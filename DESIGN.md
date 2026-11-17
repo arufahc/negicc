@@ -627,7 +627,13 @@ were constructed"). The print's lightness is searched once and continuously, in 
      (perforations within a `--roi`) is not masked, since the detector's light mask also takes thin film for light, and
      the record's factor shows what was read. The print's search itself reads the search frame, which without `--roi`
      is the whole scan, bare light included: there the floor's frame and the search's crop differ, and such a print
-     meters and balances on the light too (give `--roi` or `--roi auto`). Without `--print`, nothing changes. So the same frame's density file differs with and without
+     meters and balances on the light too (give `--roi` or `--roi auto`). The print says so when more than 100 −
+     `kBasePercentile` (0.5) % of the search's crop is thinner than the picture's thinnest film (the base after the
+     floor; `print_share_thinner`, every 4th pixel as the floor reads): "no --roi: the print's search reads the whole
+     scan, the holder's light included (N % of its crop is thinner than the picture's thinnest film)". The base
+     warnings beside it then say that their shares are of the search's crop (the whole scan, the light included), not
+     of the picture's frame: on 1004_0036, 12.12 % of the whole scan is thinner than the picture's thinnest film, and
+     11.07 % of it past the cut is that light. Without `--print`, nothing changes. So the same frame's density file differs with and without
      `--print` when its base is an estimate (written against the raised base with it, against the base as found
      without it), and the sidecar says which (`film_base.print_floor`). `make check_print` checks the
      arithmetic on synthetic frames, the branch with no base read from the scan included (the bundle's base scaled

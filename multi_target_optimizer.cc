@@ -2767,6 +2767,23 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
   return k;
 }
 
+double print_share_thinner(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]) {
+  const InnerCrop c = compute_inner_crop(frame.width, frame.height, crop_ratio);
+  const double* x = bundle.crosstalk_matrix_d;
+  uint16_t px[3];
+  size_t n = 0, thin = 0;
+  for (int y = c.y0; y < c.y0 + c.h; y += 4)
+    for (int xx = c.x0; xx < c.x0 + c.w; xx += 4) {
+      frame.sample(xx, y, px);
+      bool t = false;
+      for (int r = 0; r < 3; ++r)
+        t = t || (fb[r] > 0.0 && (float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]) > 1.0f);
+      thin += t;
+      ++n;
+    }
+  return n ? (double)thin / (double)n : 0.0;
+}
+
 float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
                        double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]) {
   if (found) {
