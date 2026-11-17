@@ -388,9 +388,10 @@ struct ContinuousPrintResult {
   int steps = 0;
   bool converged = false;
   float above_knee = 0.0f;           // the share of the inner crop above the knee at the bootstrap (the search's E, g = b = 1)
-  // At the final settings (E, g and b in the matrix, before the knee), per channel: the share of the inner crop past the
-  // knee (input above 0.95, 0.054 density thinner than the base at g = b = 1) and past the cut (above 1.1227, where the
-  // knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no detail.
+  // At the final settings, per channel (the gains are in the print's curves, after the knee, so this is at E alone): the
+  // share of the inner crop past the knee (input above 0.95, 0.054 density thinner than the base) and past the cut
+  // (above 1.1227, where the knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no
+  // detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
   float wish_mean_l = 0.0f;          // the held wish's mean L*
   float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut

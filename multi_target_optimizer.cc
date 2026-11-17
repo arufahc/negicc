@@ -3012,9 +3012,10 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   out.target_name = bundle.targets[nearest].name;
   out.params = {E / e_norm, best.g, best.b, best.shoulder};
   {
-    // The shares past the knee and past the cut per channel at the final settings (every 4th pixel each way).
+    // The shares past the knee and past the cut per channel at the final settings (every 4th pixel each way): the
+    // picture applies the gains in its curves, after the knee, so the knee sees the matrix at E alone.
     float mf[9];
-    negicc::candidate_matrix(fr.input_matrix(), E, best.g, best.b, mf);
+    negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, mf);
     const float cut = AUTO_KNEE + (1.0f - AUTO_KNEE) * std::atanh((0.9999f - AUTO_KNEE) / (1.0f - AUTO_KNEE));
     const InnerCrop& c = fr.inner_crop();
     long knee_n[3] = {0, 0, 0}, cut_n[3] = {0, 0, 0}, total = 0;

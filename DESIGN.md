@@ -727,12 +727,14 @@ Ultra Endura's base, two to two and a half times the other papers', is as spektr
 are more than 1 ΔE00 from a neutral of their lightness (Vision 2383 yellow, Ultra Endura and Endura Premier blue,
 Vision 2393 slightly yellow); relative to the paper they render neutral, at the display's white.
 
-**The gains and the knee.** g and b are in the matrix, before the knee, so a channel's gain moves where its thin film
-meets the knee: at g = 1.44 and b = 1.83 (1006_0003's search, with the roll's base) blue's base reads 1.54 of full scale,
-film under 0.21 density above the base passes the knee in blue and under 0.14 is cut; 1.5 % of that crop passes the knee
-in blue and none is cut. Rendered at those gains, 1006_0007 with the roll's base has 43 % of its crop past the cut in
-blue and the picture is 1.18 ΔE00 from the CLF in the print's darkest third, against 0.68 at its own gains. The gains'
-part is real and small; the base's level is the large part (above, step 1).
+**The gains and the knee.** The print applies g and b in its input curves, after the knee (dL_c = −log10(unknee(v)
+g_c / n0)), as the CLF applies them after the density file's floor; the matrix carries E alone, so that film at the
+base's density never passes the knee whatever the gains. With the gains in the matrix, before the knee, a gain of 1.2
+already put the base past the knee in that channel: with their captures, 6 of the 50 TriLED test frames had more than
+1 % of the crop past the cut (1004_0001 and 1004_0010 in green at g 1.64 and 1.70; 1006_0004, 0005, 0006, 0015 in blue).
+With the gains in the curves none has, the picture against the CLF is no worse (0.47 ΔE00 over the darkest third,
+0.48 before), and the prints move by at most 0.01 ΔE00 on average: the cut film lay in the paper's toe. The search's
+own previews keep the gains in the matrix; their difference from the final print is that 0.01.
 
 **Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
 the bundles carrying each bracket's own tilt) unless said otherwise:
