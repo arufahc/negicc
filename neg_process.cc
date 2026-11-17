@@ -14,12 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "np_options.h"
-#include <cstdio>
-#include "multi_target_optimizer.h"
-#include <string>
-
 #include "np_pipeline.h"
-#include "np_print.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21))
 #error This code requires LibRaw 0.21+ (vendored in 3rd_party/libraw)
@@ -64,17 +59,6 @@
 // mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
-  // The print's self-checks, before any option is read: its bracket term (np_print.h print_tilt_at) and its floor on a
-  // base that is not a capture (multi_target_optimizer.h print_floor_base).
-  for (int i = 1; i < ac; ++i) {
-    const std::string a = av[i];
-    if (a != "--check_print_tilt" && a != "--check_print_floor") continue;
-    if (ac != 2) {
-      std::fprintf(stderr, "ERROR! %s is given alone: it runs the self-check and converts nothing\n", a.c_str());
-      return 1;
-    }
-    return (a == "--check_print_tilt" ? print_tilt_selfcheck() : print_floor_selfcheck()) == 0 ? 0 : 1;
-  }
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
   Setup s;

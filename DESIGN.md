@@ -619,7 +619,7 @@ were constructed"). The print's lightness is searched once and continuously, in 
      (`film_base.print_floor`, `profile.print.search.base_factor`), and the warning on an estimated base says by how
      much it was raised. Without `--print`, nothing changes. So the same frame's density file differs with and without
      `--print` when its base is an estimate (written against the raised base with it, against the base as found
-     without it), and the sidecar says which (`film_base.print_floor`). `neg_process --check_print_floor` checks the
+     without it), and the sidecar says which (`film_base.print_floor`). `make check_print` checks the
      arithmetic on synthetic frames, the branch with no base read from the scan included (the bundle's base scaled
      once by the exposures, then raised).
    - **Why:** E held at 1 in reference units (the rule before) made the print depend on how long the scan was exposed:
@@ -670,7 +670,8 @@ print (`--print`) and the knobs if any; running it again re-runs the search, whi
 the picture to the byte. The sidecar keeps the print's `A` as a record (`profile.print.a`). A run reused with the
 knobs (`--brightness`, `--tint`, `--warmth`, on the same output's sidecar) keeps the recorded `A` and moves E, g and b
 from the recorded result by the knobs (solved through the bracket's chart profile, as for a scene picture), so the
-print gets lighter or darker and warmer or cooler at the same `A`; its `cli_equivalent` carries the knobs.
+print gets lighter or darker and warmer or cooler at the same `A`; its `cli_equivalent` carries the knobs. A knob's move is
+the one place a chart profile still enters a print; the print's search itself uses none, only the print profile.
 
 **The density output's CLF prints the same print.** A density output with `--print` on a TriLED bundle runs the
 print's search for each material it writes a CLF for (about 8 inferences and 9 s each on wp0, a 96-core x86
@@ -764,9 +765,10 @@ darker than the picture's thinnest film, and with it 1006_0007 prints without a 
 **Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
 the bundles carrying each bracket's own tilt) unless said otherwise:
 
-- `neg_process --check_print_tilt` checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
+- `make check_print` (check_print.cc; not an option of neg_process, the owner's decision of 2026-11-17 on the two
+  self-check flags: "Remove them") checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
   order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
-  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11).
+  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11). The same program checks the floor, `print_floor_base`, on synthetic frames (4 of 4).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured before the tilts shipped).
 - Re-running a print's `cli_equivalent` (the frame and `--print`: no given values) reproduces it to the byte; for the

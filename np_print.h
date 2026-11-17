@@ -380,7 +380,7 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
                    double t[3], bool linear = kPrintTiltLinear);
 // A self-check of print_tilt_at in both forms on brackets given out of order (each bracket's own tilt at its A_mid,
 // the nearest's or the interpolated tilt midway between two, held beyond the end ones); prints each case, returns the
-// number that failed. neg_process --check_print_tilt runs it.
+// number that failed. make check_print (check_print.cc) runs it.
 int print_tilt_selfcheck();
 // The same from a bundle's density brackets.
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);

@@ -309,17 +309,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
-  // neg_process --check_print_tilt and --check_print_floor alone (read in main, before these options): the print's
-  // self-checks; they are listed here for --help.
-  parser.add_argument("--check_print_floor")
-    .help("Check aid, given alone: a self-check of the print's floor on a film base that is not a capture "
-          "(print_floor_base) on synthetic frames: a found base, none found (the bundle's, scaled once by the exposures), "
-          "a raised base, film all denser than the base; prints each case and exits 1 if one fails.")
-    .flag();
-  parser.add_argument("--check_print_tilt")
-    .help("Check aid, given alone: a self-check of the print's bracket term (np_print.h print_tilt_at, both forms, on "
-          "brackets given out of order); prints each case and exits 1 if one fails.")
-    .flag();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "

@@ -10,7 +10,7 @@
 PYTHON ?= python3
 CMAKE ?= cmake
 
-.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all check_print
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -426,6 +426,14 @@ bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
+
+# The print's self-checks (check_print.cc): built like neg_process and run; exits non-zero on a failed case.
+check_print: bin_out/check_print
+	bin_out/check_print
+
+bin_out/check_print: check_print.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) -o $@ check_print.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 
 # The DINOv3 backbone (shared by every film stock): exported from the pretrained weights with torch and
 # transformers. DINOV3_SOURCE is a Hugging Face model id or a local model directory.

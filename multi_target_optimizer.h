@@ -387,7 +387,7 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
 // exposure, in the conversion's film base space, and returns k.
 float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
                        double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
-// neg_process --check_print_floor: print_floor_base on synthetic frames (a found base, none found, a raised base, film all
+// make check_print (check_print.cc): print_floor_base on synthetic frames (a found base, none found, a raised base, film all
 // denser than the base). Returns the number of failed cases.
 int print_floor_selfcheck();
 
