@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "np_options.h"
+#include <cstdio>
 #include <string>
 
 #include "np_pipeline.h"
@@ -63,7 +64,14 @@
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
   // A self-check of the print's bracket term (np_print.h print_tilt_at), before any option is read.
-  if (ac == 2 && std::string(av[1]) == "--check_print_tilt") return print_tilt_selfcheck() == 0 ? 0 : 1;
+  for (int i = 1; i < ac; ++i) {
+    if (std::string(av[i]) != "--check_print_tilt") continue;
+    if (ac != 2) {
+      std::fprintf(stderr, "ERROR! --check_print_tilt is given alone: it runs the self-check and converts nothing\n");
+      return 1;
+    }
+    return print_tilt_selfcheck() == 0 ? 0 : 1;
+  }
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
   Setup s;
