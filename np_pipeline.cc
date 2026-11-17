@@ -658,7 +658,14 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   return ok;
 }
 
+// --check_renderer's renderer (multi_target_optimizer.h PassThroughRenderer).
+static PassThroughRenderer& pass_through_renderer() {
+  static PassThroughRenderer r;
+  return r;
+}
+
 int prepare(const Options& o, Setup& s) {
+  if (o.check_renderer) negicc::cpu_pass_hook = audit_cpu_pass;
   if (!o.flat.empty()) {
     try {
       s.flat_field = negicc::load_flat_field_file(o.flat);
@@ -1400,6 +1407,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
         grey_prof.rebind_pointers();
         ParamSearchOptions ro;
+        if (o.check_renderer) ro.renderer = &pass_through_renderer();
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
         const float from[3] = {base_e, base_g, base_b};
@@ -1658,6 +1666,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // Auto's time (the sidecar's auto.time_ms): the search and the curve fit, as on the CFA path.
         const double t_auto_0 = omp_get_wtime();
         ParamSearchOptions opts;
+        if (o.check_renderer) opts.renderer = &pass_through_renderer();
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -1969,6 +1978,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
+      if (o.check_renderer) opts.renderer = &pass_through_renderer();
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2853,5 +2863,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.tone_plan = &s.tone_plan;
   }
   write_json_sidecar(sc);
+  if (o.check_renderer) {
+    const PassAudit& pa = pass_audit();
+    log_info("Renderer check: %ld binds, %ld previews and %ld clip passes through the renderer; %ld passes of the "
+             "search outside it\n", pa.binds, pa.renders, pa.clips, pa.outside);
+    if (pa.outside > 0) {
+      log_error("Renderer check: %ld passes of the search ran outside the renderer\n", pa.outside);
+      return 1;
+    }
+  }
   return 0;
 }
