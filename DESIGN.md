@@ -659,8 +659,11 @@ display white" (2026-11-17): a print is shown relative to its paper, both in the
 network see and in the exported picture, and there is no other setting.
 
 The print is media-relative, as the ICC defines it: each of X, Y and Z of every node of the table is scaled by D50's
-over the paper base's (the lightest node's), so the base becomes D50, exactly the display's white, and no channel of
-any colour passes 1. The paper's tint is therefore not shown: an eye that has adapted to the paper does not see it
+over the paper base's (the lightest node's), so the base becomes D50, exactly the display's white, and none of X, Y
+and Z of any colour passes D50's. A saturated light colour can still have an sRGB channel above 1 (light yellows'
+red, up to 1.1 to 1.2 on a few hundred nodes of a table), which the print, keeping no shoulder, cuts; the print's
+search records the share of the crop where it does (`profile.print.search.above_white_pct`). The paper's tint is
+therefore not shown: an eye that has adapted to the paper does not see it
 either. (Scaling by Y alone would keep the tint, but a tinted base at Y = 1 lies outside sRGB: one channel passes 1
 and is cut, so the bluest bases, Ultra Endura and Endura Premier, lost their tint anyway and Vision 2383's base moved
 2.3 ΔE00, second review of #94. Dividing by the base's largest channel in sRGB instead would keep the tint, the base
@@ -668,7 +671,9 @@ then a little below white; that is the alternative if the tint is wanted.) The p
 own media-relative colorimetry rather than a Bradford adaptation from the base to D50, so that a colour-managed
 viewer given the absolute profile and the relative intent would show the same picture. The bundle's print ICC
 itself stays absolute (its table as built, `wtpt` D50); the scaling is made when the print profile is loaded, and
-the profile an output embeds carries the scaled table, so it describes the exported picture. The print CLF is
+the profile an output embeds carries the scaled table, with the paper's XYZ in its `wtpt`, so it is what the ICC
+means by a media-relative profile: a viewer on the relative intent shows the exported picture, and on the absolute
+intent gets the paper's own white and tint back (negicc reads only the A2B0). The print CLF is
 media-relative the same way, the paper's colour (each layer at its least dye) scaled to the viewing light's white.
 The sidecar records `profile.print.white` and `paper_white_xyz`.
 

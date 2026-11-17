@@ -667,8 +667,9 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 
 // The paper's white (the owner's choice, "paper white is display white"): a print profile made media-relative, as the
 // ICC defines it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of
-// X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white and no
-// channel passes 1 (its tint is not shown). The bundle's print ICC itself stays absolute. paper_xyz gets the base.
+// X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white and none
+// of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have an sRGB channel above 1,
+// which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
   const double d50[3] = {0.9642, 1.0, 0.8249};
@@ -865,7 +866,13 @@ int prepare(const Options& o, Setup& s) {
         double k[3];
         const double d50[3] = {0.9642, 1.0, 0.8249};
         for (int c = 0; c < 3; ++c) k[c] = d50[c] / s.print_paper_xyz[c];
-        for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, k);
+        // The table is now media-relative: the paper's XYZ goes into wtpt, as the ICC means a media-relative table (a
+        // viewer on the relative intent shows the picture; on the absolute intent it gets the paper back). negicc
+        // reads only the A2B0.
+        for (std::vector<uint8_t>& icc : s.print_iccs) {
+          scale_print_icc_table(icc, k);
+          set_icc_wtpt(icc, s.print_paper_xyz);
+        }
       }
       s.print_cont = prints.continuum;
       s.print_a = o.print_a;
@@ -3012,6 +3019,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_steps = s.print_cr.steps;
       sc.print_converged = s.print_cr.converged;
       sc.print_above_knee = s.print_cr.above_knee;
+      for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
+      sc.print_a0_at_end = s.print_cr.a0_at_range_end;
+      for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_cr.last_move[c];
     }
   }
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;

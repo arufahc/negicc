@@ -334,6 +334,9 @@ struct ContinuousPrintResult {
   bool converged = false;
   float above_knee = 0.0f;           // the share of the inner crop above the knee at E = 1, g = b = 1
   float wish_mean_l = 0.0f;          // the held wish's mean L*
+  float above_white_pct[3] = {0, 0, 0};   // the share of the crop with the channel above 1 at the result, before the cut
+  bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
+  float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,

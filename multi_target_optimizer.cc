@@ -2735,6 +2735,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       if (lstar(mid) > 50.0f) lo = mid; else hi = mid;
     }
     a0 = 0.5 * (lo + hi);
+    cr.a0_at_range_end = a0 - cp.a_lo < 1e-6 || cp.a_hi - a0 < 1e-6;
   }
   cr.a0 = a0;
   // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
@@ -2762,7 +2763,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   }
   if (opts.verbose) {
     std::cout << "Print (continuous): A0 " << a0 << " (range " << cp.a_lo << " to " << cp.a_hi << "), above the knee at E = 1: "
-              << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)\n";
+              << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)"
+              << (cr.a0_at_range_end ? " (A0 at an end of the range: bootstrap renders there share an A)" : "") << "\n";
   }
   // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field (the optimiser's wide
   // grids, as the scene search screens its brackets).
@@ -2859,7 +2861,10 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     const double next_a = 0.5 * (lo + hi);
     ConversionParams next;
     loss(next_a, next);
-    const float move = (float)(std::fabs(next_a - a) / kStop) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
+    cr.last_move[0] = (float)(std::fabs(next_a - a) / kStop);
+    cr.last_move[1] = std::fabs(next.g - curr.g);
+    cr.last_move[2] = std::fabs(next.b - curr.b);
+    const float move = cr.last_move[0] + cr.last_move[1] + cr.last_move[2];
     a = next_a;
     curr.g = next.g;
     curr.b = next.b;
@@ -2890,6 +2895,11 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
   }
   cp.set_curves_at(best_a, prof);
+  {   // the share of the crop with a channel above 1 before the cut (the print keeps no shoulder)
+    const float above_one[3] = {255.0f, 255.0f, 255.0f};
+    const ClipStats cs = fr.highlight_clip(0, {best}, above_one)[0];
+    for (int c = 0; c < 3; ++c) cr.above_white_pct[c] = cs.exc[c];
+  }
   int nearest = 0;
   for (size_t i = 0; i < cp.a_mid.size(); ++i)
     if (std::fabs(cp.a_mid[i] - best_a) < std::fabs(cp.a_mid[nearest] - best_a)) nearest = (int)i;

@@ -1558,6 +1558,26 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   return icc;
 }
 
+bool set_icc_wtpt(std::vector<uint8_t>& icc, const double xyz[3]) {
+  if (icc.size() < 132) return false;
+  const uint32_t n = get_u32(icc, 128);
+  for (uint32_t i = 0; i < n && 144 + 12 * i <= icc.size(); ++i) {
+    if (std::memcmp(icc.data() + 132 + 12 * i, "wtpt", 4) != 0) continue;
+    const size_t off = get_u32(icc, 136 + 12 * i);
+    if (off + 20 > icc.size() || std::memcmp(icc.data() + off, "XYZ ", 4) != 0) return false;
+    for (int c = 0; c < 3; ++c) {
+      const int32_t v = (int32_t)std::lround(xyz[c] * 65536.0);
+      const uint32_t u = (uint32_t)v;
+      icc[off + 8 + 4 * c] = (uint8_t)(u >> 24);
+      icc[off + 9 + 4 * c] = (uint8_t)(u >> 16);
+      icc[off + 10 + 4 * c] = (uint8_t)(u >> 8);
+      icc[off + 11 + 4 * c] = (uint8_t)u;
+    }
+    return true;
+  }
+  return false;
+}
+
 void print_paper_xyz(const PrintMaterial& m, double xyz[3]) {
   double least[3];
   for (int c = 0; c < 3; ++c) least[c] = *std::min_element(m.curves[c].begin(), m.curves[c].end());

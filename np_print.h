@@ -386,6 +386,9 @@ std::string sha256_hex(const std::string& bytes);
 // Multiplies the X, Y and Z of an ICC's A2B0 table (a lut16's) by k[0], k[1] and k[2] in place, each code rounded and
 // held at 65535: the print relative to its paper's white in the profile an output embeds. False when it has none.
 bool scale_print_icc_table(std::vector<uint8_t>& icc, const double k[3]);
+// Writes xyz into an ICC's wtpt tag in place (the media white: the paper's, for a print made relative to its paper).
+// False when it has none.
+bool set_icc_wtpt(std::vector<uint8_t>& icc, const double xyz[3]);
 // The paper's white under the material's viewing light, as the print CLF's XYZ has it: the colour of the print where
 // every layer holds its least dye (each curve's lowest value: the base and the layers' fog), the lightest it gets.
 void print_paper_xyz(const PrintMaterial& m, double xyz[3]);
