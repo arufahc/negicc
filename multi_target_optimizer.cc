@@ -3011,6 +3011,29 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
   out.params = {E / e_norm, best.g, best.b, best.shoulder};
+  {
+    // The shares past the knee and past the cut per channel at the final settings (every 4th pixel each way).
+    float mf[9];
+    negicc::candidate_matrix(fr.input_matrix(), E, best.g, best.b, mf);
+    const float cut = AUTO_KNEE + (1.0f - AUTO_KNEE) * std::atanh((0.9999f - AUTO_KNEE) / (1.0f - AUTO_KNEE));
+    const InnerCrop& c = fr.inner_crop();
+    long knee_n[3] = {0, 0, 0}, cut_n[3] = {0, 0, 0}, total = 0;
+    uint16_t px[3];
+    for (int y = c.y0; y < c.y0 + c.h; y += 4)
+      for (int x = c.x0; x < c.x0 + c.w; x += 4) {
+        frame.sample(x, y, px);
+        for (int r = 0; r < 3; ++r) {
+          const float u = (mf[r * 3] * px[0] + mf[r * 3 + 1] * px[1] + mf[r * 3 + 2] * px[2]) / 65535.0f;
+          knee_n[r] += u > AUTO_KNEE;
+          cut_n[r] += u >= cut;
+        }
+        ++total;
+      }
+    for (int r = 0; r < 3; ++r) {
+      cr.past_knee[r] = total ? (float)knee_n[r] / total : 0.0f;
+      cr.past_cut[r] = total ? (float)cut_n[r] / total : 0.0f;
+    }
+  }
   out.residual = best_err;
   out.status = cr.converged ? FixedPointStatus::kConverged : FixedPointStatus::kMaxIters;
   out.intent_mu = best_mu;

@@ -1640,6 +1640,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.steps = cr.steps;
       for (int c = 0; c < 3; ++c) ps.last_move[c] = cr.last_move[c];
       ps.above_knee = cr.above_knee;
+      for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
       ps.stopped_by = cr.stopped_by;
       s.density_print_search[prints.id] = ps;
       log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
@@ -1663,6 +1664,23 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     s.print_a = s.print_cr.a;
     s.print_searched = true;
+    {
+      // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
+      // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
+      const bool estimate = !scan.film_base.found || scan.film_base.source == "statistics";
+      if (estimate) {
+        int c = 0;
+        for (int k = 1; k < 3; ++k)
+          if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
+        const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
+        log_warn("the print's level is relative to the film base, and this one is %s: %.2f %% of the crop is past the "
+                 "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
+                 "of this roll's unexposed film>\n",
+                 !scan.film_base.found ? "the profile bundle's own, not this roll's"
+                                       : "estimated from the thinnest film on this frame, which shows no rebate",
+                 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+      }
+    }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
              "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
              scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
@@ -3045,6 +3063,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_steps = s.print_cr.steps;
       sc.print_converged = s.print_cr.converged;
       sc.print_above_knee = s.print_cr.above_knee;
+      for (int c = 0; c < 3; ++c) sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
       for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
       for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;

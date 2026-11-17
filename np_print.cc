@@ -949,6 +949,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.steps = own->second.steps;
     for (int c = 0; c < 3; ++c) p.last_move[c] = own->second.last_move[c];
     p.above_knee = own->second.above_knee;
+    for (int c = 0; c < 3; ++c) p.past_knee[c] = own->second.past_knee[c], p.past_cut[c] = own->second.past_cut[c];
     p.stopped_by = own->second.stopped_by;
   }
   const DensityBracket* bracket = nullptr;
@@ -1240,7 +1241,9 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
         if (!p.given) {
           one["search"] = {{"converged", p.converged}, {"stopped_by", p.stopped_by}, {"steps", p.steps},
                            {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
-                           {"above_knee", p.above_knee}};
+                           {"above_knee", p.above_knee},
+                           {"past_knee_pct", {100.0 * p.past_knee[0], 100.0 * p.past_knee[1], 100.0 * p.past_knee[2]}},
+                           {"past_cut_pct", {100.0 * p.past_cut[0], 100.0 * p.past_cut[1], 100.0 * p.past_cut[2]}}};
         }
       }
       materials[p.id] = one;

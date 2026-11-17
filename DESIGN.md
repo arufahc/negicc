@@ -602,13 +602,25 @@ so the two are searched differently ("The search naturally are between scene ICC
 were constructed"). The print's lightness is searched once and continuously, in `A`, and its colour in g and b
 (`search_print_continuous`):
 
-1. **E is held at 1 relative to the frame's own film base:** the base reads n0, so the curve is read at the
-   negative's own density above its base, as the brackets were measured. The search runs on M_frame / e_norm, which
-   in green is the reference scan's matrix whatever the frame's base, so it holds E = e_norm there, and its result's
-   E (`auto.e`, `-E`) is 1. Until this was fixed it held E = 1 in those units. That put the base at n0 / e_norm (0.82
-   to 3.30 on the 50 TriLED test frames), so the print depended on how long the scan was exposed, and a frame
-   scanned at 0.4 s had 46 % of its crop above the knee (station `designs/print_search_ways.md`, "Roll 1006,
-   diagnosed"). Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
+1. **E, the print's level: its rule is pending, the owner's decision together with the film base's rule.** This
+   head holds E where the run's film base reads n0 (E = e_norm on M_frame / e_norm; the result's E, `auto.e` and
+   `-E`, is 1), the negative's own density above its base as the brackets were measured. The rule it replaced held E
+   = 1 on M_frame / e_norm, which in green is the reference scan's matrix whatever the base: the base's level cancelled
+   out and only its colour entered, so the base read at n0 / e_norm (0.82 to 3.30 on the 50 TriLED test frames) and the
+   print depended on how long the scan was exposed. The run's base is, by `--film_base`:
+   - **a capture** (given, or recorded by an earlier run of this output): measured, scaled to the scan's exposure. With
+     it this rule does what it says: on roll 1006 with its roll's base, the picture and the CLF agree in the shadows
+     (0.44 to 0.68 ΔE00 over the print's darkest third on four frames) and no frame's crop passes the knee.
+   - **the scan's rebate:** measured where the frame shows unexposed film, but on a scan exposed long enough the rebate
+     is clipped and the reading is not the base (1006_0011: 0.34 of the true base in green).
+   - **the scan's statistics** (no rebate in view): an estimate below the frame's own thinnest film, 0.21 to 1.06 of
+     the capture in green on the test frames (median 0.63). This rule takes its level in full: on 1006_0007 (0.31 of
+     the roll's base) 60 % of the crop passes the knee and the print's shadows go to one flat tone (L\* range of a
+     shadow region 5.8 to 0.0), where the rule it replaced, ignoring the base's level, printed it right.
+   - **the bundle's** (none of the above): another roll's base scaled by the exposures.
+   So the level rule and the base rule are one decision, measured as arrangements on the 50 frames (station
+   `designs/print_search_ways.md`). Until it is made, the print warns when its base is a statistics estimate or the
+   bundle's, with the shares of the crop past the knee and past the cut at its settings. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
    −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
    where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
 2. **A0, metered once, as the scene's search meters a bracket:** the `A` at which the frame's log-average cell (at E
@@ -631,7 +643,9 @@ were constructed"). The print's lightness is searched once and continuously, in 
 There is no tournament between brackets, no bracket fallback and no highlight pullback: no bracket can flip, and the
 scene's pullback reads a bracket's chart ceiling, which a print does not have (its white is the paper's). The
 sidecar's `profile.print` records `a`, the nearest bracket's own `bracket_a_mid`, and the search (`a0`, the wish,
-the steps, the share of the crop above the knee at E = 1); `auto.target` is the nearest bracket. The comparison of
+the steps, the share of the crop above the knee at the bootstrap, and `past_knee_pct` and `past_cut_pct`: per
+channel, the shares past the knee and past the cut at the final settings, gains included); `auto.target` is the
+nearest bracket. The comparison of
 this search with the earlier ones (the scene's search with the print rendered at its result, g and b on the print,
 the whole bracket search on the print) is negicc-station's `designs/print_search_ways.md`.
 
@@ -711,24 +725,36 @@ Ultra Endura's base, two to two and a half times the other papers', is as spektr
 are more than 1 ΔE00 from a neutral of their lightness (Vision 2383 yellow, Ultra Endura and Endura Premier blue,
 Vision 2393 slightly yellow); relative to the paper they render neutral, at the display's white.
 
-**Checks.** On Portra 400 frames (TriLED):
+**The gains and the knee.** g and b are in the matrix, before the knee, so a channel's gain moves where its thin film
+meets the knee: at g = 1.44 and b = 1.83 (1006_0003's search, with the roll's base) blue's base reads 1.54 of full scale,
+film under 0.21 density above the base passes the knee in blue and under 0.14 is cut; 1.5 % of that crop passes the knee
+in blue and none is cut. Rendered at those gains, 1006_0007 with the roll's base has 43 % of its crop past the cut in
+blue and the picture is 1.18 ΔE00 from the CLF in the print's darkest third, against 0.68 at its own gains. The gains'
+part is real and small; the base's level is the large part (above, step 1).
+
+**Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
+the bundles carrying each bracket's own tilt) unless said otherwise:
 
 - `neg_process --check_print_tilt` checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
   order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
   beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
-  (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura).
-- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.
+  (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured before the tilts shipped).
+- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it: 50 of 50 frames.
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
-  byte, for a built-in material and for one given as a file, Vision 2383 (D55) included.
+  byte: through the shipped bundles every one of the 50 frames' prints takes "the bundle's print ICC" (the
+  computed reference bracket's curves equal the bundle's), and earlier for a material given as a file, Vision 2383
+  (D55) included.
 - The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`), on the 50
   TriLED test frames through the shipped bundles (each bracket's own tilt), Portra Endura: 0.37 ΔE00 in the median
   frame, 0.61 at its 95th percentile, the CLF's straight lines against the curve; 48 of 50 within 0.5 / 1.0. The
   other two, 1006_0003 and 1006_0007, put 11 % and 60 % of their crop above the knee on the film base the frame
-  detector estimated from the scan's statistics: the picture clips there and the density file does not. The check
+  detector estimated from the scan's statistics: the picture clips there and the density file does not. That is the
+  pending E rule meeting an estimated base (step 1), not an exception; with the roll's base both agree. The check
   applies the CLF before shrinking: an average of densities is not the density of the average, and shrinking the
   density file first read 0.5 to 0.6 on detailed frames where the two agree to 0.37.
-- Without `--print` the output is bit-identical to `neg_process` before this change.
+- Without `--print` the output is bit-identical to `neg_process` before this change (unchanged since 094b031:
+  byte-identical on 1004_0014 and 1006_0003).
 
 **Before the print's own search.** The print was first rendered at the scene's search (its bracket, E and balance on
 the chart profiles), and a bracket search on the print profiles lost blind A/B 40 to it on 44 of 50 TriLED frames,
