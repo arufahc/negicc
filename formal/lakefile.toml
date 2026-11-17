@@ -11,3 +11,8 @@ rev = "fc4f59e577feb1a4956671bc04ac18aaaf8cd842"
 
 [[lean_lib]]
 name = "Negicc"
+
+# The numeric check against the C++ (see README.md). It imports only the definitions, so it links without Mathlib.
+[[lean_exe]]
+name = "check"
+root = "Check"

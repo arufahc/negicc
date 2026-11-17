@@ -1,0 +1,79 @@
+/-
+From the profile connection space to linear sRGB, and the conversion up to the pre-shoulder value.
+-/
+module
+
+public import Negicc.Scene.Input
+public import Negicc.Scene.Profile
+
+@[expose] public section
+
+/-!
+# To linear sRGB
+
+The film profile gives XYZ under D50. Two fixed matrices take it to linear sRGB (D65): the
+Bradford adaptation from D50 to D65, then XYZ to linear sRGB
+(`pcs_to_linear_srgb_unclamped` in `color_pipeline.h`). The result is held at zero from below
+only: values above 1, brighter than the chart's white, are kept for the highlight shoulder
+(`pcs_to_linear_srgb_pre_shoulder`).
+
+`convertPixelLinear` is the conversion of one pixel up to this point, the *pre-shoulder* value.
+The clipping statistics and the measurement of the shoulder read it.
+-/
+
+namespace Negicc
+
+open Scalar
+
+variable {α : Type} [Scalar α]
+
+/-- The Bradford chromatic adaptation from D50 to D65, on XYZ. -/
+def bradfordD50ToD65 : Mat3 α :=
+  ⟨⟨0.9555766, -0.0230393, 0.0631636⟩,
+   ⟨-0.0282895, 1.0099416, 0.0210077⟩,
+   ⟨0.0122982, -0.0204830, 1.3299098⟩⟩
+
+/-- XYZ (D65) to linear sRGB. -/
+def xyzToLinearSrgb : Mat3 α :=
+  ⟨⟨3.2406255, -1.5372080, -0.4986286⟩,
+   ⟨-0.9689307, 1.8757561, 0.0415175⟩,
+   ⟨0.0557101, -0.2040211, 1.0569959⟩⟩
+
+/-- PCS XYZ (D50) to linear sRGB (D65), not clamped (`pcs_to_linear_srgb_unclamped`). -/
+def pcsToLinearSrgbUnclamped (v : Vec3 α) : Vec3 α :=
+  xyzToLinearSrgb.mulVec (bradfordD50ToD65.mulVec v)
+
+/-- PCS XYZ (D50) to linear sRGB (D65), held at zero from below
+(`pcs_to_linear_srgb_pre_shoulder`). -/
+def pcsToLinearSrgbPreShoulder (v : Vec3 α) : Vec3 α :=
+  (pcsToLinearSrgbUnclamped v).map (max 0.0)
+
+/-- The film profile's PCS XYZ of a loaded pixel `v` under the input matrix `m`
+(`convert_pixel_pcs`). -/
+def convertPixelPcs (p : Profile α) (knee : α) (m : Mat3 α) (v : Vec3 α) : Vec3 α :=
+  applyProfile p (correctedRgb knee m v)
+
+/-- The pre-shoulder linear sRGB of a loaded pixel `v` under the input matrix `m`: zero or more,
+with the chart's white at 1 (`convert_pixel_linear`). -/
+def convertPixelLinear (p : Profile α) (knee : α) (m : Mat3 α) (v : Vec3 α) : Vec3 α :=
+  pcsToLinearSrgbPreShoulder (convertPixelPcs p knee m v)
+
+/-! ## Clipping rules -/
+
+/-- A linear channel counts as white-clipped from the linear value of the 16-bit sRGB code
+65399.5 on (`linear_channel_white_clipped`). -/
+def linearChannelWhiteClipped (l : α) : Bool := decide (0.9953029 ≤ l)
+
+/-- A linear channel counts as black-clipped below the linear value of the 16-bit sRGB code 200.5
+(`linear_channel_black_clipped`). -/
+def linearChannelBlackClipped (l : α) : Bool := decide (l < 0.00023679829)
+
+/-- A pixel is white-clipped when any channel is, measured on the pre-shoulder value. -/
+def pixelWhiteClipped (lin : Vec3 α) : Bool :=
+  linearChannelWhiteClipped lin.x || linearChannelWhiteClipped lin.y || linearChannelWhiteClipped lin.z
+
+/-- A pixel is black-clipped when every channel is, measured on the pre-shoulder value. -/
+def pixelBlackClipped (lin : Vec3 α) : Bool :=
+  linearChannelBlackClipped lin.x && linearChannelBlackClipped lin.y && linearChannelBlackClipped lin.z
+
+end Negicc

@@ -101,6 +101,13 @@ def clamp01 (x : α) : α := min 1.0 (max 0.0 x)
 non-negative arguments). -/
 def roundNat (x : α) : Nat := natFloor (x + 0.5)
 
+/-- `x ≥ 0` rounded to the nearest natural number, a half to the even neighbour (C `nearbyint` and
+`rint` in the default rounding mode, for non-negative arguments). -/
+def roundEvenNat (x : α) : Nat :=
+  let f := natFloor x
+  let r := x - (f : α)
+  if r < 0.5 then f else if 0.5 < r then f + 1 else if f % 2 = 0 then f else f + 1
+
 end Scalar
 
 /-- Double precision floating point numbers, with the C library's functions. This is the reading

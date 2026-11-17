@@ -16,7 +16,7 @@ It is a specification of code that exists: nothing here changes what `neg_proces
 | Mathlib | commit `fc4f59e577feb1a4956671bc04ac18aaaf8cd842`, the commit of its tag `v4.36.0` (`lakefile.toml`) |
 | Other dependencies | the exact commits Mathlib's own manifest names, in `lake-manifest.json` |
 
-The base of the library, on which the other parts build:
+The modules, in the order the pipeline runs. The base is what the other parts build on:
 
 | Module | Contents |
 |---|---|
@@ -28,6 +28,14 @@ The base of the library, on which the other parts build:
 | `Negicc.Base.Real` | The real numbers as scalars (`Scalar ℝ`), and the operations restated in Mathlib's terms |
 | `Negicc.Base.Props` | Proved properties of the base definitions over the real numbers |
 | `Negicc.Base` | All of the above |
+| `Negicc.Scene.Input` | Flat field, load, the input matrix (crosstalk correction, film base normalisation, `E`, `g`, `b`), the soft knee |
+| `Negicc.Scene.Profile` | A bracket's film profile: input curves, the colour table with tetrahedral interpolation, output curves |
+| `Negicc.Scene.Linear` | The profile connection space to linear sRGB, the pre-shoulder value, the clipping rules |
+| `Negicc.Scene.Shoulder` | The highlight roll-off: the curve, its knee, and `x_hi` from a frame's 99.5 % point |
+| `Negicc.Scene.Convert` | The whole pixel: display value, encoded sRGB, CIELAB |
+| `Negicc.Scene.Defs` | The five modules above together. No Mathlib |
+| `Negicc.Scene.Props` | Proved properties of the conversion |
+| `Negicc.Tone.Apply` | The tone curve on a pixel (`apply_tone`) |
 
 ## One formula, two readings
 
@@ -81,6 +89,60 @@ lake build              # builds the library; about a minute the first time, sec
 
 `elan` reads `lean-toolchain` and downloads that Lean release on first use. `lake build` must
 end with `Build completed successfully` and print no warning. The library contains no `sorry`.
+
+## The numeric check against the C++
+
+```sh
+cd formal
+lake exe check
+```
+
+`check` (`Check.lean`) reads the test vectors in `testvectors/` and the bracket profile they name
+(`profiles/Portra400-A7R4-TriLED/Target_3.icc` of this repository, parsed by the check itself),
+evaluates the Lean definitions over `Float` on the vectors' inputs, and compares the results with
+the values the C++ functions computed for the same inputs. It prints one line per group of
+comparisons, with the number of comparisons, the largest difference and the tolerance, and exits
+with a non-zero code if a comparison is outside its tolerance. Run it from `formal/`; a different
+repository root can be given as its argument (the default is `..`).
+
+The tolerances and their reasons are at the top of `Check.lean`:
+
+| Tolerance | Value | For |
+|---|---|---|
+| `tolSingle` | 5e-6 | Values the C++ computes in single precision: linear and encoded colours, curve constants, matrices |
+| `tolLab` | 1e-4 | CIELAB of a given linear colour |
+| `tolLabPixel` | 1e-3 | CIELAB at the end of the whole conversion |
+| `tolRoot` | 2e-5 | The roll-off `x_hi` found by bisection on a curve evaluated in single precision |
+| `tolDouble` | 1e-9 | Values the C++ computes in double precision |
+
+The C++ computes a pixel in single precision and the check evaluates the specification in double
+precision, so a difference of a few parts in a million is rounding, not disagreement. Two kinds
+of input are kept out of the vectors or counted apart, because there single precision changes
+more than the last digits:
+
+- **A value exactly on a threshold constant.** The specification's thresholds are the decimal
+  numbers of the source (`1.0001`, `0.0031308`), the program's are their single precision
+  roundings, and an input equal to the rounded constant falls on different sides of the two.
+- **The flat field's division.** The C++ forms the quotient in single precision, whose steps near
+  50000 are 1/256, and then rounds it to a whole number. Where the exact quotient is within 0.01
+  of a half, the result may be the neighbouring 16-bit code. The check counts those values in a
+  group of their own, with a tolerance of one code.
+
+### Regenerating the test vectors
+
+The vectors are written by `testvectors/gen/gen_vectors.cc`, a C++ program that calls the
+library's own functions and re-implements nothing. From the repository root, with the submodules
+checked out and `ORT_DIR` the ONNX Runtime directory the Makefile uses:
+
+```sh
+make -j lib USE_CUDA=0 ORT_DIR=<onnxruntime>             # the library, once
+ORT_DIR=<onnxruntime> formal/testvectors/gen/build.sh   # builds bin_out/gen_vectors
+bin_out/gen_vectors profiles/Portra400-A7R4-TriLED formal/testvectors
+```
+
+The committed vectors were generated from the `master` this specification describes
+(`24ab7c8`), on x86-64 Linux with GCC 13.3 and glibc 2.39. Another compiler or C library may
+change the last digit of a single precision result, which the tolerances cover.
 
 ## Using the package from another repository
 
