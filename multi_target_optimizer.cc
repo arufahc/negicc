@@ -2779,7 +2779,37 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
   // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0
   // (station designs/print_search_ways.md, "Roll 1006, diagnosed"). The result's E (E / e_norm) is then 1.
-  const float E = e_norm;
+  float E = e_norm;
+  if (cp.level_rule == 0) {
+    E = 1.0f;
+  } else if (cp.level_rule == 2) {
+    const float fb_t = pb.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(pb.film_base_shutter);
+    const float fb_exposure = fb_t * (pb.film_base_iso / 100.0f);
+    const float ratio_frame = fb_exposure / ((float)scan_shutter_s * ((float)scan_iso / 100.0f));
+    const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
+    E = ratio_frame / ratio_ref;
+  } else if (cp.level_rule == 3) {
+    // The run's base reads n0 in every channel at E = e_norm, g = b = 1: the crop's 99.5 % point per channel there, over n0.
+    float mb[9];
+    negicc::candidate_matrix(fr.input_matrix(), e_norm, 1.0f, 1.0f, mb);
+    const InnerCrop& c = fr.inner_crop();
+    std::vector<float> v[3];
+    uint16_t px[3];
+    for (int y = c.y0; y < c.y0 + c.h; y += 4)
+      for (int x = c.x0; x < c.x0 + c.w; x += 4) {
+        frame.sample(x, y, px);
+        for (int r = 0; r < 3; ++r) v[r].push_back((mb[r * 3] * px[0] + mb[r * 3 + 1] * px[1] + mb[r * 3 + 2] * px[2]) / 65535.0f);
+      }
+    float k = 1.0f;
+    for (int r = 0; r < 3; ++r) {
+      if (v[r].empty()) continue;
+      const size_t q = std::min(v[r].size() - 1, (size_t)(0.995 * v[r].size()));
+      std::nth_element(v[r].begin(), v[r].begin() + q, v[r].end());
+      k = std::max(k, v[r][q] / (float)cp.n0);
+    }
+    cr.floor_k = k;
+    E = e_norm / k;
+  }
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
   // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).

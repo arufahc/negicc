@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <cstdlib>
+#include <cstdio>
 #include "film_base_detector.h"
 
 #include <algorithm>
@@ -310,6 +312,9 @@ void corrected(const double v[3], const double* m, double out[3]) {
 
 }  // namespace
 
+// Experimental (the base diagnosis, NEGICC_BASE_DIAG): the crosstalk matrix detect_film_base applies afterwards.
+static const double* g_diag_crosstalk = nullptr;
+
 static void thinnest_film_base_impl(const RgbView& half, bool white_light, float out[3]) {
   int w = 0, h = 0;
   std::vector<float> v = downsample(half, w, h);
@@ -386,6 +391,9 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     light[i] = v[i * 3] >= clip_c[0] || v[i * 3 + 1] >= clip_c[1] || v[i * 3 + 2] >= clip_c[2];
     any_light |= light[i] != 0;
   }
+  size_t diag_clipped = 0;
+  for (size_t i = 0; i < n; ++i) diag_clipped += light[i];
+  const char* diag_branch = "none";
   if (any_light) light = light_parts(light, lum, ref, w, h, carrier);
 
   std::vector<float> q(n);
@@ -398,6 +406,7 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     n_cand += cand[i];
   }
   if ((double)n_light / (double)n < 0.005 && n_cand > 64) {
+    diag_branch = "unclipped";
     // Bare light that did not clip: bright, and less orange than the film (the orange mask absorbs blue).
     tmp.clear();
     for (size_t i = 0; i < n; ++i)
@@ -425,6 +434,7 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
       for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
     }
   } else if (any_light) {
+    diag_branch = "partly_clipped";
     // Bare light partly clipped: its unclipped parts connected to the clipped ones, reaching the border or carrier.
     const float light_level = (float)(kLightOfRef * ref);
     std::vector<uint8_t> unclipped(n);
@@ -510,6 +520,54 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
       if (film[i]) tmp.push_back(v[i * 3 + c]);
     out[c] = tmp.empty() ? 0.0f : percentile_f32(tmp, kBasePercentile);
   }
+  if (std::getenv("NEGICC_BASE_DIAG")) {
+    size_t nb = 0, nl = 0, ng = 0;
+    for (size_t i = 0; i < n; ++i) nb += black[i], nl += light[i], ng += grown[i];
+    const double* m = g_diag_crosstalk;
+    double base_dec[3] = {out[0], out[1], out[2]}, base_rgb[3];
+    corrected(base_dec, m, base_rgb);
+    // Film pixels brighter than the estimate per channel: in the decode (against the percentiles) and through the
+    // matrix (against the matrix-applied estimate); the percentiles of the matrix-applied film pixels.
+    long dec_above[3] = {0, 0, 0}, rgb_above[3] = {0, 0, 0};
+    std::vector<float> rgb_c[3];
+    // The central 90 % of the work image, black excluded (film and masked light alike): more than 0.02 density
+    // thinner than the matrix-applied estimate in any channel.
+    long c90 = 0, c90_thin = 0, c90_film = 0, c90_film_thin = 0;
+    const double thin = std::pow(10.0, 0.02);
+    for (int y = 0; y < h; ++y)
+      for (int x = 0; x < w; ++x) {
+        const size_t i = (size_t)y * w + x;
+        double d[3] = {v[i * 3], v[i * 3 + 1], v[i * 3 + 2]}, r[3];
+        corrected(d, m, r);
+        if (film[i]) {
+          for (int c = 0; c < 3; ++c) {
+            dec_above[c] += d[c] > base_dec[c];
+            rgb_above[c] += r[c] > base_rgb[c];
+            rgb_c[c].push_back((float)r[c]);
+          }
+        }
+        if (x >= w / 20 && x < w - w / 20 && y >= h / 20 && y < h - h / 20 && !black[i]) {
+          const bool t = r[0] > thin * base_rgb[0] || r[1] > thin * base_rgb[1] || r[2] > thin * base_rgb[2];
+          ++c90;
+          c90_thin += t;
+          if (film[i]) ++c90_film, c90_film_thin += t;
+        }
+      }
+    float p_rgb[3];
+    for (int c = 0; c < 3; ++c) p_rgb[c] = rgb_c[c].empty() ? 0.0f : percentile_f32(rgb_c[c], kBasePercentile);
+    const double nf = std::max<double>(1.0, (double)n_film);
+    std::fprintf(stderr,
+                 "BASE_DIAG {\"work\": [%d, %d], \"black_pct\": %.3f, \"clipped_pct\": %.3f, \"light_pct\": %.3f, "
+                 "\"grown_pct\": %.3f, \"film_pct\": %.3f, \"branch\": \"%s\", \"p995_decode\": [%.1f, %.1f, %.1f], "
+                 "\"p995_then_matrix\": [%.1f, %.1f, %.1f], \"matrix_then_p995\": [%.1f, %.1f, %.1f], "
+                 "\"film_above_decode_pct\": [%.3f, %.3f, %.3f], \"film_above_after_matrix_pct\": [%.3f, %.3f, %.3f], "
+                 "\"central90_thinner_0p02_pct\": %.3f, \"central90_film_thinner_0p02_pct\": %.3f}\n",
+                 w, h, 100.0 * nb / n, 100.0 * diag_clipped / n, 100.0 * nl / n, 100.0 * ng / n, 100.0 * n_film / n, diag_branch,
+                 base_dec[0], base_dec[1], base_dec[2], base_rgb[0], base_rgb[1], base_rgb[2], p_rgb[0], p_rgb[1], p_rgb[2],
+                 100.0 * dec_above[0] / nf, 100.0 * dec_above[1] / nf, 100.0 * dec_above[2] / nf,
+                 100.0 * rgb_above[0] / nf, 100.0 * rgb_above[1] / nf, 100.0 * rgb_above[2] / nf,
+                 100.0 * c90_thin / std::max(1L, c90), 100.0 * c90_film_thin / std::max(1L, c90_film));
+  }
 }
 
 void thinnest_film_base(const RgbView& half, float out[3]) {
@@ -556,6 +614,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
       }
     }
   }
+  g_diag_crosstalk = crosstalk;
   thinnest_film_base_impl(half, crosstalk == nullptr, out.thinnest);
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
   if (has_box) {

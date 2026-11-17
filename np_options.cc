@@ -314,6 +314,11 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Check aid, given alone: a self-check of the print's bracket term (np_print.h print_tilt_at, both forms, on "
           "brackets given out of order); prints each case and exits 1 if one fails.")
     .flag();
+  parser.add_argument("--print_level")
+    .help("Experimental (the level rule's arrangements): ref (E = 1 in reference units), base (default: the run's film "
+          "base at n0), bundle (the bundle's base scaled by the exposures at n0) or floor (the run's base raised by one "
+          "factor so that the crop's 99.5 % point reads no thinner than it in any channel).")
+    .default_value(std::string("base"));
   parser.add_argument("--print_a")
     .help("With --print on a TriLED bundle and given values (--target, -E, --gain_g, --gain_b): render the print at "
           "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "
@@ -731,6 +736,14 @@ int parse_options(int ac, char* av[], Options& o) {
     if (o.colorspace == density_measure_name((DensityMeasure)m)) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
+    }
+  }
+  {
+    const std::string lv = parser.get<std::string>("--print_level");
+    o.print_level = lv == "ref" ? 0 : lv == "base" ? 1 : lv == "bundle" ? 2 : lv == "floor" ? 3 : -1;
+    if (o.print_level < 0) {
+      log_error("--print_level takes ref, base, bundle or floor\n");
+      return 1;
     }
   }
   if (parser.is_used("--print_a")) {

@@ -382,6 +382,10 @@ struct ContinuousPrint {
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
   double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)
+  // Experimental (--print_level, the arrangements of the level rule): 0 ref (E = 1 in reference units), 1 base (the
+  // run's base at n0, as print-icc), 2 bundle (the bundle's base scaled by the exposures at n0), 3 floor (the run's base
+  // raised by one factor so that the crop's 99.5 % point reads no thinner than it in any channel).
+  int level_rule = 1;
 };
 struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;
@@ -392,6 +396,7 @@ struct ContinuousPrintResult {
   // knee (input above 0.95, 0.054 density thinner than the base at g = b = 1) and past the cut (above 1.1227, where the
   // knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
+  float floor_k = 1.0f;   // experimental: the factor the floor rule put on the base's level (1 elsewhere)
   float wish_mean_l = 0.0f;          // the held wish's mean L*
   float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut
   float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above

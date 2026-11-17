@@ -891,6 +891,7 @@ int prepare(const Options& o, Setup& s) {
       {
         const PrintContinuum* pc = &s.print_cont;
         s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
+        s.print_cp.level_rule = o.print_level;
         s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
         s.print_cp.n0 = pc->n0;
         s.print_cp.a_lo = pc->a_lo();
@@ -1625,6 +1626,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       cp.a_lo = pc.a_lo();
       cp.a_hi = pc.a_hi();
       cp.a_mid = pc.a_mid;
+      cp.level_rule = o.print_level;
       ParamSearchResult res;
       ContinuousPrintResult cr;
       if (!search_print_continuous(bundle, prof, cp, s.engine, frame, scan_shutter_s, scan_iso, opts, res, cr)) {
