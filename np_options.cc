@@ -313,6 +313,15 @@ int parse_options(int ac, char* av[], Options& o) {
           "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "
           "reports it in its cli_equivalent. Without --print_a, given values print at the bracket's own mid grey.")
     .scan<'g', double>();
+  parser.add_argument("--print_tilt")
+    .help("Experimental (the continuous-slopes experiment): the bracket term of a print: none, nearest (default: the "
+          "nearest bracket's tilt), linear (linear in A between neighbouring brackets, held beyond the end ones), "
+          "extrap (linear, extrapolated beyond them) or free (the red and blue tilts searched within the brackets' "
+          "span).")
+    .default_value(std::string("nearest"));
+  parser.add_argument("--print_tilt_rb")
+    .help("Experimental: with --print_a, the red and blue tilts given (as --print_tilt free reports them): r,b.")
+    .default_value(std::string(""));
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -718,6 +727,19 @@ int parse_options(int ac, char* av[], Options& o) {
     if (o.colorspace == density_measure_name((DensityMeasure)m)) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
+    }
+  }
+  o.print_tilt = parser.get<std::string>("--print_tilt");
+  if (o.print_tilt != "none" && o.print_tilt != "nearest" && o.print_tilt != "linear" && o.print_tilt != "extrap" &&
+      o.print_tilt != "free") {
+    log_error("--print_tilt takes none, nearest, linear, extrap or free\n");
+    return 1;
+  }
+  {
+    const std::string rb = parser.get<std::string>("--print_tilt_rb");
+    if (!rb.empty() && std::sscanf(rb.c_str(), "%lf,%lf", &o.print_tilt_given[0], &o.print_tilt_given[1]) != 2) {
+      log_error("--print_tilt_rb takes r,b\n");
+      return 1;
     }
   }
   if (parser.is_used("--print_a")) {

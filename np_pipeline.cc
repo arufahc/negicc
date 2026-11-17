@@ -868,9 +868,27 @@ int prepare(const Options& o, Setup& s) {
         for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, k);
       }
       s.print_cont = prints.continuum;
+      s.print_cont.tilt_mode = o.print_tilt == "none" ? 0 : o.print_tilt == "linear" ? 2 : o.print_tilt == "extrap" ? 3 : 1;
       s.print_a = o.print_a;
+      if (std::isfinite(o.print_tilt_given[0])) {
+        s.print_tilt_used[0] = o.print_tilt_given[0];
+        s.print_tilt_used[2] = o.print_tilt_given[1];
+        s.print_tilt_is_given = true;
+      }
       {
         const PrintContinuum* pc = &s.print_cont;
+        s.print_cp.free_tilt = o.print_tilt == "free";
+        s.print_cp.set_curves_tilt = [pc](double a, const double* t, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof, t); };
+        s.print_cp.tilt_at = [pc](double a, double t[3]) { pc->tilt_at(a, t); };
+        for (int c = 0; c < 3; ++c) {
+          s.print_cp.tilt_lo[c] = INFINITY;
+          s.print_cp.tilt_hi[c] = -INFINITY;
+          for (const auto& t : pc->tilt) {
+            s.print_cp.tilt_lo[c] = std::min(s.print_cp.tilt_lo[c], t[c]);
+            s.print_cp.tilt_hi[c] = std::max(s.print_cp.tilt_hi[c], t[c]);
+          }
+          if (pc->tilt.empty()) s.print_cp.tilt_lo[c] = s.print_cp.tilt_hi[c] = 0.0;
+        }
         s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
         s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
         s.print_cp.n0 = pc->n0;
@@ -1638,6 +1656,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     s.print_a = s.print_cr.a;
     s.print_searched = true;
+    if (o.print_tilt == "free") {
+      s.print_tilt_used[0] = s.print_cr.tilt[0];
+      s.print_tilt_used[2] = s.print_cr.tilt[2];
+      s.print_tilt_is_given = true;
+    }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
              "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
              scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
@@ -2655,8 +2678,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
     if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search, --print_a or a reused run's)
-      s.print_cont.set_curves_at(s.print_a, c.film_prof);
-      set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+      const double* tg = s.print_tilt_is_given ? s.print_tilt_used : nullptr;
+      s.print_cont.set_curves_at(s.print_a, c.film_prof, tg);
+      set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, tg));
     }
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
@@ -3000,6 +3024,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_file = s.print_file;
   sc.print_file_sha256 = s.print_file_sha256;
   sc.print_from_bundle = s.print_from_bundle;
+  if (!s.print_profs.empty() && std::isfinite(s.print_a)) {
+    if (s.print_tilt_is_given) {
+      for (int c = 0; c < 3; ++c) sc.print_tilt[c] = s.print_tilt_used[c];
+    } else {
+      s.print_cont.tilt_at(s.print_a, sc.print_tilt);
+    }
+    sc.print_tilt_mode = o.print_tilt;
+  }
   if (!s.print_profs.empty()) {
     sc.print_a = s.print_a;
     for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];

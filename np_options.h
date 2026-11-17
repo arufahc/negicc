@@ -118,6 +118,8 @@ struct Options {
   // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
   std::vector<std::string> prints;
   double print_a = NAN;                       // --print_a: the print at this mid grey A, not the bracket's own
+  std::string print_tilt = "nearest";        // --print_tilt (experimental): none, nearest, linear, extrap, free
+  double print_tilt_given[2] = {NAN, NAN};    // --print_tilt_rb (experimental): the red and blue tilts, with --print_a
   bool density_print_given = false;           // a density output's --print with --print_a, --target, -E and gains: the CLFs' numbers
   bool no_metadata = false;
 };

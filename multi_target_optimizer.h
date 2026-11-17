@@ -327,6 +327,12 @@ struct ContinuousPrint {
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
   double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)
+  // Experimental (--print_tilt free): the red and blue tilts searched within [tilt_lo, tilt_hi] (the brackets' span),
+  // starting at start_tilt (the nearest bracket's at A0); set_curves_tilt renders the print at A with a given tilt.
+  bool free_tilt = false;
+  std::function<void(double a, const double* tilt, ParsedFilmProfile& prof)> set_curves_tilt;
+  std::function<void(double a, double tilt[3])> tilt_at;
+  double tilt_lo[3] = {0, 0, 0}, tilt_hi[3] = {0, 0, 0};
 };
 struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;
@@ -334,6 +340,7 @@ struct ContinuousPrintResult {
   bool converged = false;
   float above_knee = 0.0f;           // the share of the inner crop above the knee at E = 1, g = b = 1
   float wish_mean_l = 0.0f;          // the held wish's mean L*
+  double tilt[3] = {0, 0, 0};        // the tilt of the result (the form's at A, or the searched one)
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,

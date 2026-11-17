@@ -577,6 +577,10 @@ bool write_json_sidecar(const Sidecar& sc) {
       j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"), num(sc.print_paper_xyz[1], "%.6g"),
                                                   num(sc.print_paper_xyz[2], "%.6g")};
       if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      if (!sc.print_tilt_mode.empty()) {
+        j["profile"]["print"]["tilt_mode"] = sc.print_tilt_mode;
+        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"), num(sc.print_tilt[2], "%.9g")};
+      }
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
       if (sc.print_searched) {
@@ -611,6 +615,10 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
   if (std::isfinite(sc.print_a)) cli.insert(cli.end(), {"--print_a", num_str(sc.print_a, "%.17g")});
+  if (std::isfinite(sc.print_a) && sc.print_tilt_mode == "free")
+    cli.insert(cli.end(), {"--print_tilt_rb", num_str(sc.print_tilt[0], "%.17g") + "," + num_str(sc.print_tilt[2], "%.17g")});
+  else if (std::isfinite(sc.print_a) && !sc.print_tilt_mode.empty() && sc.print_tilt_mode != "nearest")
+    cli.insert(cli.end(), {"--print_tilt", sc.print_tilt_mode});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.

@@ -143,6 +143,8 @@ struct Sidecar {
   double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
   double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the paper's white the print is relative to (PCS D50)
   bool print_searched = false, print_converged = false;
+  double print_tilt[3] = {0, 0, 0};   // the print's tilt at its A (experimental --print_tilt)
+  std::string print_tilt_mode;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;
 };

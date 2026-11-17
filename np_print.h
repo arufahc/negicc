@@ -403,8 +403,12 @@ struct PrintContinuum {
   std::vector<double> a_mid;                  // per bundle.targets, in its order
   std::vector<std::array<double, 3>> tilt;    // per bundle.targets
   int nearest(double a) const;                // the bracket whose A_mid is nearest A (the first of a tie)
-  PrintCurves curves_at(double a) const;
-  void set_curves_at(double a, ParsedFilmProfile& prof) const;
+  // Experimental (--print_tilt, the continuous-slopes experiment): 0 none, 1 nearest (the default), 2 linear in A
+  // between neighbouring brackets, held beyond the end ones, 3 linear and extrapolated beyond them.
+  int tilt_mode = 1;
+  void tilt_at(double a, double t[3]) const;
+  PrintCurves curves_at(double a, const double* tilt = nullptr) const;   // tilt: in place of tilt_at's
+  void set_curves_at(double a, ParsedFilmProfile& prof, const double* tilt = nullptr) const;
   double green_apd(double dl) const;          // G_green at light density dl
   double a_lo() const;                        // the range A is searched in: the curve's green APD range
   double a_hi() const;

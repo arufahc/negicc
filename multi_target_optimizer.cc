@@ -2764,13 +2764,20 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     std::cout << "Print (continuous): A0 " << a0 << " (range " << cp.a_lo << " to " << cp.a_hi << "), above the knee at E = 1: "
               << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)\n";
   }
+  // --print_tilt free: the tilt in use, searched with A (starting at the nearest bracket's at A0).
+  double tilt[3] = {0, 0, 0};
+  if (cp.free_tilt && cp.tilt_at) cp.tilt_at(a0, tilt);
+  double best_tilt[3] = {tilt[0], tilt[1], tilt[2]};
+  auto set_at = [&](double x) {
+    if (cp.free_tilt && cp.set_curves_tilt) cp.set_curves_tilt(x, tilt, prof); else cp.set_curves_at(x, prof);
+  };
   // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field (the optimiser's wide
   // grids, as the scene search screens its brackets).
   fr.set_pins(PIN_E, E, 1.0f, 1.0f);
   float e_bounds[3] = {E, E, E};
   ConversionParams curr{E, 1.0f, 1.0f, 1.0f};
   {
-    cp.set_curves_at(a0, prof);
+    set_at(a0);
     ConversionParams scr;
     fr.search(0, mu1, sig1, nullptr, e_bounds, scr);
     curr.g = scr.g;
@@ -2782,7 +2789,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   std::vector<float> best_mu, best_sg;
   bool stop_next = false;
   for (int it = 0; it < std::max(1, opts.max_steps); ++it) {
-    cp.set_curves_at(a, prof);
+    set_at(a);
     fr.render_preview(0, curr, preview);
     fr.update_correction(0, curr, preview);
     if (!fr.predict(preview, mu, sg)) return false;
@@ -2796,6 +2803,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       best_err = err;
       best = curr;
       best_a = a;
+      for (int c = 0; c < 3; ++c) best_tilt[c] = tilt[c];
       best_mu = mu;
       best_sg = sg;
     }
@@ -2810,7 +2818,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned).
     ConversionParams gb;
     auto loss = [&](double x, ConversionParams& p) {
-      cp.set_curves_at(x, prof);
+      set_at(x);
       return fr.search(0, mu, sg, &curr, e_bounds, p);
     };
     // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
@@ -2857,6 +2865,26 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       }
     }
     const double next_a = 0.5 * (lo + hi);
+    if (cp.free_tilt && cp.set_curves_tilt) {
+      // The red and blue tilts at next_a, each by golden section within the brackets' span.
+      for (int c : {0, 2}) {
+        auto tloss = [&](double v) {
+          tilt[c] = v;
+          cp.set_curves_tilt(next_a, tilt, prof);
+          return fr.search(0, mu, sg, &curr, e_bounds, gb);
+        };
+        double tl = cp.tilt_lo[c], th = cp.tilt_hi[c];
+        if (th > tl) {
+          double y1 = th - phi * (th - tl), y2 = tl + phi * (th - tl);
+          float g1 = tloss(y1), g2 = tloss(y2);
+          while (th - tl > 1e-4) {
+            if (g1 <= g2) { th = y2; y2 = y1; g2 = g1; y1 = th - phi * (th - tl); g1 = tloss(y1); }
+            else { tl = y1; y1 = y2; g1 = g2; y2 = tl + phi * (th - tl); g2 = tloss(y2); }
+          }
+          tilt[c] = 0.5 * (tl + th);
+        }
+      }
+    }
     ConversionParams next;
     loss(next_a, next);
     const float move = (float)(std::fabs(next_a - a) / kStop) + std::fabs(next.g - curr.g) + std::fabs(next.b - curr.b);
@@ -2878,7 +2906,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     };
     for (const float stop : opts.probe_stops) {
       const double ap = std::clamp(best_a + stop * kStop, cp.a_lo, cp.a_hi);
-      cp.set_curves_at(ap, prof);
+      if (cp.free_tilt && cp.set_curves_tilt) cp.set_curves_tilt(ap, best_tilt, prof); else cp.set_curves_at(ap, prof);
       fr.render_preview(0, best, preview);
       if (!fr.predict(preview, mu, sg)) return false;
       const std::vector<float> lab = fr.patch_lab(preview);
@@ -2889,7 +2917,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     std::ofstream f(opts.probe_path);
     f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
   }
-  cp.set_curves_at(best_a, prof);
+  for (int c = 0; c < 3; ++c) tilt[c] = best_tilt[c];
+  set_at(best_a);
   int nearest = 0;
   for (size_t i = 0; i < cp.a_mid.size(); ++i)
     if (std::fabs(cp.a_mid[i] - best_a) < std::fabs(cp.a_mid[nearest] - best_a)) nearest = (int)i;
@@ -2906,6 +2935,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   out.g_lo = st.g_lo;
   out.g_hi = st.g_hi;
   cr.a = best_a;
+  if (cp.free_tilt) { for (int c = 0; c < 3; ++c) cr.tilt[c] = tilt[c]; } else if (cp.tilt_at) cp.tilt_at(best_a, cr.tilt);
   fr.write_timings();
   out.total_time = Clock::now() - t0;
   return true;

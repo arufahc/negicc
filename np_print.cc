@@ -1601,13 +1601,40 @@ int PrintContinuum::nearest(double a) const {
   return k;
 }
 
-PrintCurves PrintContinuum::curves_at(double a) const {
-  static const double zero[3] = {0.0, 0.0, 0.0};
-  return bracket_print_curves(g, paper, a, n0, a_mid.empty() ? zero : tilt[nearest(a)].data());
+void PrintContinuum::tilt_at(double a, double t[3]) const {
+  for (int c = 0; c < 3; ++c) t[c] = 0.0;
+  if (a_mid.empty() || tilt_mode == 0) return;
+  if (tilt_mode == 1) {
+    for (int c = 0; c < 3; ++c) t[c] = tilt[nearest(a)][c];
+    return;
+  }
+  std::vector<size_t> o(a_mid.size());
+  for (size_t i = 0; i < o.size(); ++i) o[i] = i;
+  std::sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
+  if (o.size() == 1) {
+    for (int c = 0; c < 3; ++c) t[c] = tilt[o[0]][c];
+    return;
+  }
+  size_t k = 0;   // the segment o[k], o[k + 1]
+  while (k + 2 < o.size() && a > a_mid[o[k + 1]]) ++k;
+  const size_t i = o[k], j = o[k + 1];
+  double f = (a - a_mid[i]) / (a_mid[j] - a_mid[i]);
+  if (tilt_mode == 2) f = std::clamp(f, 0.0, 1.0);
+  for (int c = 0; c < 3; ++c) t[c] = tilt[i][c] + f * (tilt[j][c] - tilt[i][c]);
 }
 
-void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof) const {
-  const PrintCurves cv = curves_at(a);
+PrintCurves PrintContinuum::curves_at(double a, const double* tilt_given) const {
+  double t[3];
+  if (tilt_given) {
+    for (int c = 0; c < 3; ++c) t[c] = tilt_given[c];
+  } else {
+    tilt_at(a, t);
+  }
+  return bracket_print_curves(g, paper, a, n0, t);
+}
+
+void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const double* tilt_given) const {
+  const PrintCurves cv = curves_at(a, tilt_given);
   for (int c = 0; c < 3; ++c) {
     prof.in_trc[c].resize(cv[c].size());
     for (size_t i = 0; i < cv[c].size(); ++i)
