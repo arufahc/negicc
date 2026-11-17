@@ -140,8 +140,8 @@ struct Sidecar {
   std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
   bool print_from_bundle = false;
   // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
-  double print_a = NAN, print_bracket_a_mid = NAN, print_paper_y = 1.0, print_a0 = NAN;
-  std::string print_white;
+  double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
+  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the paper's white the print is relative to (PCS D50)
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;

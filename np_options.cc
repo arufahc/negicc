@@ -313,12 +313,6 @@ int parse_options(int ac, char* av[], Options& o) {
           "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "
           "reports it in its cli_equivalent. Without --print_a, given values print at the bracket's own mid grey.")
     .scan<'g', double>();
-  parser.add_argument("--print_white")
-    .help("Where a print's white sits: paper (default; the paper's base renders at the display's white, the print's "
-          "linear values divided by the luminance of the lightest node of its table, so the base's tint stays) or "
-          "perfect (against a perfect white, where the paper's base is a light grey). The print's search sees what "
-          "the output shows.")
-    .default_value(std::string("paper"));
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -725,11 +719,6 @@ int parse_options(int ac, char* av[], Options& o) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
     }
-  }
-  o.print_white = parser.get<std::string>("--print_white");
-  if (o.print_white != "paper" && o.print_white != "perfect") {
-    log_error("--print_white takes paper or perfect\n");
-    return 1;
   }
   if (parser.is_used("--print_a")) {
     o.print_a = parser.get<double>("--print_a");

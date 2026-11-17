@@ -845,7 +845,12 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   snprintf(buf, sizeof buf, "  <LUT3D inBitDepth=\"32f\" outBitDepth=\"32f\" interpolation=\"tetrahedral\">\n"
                             "    <Array dim=\"%d %d %d 3\">\n", cube, cube, cube);
   s += buf;
-  // The cube: dye amounts 0..top on each axis, blue changing fastest, to linear sRGB.
+  // The cube: dye amounts 0..top on each axis, blue changing fastest, to linear sRGB, relative to the paper's white:
+  // each of X, Y and Z scaled by the viewing light's over the paper's (the ICC's media-relative colorimetry), so the
+  // paper renders at the display's white, as the print ICC's picture does (np_pipeline: the print's white).
+  double paper[3], rel[3];
+  print_paper_xyz(m, paper);
+  for (int c = 0; c < 3; ++c) rel[c] = m.white[c] / paper[c];
   const size_t points = (size_t)cube * cube * cube;
   std::vector<double> rgb(points * 3);
   #pragma omp parallel for schedule(static)
@@ -854,6 +859,7 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
     const double amount[3] = {top * r / (cube - 1), top * g / (cube - 1), top * b / (cube - 1)};
     double xyz[3];
     amounts_to_xyz(m, amount, xyz);
+    for (int c = 0; c < 3; ++c) xyz[c] *= rel[c];
     for (int c = 0; c < 3; ++c) {
       rgb[idx * 3 + c] = m.to_srgb[c * 3] * xyz[0] + m.to_srgb[c * 3 + 1] * xyz[1] + m.to_srgb[c * 3 + 2] * xyz[2];
     }
@@ -1504,7 +1510,13 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   return icc;
 }
 
-bool scale_print_icc_table(std::vector<uint8_t>& icc, double k) {
+void print_paper_xyz(const PrintMaterial& m, double xyz[3]) {
+  double least[3];
+  for (int c = 0; c < 3; ++c) least[c] = *std::min_element(m.curves[c].begin(), m.curves[c].end());
+  amounts_to_xyz(m, least, xyz);
+}
+
+bool scale_print_icc_table(std::vector<uint8_t>& icc, const double k[3]) {
   const size_t off = a2b0_lut16(icc);
   if (!off) return false;
   const size_t n_in = (size_t)icc[off + 48] << 8 | icc[off + 49];
@@ -1515,7 +1527,7 @@ bool scale_print_icc_table(std::vector<uint8_t>& icc, double k) {
   for (size_t i = 0; i < count; ++i) {
     const size_t p = at + 2 * i;
     const long code = (long)icc[p] << 8 | icc[p + 1];
-    const long q = std::min(65535L, std::lround(code * k));
+    const long q = std::min(65535L, std::lround(code * k[i % 3]));
     icc[p] = (uint8_t)(q >> 8);
     icc[p + 1] = (uint8_t)(q & 0xff);
   }

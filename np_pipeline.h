@@ -113,7 +113,7 @@ struct Setup {
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
   ContinuousPrint print_cp;           // the search's view of it
   double print_a = NAN;               // the print's mid grey A: the search's, --print_a's or a reused run's; NaN: the bracket's
-  double print_paper_y = 1.0;         // the Y of the lightest node of the print's table: the paper's white
+  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the lightest node of the print's table: the paper's white
   ContinuousPrintResult print_cr;     // the print's search
   bool print_searched = false;
   bool has_crosstalk = false;

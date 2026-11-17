@@ -2712,16 +2712,30 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       }
     cr.above_knee = total ? (float)above / total : 0.0f;
   }
-  // A0: the median over the grid cells of G_green(dL_green).
+  // A0, as the scene's search meters a bracket: the A at which the frame's log-average cell prints at L* 50 through
+  // the print profile (bisection; L* falls as A rises).
   const FrameStats& st = fr.stats();
   const size_t n = st.grid.size() / 3;
-  std::vector<double> ga(n);
-  for (size_t i = 0; i < n; ++i) {
-    const double u = (m[3] * st.grid[i * 3] + m[4] * st.grid[i * 3 + 1] + m[5] * st.grid[i * 3 + 2]) / 65535.0;
-    ga[i] = cp.green_apd(-std::log10(std::max(u, 1e-7) / cp.n0));
+  if (n == 0) {
+    std::cerr << "ERROR! The print's search has no grid cells on this frame" << std::endl;
+    return false;
   }
-  std::nth_element(ga.begin(), ga.begin() + (long)(n / 2), ga.end());
-  const double a0 = std::clamp(ga[n / 2], cp.a_lo, cp.a_hi);
+  double a0;
+  {
+    uint16_t px[3];
+    for (int c = 0; c < 3; ++c) px[c] = (uint16_t)std::lround(std::clamp(st.log_avg_rgb[c], 0.0f, 1.0f) * 65535.0f);
+    auto lstar = [&](double a) {
+      cp.set_curves_at(a, prof);
+      const negicc::PipelineConfig pc = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
+      return negicc::linear_srgb_to_lab(negicc::convert_pixel_display(pc, m, px)).L;
+    };
+    double lo = cp.a_lo, hi = cp.a_hi;
+    for (int it = 0; it < 60; ++it) {
+      const double mid = 0.5 * (lo + hi);
+      if (lstar(mid) > 50.0f) lo = mid; else hi = mid;
+    }
+    a0 = 0.5 * (lo + hi);
+  }
   cr.a0 = a0;
   // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
   std::vector<uint8_t> preview;
@@ -2799,23 +2813,39 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       cp.set_curves_at(x, prof);
       return fr.search(0, mu, sg, &curr, e_bounds, p);
     };
-    // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range.
+    // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
+    // neighbours are lower, each side is marched and the lower of the two brackets kept.
     auto clampA = [&](double x) { return std::clamp(x, cp.a_lo, cp.a_hi); };
-    double xm = clampA(a);
-    float fm = loss(xm, gb);
-    double xl = clampA(xm - kContinuousStep), xr = clampA(xm + kContinuousStep);
-    float fl = loss(xl, gb), fr_ = loss(xr, gb);
-    while (fl < fm && xl > cp.a_lo) {
-      xr = xm; fr_ = fm; xm = xl; fm = fl;
-      xl = clampA(xm - kContinuousStep);
-      fl = loss(xl, gb);
+    struct Bracket { double lo, mid, hi; float f; };
+    auto march = [&](double x0, float f0, double dir) {
+      double xm = x0, xo = clampA(x0 - dir * kContinuousStep);
+      float fm = f0;
+      double xn = clampA(xm + dir * kContinuousStep);
+      float fn = loss(xn, gb);
+      while (fn < fm && xn != xm) {
+        xo = xm;
+        xm = xn;
+        fm = fn;
+        xn = clampA(xm + dir * kContinuousStep);
+        if (xn == xm) break;
+        fn = loss(xn, gb);
+      }
+      return Bracket{std::min(xo, xn), xm, std::max(xo, xn), fm};
+    };
+    const double x0 = clampA(a);
+    const float f0 = loss(x0, gb);
+    const double xl0 = clampA(x0 - kContinuousStep), xr0 = clampA(x0 + kContinuousStep);
+    const float fl0 = loss(xl0, gb), fr0 = loss(xr0, gb);
+    Bracket br{xl0, x0, xr0, f0};
+    if (fl0 < f0 && fr0 < f0) {
+      const Bracket left = march(xl0, fl0, -1.0), right = march(xr0, fr0, 1.0);
+      br = left.f <= right.f ? left : right;
+    } else if (fl0 < f0) {
+      br = march(xl0, fl0, -1.0);
+    } else if (fr0 < f0) {
+      br = march(xr0, fr0, 1.0);
     }
-    while (fr_ < fm && xr < cp.a_hi) {
-      xl = xm; fl = fm; xm = xr; fm = fr_;
-      xr = clampA(xm + kContinuousStep);
-      fr_ = loss(xr, gb);
-    }
-    double lo = std::min(xl, xm), hi = std::max(xr, xm);
+    double lo = br.lo, hi = br.hi;
     const double phi = 0.6180339887498949;
     double x1 = hi - phi * (hi - lo), x2 = lo + phi * (hi - lo);
     float f1 = loss(x1, gb), f2 = loss(x2, gb);

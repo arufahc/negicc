@@ -573,8 +573,9 @@ bool write_json_sidecar(const Sidecar& sc) {
         j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
       }
       // The print's white, its mid grey A and the bracket's own, and its search (np_pipeline: search_print_continuous).
-      j["profile"]["print"]["white"] = sc.print_white;
-      j["profile"]["print"]["paper_white_Y"] = num(sc.print_paper_y, "%.6g");
+      j["profile"]["print"]["white"] = "paper";   // media-relative: the paper's base at the display's white
+      j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"), num(sc.print_paper_xyz[1], "%.6g"),
+                                                  num(sc.print_paper_xyz[2], "%.6g")};
       if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");

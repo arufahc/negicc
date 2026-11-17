@@ -838,23 +838,28 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
-      // The paper's white: the Y of the lightest node of the print's table (PCS XYZ D50 as a lut16 holds it). With
-      // --print_white paper (the default) every table value is divided by it: the paper's base renders at the
-      // display's white, its tint kept (one factor for X, Y and Z). The bundle's print ICC itself stays absolute.
+      // The paper's white (the owner's choice, "paper white is display white"): the print is media-relative. The
+      // lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of X, Y and Z of
+      // every node is scaled by D50's over the base's, the ICC's own media-relative colorimetry, so the base is exactly
+      // the display's white and no channel passes 1 (its tint is not shown). The bundle's print ICC itself stays
+      // absolute; the profile an output embeds carries the scaled table.
       {
-        constexpr double kPcsMaxY = 1.0 + 32767.0 / 32768.0;
-        float ymax = 0.0f;
+        constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
+        const double d50[3] = {0.9642, 1.0, 0.8249};
         const std::vector<float>& t = s.print_profs.front().clut;
-        for (size_t i = 1; i < t.size(); i += 3) ymax = std::max(ymax, t[i]);
-        s.print_paper_y = ymax * kPcsMaxY;
-      }
-      if (o.print_white == "paper") {
-        const float k = (float)(1.0 / s.print_paper_y);
+        size_t best = 0;
+        for (size_t i = 1; i < t.size(); i += 3)
+          if (t[i] > t[best * 3 + 1]) best = i / 3;
+        double k[3];
+        for (int c = 0; c < 3; ++c) {
+          s.print_paper_xyz[c] = t[best * 3 + c] * kPcsMax;
+          k[c] = d50[c] / s.print_paper_xyz[c];
+        }
         for (ParsedFilmProfile& p : s.print_profs) {
-          for (float& v : p.clut) v *= k;
+          for (size_t i = 0; i < p.clut.size(); ++i) p.clut[i] *= (float)k[i % 3];
           p.rebind_pointers();
         }
-        for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, 1.0 / s.print_paper_y);
+        for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, k);
       }
       s.print_cont = prints.continuum;
       s.print_a = o.print_a;
@@ -2904,8 +2909,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_from_bundle = s.print_from_bundle;
   if (!s.print_profs.empty()) {
     sc.print_a = s.print_a;
-    sc.print_white = o.print_white;
-    sc.print_paper_y = s.print_paper_y;
+    for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
     if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
       sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
     if (s.print_searched) {

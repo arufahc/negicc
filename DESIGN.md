@@ -543,7 +543,7 @@ the scene, as before.
 | 1 | Bundle | One print ICC per print material, built when the profile set is saved by the profile-building tools: its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
 | 2 | Print profile at A | The bundle's print ICC with the input curves for a mid grey `A` written in (about 5 ms); at a bracket's own `A_mid` it is that bracket's print profile. | The curve, `A`, the nearest bracket's tilt, the material's curve. |
 | 3 | Search | The print's search: `A`, then g and b, on the print profile at `A`. | The frame. |
-| 4 | Conversion | The picture conversion with the print profile at the search's `A`, divided by the paper's white. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
+| 4 | Conversion | The picture conversion with the print profile at the search's `A`, relative to the paper's white. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
 
 **The chain.** For the profile's input `v` (the scan after the crosstalk correction, the film base at `n0 =
 normalization_target / 65535`, after the soft knee at 0.95), in each channel `c`:
@@ -554,7 +554,7 @@ alpha_c  = (G_c(dL_c) - A) (1 + b_c)                 APD above the print's mid g
 pd       = 0.70 + Q L (w alpha),  w = M⁻¹ (1, 1, 1)  printing density (Q L = P M, "The print matrix")
 logE_c   = aim_c - (pd_c - 0.70)                     then the print as in "Derivations": dye amounts, XYZ
 XYZ_PCS  = XYZ (paper, under D50)  |  Bradford(D55 -> D50) XYZ (print film)
-XYZ_out  = XYZ_PCS / Y_paper                         relative to the paper's white (--print_white paper, the default)
+XYZ_out  = XYZ_PCS × D50 / XYZ_paper (per component)  relative to the paper's white: the base at the display's white
 ```
 
 `A` is the print's mid grey as green APD: the printing exposure, applied after the grey balance curve, so that it
@@ -603,7 +603,12 @@ were constructed"). The print's lightness is searched once and continuously, in 
    were measured. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
    −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
    where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
-2. **A0, metered once:** the median over the search's grid cells of `G_green(dL_green)` at E = 1, g = b = 1.
+2. **A0, metered once, as the scene's search meters a bracket:** the `A` at which the frame's log-average cell (at E
+   = 1, g = b = 1) prints at L\* 50 through the print profile, by bisection. The network's lightness follows the render
+   it is shown (its echo on these previews is 0.74 to 0.79), so the meter decides most of the print's lightness: a
+   first rule, the median cell's `G_green` put at the paper's mid grey, put a bright sky at mid grey on a lake under
+   a blue sky and printed it 20 L\* darker than the scene; with the scene's rule the print's wish follows the scene's
+   on every frame, 2.6 L\* below it with an sd of 2.3 (station `designs/print_search_ways.md`).
 3. **The lightness wish:** the mean of the intent fields predicted from the print at `A0 - h`, `A0` and `A0 + h`,
    `h = log10(2) / 2` (half a stop of printing exposure, about one bracket's spacing); its L\* is the frame's wish,
    held for the rest of the search, as the scene's search holds its bootstrap's.
@@ -637,16 +642,23 @@ There is no other path.
 ### The print's white
 
 The table's lightest node is the paper's base under its viewing light, measured against a perfect white (Y = 1).
-On screen that base is a light grey, and on Ultra Endura a clearly darker one. The owner chose to show a print
-relative to its paper: the paper's base renders at the display's white, both in the preview the search and the
-intent network see and in the exported picture ("Go with 2", 2026-11-17). `--print_white perfect` keeps the perfect
-white.
+On screen that base would be a light grey, and on Ultra Endura a clearly darker one. The owner chose "paper white is
+display white" (2026-11-17): a print is shown relative to its paper, both in the preview the search and the intent
+network see and in the exported picture, and there is no other setting.
 
-The scale is luminance only: every value of the table is divided by `Y_paper`, the Y of its lightest node, so the
-paper's base keeps its tint and only its lightness moves to the display's white. The bundle's print ICC itself stays
-absolute (its table as built, `wtpt` D50); the division is made when the print profile is loaded, and the profile an
-output embeds carries the divided table, so it describes the exported picture. The sidecar records
-`profile.print.white` and `paper_white_Y`.
+The print is media-relative, as the ICC defines it: each of X, Y and Z of every node of the table is scaled by D50's
+over the paper base's (the lightest node's), so the base becomes D50, exactly the display's white, and no channel of
+any colour passes 1. The paper's tint is therefore not shown: an eye that has adapted to the paper does not see it
+either. (Scaling by Y alone would keep the tint, but a tinted base at Y = 1 lies outside sRGB: one channel passes 1
+and is cut, so the bluest bases, Ultra Endura and Endura Premier, lost their tint anyway and Vision 2383's base moved
+2.3 ΔE00, second review of #94. Dividing by the base's largest channel in sRGB instead would keep the tint, the base
+then a little below white; that is the alternative if the tint is wanted.) The per-component scaling is the ICC's
+own media-relative colorimetry rather than a Bradford adaptation from the base to D50, so that a colour-managed
+viewer given the absolute profile and the relative intent would show the same picture. The bundle's print ICC
+itself stays absolute (its table as built, `wtpt` D50); the scaling is made when the print profile is loaded, and
+the profile an output embeds carries the scaled table, so it describes the exported picture. The print CLF is
+media-relative the same way, the paper's colour (each layer at its least dye) scaled to the viewing light's white.
+The sidecar records `profile.print.white` and `paper_white_xyz`.
 
 Why it matters to the search: the intent network names nearly the same lightness whatever white it is shown (its
 prediction moves 0.09 to 0.10 L\* per L\* of a uniform scaling), so a print shown against a perfect white, 2.8 L\*
@@ -669,12 +681,12 @@ The paper's white per material (the Portra 400 TriLED set's print ICCs; spektraf
 Ultra Endura's base, two to two and a half times the other papers', is as spektrafilm's profile gives it (version
 0.3.2, from Kodak's data sheets by its own account); it has not been checked against a data sheet here. Four bases
 are more than 1 ΔE00 from a neutral of their lightness (Vision 2383 yellow, Ultra Endura and Endura Premier blue,
-Vision 2393 slightly yellow): luminance-only scaling shows that tint, as the paper has it.
+Vision 2393 slightly yellow); relative to the paper they render neutral, at the display's white.
 
 **Checks.** On Portra 400 frames (TriLED):
 
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
-  (frames 1004_0014 and 1006_0007, both whites).
+  (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura).
 - An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte, for a built-in material and for one given as a file, Vision 2383 (D55) included.
