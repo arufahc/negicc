@@ -588,7 +588,7 @@ its slopes are the curve's tangent at the mid grey times `1 + b_c`, which is the
 | `Paper_c` table | alpha −3 to 5 in steps of 0.005 | Covers the paper from its white to its black. |
 | Grey balance curve | 501 points per channel | See "Derivations". |
 | Bundle ICC used when | its own curves equal those computed for its bracket, to one 16-bit code | Otherwise (a `--print` file, or a bundle built with another version of the math) the table is computed by `neg_process`, in about 0.3 s. |
-| Tone stage, shoulder | off | The print material's curve is the tone. `--tone_stage` with `--print` is refused. |
+| Tone stage, shoulder | off | The print material's curve is the tone. `--tone_stage` with `--print` is refused. The owner's decision (2026-11-17), after the blind comparison of prints: "No tone in print". The print takes no tone stage, and it is not made from settings a tone-aware search found. |
 | Picture output | one print material | A density output takes several, one CLF each. |
 | White light | density output only | Its curve fit composes into the chart profiles; its print is the density output's CLF. |
 
