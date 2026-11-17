@@ -2895,10 +2895,23 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
   }
   cp.set_curves_at(best_a, prof);
-  {   // the share of the crop with a channel above 1 before the cut (the print keeps no shoulder)
-    const float above_one[3] = {255.0f, 255.0f, 255.0f};
-    const ClipStats cs = fr.highlight_clip(0, {best}, above_one)[0];
-    for (int c = 0; c < 3; ++c) cr.above_white_pct[c] = cs.exc[c];
+  {   // the share of the crop with a channel above 1 (linear) before the cut: the print keeps no shoulder
+    float mb[9];
+    negicc::candidate_matrix(fr.input_matrix(), best.e, best.g, best.b, mb);
+    std::vector<float> hc(5, 0.0f);
+    const InnerCrop& c0 = fr.inner_crop();
+    negicc::HighlightClipArgs ha{};
+    ha.in_view = &frame;
+    ha.width = frame.width;
+    ha.height = frame.height;
+    ha.crop = {c0.x0, c0.y0, c0.w, c0.h};
+    ha.matrices = mb;
+    ha.n = 1;
+    ha.cfg = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
+    for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = 1.0f + 1e-4f;
+    ha.out = hc.data();
+    negicc::cpu_highlight_clip(ha);
+    for (int c = 0; c < 3; ++c) cr.above_white_pct[c] = hc[c];
   }
   int nearest = 0;
   for (size_t i = 0; i < cp.a_mid.size(); ++i)
