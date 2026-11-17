@@ -620,10 +620,14 @@ were constructed"). The print's lightness is searched once and continuously, in 
      much it was raised. The floor reads the picture's frame: the given `--roi` (or `--roi auto`'s), else, with no
      `--roi`, the frame detector's crop when the detection is at or above `kBaseMinFrameConf` (0.5, the level the base
      takes the detector's patch at), else the whole scan; the sidecar records which (`film_base.print_floor.frame`,
-     with the detection's confidence). Without a frame the scan's bare light (the holder's gaps, perforations, the
+     with the detection's confidence where it decided the frame). The detection is the one the film base reads: the
+     CFA route's, and a single RAW's on the LibRaw route (used when that decode is the mosaic halved, not turned); TIFF,
+     JPEG and three captures have none without `--roi auto`, so their floor reads the whole scan, and a `--roi auto`
+     that fell back to the whole image is recorded as the whole scan. Without a frame the scan's bare light (the holder's gaps, perforations, the
      strip's edges) lies in the crop and reads as the thinnest film: on the 50 TriLED test frames without `--roi`, the
      whole scan raised the factor on 27 of them, by up to 2.5x, where the detected frame agrees with the frame's own
-     `--roi` within 2 % on 47 (at most 2.4 %, 1004_0026; every detection at 0.68 or above). Light inside the frame
+     `--roi` within 2 % on 47 (at most 2.4 %, 1004_0026; every detection at 0.68 or above; station
+     `designs/print_search_ways.md`, "The floor's frame", with its scripts). Light inside the frame
      (perforations within a `--roi`) is not masked, since the detector's light mask also takes thin film for light, and
      the record's factor shows what was read. The print's search itself reads the search frame, which without `--roi`
      is the whole scan, bare light included: there the floor's frame and the search's crop differ, and such a print
@@ -787,7 +791,7 @@ commit it was run at (on wp0, x86-64, CPU):
 - `make check_print` (check_print.cc; not an option of neg_process, the owner's decision of 2026-11-17 on the two
   self-check flags: "Remove them") checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
   order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
-  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11). (Run at this head.) The same program checks the floor, `print_floor_base`, on synthetic frames (5 of 5): four grey (a found base, none
+  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11; run at 9161629). The same program checks the floor, `print_floor_base`, on synthetic frames (5 of 5): four grey (a found base, none
   found, a raised base, film all denser than the base) and one coloured, through a crosstalk that is not symmetric with
   a patch thin in blue, which tells the largest channel from another, the matrix from its transpose, and the base's
   colour kept from one value for all.
@@ -795,10 +799,10 @@ commit it was run at (on wp0, x86-64, CPU):
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured at the continuous search's commit, before
   the tilts shipped).
 - Re-running a print's `cli_equivalent` (the frame and `--print`: no given values) reproduces it to the byte on 50 of
-  50 at this head: it re-runs the network and the print's search, deterministic on the same build, machine and backend
+  50 at 9161629 (the pictures are byte-identical since): it re-runs the network and the print's search, deterministic on the same build, machine and backend
   (and the raised base is derived again from the same scan). The claim covers that much: a different compiler, CPU
   architecture or backend can round differently, and on the Jetson (aarch64) neither its CPU nor its GPU backend is
-  claimed to reproduce wp0's picture to the byte (the Orin's own replay and its distance from wp0's print: to be measured in this pull request). A density output's `cli_equivalent` carries the `--print`
+  claimed to reproduce wp0's picture to the byte (not measured: neither the Orin's own replay nor its distance from wp0's print). A density output's `cli_equivalent` carries the `--print`
   materials as given, since with `--print` the file is written against the raised base: replayed, it writes the same
   file and the same CLFs (1006_0007, k 5.84, and 1004_0001, k 2.25; without `--print` in the line, master's replay
   wrote a different file and no CLF).

@@ -698,10 +698,7 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
-    if (!sc.density_prints.empty()) {
-      cli.push_back("--print");
-      cli.insert(cli.end(), sc.density_prints.begin(), sc.density_prints.end());
-    }
+    for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
   }
   j["cli_equivalent"] = cli;
 

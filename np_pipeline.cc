@@ -1752,20 +1752,31 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // Light inside the frame is not masked (the detector's light mask takes thin film for light on some frames); the
   // record's factor and frame show what was read. The print's search itself reads the search frame (without --roi, the
   // whole scan). A caller that gains a print (negicc-station) chooses the frame here, as this does.
+  // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), used only when |half|
+  // is that mosaic halved (a decode turned against the sensor does not map; as the base's patch). A --roi auto that fell
+  // back to the whole image is the whole scan. frame_conf is written only where the detection decided the frame.
   auto floor_print_base = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
-                              double scan_shutter_s, double scan_iso) {
+                              int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
     if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
       return;
     negicc::RgbView floor_frame = frame;
-    scan.print_floor_frame = scan.has_roi ? "roi" : "whole_scan";
-    scan.print_floor_frame_conf = det ? det->conf : -1.0f;
-    if (!scan.has_roi && det && det->ok && det->conf >= negicc::kBaseMinFrameConf) {
-      int b[4] = {det->crop[0] / 2, det->crop[1] / 2, std::max(1, (det->crop[0] + det->crop[2]) / 2 - det->crop[0] / 2),
-                  std::max(1, (det->crop[1] + det->crop[3]) / 2 - det->crop[1] / 2)};
-      clamp_rect(b, half.width, half.height);
-      floor_frame = half.crop_and_orient(b[0], b[1], b[2], b[3], scan.rot_cw, scan.hflip, scan.vflip);
-      scan.print_floor_frame = "detected";
+    scan.print_floor_frame_conf = -1.0f;
+    if (scan.has_roi) {
+      const bool fell_back = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
+      scan.print_floor_frame = fell_back ? "whole_scan" : "roi";
+      if (fell_back) scan.print_floor_frame_conf = scan.frame_det.conf;
+    } else {
+      scan.print_floor_frame = "whole_scan";
+      const bool aligned = det && std::abs(2 * half.width - sensor_w) <= 4 && std::abs(2 * half.height - sensor_h) <= 4;
+      if (aligned) scan.print_floor_frame_conf = det->conf;
+      if (aligned && det->ok && det->conf >= negicc::kBaseMinFrameConf) {
+        int b[4] = {det->crop[0] / 2, det->crop[1] / 2, std::max(1, (det->crop[0] + det->crop[2]) / 2 - det->crop[0] / 2),
+                    std::max(1, (det->crop[1] + det->crop[3]) / 2 - det->crop[1] / 2)};
+        clamp_rect(b, half.width, half.height);
+        floor_frame = half.crop_and_orient(b[0], b[1], b[2], b[3], scan.rot_cw, scan.hflip, scan.vflip);
+        scan.print_floor_frame = "detected";
+      }
     }
     double fb[3], raised_rgb[3];
     const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
@@ -1962,9 +1973,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      // This path runs the frame detector only for --roi auto (then the frame is given); without it the floor reads the
-      // whole scan, or the white-light base's detection (white light takes no floor).
-      floor_print_base(frame, half_view, (o.roi_auto && scan.frame_det.ok) ? &scan.frame_det : nullptr, scan_shutter_s, scan_iso);
+      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG and three
+      // captures have no detection without --roi auto, so their floor reads the whole scan.
+      floor_print_base(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h, scan_shutter_s,
+                       scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -2281,7 +2293,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, scan_shutter_s, scan_iso);
+      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h, scan_shutter_s,
+                       scan_iso);
     }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
