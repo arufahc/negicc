@@ -585,6 +585,8 @@ bool write_json_sidecar(const Sidecar& sc) {
                                            {"above_knee", num(sc.print_above_knee, "%.6g")},
                                            {"above_white_pct", {num(sc.print_above_white[0], "%.4g"), num(sc.print_above_white[1], "%.4g"),
                                                                 num(sc.print_above_white[2], "%.4g")}},
+                                           {"at_white_pct", {num(sc.print_at_white[0], "%.4g"), num(sc.print_at_white[1], "%.4g"),
+                                                             num(sc.print_at_white[2], "%.4g")}},
                                            {"a0_at_range_end", sc.print_a0_at_end},
                                            {"last_move", {num(sc.print_last_move[0], "%.4g"), num(sc.print_last_move[1], "%.4g"),
                                                           num(sc.print_last_move[2], "%.4g")}}};

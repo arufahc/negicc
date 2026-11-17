@@ -686,7 +686,14 @@ static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   p.rebind_pointers();
 }
 
+// --check_renderer's renderer (multi_target_optimizer.h PassThroughRenderer).
+static PassThroughRenderer& pass_through_renderer() {
+  static PassThroughRenderer r;
+  return r;
+}
+
 int prepare(const Options& o, Setup& s) {
+  if (o.check_renderer) negicc::cpu_pass_hook = audit_cpu_pass;
   if (!o.flat.empty()) {
     try {
       s.flat_field = negicc::load_flat_field_file(o.flat);
@@ -830,6 +837,11 @@ int prepare(const Options& o, Setup& s) {
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
                 "computed for the bundle's film\n");
+      return 1;
+    }
+    if (s.white_light && o.density_print_given) {
+      log_error("--print_a, --target, -E and the gains set a TriLED print's CLF numbers; a white-light bundle's density "
+                "output takes none of them\n");
       return 1;
     }
     if (s.white_light && !s.density) {
@@ -1509,6 +1521,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
         grey_prof.rebind_pointers();
         ParamSearchOptions ro;
+        if (o.check_renderer) ro.renderer = &pass_through_renderer();
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
         const float from[3] = {base_e, base_g, base_b};
@@ -1623,6 +1636,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.g = res.params.g;
       ps.b = res.params.b;
       ps.bracket = res.target_name;
+      ps.converged = cr.converged;
+      ps.steps = cr.steps;
+      for (int c = 0; c < 3; ++c) ps.last_move[c] = cr.last_move[c];
+      ps.above_knee = cr.above_knee;
       s.density_print_search[prints.id] = ps;
       log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
                ps.bracket.c_str(), ps.g, ps.b);
@@ -1849,6 +1866,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // Auto's time (the sidecar's auto.time_ms): the search and the curve fit, as on the CFA path.
         const double t_auto_0 = omp_get_wtime();
         ParamSearchOptions opts;
+        if (o.check_renderer) opts.renderer = &pass_through_renderer();
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2160,6 +2178,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = 0.125, scan_iso = 100.0;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
+      if (o.check_renderer) opts.renderer = &pass_through_renderer();
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2883,6 +2902,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.print_search = s.density_print_search;
+    if (o.density_print_given) rec.has_balance = false;   // no scene search ran: the given values are the print's
     // A print's given values (a picture's cli_equivalent) set every material's CLF numbers, in place of its search.
     if (o.density_print_given && !s.white_light && s.manual_target_idx >= 0 &&
         s.manual_target_idx < (int)s.bundle.targets.size()) {
@@ -2904,6 +2924,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
         ps.g = o.gain_g;
         ps.b = o.gain_b;
         ps.bracket = s.bundle.targets[s.manual_target_idx].name;
+        ps.given = true;
         rec.print_search[bp.id] = ps;
       }
     }
@@ -3020,6 +3041,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_converged = s.print_cr.converged;
       sc.print_above_knee = s.print_cr.above_knee;
       for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
+      for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;
       for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_cr.last_move[c];
     }
@@ -3102,5 +3124,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.tone_plan = &s.tone_plan;
   }
   write_json_sidecar(sc);
+  if (o.check_renderer) {
+    const PassAudit& pa = pass_audit();
+    log_info("Renderer check: %ld binds, %ld previews and %ld clip passes through the renderer; %ld passes of the "
+             "search outside it\n", pa.binds, pa.renders, pa.clips, pa.outside);
+    if (pa.outside > 0) {
+      log_error("Renderer check: %ld passes of the search ran outside the renderer\n", pa.outside);
+      return 1;
+    }
+  }
   return 0;
 }

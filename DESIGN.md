@@ -634,13 +634,16 @@ frame's units, the gains, and the nearest bracket as `--target`), and replays th
 the knobs (`--brightness`, `--tint`, `--warmth`) keeps the recorded `A`.
 
 **The density output's CLF prints the same print.** A density output with `--print` on a TriLED bundle runs the
-print's search for each material it writes a CLF for (about 8 inferences and 9 s each), and that material's CLF
+print's search for each material it writes a CLF for (about 8 inferences and 9 s each on wp0, a 96-core x86
+machine; `--print all` runs eight), and that material's CLF
 carries its result in the existing nodes: the first matrix's mid grey and offsets from the curve's grey at the
 search's `A` (with its E), the density offsets from its g and b, the slopes from the curve's tangent at `A` times
-`1 + b_c` of the nearest bracket, and the media-relative white. The scene's search still runs first: the file's
+`1 + b_c` (the bracket term, `print_tilt_at`, one rule for the picture and the CLF), and the media-relative white. The scene's search still runs first: the file's
 `suggested_balance` records it, as without `--print`. A density output without `--print` runs no print search. The
 print's given values (a picture's `cli_equivalent`: `--print_a`, `--target`, `-E`, `--gain_g`, `--gain_b`) set every
-material's CLF numbers in place of its search, the densities staying as read: the CLF written from a print picture's
+material's CLF numbers in place of its search, for the one material whose picture they came from (more than one
+material is refused, and so is a white-light bundle, whose density output takes none of them), the densities
+staying as read and the file carrying no `suggested_balance` (no scene search ran): the CLF written from a print picture's
 `cli_equivalent` equals the one the Auto density run wrote, byte for byte. The density file's metadata lists each
 material's `mid_grey_a` and gains. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
 the picture (CIEDE2000 at 1000 px).

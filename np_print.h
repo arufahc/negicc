@@ -118,6 +118,11 @@ struct DensityRecord {
   struct PrintSearch {
     double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
     std::string bracket;
+    bool given = false;                 // given values (a print's cli_equivalent), not a search
+    bool converged = false;
+    int steps = 0;
+    double last_move[3] = {0, 0, 0};    // |dA| in stops, |dg|, |db| of the search's last step
+    double above_knee = 0.0;            // the crop's share above the knee at E = 1
   };
   std::map<std::string, PrintSearch> print_search;
 };
@@ -261,6 +266,9 @@ struct FramePrint {
   // and its gains, which the CLF's balance applies in place of the picture conversion's.
   bool print_searched = false;
   double a = NAN, gain_g = 1.0, gain_b = 1.0;
+  bool given = false, converged = false;
+  int steps = 0;
+  double last_move[3] = {0, 0, 0}, above_knee = 0.0;
   double grey_density = 0.70;
 };
 // The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
@@ -358,6 +366,15 @@ void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
 void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
 // The bracket whose mid grey is nearest A (null without brackets).
 const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
+// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: the tilt of the bracket nearest
+// A (kPrintTiltLinear false), or the tilt linear in A between the two neighbouring brackets, held beyond the end ones
+// (kPrintTiltLinear true; the continuous-slopes experiment's "linear", proposed to the owner). At a bracket's own A_mid
+// both give that bracket's tilt. a_mid and tilt per bracket, in any order; zeros without brackets.
+constexpr bool kPrintTiltLinear = false;
+void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
+                   double t[3]);
+// The same from a bundle's density brackets.
+void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
 // The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
 // curve has it. A print CLF of a narrow-band bundle takes it as the frame's mid grey (frame_print).
 void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
@@ -406,6 +423,7 @@ struct PrintContinuum {
   std::vector<double> a_mid;                  // per bundle.targets, in its order
   std::vector<std::array<double, 3>> tilt;    // per bundle.targets
   int nearest(double a) const;                // the bracket whose A_mid is nearest A (the first of a tie)
+  void tilt_at(double a, double t[3]) const;  // print_tilt_at over these brackets
   PrintCurves curves_at(double a) const;
   void set_curves_at(double a, ParsedFilmProfile& prof) const;
   double green_apd(double dl) const;          // G_green at light density dl

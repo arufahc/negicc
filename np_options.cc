@@ -366,6 +366,12 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
+  parser.add_argument("--check_renderer")
+    .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
+          "curve fit and the tone plan through a pass-through renderer that forwards each pass to the CPU and counts "
+          "it, count every pass of theirs that runs outside it, and print both; exit 1 when one does. The output must "
+          "equal the conversion without it, bit for bit (tools/check_renderer.sh).")
+    .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "
           "of this frame to this JSON file and stop without converting. Renders every metered bracket at its metered "
@@ -465,6 +471,7 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
+  o.check_renderer = parser.get<bool>("--check_renderer");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;
@@ -723,7 +730,7 @@ int parse_options(int ac, char* av[], Options& o) {
   if (parser.is_used("--print_a")) {
     o.print_a = parser.get<double>("--print_a");
     if (!std::isfinite(o.print_a) || !parser.is_used("--print")) {
-      log_error("--print_a takes a finite mid grey and needs --print with a picture output\n");
+      log_error("--print_a takes a finite mid grey and needs --print\n");
       return 1;
     }
   }
@@ -783,6 +790,11 @@ int parse_options(int ac, char* av[], Options& o) {
   // print CLFs' numbers on a density output, in place of each material's print search; the densities stay as read.
   o.density_print_given = !o.prints.empty() && std::isfinite(o.print_a) && o.target_given && o.exposure_given &&
                           o.gain_g_given && o.gain_b_given;
+  if (o.density_print_given && (o.prints.size() != 1 || o.prints.front() == "all")) {
+    log_error("A print's given values (--print_a with --target, -E and the gains) belong to the one material whose "
+              "picture they came from: give that material alone to --print\n");
+    return 1;
+  }
   if (!o.prints.empty() && std::isfinite(o.print_a) && !o.density_print_given) {
     log_error("--print_a on a density output needs --target, -E, --gain_g and --gain_b with it (a print's "
               "cli_equivalent): they set the print CLFs' numbers\n");

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -651,7 +652,8 @@ struct ClipStats {
 std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const InnerCrop& crop_in,
                                               const std::vector<float>& matrices, float knee,
                                               const ProfileData& prof, const float ceil_rgb[3],
-                                              float shoulder = 1.0f, uint64_t* max_hist = nullptr) {
+                                              float shoulder = 1.0f, uint64_t* max_hist = nullptr,
+                                              PreviewRenderer* renderer = nullptr) {
   const size_t n = matrices.size() / 9;
   std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
@@ -677,7 +679,11 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
     ha.ceil_lin[c] = negicc::srgb_decode(std::max(0.0f, (thr_u8 - 0.5f) / 255.0f));
   }
   ha.out = hc_out.data();
-  negicc::cpu_highlight_clip(ha);
+  if (renderer) {
+    renderer->highlight_clip(ha);
+  } else {
+    negicc::cpu_highlight_clip(ha);
+  }
   for (size_t c = 0; c < n; ++c) {
     res[c].exc[0] = hc_out[c * 5 + 0];
     res[c].exc[1] = hc_out[c * 5 + 1];
@@ -701,9 +707,22 @@ class SearchFrame {
   SearchFrame(const ProfileBundle& bundle, DinoV3Engine& engine, bool verbose, int max_steps, ParamSearchResult& out)
       : bundle_(bundle), engine_(engine), verbose_(verbose), max_steps_(std::max(1, max_steps)), out_(out) {}
 
+  // The passes over the frame (ParamSearchOptions::renderer; null: the CPU's). Set before set_frame.
+  void set_renderer(PreviewRenderer* renderer) { renderer_ = renderer; }
+
+  // A preview pass (render_preview, render_net_preview) through the renderer, or the CPU's.
+  void render(const negicc::RenderArgs& ra) {
+    if (renderer_) {
+      renderer_->render(ra);
+    } else {
+      negicc::cpu_render(ra);
+    }
+  }
+
   // Takes the upright frame view, its inner crop and the statistics.
   void set_frame(const negicc::RgbView& frame, float crop_ratio) {
     frame_ = frame;
+    if (renderer_) renderer_->bind_frame(frame_);
     crop_ = compute_inner_crop(frame.width, frame.height, crop_ratio);
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
   }
@@ -796,7 +815,7 @@ class SearchFrame {
     ra.cfg = make_pipeline_config(bundle_.targets[target_idx].film_prof.data, AUTO_KNEE, shoulder_of(params));
     ra.out_type = 1;
     ra.out = out.data();
-    negicc::cpu_render(ra);
+    render(ra);
     render_time_ += Clock::now() - t0;
   }
 
@@ -872,7 +891,7 @@ class SearchFrame {
     ra.cfg = make_pipeline_config(pd, AUTO_KNEE, shoulder_of(params));
     ra.out_type = 1;
     ra.out = full.data();
-    negicc::cpu_render(ra);
+    render(ra);
     const negicc::AspectPreservedShape sh =
         negicc::compute_aspect_preserved_shape(crop_.w, crop_.h, engine_.max_size(), engine_.patch_size());
     net_w = sh.target_w;
@@ -1115,7 +1134,8 @@ class SearchFrame {
     // The candidates share one shoulder (they differ in E, g, b around one render): the first one's. The clip
     // counts read the pre-shoulder value; only the median L* is post-shoulder.
     return measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data,
-                                  ceil, candidates.empty() ? shoulder_fixed_ : shoulder_of(candidates[0]));
+                                  ceil, candidates.empty() ? shoulder_fixed_ : shoulder_of(candidates[0]), nullptr,
+                                  renderer_);
   }
 
   // log2(E / e_max) of bracket target_idx's enclosure at E: the same quantity as the shoulder's q995 for green (the
@@ -1142,7 +1162,7 @@ class SearchFrame {
     std::vector<float> matrices(m, m + 9);
     std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
     measure_highlight_clip(frame_, crop_, matrices, AUTO_KNEE, bundle_.targets[target_idx].film_prof.data, kCeil,
-                           1.0f, hist.data());
+                           1.0f, hist.data(), renderer_);
     const float x_hi = shoulder_x_hi_from_hist(hist.data(), q995);
     render_time_ += Clock::now() - t0;
     return x_hi;
@@ -1170,6 +1190,7 @@ class SearchFrame {
   float frame_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // M_frame (ParamSearchResult)
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
+  PreviewRenderer* renderer_ = nullptr;   // ParamSearchOptions::renderer: null for the CPU's passes
   float shoulder_fixed_ = 1.0f;
   unsigned pin_mask_ = 0;
   float pin_e_ = 1.0f, pin_g_ = 1.0f, pin_b_ = 1.0f;
@@ -1282,15 +1303,15 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
 
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995, const double* film_base_rgb) {
+                           float* q995, const double* film_base_rgb, PreviewRenderer* renderer) {
   return measure_rolloff_x_hi(bundle, bundle.targets[target_idx].film_prof.data, frame, scan_shutter_s, scan_iso, e, g,
-                              b, crop_ratio, q995, film_base_rgb);
+                              b, crop_ratio, q995, film_base_rgb, renderer);
 }
 
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof_in,
                            const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995, const double* film_base_rgb) {
+                           float* q995, const double* film_base_rgb, PreviewRenderer* renderer) {
   ProfileData prof;
   static_cast<negicc::ProfileData&>(prof) = prof_in;
   ParamSearchOptions base_opts;
@@ -1303,8 +1324,9 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
   negicc::candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+  if (renderer) renderer->bind_frame(frame);
   measure_highlight_clip(frame, compute_inner_crop(frame.width, frame.height, crop_ratio), std::vector<float>(m, m + 9),
-                         AUTO_KNEE, prof, kCeil, 1.0f, hist.data());
+                         AUTO_KNEE, prof, kCeil, 1.0f, hist.data(), renderer);
   return shoulder_x_hi_from_hist(hist.data(), q995);
 }
 
@@ -1433,9 +1455,51 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // bracket or pulls E back where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket,
 // (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
 // white-light stages (run_white_light_fit).
+namespace {
+// Inside an entry point of the bundle search, process-wide, so that a pass started on another thread (which the
+// contract does not allow) is counted too.
+std::atomic<int> g_audit_depth{0};
+thread_local bool t_in_renderer = false;  // inside PassThroughRenderer's forwarding, on this thread
+struct AuditScope {
+  AuditScope() { ++g_audit_depth; }
+  ~AuditScope() { --g_audit_depth; }
+};
+// Marks PassThroughRenderer's forwarding, and clears the mark when the forwarded pass returns or throws.
+struct InRenderer {
+  InRenderer() { t_in_renderer = true; }
+  ~InRenderer() { t_in_renderer = false; }
+};
+}  // namespace
+
+PassAudit& pass_audit() {
+  static PassAudit a;
+  return a;
+}
+
+void audit_cpu_pass(int kind) {
+  (void)kind;
+  if (g_audit_depth.load() > 0 && !t_in_renderer) pass_audit().outside++;
+}
+
+void PassThroughRenderer::bind_frame(const negicc::RgbView& frame) {
+  (void)frame;
+  pass_audit().binds++;
+}
+void PassThroughRenderer::render(const negicc::RenderArgs& a) {
+  pass_audit().renders++;
+  const InRenderer in_renderer;
+  negicc::cpu_render(a);
+}
+void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
+  pass_audit().clips++;
+  const InRenderer in_renderer;
+  negicc::cpu_highlight_clip(a);
+}
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s_in, double scan_iso_in, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const float scan_shutter_s = (float)scan_shutter_s_in;
   const float scan_iso = (float)scan_iso_in;
   const Clock::time_point t_start = Clock::now();
@@ -1445,6 +1509,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     return false;
   }
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
+  fr.set_renderer(opts.renderer);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
   fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
@@ -2063,6 +2128,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
                            const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                            const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
                            const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   out = curves;
   scale[0] = scale[1] = 1.0f;
   if (bundle.has_crosstalk || target_idx < 0 || target_idx >= (int)bundle.targets.size()) {
@@ -2530,6 +2596,7 @@ class WhiteLightFit {
       return false;
     }
     const Clock::time_point t_fit0 = Clock::now();
+    fr_.set_renderer(opts_.renderer);
     fr_.set_shoulder(1.0f, true);
     fr_.set_frame(frame_, opts_.crop_ratio);
     const FrameStats& stats = fr_.stats();
@@ -2591,16 +2658,25 @@ class WhiteLightFit {
     const WhiteLightRolloff rolloff = [&](const negicc::ProfileData& p, const negicc::InputCurves&, float e, float g,
                                           float b, float* q995) {
       return measure_rolloff_x_hi(bundle_, p, frame_, scan_shutter_s_, scan_iso_, e, g, b, opts_.crop_ratio, q995,
-                                  opts_.film_base_rgb_d);
+                                  opts_.film_base_rgb_d, opts_.renderer);
     };
     if (!fit_white_light_curves(d, fit_opts_, rolloff, out_)) return false;
     // The bracket's tables composed with the curves in place (apply_input_curves): every later use of the bracket
     // renders through them.
+    // A pass that throws after this (the tone plan's render) leaves the bracket's own tables restored.
+    const std::vector<float> own_g = prof.in_trc[1], own_b = prof.in_trc[2];
     apply_input_curves(prof, out_.fit.curves);
     // The tone stage's plan: the heads read the image the stage will be applied to, the final state's preview, at one
     // inference (the search's intent preview has the pre-fit colour, and is the fallback when that inference fails).
     out_.tone.features = "search";
-    plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features, out_.tone);
+    try {
+      plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features, out_.tone);
+    } catch (...) {
+      prof.in_trc[1] = own_g;
+      prof.in_trc[2] = own_b;
+      prof.rebind_pointers();
+      throw;
+    }
     out_.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
     return true;
   }
@@ -2631,6 +2707,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                          int encoding, const ToneHead* tone_head,
                          WhiteLightFitResult& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
 }
@@ -2638,6 +2715,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
 bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                           double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                           const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const int idx = res.target_idx;
   if (idx < 0 || idx >= (int)bundle.targets.size()) {
     std::cerr << "ERROR! The tone stage needs the bracket of a finished search" << std::endl;
@@ -2646,6 +2724,7 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   out = ToneStagePlan{};
   ParamSearchResult scratch;  // the inference and timings of the frame below; not reported
   SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
+  fr.set_renderer(opts.renderer);
   fr.set_shoulder(1.0f, true);
   fr.set_frame(frame, opts.crop_ratio);
   const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
@@ -2656,7 +2735,7 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   float q995 = 0.0f;
   p.shoulder = encoding == ENCODE_SRGB
                    ? measure_rolloff_x_hi(bundle, pd, frame, scan_shutter_s, scan_iso, p.e, p.g, p.b, opts.crop_ratio,
-                                          &q995, opts.film_base_rgb_d)
+                                          &q995, opts.film_base_rgb_d, opts.renderer)
                    : 1.0f;
   // The preview renders in the search's units: a TriLED search runs on M_frame / e_norm with E in the reference's
   // units, while res.params.e is in this frame's (white light searches in the frame's units).
@@ -2669,6 +2748,7 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                              const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
   if (bundle.targets.empty() || !bundle.has_crosstalk || !print_base.data.has_profile || !cp.set_curves_at || !cp.green_apd ||
@@ -2684,6 +2764,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   ParsedFilmProfile& prof = pb.targets[0].film_prof;
   out = ParamSearchResult{};
   SearchFrame fr(pb, engine, opts.verbose, opts.max_steps, out);
+  fr.set_renderer(opts.renderer);
   fr.set_shoulder(1.0f, false);   // a print keeps no highlight shoulder (the paper rolls off to its white)
   fr.set_frame(frame, opts.crop_ratio);
   const FrameScale scale = frame_scale(pb, (float)scan_shutter_s, (float)scan_iso, opts);
@@ -2895,23 +2976,29 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
   }
   cp.set_curves_at(best_a, prof);
-  {   // the share of the crop with a channel above 1 (linear) before the cut: the print keeps no shoulder
+  {   // the crop's share with a channel above 1 that the print cuts (above 1.002 linear, a margin over the paper's
+      // white, whose sRGB values relative to the paper are 1.0001, 1.0000, 0.9994), and its share at the paper's white
     float mb[9];
     negicc::candidate_matrix(fr.input_matrix(), best.e, best.g, best.b, mb);
-    std::vector<float> hc(5, 0.0f);
     const InnerCrop& c0 = fr.inner_crop();
-    negicc::HighlightClipArgs ha{};
-    ha.in_view = &frame;
-    ha.width = frame.width;
-    ha.height = frame.height;
-    ha.crop = {c0.x0, c0.y0, c0.w, c0.h};
-    ha.matrices = mb;
-    ha.n = 1;
-    ha.cfg = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
-    for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = 1.0f + 1e-4f;
-    ha.out = hc.data();
-    negicc::cpu_highlight_clip(ha);
-    for (int c = 0; c < 3; ++c) cr.above_white_pct[c] = hc[c];
+    auto share = [&](float ceil, float out3[3]) {
+      std::vector<float> hc(5, 0.0f);
+      negicc::HighlightClipArgs ha{};
+      ha.in_view = &frame;
+      ha.width = frame.width;
+      ha.height = frame.height;
+      ha.crop = {c0.x0, c0.y0, c0.w, c0.h};
+      ha.matrices = mb;
+      ha.n = 1;
+      ha.cfg = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
+      for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = ceil;
+      ha.out = hc.data();
+      if (opts.renderer) opts.renderer->highlight_clip(ha); else negicc::cpu_highlight_clip(ha);
+      for (int c = 0; c < 3; ++c) out3[c] = hc[c];
+    };
+    if (opts.renderer) opts.renderer->bind_frame(frame);
+    share(1.002f, cr.above_white_pct);
+    share(0.999f, cr.at_white_pct);
   }
   int nearest = 0;
   for (size_t i = 0; i < cp.a_mid.size(); ++i)

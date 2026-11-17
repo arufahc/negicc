@@ -3,7 +3,10 @@
 converted twice by neg_process, as a print picture (-P srgb --print <material>) and as a density file with the print's
 CLF (-P apd --print <material>); the CLF is applied here to the density file and the result compared with the picture,
 CIEDE2000 per pixel at 1000 px on the long side. Passes when the mean is within --mean and the 95th percentile within
---p95. Needs numpy and opencv-python.
+--p95; the two differ where the scan is thinner than the film base (the picture passes the soft knee there and the
+density file does not), so the print search's share of the crop above the knee is printed beside each result. Run it
+on two or three TriLED frames before a change to the print's search, its CLF or the print ICC is merged. Needs numpy
+and opencv-python.
 
     python3 tools/check_print_clf.py --neg-process bin_out/neg_process --print kodak_portra_endura \\
         -- --film_stock portra400 --light_source tri --roi auto scan.ARW
@@ -156,8 +159,11 @@ def main():
             mean, p95 = float(de.mean()), float(np.percentile(de, 95))
             good = mean <= a.mean and p95 <= a.p95
             ok &= good
+            import json
+            knee = json.load(open(pic + ".json"))["profile"]["print"].get("search", {}).get("above_knee")
             print(f"{m}: picture against the CLF on the density file, CIEDE2000 mean {mean:.3f}, 95th percentile "
-                  f"{p95:.3f} ({'within' if good else 'OUTSIDE'} {a.mean} / {a.p95})")
+                  f"{p95:.3f} ({'within' if good else 'OUTSIDE'} {a.mean} / {a.p95}); crop above the knee at E = 1: "
+                  f"{100 * knee:.2f} %" if knee is not None else "")
     sys.exit(0 if ok else 1)
 
 

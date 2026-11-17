@@ -944,6 +944,11 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.a = own->second.a;
     p.gain_g = own->second.g;
     p.gain_b = own->second.b;
+    p.given = own->second.given;
+    p.converged = own->second.converged;
+    p.steps = own->second.steps;
+    for (int c = 0; c < 3; ++c) p.last_move[c] = own->second.last_move[c];
+    p.above_knee = own->second.above_knee;
   }
   const DensityBracket* bracket = nullptr;
   for (const DensityBracket& b : bundle.density_brackets) {
@@ -968,8 +973,9 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     // A, and the tilt of the bracket nearest A.
     curve_grey_at(bundle, p.a, light);
     curve_slopes_at(bundle, p.a, p.slopes);
-    const DensityBracket* nb = nearest_bracket(bundle, p.a);
-    for (int c = 0; c < 3; ++c) p.slopes[c] *= 1.0 + (nb ? nb->tilt[c] : 0.0);
+    double t[3];
+    print_tilt_at(bundle, p.a, t);
+    for (int c = 0; c < 3; ++c) p.slopes[c] *= 1.0 + t[c];
     p.from_curve = true;
   } else if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
     curve_grey(bundle, *bracket, light);
@@ -1217,7 +1223,8 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
           {"to_print_density_for", p.to_print_for},
           {"bracket", p.bracket},
-          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
+          {"bracket_from", p.print_searched && p.given ? "given values (a print picture's cli_equivalent)"
+                           : p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
                            : p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
@@ -1229,6 +1236,11 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
       if (p.print_searched) {
         one["mid_grey_a"] = p.a;
         one["gains"] = {p.gain_g, p.gain_b};
+        if (!p.given) {
+          one["search"] = {{"converged", p.converged}, {"steps", p.steps},
+                           {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
+                           {"above_knee", p.above_knee}};
+        }
       }
       materials[p.id] = one;
     }
@@ -1343,6 +1355,37 @@ void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]) {
 
 void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]) {
   curve_grey_at(bundle, bracket_mid_apd(bundle, bracket), light);
+}
+
+void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
+                   double t[3]) {
+  for (int c = 0; c < 3; ++c) t[c] = 0.0;
+  if (a_mid.empty() || a_mid.size() != tilt.size()) return;
+  std::vector<size_t> o(a_mid.size());
+  for (size_t i = 0; i < o.size(); ++i) o[i] = i;
+  std::sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
+  if (!kPrintTiltLinear || o.size() == 1) {
+    size_t k = o[0];
+    for (size_t i : o)
+      if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = i;
+    for (int c = 0; c < 3; ++c) t[c] = tilt[k][c];
+    return;
+  }
+  size_t k = 0;   // the segment o[k], o[k + 1]
+  while (k + 2 < o.size() && a > a_mid[o[k + 1]]) ++k;
+  const size_t i = o[k], j = o[k + 1];
+  const double f = std::clamp((a - a_mid[i]) / (a_mid[j] - a_mid[i]), 0.0, 1.0);
+  for (int c = 0; c < 3; ++c) t[c] = tilt[i][c] + f * (tilt[j][c] - tilt[i][c]);
+}
+
+void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]) {
+  std::vector<double> am;
+  std::vector<std::array<double, 3>> tl;
+  for (const DensityBracket& b : bundle.density_brackets) {
+    am.push_back(bracket_mid_apd(bundle, b));
+    tl.push_back({b.tilt[0], b.tilt[1], b.tilt[2]});
+  }
+  print_tilt_at(am, tl, a, t);
 }
 
 const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a) {
@@ -1614,6 +1657,8 @@ bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) 
   return true;
 }
 
+void PrintContinuum::tilt_at(double a, double t[3]) const { print_tilt_at(a_mid, tilt, a, t); }
+
 int PrintContinuum::nearest(double a) const {
   int k = 0;
   for (size_t i = 1; i < a_mid.size(); ++i)
@@ -1623,7 +1668,10 @@ int PrintContinuum::nearest(double a) const {
 
 PrintCurves PrintContinuum::curves_at(double a) const {
   static const double zero[3] = {0.0, 0.0, 0.0};
-  return bracket_print_curves(g, paper, a, n0, a_mid.empty() ? zero : tilt[nearest(a)].data());
+  if (a_mid.empty()) return bracket_print_curves(g, paper, a, n0, zero);
+  double t[3];
+  tilt_at(a, t);
+  return bracket_print_curves(g, paper, a, n0, t);
 }
 
 void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof) const {

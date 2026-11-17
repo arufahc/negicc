@@ -114,7 +114,60 @@ enum class ClipFallbackOutcome {
 };
 const char* to_string(ClipFallbackOutcome outcome);
 
+// The passes over the frame the bundle search renders (negicc-station designs/plan_search_binding.md): the preview of
+// the inner crop and the clip statistics (the roll-off's 99.5 % point, white-clip shares). The defaults are
+// negicc::cpu_render and negicc::cpu_highlight_clip; a caller that renders the same pipeline elsewhere (the station's
+// GPU) overrides them. search_conversion_params, run_white_light_fit (the curve fit, its roll-off and its tone plan),
+// plan_auto_tone_stage and reanchor_input_curves send every pass of theirs through it; the passes are serial, called
+// from the caller's thread one at a time.
+//
+// What stays and what changes between calls:
+// - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same
+//   frame, by each roll-off measurement (measure_rolloff_x_hi). The frame's pixels and the view given to bind_frame
+//   stay valid until the search returns.
+// - RenderArgs::in_view and HighlightClipArgs::in_view point to views made for the call (crops of the bound frame): a
+//   renderer reads them during the call and keeps no pointer to them.
+// - The bracket's 3D table (cfg's clut) and output tables are the bundle's and stay for the whole search. The three
+//   input tables (cfg's in_trc) may change between any two calls, in place at the same address (the curve fit's
+//   re-meter passes) or freed and replaced (when the fit composes its curves into the bracket): a renderer reads them
+//   on every call, or compares their contents, and never keys a copy by their address.
+// - The search owns every output buffer: out is sized before each call and must be filled before it returns.
+//
+// A renderer may refuse a frame it cannot read (a CFA view with its private flat-field mapping, say) by throwing from
+// bind_frame. A failed pass throws: the exception leaves the search, the fit, the tone plan or the roll-off measurement
+// to the caller (none of them catches it), so a caller can tell a render failure from every other one and run the
+// search again on the CPU. The bundle is then as it was given: run_white_light_fit restores the bracket's own input
+// tables when a pass throws after it has composed its curves into them. The result structures (ParamSearchResult,
+// WhiteLightFitResult, ToneStagePlan) are then partly filled, and a caller must not read them.
+//
+// neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
+// pass that runs outside it (PassAudit), on any thread; its picture must equal the conversion without it, bit for bit.
+// tools/check_renderer.sh runs it, and must be run, on a TriLED scan and on a white-light scan with the curve fit,
+// before a change to the search, the curve fit, the tone plan or this interface is merged.
+struct PreviewRenderer {
+  virtual ~PreviewRenderer() = default;
+  virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }
+  virtual void render(const negicc::RenderArgs& a) { negicc::cpu_render(a); }
+  virtual void highlight_clip(const negicc::HighlightClipArgs& a) { negicc::cpu_highlight_clip(a); }
+};
+
+// The check aid (neg_process --check_renderer): the passes the bundle search's entry points run through a renderer
+// and outside it. AuditScope marks those entry points; a CPU pass inside one that does not come through
+// PassThroughRenderer is counted as outside (negicc::cpu_pass_hook).
+struct PassAudit {
+  long binds = 0, renders = 0, clips = 0, outside = 0;
+};
+PassAudit& pass_audit();
+void audit_cpu_pass(int kind);   // the hook neg_process sets in negicc::cpu_pass_hook
+struct PassThroughRenderer : PreviewRenderer {
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
+};
+
 struct ParamSearchOptions {
+  // The passes over the frame (PreviewRenderer); null: the CPU's, as neg_process runs.
+  PreviewRenderer* renderer = nullptr;
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
   int max_steps = 8;         // the most steps of each bracket's fixed-point loop (neg_process's --dino_iters)
   // A film base measured on this capture (crosstalk-corrected RGB) instead of the bundle's; null for the bundle's. Set
@@ -280,10 +333,12 @@ void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView&
 // as ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr,
+                           PreviewRenderer* renderer = nullptr);
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
-                           float* q995 = nullptr, const double* film_base_rgb = nullptr);
+                           float* q995 = nullptr, const double* film_base_rgb = nullptr,
+                           PreviewRenderer* renderer = nullptr);
 
 struct KnobSolveResult {
   float e = 1.0f, g = 1.0f, b = 1.0f;
@@ -334,7 +389,8 @@ struct ContinuousPrintResult {
   bool converged = false;
   float above_knee = 0.0f;           // the share of the inner crop above the knee at E = 1, g = b = 1
   float wish_mean_l = 0.0f;          // the held wish's mean L*
-  float above_white_pct[3] = {0, 0, 0};   // the share of the crop with the channel above 1 at the result, before the cut
+  float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut
+  float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above
   bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
   float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
 };

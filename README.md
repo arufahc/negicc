@@ -262,8 +262,9 @@ continuous level, then the colour balance, and the paper's own curve sets the to
 The print is shown relative to its paper, the paper's base at the display's white. A print profile given as a file
 gets its ICC computed. With a density output, each material's CLF prints the frame as the picture does, except where the scan is
 thinner than the film base (the picture passes the soft knee there and the density file does not): `--print` runs the print's
-search for each material it writes a CLF for (about 9 s each), and a print's `cli_equivalent` given to a density
-output writes the same CLF. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
+search for each material it writes a CLF for (about 9 s each on a 96-core x86 machine; `--print all`, eight
+searches, about 70 s), and a print's `cli_equivalent` given to a density output writes the same CLF for the one
+material whose picture it came from. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
 set saved before it had a grey balance curve cannot print.
 
 One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search

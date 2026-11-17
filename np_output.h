@@ -145,7 +145,7 @@ struct Sidecar {
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;
-  float print_above_white[3] = {0, 0, 0};
+  float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
   bool print_a0_at_end = false;
   float print_last_move[3] = {0, 0, 0};
 };
