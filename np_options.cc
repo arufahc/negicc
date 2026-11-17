@@ -358,6 +358,12 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
+  parser.add_argument("--check_renderer")
+    .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
+          "curve fit and the tone plan through a pass-through renderer that forwards each pass to the CPU and counts "
+          "it, count every pass of theirs that runs outside it, and print both; exit 1 when one does. The output must "
+          "equal the conversion without it, bit for bit (tools/check_renderer.sh).")
+    .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "
           "of this frame to this JSON file and stop without converting. Renders every metered bracket at its metered "
@@ -457,6 +463,7 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
+  o.check_renderer = parser.get<bool>("--check_renderer");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;

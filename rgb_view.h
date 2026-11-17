@@ -300,6 +300,10 @@ struct PixelShiftMergeArgs {
     size_t cfa_pitch = 0;  // 0 defaults to src_w
 };
 
+// Called at the start of every cpu_render and cpu_highlight_clip when set (kind 0: render, 1: clip); null by default.
+// A check aid: neg_process --check_renderer counts with it the passes the bundle search runs outside its renderer
+// (multi_target_optimizer.h PassAudit).
+extern void (*cpu_pass_hook)(int kind);
 void cpu_render(const RenderArgs& a);
 void cpu_intent_loss(const IntentLossArgs& a);
 void cpu_highlight_clip(const HighlightClipArgs& a);

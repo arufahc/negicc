@@ -117,15 +117,49 @@ const char* to_string(ClipFallbackOutcome outcome);
 // The passes over the frame the bundle search renders (negicc-station designs/plan_search_binding.md): the preview of
 // the inner crop and the clip statistics (the roll-off's 99.5 % point, white-clip shares). The defaults are
 // negicc::cpu_render and negicc::cpu_highlight_clip; a caller that renders the same pipeline elsewhere (the station's
-// GPU) overrides them. The search owns every buffer: out is sized before each call and must be filled before it
-// returns, and in_view and cfg's tables are valid for the whole search, so a renderer may keep copies keyed by them
-// until the search returns and no pointer after. bind_frame is called once per search, before any pass, with the
-// frame the passes crop. A failed pass throws std::runtime_error; the search then stops and returns false.
+// GPU) overrides them. search_conversion_params, run_white_light_fit (the curve fit, its roll-off and its tone plan),
+// plan_auto_tone_stage and reanchor_input_curves send every pass of theirs through it; the passes are serial, called
+// from the caller's thread one at a time.
+//
+// What stays and what changes between calls:
+// - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same
+//   frame, by each roll-off measurement (measure_rolloff_x_hi). The frame's pixels and the view given to bind_frame
+//   stay valid until the search returns.
+// - RenderArgs::in_view and HighlightClipArgs::in_view point to views made for the call (crops of the bound frame): a
+//   renderer reads them during the call and keeps no pointer to them.
+// - The bracket's 3D table (cfg's clut) and output tables are the bundle's and stay for the whole search. The three
+//   input tables (cfg's in_trc) may change between any two calls, in place at the same address (the curve fit's
+//   re-meter passes) or freed and replaced (when the fit composes its curves into the bracket): a renderer reads them
+//   on every call, or compares their contents, and never keys a copy by their address.
+// - The search owns every output buffer: out is sized before each call and must be filled before it returns.
+//
+// A renderer may refuse a frame it cannot read (a CFA view with its private flat-field mapping, say) by throwing from
+// bind_frame. A failed pass throws: the exception leaves the search, the fit, the tone plan or the roll-off measurement
+// to the caller (none of them catches it), so a caller can tell a render failure from every other one and run the
+// search again on the CPU. The bundle is then as it was given: run_white_light_fit restores the bracket's own input
+// tables when a pass throws after it has composed its curves into them.
+//
+// neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
+// pass that runs outside it (PassAudit); its picture must equal the conversion without it, bit for bit.
 struct PreviewRenderer {
   virtual ~PreviewRenderer() = default;
   virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }
   virtual void render(const negicc::RenderArgs& a) { negicc::cpu_render(a); }
   virtual void highlight_clip(const negicc::HighlightClipArgs& a) { negicc::cpu_highlight_clip(a); }
+};
+
+// The check aid (neg_process --check_renderer): the passes the bundle search's entry points run through a renderer
+// and outside it. AuditScope marks those entry points; a CPU pass inside one that does not come through
+// PassThroughRenderer is counted as outside (negicc::cpu_pass_hook).
+struct PassAudit {
+  long binds = 0, renders = 0, clips = 0, outside = 0;
+};
+PassAudit& pass_audit();
+void audit_cpu_pass(int kind);   // the hook neg_process sets in negicc::cpu_pass_hook
+struct PassThroughRenderer : PreviewRenderer {
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
 };
 
 struct ParamSearchOptions {

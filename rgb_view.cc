@@ -681,7 +681,10 @@ void resample_linear_rgb16(
 
 // ---- CPU Render & Scoring Kernels --------------------------------------------------------------------------
 
+void (*cpu_pass_hook)(int kind) = nullptr;
+
 void cpu_render(const RenderArgs& a) {
+    if (cpu_pass_hook) cpu_pass_hook(0);
     const long long n = (long long)a.width * a.height;
     const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     if (!a.stats) {
@@ -872,6 +875,7 @@ void cpu_intent_loss(const IntentLossArgs& a) {
 }
 
 void cpu_highlight_clip(const HighlightClipArgs& a) {
+    if (cpu_pass_hook) cpu_pass_hook(1);
     if (a.n <= 0) return;
     const bool use_view = (a.in_view != nullptr && a.in_view->valid());
     const InnerCrop crop = (a.crop.w > 0 && a.crop.h > 0)

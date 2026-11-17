@@ -1454,9 +1454,46 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // bracket or pulls E back where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket,
 // (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
 // white-light stages (run_white_light_fit).
+namespace {
+thread_local int t_audit_depth = 0;      // inside an entry point of the bundle search
+thread_local bool t_in_renderer = false;  // inside PassThroughRenderer's forwarding
+struct AuditScope {
+  AuditScope() { ++t_audit_depth; }
+  ~AuditScope() { --t_audit_depth; }
+};
+}  // namespace
+
+PassAudit& pass_audit() {
+  static PassAudit a;
+  return a;
+}
+
+void audit_cpu_pass(int kind) {
+  (void)kind;
+  if (t_audit_depth > 0 && !t_in_renderer) pass_audit().outside++;
+}
+
+void PassThroughRenderer::bind_frame(const negicc::RgbView& frame) {
+  (void)frame;
+  pass_audit().binds++;
+}
+void PassThroughRenderer::render(const negicc::RenderArgs& a) {
+  pass_audit().renders++;
+  t_in_renderer = true;
+  negicc::cpu_render(a);
+  t_in_renderer = false;
+}
+void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
+  pass_audit().clips++;
+  t_in_renderer = true;
+  negicc::cpu_highlight_clip(a);
+  t_in_renderer = false;
+}
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s_in, double scan_iso_in, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const float scan_shutter_s = (float)scan_shutter_s_in;
   const float scan_iso = (float)scan_iso_in;
   const Clock::time_point t_start = Clock::now();
@@ -2085,6 +2122,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
                            const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                            const ParamSearchOptions& opts, const negicc::InputCurves& curves, const float from[3],
                            const float to[3], float max_dev_stops, negicc::InputCurves& out, float scale[2]) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   out = curves;
   scale[0] = scale[1] = 1.0f;
   if (bundle.has_crosstalk || target_idx < 0 || target_idx >= (int)bundle.targets.size()) {
@@ -2614,16 +2652,25 @@ class WhiteLightFit {
     const WhiteLightRolloff rolloff = [&](const negicc::ProfileData& p, const negicc::InputCurves&, float e, float g,
                                           float b, float* q995) {
       return measure_rolloff_x_hi(bundle_, p, frame_, scan_shutter_s_, scan_iso_, e, g, b, opts_.crop_ratio, q995,
-                                  opts_.film_base_rgb_d);
+                                  opts_.film_base_rgb_d, opts_.renderer);
     };
     if (!fit_white_light_curves(d, fit_opts_, rolloff, out_)) return false;
     // The bracket's tables composed with the curves in place (apply_input_curves): every later use of the bracket
     // renders through them.
+    // A pass that throws after this (the tone plan's render) leaves the bracket's own tables restored.
+    const std::vector<float> own_g = prof.in_trc[1], own_b = prof.in_trc[2];
     apply_input_curves(prof, out_.fit.curves);
     // The tone stage's plan: the heads read the image the stage will be applied to, the final state's preview, at one
     // inference (the search's intent preview has the pre-fit colour, and is the fallback when that inference fails).
     out_.tone.features = "search";
-    plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features, out_.tone);
+    try {
+      plan_tone_on_render(fr_, prof.data, out_.params, tone_head_, encoding_, tone_features, out_.tone);
+    } catch (...) {
+      prof.in_trc[1] = own_g;
+      prof.in_trc[2] = own_b;
+      prof.rebind_pointers();
+      throw;
+    }
     out_.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t_fit0).count();
     return true;
   }
@@ -2654,6 +2701,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                          int encoding, const ToneHead* tone_head,
                          WhiteLightFitResult& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
 }
@@ -2661,6 +2709,7 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
 bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                           double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                           const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const int idx = res.target_idx;
   if (idx < 0 || idx >= (int)bundle.targets.size()) {
     std::cerr << "ERROR! The tone stage needs the bracket of a finished search" << std::endl;
@@ -2680,7 +2729,7 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   float q995 = 0.0f;
   p.shoulder = encoding == ENCODE_SRGB
                    ? measure_rolloff_x_hi(bundle, pd, frame, scan_shutter_s, scan_iso, p.e, p.g, p.b, opts.crop_ratio,
-                                          &q995, opts.film_base_rgb_d)
+                                          &q995, opts.film_base_rgb_d, opts.renderer)
                    : 1.0f;
   // The preview renders in the search's units: a TriLED search runs on M_frame / e_norm with E in the reference's
   // units, while res.params.e is in this frame's (white light searches in the frame's units).
