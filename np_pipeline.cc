@@ -1881,6 +1881,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           opts.pin_b = o.gain_b;
         }
         opts.probe_path = o.probe_intent;
+        if (o.tone_in_search && s.tone_active && s.tone_head.loaded()) opts.tone_in_search = &s.tone_head;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
         if (!bundle_search(frame, scan_shutter_s, scan_iso, opts)) {
@@ -2183,6 +2184,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
       opts.probe_path = o.probe_intent;
+        if (o.tone_in_search && s.tone_active && s.tone_head.loaded()) opts.tone_in_search = &s.tone_head;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
       if (!bundle_search(search_half_view, scan_shutter_s, scan_iso, opts)) {

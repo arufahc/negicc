@@ -34,6 +34,7 @@
 #include "dinov3_auto_solver.h"
 #include "dinov3_preprocess.h"
 #include "profile_bundle.h"
+#include "tone_stage.h"
 #include "nlohmann/json.hpp"
 
 const char* to_string(FixedPointStatus status) {
@@ -813,6 +814,7 @@ class SearchFrame {
     ra.height = crop_.h;
     ra.matrix = m;
     ra.cfg = make_pipeline_config(bundle_.targets[target_idx].film_prof.data, AUTO_KNEE, shoulder_of(params));
+    if (tone_head_ && plan_tone(target_idx, params)) ra.cfg.tone = negicc::ToneTable{tone_lut_.data(), kToneTableSize};
     ra.out_type = 1;
     ra.out = out.data();
     render(ra);
@@ -856,6 +858,27 @@ class SearchFrame {
     }
     return true;
   }
+
+  // --tone_in_search: the tone heads used to tone each preview (null: none).
+  void set_tone_in_search(const ToneHead* h) { tone_head_ = h; }
+  // The tone curve for a preview at params, planned on its untoned render (tone_in_search): its features from one
+  // inference, the heads' predictions, the curve solved on the network-size preview's descriptors (the designed moves).
+  // False (the preview stays untoned) when the features or the heads fail.
+  bool plan_tone(int target_idx, const ConversionParams& params) {
+    std::vector<uint8_t> pv;
+    int pw = 0, ph = 0;
+    render_net_preview(bundle_.targets[target_idx].film_prof.data, params, pv, pw, ph);
+    std::vector<float> mu, sg, tf;
+    if (!predict_net(pv, pw, ph, mu, sg, tf) || tf.size() != (size_t)ToneHead::kInDim) return false;
+    double mean[ToneHead::kTargets], sd[ToneHead::kTargets];
+    if (!tone_head_->run(tf.data(), mean, sd)) return false;
+    const ToneDescriptors d = tone_descriptors(pv.data(), (size_t)pw * ph);
+    const ToneCurve q = tone_plan(d, mean[ToneHead::kL2], mean[ToneHead::kL98], mean[ToneHead::kR9010], 1.0, nullptr);
+    tone_lut_ = tone_table(q);
+    ++tone_plans_;
+    return true;
+  }
+  int tone_plans() const { return tone_plans_; }
 
   // The neutral head's p per cell from the last predict() (empty without a neutral head).
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
@@ -1200,6 +1223,9 @@ class SearchFrame {
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
   std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
   std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
+  const ToneHead* tone_head_ = nullptr;   // --tone_in_search
+  std::vector<float> tone_lut_;           // the last planned curve's table
+  int tone_plans_ = 0;
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1510,6 +1536,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
   SearchFrame fr(bundle, engine, verbose, opts.max_steps, out);
   fr.set_renderer(opts.renderer);
+  fr.set_tone_in_search(opts.tone_in_search);
   auto name_of = [&](int target_idx) { return bundle.targets[target_idx].name; };
 
   fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop

@@ -85,7 +85,8 @@ struct Options {
   // goal harness (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
   // FILE and neg_process stops without converting.
   std::string probe_intent;
-  bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting pass-through renderer
+  bool check_renderer = false;
+  bool tone_in_search = false;    // --tone_in_search (experimental): the scene search's previews toned   // --check_renderer: the bundle search's passes through a counting pass-through renderer
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
   bool dino_iters_given = false;

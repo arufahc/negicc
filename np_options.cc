@@ -366,6 +366,11 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
+  parser.add_argument("--tone_in_search")
+    .help("Experimental (the print experiment's tone measurement): the bundle search's previews toned as the export "
+          "will be: each preview's tone curve planned on its untoned render by the tone heads (one more inference a "
+          "preview), and the network shown the toned preview. Needs the tone stage (-P srgb).")
+    .flag();
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
           "curve fit and the tone plan through a pass-through renderer that forwards each pass to the CPU and counts "
@@ -472,6 +477,7 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
   o.check_renderer = parser.get<bool>("--check_renderer");
+  o.tone_in_search = parser.get<bool>("--tone_in_search");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;

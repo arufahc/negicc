@@ -166,6 +166,11 @@ struct PassThroughRenderer : PreviewRenderer {
 };
 
 struct ParamSearchOptions {
+  // Experimental (neg_process --tone_in_search, the review's measurement c): the search's previews toned as the export
+  // will be. Each preview is rendered untoned, the tone heads read its features (one inference), the tone curve is
+  // planned on it (tone_plan, the designed moves, no clip-share step), and the preview the network is shown and the
+  // residual reads is the toned one. Null: untoned previews, as the search is.
+  const ToneHead* tone_in_search = nullptr;
   // The passes over the frame (PreviewRenderer); null: the CPU's, as neg_process runs.
   PreviewRenderer* renderer = nullptr;
   float crop_ratio = 0.90f;  // the frame's centred inner crop the statistics and the previews use
