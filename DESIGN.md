@@ -654,7 +654,7 @@ material is refused, and so is a white-light bundle, whose density output takes 
 staying as read and the file carrying no `suggested_balance` (no scene search ran): the CLF written from a print picture's
 `cli_equivalent` equals the one the Auto density run wrote, byte for byte. The density file's metadata lists each
 material's `mid_grey_a` and gains. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
-the picture (CIEDE2000 at 1000 px). Through a bundle carrying tilts the two agree as without (1004_0001 and 1004_0014, 0.36 ΔE00 mean).
+the picture (CIEDE2000 at 1000 px, the CLF applied at full resolution and both pictures then shrunk in linear light).
 
 **When the print's search cannot run.** `--print` with a picture output needs a TriLED bundle with the film's grey
 balance curve. A white-light bundle is refused ("--print with a picture output needs a TriLED bundle; on a
@@ -721,11 +721,13 @@ Vision 2393 slightly yellow); relative to the paper they render neutral, at the 
 - An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte, for a built-in material and for one given as a file, Vision 2383 (D55) included.
-- The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`): on frames
-  1004_0001 and 1004_0014, Portra Endura 0.37 ΔE00 on average (95th percentile 0.91 and 0.75), Vision 2383 0.32 and
-  0.38 (0.71 and 0.84): the CLF's straight lines against the curve. On frame 1006_0003 the two differ where the
-  picture's input passes the soft knee at E = 1 (1.2 and 2.1 on average, 95th percentiles 6 and 11): the picture
-  clips there and the density file does not; that roll's frames put more than 1 % of their crop above the knee.
+- The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`), on the 50
+  TriLED test frames through the shipped bundles (each bracket's own tilt), Portra Endura: 0.37 ΔE00 in the median
+  frame, 0.61 at its 95th percentile, the CLF's straight lines against the curve; 48 of 50 within 0.5 / 1.0. The
+  other two, 1006_0003 and 1006_0007, put 11 % and 60 % of their crop above the knee on the film base the frame
+  detector estimated from the scan's statistics: the picture clips there and the density file does not. The check
+  applies the CLF before shrinking: an average of densities is not the density of the average, and shrinking the
+  density file first read 0.5 to 0.6 on detailed frames where the two agree to 0.37.
 - Without `--print` the output is bit-identical to `neg_process` before this change.
 
 **Before the print's own search.** The print was first rendered at the scene's search (its bracket, E and balance on

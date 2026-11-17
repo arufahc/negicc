@@ -2,7 +2,8 @@
 """The print's two paths against each other (DESIGN.md, "Direct sRGB output: the print ICC", Checks): a TriLED scan
 converted twice by neg_process, as a print picture (-P srgb --print <material>) and as a density file with the print's
 CLF (-P apd --print <material>); the CLF is applied here to the density file and the result compared with the picture,
-CIEDE2000 per pixel at 1000 px on the long side. Passes when the mean is within --mean and the 95th percentile within
+CIEDE2000 per pixel at 1000 px on the long side (the CLF applied at full resolution, then both pictures shrunk in
+linear light). Passes when the mean is within --mean and the 95th percentile within
 --p95; the two differ where the scan is thinner than the film base (the picture passes the soft knee there and the
 density file does not), so the print search's share of the crop above the knee is printed beside each result. Run it
 on two or three TriLED frames before a change to the print's search, its CLF or the print ICC is merged. Needs numpy
@@ -127,10 +128,25 @@ def ciede2000(a, b):
     return np.sqrt((dLp / Sl) ** 2 + (dCp / Sc) ** 2 + (dHp / Sh) ** 2 + Rt * (dCp / Sc) * (dHp / Sh))
 
 
-def small(path, side=1000):
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)[..., :3][..., ::-1].astype(np.float64) / 65535.0
-    k = side / max(img.shape[:2])
-    return cv2.resize(img, (round(img.shape[1] * k), round(img.shape[0] * k)), interpolation=cv2.INTER_AREA)
+def read(path):
+    return cv2.imread(path, cv2.IMREAD_UNCHANGED)[..., :3][..., ::-1].astype(np.float32) / 65535.0
+
+
+def small(srgb, side=1000):
+    """An sRGB-encoded picture box-shrunk in linear light to side pixels on its long side."""
+    lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    k = side / max(srgb.shape[:2])
+    lin = cv2.resize(lin, (round(srgb.shape[1] * k), round(srgb.shape[0] * k)), interpolation=cv2.INTER_AREA).astype(np.float64)
+    return np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * np.clip(lin, 0.0, None) ** (1 / 2.4) - 0.055)
+
+
+def clf_full(path, dens, band=256):
+    """The CLF applied to the density file at full resolution, in bands of rows (sRGB-encoded, clipped to 0..1). It is
+    applied before any shrink: an average of densities is not the density of the average, so shrinking the density file
+    first would differ from the picture wherever the frame has detail (0.5 to 0.6 mean and 1.3 to 1.6 at the 95th
+    percentile on detailed frames, against 0.37 and 0.6 this way)."""
+    return np.concatenate([np.clip(apply_clf(path, dens[y:y + band].astype(np.float64)), 0.0, 1.0).astype(np.float32)
+                           for y in range(0, dens.shape[0], band)], 0)
 
 
 def main():
@@ -148,14 +164,14 @@ def main():
         cmd = [a.neg_process, *args[:-1], "-P", "apd", *sum((["--print", m] for m in a.material), []), "-o", dens, args[-1]]
         if subprocess.run(cmd, capture_output=True).returncode:
             raise SystemExit("the density run failed: " + " ".join(cmd))
-        x = small(dens)
+        x = read(dens)
         for m in a.material:
             pic = os.path.join(t, f"p_{m}.tif")
             cmd = [a.neg_process, *args[:-1], "-P", "srgb", "--print", m, "-o", pic, args[-1]]
             if subprocess.run(cmd, capture_output=True).returncode:
                 raise SystemExit("the picture run failed: " + " ".join(cmd))
-            out = np.clip(apply_clf(f"{dens}.{m}.clf", x), 0.0, 1.0)
-            de = ciede2000(lab(out), lab(small(pic)))
+            out = clf_full(f"{dens}.{m}.clf", x)
+            de = ciede2000(lab(small(out)), lab(small(read(pic))))
             mean, p95 = float(de.mean()), float(np.percentile(de, 95))
             good = mean <= a.mean and p95 <= a.p95
             ok &= good
