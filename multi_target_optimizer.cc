@@ -2694,7 +2694,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   for (int r = 0; r < 3; ++r) {
     out.row_scale[r] = (scale.fb[r] > 0 ? (pb.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm;
   }
-  const float E = 1.0f;
+  const float E = cp.e_from_base ? e_norm : (float)cp.e_ref;
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
   // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).

@@ -120,6 +120,7 @@ struct Options {
   double print_a = NAN;                       // --print_a: the print at this mid grey A, not the bracket's own
   std::string print_tilt = "nearest";        // --print_tilt (experimental): none, nearest, linear, extrap, free
   double print_tilt_given[2] = {NAN, NAN};    // --print_tilt_rb (experimental): the red and blue tilts, with --print_a
+  std::string print_e = "1";                // --print_e (experimental): the E the print's search holds, or base
   bool density_print_given = false;           // a density output's --print with --print_a, --target, -E and gains: the CLFs' numbers
   bool no_metadata = false;
 };

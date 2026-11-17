@@ -878,6 +878,8 @@ int prepare(const Options& o, Setup& s) {
       {
         const PrintContinuum* pc = &s.print_cont;
         s.print_cp.free_tilt = o.print_tilt == "free";
+        s.print_cp.e_from_base = o.print_e == "base";
+        if (!s.print_cp.e_from_base) s.print_cp.e_ref = std::strtod(o.print_e.c_str(), nullptr);
         s.print_cp.set_curves_tilt = [pc](double a, const double* t, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof, t); };
         s.print_cp.tilt_at = [pc](double a, double t[3]) { pc->tilt_at(a, t); };
         for (int c = 0; c < 3; ++c) {

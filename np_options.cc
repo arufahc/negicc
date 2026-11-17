@@ -319,6 +319,10 @@ int parse_options(int ac, char* av[], Options& o) {
           "extrap (linear, extrapolated beyond them) or free (the red and blue tilts searched within the brackets' "
           "span).")
     .default_value(std::string("nearest"));
+  parser.add_argument("--print_e")
+    .help("Experimental (the roll 1006 diagnostic): the E the print's search holds, in reference units (default 1), "
+          "or base: e_norm, so that the frame's own film base sits at n0 (E = 1 relative to the base, as the scene's).")
+    .default_value(std::string("1"));
   parser.add_argument("--print_tilt_rb")
     .help("Experimental: with --print_a, the red and blue tilts given (as --print_tilt free reports them): r,b.")
     .default_value(std::string(""));
@@ -727,6 +731,15 @@ int parse_options(int ac, char* av[], Options& o) {
     if (o.colorspace == density_measure_name((DensityMeasure)m)) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
+    }
+  }
+  o.print_e = parser.get<std::string>("--print_e");
+  if (o.print_e != "base") {
+    char* end = nullptr;
+    const double v = std::strtod(o.print_e.c_str(), &end);
+    if (!end || *end || !(v > 0.0) || !std::isfinite(v)) {
+      log_error("--print_e takes a positive number or base\n");
+      return 1;
     }
   }
   o.print_tilt = parser.get<std::string>("--print_tilt");

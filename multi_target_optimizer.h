@@ -333,6 +333,10 @@ struct ContinuousPrint {
   std::function<void(double a, const double* tilt, ParsedFilmProfile& prof)> set_curves_tilt;
   std::function<void(double a, double tilt[3])> tilt_at;
   double tilt_lo[3] = {0, 0, 0}, tilt_hi[3] = {0, 0, 0};
+  // Experimental (--print_e, the roll 1006 diagnostic): the E the search holds, in reference units (default 1), or
+  // e_norm with e_from_base (the frame's own film base at n0: E = 1 relative to the base, as the scene's E is).
+  double e_ref = 1.0;
+  bool e_from_base = false;
 };
 struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;
