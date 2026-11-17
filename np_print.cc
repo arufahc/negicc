@@ -944,7 +944,6 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.a = own->second.a;
     p.gain_g = own->second.g;
     p.gain_b = own->second.b;
-    p.given = own->second.given;
     p.converged = own->second.converged;
     p.steps = own->second.steps;
     for (int c = 0; c < 3; ++c) p.last_move[c] = own->second.last_move[c];
@@ -1225,8 +1224,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
           {"to_print_density_for", p.to_print_for},
           {"bracket", p.bracket},
-          {"bracket_from", p.print_searched && p.given ? "given values (a print picture's cli_equivalent)"
-                           : p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
+          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
                            : p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
@@ -1238,13 +1236,11 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
       if (p.print_searched) {
         one["mid_grey_a"] = p.a;
         one["gains"] = {p.gain_g, p.gain_b};
-        if (!p.given) {
-          one["search"] = {{"converged", p.converged}, {"stopped_by", p.stopped_by}, {"steps", p.steps},
-                           {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
-                           {"above_knee", p.above_knee},
-                           {"past_knee_pct", {100.0 * p.past_knee[0], 100.0 * p.past_knee[1], 100.0 * p.past_knee[2]}},
-                           {"past_cut_pct", {100.0 * p.past_cut[0], 100.0 * p.past_cut[1], 100.0 * p.past_cut[2]}}};
-        }
+        one["search"] = {{"converged", p.converged}, {"stopped_by", p.stopped_by}, {"steps", p.steps},
+                         {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
+                         {"above_knee", p.above_knee},
+                         {"past_knee_pct", {100.0 * p.past_knee[0], 100.0 * p.past_knee[1], 100.0 * p.past_knee[2]}},
+                         {"past_cut_pct", {100.0 * p.past_cut[0], 100.0 * p.past_cut[1], 100.0 * p.past_cut[2]}}};
       }
       materials[p.id] = one;
     }

@@ -556,7 +556,10 @@ bool write_json_sidecar(const Sidecar& sc) {
                          {"found_source", sc.print_floor_found_source},
                          {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"), num(sc.print_floor_found_rgb[1], "%.10g"),
                                         num(sc.print_floor_found_rgb[2], "%.10g")}},
-                         {"factor", num(sc.print_floor_k, "%.6g")}};
+                         {"factor", num(sc.print_floor_k, "%.6g")},
+                         {"frame", sc.print_floor_frame},
+                         {"frame_conf", sc.print_floor_frame_conf < 0.0f ? ordered_json(nullptr)
+                                                                         : num(sc.print_floor_frame_conf, "%.4g")}};
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
@@ -683,8 +686,10 @@ bool write_json_sidecar(const Sidecar& sc) {
     }
   }
   if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
-  // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
-  // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
+  // A density output takes no exposure, gains or bracket: its replay is the frame alone, --fit_curves off when the run
+  // turned the white-light fit off (the print CLF's mid grey and slopes depend on it), and the --print materials as
+  // given: with --print the base not a capture is raised to the picture's thinnest film (print_floor_base) and the
+  // densities are written against it, so the replay needs --print to write the same file and its CLFs.
   if (!sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -693,6 +698,7 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
+    for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
   }
   j["cli_equivalent"] = cli;
 

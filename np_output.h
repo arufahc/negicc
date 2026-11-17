@@ -76,6 +76,11 @@ struct Sidecar {
   double print_floor_found_rgb[3] = {0, 0, 0};
   std::string print_floor_found_source;
   float print_floor_k = 1.0f;
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's), "detected" (no --roi: the frame
+  // detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection); the
+  // detection's confidence when one ran (else -1).
+  std::string print_floor_frame;
+  float print_floor_frame_conf = -1.0f;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
   // The white-light decode's gains on the camera channels before the camera matrix; null: not a white-light decode.
   const float* balance_gains = nullptr;
@@ -141,6 +146,9 @@ struct Sidecar {
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
   bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
+  // A density run's --print materials as given (built-in ids, 'all', or files): its replay gives them again, so the
+  // base's floor (raised only with --print) and the CLFs are made again. Empty: no --print.
+  std::vector<std::string> density_prints;
   std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
   std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
   bool print_from_bundle = false;
@@ -151,7 +159,7 @@ struct Sidecar {
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;
-  float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};   // ContinuousPrintResult at the final settings
+  float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};   // ContinuousPrintResult: at E (the matrix at E alone)
   float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
   bool print_a0_at_end = false;
   float print_last_move[3] = {0, 0, 0};

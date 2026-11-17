@@ -118,12 +118,11 @@ struct DensityRecord {
   struct PrintSearch {
     double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
     std::string bracket;
-    bool given = false;                 // given values (a print's cli_equivalent), not a search
     bool converged = false;
     int steps = 0;
     double last_move[3] = {0, 0, 0};    // |dA| in stops, |dg|, |db| of the search's last step
     double above_knee = 0.0;            // the crop's share above the knee at the bootstrap
-    double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at the final settings, per channel (shares)
+    double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
     std::string stopped_by;             // parameters, residual or steps
   };
   std::map<std::string, PrintSearch> print_search;
@@ -268,10 +267,10 @@ struct FramePrint {
   // and its gains, which the CLF's balance applies in place of the picture conversion's.
   bool print_searched = false;
   double a = NAN, gain_g = 1.0, gain_b = 1.0;
-  bool given = false, converged = false;
+  bool converged = false;
   int steps = 0;
   double last_move[3] = {0, 0, 0}, above_knee = 0.0;
-  double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at the final settings, per channel (shares)
+  double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
   std::string stopped_by;
   double grey_density = 0.70;
 };
