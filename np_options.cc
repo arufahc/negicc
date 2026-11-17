@@ -299,13 +299,26 @@ int parse_options(int ac, char* av[], Options& o) {
           "beside the file uses it.");
   parser.add_argument("--print")
     .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
-          "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto runs on "
-          "the chart profiles as always, and the conversion renders the chosen bracket's print ICC. With a density "
+          "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto searches "
+          "the print itself (its mid grey A as a continuous printing exposure, E held, then g and b; DESIGN.md, \"The "
+          "print's search\") and the conversion renders it there; given values print at the bracket's mid grey or "
+          "--print_a's. It needs the bundle's grey_balance_curves. With a density "
           "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
           "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
           "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
+  parser.add_argument("--print_a")
+    .help("With --print on a TriLED bundle and given values (--target, -E, --gain_g, --gain_b): render the print at "
+          "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "
+          "reports it in its cli_equivalent. Without --print_a, given values print at the bracket's own mid grey.")
+    .scan<'g', double>();
+  parser.add_argument("--print_white")
+    .help("Where a print's white sits: paper (default; the paper's base renders at the display's white, the print's "
+          "linear values divided by the luminance of the lightest node of its table, so the base's tint stays) or "
+          "perfect (against a perfect white, where the paper's base is a light grey). The print's search sees what "
+          "the output shows.")
+    .default_value(std::string("paper"));
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -711,6 +724,18 @@ int parse_options(int ac, char* av[], Options& o) {
     if (o.colorspace == density_measure_name((DensityMeasure)m)) {
       o.density = true;
       o.density_measure = (DensityMeasure)m;
+    }
+  }
+  o.print_white = parser.get<std::string>("--print_white");
+  if (o.print_white != "paper" && o.print_white != "perfect") {
+    log_error("--print_white takes paper or perfect\n");
+    return 1;
+  }
+  if (parser.is_used("--print_a")) {
+    o.print_a = parser.get<double>("--print_a");
+    if (!std::isfinite(o.print_a) || !parser.is_used("--print")) {
+      log_error("--print_a takes a finite mid grey and needs --print with a picture output\n");
+      return 1;
     }
   }
   if (parser.is_used("--print")) {

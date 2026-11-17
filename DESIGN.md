@@ -334,9 +334,9 @@ involved. The density file is the film as measured. The CLF holds everything tha
 `neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written. A
 white-light scan goes the same way with one more step, described under "White-light scans".
 
-On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): Auto runs on the chart profiles as
-always, and the conversion renders the chosen bracket's print ICC in place of its chart profile. "Direct sRGB output: the print
-ICC", after the density output's stages, specifies it.
+On a TriLED bundle `--print` also gives the print as a picture (`-P srgb`): Auto searches the print itself, with its
+mid grey as a continuous printing exposure, and the conversion renders the print there, relative to the paper's white.
+"Direct sRGB output: the print ICC", after the density output's stages, specifies it.
 
 ## Pipeline
 
@@ -531,49 +531,59 @@ spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the 
 
 ## Direct sRGB output: the print ICC
 
-With `--print <print>` on a TriLED bundle and a picture output (`-P srgb`, or any other), the output is the print.
-Auto chooses the bracket, the exposure and the gains on the chart profiles, as it does without `--print` and for a
-density output's CLF. The conversion then renders the chosen bracket's print profile in place of its chart profile:
-the film printed on that material, shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50, A2B0 lut16: three
-4096-entry input curves, a 45 × 45 × 45 table, identity output curves). Its curves put the bracket's mid grey, moved
-by the search's exposure, on the print's mid grey, as the CLF's frame matrix does. A density output is written as in
-stages 1 to 4. Without `--print` the chart profiles render the scene, as before.
+With `--print <print>` on a TriLED bundle and a picture output (`-P srgb`, or any other), the output is the print:
+the film printed on that material, through a profile shaped as the chart profiles are (ICC v2, RGB to PCS XYZ D50,
+A2B0 lut16: three 4096-entry input curves, a 45 × 45 × 45 table, identity output curves). Auto searches the print
+itself ("The print's search"), and the conversion renders it at the search's result, relative to the paper's white
+("The print's white"). A density output is written as in stages 1 to 4. Without `--print` the chart profiles render
+the scene, as before.
 
 | # | Stage | Function | Inputs |
 |---|---|---|---|
 | 1 | Bundle | One print ICC per print material, built when the profile set is saved by the profile-building tools: its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
-| 2 | Bracket profiles | For each bracket, the bundle's print ICC with that bracket's input curves written in (about 5 ms each). | The curve, the bracket's mid grey, the material's curve. |
-| 3 | Search | Stage 1 of the picture conversion, unchanged, on the chart profiles. | The frame. |
-| 4 | Conversion | The picture conversion with the chosen bracket's print profile of stage 2. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
+| 2 | Print profile at A | The bundle's print ICC with the input curves for a mid grey `A` written in (about 5 ms); at a bracket's own `A_mid` it is that bracket's print profile. | The curve, `A`, the nearest bracket's tilt, the material's curve. |
+| 3 | Search | The print's search: `A`, then g and b, on the print profile at `A`. | The frame. |
+| 4 | Conversion | The picture conversion with the print profile at the search's `A`, divided by the paper's white. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
 
 **The chain.** For the profile's input `v` (the scan after the crosstalk correction, the film base at `n0 =
 normalization_target / 65535`, after the soft knee at 0.95), in each channel `c`:
 
 ```
 dL_c     = -log10(unknee(v_c) / n0)                  light density
-alpha_c  = G_c(dL_c) - A_mid                         APD above the bracket's mid grey; equal in all channels on a grey
+alpha_c  = (G_c(dL_c) - A) (1 + b_c)                 APD above the print's mid grey A; equal in all channels on a grey
 pd       = 0.70 + Q L (w alpha),  w = M⁻¹ (1, 1, 1)  printing density (Q L = P M, "The print matrix")
 logE_c   = aim_c - (pd_c - 0.70)                     then the print as in "Derivations": dye amounts, XYZ
 XYZ_PCS  = XYZ (paper, under D50)  |  Bradford(D55 -> D50) XYZ (print film)
+XYZ_out  = XYZ_PCS / Y_paper                         relative to the paper's white (--print_white paper, the default)
 ```
+
+`A` is the print's mid grey as green APD: the printing exposure, applied after the grey balance curve, so that it
+moves a grey along the grey axis and keeps it grey. A bracket enters the print only through it: bracket `k`'s print
+is the one at `A = A_mid(k)`, the green APD of its gs10 (`bracket_mid_apd`). `b_c` is the tilt of the bracket whose
+`A_mid` is nearest `A`, its grey scale's slope relative to the curve (`grey_relative.b` in its
+`density_matrices.brackets` entry, fitted by the profile-building tools; zero without it, the curve alone). The
+bracket's offset relative to the curve (`grey_relative.a`) is not read. The owner chose the brackets' terms as they
+are, "Try the discrete version from the brackets first. We will visit this later to see if it's is worthwhile"; a
+form that follows `A` continuously is a later question.
 
 **Where the profile splits it.** A 3D table samples the paper's S-curve badly, so the curve goes into the input
 curves and the table keeps only colour:
 
 ```
-curve_c(v)    = Paper_c(G_c(dL_c) - A_mid)
+curve_c(v)    = Paper_c((G_c(dL_c) - A) (1 + b_c))
 table(a)      = the chain from alpha_c = Paper_c⁻¹(a_c)
 Paper_c(alpha) = curve_c(aim_c - k_c alpha) / top,   k = P (1, 1, 1)
 ```
 
 `Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey (`top`: the curves' largest value,
 rounded up to 0.1; `P` the print matrix for APD). It is held strictly decreasing (1e-6 a step past the curve's flat
-ends), so it inverts the same way for every bracket, and the table has no bracket in it: one table serves all seven,
-and a bracket's profile differs from another's only in its curves.
+ends), so it inverts the same way for every `A`, and the table has no bracket in it: one table serves every mid grey,
+and the print at one `A` differs from the print at another only in its curves. The print CLF takes the same tilt:
+its slopes are the curve's tangent at the mid grey times `1 + b_c`, which is the slope of `(G_c - A)(1 + b_c)` there.
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| Input curves | 4096 entries, on `v` = 0 to 1 | As the chart profiles; they hold the knee's inverse, the film's grey balance and the paper's curve. |
+| Input curves | 4096 entries, on `v` = 0 to 1 | As the chart profiles; they hold the knee's inverse, the film's grey balance, `A` and the paper's curve. |
 | Table | 45 points a side, XYZ D50 | The dyes' colour and the print matrix's mixing off the grey axis. Its sampling error is 0.04 ΔE00 on the chart. |
 | `Paper_c` table | alpha −3 to 5 in steps of 0.005 | Covers the paper from its white to its black. |
 | Grey balance curve | 501 points per channel | See "Derivations". |
@@ -582,43 +592,105 @@ and a bracket's profile differs from another's only in its curves.
 | Picture output | one print material | A density output takes several, one CLF each. |
 | White light | density output only | Its curve fit composes into the chart profiles; its print is the density output's CLF. |
 
-**Checks.** On a Portra 400 frame (TriLED, frame 0057, Portra Endura):
+### The print's search
 
-- The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the byte, for a built-in material and for one
-  given as a file, Vision 2383 (D55) included.
-- The CLF of the same frame, with its slopes and mid grey from the curve, is 0.42 ΔE00 from the print ICC on average
-  (95th percentile 0.60): the CLF's straight lines against the curve. With the bracket's own slopes and patch it was
-  0.99.
+The owner's design: the scene's profiles are a table per bracket, the print's one table and a level per bracket,
+so the two are searched differently ("The search naturally are between scene ICC and print ICC be cause of how they
+were constructed"). The print's lightness is searched once and continuously, in `A`, and its colour in g and b
+(`search_print_continuous`):
+
+1. **E is held at 1** in the search's reference units: the negative's own density above its base, as the brackets
+   were measured. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
+   −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
+   where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
+2. **A0, metered once:** the median over the search's grid cells of `G_green(dL_green)` at E = 1, g = b = 1.
+3. **The lightness wish:** the mean of the intent fields predicted from the print at `A0 - h`, `A0` and `A0 + h`,
+   `h = log10(2) / 2` (half a stop of printing exposure, about one bracket's spacing); its L\* is the frame's wish,
+   held for the rest of the search, as the scene's search holds its bootstrap's.
+4. **g and b screened at A0** against that field, on the optimiser's wide grids, as the scene's search screens its
+   brackets. g = b = 1 is the film's own neutral (a grey on the curve prints grey), but the frame's light need not be.
+5. **The fixed point over (A, g, b):** each step renders the print at its `A`, measures the optimiser's correction
+   on it (as the scene's loop does since negicc #101), predicts a\* and b\* from it (L\* is the wish), and solves
+   `A`: bracketed by steps of 0.1 APD downhill from the current `A`, then golden section to 0.001, each `A` with g
+   and b by the optimiser (E pinned). It stops on the scene loop's thresholds, with `A` counted in stops
+   (`ΔA / log10 2`), and keeps the lowest-residual step.
+
+There is no tournament between brackets, no bracket fallback and no highlight pullback: no bracket can flip, and the
+scene's pullback reads a bracket's chart ceiling, which a print does not have (its white is the paper's). The
+sidecar's `profile.print` records `a`, the nearest bracket's own `bracket_a_mid`, and the search (`a0`, the wish,
+the steps, the share of the crop above the knee at E = 1); `auto.target` is the nearest bracket. The comparison of
+this search with the earlier ones (the scene's search with the print rendered at its result, g and b on the print,
+the whole bracket search on the print) is negicc-station's `designs/print_search_ways.md`.
+
+**Given values.** `--target`, `-E`, `--gain_g` and `--gain_b` given print exactly as before this search: the bracket's
+print profile (`A = A_mid` of `--target`) at the given E, g and b, so a picture's saved settings still print.
+`--print_a A` with them replaces the bracket's `A_mid`; the search's `cli_equivalent` writes it (with E at 1 in the
+frame's units, the gains, and the nearest bracket as `--target`), and replays the print to the bit. A run reused with
+the knobs (`--brightness`, `--tint`, `--warmth`) keeps the recorded `A`.
+
+**When the print's search cannot run.** `--print` with a picture output needs a TriLED bundle with the film's grey
+balance curve. A white-light bundle is refused ("--print with a picture output needs a TriLED bundle; on a
+white-light bundle give a density output"), and so is a TriLED bundle saved before grey balance curves ("the profile
+bundle has no grey_balance_curves (a print ICC is computed from them): rebuild it with the profile-building tools").
+There is no other path.
+
+### The print's white
+
+The table's lightest node is the paper's base under its viewing light, measured against a perfect white (Y = 1).
+On screen that base is a light grey, and on Ultra Endura a clearly darker one. The owner chose to show a print
+relative to its paper: the paper's base renders at the display's white, both in the preview the search and the
+intent network see and in the exported picture ("Go with 2", 2026-11-17). `--print_white perfect` keeps the perfect
+white.
+
+The scale is luminance only: every value of the table is divided by `Y_paper`, the Y of its lightest node, so the
+paper's base keeps its tint and only its lightness moves to the display's white. The bundle's print ICC itself stays
+absolute (its table as built, `wtpt` D50); the division is made when the print profile is loaded, and the profile an
+output embeds carries the divided table, so it describes the exported picture. The sidecar records
+`profile.print.white` and `paper_white_Y`.
+
+Why it matters to the search: the intent network names nearly the same lightness whatever white it is shown (its
+prediction moves 0.09 to 0.10 L\* per L\* of a uniform scaling), so a print shown against a perfect white, 2.8 L\*
+darker than the scene at the same settings, is asked to come up by about 2 L\*, and its whites cannot pass the
+paper's; shown relative to its paper, the ask is −0.6 L\* against the scene's (50 TriLED frames, Portra Endura).
+
+The paper's white per material (the Portra 400 TriLED set's print ICCs; spektrafilm's base density at 550 nm):
+
+| Material | Y of the lightest node | L* | a* | b* | ΔE00 from a neutral of its L* | base density at 550 nm (spektrafilm) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fujifilm Crystal Archive Type II | 0.823 | 92.7 | +0.07 | +0.45 | 0.46 | 0.082 |
+| Kodak Vision 2383 | 0.862 | 94.4 | +0.23 | +5.97 | 5.27 | 0.060 |
+| Kodak Vision Premier 2393 | 0.865 | 94.5 | -0.12 | +1.84 | 1.77 | 0.058 |
+| Kodak Ektacolor Edge | 0.783 | 90.9 | +0.16 | +0.06 | 0.24 | 0.105 |
+| Kodak Professional Endura Premier | 0.783 | 90.9 | +0.56 | -2.73 | 2.68 | 0.106 |
+| Kodak Professional Portra Endura | 0.809 | 92.1 | +0.15 | +0.80 | 0.81 | 0.090 |
+| Kodak Professional Supra Endura | 0.823 | 92.7 | +0.09 | +0.39 | 0.41 | 0.082 |
+| Kodak Professional Ultra Endura | 0.619 | 82.9 | +0.62 | -4.10 | 3.84 | 0.208 |
+
+Ultra Endura's base, two to two and a half times the other papers', is as spektrafilm's profile gives it (version
+0.3.2, from Kodak's data sheets by its own account); it has not been checked against a data sheet here. Four bases
+are more than 1 ΔE00 from a neutral of their lightness (Vision 2383 yellow, Ultra Endura and Endura Premier blue,
+Vision 2393 slightly yellow): luminance-only scaling shows that tint, as the paper has it.
+
+**Checks.** On Portra 400 frames (TriLED):
+
+- At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
+  (frames 1004_0014 and 1006_0007, both whites).
+- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.
+- The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
+  byte, for a built-in material and for one given as a file, Vision 2383 (D55) included.
+- The CLF of a frame, with its slopes and mid grey from the curve, is 0.42 ΔE00 from the print ICC on average (95th
+  percentile 0.60), on frame 0057, Portra Endura: the CLF's straight lines against the curve.
 - Without `--print` the output is bit-identical to `neg_process` before this change.
-- On a lake under a blue sky (TriLED frame 1004_0001), the print profile against the CLF of the same frame, material
-  by material: 0.19 to 0.30 ΔE00 on average, mean L\* equal to 0.1.
 
-**Why the search stays on the chart profiles.** A search on the print profiles overexposes the print, for two
-reasons, both measured with the Portra 400 intent adapter trained on 400 web scans, the one negicc #96 replaced, and on
-the search before negicc #97 and #101. They are to be measured again on today's search once the adapters of #99 are
-settled; until then they describe that adapter and that search.
+**Before the print's own search.** The print was first rendered at the scene's search (its bracket, E and balance on
+the chart profiles), and a bracket search on the print profiles lost blind A/B 40 to it on 44 of 50 TriLED frames,
+7.5 L\* lighter and washed out. Both were measured against a perfect white with the intent adapter negicc #96
+replaced; the lift is the network's ask on a print shown against a perfect white (above), which the paper-relative
+rendering removes, and the bracket tournament's flips under a 1 % tighter crop (on 22 to 27 of 50 frames) are what
+the continuous `A` removes.
 
-- *Screening's green gain.* Auto screens every metered bracket against one intent field, sweeping the green gain from
-  0.98 to 1.28, and refines only the best two. A frame that needs more green (TriLED 1004_0001, a lake under a blue
-  sky, needs about 1.5) is screened green-cast. On a print, overexposure costs about half as much in L\* as on the
-  picture (the paper rolls an overexposed sky off at L\* 89 where the picture's reaches 94) and bleaches the sky toward
-  the paper's white, hiding the cast; an overexposed bracket (Target 5, E 0.38, against the scene's Target 3 at E 1.14)
-  won screening on five of the eight materials. Sweeping the green gain up to 1.64 fixed that frame.
-- *The model asks a print for lighter highlights.* The intent model learnt from web scans of finished Portra 400
-  positives, and its L\* wish is known to follow the
-  preview it is shown. Shown a print, it asks for lighter highlights: on 50 TriLED frames at the scene's exposure it
-  wants the print's highlights 3.8 L\* lighter and its midtones 1.7 lighter (shown negicc's pictures of the same frames,
-  -1.1 and -0.7). The paper's shoulder holds a print's highlights below the picture's (75 against 80 L\* in the top
-  third), and they rise slowly with exposure while the midtones and shadows rise fast. The search's fixed-point loop, which re-predicts the
-  field from each render, follows the model step by step (on 1004_0055 from E 0.68 to 0.48 in the search's units, half
-  a stop, its residual falling at each step) until the highlights reach the picture's: on average +0.6 L\* from them,
-  with the shadows 8.1 and the midtones 7.3 lighter than the picture's.
-
-With the green grid widened, the print searched on the print lost blind A/B 40 to the print at the scene's search on 44
-of 50 TriLED frames (4 for, 2 no preference; Portra Endura): 7.5 L\* lighter on average, and washed out. On the chart
-profiles every material gets the scene's bracket, exposure and balance, and the print profile and the CLF agree.
-
-The eight print materials on one TriLED frame, at the bracket, exposure and balance Auto chose:
+The eight print materials on one TriLED frame, rendered before the print's own search: at the bracket, exposure and
+balance the scene's search chose, against a perfect white:
 
 ![negicc's picture and the eight print materials](samples/print_materials_triled.jpg)
 

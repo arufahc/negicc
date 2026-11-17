@@ -947,6 +947,9 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
     curve_grey(bundle, *bracket, light);
     curve_slopes(bundle, *bracket, p.slopes);
+    // The bracket's tilt relative to the curve, as its print ICC's curves take it: (G_c - A_mid)(1 + b_c) has the
+    // slope (1 + b_c) times the curve's at the mid grey.
+    for (int c = 0; c < 3; ++c) p.slopes[c] *= 1.0 + bracket->tilt[c];
     p.from_curve = true;
   } else if (!bracket->has_slopes) {
     return err = "the bundle has neither grey_balance_curves nor slopes for " + p.bracket +
@@ -1334,7 +1337,8 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
   return out;
 }
 
-PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0) {
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double tilt[3]) {
   const double d = 1.0 - kPrintKnee;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {
@@ -1345,7 +1349,7 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
       const double u = v <= kPrintKnee ? v
                                        : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
       const double dl = -std::log10(std::max(u, 1e-7) / n0);
-      const double alpha = on_grid(g.apd[c], g.start, g.step, dl) - a_mid;
+      const double alpha = (on_grid(g.apd[c], g.start, g.step, dl) - a_mid) * (1.0 + tilt[c]);
       run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
       out[c][i] = run + 1e-9 * i;
     }
@@ -1500,6 +1504,24 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   return icc;
 }
 
+bool scale_print_icc_table(std::vector<uint8_t>& icc, double k) {
+  const size_t off = a2b0_lut16(icc);
+  if (!off) return false;
+  const size_t n_in = (size_t)icc[off + 48] << 8 | icc[off + 49];
+  const size_t grid = icc[off + 10];
+  const size_t at = off + 52 + 6 * n_in;
+  const size_t count = grid * grid * grid * 3;
+  if (at + 2 * count > icc.size()) return false;
+  for (size_t i = 0; i < count; ++i) {
+    const size_t p = at + 2 * i;
+    const long code = (long)icc[p] << 8 | icc[p + 1];
+    const long q = std::min(65535L, std::lround(code * k));
+    icc[p] = (uint8_t)(q >> 8);
+    icc[p + 1] = (uint8_t)(q & 0xff);
+  }
+  return true;
+}
+
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) {
   const size_t off = a2b0_lut16(icc);
   if (!off) return false;
@@ -1511,6 +1533,33 @@ bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) 
   std::copy(codes.begin(), codes.end(), icc.begin() + (long)(off + 52));
   return true;
 }
+
+int PrintContinuum::nearest(double a) const {
+  int k = 0;
+  for (size_t i = 1; i < a_mid.size(); ++i)
+    if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = (int)i;
+  return k;
+}
+
+PrintCurves PrintContinuum::curves_at(double a) const {
+  static const double zero[3] = {0.0, 0.0, 0.0};
+  return bracket_print_curves(g, paper, a, n0, a_mid.empty() ? zero : tilt[nearest(a)].data());
+}
+
+void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof) const {
+  const PrintCurves cv = curves_at(a);
+  for (int c = 0; c < 3; ++c) {
+    prof.in_trc[c].resize(cv[c].size());
+    for (size_t i = 0; i < cv[c].size(); ++i)
+      prof.in_trc[c][i] = (float)std::lround(std::min(std::max(cv[c][i], 0.0), 1.0) * 65535.0) / 65535.0f;
+    prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
+  }
+  prof.rebind_pointers();
+}
+
+double PrintContinuum::green_apd(double dl) const { return on_grid(g.apd[1], g.start, g.step, dl); }
+double PrintContinuum::a_lo() const { return *std::min_element(g.apd[1].begin(), g.apd[1].end()); }
+double PrintContinuum::a_hi() const { return *std::max_element(g.apd[1].begin(), g.apd[1].end()); }
 
 bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
                             std::string& err) {
@@ -1565,7 +1614,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* ref = bracket_of(bp.reference_bracket);
     const size_t off = a2b0_lut16(icc);
     if (!ref || !off) break;
-    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0);
+    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0, ref->tilt);
     const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
     // The three input curves must lie inside the file: a truncated ICC is not read past its end.
     if (off + 52 + 6 * n > icc.size()) {
@@ -1592,21 +1641,25 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   if (base.empty()) {
     const DensityBracket* mid = bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
-    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0),
+    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0, mid->tilt),
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
                            bundle.key + " printed on " + material.name + " (spektrafilm)",
-                           "Tables derived from spektrafilm's print profile (Andrea Volpato), CC BY-SA 4.0. Computed "
-                           "by neg_process.", bundle_date(bundle));
+                           kPrintIccCopyright, bundle_date(bundle));
   }
   for (const BundleTarget& t : bundle.targets) {
     const DensityBracket* b = bracket_of(t.name);
     if (!b) return err = "the profile bundle has no density_matrices.brackets entry for " + t.name, false;
     std::vector<uint8_t> icc = base;
-    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0))) {
+    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0, b->tilt))) {
       return err = "the print ICC has no lut16 A2B0 to write curves into", false;
     }
     out.icc.push_back(std::move(icc));
+    out.continuum.a_mid.push_back(bracket_mid_apd(bundle, *b));
+    out.continuum.tilt.push_back({b->tilt[0], b->tilt[1], b->tilt[2]});
   }
+  out.continuum.g = bundle.grey_balance;
+  out.continuum.paper = paper;
+  out.continuum.n0 = n0;
   return true;
 }
 

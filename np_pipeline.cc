@@ -473,6 +473,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.has_cached_sidecar = true;
     s.bundle_search = true;
     s.cached_sidecar.is_auto = true;
+    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
+        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
+      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
     s.cached_sidecar.target_idx = tgt_idx;
     s.cached_sidecar.target_name = s.bundle.targets[tgt_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -592,6 +595,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
 
     s.has_cached_sidecar = true;
     s.cached_sidecar.is_auto = false;
+    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
+        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
+      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
     s.cached_sidecar.target_idx = expected_idx;
     if (s.is_bundle && expected_idx >= 0) s.cached_sidecar.target_name = s.bundle.targets[expected_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -832,6 +838,35 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
+      // The paper's white: the Y of the lightest node of the print's table (PCS XYZ D50 as a lut16 holds it). With
+      // --print_white paper (the default) every table value is divided by it: the paper's base renders at the
+      // display's white, its tint kept (one factor for X, Y and Z). The bundle's print ICC itself stays absolute.
+      {
+        constexpr double kPcsMaxY = 1.0 + 32767.0 / 32768.0;
+        float ymax = 0.0f;
+        const std::vector<float>& t = s.print_profs.front().clut;
+        for (size_t i = 1; i < t.size(); i += 3) ymax = std::max(ymax, t[i]);
+        s.print_paper_y = ymax * kPcsMaxY;
+      }
+      if (o.print_white == "paper") {
+        const float k = (float)(1.0 / s.print_paper_y);
+        for (ParsedFilmProfile& p : s.print_profs) {
+          for (float& v : p.clut) v *= k;
+          p.rebind_pointers();
+        }
+        for (std::vector<uint8_t>& icc : s.print_iccs) scale_print_icc_table(icc, 1.0 / s.print_paper_y);
+      }
+      s.print_cont = prints.continuum;
+      s.print_a = o.print_a;
+      {
+        const PrintContinuum* pc = &s.print_cont;
+        s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
+        s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
+        s.print_cp.n0 = pc->n0;
+        s.print_cp.a_lo = pc->a_lo();
+        s.print_cp.a_hi = pc->a_hi();
+        s.print_cp.a_mid = pc->a_mid;
+      }
       s.print_id = prints.id;
       s.print_name = prints.name;
       s.print_file = prints.file;
@@ -1518,7 +1553,27 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   };
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
   // g, b on the combined profile the curves were replayed into) in place of the search.
+  // The bundle search: on a print (--print with a picture output) the print's own search, the scene's otherwise.
+  auto bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts) -> bool {
+    if (s.print_profs.empty()) {
+      return search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res);
+    }
+    if (!search_print_continuous(bundle, s.print_profs[s.print_profs.size() / 2], s.print_cp, s.engine, frame,
+                                 scan_shutter_s, scan_iso, opts, scan.auto_res, s.print_cr)) {
+      return false;
+    }
+    s.print_a = s.print_cr.a;
+    s.print_searched = true;
+    log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
+             "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
+             scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
+             s.print_cr.converged ? "" : ", not converged", s.print_cr.wish_mean_l, 100.0 * s.print_cr.above_knee);
+    return true;
+  };
   auto restore_cached_auto = [&]() {
+    if (!s.print_profs.empty() && std::isfinite(s.cached_sidecar.print_a) && !std::isfinite(o.print_a))
+      s.print_a = s.cached_sidecar.print_a;
     scan.auto_res.target_idx = s.cached_sidecar.target_idx;
     scan.auto_res.target_name = s.cached_sidecar.target_name;
     scan.auto_res.params = {s.cached_sidecar.base_e, s.cached_sidecar.base_g, s.cached_sidecar.base_b, 1.0f};
@@ -1730,7 +1785,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
-        if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
+        if (!bundle_search(frame, scan_shutter_s, scan_iso, opts)) {
           log_error("The conversion parameter search failed\n");
           return false;
         }
@@ -2031,8 +2086,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
-      if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
-                                    scan.auto_res)) {
+      if (!bundle_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
@@ -2521,12 +2575,16 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  // A print: the search chose the bracket, E, g and b on the chart profiles; the conversion renders that bracket's
-  // print profile, which puts the same mid grey on the print's.
+  // A print: the conversion renders the print profile at the print's mid grey A (its search's, --print_a's or a reused
+  // run's), else, with given values, at the chosen bracket's own.
   if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
     c.film_prof = s.print_profs[c.bundle_target_idx];
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
+    if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search, --print_a or a reused run's)
+      s.print_cont.set_curves_at(s.print_a, c.film_prof);
+      set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+    }
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
   if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {
@@ -2844,6 +2902,21 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_file = s.print_file;
   sc.print_file_sha256 = s.print_file_sha256;
   sc.print_from_bundle = s.print_from_bundle;
+  if (!s.print_profs.empty()) {
+    sc.print_a = s.print_a;
+    sc.print_white = o.print_white;
+    sc.print_paper_y = s.print_paper_y;
+    if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
+      sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
+    if (s.print_searched) {
+      sc.print_searched = true;
+      sc.print_a0 = s.print_cr.a0;
+      sc.print_wish_l = s.print_cr.wish_mean_l;
+      sc.print_steps = s.print_cr.steps;
+      sc.print_converged = s.print_cr.converged;
+      sc.print_above_knee = s.print_cr.above_knee;
+    }
+  }
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;

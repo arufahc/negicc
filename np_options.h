@@ -19,6 +19,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -116,6 +117,8 @@ struct Options {
   bool output_dpx = false;
   // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
   std::vector<std::string> prints;
+  double print_a = NAN;                       // --print_a: the print at this mid grey A, not the bracket's own
+  std::string print_white = "paper";          // --print_white: paper (default) or perfect
   bool no_metadata = false;
 };
 

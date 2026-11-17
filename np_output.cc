@@ -572,6 +572,17 @@ bool write_json_sidecar(const Sidecar& sc) {
         j["profile"]["print"]["file"] = sc.print_file;
         j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
       }
+      // The print's white, its mid grey A and the bracket's own, and its search (np_pipeline: search_print_continuous).
+      j["profile"]["print"]["white"] = sc.print_white;
+      j["profile"]["print"]["paper_white_Y"] = num(sc.print_paper_y, "%.6g");
+      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      if (std::isfinite(sc.print_bracket_a_mid))
+        j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
+      if (sc.print_searched) {
+        j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
+                                           {"steps", sc.print_steps}, {"converged", sc.print_converged},
+                                           {"above_knee", num(sc.print_above_knee, "%.6g")}};
+      }
     }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
@@ -598,6 +609,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       cli.push_back(std::to_string(v));
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  if (std::isfinite(sc.print_a)) cli.insert(cli.end(), {"--print_a", num_str(sc.print_a, "%.17g")});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.

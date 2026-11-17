@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -138,6 +139,12 @@ struct Sidecar {
   std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
   std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
   bool print_from_bundle = false;
+  // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
+  double print_a = NAN, print_bracket_a_mid = NAN, print_paper_y = 1.0, print_a0 = NAN;
+  std::string print_white;
+  bool print_searched = false, print_converged = false;
+  int print_steps = 0;
+  float print_wish_l = 0.0f, print_above_knee = 0.0f;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

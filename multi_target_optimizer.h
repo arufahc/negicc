@@ -310,6 +310,36 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
+// The print's search (--print with Auto on a TriLED bundle with grey_balance_curves): the print searched with its mid
+// grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the search's reference units (the negative's own
+// density above base, as the brackets were measured): A0 metered once (the median over the grid cells of
+// G_green(dL_green) at E = 1, g = b = 1); the lightness wish from the mean field of the renders at A0 - boot_h, A0,
+// A0 + boot_h (A0 alone when boot_h is 0), held; g and b screened at A0 on the optimiser's wide grids; then the fixed
+// point over (A, g, b): each step renders the print at its A, measures the optimiser's correction, predicts a* b* (L*
+// is the wish) and solves A (bracketed by steps of 0.1 APD downhill from the current A, then golden section to 0.001,
+// each A with g and b by the optimiser, E pinned). The scene
+// loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
+// bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+struct ContinuousPrint {
+  std::function<void(double a, ParsedFilmProfile& prof)> set_curves_at;   // the print's input tables at A
+  std::function<double(double dl)> green_apd;                             // G_green
+  double n0 = 1.0;
+  double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
+  std::vector<double> a_mid;         // per bundle.targets
+  double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)
+};
+struct ContinuousPrintResult {
+  double a = 0.0, a0 = 0.0;
+  int steps = 0;
+  bool converged = false;
+  float above_knee = 0.0f;           // the share of the inner crop above the knee at E = 1, g = b = 1
+  float wish_mean_l = 0.0f;          // the held wish's mean L*
+};
+// print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
+bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
+                             DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                             const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);

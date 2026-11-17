@@ -257,11 +257,12 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
 ```
 
 Each RGB-LED profile set carries one print ICC per print material (`profiles/<film>-A7R4-TriLED/print_<print>.icc`,
-and its `README.md` gives the math). The automatic search runs on the chart's profiles as usual; the conversion
-then renders the chosen bracket's print ICC in place of its chart profile, and the paper's own curve sets the tone,
-so the toning step does not run. `neg_process` writes each exposure bracket's version of the ICC from the built-in
-one when it converts. A print profile given as a file gets its ICC computed. The picture matches what the density
-file's CLF prints. A white-LED scan takes `--print` with a density output only.
+and its `README.md` gives the math). The automatic search runs on the print itself: its printing exposure is one
+continuous level, then the colour balance, and the paper's own curve sets the tone, so the toning step does not run.
+The print is shown relative to its paper, the paper's base at the display's white (`--print_white perfect` shows it
+against a perfect white instead). A print profile given as a file gets its ICC computed. The picture matches what
+the density file's CLF prints. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
+set saved before it had a grey balance curve cannot print.
 
 One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search
 chose:
@@ -269,7 +270,8 @@ chose:
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
 *Top left: negicc's picture without `--print`. Then the six papers and the two print films, all at one exposure
-and balance, so only the print material changes.*
+and balance, so only the print material changes. Rendered before the print's own search: at the scene's search's
+bracket, exposure and balance, against a perfect white.*
 
 ## Options
 

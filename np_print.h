@@ -309,10 +309,11 @@ void remove_print_clfs(const DensityPrints& prints);
 // The bundle carries one print ICC per print material (print_profiles, built by negicc-station src/print_icc.py when
 // the bundle was saved); its table serves every bracket, and each bracket's three input curves are computed here:
 //
-//     curve_c(v) = Paper_c(G_c(-log10(unknee(v) / n0)) - A_mid)
+//     curve_c(v) = Paper_c((G_c(-log10(unknee(v) / n0)) - A_mid) (1 + b_c))
 //
 //   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
 //   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
+//   b_c       the bracket's tilt relative to the curve (DensityBracket::tilt; 0 without grey_relative)
 //   Paper_c   the dye amount layer c takes on a grey alpha above the mid grey: curve_c(aim_c - k_c alpha) / top,
 //             k = P (1, 1, 1) with P the material's print matrix for APD, top the curves' largest value rounded up
 //             to 0.1; held strictly decreasing (paper_curve)
@@ -323,6 +324,13 @@ void remove_print_clfs(const DensityPrints& prints);
 // A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is computed
 // here, gets its table computed here (print_table).
 // py-ref: negicc_station/src/print_icc.py
+// The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence, and
+// that and by whom it was modified); the print CLF's description says the same. The profile-building tools write the
+// same text into the bundle's print ICCs (negicc-station src/print_icc.py).
+constexpr const char* kPrintIccCopyright =
+    "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
+    "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
+    "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
 constexpr int kPrintIccCube = 45;
 constexpr double kPaperAlphaStart = -3.0, kPaperAlphaStep = 0.005;
@@ -341,7 +349,8 @@ void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, do
 // Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
-PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0);
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double tilt[3]);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);
@@ -355,11 +364,33 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
 std::array<int, 6> bundle_date(const ProfileBundle& bundle);
 // The SHA-256 of bytes, as 64 lowercase hex digits.
 std::string sha256_hex(const std::string& bytes);
+// Multiplies an ICC's A2B0 table (a lut16's) by k in place, each code rounded and held at 65535: the print relative to its
+// paper's white (--print_white paper) in the profile an output embeds. False when it has none.
+bool scale_print_icc_table(std::vector<uint8_t>& icc, double k);
 // Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
 
+// The print at a continuous mid grey A (np_pipeline: the print search, and --print_a): the input curves above with A for
+// A_mid and the tilt of the bracket whose A_mid is nearest A, as it is (the owner's choice: the brackets' discrete
+// terms first). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
+// codes an ICC holds, as code / 65535).
+struct PrintContinuum {
+  GreyBalanceCurves g;
+  PrintCurves paper;
+  double n0 = 1.0;
+  std::vector<double> a_mid;                  // per bundle.targets, in its order
+  std::vector<std::array<double, 3>> tilt;    // per bundle.targets
+  int nearest(double a) const;                // the bracket whose A_mid is nearest A (the first of a tie)
+  PrintCurves curves_at(double a) const;
+  void set_curves_at(double a, ParsedFilmProfile& prof) const;
+  double green_apd(double dl) const;          // G_green at light density dl
+  double a_lo() const;                        // the range A is searched in: the curve's green APD range
+  double a_hi() const;
+};
+
 // The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
 struct BracketPrints {
+  PrintContinuum continuum;                    // the print at a continuous A
   std::string id, name;
   std::string file, file_sha256;               // a material given as a file: its path as given and its SHA-256
   bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here
