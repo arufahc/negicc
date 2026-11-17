@@ -1476,7 +1476,7 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
 }
 
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
-                                 const double tilt[3]) {
+                                 const double tilt[3], const double gains[3]) {
   const double d = 1.0 - kPrintKnee;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {
@@ -1486,7 +1486,7 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
       const double v = (double)i / (kPrintIccPoints - 1);
       const double u = v <= kPrintKnee ? v
                                        : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
-      const double dl = -std::log10(std::max(u, 1e-7) / n0);
+      const double dl = -std::log10(std::max(u * (gains ? gains[c] : 1.0), 1e-7) / n0);
       const double alpha = (on_grid(g.apd[c], g.start, g.step, dl) - a_mid) * (1.0 + tilt[c]);
       run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
       out[c][i] = run + 1e-9 * i;
@@ -1707,16 +1707,16 @@ int PrintContinuum::nearest(double a) const {
   return k;
 }
 
-PrintCurves PrintContinuum::curves_at(double a) const {
+PrintCurves PrintContinuum::curves_at(double a, const double gains[3]) const {
   static const double zero[3] = {0.0, 0.0, 0.0};
-  if (a_mid.empty()) return bracket_print_curves(g, paper, a, n0, zero);
+  if (a_mid.empty()) return bracket_print_curves(g, paper, a, n0, zero, gains);
   double t[3];
   tilt_at(a, t);
-  return bracket_print_curves(g, paper, a, n0, t);
+  return bracket_print_curves(g, paper, a, n0, t, gains);
 }
 
-void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof) const {
-  const PrintCurves cv = curves_at(a);
+void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3]) const {
+  const PrintCurves cv = curves_at(a, gains);
   for (int c = 0; c < 3; ++c) {
     prof.in_trc[c].resize(cv[c].size());
     for (size_t i = 0; i < cv[c].size(); ++i)

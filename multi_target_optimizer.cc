@@ -3063,6 +3063,22 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       cr.past_knee[r] = total ? (float)knee_n[r] / total : 0.0f;
       cr.past_cut[r] = total ? (float)cut_n[r] / total : 0.0f;
     }
+    float mu_[9];
+    negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, mu_);
+    long kn[3] = {0, 0, 0}, cn[3] = {0, 0, 0};
+    for (int y = c.y0; y < c.y0 + c.h; y += 4)
+      for (int x = c.x0; x < c.x0 + c.w; x += 4) {
+        frame.sample(x, y, px);
+        for (int r = 0; r < 3; ++r) {
+          const float u = (mu_[r * 3] * px[0] + mu_[r * 3 + 1] * px[1] + mu_[r * 3 + 2] * px[2]) / 65535.0f;
+          kn[r] += u > AUTO_KNEE;
+          cn[r] += u >= cut;
+        }
+      }
+    for (int r = 0; r < 3; ++r) {
+      cr.past_knee_ug[r] = total ? (float)kn[r] / total : 0.0f;
+      cr.past_cut_ug[r] = total ? (float)cn[r] / total : 0.0f;
+    }
   }
   out.residual = best_err;
   out.status = cr.converged ? FixedPointStatus::kConverged : FixedPointStatus::kMaxIters;

@@ -396,7 +396,8 @@ struct ContinuousPrintResult {
   // knee (input above 0.95, 0.054 density thinner than the base at g = b = 1) and past the cut (above 1.1227, where the
   // knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
-  float floor_k = 1.0f;   // experimental: the factor the floor rule put on the base's level (1 elsewhere)
+  float floor_k = 1.0f;
+  float past_knee_ug[3] = {0, 0, 0}, past_cut_ug[3] = {0, 0, 0};   // experimental: at E alone (g = b = 1 in the matrix)   // experimental: the factor the floor rule put on the base's level (1 elsewhere)
   float wish_mean_l = 0.0f;          // the held wish's mean L*
   float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut
   float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above

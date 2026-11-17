@@ -395,7 +395,7 @@ void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, do
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp).
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
-                                 const double tilt[3]);
+                                 const double tilt[3], const double gains[3] = nullptr);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);
@@ -433,8 +433,9 @@ struct PrintContinuum {
   std::vector<std::array<double, 3>> tilt;    // per bundle.targets
   int nearest(double a) const;                // the bracket whose A_mid is nearest A (the first of a tie)
   void tilt_at(double a, double t[3]) const;  // print_tilt_at over these brackets
-  PrintCurves curves_at(double a) const;
-  void set_curves_at(double a, ParsedFilmProfile& prof) const;
+  PrintCurves curves_at(double a, const double gains[3] = nullptr) const;
+  // Experimental (--print_gains curve): gains (r, g, b) as a density offset after the knee, -log10(unknee(v) g_c / n0).
+  void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
   double green_apd(double dl) const;          // G_green at light density dl
   double a_lo() const;                        // the range A is searched in: the curve's green APD range
   double a_hi() const;

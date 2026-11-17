@@ -1726,6 +1726,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.film_base = scan.given_base;
       return;
     }
+    if (o.film_base_bundle) {   // experimental: no base read, the bundle's (scaled by the exposures)
+      scan.film_base = negicc::FilmBaseDetection{};
+      log_info("Film base: the bundle's (--film_base bundle)\n");
+      return;
+    }
     const double* xt = (s.bundle.has_crosstalk && !s.white_light) ? s.bundle.crosstalk_matrix_d : nullptr;
     const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, scan.film_base);
     const negicc::FilmBaseDetection& fb = scan.film_base;
@@ -2702,8 +2707,16 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
     if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search, --print_a or a reused run's)
-      s.print_cont.set_curves_at(s.print_a, c.film_prof);
-      set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+      if (o.print_gains_curve && c.station_params) {
+        // Experimental: the gains after the knee, in the curves; the matrix at E alone (the base at n0 in every channel).
+        const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
+        negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
+        s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
+        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));
+      } else {
+        s.print_cont.set_curves_at(s.print_a, c.film_prof);
+        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+      }
     }
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
@@ -3066,6 +3079,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_converged = s.print_cr.converged;
       sc.print_above_knee = s.print_cr.above_knee;
       for (int c = 0; c < 3; ++c) sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
+      for (int c = 0; c < 3; ++c) sc.print_past_cut_ug[c] = s.print_cr.past_cut_ug[c];
       for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
       for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;
