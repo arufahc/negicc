@@ -198,7 +198,6 @@ struct PrintMaterial {
   std::vector<double> observer[3];            // X, Y, Z weights on the grid (viewing light x observer)
   double white[3] = {1, 1, 1};
   double aim[3] = {0, 0, 0};
-  double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
 };
 
 // A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.

@@ -672,7 +672,7 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 // which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
-  const double d50[3] = {0.9642, 1.0, 0.8249};
+  const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale
   size_t best = 0;
   for (size_t i = 1; i < p.clut.size(); i += 3)
     if (p.clut[i] > p.clut[best * 3 + 1]) best = i / 3;
@@ -871,7 +871,7 @@ int prepare(const Options& o, Setup& s) {
       for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p, s.print_paper_xyz);
       {
         double k[3];
-        const double d50[3] = {0.9642, 1.0, 0.8249};
+        const double* d50 = negicc::kPcsWhite;
         for (int c = 0; c < 3; ++c) k[c] = d50[c] / s.print_paper_xyz[c];
         // The table is now media-relative: the paper's XYZ goes into wtpt, as the ICC means a media-relative table (a
         // viewer on the relative intent shows the picture; on the absolute intent it gets the paper back). negicc

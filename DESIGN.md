@@ -520,7 +520,7 @@ The same frame without slopes and with its own, on each print material, beside t
 |---|---|---|
 | Print materials | spektrafilm's print profiles: six papers and two print films built in, or a file | `--print <print>` writes the CLF of one, `<output>.<print>.clf`; repeated, or `all`, of several. `--print` alone lists them. Without it no CLF is written and stages 3 and 4 do not run. |
 | Printer lamp | 3200 K blackbody, no heat filter | With the material's sensitivity it defines the density the material reads. |
-| Viewing light | D50 for paper, D55 for print film | The print's colour is computed under it and adapted to D65 (CAT02) for sRGB. |
+| Viewing light | D50 for paper, D55 for print film | The print's colour is computed under it and adapted to the PCS's D50 (Bradford; none for a paper), then to the output's sRGB through the embedded profile's colorants. |
 | Curve table | 4096 points | The curve of each layer, as a 1D table. |
 | Colour table | 45 points a side | Dye amounts to linear sRGB, as a 3D table. |
 
@@ -740,13 +740,17 @@ Which profile an output embeds depends on the output:
   profile: a viewer on the relative intent shows the exported picture, and on the absolute intent gets the paper's
   own white and tint back (negicc reads only the A2B0).
 - **An output space** (`-P srgb` and the others): the picture is converted to that space and the file embeds the
-  space's profile (Elle's sRGB V2 for `-P srgb`, colorants summing to D50, `wtpt` D65). The paper's white, at D50 after
-  the scaling, lands at linear 1.00008 / 1.00003 / 0.99938, so 65535 / 65535 / 65517 in a 16-bit file, 0.03 ΔE from
-  the profile's white: the textbook Bradford and sRGB constants differ from the inverse of Elle's colorants in the
-  fourth decimal, the same for every conversion. The paper's own XYZ is then in the sidecar only.
+  space's profile (Elle's sRGB V2 for `-P srgb` and `-P srgb-g10`, colorants summing to D50, `wtpt` D65). The PCS goes
+  to linear sRGB by one matrix, the inverse of those colorants (`color_pipeline.h`), everywhere: the outputs, the
+  previews the search renders, the bracket's ceiling and the print's CLF. So a colour-managed reader gets the PCS back
+  through the embedded profile within quantisation, and `make check_output` checks the matrix against the profiles'
+  own colorants and Little-CMS. The paper is scaled to the PCS white the colorants sum to (`kPcsWhite`, the ICC's D50
+  as an ICC profile stores it, s15.16), and lands at 65535 in all three channels in both spaces. (Before, Bradford
+  D50 -> D65 and the textbook XYZ -> sRGB put it at 65535 / 65535 / 65517.) The paper's own XYZ is in the sidecar.
 
-The print CLF is media-relative the same way, the paper's colour (each layer at its least dye) scaled to the viewing
-light's white. The sidecar records `profile.print.white` and `paper_white_xyz`.
+The print CLF is media-relative the same way, through the picture's own chain: XYZ under the viewing light, adapted
+to D50 as the print ICC's table is (Bradford for a print film, none for a paper), the paper scaled to `kPcsWhite`, then
+the same PCS -> linear sRGB matrix, so it aims at the sRGB the picture is written in. The sidecar records `profile.print.white` and `paper_white_xyz`.
 
 Why it matters to the search: the intent network names nearly the same lightness whatever white it is shown (its
 prediction moves 0.09 to 0.10 L\* per L\* of a uniform scaling), so a print shown against a perfect white, 2.8 L\*
