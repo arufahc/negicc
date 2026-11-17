@@ -1680,7 +1680,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const bool estimate = bundle_base || scan.film_base.source == "statistics";
       char raised[160] = "";
       if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
-        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film,", scan.print_floor_k);
+        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film", scan.print_floor_k);
       if (estimate) {
         log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the crop is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
