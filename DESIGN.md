@@ -734,7 +734,12 @@ already put the base past the knee in that channel: with their captures, 6 of th
 1 % of the crop past the cut (1004_0001 and 1004_0010 in green at g 1.64 and 1.70; 1006_0004, 0005, 0006, 0015 in blue).
 With the gains in the curves none has, the picture against the CLF is no worse (0.47 ΔE00 over the darkest third,
 0.48 before), and the prints move by at most 0.01 ΔE00 on average: the cut film lay in the paper's toe. The search's
-own previews keep the gains in the matrix; their difference from the final print is that 0.01.
+own previews keep the gains in the matrix; their difference from the final print is that 0.01. The other side of
+it: a gain under 1 no longer pulls a channel back under the knee. With a grossly wrong base the cut is now total:
+1006_0007 on its scan's estimate (0.31 of its capture in green) searches gains of 0.70 and 0.44, and its print is
+19.4 ΔE00 from the capture's print over the darkest third, against 3.2 with the gains in the matrix; there the
+previews, which keep the gains in the matrix, are 10 ΔE00 from the picture. That is the pending level rule meeting an
+estimated base (step 1), and the print warns.
 
 **Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
 the bundles carrying each bracket's own tilt) unless said otherwise:
