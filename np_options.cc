@@ -319,6 +319,15 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Experimental: render the print at this mid grey A (green APD) in place of the bracket's own, as the "
           "continuous print search reports it (with -E, --gain_g, --gain_b and --target, its cli_equivalent).")
     .scan<'g', double>();
+  parser.add_argument("--print_white_search")
+    .help("Experimental: the white a print's search previews are shown against: perfect (default; the paper's base is "
+          "a light grey) or paper (the preview's linear values scaled so the material's lightest table node is white; "
+          "luminance only, one factor for the three channels). Applies where the search renders the print "
+          "(--print_search gb, full, fullwish, continuous).")
+    .default_value(std::string("perfect"));
+  parser.add_argument("--print_white_export")
+    .help("Experimental: the white of the exported print: perfect (default) or paper, as --print_white_search.")
+    .default_value(std::string("perfect"));
   parser.add_argument("--print_boot_h")
     .help("Experimental: the continuous print search's bootstrap renders at A0 - h, A0, A0 + h (A0 alone with 0); "
           "default log10(2) / 2, half a stop of printing exposure.")
@@ -741,6 +750,14 @@ int parse_options(int ac, char* av[], Options& o) {
     o.print_a = parser.get<double>("--print_a");
     if (!std::isfinite(o.print_a) || !parser.is_used("--print")) {
       log_error("--print_a takes a finite mid grey and needs --print with a picture output\n");
+      return 1;
+    }
+  }
+  o.print_white_search = parser.get<std::string>("--print_white_search");
+  o.print_white_export = parser.get<std::string>("--print_white_export");
+  for (const std::string* w : {&o.print_white_search, &o.print_white_export}) {
+    if (*w != "perfect" && *w != "paper") {
+      log_error("--print_white_search and --print_white_export take perfect or paper\n");
       return 1;
     }
   }

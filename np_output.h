@@ -145,7 +145,9 @@ struct Sidecar {
   bool print_from_bundle = false;
   // --print_a or --print_search continuous: the print's mid grey A (NaN: the bracket's own), and the search's record.
   double print_a = NAN, print_a0 = NAN, print_boot_h = 0.0;
-  double print_bracket_a_mid = NAN;   // the chosen bracket's own mid grey A_mid
+  double print_bracket_a_mid = NAN;
+  double print_paper_y = 1.0;                       // the paper's white (Y of the lightest table node)
+  std::string print_white_search, print_white_export;  // perfect or paper   // the chosen bracket's own mid grey A_mid
   int print_cont_steps = 0;
   bool print_cont_converged = false;
   float print_above_knee = 0.0f, print_wish_l = 0.0f;

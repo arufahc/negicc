@@ -119,6 +119,7 @@ struct Options {
   std::vector<std::string> prints;
   std::string print_search = "scene";   // --print_search (experimental): scene, gb, full, fullwish or continuous
   double print_a = NAN;                 // --print_a (experimental): the print at this mid grey A, not a bracket's
+  std::string print_white_search = "perfect", print_white_export = "perfect";   // --print_white_search, _export
   double print_boot_h = 0.150515;       // --print_boot_h (experimental): the continuous search's bootstrap spread
   bool no_metadata = false;
 };

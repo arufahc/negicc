@@ -592,6 +592,9 @@ bool write_json_sidecar(const Sidecar& sc) {
         }
       }
       if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.9g");
+      j["profile"]["print"]["paper_white_Y"] = num(sc.print_paper_y, "%.6g");
+      j["profile"]["print"]["white_search"] = sc.print_white_search;
+      j["profile"]["print"]["white_export"] = sc.print_white_export;
       if (std::isfinite(sc.print_bracket_a_mid)) j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
     }
   } else {

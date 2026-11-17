@@ -2933,6 +2933,30 @@ bool search_print_continuous(const ProfileBundle& print_bundle, const Continuous
     curr.b = next.b;
     stop_next = move <= TOL_PARAM;   // the moved parameters are rendered and scored once more
   }
+  // --probe_intent: what the network predicts from the print at the result's g, b and A moved by each probe stop
+  // (stops of printing exposure, A + stop log10 2); written beside the search, which goes on to convert.
+  if (!opts.probe_path.empty()) {
+    nlohmann::json recs = nlohmann::json::array();
+    auto mean3 = [](const std::vector<float>& v) {
+      double sm[3] = {0, 0, 0};
+      const size_t k = v.size() / 3;
+      for (size_t i = 0; i < k; ++i)
+        for (int c = 0; c < 3; ++c) sm[c] += v[i * 3 + c];
+      return std::vector<double>{sm[0] / k, sm[1] / k, sm[2] / k};
+    };
+    for (const float stop : opts.probe_stops) {
+      const double ap = std::clamp(best_a + stop * kStop, cp.a_lo, cp.a_hi);
+      cp.set_curves_at(ap, prof);
+      fr.render_preview(0, best, preview);
+      if (!fr.predict(preview, mu, sg)) return false;
+      const std::vector<float> lab = fr.patch_lab(preview);
+      recs.push_back({{"kind", "params"}, {"stop", stop}, {"a", ap}, {"e", best.e}, {"g", best.g}, {"b", best.b},
+                      {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)}, {"mu", mu},
+                      {"sigma_cells", sg}, {"render_cells", lab}});
+    }
+    std::ofstream f(opts.probe_path);
+    f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
+  }
   cp.set_curves_at(best_a, prof);
   int nearest = 0;
   for (size_t i = 0; i < cp.a_mid.size(); ++i)

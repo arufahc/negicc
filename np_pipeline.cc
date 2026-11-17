@@ -832,13 +832,31 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
-      if (o.print_search != "scene") {   // gb, full, fullwish
+      // The paper's white: the Y of the lightest node of the print's table (PCS XYZ D50 as a lut16 holds it). With
+      // --print_white_search / --print_white_export paper, every table value is divided by it (luminance only), so
+      // the paper's base renders at the display's white.
+      {
+        constexpr double kPcsMaxY = 1.0 + 32767.0 / 32768.0;
+        float ymax = 0.0f;
+        const std::vector<float>& t = s.print_profs.front().clut;
+        for (size_t i = 1; i < t.size(); i += 3) ymax = std::max(ymax, t[i]);
+        s.print_paper_y = ymax * kPcsMaxY;
+      }
+      auto to_paper_white = [&](ParsedFilmProfile& p) {
+        const float k = (float)(1.0 / s.print_paper_y);
+        for (float& v : p.clut) v *= k;
+        p.rebind_pointers();
+      };
+      if (o.print_search != "scene") {   // gb, full, fullwish, continuous
         s.print_bundle = bundle;
         for (size_t i = 0; i < bundle.targets.size(); ++i) {
           s.print_bundle.targets[i].film_prof = s.print_profs[i];
           s.print_bundle.targets[i].film_prof.rebind_pointers();
+          if (o.print_white_search == "paper") to_paper_white(s.print_bundle.targets[i].film_prof);
         }
       }
+      if (o.print_white_export == "paper")
+        for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p);
       s.print_cont = prints.continuum;
       s.print_a = o.print_a;
       {
@@ -2911,6 +2929,11 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_gb_steps = s.print_gb_steps;
   sc.print_gb_converged = s.print_gb_converged;
   if (!s.print_profs.empty()) sc.print_a = s.print_a;
+  if (!s.print_profs.empty()) {
+    sc.print_paper_y = s.print_paper_y;
+    sc.print_white_search = o.print_white_search;
+    sc.print_white_export = o.print_white_export;
+  }
   if (!s.print_profs.empty() && c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
     sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
   if (!s.print_profs.empty() && o.print_search == "continuous") {

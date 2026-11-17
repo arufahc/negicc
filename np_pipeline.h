@@ -114,6 +114,7 @@ struct Setup {
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
   // --print_a or --print_search continuous: the print at a continuous mid grey (np_print.h PrintContinuum), its A
   // (NaN: the bracket's own) and the continuous search's record.
+  double print_paper_y = 1.0;   // the material's lightest table node's Y (PCS D50): the paper's white
   PrintContinuum print_cont;
   ContinuousPrint print_cp;
   double print_a = NAN;
