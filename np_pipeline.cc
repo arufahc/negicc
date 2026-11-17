@@ -1667,18 +1667,28 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
       // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
+      // Also whatever the base's source: a rebate read on clipped film (a long scan) is a measured base in name only,
+      // and a gain can put a channel's thin film past the cut. kPrintCutWarnShare: the share of the crop past the cut
+      // in a channel from which the print says so (new constant, 1 %: on the 50 TriLED test frames with their captures,
+      // the base rule's prints pass it on 2, and every crushed print found so far is above it).
+      constexpr double kPrintCutWarnShare = 0.01;
+      int c = 0;
+      for (int k = 1; k < 3; ++k)
+        if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
+      const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
       const bool estimate = !scan.film_base.found || scan.film_base.source == "statistics";
       if (estimate) {
-        int c = 0;
-        for (int k = 1; k < 3; ++k)
-          if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
-        const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
         log_warn("the print's level is relative to the film base, and this one is %s: %.2f %% of the crop is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
                  "of this roll's unexposed film>\n",
                  !scan.film_base.found ? "the profile bundle's own, not this roll's"
                                        : "estimated from the thinnest film on this frame, which shows no rebate",
                  100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+      } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
+        log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
+                 "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
+                 "<capture of this roll's unexposed film> if this is not one\n",
+                 100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str());
       }
     }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "

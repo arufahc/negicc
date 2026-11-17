@@ -620,7 +620,9 @@ were constructed"). The print's lightness is searched once and continuously, in 
    - **the bundle's** (none of the above): another roll's base scaled by the exposures.
    So the level rule and the base rule are one decision, measured as arrangements on the 50 frames (station
    `designs/print_search_ways.md`). Until it is made, the print warns when its base is a statistics estimate or the
-   bundle's, with the shares of the crop past the knee and past the cut at its settings. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
+   bundle's, with the shares of the crop past the knee and past the cut at its settings, and, whatever the base's
+   source, when 1 % or more of the crop is past the cut in a channel (`kPrintCutWarnShare`): a rebate read on a scan
+   long enough to clip unexposed film (1006_0011: 8 % past the cut in blue) is a measured base in name only. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
    −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
    where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
 2. **A0, metered once, as the scene's search meters a bracket:** the `A` at which the frame's log-average cell (at E
