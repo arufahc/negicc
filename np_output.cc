@@ -548,6 +548,14 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!sc.film_base_capture_json.empty()) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
+  // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's thinnest
+  // film (print_base_floor); the base as found and the factor.
+  if (sc.print_floor_applied) {
+    fb["print_floor"] = {{"found_source", sc.print_floor_found_source},
+                         {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"), num(sc.print_floor_found_rgb[1], "%.10g"),
+                                        num(sc.print_floor_found_rgb[2], "%.10g")}},
+                         {"factor", num(sc.print_floor_k, "%.6g")}};
+  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
   // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain round-trips
@@ -586,6 +594,7 @@ bool write_json_sidecar(const Sidecar& sc) {
                                            {"steps", sc.print_steps}, {"converged", sc.print_converged},
                                            {"stopped_by", sc.print_stopped_by},
                                            {"above_knee", num(sc.print_above_knee, "%.6g")},
+                                           {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
                                            {"past_knee_pct", {num(100.0 * sc.print_past_knee[0], "%.4g"), num(100.0 * sc.print_past_knee[1], "%.4g"),
                                                               num(100.0 * sc.print_past_knee[2], "%.4g")}},
                                            {"past_cut_pct", {num(100.0 * sc.print_past_cut[0], "%.4g"), num(100.0 * sc.print_past_cut[1], "%.4g"),

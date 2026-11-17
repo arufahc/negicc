@@ -249,6 +249,12 @@ struct Scan {
   // film_base holds it and the scan's is not read.
   bool has_given_base = false;
   negicc::FilmBaseDetection given_base;
+  // A print on a base that is not a capture (print_base_floor): the base as found, its source ("rebate",
+  // "statistics" or "bundle") and the factor it was raised by (film_base holds the raised base; 1: not raised).
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
   bool has_base_capture = false;
   FilmBaseCapture base_capture;
   std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)

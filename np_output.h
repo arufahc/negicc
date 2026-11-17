@@ -71,6 +71,11 @@ struct Sidecar {
   std::vector<double> film_base_rgb;
   std::vector<int> profile_film_base_rgb;
   std::string film_base_source;
+  // A print on a base that is not a capture (Scan::print_floor_*): the base as found, its source and the factor.
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
   // The white-light decode's gains on the camera channels before the camera matrix; null: not a white-light decode.
   const float* balance_gains = nullptr;

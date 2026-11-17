@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "multi_target_optimizer.h"
+#include "film_base_detector.h"
 
 #include <algorithm>
 #include <chrono>
@@ -2743,6 +2744,27 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   std::vector<float> features = res.intent_tone_features;
   plan_tone_on_render(fr, pd, p, &tone_head, encoding, features, out);
   return true;
+}
+
+float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]) {
+  const InnerCrop c = compute_inner_crop(frame.width, frame.height, crop_ratio);
+  const double* x = bundle.crosstalk_matrix_d;
+  std::vector<float> v[3];
+  uint16_t px[3];
+  for (int y = c.y0; y < c.y0 + c.h; y += 4)
+    for (int xx = c.x0; xx < c.x0 + c.w; xx += 4) {
+      frame.sample(xx, y, px);
+      for (int r = 0; r < 3; ++r)
+        v[r].push_back((float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]));
+    }
+  float k = 1.0f;
+  for (int r = 0; r < 3; ++r) {
+    if (v[r].empty() || !(fb[r] > 0.0)) continue;
+    const size_t q = std::min(v[r].size() - 1, (size_t)(negicc::kBasePercentile / 100.0 * v[r].size()));
+    std::nth_element(v[r].begin(), v[r].begin() + q, v[r].end());
+    k = std::max(k, v[r][q]);
+  }
+  return k;
 }
 
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,

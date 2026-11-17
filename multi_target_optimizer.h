@@ -375,6 +375,13 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // each A with g and b by the optimiser, E pinned). The scene
 // loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
 // bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+// The print's film base held no darker than the picture's thinnest film (the owner's decision of 2026-11-17, option 1:
+// "1, looks good then merge"), for a base that is not a capture (the scan's rebate or statistics, or the bundle's): the
+// factor k = max(1, the largest over the three channels of the inner crop's kBasePercentile point of (X px)_c / fb_c),
+// X the bundle's crosstalk matrix and fb the base in the conversion's film base space (fb_c reads n0 at the print's E).
+// The base the print takes is fb k, its colour kept; on a base already raised k is 1. Every 4th pixel each way.
+float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
+
 struct ContinuousPrint {
   std::function<void(double a, ParsedFilmProfile& prof)> set_curves_at;   // the print's input tables at A
   std::function<double(double dl)> green_apd;                             // G_green

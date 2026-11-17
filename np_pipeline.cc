@@ -1676,14 +1676,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       for (int k = 1; k < 3; ++k)
         if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
       const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
-      const bool estimate = !scan.film_base.found || scan.film_base.source == "statistics";
+      const bool bundle_base = !scan.film_base.found || scan.film_base.source == "bundle";
+      const bool estimate = bundle_base || scan.film_base.source == "statistics";
+      char raised[160] = "";
+      if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
+        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film,", scan.print_floor_k);
       if (estimate) {
-        log_warn("the print's level is relative to the film base, and this one is %s: %.2f %% of the crop is past the "
+        log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the crop is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
                  "of this roll's unexposed film>\n",
-                 !scan.film_base.found ? "the profile bundle's own, not this roll's"
-                                       : "estimated from the thinnest film on this frame, which shows no rebate",
-                 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+                 bundle_base ? "the profile bundle's own, not this roll's"
+                             : "estimated from the thinnest film on this frame, which shows no rebate",
+                 raised, 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
       } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
         log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
                  "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
@@ -1728,6 +1732,43 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
   // detector, so the base comes from the statistics.
   // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it is.
+  // A print on a base that is not a capture: the base held no darker than the picture's thinnest film (the owner's
+  // option 1, print_base_floor), on the frame the search crops. The raised base replaces the found one for the
+  // whole conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
+  // derives the same; a capture (given, or a capture's values kept from an earlier run) is taken as it is, and so is
+  // any base without --print. Called once per conversion, with the frame, before the search.
+  auto floor_print_base = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
+    const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
+    if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
+      return;
+    double fb[3];
+    std::string src;
+    if (scan.film_base.found) {
+      for (int c = 0; c < 3; ++c) fb[c] = scan.film_base.rgb[c];
+      src = scan.film_base.source;
+    } else {  // the bundle's base scaled by the exposures, as the conversion takes it (frame_scale)
+      const double fb_t = s.bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(s.bundle.film_base_shutter);
+      const double ratio = (scan_shutter_s * (scan_iso / 100.0)) / (fb_t * (s.bundle.film_base_iso / 100.0));
+      for (int c = 0; c < 3; ++c) fb[c] = s.bundle.film_base_avg_d[c] * ratio;
+      src = "bundle";
+    }
+    const float k = print_base_floor(s.bundle, frame, ParamSearchOptions{}.crop_ratio, fb);
+    scan.print_floor_applied = true;
+    scan.print_floor_found_source = src;
+    scan.print_floor_k = k;
+    for (int c = 0; c < 3; ++c) scan.print_floor_found_rgb[c] = fb[c];
+    if (k > 1.0f) {
+      if (!scan.film_base.found) {
+        scan.film_base = negicc::FilmBaseDetection{};
+        scan.film_base.found = true;
+        scan.film_base.source = "bundle";
+      }
+      for (int c = 0; c < 3; ++c) scan.film_base.rgb[c] = fb[c] * k;
+      log_info("Film base for the print: %s, raised %.4fx to be no darker than the picture's thinnest film "
+               "(R=%.1f G=%.1f B=%.1f)\n", src.c_str(), k, scan.film_base.rgb[0], scan.film_base.rgb[1], scan.film_base.rgb[2]);
+    }
+  };
+
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
     if (scan.has_given_base) {  // --film_base's capture, or a previous run's: logged where it was read
@@ -1889,6 +1930,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
+      floor_print_base(frame, scan_shutter_s, scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -2198,6 +2240,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         scan.auto_frame_half[0], scan.auto_frame_half[1], scan.auto_frame_half[2], scan.auto_frame_half[3],
         scan.rot_cw, scan.hflip, scan.vflip);
     oriented_half_view = search_half_view;
+    {
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+      floor_print_base(search_half_view, scan_shutter_s, scan_iso);
+    }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
     if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -2776,7 +2823,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // crop that shows the rebate.
     const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
                                        : "give --film_base <capture of this roll's unexposed film>";
-    if (!scan.film_base.found) {
+    if (!scan.film_base.found || scan.film_base.source == "bundle") {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
                "roll's base; %s\n", remedy);
     } else if (scan.film_base.source == "statistics") {
@@ -3058,6 +3105,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_rgb.assign(c.sidecar_film_base_rgb.begin(), c.sidecar_film_base_rgb.end());
   sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
+  sc.print_floor_applied = scan.print_floor_applied;
+  sc.print_floor_found_source = scan.print_floor_found_source;
+  sc.print_floor_k = scan.print_floor_k;
+  for (int k = 0; k < 3; ++k) sc.print_floor_found_rgb[k] = scan.print_floor_found_rgb[k];
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;

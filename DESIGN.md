@@ -602,29 +602,37 @@ so the two are searched differently ("The search naturally are between scene ICC
 were constructed"). The print's lightness is searched once and continuously, in `A`, and its colour in g and b
 (`search_print_continuous`):
 
-1. **E, the print's level: its rule is pending, the owner's decision together with the film base's rule.** This
-   head holds E where the run's film base reads n0 (E = e_norm on M_frame / e_norm; the result's E, `auto.e` and
-   `-E`, is 1), the negative's own density above its base as the brackets were measured. The rule it replaced held E
-   = 1 on M_frame / e_norm, which in green is the reference scan's matrix whatever the base: the base's level cancelled
-   out and only its colour entered, so the base read at n0 / e_norm (0.82 to 3.30 on the 50 TriLED test frames) and the
-   print depended on how long the scan was exposed. The run's base is, by `--film_base`:
-   - **a capture** (given, or recorded by an earlier run of this output): measured, scaled to the scan's exposure. With
-     it this rule does what it says: on roll 1006 with its roll's base, the picture and the CLF agree in the shadows
-     (0.44 to 0.68 ΔE00 over the print's darkest third on four frames) and no frame's crop passes the knee.
-   - **the scan's rebate:** measured where the frame shows unexposed film, but on a scan exposed long enough the rebate
-     is clipped and the reading is not the base (1006_0011: 0.34 of the true base in green).
-   - **the scan's statistics** (no rebate in view): an estimate below the frame's own thinnest film, 0.21 to 1.06 of
-     the capture in green on the test frames (median 0.63). This rule takes its level in full: on 1006_0007 (0.31 of
-     the roll's base) 60 % of the crop passes the knee and the print's shadows go to one flat tone (L\* range of a
-     shadow region 5.8 to 0.0), where the rule it replaced, ignoring the base's level, printed it right.
-   - **the bundle's** (none of the above): another roll's base scaled by the exposures.
-   So the level rule and the base rule are one decision, measured as arrangements on the 50 frames (station
-   `designs/print_search_ways.md`). Until it is made, the print warns when its base is a statistics estimate or the
-   bundle's, with the shares of the crop past the knee and past the cut at its settings, and, whatever the base's
-   source, when 1 % or more of the crop is past the cut in a channel (`kPrintCutWarnShare`): a rebate read on a scan
-   long enough to clip unexposed film (1006_0011: 8 % past the cut in blue) is a measured base in name only. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
-   −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
-   where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
+1. **E, the print's level: where the film base reads n0, and the base no darker than the picture's thinnest film when
+   it is not a capture.** The owner's decision (2026-11-17), with the arrangements measured on 50 TriLED frames:
+   "1, looks good then merge" (option 1). The search holds E where the run's film base reads n0 (E = e_norm on M_frame
+   / e_norm; the result's E, `auto.e` and `-E`, is 1), the negative's own density above its base as the brackets were
+   measured. The base is, by `--film_base`:
+   - **a capture** (given, or a capture's values kept by an earlier run of this output): measured, scaled to the scan's
+     exposure, and taken as it is.
+   - **otherwise** (the scan's rebate or statistics, or the bundle's base scaled by the exposures): an estimate, and with
+     `--print` it is held no darker than the picture's thinnest film (`print_base_floor`). Its level is raised by k =
+     max(1, the largest over the channels of the inner crop's `kBasePercentile` point of (X px)_c / fb_c), its colour
+     kept. `kBasePercentile` (99.5) is the base detector's own percentile, the one its statistics step reads the
+     thinnest film with; there is no second number. The raised base serves the whole conversion: the picture's search,
+     given values, the density file (written against the raised base), its print searches and CLFs, so the CLF still
+     prints the picture's print and a replay reproduces it. The sidecar records the base as found and k
+     (`film_base.print_floor`, `profile.print.search.base_factor`), and the warning on an estimated base says by how
+     much it was raised. Without `--print`, nothing changes.
+   - **Why:** E held at 1 in reference units (the rule before) made the print depend on how long the scan was exposed:
+     the base read at n0 / e_norm, 0.82 to 3.30 on the test frames. Taking the base's level in full instead, an
+     estimated base far below the film's thinnest areas cut the shadows: 1006_0007 on its estimate (0.31 of its capture
+     in green) had 60 % of its crop past the knee and its shadows went to one flat tone.
+   - **What the rule gives** (station `designs/print_search_ways.md`, "Option 1 evaluated"): on the 50 frames with the
+     base a default run finds, no frame has more than 1 % of the crop past the cut, against 10 with the estimate taken
+     as it is. The print is 0.87 ΔE00 from the capture's print over its darkest third (0.46 where the frame shows a
+     readable rebate). The harness's measures match the capture's: colour self-prediction within its intervals, 9
+     frames moving over 1 L\* under a 1 % or 2 % tighter crop (8 with the captures) and none over 3, and 48 of 50
+     searches converged (44). k is above 1 on 33 of the 50 frames, from 1.000 to 5.84, and moves 0.45 % on average
+     under the tighter crops.
+   - **Its limit:** without a capture the shadows stay about 1 ΔE00 from the capture's print, because the base's colour
+     is still the estimate's. A capture of the roll's unexposed film is the remedy, and the warning says so. On a
+     capture the rule is not applied: there it would change 10 of the 50 prints (by up to 1.05 ΔE00), the film's
+     thinnest 0.5 % reading a little above some captures.
 2. **A0, metered once, as the scene's search meters a bracket:** the `A` at which the frame's log-average cell (at E
    = 1, g = b = 1) prints at L\* 50 through the print profile, by bisection. The network's lightness follows the render
    it is shown (its echo on these previews is 0.74 to 0.79), so the meter decides most of the print's lightness: a
@@ -738,8 +746,8 @@ own previews keep the gains in the matrix; their difference from the final print
 it: a gain under 1 no longer pulls a channel back under the knee. With a grossly wrong base the cut is now total:
 1006_0007 on its scan's estimate (0.31 of its capture in green) searches gains of 0.70 and 0.44, and its print is
 19.4 ΔE00 from the capture's print over the darkest third, against 3.2 with the gains in the matrix; there the
-previews, which keep the gains in the matrix, are 10 ΔE00 from the picture. That is the pending level rule meeting an
-estimated base (step 1), and the print warns.
+previews, which keep the gains in the matrix, are 10 ΔE00 from the picture. The owner's rule (step 1) holds such a base no
+darker than the picture's thinnest film, and with it 1006_0007 prints without a cut.
 
 **Checks.** On Portra 400 frames (TriLED), run again at this head (5dd91cb's code with the record and the warning;
 the bundles carrying each bracket's own tilt) unless said otherwise:
@@ -749,19 +757,21 @@ the bundles carrying each bracket's own tilt) unless said otherwise:
   beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured before the tilts shipped).
-- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it: 50 of 50 frames.
+- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it: 50 of 50 frames with their
+  captures, and 50 of 50 on the base a default run finds (the raised base is derived again from the same scan).
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte: through the shipped bundles every one of the 50 frames' prints takes "the bundle's print ICC" (the
   computed reference bracket's curves equal the bundle's), and earlier for a material given as a file, Vision 2383
   (D55) included.
 - The picture against the CLF applied to the density file of the same frame (`tools/check_print_clf.py`), on the 50
-  TriLED test frames through the shipped bundles (each bracket's own tilt), Portra Endura: 0.37 ΔE00 in the median
-  frame, 0.61 at its 95th percentile, the CLF's straight lines against the curve; 48 of 50 within 0.5 / 1.0. The
-  other two, 1006_0003 and 1006_0007, put 11 % and 60 % of their crop above the knee on the film base the frame
-  detector estimated from the scan's statistics: the picture clips there and the density file does not. That is the
-  pending E rule meeting an estimated base (step 1), not an exception; with the roll's base both agree. The check
-  applies the CLF before shrinking: an average of densities is not the density of the average, and shrinking the
-  density file first read 0.5 to 0.6 on detailed frames where the two agree to 0.37.
+  TriLED test frames through the shipped bundles (each bracket's own tilt), Portra Endura. With their captures: 0.37
+  ΔE00 in the median frame, 0.61 at its 95th percentile, the CLF's straight lines against the curve; 48 of 50 within
+  0.5 / 1.0. On the base a default run finds, with the base held no darker than the picture's thinnest film (step 1):
+  0.36 and 0.60, and 49 of 50 within 0.5 / 1.0. The three frames with the largest factor read 0.53 / 0.71 (1006_0007,
+  k 5.84), 0.29 / 0.47 (1004_0001, k 2.25) and 0.32 / 0.62 (1006_0003, k 1.86). With a capture, the pictures, the
+  density files' pixels and their CLFs are the same as before the rule. The check applies the CLF before shrinking:
+  an average of densities is not the density of the average, and shrinking the density file first read 0.5 to 0.6
+  on detailed frames where the two agree to 0.37.
 - Without `--print` the output is bit-identical to `neg_process` before this change (unchanged since 094b031:
   byte-identical on 1004_0014 and 1006_0003).
 
