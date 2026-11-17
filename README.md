@@ -246,6 +246,36 @@ RGB-LED scan.
 
 *Left to right: negicc's picture, the print on Portra Endura paper, the print on Vision 2383 film.*
 
+### The print as a picture
+
+On an RGB-LED scan, `--print <print>` with `-P srgb` writes the print itself, with no density file or CLF in
+between:
+
+```sh
+bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
+    --film_base base.ARW --roi auto -o print.tif scan.ARW
+```
+
+Each RGB-LED profile set carries one print ICC per print material (`profiles/<film>-A7R4-TriLED/print_<print>.icc`,
+and its `README.md` gives the math). The automatic search runs on the print itself: its printing exposure is one
+continuous level, then the colour balance, and the paper's own curve sets the tone, so the toning step does not run.
+The print is shown relative to its paper, the paper's base at the display's white. A print profile given as a file
+gets its ICC computed. With a density output, each material's CLF prints the frame as the picture does, except where the scan is
+thinner than the film base (the picture passes the soft knee there and the density file does not): `--print` runs the print's
+search for each material it writes a CLF for (about 9 s each on a 96-core x86 machine; `--print all`, eight
+searches, about 70 s), and a print's `cli_equivalent` given to a density output writes the same CLF for the one
+material whose picture it came from. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
+set saved before it had a grey balance curve cannot print.
+
+One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search
+chose:
+
+![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
+
+*Top left: negicc's picture without `--print`. Then the six papers and the two print films, all at one exposure
+and balance, so only the print material changes. Rendered before the print's own search: at the scene's search's
+bracket, exposure and balance, against a perfect white.*
+
 ## Options
 
 `bin_out/neg_process --help` lists everything. The common ones:
@@ -256,7 +286,7 @@ RGB-LED scan.
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
-| `--print <print>` | With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB. `<print>` is a built-in print material or the path of a spektrafilm print profile. Repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
+| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, at the bracket, exposure and gains the search chose on the scene. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
@@ -289,5 +319,7 @@ people's photographs, credited above. The print profiles in `3rd_party/spektrafi
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
 (`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two
 tables, and the pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
-spektrafilm's film spectra, under the same licence; it covers that block only, not the rest of a bundle or its ICC
-profiles.
+spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each RGB-LED profile set
+(`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
+The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
+the pictures made with a print ICC.

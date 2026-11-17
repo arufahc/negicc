@@ -22,7 +22,9 @@ alone lists them.
 **Licence.** The profiles are under CC BY-SA 4.0 (`SPEKTRAFILM_LICENSE.txt`), not under negicc's licence. A CLF that
 `neg_process` writes with one carries that notice for its two tables, the curve per layer and the colour cube, which
 derive from this data. Its matrices are computed and are not under that licence, and neither are the pictures made
-through a CLF.
+through a CLF. The same holds for a print ICC: those of the RGB-LED profile sets (`profiles/*/print_<material>.icc`),
+and those `neg_process` computes for a material given as a file, carry the notice in their copyright tag for their
+table and input curves, which derive from this data; the pictures made through one are not under that licence.
 
 The profiles are models built from datasheets and have not been compared with real prints.
 

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,11 @@ struct Sidecar {
   std::vector<double> film_base_rgb;
   std::vector<int> profile_film_base_rgb;
   std::string film_base_source;
+  // A print on a base that is not a capture (Scan::print_floor_*): the base as found, its source and the factor.
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
   // The white-light decode's gains on the camera channels before the camera matrix; null: not a white-light decode.
   const float* balance_gains = nullptr;
@@ -135,6 +141,21 @@ struct Sidecar {
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
   bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
+  std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
+  std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
+  bool print_from_bundle = false;
+  // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
+  double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
+  double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
+  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the paper's white the print is relative to (PCS D50)
+  bool print_searched = false, print_converged = false;
+  int print_steps = 0;
+  float print_wish_l = 0.0f, print_above_knee = 0.0f;
+  float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};   // ContinuousPrintResult at the final settings
+  float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
+  bool print_a0_at_end = false;
+  float print_last_move[3] = {0, 0, 0};
+  std::string print_stopped_by;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

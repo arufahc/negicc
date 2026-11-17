@@ -548,6 +548,16 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!sc.film_base_capture_json.empty()) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
+  // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's thinnest
+  // film (print_base_floor); the base as found and the factor.
+  if (sc.print_floor_applied) {
+    fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is scaled to it; "
+                                    "film_base_rgb is the bundle's at its own exposure when nothing was raised)"},
+                         {"found_source", sc.print_floor_found_source},
+                         {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"), num(sc.print_floor_found_rgb[1], "%.10g"),
+                                        num(sc.print_floor_found_rgb[2], "%.10g")}},
+                         {"factor", num(sc.print_floor_k, "%.6g")}};
+  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
   // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain round-trips
@@ -562,6 +572,44 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else if (sc.is_bundle) {
     j["profile"] = {{"path", sc.profile_path}, {"type", "bundle"}, {"bundle_target", sc.bundle_target_name},
                     {"input_space", to_string(sc.input_space)}};
+    // --print: the brackets were rendered through a print material's print ICC (np_print.h), not the chart's.
+    if (!sc.print_id.empty()) {
+      j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
+                               {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
+                               {"curves", "computed for the bracket from the bundle's grey_balance_curves"}};
+      // A material given as a file: which file, and its content, so the replay can be checked against it.
+      if (!sc.print_file.empty()) {
+        j["profile"]["print"]["file"] = sc.print_file;
+        j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
+      }
+      // The print's white, its mid grey A and the bracket's own, and its search (np_pipeline: search_print_continuous).
+      j["profile"]["print"]["white"] = "paper";   // media-relative: the paper's base at the display's white
+      j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"), num(sc.print_paper_xyz[1], "%.6g"),
+                                                  num(sc.print_paper_xyz[2], "%.6g")};
+      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      if (std::isfinite(sc.print_bracket_a_mid))
+        j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
+      if (std::isfinite(sc.print_tilt[0]))   // the brackets' tilt (grey_relative.b) at that A, linear in A between brackets
+        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"), num(sc.print_tilt[2], "%.9g")};
+      if (sc.print_searched) {
+        j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
+                                           {"steps", sc.print_steps}, {"converged", sc.print_converged},
+                                           {"stopped_by", sc.print_stopped_by},
+                                           {"above_knee", num(sc.print_above_knee, "%.6g")},
+                                           {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
+                                           {"past_knee_pct", {num(100.0 * sc.print_past_knee[0], "%.4g"), num(100.0 * sc.print_past_knee[1], "%.4g"),
+                                                              num(100.0 * sc.print_past_knee[2], "%.4g")}},
+                                           {"past_cut_pct", {num(100.0 * sc.print_past_cut[0], "%.4g"), num(100.0 * sc.print_past_cut[1], "%.4g"),
+                                                             num(100.0 * sc.print_past_cut[2], "%.4g")}},
+                                           {"above_white_pct", {num(sc.print_above_white[0], "%.4g"), num(sc.print_above_white[1], "%.4g"),
+                                                                num(sc.print_above_white[2], "%.4g")}},
+                                           {"at_white_pct", {num(sc.print_at_white[0], "%.4g"), num(sc.print_at_white[1], "%.4g"),
+                                                             num(sc.print_at_white[2], "%.4g")}},
+                                           {"a0_at_range_end", sc.print_a0_at_end},
+                                           {"last_move", {num(sc.print_last_move[0], "%.4g"), num(sc.print_last_move[1], "%.4g"),
+                                                          num(sc.print_last_move[2], "%.4g")}}};
+      }
+    }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
   }
@@ -617,6 +665,24 @@ bool write_json_sidecar(const Sidecar& sc) {
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
+  // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
+  // built-in material's, or none).
+  // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
+  // if any, and re-running it re-runs the search (deterministic), then the same knobs on its result.
+  if (!sc.print_id.empty() && sc.density_json.empty()) {
+    cli.clear();
+    if (sc.has_roi) {
+      cli.push_back("--roi");
+      for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
+        cli.push_back(std::to_string(v));
+    }
+    if (sc.has_knobs) {
+      if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
+      if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
+      if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
+    }
+  }
+  if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
   // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
   // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
   if (!sc.density_json.empty()) {

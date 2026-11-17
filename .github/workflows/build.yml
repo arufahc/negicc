@@ -51,6 +51,7 @@ jobs:
           cp COPYING dist/neg_process-linux-x86_64/COPYING
           cp models/dinov3-small/LICENSE.md dist/neg_process-linux-x86_64/LICENSE.dinov3.md
           cp 3rd_party/onnxruntime/LICENSE dist/neg_process-linux-x86_64/LICENSE.onnxruntime
+          cp 3rd_party/spektrafilm/SPEKTRAFILM_LICENSE.txt dist/neg_process-linux-x86_64/LICENSE.spektrafilm
           tar -C dist -czf dist/neg_process-linux-x86_64.tar.gz neg_process-linux-x86_64
           (cd dist && sha256sum neg_process-linux-x86_64.tar.gz > neg_process-linux-x86_64.tar.gz.sha256)
 

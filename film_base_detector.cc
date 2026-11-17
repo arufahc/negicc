@@ -29,7 +29,6 @@ constexpr double kClipLevel = 15000.0;      // a channel at or above this: clipp
 constexpr double kLightChromaGap = 0.8;     // stops of log2(R/B) between film (orange mask) and bare light
 constexpr double kLightHoleArea = 0.005;    // a light part inside the scan at most this fraction: sprocket hole
 constexpr double kLightOfRef = 0.65;        // bare light luminance at least this fraction of the p99.9 luminance
-constexpr double kBasePercentile = 99.5;    // per-channel percentile of film pixels taken as the film base
 constexpr int kCarrierPad = 3;              // dark-carrier dilation radius (px on a 1024-px-wide work image)
 
 // numpy's percentile (method linear) of float32 values with a Python float q: the interpolation runs in float32.

@@ -298,12 +298,16 @@ int parse_options(int ac, char* av[], Options& o) {
           "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
           "beside the file uses it.");
   parser.add_argument("--print")
-    .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
-          "print on this print material, as sRGB (<output>.<print>.clf). The print material is one built in, or the "
-          "path of a spektrafilm print profile (a .json file). Give it once per print material, or 'all' for those "
-          "built in. "
-          "Without a name, --print lists the print materials built in. Without --print only the density file is "
-          "written.")
+    .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
+          "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto searches "
+          "the print itself (its mid grey A as a continuous printing exposure, E held, then g and b; DESIGN.md, \"The "
+          "print's search\") and the conversion renders it there; a print is made by its own search, so --target, -E, "
+          "--gain_g and --gain_b are refused with it, and re-running reproduces it. It needs the bundle's "
+          "grey_balance_curves. With a density "
+          "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
+          "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
+          "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
+          "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
@@ -721,8 +725,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   if (parser.is_used("--print")) {
     o.prints = parser.get<std::vector<std::string>>("--print");
-    if (!o.density) {
-      log_error("--print takes a density output: give -P statusm, rp180 or apd\n");
+    // A picture output is one print: one material.
+    if (!o.density && (o.prints.size() != 1 || o.prints.front() == "all")) {
+      log_error("--print with a picture output renders one print: give one print material (a density output takes "
+                "several, or 'all', one CLF each)\n");
       return 1;
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
@@ -751,6 +757,14 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
+  // A print is made by its own search (the owner, 2026-11-17: "Remove, just rerun."): no given bracket, exposure or
+  // gains with --print, on a picture or a density output, so that no print differs silently from its Auto; re-running
+  // the same command reproduces it.
+  if (!o.prints.empty() && (o.target_given || o.exposure_given || o.gain_g_given || o.gain_b_given)) {
+    log_error("--target, -E, --gain_g and --gain_b do not apply with --print: a print is made by its own search, and "
+              "re-running reproduces it\n");
+    return 1;
+  }
   if (!o.density) {
     if (ext == ".dpx") {
       log_error("A .dpx output holds density: give -P statusm, rp180 or apd\n");
@@ -774,8 +788,8 @@ int parse_options(int ac, char* av[], Options& o) {
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given},          {"-E", o.exposure_given},
-        {"--gain_g", o.gain_g_given},          {"--gain_b", o.gain_b_given},
+        {"--target", o.target_given},  {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},  {"--gain_b", o.gain_b_given},
         {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
         {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
         {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},

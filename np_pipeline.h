@@ -37,6 +37,7 @@
 #include <lcms2.h>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,6 +62,7 @@ struct CachedSidecar {
   int target_idx = -1;
   std::string target_name;
   float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
+  double print_a = NAN;                  // a print's mid grey A (profile.print.a); NaN: none
   std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
   std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
   std::string dino_backend;
@@ -100,6 +102,22 @@ struct Setup {
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
+  // --print with a picture output on a narrow-band bundle: the print material, and each bracket's print profile
+  // (np_print.h bracket_print_profiles, in bundle.targets' order). Auto searches the print itself
+  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a), or, on a reused run,
+  // at the bracket's own. Empty without.
+  std::string print_id, print_name;
+  std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
+  bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
+  std::vector<ParsedFilmProfile> print_profs;
+  std::vector<std::vector<uint8_t>> print_iccs;
+  PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
+  ContinuousPrint print_cp;           // the search's view of it
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
+  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the lightest node of the print's table: the paper's white
+  ContinuousPrintResult print_cr;     // the print's search
+  std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a TriLED density run's, per material
+  bool print_searched = false;
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
@@ -231,6 +249,12 @@ struct Scan {
   // film_base holds it and the scan's is not read.
   bool has_given_base = false;
   negicc::FilmBaseDetection given_base;
+  // A print on a base that is not a capture (print_base_floor): the base as found, its source ("rebate",
+  // "statistics" or "bundle") and the factor it was raised by (film_base holds the raised base; 1: not raised).
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
   bool has_base_capture = false;
   FilmBaseCapture base_capture;
   std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)

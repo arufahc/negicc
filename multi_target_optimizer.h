@@ -365,6 +365,62 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
+// The print's search (--print with Auto on a TriLED bundle with grey_balance_curves): the print searched with its mid
+// grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the search's reference units (the negative's own
+// density above base, as the brackets were measured): A0 metered once (the A at which the frame's log-average cell
+// prints at L* 50, as the scene's search meters a bracket); the lightness wish from the mean field of the renders at A0 - boot_h, A0,
+// A0 + boot_h (A0 alone when boot_h is 0), held; g and b screened at A0 on the optimiser's wide grids; then the fixed
+// point over (A, g, b): each step renders the print at its A, measures the optimiser's correction, predicts a* b* (L*
+// is the wish) and solves A (bracketed by steps of 0.1 APD downhill from the current A, then golden section to 0.001,
+// each A with g and b by the optimiser, E pinned). The scene
+// loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
+// bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+// The print's film base held no darker than the picture's thinnest film (the owner's decision of 2026-11-17, option 1:
+// "1, looks good then merge"), for a base that is not a capture (the scan's rebate or statistics, or the bundle's): the
+// factor k = max(1, the largest over the three channels of the inner crop's kBasePercentile point of (X px)_c / fb_c),
+// X the bundle's crosstalk matrix and fb the base in the conversion's film base space (fb_c reads n0 at the print's E).
+// The base the print takes is fb k, its colour kept; on a base already raised k is 1. Every 4th pixel each way.
+float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
+// The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
+// found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
+// conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times k) at the scan's
+// exposure, in the conversion's film base space, and returns k.
+float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
+                       double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
+// make check_print (check_print.cc): print_floor_base on synthetic frames (a found base, none found, a raised base, film all
+// denser than the base). Returns the number of failed cases.
+int print_floor_selfcheck();
+
+struct ContinuousPrint {
+  std::function<void(double a, ParsedFilmProfile& prof)> set_curves_at;   // the print's input tables at A
+  std::function<double(double dl)> green_apd;                             // G_green
+  double n0 = 1.0;
+  double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
+  std::vector<double> a_mid;         // per bundle.targets
+  double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)
+};
+struct ContinuousPrintResult {
+  double a = 0.0, a0 = 0.0;
+  int steps = 0;
+  bool converged = false;
+  float above_knee = 0.0f;           // the share of the inner crop above the knee at the bootstrap (the search's E, g = b = 1)
+  // At the final settings, per channel (the gains are in the print's curves, after the knee, so this is at E alone): the
+  // share of the inner crop past the knee (input above 0.95, 0.054 density thinner than the base) and past the cut
+  // (above 1.1227, where the knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no
+  // detail.
+  float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
+  float wish_mean_l = 0.0f;          // the held wish's mean L*
+  float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut
+  float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above
+  bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
+  float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
+  const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
+};
+// print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
+bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
+                             DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                             const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);
+
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);

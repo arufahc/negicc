@@ -236,6 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
+      {"", "--print", 1, false},
       {"", "--probe_intent", 1, true},    {"", "--probe_params", 1, true},      {"", "--probe_stops", -1, true},
   };
   auto is_number = [](const std::string& t) {
@@ -472,6 +473,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.has_cached_sidecar = true;
     s.bundle_search = true;
     s.cached_sidecar.is_auto = true;
+    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
+        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
+      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
     s.cached_sidecar.target_idx = tgt_idx;
     s.cached_sidecar.target_name = s.bundle.targets[tgt_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -591,6 +595,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
 
     s.has_cached_sidecar = true;
     s.cached_sidecar.is_auto = false;
+    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
+        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
+      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
     s.cached_sidecar.target_idx = expected_idx;
     if (s.is_bundle && expected_idx >= 0) s.cached_sidecar.target_name = s.bundle.targets[expected_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -656,6 +663,27 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
     log_info("Not reusing %s: %s; converting from scratch\n", sidecar_path.c_str(), why.c_str());
   }
   return ok;
+}
+
+// The paper's white (the owner's choice, "paper white is display white"): a print profile made media-relative, as the
+// ICC defines it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of
+// X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white and none
+// of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have an sRGB channel above 1,
+// which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the base.
+static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
+  constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
+  const double d50[3] = {0.9642, 1.0, 0.8249};
+  size_t best = 0;
+  for (size_t i = 1; i < p.clut.size(); i += 3)
+    if (p.clut[i] > p.clut[best * 3 + 1]) best = i / 3;
+  double base[3], k[3];
+  for (int c = 0; c < 3; ++c) {
+    base[c] = p.clut[best * 3 + c] * kPcsMax;
+    k[c] = d50[c] / base[c];
+    if (paper_xyz) paper_xyz[c] = base[c];
+  }
+  for (size_t i = 0; i < p.clut.size(); ++i) p.clut[i] *= (float)k[i % 3];
+  p.rebind_pointers();
 }
 
 // --check_renderer's renderer (multi_target_optimizer.h PassThroughRenderer).
@@ -799,6 +827,81 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
+  // --print. The search (bracket, E, g, b) always runs on the chart profiles, as for the density output's CLF, whose
+  // frame matrix puts the search's mid grey on the print's. With a picture output on a narrow-band bundle the
+  // conversion then renders the chosen bracket's print profile: the bundle's print ICC with that bracket's curves
+  // (np_print.h bracket_print_profiles), built here for every bracket. A density output writes a CLF per material, as
+  // before. On a white-light bundle the curve fit composes into the chart profiles, so its print is a density
+  // output's CLF alone.
+  if (!o.prints.empty()) {
+    if (!s.is_bundle) {
+      log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
+                "computed for the bundle's film\n");
+      return 1;
+    }
+    if (s.white_light && !s.density) {
+      log_error("--print with a picture output needs a TriLED bundle; on a white-light bundle give a density output "
+                "(-P statusm, rp180 or apd) for its print CLF\n");
+      return 1;
+    }
+    if (!s.white_light && !s.density) {
+      const std::string& print = o.prints.front();
+      BracketPrints prints;
+      std::string why;
+      if (!bracket_print_profiles(bundle, print, prints, why)) {
+        log_error("--print %s: %s\n", print.c_str(), why.c_str());
+        return 1;
+      }
+      for (size_t i = 0; i < bundle.targets.size(); ++i) {
+        std::vector<uint8_t>& icc = prints.icc[i];
+        cmsHPROFILE h = cmsOpenProfileFromMem(icc.data(), (cmsUInt32Number)icc.size());
+        ParsedFilmProfile prof;
+        const bool ok = h && parse_film_profile_pipeline(h, prof);
+        if (h) cmsCloseProfile(h);
+        if (!ok) {
+          log_error("--print %s: the print ICC of %s cannot be read\n", print.c_str(), bundle.targets[i].name.c_str());
+          return 1;
+        }
+        s.print_profs.push_back(std::move(prof));
+        s.print_iccs.push_back(std::move(icc));
+      }
+      for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
+      // The paper's white (the owner's choice, "paper white is display white"): the print is media-relative
+      // (to_paper_white); the profile an output embeds carries the same scaled table.
+      for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p, s.print_paper_xyz);
+      {
+        double k[3];
+        const double d50[3] = {0.9642, 1.0, 0.8249};
+        for (int c = 0; c < 3; ++c) k[c] = d50[c] / s.print_paper_xyz[c];
+        // The table is now media-relative: the paper's XYZ goes into wtpt, as the ICC means a media-relative table (a
+        // viewer on the relative intent shows the picture; on the absolute intent it gets the paper back). negicc
+        // reads only the A2B0.
+        for (std::vector<uint8_t>& icc : s.print_iccs) {
+          scale_print_icc_table(icc, k);
+          set_icc_wtpt(icc, s.print_paper_xyz);
+        }
+      }
+      s.print_cont = prints.continuum;
+      s.print_a = NAN;   // the print's search sets it (or a reused run's)
+      {
+        const PrintContinuum* pc = &s.print_cont;
+        s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
+        s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
+        s.print_cp.n0 = pc->n0;
+        s.print_cp.a_lo = pc->a_lo();
+        s.print_cp.a_hi = pc->a_hi();
+        s.print_cp.a_mid = pc->a_mid;
+      }
+      s.print_id = prints.id;
+      s.print_name = prints.name;
+      s.print_file = prints.file;
+      s.print_file_sha256 = prints.file_sha256;
+      s.print_from_bundle = prints.from_bundle;
+      log_info("Print: %s (%s), the print ICC %s: with a picture output the print's own search runs on the print profile "
+               "(no chart profile) and the conversion renders the print\n", prints.name.c_str(), prints.id.c_str(),
+               prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
+    }
+  }
   if (s.white_light) {
     if (row_given[0] || row_given[1] || row_given[2]) {
       log_error("-r, -g and -b cannot be used with the rec2020_linear profile bundle %s: its white-light "
@@ -886,8 +989,14 @@ int prepare(const Options& o, Setup& s) {
                                (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
+  // A print (--print on a TriLED bundle) has its tone from the print material's own curve: no tone stage.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
-  const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb";
+  const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb" &&
+                           s.print_id.empty();
+  if ((tone_on || o.tone_replay_given) && !s.print_id.empty()) {
+    log_error("--tone_stage does not apply with --print: the print material's curve gives the print its tone\n");
+    return 1;
+  }
 
   // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
   // which picks the bracket, the exposure and the gains.
@@ -1470,7 +1579,130 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   };
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
   // g, b on the combined profile the curves were replayed into) in place of the search.
+  // The bundle search: on a print (--print with a picture output) the print's own search, the scene's otherwise.
+  // A TriLED density run with --print: each material's own print search, so that its CLF prints the frame as the
+  // picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's suggested
+  // balance, as without --print.
+  auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                                    const ParamSearchOptions& opts) -> bool {
+    std::vector<std::string> ids;
+    for (const std::string& id : o.prints) {
+      if (id == "all") {
+        for (const PrintMaterial& m : builtin_print_materials(&bundle)) ids.push_back(m.id);
+      } else {
+        ids.push_back(id);
+      }
+    }
+    for (const std::string& id : ids) {
+      BracketPrints prints;
+      std::string why;
+      if (!bracket_print_profiles(bundle, id, prints, why)) {
+        log_warn("No print search for %s: %s\n", id.c_str(), why.c_str());
+        continue;
+      }
+      if (s.density_print_search.count(prints.id)) continue;
+      std::vector<uint8_t>& icc = prints.icc[prints.icc.size() / 2];
+      cmsHPROFILE h = cmsOpenProfileFromMem(icc.data(), (cmsUInt32Number)icc.size());
+      ParsedFilmProfile prof;
+      const bool ok = h && parse_film_profile_pipeline(h, prof);
+      if (h) cmsCloseProfile(h);
+      if (!ok) {
+        log_warn("No print search for %s: its print ICC cannot be read\n", id.c_str());
+        continue;
+      }
+      prof.rebind_pointers();
+      to_paper_white(prof);
+      const PrintContinuum& pc = prints.continuum;
+      ContinuousPrint cp;
+      cp.set_curves_at = [&pc](double a, ParsedFilmProfile& p) { pc.set_curves_at(a, p); };
+      cp.green_apd = [&pc](double dl) { return pc.green_apd(dl); };
+      cp.n0 = pc.n0;
+      cp.a_lo = pc.a_lo();
+      cp.a_hi = pc.a_hi();
+      cp.a_mid = pc.a_mid;
+      ParamSearchResult res;
+      ContinuousPrintResult cr;
+      if (!search_print_continuous(bundle, prof, cp, s.engine, frame, scan_shutter_s, scan_iso, opts, res, cr)) {
+        return false;
+      }
+      DensityRecord::PrintSearch ps;
+      ps.a = cr.a;
+      ps.e = res.params.e;
+      ps.g = res.params.g;
+      ps.b = res.params.b;
+      ps.bracket = res.target_name;
+      ps.converged = cr.converged;
+      ps.steps = cr.steps;
+      for (int c = 0; c < 3; ++c) ps.last_move[c] = cr.last_move[c];
+      ps.above_knee = cr.above_knee;
+      for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
+      ps.stopped_by = cr.stopped_by;
+      s.density_print_search[prints.id] = ps;
+      log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
+               ps.bracket.c_str(), ps.g, ps.b);
+    }
+    return true;
+  };
+  auto bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                           const ParamSearchOptions& opts) -> bool {
+    if (s.print_profs.empty()) {
+      if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) return false;
+      if (s.density && !s.white_light && !o.prints.empty() && !scan.auto_res.probed &&
+          !density_print_searches(frame, scan_shutter_s, scan_iso, opts)) {
+        return false;
+      }
+      return true;
+    }
+    if (!search_print_continuous(bundle, s.print_profs[s.print_profs.size() / 2], s.print_cp, s.engine, frame,
+                                 scan_shutter_s, scan_iso, opts, scan.auto_res, s.print_cr)) {
+      return false;
+    }
+    s.print_a = s.print_cr.a;
+    s.print_searched = true;
+    {
+      // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
+      // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
+      // Also whatever the base's source: a rebate read on clipped film (a long scan) is a measured base in name only,
+      // and a gain can put a channel's thin film past the cut. kPrintCutWarnShare: the share of the crop past the cut
+      // in a channel from which the print says so (new constant, 1 %: on the 50 TriLED test frames with their captures,
+      // the base rule's prints pass it on 2, and every crushed print found so far is above it).
+      constexpr double kPrintCutWarnShare = 0.01;
+      int c = 0;
+      for (int k = 1; k < 3; ++k)
+        if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
+      const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
+      const bool bundle_base = !scan.film_base.found || scan.film_base.source == "bundle";
+      const bool estimate = bundle_base || scan.film_base.source == "statistics";
+      char raised[160] = "";
+      if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
+        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film", scan.print_floor_k);
+      if (estimate) {
+        log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the crop is past the "
+                 "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
+                 "of this roll's unexposed film>\n",
+                 bundle_base ? "the profile bundle's own, not this roll's"
+                             : "estimated from the thinnest film on this frame, which shows no rebate",
+                 raised, 100.0 * s.print_cr.past_knee[c], 100.0 * s.print_cr.past_cut[c], name);
+      } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
+        log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
+                 "base (a long scan clips unexposed film); give --film_base <capture of this roll's unexposed film>\n",
+                 scan.film_base.source.c_str(), raised);
+      } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
+        log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
+                 "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
+                 "<capture of this roll's unexposed film> if this is not one\n",
+                 100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str());
+      }
+    }
+    log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
+             "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
+             scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
+             s.print_cr.converged ? "" : ", not converged", s.print_cr.wish_mean_l, 100.0 * s.print_cr.above_knee);
+    return true;
+  };
   auto restore_cached_auto = [&]() {
+    if (!s.print_profs.empty() && std::isfinite(s.cached_sidecar.print_a))
+      s.print_a = s.cached_sidecar.print_a;
     scan.auto_res.target_idx = s.cached_sidecar.target_idx;
     scan.auto_res.target_name = s.cached_sidecar.target_name;
     scan.auto_res.params = {s.cached_sidecar.base_e, s.cached_sidecar.base_g, s.cached_sidecar.base_b, 1.0f};
@@ -1499,6 +1731,35 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
   // detector, so the base comes from the statistics.
   // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it is.
+  // A print on a base that is not a capture: the base held no darker than the picture's thinnest film (the owner's
+  // option 1, print_base_floor), on the frame the search crops. The raised base replaces the found one for the
+  // whole conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
+  // derives the same; a capture (given, or a capture's values kept from an earlier run) is taken as it is, and so is
+  // any base without --print. Called once per conversion, with the frame, before the search.
+  auto floor_print_base = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
+    const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
+    if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
+      return;
+    double fb[3], raised_rgb[3];
+    const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
+    const float k = print_floor_base(s.bundle, frame, ParamSearchOptions{}.crop_ratio,
+                                     scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb, raised_rgb);
+    scan.print_floor_applied = true;
+    scan.print_floor_found_source = src;
+    scan.print_floor_k = k;
+    for (int c = 0; c < 3; ++c) scan.print_floor_found_rgb[c] = fb[c];
+    if (k > 1.0f) {
+      if (!scan.film_base.found) {
+        scan.film_base = negicc::FilmBaseDetection{};
+        scan.film_base.found = true;
+        scan.film_base.source = "bundle";
+      }
+      for (int c = 0; c < 3; ++c) scan.film_base.rgb[c] = raised_rgb[c];
+      log_info("Film base for the print: %s, raised %.4fx to be no darker than the picture's thinnest film "
+               "(R=%.1f G=%.1f B=%.1f)\n", src.c_str(), k, scan.film_base.rgb[0], scan.film_base.rgb[1], scan.film_base.rgb[2]);
+    }
+  };
+
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
     if (scan.has_given_base) {  // --film_base's capture, or a previous run's: logged where it was read
@@ -1660,6 +1921,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
+      floor_print_base(frame, scan_shutter_s, scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -1683,7 +1945,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
-        if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) {
+        if (!bundle_search(frame, scan_shutter_s, scan_iso, opts)) {
           log_error("The conversion parameter search failed\n");
           return false;
         }
@@ -1969,6 +2231,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         scan.auto_frame_half[0], scan.auto_frame_half[1], scan.auto_frame_half[2], scan.auto_frame_half[3],
         scan.rot_cw, scan.hflip, scan.vflip);
     oriented_half_view = search_half_view;
+    {
+      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
+      floor_print_base(search_half_view, scan_shutter_s, scan_iso);
+    }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
     if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -1985,8 +2252,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
-      if (!search_conversion_params(bundle, s.engine, search_half_view, scan_shutter_s, scan_iso, opts,
-                                    scan.auto_res)) {
+      if (!bundle_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
         log_error("The conversion parameter search failed\n");
         delete proc;
         return 1;
@@ -2475,7 +2741,29 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params) {
+  // A print: the conversion renders the print profile at the print's mid grey A (its search's or a reused
+  // run's), else, with given values, at the chosen bracket's own.
+  if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
+    c.film_prof = s.print_profs[c.bundle_target_idx];
+    c.film_prof.rebind_pointers();
+    c.embedded_icc = s.print_iccs[c.bundle_target_idx];
+    if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search or a reused run's)
+      if (c.station_params) {
+        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix at
+        // E alone, so that film at the base's density never passes the knee whatever the gains: with them in the matrix
+        // a gain of 1.2 put the base past the knee (DESIGN.md, "The gains and the knee"). The CLF applies them the same way.
+        const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
+        negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
+        s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
+        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));
+      } else {
+        s.print_cont.set_curves_at(s.print_a, c.film_prof);
+        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
+      }
+    }
+  }
+  // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
+  if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {
     // The highlight roll-off of the conversion, as the bracket search measures it at its final parameters (on the
     // half-size frame), so given values (cli_equivalent) reproduce it: Auto's result and given values were measured
     // in decode, the single-bracket search above at its final E, g, b.
@@ -2526,12 +2814,18 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // crop that shows the rebate.
     const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
                                        : "give --film_base <capture of this roll's unexposed film>";
-    if (!scan.film_base.found) {
+    if (!scan.film_base.found || scan.film_base.source == "bundle") {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
                "roll's base; %s\n", remedy);
     } else if (scan.film_base.source == "statistics") {
       log_warn("the film base was estimated from the thinnest film on this frame, which shows no rebate: the densities "
                "are too low wherever the frame has no unexposed film; %s\n", remedy);
+    }
+    if (scan.print_floor_applied && scan.print_floor_k > 1.0f) {
+      log_warn("with --print, the density file is written against the film base raised %.3fx (from the %s's) to be no "
+               "darker than the picture's thinnest film, as the print takes it, so that the CLF prints the picture's print; "
+               "the same frame without --print is written against the base as found (the sidecar's film_base.print_floor)\n",
+               scan.print_floor_k, scan.print_floor_found_source.c_str());
     }
     {
       // Much of the frame thinner than the base, or at the density floor: the film base is probably wrong.
@@ -2690,6 +2984,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_b = (*c.station_params)[2];
       rec.balance_target = c.bundle_target_name;
     }
+    rec.print_search = s.density_print_search;
     // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
     if (s.white_light && s.input_curves.active()) {
       rec.has_curves = true;
@@ -2781,10 +3076,43 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_rgb.assign(c.sidecar_film_base_rgb.begin(), c.sidecar_film_base_rgb.end());
   sc.profile_film_base_rgb = c.sidecar_profile_film_base_rgb;
   sc.film_base_source = film_base_applied ? scan.film_base.source : c.film_base_source;
+  sc.print_floor_applied = scan.print_floor_applied;
+  sc.print_floor_found_source = scan.print_floor_found_source;
+  sc.print_floor_k = scan.print_floor_k;
+  for (int k = 0; k < 3; ++k) sc.print_floor_found_rgb[k] = scan.print_floor_found_rgb[k];
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
   sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
+  sc.print_id = s.print_id;
+  sc.print_name = s.print_name;
+  sc.print_file = s.print_file;
+  sc.print_file_sha256 = s.print_file_sha256;
+  sc.print_from_bundle = s.print_from_bundle;
+  if (!s.print_profs.empty()) {
+    sc.print_a = s.print_a;
+    for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
+    if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
+      sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
+    {
+      const double a_used = std::isfinite(s.print_a) ? s.print_a : sc.print_bracket_a_mid;
+      if (std::isfinite(a_used)) print_tilt_at(s.bundle, a_used, sc.print_tilt);
+    }
+    if (s.print_searched) {
+      sc.print_searched = true;
+      sc.print_a0 = s.print_cr.a0;
+      sc.print_wish_l = s.print_cr.wish_mean_l;
+      sc.print_steps = s.print_cr.steps;
+      sc.print_converged = s.print_cr.converged;
+      sc.print_above_knee = s.print_cr.above_knee;
+      for (int c = 0; c < 3; ++c) sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
+      for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
+      for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
+      sc.print_a0_at_end = s.print_cr.a0_at_range_end;
+      for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_cr.last_move[c];
+      sc.print_stopped_by = s.print_cr.stopped_by;
+    }
+  }
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;
