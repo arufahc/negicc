@@ -14,7 +14,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "np_options.h"
+#include <string>
+
 #include "np_pipeline.h"
+#include "np_print.h"
 
 #if !(LIBRAW_COMPILE_CHECK_VERSION_NOTLESS(0, 21))
 #error This code requires LibRaw 0.21+ (vendored in 3rd_party/libraw)
@@ -59,6 +62,8 @@
 // mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
+  // A self-check of the print's bracket term (np_print.h print_tilt_at), before any option is read.
+  if (ac == 2 && std::string(av[1]) == "--check_print_tilt") return print_tilt_selfcheck() == 0 ? 0 : 1;
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
   Setup s;

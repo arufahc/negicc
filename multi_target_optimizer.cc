@@ -2887,6 +2887,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     }
     if (stop_next || (std::isfinite(prev_err) && std::fabs(err - prev_err) <= TOL_REL_ERR * prev_err)) {
       cr.converged = true;
+      cr.stopped_by = stop_next ? "parameters" : "residual";
       break;
     }
     prev_err = err;

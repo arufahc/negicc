@@ -393,6 +393,7 @@ struct ContinuousPrintResult {
   float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above
   bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
   float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
+  const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,

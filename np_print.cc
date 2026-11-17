@@ -1358,13 +1358,13 @@ void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, doub
 }
 
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
-                   double t[3]) {
+                   double t[3], bool linear) {
   for (int c = 0; c < 3; ++c) t[c] = 0.0;
   if (a_mid.empty() || a_mid.size() != tilt.size()) return;
   std::vector<size_t> o(a_mid.size());
   for (size_t i = 0; i < o.size(); ++i) o[i] = i;
   std::sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
-  if (!kPrintTiltLinear || o.size() == 1) {
+  if (!linear || o.size() == 1) {
     size_t k = o[0];
     for (size_t i : o)
       if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = i;
@@ -1376,6 +1376,34 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
   const size_t i = o[k], j = o[k + 1];
   const double f = std::clamp((a - a_mid[i]) / (a_mid[j] - a_mid[i]), 0.0, 1.0);
   for (int c = 0; c < 3; ++c) t[c] = tilt[i][c] + f * (tilt[j][c] - tilt[i][c]);
+}
+
+int print_tilt_selfcheck() {
+  const std::vector<double> am = {0.9, 0.3, 0.6};   // out of order on purpose
+  const std::vector<std::array<double, 3>> tl = {{0.03, 0.0, 0.01}, {0.01, 0.0, -0.02}, {0.02, 0.0, 0.0}};
+  struct Case { const char* what; double a; bool linear; double r, b; };
+  const Case cases[] = {
+      {"nearest, at a bracket's own A_mid (0.9)", 0.9, false, 0.03, 0.01},
+      {"nearest, at a bracket's own A_mid (0.3)", 0.3, false, 0.01, -0.02},
+      {"nearest, nearer 0.6 than 0.3", 0.5, false, 0.02, 0.0},
+      {"nearest, just below the midway point of 0.3 and 0.6", 0.449, false, 0.01, -0.02},
+      {"nearest, beyond the lowest", 0.1, false, 0.01, -0.02},
+      {"linear, at a bracket's own A_mid (0.6)", 0.6, true, 0.02, 0.0},
+      {"linear, midway between 0.3 and 0.6", 0.45, true, 0.015, -0.01},
+      {"linear, a quarter of the way from 0.6 to 0.9", 0.675, true, 0.0225, 0.0025},
+      {"linear, beyond the lowest (held)", 0.1, true, 0.01, -0.02},
+      {"linear, beyond the highest (held)", 1.2, true, 0.03, 0.01},
+  };
+  int failed = 0;
+  for (const Case& c : cases) {
+    double t[3];
+    print_tilt_at(am, tl, c.a, t, c.linear);
+    const bool ok = std::fabs(t[0] - c.r) < 1e-12 && std::fabs(t[2] - c.b) < 1e-12 && t[1] == 0.0;
+    failed += !ok;
+    std::printf("%s %s: A %.3f -> red %.4f, blue %.4f (expected %.4f, %.4f)\n", ok ? "ok  " : "FAIL", c.what, c.a, t[0], t[2],
+                c.r, c.b);
+  }
+  return failed;
 }
 
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]) {

@@ -148,6 +148,7 @@ struct Sidecar {
   float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
   bool print_a0_at_end = false;
   float print_last_move[3] = {0, 0, 0};
+  std::string print_stopped_by;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

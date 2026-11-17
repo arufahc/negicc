@@ -3044,6 +3044,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;
       for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_cr.last_move[c];
+      sc.print_stopped_by = s.print_cr.stopped_by;
     }
   }
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;

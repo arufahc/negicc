@@ -582,6 +582,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       if (sc.print_searched) {
         j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
                                            {"steps", sc.print_steps}, {"converged", sc.print_converged},
+                                           {"stopped_by", sc.print_stopped_by},
                                            {"above_knee", num(sc.print_above_knee, "%.6g")},
                                            {"above_white_pct", {num(sc.print_above_white[0], "%.4g"), num(sc.print_above_white[1], "%.4g"),
                                                                 num(sc.print_above_white[2], "%.4g")}},
