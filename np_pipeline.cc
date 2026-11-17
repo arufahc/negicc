@@ -839,11 +839,6 @@ int prepare(const Options& o, Setup& s) {
                 "computed for the bundle's film\n");
       return 1;
     }
-    if (s.white_light && o.density_print_given) {
-      log_error("--print_a, --target, -E and the gains set a TriLED print's CLF numbers; a white-light bundle's density "
-                "output takes none of them\n");
-      return 1;
-    }
     if (s.white_light && !s.density) {
       log_error("--print with a picture output needs a TriLED bundle; on a white-light bundle give a density output "
                 "(-P statusm, rp180 or apd) for its print CLF\n");
@@ -887,7 +882,7 @@ int prepare(const Options& o, Setup& s) {
         }
       }
       s.print_cont = prints.continuum;
-      s.print_a = o.print_a;
+      s.print_a = NAN;   // the print's search sets it (or a reused run's)
       {
         const PrintContinuum* pc = &s.print_cont;
         s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
@@ -1706,7 +1701,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     return true;
   };
   auto restore_cached_auto = [&]() {
-    if (!s.print_profs.empty() && std::isfinite(s.cached_sidecar.print_a) && !std::isfinite(o.print_a))
+    if (!s.print_profs.empty() && std::isfinite(s.cached_sidecar.print_a))
       s.print_a = s.cached_sidecar.print_a;
     scan.auto_res.target_idx = s.cached_sidecar.target_idx;
     scan.auto_res.target_name = s.cached_sidecar.target_name;
@@ -2746,13 +2741,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle && c.bundle_target_idx >= 0) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
-  // A print: the conversion renders the print profile at the print's mid grey A (its search's, --print_a's or a reused
+  // A print: the conversion renders the print profile at the print's mid grey A (its search's or a reused
   // run's), else, with given values, at the chosen bracket's own.
   if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
     c.film_prof = s.print_profs[c.bundle_target_idx];
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
-    if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search, --print_a or a reused run's)
+    if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search or a reused run's)
       if (c.station_params) {
         // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix at
         // E alone, so that film at the base's density never passes the knee whatever the gains: with them in the matrix
@@ -2990,32 +2985,6 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.print_search = s.density_print_search;
-    if (o.density_print_given) rec.has_balance = false;   // no scene search ran: the given values are the print's
-    // A print's given values (a picture's cli_equivalent) set every material's CLF numbers, in place of its search.
-    if (o.density_print_given && !s.white_light && s.manual_target_idx >= 0 &&
-        s.manual_target_idx < (int)s.bundle.targets.size()) {
-      std::vector<std::string> ids;
-      for (const std::string& id : o.prints) {
-        if (id == "all") {
-          for (const PrintMaterial& m : builtin_print_materials(&s.bundle)) ids.push_back(m.id);
-        } else {
-          ids.push_back(id);
-        }
-      }
-      for (const std::string& id : ids) {
-        BracketPrints bp;
-        std::string why;
-        if (!bracket_print_profiles(s.bundle, id, bp, why)) continue;
-        DensityRecord::PrintSearch ps;
-        ps.a = o.print_a;
-        ps.e = o.exposure_comp;
-        ps.g = o.gain_g;
-        ps.b = o.gain_b;
-        ps.bracket = s.bundle.targets[s.manual_target_idx].name;
-        ps.given = true;
-        rec.print_search[bp.id] = ps;
-      }
-    }
     // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
     if (s.white_light && s.input_curves.active()) {
       rec.has_curves = true;

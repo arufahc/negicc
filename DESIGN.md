@@ -663,11 +663,14 @@ nearest bracket. The comparison of
 this search with the earlier ones (the scene's search with the print rendered at its result, g and b on the print,
 the whole bracket search on the print) is negicc-station's `designs/print_search_ways.md`.
 
-**Given values.** `--target`, `-E`, `--gain_g` and `--gain_b` given print exactly as before this search: the bracket's
-print profile (`A = A_mid` of `--target`) at the given E, g and b, so a picture's saved settings still print.
-`--print_a A` with them replaces the bracket's `A_mid`; the search's `cli_equivalent` writes it (with E at 1 in the
-frame's units, the gains, and the nearest bracket as `--target`), and replays the print to the bit. A run reused with
-the knobs (`--brightness`, `--tint`, `--warmth`) keeps the recorded `A`.
+**No given values: re-running reproduces a print.** The owner's decision (2026-11-17): "Remove, just rerun." A print is
+made by its own search, so `--target`, `-E`, `--gain_g` and `--gain_b` are refused with `--print`, on a picture and on a
+density output, and no print can differ silently from its Auto. A print's `cli_equivalent` is the frame (`--roi`), the
+print (`--print`) and the knobs if any; running it again re-runs the search, which is deterministic, and reproduces
+the picture to the byte. The sidecar keeps the print's `A` as a record (`profile.print.a`). A run reused with the
+knobs (`--brightness`, `--tint`, `--warmth`, on the same output's sidecar) keeps the recorded `A` and moves E, g and b
+from the recorded result by the knobs (solved through the bracket's chart profile, as for a scene picture), so the
+print gets lighter or darker and warmer or cooler at the same `A`; its `cli_equivalent` carries the knobs.
 
 **The density output's CLF prints the same print.** A density output with `--print` on a TriLED bundle runs the
 print's search for each material it writes a CLF for (about 8 inferences and 9 s each on wp0, a 96-core x86
@@ -676,11 +679,8 @@ carries its result in the existing nodes: the first matrix's mid grey and offset
 search's `A` (with its E), the density offsets from its g and b, the slopes from the curve's tangent at `A` times
 `1 + b_c` (the bracket term, `print_tilt_at`, one rule for the picture and the CLF), and the media-relative white. The scene's search still runs first: the file's
 `suggested_balance` records it, as without `--print`. A density output without `--print` runs no print search. The
-print's given values (a picture's `cli_equivalent`: `--print_a`, `--target`, `-E`, `--gain_g`, `--gain_b`) set every
-material's CLF numbers in place of its search, for the one material whose picture they came from (more than one
-material is refused, and so is a white-light bundle, whose density output takes none of them), the densities
-staying as read and the file carrying no `suggested_balance` (no scene search ran): the CLF written from a print picture's
-`cli_equivalent` equals the one the Auto density run wrote, byte for byte. The density file's metadata lists each
+CLF always comes from the density output's own print search: given values are refused with `--print` (above), and the
+same search on the same inputs gives the picture's print. The density file's metadata lists each
 material's `mid_grey_a` and gains. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
 the picture (CIEDE2000 at 1000 px, the CLF applied at full resolution and both pictures then shrunk in linear light).
 
@@ -769,8 +769,9 @@ the bundles carrying each bracket's own tilt) unless said otherwise:
   beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured before the tilts shipped).
-- An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it: 50 of 50 frames with their
-  captures, and 50 of 50 on the base a default run finds (the raised base is derived again from the same scan).
+- Re-running a print's `cli_equivalent` (the frame and `--print`: no given values) reproduces it to the byte; for the
+  picture this re-runs the print's search, deterministic on the same inputs (and the raised base is derived again from
+  the same scan).
 - The table and curves that `neg_process` writes equal the bundle's (as the profile-building tools wrote them) to the
   byte: through the shipped bundles every one of the 50 frames' prints takes "the bundle's print ICC" (the
   computed reference bracket's curves equal the bundle's), and earlier for a material given as a file, Vision 2383

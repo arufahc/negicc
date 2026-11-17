@@ -104,8 +104,8 @@ struct Setup {
   bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
   // --print with a picture output on a narrow-band bundle: the print material, and each bracket's print profile
   // (np_print.h bracket_print_profiles, in bundle.targets' order). Auto searches the print itself
-  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a), or, with given values,
-  // at the bracket's own (or --print_a's). Empty without.
+  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a), or, on a reused run,
+  // at the bracket's own. Empty without.
   std::string print_id, print_name;
   std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
@@ -113,7 +113,7 @@ struct Setup {
   std::vector<std::vector<uint8_t>> print_iccs;
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
   ContinuousPrint print_cp;           // the search's view of it
-  double print_a = NAN;               // the print's mid grey A: the search's, --print_a's or a reused run's; NaN: the bracket's
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
   double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the lightest node of the print's table: the paper's white
   ContinuousPrintResult print_cr;     // the print's search
   std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a TriLED density run's, per material

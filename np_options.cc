@@ -301,8 +301,9 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
           "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto searches "
           "the print itself (its mid grey A as a continuous printing exposure, E held, then g and b; DESIGN.md, \"The "
-          "print's search\") and the conversion renders it there; given values print at the bracket's mid grey or "
-          "--print_a's. It needs the bundle's grey_balance_curves. With a density "
+          "print's search\") and the conversion renders it there; a print is made by its own search, so --target, -E, "
+          "--gain_g and --gain_b are refused with it, and re-running reproduces it. It needs the bundle's "
+          "grey_balance_curves. With a density "
           "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
           "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
           "or 'all' for those built in. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
@@ -319,11 +320,6 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Check aid, given alone: a self-check of the print's bracket term (np_print.h print_tilt_at, both forms, on "
           "brackets given out of order); prints each case and exits 1 if one fails.")
     .flag();
-  parser.add_argument("--print_a")
-    .help("With --print on a TriLED bundle and given values (--target, -E, --gain_g, --gain_b): render the print at "
-          "this mid grey A (green Academy Printing Density) in place of the bracket's own, as the print's search "
-          "reports it in its cli_equivalent. Without --print_a, given values print at the bracket's own mid grey.")
-    .scan<'g', double>();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
           "base around a negative's frame; a positive (slide) scan has none, so it usually falls back to the full "
@@ -738,13 +734,6 @@ int parse_options(int ac, char* av[], Options& o) {
       o.density_measure = (DensityMeasure)m;
     }
   }
-  if (parser.is_used("--print_a")) {
-    o.print_a = parser.get<double>("--print_a");
-    if (!std::isfinite(o.print_a) || !parser.is_used("--print")) {
-      log_error("--print_a takes a finite mid grey and needs --print\n");
-      return 1;
-    }
-  }
   if (parser.is_used("--print")) {
     o.prints = parser.get<std::vector<std::string>>("--print");
     // A picture output is one print: one material.
@@ -779,10 +768,12 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
-  if (!o.prints.empty() && std::isfinite(o.print_a) && !o.density &&
-      !(o.target_given && o.exposure_given && o.gain_g_given && o.gain_b_given)) {
-    log_error("--print_a sets the print's mid grey for given values: it needs --target, -E, --gain_g and --gain_b with it "
-              "(a print's cli_equivalent); with Auto the print's search finds A itself\n");
+  // A print is made by its own search (the owner, 2026-11-17: "Remove, just rerun."): no given bracket, exposure or
+  // gains with --print, on a picture or a density output, so that no print differs silently from its Auto; re-running
+  // the same command reproduces it.
+  if (!o.prints.empty() && (o.target_given || o.exposure_given || o.gain_g_given || o.gain_b_given)) {
+    log_error("--target, -E, --gain_g and --gain_b do not apply with --print: a print is made by its own search, and "
+              "re-running reproduces it\n");
     return 1;
   }
   if (!o.density) {
@@ -803,27 +794,13 @@ int parse_options(int ac, char* av[], Options& o) {
   // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
   // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
   // density output does not take.
-  // A print's given values (a picture's cli_equivalent: --print_a with --target, -E, --gain_g and --gain_b) set the
-  // print CLFs' numbers on a density output, in place of each material's print search; the densities stay as read.
-  o.density_print_given = !o.prints.empty() && std::isfinite(o.print_a) && o.target_given && o.exposure_given &&
-                          o.gain_g_given && o.gain_b_given;
-  if (o.density_print_given && (o.prints.size() != 1 || o.prints.front() == "all")) {
-    log_error("A print's given values (--print_a with --target, -E and the gains) belong to the one material whose "
-              "picture they came from: give that material alone to --print\n");
-    return 1;
-  }
-  if (!o.prints.empty() && std::isfinite(o.print_a) && !o.density_print_given) {
-    log_error("--print_a on a density output needs --target, -E, --gain_g and --gain_b with it (a print's "
-              "cli_equivalent): they set the print CLFs' numbers\n");
-    return 1;
-  }
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given && !o.density_print_given},  {"-E", o.exposure_given && !o.density_print_given},
-        {"--gain_g", o.gain_g_given && !o.density_print_given},  {"--gain_b", o.gain_b_given && !o.density_print_given},
+        {"--target", o.target_given},  {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},  {"--gain_b", o.gain_b_given},
         {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
         {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
         {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},

@@ -118,8 +118,6 @@ struct Options {
   bool output_dpx = false;
   // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
   std::vector<std::string> prints;
-  double print_a = NAN;                       // --print_a: the print at this mid grey A, not the bracket's own
-  bool density_print_given = false;           // a density output's --print with --print_a, --target, -E and gains: the CLFs' numbers
   bool no_metadata = false;
 };
 

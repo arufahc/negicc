@@ -635,7 +635,6 @@ bool write_json_sidecar(const Sidecar& sc) {
       cli.push_back(std::to_string(v));
   }
   if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
-  if (std::isfinite(sc.print_a)) cli.insert(cli.end(), {"--print_a", num_str(sc.print_a, "%.17g")});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.
@@ -668,6 +667,21 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
   // built-in material's, or none).
+  // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
+  // if any, and re-running it re-runs the search (deterministic), then the same knobs on its result.
+  if (!sc.print_id.empty() && sc.density_json.empty()) {
+    cli.clear();
+    if (sc.has_roi) {
+      cli.push_back("--roi");
+      for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
+        cli.push_back(std::to_string(v));
+    }
+    if (sc.has_knobs) {
+      if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
+      if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
+      if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
+    }
+  }
   if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
   // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
   // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).

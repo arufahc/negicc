@@ -422,7 +422,7 @@ void print_paper_xyz(const PrintMaterial& m, double xyz[3]);
 // Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
 
-// The print at a continuous mid grey A (np_pipeline: the print search, and --print_a): the input curves above with A for
+// The print at a continuous mid grey A (np_pipeline: the print search): the input curves above with A for
 // A_mid and the tilt of the bracket whose A_mid is nearest A, as it is (the owner's choice: the brackets' discrete
 // terms first). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
 // codes an ICC holds, as code / 65535).
