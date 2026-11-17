@@ -79,19 +79,26 @@ normalization_target / 65535, after neg_process's soft knee at 0.95), in each ch
 
 ```
 light density    dL_c  = -log10(unknee(v_c) / n0)
-grey balance     alpha_c = G_c(dL_c) - A_mid
+grey balance     alpha_c = (G_c(dL_c) - A) (1 + b_c)
 print density    pd = 0.70 + Q L (w alpha),   w = M^-1 (1, 1, 1)
 the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts (its curve per layer)
                  ->  its colour under its viewing light (CIE 1931 2 degree)  ->  XYZ, adapted to D50 (Bradford)
+                 ->  relative to the paper's white when neg_process renders it (the paper base at D50)
 ```
 
 - **G_c**, the film's grey balance curve (`bundle.json` `density_matrices.grey_balance_curves`, 501 points per
   channel from light density -0.5 in steps of 0.01): the APD of the film's
   grey that has light density dL_c in channel c. It comes from the chart's grey steps of every bracket: the red and
   the blue light density as a cubic in the green (least squares, carried on by its tangent past the end steps),
-  then through M.
-- **A_mid**, the bracket's mid grey: the green APD of its 18 % grey step (gs10), from
-  `density_matrices.brackets.<bracket>.grey_light_density`.
+  then through M. The steps run from green -0.0082 to 1.5185
+  above the film base; past them the tangents' slopes (red and blue against green) are red 1.0874
+  and 0.7023, blue 1.6077 and 1.5405 at the first and the last step
+  (`grey_balance_curves.tangents`), and most of the table past the last step comes from them.
+- **A**, the print's mid grey: a bracket's own `A_mid` (the green APD of its 18 % grey step, gs10, from
+  `density_matrices.brackets.<bracket>.grey_light_density`), or the A the print's search finds.
+- **b_c**, each bracket's tilt relative to the curve (`density_matrices.brackets.<bracket>.grey_relative.b`):
+  neg_process takes it linear in A between the two brackets whose A_mid enclose A, held beyond the end
+  ones (its kPrintTiltLinear), so at a bracket's own A_mid it is that bracket's
 - **M**, the bundle's matrix for Academy Printing Density (`film_to_measure` times `light_to_film`).
 - **Q L**, from the light's density to the density the print material reads: Q from the film model's dye amounts
   to the print's own density under a 3200 K printer lamp, least squares over the film's sample colours
@@ -101,7 +108,7 @@ the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts
 The profile splits this where a table samples it well:
 
 ```
-input curve_c(v)  = Paper_c(G_c(dL_c) - A_mid)
+input curve_c(v)  = Paper_c((G_c(dL_c) - A) (1 + b_c))
 table(a)          = the chain above, from alpha_c = Paper_c^-1(a_c)
 Paper_c(alpha)    = curve_c(aim_c - k_c alpha) / top,   k = P (1, 1, 1)
 ```

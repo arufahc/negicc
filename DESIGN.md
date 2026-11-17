@@ -541,7 +541,7 @@ the scene, as before.
 | # | Stage | Function | Inputs |
 |---|---|---|---|
 | 1 | Bundle | One print ICC per print material, built when the profile set is saved by the profile-building tools: its table, and input curves for the middle bracket. | The film's grey balance curve, the bundle's matrices and film model, the material's spektrafilm profile. |
-| 2 | Print profile at A | The bundle's print ICC with the input curves for a mid grey `A` written in (about 5 ms); at a bracket's own `A_mid` it is that bracket's print profile. | The curve, `A`, the nearest bracket's tilt, the material's curve. |
+| 2 | Print profile at A | The bundle's print ICC with the input curves for a mid grey `A` written in (about 5 ms); at a bracket's own `A_mid` it is that bracket's print profile. | The curve, `A`, the brackets' tilt at `A`, the material's curve. |
 | 3 | Search | The print's search: `A`, then g and b, on the print profile at `A`. | The frame. |
 | 4 | Conversion | The picture conversion with the print profile at the search's `A`, relative to the paper's white. No tone stage and no highlight shoulder: the paper's curve gives the tone and rolls the highlights off to its white. | The search. |
 
@@ -559,12 +559,15 @@ XYZ_out  = XYZ_PCS × D50 / XYZ_paper (per component)  relative to the paper's w
 
 `A` is the print's mid grey as green APD: the printing exposure, applied after the grey balance curve, so that it
 moves a grey along the grey axis and keeps it grey. A bracket enters the print only through it: bracket `k`'s print
-is the one at `A = A_mid(k)`, the green APD of its gs10 (`bracket_mid_apd`). `b_c` is the tilt of the bracket whose
-`A_mid` is nearest `A`, its grey scale's slope relative to the curve (`grey_relative.b` in its
-`density_matrices.brackets` entry, fitted by the profile-building tools; zero without it, the curve alone). The
-bracket's offset relative to the curve (`grey_relative.a`) is not read. The owner chose the brackets' terms as they
-are, "Try the discrete version from the brackets first. We will visit this later to see if it's is worthwhile"; a
-form that follows `A` continuously is a later question.
+is the one at `A = A_mid(k)`, the green APD of its gs10 (`bracket_mid_apd`). `b_c` is the brackets' tilt at `A`: each
+bracket's grey scale's slope relative to the curve (`grey_relative.b` in its `density_matrices.brackets` entry, fitted
+by the profile-building tools; zero without it, the curve alone), linear in `A` between the two brackets whose `A_mid`
+enclose it and held beyond the end ones (`print_tilt_at`, `kPrintTiltLinear`). At a bracket's own `A_mid` it is that
+bracket's tilt. The bracket's offset relative to the curve (`grey_relative.a`) is not read. The owner chose the
+brackets' own terms: first "Try the discrete version from the brackets first", then, after the six forms were measured
+on 50 frames (station `designs/print_search_ways.md`, "Continuous slopes"), "Tilt per bracket makes more sense"
+(2026-11-17). Linear between them is that design without the nearest bracket's step where `A` crosses a midpoint
+(0.42 ΔE00 there, at the same colour).
 
 **Where the profile splits it.** A 3D table samples the paper's S-curve badly, so the curve goes into the input
 curves and the table keeps only colour:
@@ -599,8 +602,13 @@ so the two are searched differently ("The search naturally are between scene ICC
 were constructed"). The print's lightness is searched once and continuously, in `A`, and its colour in g and b
 (`search_print_continuous`):
 
-1. **E is held at 1** in the search's reference units: the negative's own density above its base, as the brackets
-   were measured. Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
+1. **E is held at 1 relative to the frame's own film base:** the base reads n0, so the curve is read at the
+   negative's own density above its base, as the brackets were measured. The search runs on M_frame / e_norm, which
+   in green is the reference scan's matrix whatever the frame's base, so it holds E = e_norm there, and its result's
+   E (`auto.e`, `-E`) is 1. Until this was fixed it held E = 1 in those units. That put the base at n0 / e_norm (0.82
+   to 3.30 on the 50 TriLED test frames), so the print depended on how long the scan was exposed, and a frame
+   scanned at 0.4 s had 46 % of its crop above the knee (station `designs/print_search_ways.md`, "Roll 1006,
+   diagnosed"). Between brackets, E and `A_mid` carry the same thing (on the brackets' screening of a frame,
    −Δlog10 E / ΔA_mid is 0.77 to 0.81), so with `A` free E has nothing left to do; and E acts before the curve,
    where the channels' slopes differ, while `A` acts after it and keeps a grey grey.
 2. **A0, metered once, as the scene's search meters a bracket:** the `A` at which the frame's log-average cell (at E
@@ -707,7 +715,7 @@ Vision 2393 slightly yellow); relative to the paper they render neutral, at the 
 
 - `neg_process --check_print_tilt` checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
   order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
-  beyond the end ones (10 of 10).
+  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11).
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura).
 - An Auto print replayed from its `cli_equivalent` (with `--print_a`) is bit-identical to it.

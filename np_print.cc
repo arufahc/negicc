@@ -1396,6 +1396,15 @@ int print_tilt_selfcheck() {
       {"linear, beyond the highest (held)", 1.2, true, 0.03, 0.01},
   };
   int failed = 0;
+  // The shipped rule (kPrintTiltLinear, the default argument): linear, midway between 0.3 and 0.6.
+  {
+    double t[3];
+    print_tilt_at(am, tl, 0.45, t);
+    const bool ok = kPrintTiltLinear && std::fabs(t[0] - 0.015) < 1e-12 && std::fabs(t[2] + 0.01) < 1e-12 && t[1] == 0.0;
+    failed += !ok;
+    std::printf("%s the shipped rule is linear: A 0.450 -> red %.4f, blue %.4f (expected 0.0150, -0.0100)\n", ok ? "ok  " : "FAIL",
+                t[0], t[2]);
+  }
   for (const Case& c : cases) {
     double t[3];
     print_tilt_at(am, tl, c.a, t, c.linear);

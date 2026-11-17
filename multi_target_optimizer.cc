@@ -2775,7 +2775,11 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   for (int r = 0; r < 3; ++r) {
     out.row_scale[r] = (scale.fb[r] > 0 ? (pb.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm;
   }
-  const float E = 1.0f;
+  // E = 1 relative to the frame's own film base: the base reads n0, as the brackets were measured. The search runs on
+  // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
+  // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0
+  // (station designs/print_search_ways.md, "Roll 1006, diagnosed"). The result's E (E / e_norm) is then 1.
+  const float E = e_norm;
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
   // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).

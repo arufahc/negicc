@@ -141,6 +141,7 @@ struct Sidecar {
   bool print_from_bundle = false;
   // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
   double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
+  double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
   double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the paper's white the print is relative to (PCS D50)
   bool print_searched = false, print_converged = false;
   int print_steps = 0;

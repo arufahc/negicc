@@ -370,9 +370,10 @@ void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
 const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
 // The print's bracket term at a mid grey A, the one rule for the picture and the CLF: the tilt of the bracket nearest
 // A (kPrintTiltLinear false), or the tilt linear in A between the two neighbouring brackets, held beyond the end ones
-// (kPrintTiltLinear true; the continuous-slopes experiment's "linear", proposed to the owner). At a bracket's own A_mid
+// (kPrintTiltLinear true, as shipped: the owner chose each bracket's own tilt, "Tilt per bracket makes more sense",
+// 2026-11-17, and linear between them is that without the nearest rule's step at a midpoint). At a bracket's own A_mid
 // both give that bracket's tilt. a_mid and tilt per bracket, in any order; zeros without brackets.
-constexpr bool kPrintTiltLinear = false;
+constexpr bool kPrintTiltLinear = true;
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
                    double t[3], bool linear = kPrintTiltLinear);
 // A self-check of print_tilt_at in both forms on brackets given out of order (each bracket's own tilt at its A_mid,

@@ -579,6 +579,8 @@ bool write_json_sidecar(const Sidecar& sc) {
       if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
+      if (std::isfinite(sc.print_tilt[0]))   // the brackets' tilt (grey_relative.b) at that A, linear in A between brackets
+        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"), num(sc.print_tilt[2], "%.9g")};
       if (sc.print_searched) {
         j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
                                            {"steps", sc.print_steps}, {"converged", sc.print_converged},

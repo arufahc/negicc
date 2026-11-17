@@ -21655,7 +21655,32 @@
       1.0,
       1.0448
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       0.003884,
+       0.0,
+       0.006062
+      ],
+      "b": [
+       0.028707,
+       0.0,
+       -0.029671
+      ],
+      "se_b": [
+       0.005907,
+       0.0,
+       0.015344
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       0.028707,
+       0.0,
+       -0.029671
+      ],
+      "form": "own"
+     }
     },
     "Target 2": {
      "grey_light_density": [
@@ -21668,7 +21693,32 @@
       1.0,
       1.0566
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       0.004074,
+       0.0,
+       0.001112
+      ],
+      "b": [
+       0.024452,
+       0.0,
+       -0.000589
+      ],
+      "se_b": [
+       0.005617,
+       0.0,
+       0.010766
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       0.024452,
+       0.0,
+       -0.000589
+      ],
+      "form": "own"
+     }
     },
     "Target 3": {
      "grey_light_density": [
@@ -21681,7 +21731,32 @@
       1.0,
       1.0492
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       0.004086,
+       0.0,
+       -0.005563
+      ],
+      "b": [
+       0.005281,
+       0.0,
+       -0.005496
+      ],
+      "se_b": [
+       0.00383,
+       0.0,
+       0.010382
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       0.005281,
+       0.0,
+       -0.005496
+      ],
+      "form": "own"
+     }
     },
     "Target 4": {
      "grey_light_density": [
@@ -21694,7 +21769,32 @@
       1.0,
       1.0203
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       -0.013284,
+       0.0,
+       -0.01696
+      ],
+      "b": [
+       0.011258,
+       0.0,
+       -0.007211
+      ],
+      "se_b": [
+       0.006655,
+       0.0,
+       0.010832
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       0.011258,
+       0.0,
+       -0.007211
+      ],
+      "form": "own"
+     }
     },
     "Target 5": {
      "grey_light_density": [
@@ -21707,7 +21807,32 @@
       1.0,
       0.9768
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       -0.001182,
+       0.0,
+       -0.007877
+      ],
+      "b": [
+       -0.011721,
+       0.0,
+       -0.022863
+      ],
+      "se_b": [
+       0.008595,
+       0.0,
+       0.006524
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       -0.011721,
+       0.0,
+       -0.022863
+      ],
+      "form": "own"
+     }
     },
     "Target 6": {
      "grey_light_density": [
@@ -21720,7 +21845,32 @@
       1.0,
       0.9778
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       0.018557,
+       0.0,
+       0.005434
+      ],
+      "b": [
+       0.008123,
+       0.0,
+       -0.015133
+      ],
+      "se_b": [
+       0.009791,
+       0.0,
+       0.006576
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       0.008123,
+       0.0,
+       -0.015133
+      ],
+      "form": "own"
+     }
     },
     "Target 7": {
      "grey_light_density": [
@@ -21733,13 +21883,51 @@
       1.0,
       1.0212
      ],
-     "grey_steps": 24
+     "grey_steps": 24,
+     "grey_relative_fit": {
+      "a": [
+       -0.014534,
+       0.0,
+       0.011247
+      ],
+      "b": [
+       -0.007905,
+       0.0,
+       -0.010601
+      ],
+      "se_b": [
+       0.008659,
+       0.0,
+       0.011271
+      ]
+     },
+     "grey_relative": {
+      "b": [
+       -0.007905,
+       0.0,
+       -0.010601
+      ],
+      "form": "own"
+     }
     }
    }
   },
   "grey_balance_curves": {
    "what": "for each light channel, its light density above the film base -> the APD (Academy Printing Density) of the film's grey that has that light density in that channel",
    "from": "the chart's grey steps of every bracket (168): red and blue as a cubic in green, least squares, carried on by its tangent past the lowest and highest step",
+   "tangents": {
+    "what": "past the chart's first and last grey step the scale is carried on by its tangent: red and blue against green, the slope at each end (light density above the film base); most of the table past the last step comes from these",
+    "green_first_step": -0.0012,
+    "green_last_step": 1.455,
+    "red": {
+     "low": 0.5701,
+     "high": 0.6423
+    },
+    "blue": {
+     "low": 0.9045,
+     "high": 0.8418
+    }
+   },
    "measure": "academy_printing_density",
    "light_density_start": -0.5,
    "light_density_step": 0.01,
@@ -23253,7 +23441,26 @@
      5.33343,
      5.346145
     ]
-   ]
+   ],
+   "tilt": {
+    "b": [
+     0.008314,
+     0.0,
+     -0.013081
+    ],
+    "sd": [
+     0.015048,
+     0.0,
+     0.010241
+    ],
+    "se": [
+     0.005688,
+     0.0,
+     0.003871
+    ],
+    "brackets": 7,
+    "what": "the brackets' tilts relative to the curve (grey_relative_fit.b): their mean, standard deviation and standard error (the error to quote; each bracket's se_b is the regression's naive error, too small since the residuals along its steps are autocorrelated, and not for comparing brackets)"
+   }
   }
  },
  "film_model": {
@@ -25922,7 +26129,7 @@
    "spektrafilm_sha256": "0db98e5b8e2ed5248696e62bc39b7f21459a8812d64049b1275d7be995af873b",
    "reference_bracket": "Target 4",
    "icc_profile": "print_fujifilm_crystal_archive_typeii.icc",
-   "icc_profile_sha256": "ed2024b06ec2b5c991057a9c91a0053bfb2899ecd85e9963024dc53c535ea795"
+   "icc_profile_sha256": "722a8f11bff6610fa51168af0cf72b73d4ec6eaa12202f7f11165f5efdb203e6"
   },
   "kodak_2383": {
    "name": "Kodak Vision 2383",
@@ -25930,7 +26137,7 @@
    "spektrafilm_sha256": "eb7fdfa3b75a909bf5c400802f7401160c8017ed1ac3e8e0d1c8448d56fbe184",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2383.icc",
-   "icc_profile_sha256": "0762594ab51a4a4b9e8acd43b20ee8c363945a253ab4e54d7581e743500e9329"
+   "icc_profile_sha256": "ef14293cd7f76526d0f9a9037363b6131d52e2d08128737e3e3d1346c386df1a"
   },
   "kodak_2393": {
    "name": "Kodak Vision Premier 2393",
@@ -25938,7 +26145,7 @@
    "spektrafilm_sha256": "b564aece5e9fe43a5c7878d661a8c260c9f73a647a55899596c78487c79678dc",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2393.icc",
-   "icc_profile_sha256": "c0785f72dddb6c408604c35646dae707411b9235f9b9a8a8959aa5d1a556a94e"
+   "icc_profile_sha256": "9ac03c74035a8c9fac93f5ac0ef2be92218b609f7bedb539cc3c0ee19c8676d0"
   },
   "kodak_ektacolor_edge": {
    "name": "Kodak Ektacolor Edge",
@@ -25946,7 +26153,7 @@
    "spektrafilm_sha256": "5db23694d478c35cc0f96d42f94da79e552b2f8eb0853767449a24ac0f0f890e",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ektacolor_edge.icc",
-   "icc_profile_sha256": "c042b45d641f6ef8b2c9fb5b088804199fc4ef2f2a766de5bea6aa9bdbb800c1"
+   "icc_profile_sha256": "e4133bbd2fad0b7125880c2aa78806180cc32d22c8eb04e05525355fa7e5ca30"
   },
   "kodak_endura_premier": {
    "name": "Kodak Professional Endura Premier",
@@ -25954,7 +26161,7 @@
    "spektrafilm_sha256": "fd37807d61eb730cda54e85d36640e35a0f8da58666bfc6aa83db888b2e364c2",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_endura_premier.icc",
-   "icc_profile_sha256": "58d4a644039bd32a52522eb792d83a87ca508ae40c8e22057d47e800ead117d7"
+   "icc_profile_sha256": "f367e577565961f3c78e86093c5d6044556160eceecd8843453b09f62101cad0"
   },
   "kodak_portra_endura": {
    "name": "Kodak Professional Portra Endura",
@@ -25962,7 +26169,7 @@
    "spektrafilm_sha256": "e3bb6069e02d088d8080d38ce28035816038f62786e2aff9176bf4aeeb4820a0",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_portra_endura.icc",
-   "icc_profile_sha256": "5fd3510b8d53356003fa65edbca372a71e8264b3586bf24059cddc8f0ae88abb"
+   "icc_profile_sha256": "7a6d3f56be693c0a3280d178cafd4ceeb2f43ba3c5885a9655853b2579f68908"
   },
   "kodak_supra_endura": {
    "name": "Kodak Professional Supra Endura",
@@ -25970,7 +26177,7 @@
    "spektrafilm_sha256": "3a0928013effbb33e81acd01db426937faa3a12021a267c54b4d96e916286bd6",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_supra_endura.icc",
-   "icc_profile_sha256": "a5227fc828dbb2befafdfb2ede1f327350ece659403628dc6a096185879681fd"
+   "icc_profile_sha256": "cd8f440e7cd6c7a6789963b221470d9cbd43d2aae01f4878459e57f32e6b363e"
   },
   "kodak_ultra_endura": {
    "name": "Kodak Professional Ultra Endura",
@@ -25978,16 +26185,17 @@
    "spektrafilm_sha256": "319fa2514e9a6809fd09ce587c4f714effc035e7f9ebaeb3b55d9bc1b52c2a72",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ultra_endura.icc",
-   "icc_profile_sha256": "94ca61cf7d101b46702dc98bfad8d03e5a0b3d7f5fa07694e2e1a32abc85b667"
+   "icc_profile_sha256": "713e1bf312d224660b66f6b5d9861f7a6488a367b20d51ac3a5f6bbbf1b6ad32"
   }
  },
  "export": {
   "bundle_key": "Portra160-A7R4-TriLED",
   "stock_key": "portra160",
   "source_file": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
-  "source_sha256": "c786d2f435a727e3ddb022fd07a3ed5bea0a1fb69cb433fde8da68e997b17404",
+  "source_sha256": "8168814a5b06e485e94010d06b08c3162437ea0cb9aeefad2d1a9df345570e5a",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "07d5e7de990d46d5d8f3637a838dbb81e2c2663d"
+  "station_commit": "a3fd2ba78c91a0fabece5318884d097daa641cc2",
+  "tilt_form": "own"
  }
 }

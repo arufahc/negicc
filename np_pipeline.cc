@@ -3034,6 +3034,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
     if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
       sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
+    {
+      const double a_used = std::isfinite(s.print_a) ? s.print_a : sc.print_bracket_a_mid;
+      if (std::isfinite(a_used)) print_tilt_at(s.bundle, a_used, sc.print_tilt);
+    }
     if (s.print_searched) {
       sc.print_searched = true;
       sc.print_a0 = s.print_cr.a0;
