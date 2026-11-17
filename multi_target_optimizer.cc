@@ -2819,7 +2819,24 @@ bool search_print_continuous(const ProfileBundle& print_bundle, const Continuous
     ga[i] = cp.green_apd(-std::log10(std::max(u, 1e-7) / cp.n0));
   }
   std::nth_element(ga.begin(), ga.begin() + (long)(n / 2), ga.end());
-  const double a0 = std::clamp(ga[n / 2], cp.a_lo, cp.a_hi);
+  double a0 = std::clamp(ga[n / 2], cp.a_lo, cp.a_hi);
+  if (cp.meter_grey50) {
+    // As the scene's search meters a bracket (L* 50 of the frame's log-average): the A at which the log-average cell
+    // prints at L* 50 through the print profile (bisection; L* falls as A rises).
+    uint16_t px[3];
+    for (int c = 0; c < 3; ++c) px[c] = (uint16_t)std::lround(std::clamp(st.log_avg_rgb[c], 0.0f, 1.0f) * 65535.0f);
+    auto lstar = [&](double a) {
+      cp.set_curves_at(a, prof);
+      const negicc::PipelineConfig pc = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
+      return negicc::linear_srgb_to_lab(negicc::convert_pixel_display(pc, m, px)).L;
+    };
+    double lo = cp.a_lo, hi = cp.a_hi;
+    for (int it = 0; it < 60; ++it) {
+      const double mid = 0.5 * (lo + hi);
+      if (lstar(mid) > 50.0f) lo = mid; else hi = mid;
+    }
+    a0 = 0.5 * (lo + hi);
+  }
   cr.a0 = a0;
   // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
   std::vector<uint8_t> preview;

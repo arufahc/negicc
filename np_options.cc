@@ -328,6 +328,11 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--print_white_export")
     .help("Experimental: the white of the exported print: perfect (default) or paper, as --print_white_search.")
     .default_value(std::string("perfect"));
+  parser.add_argument("--print_meter")
+    .help("Experimental: how the continuous print search meters A0: median (the median grid cell's G_green at the "
+          "paper's mid grey) or grey50 (the A printing the frame's log-average cell at L* 50, as the scene's search "
+          "meters a bracket).")
+    .default_value(std::string("median"));
   parser.add_argument("--print_boot_h")
     .help("Experimental: the continuous print search's bootstrap renders at A0 - h, A0, A0 + h (A0 alone with 0); "
           "default log10(2) / 2, half a stop of printing exposure.")
@@ -760,6 +765,11 @@ int parse_options(int ac, char* av[], Options& o) {
       log_error("--print_white_search and --print_white_export take perfect or paper\n");
       return 1;
     }
+  }
+  o.print_meter = parser.get<std::string>("--print_meter");
+  if (o.print_meter != "median" && o.print_meter != "grey50") {
+    log_error("--print_meter takes median or grey50\n");
+    return 1;
   }
   o.print_boot_h = parser.get<double>("--print_boot_h");
   if (!(o.print_boot_h >= 0.0) || !std::isfinite(o.print_boot_h)) {

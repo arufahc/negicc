@@ -348,6 +348,7 @@ struct ContinuousPrint {
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
   double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure
+  bool meter_grey50 = false;         // A0: the A printing the log-average cell at L* 50 (else the median's G_green)
 };
 struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;

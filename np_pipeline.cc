@@ -868,6 +868,7 @@ int prepare(const Options& o, Setup& s) {
         s.print_cp.a_hi = pc->a_hi();
         s.print_cp.a_mid = pc->a_mid;
         s.print_cp.boot_h = o.print_boot_h;
+        s.print_cp.meter_grey50 = o.print_meter == "grey50";
       }
       s.print_id = prints.id;
       s.print_name = prints.name;
