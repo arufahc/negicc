@@ -137,10 +137,13 @@ const char* to_string(ClipFallbackOutcome outcome);
 // bind_frame. A failed pass throws: the exception leaves the search, the fit, the tone plan or the roll-off measurement
 // to the caller (none of them catches it), so a caller can tell a render failure from every other one and run the
 // search again on the CPU. The bundle is then as it was given: run_white_light_fit restores the bracket's own input
-// tables when a pass throws after it has composed its curves into them.
+// tables when a pass throws after it has composed its curves into them. The result structures (ParamSearchResult,
+// WhiteLightFitResult, ToneStagePlan) are then partly filled, and a caller must not read them.
 //
 // neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
-// pass that runs outside it (PassAudit); its picture must equal the conversion without it, bit for bit.
+// pass that runs outside it (PassAudit), on any thread; its picture must equal the conversion without it, bit for bit.
+// tools/check_renderer.sh runs it, and must be run, on a TriLED scan and on a white-light scan with the curve fit,
+// before a change to the search, the curve fit, the tone plan or this interface is merged.
 struct PreviewRenderer {
   virtual ~PreviewRenderer() = default;
   virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }

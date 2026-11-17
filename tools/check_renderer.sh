@@ -2,7 +2,8 @@
 # The renderer interface's check (multi_target_optimizer.h PreviewRenderer): converts a scan twice, without and with
 # --check_renderer, and passes when the two pictures are identical byte for byte and no pass of the bundle search, the
 # curve fit or the tone plan ran outside the renderer. Run it on a narrow-band (TriLED) scan and on a white-light scan
-# with the curve fit, e.g.
+# with the curve fit, before a change to the search, the curve fit, the tone plan or the renderer interface
+# (multi_target_optimizer.h) is merged, e.g.
 #
 #     tools/check_renderer.sh bin_out/neg_process --film_stock portra400 --light_source tri --roi auto scan.ARW
 #     tools/check_renderer.sh bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto scan.ARW

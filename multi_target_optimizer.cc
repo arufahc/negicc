@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -1455,11 +1456,18 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
 // white-light stages (run_white_light_fit).
 namespace {
-thread_local int t_audit_depth = 0;      // inside an entry point of the bundle search
-thread_local bool t_in_renderer = false;  // inside PassThroughRenderer's forwarding
+// Inside an entry point of the bundle search, process-wide, so that a pass started on another thread (which the
+// contract does not allow) is counted too.
+std::atomic<int> g_audit_depth{0};
+thread_local bool t_in_renderer = false;  // inside PassThroughRenderer's forwarding, on this thread
 struct AuditScope {
-  AuditScope() { ++t_audit_depth; }
-  ~AuditScope() { --t_audit_depth; }
+  AuditScope() { ++g_audit_depth; }
+  ~AuditScope() { --g_audit_depth; }
+};
+// Marks PassThroughRenderer's forwarding, and clears the mark when the forwarded pass returns or throws.
+struct InRenderer {
+  InRenderer() { t_in_renderer = true; }
+  ~InRenderer() { t_in_renderer = false; }
 };
 }  // namespace
 
@@ -1470,7 +1478,7 @@ PassAudit& pass_audit() {
 
 void audit_cpu_pass(int kind) {
   (void)kind;
-  if (t_audit_depth > 0 && !t_in_renderer) pass_audit().outside++;
+  if (g_audit_depth.load() > 0 && !t_in_renderer) pass_audit().outside++;
 }
 
 void PassThroughRenderer::bind_frame(const negicc::RgbView& frame) {
@@ -1479,15 +1487,13 @@ void PassThroughRenderer::bind_frame(const negicc::RgbView& frame) {
 }
 void PassThroughRenderer::render(const negicc::RenderArgs& a) {
   pass_audit().renders++;
-  t_in_renderer = true;
+  const InRenderer in_renderer;
   negicc::cpu_render(a);
-  t_in_renderer = false;
 }
 void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   pass_audit().clips++;
-  t_in_renderer = true;
+  const InRenderer in_renderer;
   negicc::cpu_highlight_clip(a);
-  t_in_renderer = false;
 }
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
