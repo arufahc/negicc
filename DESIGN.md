@@ -370,8 +370,9 @@ not the optimiser's reading of it, matches the field.
    deepest metered bracket's (its metered `E` furthest inside its usable range), or the best-fit one's when none
    meters.
 3. **Screening.** Each metered bracket's `(E, g, b)` is optimised against the bootstrap field over its usable range,
-   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered). The brackets are ranked
-   by that loss.
+   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered), each aimed at the field
+   minus its own correction (below): the one of its bootstrap render, or, when one render made the field, the one of
+   a render at the `E` it is screened from with the bootstrap's gains. The brackets are ranked by that loss.
 4. **Tournament.** The best two run a fixed-point loop (`SearchFrame::fixed_point`), with `E` held within ±0.5 stop of
    its screened value. Each step measures the shoulder's `x_hi`, renders the preview, updates the correction,
    predicts a field, puts the lightness target in its `L*`, measures the residual, and optimises the next `(E, g, b)`.

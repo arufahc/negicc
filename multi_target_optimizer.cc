@@ -1882,6 +1882,22 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     });
     return rows;
   };
+  // Each screened bracket is aimed at the field minus its own correction, and the screening ranks their losses. The
+  // bootstrap measured a correction for each bracket it rendered; when it rendered one bracket alone (E pinned, or no
+  // bracket metered), every other screened bracket is rendered once at the E its screening starts from (the pinned E,
+  // else its e_center) and the bootstrap gains, as the bootstrap's bracket was, to measure its own (no inference).
+  if (depths.empty() || pin_e) {
+    auto measure = [&](int target_idx, float e) {
+      if (target_idx == cand1.target_idx) return;
+      fr.render_preview(target_idx, {e, boot_g, boot_b}, preview);
+      fr.update_correction(target_idx, {e, boot_g, boot_b}, preview);
+    };
+    if (!depths.empty()) {
+      for (const auto& d : depths) measure(d.cand.target_idx, pin_e_search);
+    } else {
+      for (const auto& c : pool) measure(c.target_idx, pin_e ? pin_e_search : c.e_center);
+    }
+  }
   const std::vector<Screened> screening = screen_all(depths, mu1, sig1, false);
   for (const auto& s : screening) out.screening.push_back(s.result);
   if (verbose) {
