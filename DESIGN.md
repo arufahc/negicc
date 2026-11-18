@@ -97,6 +97,15 @@ Rec.2020 already and are not converted. A TIFF with `--light_source tri` is take
 (black subtracted, no white balance or colour matrix) and goes through the crosstalk correction (2.4); a TIFF with an
 embedded profile or 8-bit samples is refused there.
 
+Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
+(`np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
+third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
+the capture's own channel is kept; a TIFF gives its channel as it is read. When all three captures record shutter and
+ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
+half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame, it is the mean of each 2×2 block
+of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
+`-g` or `-b` give one.
+
 ## 2.2 Flat field
 
 The flat field removes the light's and the lens's falloff. It is measured on the empty gate (`--flat`, an `.npz`
@@ -216,11 +225,11 @@ The profile-building tools are not in this repository. Each bracket's profile is
 
 A bracket's range is not stored; it is computed at conversion from the bracket's stored patches
 (`multi_target_optimizer.cc`: `bracket_enclosure`). With `g_min` and `g_max` the smallest and largest green value of
-its patches, `g_lo` and `g_hi` the scene's green 0.5 % and 99.5 % points over the inner 90 % of the frame, and `k` the
-reference exposure (1/8 s, ISO 100) over the bracket's capture exposure:
+its patches, `g_lo` and `g_hi` the scene's green 0.5 % and 99.5 % points over the inner 90 % of the frame, and `ρ_b`
+the reference exposure (1/8 s, ISO 100) over the bracket's capture exposure:
 
 ```
-e_min = g_min / g_lo × k        e_max = g_max / g_hi × k        e_centre = sqrt(e_min e_max)
+e_min = g_min / g_lo × ρ_b      e_max = g_max / g_hi × ρ_b      e_centre = sqrt(e_min e_max)
 usable range: e_min / 2^1.5 … e_max × 2^1.2
 ```
 Every `E` between `e_min` and `e_max` keeps the whole scene inside the calibrated range (the bracket is **feasible**
@@ -234,9 +243,10 @@ between them.
 
 CIEDE2000 between each profile's prediction and the chart's reference, per bracket, mean / maximum. **In-sample**
 is ArgyllCMS `profcheck` on all 288 patches the table was fitted to, as stored in `bundle.json`
-(`targets[i].profcheck_output`); it shows how well the table fits its own data. **Held out** is the mean error on
-colour patches left out of the fit (each profile rebuilt twice, each time without alternate halves of the 264 colour
-patches; the grey steps stay in), as each bundle's README gives it; it is the better guide to a photograph.
+(`targets[i].profcheck_output`, the "Fitted" columns of each profile set's README); it shows how well the table fits
+its own data. **Held out** is the mean error on colour patches left out of the fit (each profile rebuilt twice, each
+time without alternate halves of the 264 colour patches; the grey steps stay in), as each profile set's README gives
+it; it is the better guide to a photograph.
 
 | Profile set | Error | −3 EV | −2 EV | −1 EV | 0 EV | +1 EV | +2 EV | +3 EV |
 |---|---|---|---|---|---|---|---|---|
@@ -376,8 +386,9 @@ not the optimiser's reading of it, matches the field.
 6. **Highlight pullback.** A bright frame with highlights crowding the top was rendered too bright: median `L*` ≥ 58
    with ≥ 2.2 % of the crop above sRGB 242 in a channel, or median `L*` ≥ 48 with ≥ 7.5 % above 242 (or, on `Target 4`
    and denser brackets, ≥ 11 % above 235). On a feasible bracket with `E` below `e_min`, `E` is raised toward `e_min` by
-   at most 0.15 stop. On an infeasible one, the bootstrap field, the screening and the tournament (steps 2 to 4, on the
-   brackets already metered, with the same lightness target) run again with penalties
+   at most 0.15 stop. On an infeasible one, steps 2 to 4 run again with the same lightness target: the bootstrap field
+   is made again from the metered brackets' renders (when no bracket metered, the first field is kept), the brackets
+   step 3 screened are screened again, and the best two run the tournament, with penalties
    `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below
    `e_min` or above `e_max`; `slack`: stops by which the scene overflows the bracket); the runs are ranked by their
    residual plus the same penalties, on TriLED among the converged runs when any converged. When the winner puts the
@@ -430,13 +441,14 @@ the input matrix and the knee):
 
 ```
 u     = log2(x / ref) ≤ 0
-f(u)  = u (1 + a + k tanh(u − u_med))          held at slope 1 below the densest cell (slope hold)
+f(u)  = u (1 + a)                              held at slope 1 below the densest cell (slope hold)
 x'    = ref 2^f(u)
 ```
 
-`a` is the channel's bend, the slope term the fit solves; `k`, a bend around the median, is 0 in the fit. `u_med` is the
-median cell's `u`. The fitted curve is composed into the bracket's input tables (stage "profile tables":
-`apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined profile.
+`a` is the channel's bend, the slope term the fit solves. The curve's form in `input_curves.h` also has a bend around
+the median cell's `u`, which the fit holds at 0. The fitted curve is composed into the bracket's input tables (stage
+"profile tables": `apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined
+profile.
 
 **The anchors.** Every cell that Auto's render puts between `L*` 2 and 92 is an anchor, weighted by `p²`:
 
@@ -447,7 +459,8 @@ k_a = 50 cov_ω(L, a) / (var_ω(L) + 25)          (likewise k_b)
 ```
 
 `m` is the frame's neutral evidence. A neutral surface has `a* = b* = 0` at every lightness, so the gains move `ā` and
-`b̄` and the slopes remove the trend `k` (the drift of `a*` or `b*` per 50 `L*`). The targets grow with the evidence:
+`b̄` and the slopes remove the trends `k_a` and `k_b` (the drift of `a*` or `b*` per 50 `L*`). The targets grow with
+the evidence:
 
 ```
 w        = m / (m + 12)
@@ -472,10 +485,10 @@ detrended in `L*`. `dL` is the gap between the field's and the anchors' mean lig
 slope is not read as a shift of `a*`. Subtracting `SE` leans the target toward magenta by one standard error. The 1
 under the root and the 1 that `σ_anc` approaches are each estimate's systematic error in `a*`.
 
-**The solve.** One Levenberg-Marquardt solve over four numbers, the green and blue gains and the green and blue
-slope terms (`input_curves.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against
-its target, the two trends `k` against theirs, the intent term and a ridge on the slope terms; the `a*` and `b*` terms
-are divided by 1.5. `E` is re-solved at every step so the median lightness stays where Auto put it.
+**The solve.** One Levenberg-Marquardt solve over four numbers, the green and blue gains and the green and blue slope
+terms (`input_curves.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against its
+target, the two trends `k_a` and `k_b` against theirs, the intent term and a ridge on the slope terms; the `a*` and `b*`
+terms are divided by 1.5. `E` is re-solved at every step so the median lightness stays where Auto put it.
 
 **The never-greener guard.** The fit may not end greener than Auto's render. It runs freely first; only if its
 result is greener does it run again with the excess green penalised (weight 4).
@@ -595,7 +608,7 @@ its mid grey as green APD, `A_mid` (`bracket_mid_apd`). The bracket's grey steps
 The film's channels change their relation with exposure, more on some stocks than others, which a per-bracket tilt
 follows:
 
-![The slopes in the bundle, bracket by bracket](samples/slopes_across_brackets.png)
+![Each bracket's tilt in the profile set](samples/slopes_across_brackets.png)
 
 ## 5.3 The print matrix and the print material
 
@@ -610,13 +623,13 @@ computed:
   exposure −1.5 and 1.0, each point with 27 colour variations (each dye amount times `exp(0.184 z)`, `z` = −1, 0, 1);
 - **the print matrix** `P = Q L M⁻¹` for each measure, so `P M = Q L` (for a measure without `φ`, `P = Q F⁻¹`).
 
-The print of a printing density `pd`, per layer `c` and wavelength `w`:
+The print of a printing density `pd`, per layer `c` and wavelength `λ`:
 
 ```
 logE_c = aim_c − (pd_c − 0.70)                        0.70: the printing density that prints as mid grey
 a_c    = curve_c(logE_c)                              dye amount, held at the curve's ends
-t(w)   = 10^−(Σ_c a_c dye_c(w) + base(w))             the print's transmittance or reflectance
-XYZ    = Σ_w t(w) light(w) observer(w) / Σ_w light(w) ȳ(w)
+τ(λ)   = 10^−(Σ_c a_c dye_c(λ) + base(λ))             the print's transmittance or reflectance
+XYZ    = Σ_λ τ(λ) light(λ) observer(λ) / Σ_λ light(λ) ȳ(λ)
 ```
 
 ## 5.4 The print ICC
@@ -629,7 +642,7 @@ after the knee) in channel `c`:
 ```
 dL_c    = −log10(unknee(x_c) g_c / n0)                light density; (g_r, g_g, g_b) = (1, g, b), applied after the knee
 alpha_c = (G_c(dL_c) − A) (1 + t_c(A))                APD above the print's mid grey; equal in all channels on a grey
-pd      = 0.70 + Q L (w ∘ alpha),   w = M⁻¹ (1, 1, 1)   M for APD; w ∘ alpha the light density of that grey
+pd      = 0.70 + Q L (ψ ∘ alpha),   ψ = M⁻¹ (1, 1, 1)   M for APD; ψ ∘ alpha the light density of that grey
 XYZ     = the print of pd (5.3), adapted from D55 to D50 (Bradford) for a print film
 ```
 
@@ -639,7 +652,7 @@ the input curves and the table keeps only colour:
 ```
 curve_c(x)     = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))
 table(a)       = the chain above from alpha_c = Paper_c⁻¹(a_c)
-Paper_c(alpha) = curve_c(aim_c − k_c alpha) / top,     k = P (1, 1, 1),  P for APD
+Paper_c(alpha) = curve_c(aim_c − η_c alpha) / top,     η = P (1, 1, 1),  P for APD
 ```
 
 `Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey (`top`: the curves' largest value
@@ -698,8 +711,8 @@ either light (5.10).
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
 and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
-the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, 5.8), per channel the shares of the
-crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
+the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per channel
+the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
 (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
 move (`last_move`).
 
@@ -745,13 +758,13 @@ push thin film past the knee and cut the shadows. On a TriLED scan with `--print
 (`multi_target_optimizer.cc`: `print_base_floor`): its level is multiplied by
 
 ```
-k = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
+β = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
 ```
 
 with the colour kept. 99.5 % is the base detector's own percentile (`kBasePercentile`). The crop is the picture's
 frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the frame detector's crop when its confidence is
 at least 0.5, else the whole scan. The raised base serves the whole conversion, the density file included, so its
-CLF still prints the picture's print. The sidecar records the base as found and `k` (`film_base.print_floor`). A
+CLF still prints the picture's print. The sidecar records the base as found and `β` (`film_base.print_floor`). A
 captured base is taken as it is.
 
 ## 5.9 The density file and its CLF
@@ -777,7 +790,7 @@ D             = (q × largest code − offset) / (scale κ)
 print density = 0.70 + S P (D + balance − grey)
 balance       = M (0, −log10 g, −log10 b)
 grey          = M (n + log10 E)                    n: the light density of the curve's grey at green APD A
-S_c           = (k_green / k_c) (1 + t_c(A)),   k_c = Σ_j M_cj dn_j/dA      (S_green = 1)
+S_c           = (γ_green / γ_c) (1 + t_c(A)),   γ_c = Σ_j M_cj dn_j/dA      (S_green = 1)
 ```
 
 `dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
@@ -882,8 +895,8 @@ The camera has no spectral data here; the crosstalk correction stands in for its
 - **A print without a captured base** keeps the estimate's colour in its shadows; a capture of the roll's unexposed
   film is the remedy, and the warning says so.
 - **A print without `--roi`** searches the whole scan, bare light included; it says so.
-- **The slopes remove the film's own drift** of its greys from shadows to highlights. Whether a print should keep it
-  has not been judged.
+- **The tilt removes the film's own drift** of its greys from shadows to highlights (`t_c` in the print ICC's curves,
+  with it the slopes `S` in the CLF). Whether a print should keep it has not been judged.
 - **Mid grey at 0.70, printed as an 18 % grey.** A Cineon scan has an 18 % card at 0.75; both are stated values.
 - **Reproducibility.** A re-run reproduces a print to the byte on the same build, machine and backend; another
   compiler, CPU architecture or inference backend can round differently.

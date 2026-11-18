@@ -313,8 +313,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "grey_balance_curves. With a density "
           "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
           "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
-          "or 'all' for those built in. On a white-light bundle the print takes no curve fit. Without a name, --print "
-          "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
+          "or 'all' for those built in. Each material's print is searched as for a picture output, and its CLF "
+          "carries that print's A, g and b. On a white-light bundle the print takes no curve fit. Without a name, "
+          "--print lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "

@@ -31,12 +31,12 @@
 #include "embedded_data.h"
 #include "np_log.h"
 
-// ---- BEGIN CIE TABLES (copied from the cie_tables.h that negicc-station tools/export_cie_header.py writes) ----
+// ---- BEGIN CIE TABLES (copied from the tables of the companion profiling tool) ----
 // The CIE 1931 2 degree standard observer and the relative spectral power of CIE illuminants D50 and D55, on
-// 380-780 nm at 1 nm, as colour-science 0.4.7 gives them (D50 and D55 interpolated from the CIE's 5 nm tables), from
-// negicc-station's data/cie/cie_1931_2deg_d50_d55.csv. Three z_bar values at 650-652 nm are interpolation residue of
-// the order of 1e-22, one of them negative, where the CIE's table is 0. No tool writes or checks this block: a change
-// to the tables is made by hand from that tool's output. Used for the colour of a print.
+// 380-780 nm at 1 nm, as colour-science 0.4.7 gives them (D50 and D55 interpolated from the CIE's 5 nm tables).
+// Three z_bar values at 650-652 nm are interpolation residue of the order of 1e-22, one of them negative, where the
+// CIE's table is 0. No tool in this repository writes or checks this block: a change to the tables is made by hand.
+// Used for the colour of a print.
 constexpr int kCieSamples = 401;
 constexpr double kCieFirstNm = 380.0;   // 1 nm steps
 
@@ -868,7 +868,6 @@ namespace {
 // density_curves per value, each layer's curve rising with exposure, and each layer's log_sensitivity peaking within 6
 // (log10) of the most sensitive layer's. False with why in err. Only load_spektrafilm_print calls it, so one reader
 // holds every rule.
-// py-ref: negicc_station/src/print_emulation.py (check_spektrafilm_print)
 bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
   if (!j.is_object() || !j.contains("data") || !j["data"].is_object()) return err = "not a spektrafilm profile (no data)", false;
   if (!j.contains("info") || !j["info"].is_object()) return err = "a spektrafilm profile without info", false;
@@ -1209,8 +1208,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
   // py-ref: negicc_station/src/print_emulation.py (frame_grey)
   // A narrow-band bundle with the film's grey balance curve: the mid grey and the slopes are the curve's, as in its
-  // print ICCs (curve_grey, curve_slopes).
-  // py-ref: negicc_station/src/print_icc.py (curve_grey, curve_slopes)
+  // print ICCs.
   const double* m = rec.matrix->m;
   const double shift = std::log10(p.exposure);
   double light[3] = {bracket->grey_light[0], bracket->grey_light[1], bracket->grey_light[2]};
@@ -1765,8 +1763,8 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
 }
 
 std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
-  // The station's file name ends in _YYYYMMDD_HHMMSS (profile_<Key>_<date>_<time>.json), as the bundle's own print
-  // ICCs are dated (density_matrices.py add_print_profiles); 2026-01-01 00:00:00 when it does not.
+  // The bundle's source file name (export.source_file) ends in _YYYYMMDD_HHMMSS (profile_<Key>_<date>_<time>.json),
+  // the date the bundle's own print ICCs carry; 2026-01-01 00:00:00 when it does not.
   std::string stem = bundle.source_file;
   const size_t slash = stem.find_last_of("/\\");
   if (slash != std::string::npos) stem = stem.substr(slash + 1);
