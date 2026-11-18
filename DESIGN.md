@@ -25,13 +25,13 @@ matrices and curves the print emulation needs.
 
 The stages, and which run for each output:
 
-| Stage | Section | Picture, TriLED | Picture, white light | Print as a picture (TriLED only) | Density file |
+| Stage | Section | Picture, TriLED | Picture, white light | Print as a picture | Density file |
 |---|---|---|---|---|---|
 | From the scan to film RGB | 2 | yes | yes | yes | yes |
 | Auto search on the chart profiles | 4.2 | yes | yes | no | yes, recorded only |
-| White-light curve fit | 4.3 | no | yes | no | white light: yes, for the CLF only |
+| White-light curve fit | 4.3 | no | yes | no | white light without `--print`: yes, for the suggested balance only |
 | Tone stage | 4.4 | yes (`srgb`) | yes (`srgb`) | no | no |
-| The print's search on the print profile | 5.6 | no | no | yes | TriLED with `--print`: once per material |
+| The print's search on the print profile | 5.6 | no | no | yes | with `--print`: once per material |
 | Conversion | 4.1, 5.4 | chart profile | chart profile | print profile | density, then CLF |
 
 Every pixel is converted once, by one chain of per-pixel stages (`color_pipeline.h`). The searches decide only the
@@ -422,7 +422,8 @@ A white-light conversion leaves a cast that differs from frame to frame more tha
 channels mix the film's layers, which a 3×3 cannot undo. After the search, the fit corrects the green and blue gains
 and the slopes of the green and blue input curves so that what the frame shows as neutral comes out grey
 (`input_curves.h`; `multi_target_optimizer.cc`: `run_white_light_fit`). It runs on white light with `-P srgb` or
-`srgb-g10` (`--fit_curves`), and for a white-light density file, where only the CLF uses it (5.10).
+`srgb-g10` (`--fit_curves`), and for a white-light density file without `--print`, where it gives the suggested
+balance only. A print takes no fit (5.10).
 
 **The curve.** On the green and blue input of the bracket's profile, below the pivot `ref` (the film base through
 the input matrix and the knee):
@@ -692,8 +693,8 @@ deterministic on the same build, machine and backend. `--brightness` moves the p
 print at the search's values renders as neutral L* 50 renders at the knobs' target, by Newton on (`A`, `ln g`,
 `ln b`); an unreachable target is scaled back as for a picture. The sidecar's `knobs.base.a` records the search's
 `A`, which a run reusing the sidecar starts from. A density output with `--print` moves each material's print search
-the same way before its CLF is built. A picture output with `--print` needs a
-TriLED bundle with grey balance curves; a white-light scan takes `--print` with a density output only.
+the same way before its CLF is built. A picture output with `--print` needs a bundle with grey balance curves, under
+either light (5.10).
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
 and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
@@ -781,7 +782,7 @@ S_c           = (k_green / k_c) (1 + t_c(A)),   k_c = Σ_j M_cj dn_j/dA      (S_
 
 `dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
 `1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has
-equal contrast in the three channels. With `--print` on a TriLED bundle the density run searches each material's print
+equal contrast in the three channels. With `--print` the density run searches each material's print
 (5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is
 then computed from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The print CLF is
 relative to the paper's white like the print ICC.
@@ -802,30 +803,19 @@ CLF's tables derive from spektrafilm's print profiles and carry their licence no
 
 ## 5.10 White-light scans
 
-A white-light scan gets a density file and CLFs (`--light_source d65 -P apd --print …`), not a print as a picture.
-What differs:
+A white-light scan takes the print as a picture and the density file with its CLFs as a TriLED scan does: the
+print's own search (5.6) runs on the white-light decode, and each material's CLF takes that print's `A`, `E` and gains
+(5.9). What differs:
 
-- **No crosstalk correction**: `D_white = −log10(max(s ⊙ v / 65535 / n0, 0.0001))` per Rec.2020 channel.
+- **No crosstalk correction**: `D_white = −log10(max(s ⊙ v / 65535 / n0, 0.0001))` per Rec.2020 channel. The search
+  reads `M_frame` itself, so `E = 1` puts the film base at `n0`.
 - **`L` for white light.** No spectrum of the light or the camera is measured. Linear Rec.2020 is taken as what it is
   defined to be, the CIE 1931 observer under D65 through the Rec.2020 matrix; `L` is fitted on the same 3000 film
-  samples seen that way. `F` is the narrow-band set's.
-- **Mid grey and slopes from the fitted curves.** The curve fit (4.3) runs and changes no pixel of the file; the CLF
-  takes the frame's mid grey and slopes from the grey scale the fitted curves describe (`fitted_grey_scale`,
-  `frame_print`). A film of density `D` reaches the profile's input as `w = E g_c n0 10^−D`, `x = knee(w)`,
-  `x' = ref 2^f(log2(x / ref))`; the bracket's profile renders `x' = n0 10^−d_i` as grey step `i`. Each step is
-  inverted (`f` by bisection, the knee in closed form, `D_c,i = −log10(w / (E g_c n0))`), then taken forward:
-
-  ```
-  grey' = F L D_mid                         the fitted mid step, balance and exposure included
-  S'    = (1 / k_red, 1, 1 / k_blue),  k_red = Σ_i r_i,red r_i,green / Σ_i r_i,green²   over the 24 fitted steps,
-          r_i = F L (D_i − D_mid)                                                         (likewise k_blue)
-  print density = 0.70 + S' P (D − grey')
-  ```
-
-  With `--fit_curves off` the CLF takes the bracket's own mid grey and slopes (the same regression on its chart
-  steps). Without a fit this is the TriLED formula with the bracket's slopes.
-
-![The grey steps of a bracket in APD, and its slopes](samples/slopes_grey_steps.png)
+  samples seen that way. `F` is the narrow-band set's. The grey balance curve, the brackets' `A_mid` and tilts and the
+  print ICCs are built from the white-light reading of the chart, as for TriLED.
+- **No curve fit on a print.** The fit (4.3) composes into the chart profiles, which a print does not use;
+  `--fit_curves on` with `--print` is refused. A density file without `--print` still runs the fit, which changes no
+  pixel and gives the file's suggested balance.
 
 | Parameter | Value | Purpose |
 |---|---|---|
