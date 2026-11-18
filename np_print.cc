@@ -1613,7 +1613,7 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
-constexpr double kD50[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};   // the PCS white
+constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
 constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
 

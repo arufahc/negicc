@@ -235,11 +235,12 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
 // PCS -> linear sRGB: the inverse of the colorants (rXYZ, gXYZ, bXYZ, D50-adapted) of the profile neg_process embeds in
 // its sRGB outputs, Elle Stone's sRGB V2 (3rd_party/elle_icc_profiles; the sRGB-TRC and the gamma 1.0 profiles carry
-// the same colorants). So the codes written mean, through the embedded profile, the PCS they were computed from: a
-// colour-managed reader gets the PCS back within quantisation, and kPcsWhite maps to (1, 1, 1). It replaces Bradford
-// D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it in the fourth decimal. The print CLF
-// keeps the standard sRGB (np_print.cc print_clf_nodes), as it carries no profile. Unclamped; inline so device code
-// can use it.
+// the same colorants). So the codes written mean, through the embedded profile, the PCS they were computed from, and
+// kPcsWhite maps to (1, 1, 1): a colour-managed reader gets the PCS back within quantisation from srgb-g10, and from
+// srgb within that and the difference between the profile's 4096-entry TRC table and the analytic sRGB curve the codes
+// are encoded with. It replaces Bradford D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it
+// in the fourth decimal. The print CLF keeps the standard sRGB (np_print.cc print_clf_nodes), as it carries no profile.
+// Unclamped; inline so device code can use it.
 NEGICC_HD Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
     return { v.r * 3.13427485f + v.g * -1.61727573f + v.b * -0.490724277f,
              v.r * -0.978795611f + v.g * 1.91616171f + v.b * 0.0334533327f,
@@ -372,8 +373,8 @@ NEGICC_HD float lab_f(float t) {
 // Direct linear sRGB D65 -> CIELAB D65 (skips 6x powf of srgb_encode + srgb_decode).
 // Independent of the PCS conversion above: it reads a picture's linear sRGB and gives L*a*b* relative to sRGB's own
 // white (the textbook sRGB -> XYZ D65, divided by D65's X and Z, so (1, 1, 1) is L* 100, a* b* 0). It is the colour of
-// what is displayed, the space the intent adapters' training targets were made in (negicc-station), and is kept as it
-// is: making it the inverse of the PCS conversion would move every trained cell.
+// what is displayed, the space the intent adapters' training targets were made in by the profile-building tools, and is
+// kept as it is: making it the inverse of the PCS conversion would move every trained cell.
 NEGICC_HD Lab linear_srgb_to_lab(Rgb lin) {
     const float r = lin.r, g = lin.g, b = lin.b;
     const float X = (0.412453f * r + 0.357580f * g + 0.180423f * b) / 0.950456f;
