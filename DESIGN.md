@@ -289,7 +289,7 @@ Every output pixel goes through these stages once (`color_pipeline.h`: `convert_
 x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
 y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
 XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
-rgb   = srgb_from_XYZ(bradford_D50→D65(XYZ)),  clamped at 0               linear sRGB, up to about 1.33
+rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
 rgb'  = shoulder(rgb), clamped to [0, 1]                                  sRGB output only
 rgb'' = tone(rgb')                                                        sRGB output, after a search only
 out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
@@ -687,8 +687,12 @@ highlight shoulder and no tone stage: the paper's curve gives the tone and rolls
 
 A print is made by its own search: `--target`, `-E`, `--gain_g` and `--gain_b` are refused with `--print`, and
 `--tone_stage` with `--print` is refused. Running the sidecar's `cli_equivalent` again re-runs the search, which is
-deterministic on the same build, machine and backend. `--brightness`, `--tint` and `--warmth` keep the recorded `A`
-and move `E`, `g` and `b` (solved through the bracket's chart profile). A picture output with `--print` needs a
+deterministic on the same build, machine and backend. `--brightness` moves the print's `A`, and `--tint` and
+`--warmth` its `g` and `b`, with `E` held (`solve_print_knobs`): solved on the print profile so that the film the
+print at the search's values renders as neutral L* 50 renders at the knobs' target, by Newton on (`A`, `ln g`,
+`ln b`); an unreachable target is scaled back as for a picture. The sidecar's `knobs.base.a` records the search's
+`A`, which a run reusing the sidecar starts from. A density output with `--print` moves each material's print search
+the same way before its CLF is built. A picture output with `--print` needs a
 TriLED bundle with grey balance curves; a white-light scan takes `--print` with a density output only.
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
@@ -702,8 +706,10 @@ move (`last_move`).
 
 The table's lightest node is the paper's base under its viewing light, against a perfect white (`Y` = 1). The print
 is shown relative to its paper, as the ICC defines media-relative colorimetry: each of X, Y and Z of every node is
-scaled by D50's over the paper base's, so the base becomes D50, the display's white, in the preview the search sees
-and in the output (`np_pipeline.cc`: `to_paper_white`). The paper's tint is then not shown, as an eye adapted to the
+scaled by the PCS white's over the paper base's, so the base becomes the display's white in the preview the search
+sees and in the output (`np_pipeline.cc`: `to_paper_white`). The PCS white is D50 as an ICC profile stores it,
+(63190, 65536, 54061) / 65536 (`kPcsWhite`), which the sRGB profile's colorants sum to, so the base is written at 65535
+in all three channels. The paper's tint is then not shown, as an eye adapted to the
 paper does not see it. A saturated light colour can still have an sRGB channel above 1, which is cut
 (`profile.print.search.above_white_pct`).
 

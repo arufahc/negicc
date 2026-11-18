@@ -765,9 +765,11 @@ bool write_json_sidecar(const Sidecar& sc) {
         {"tint", num(sc.tint, "%.6g")},
         {"warmth", num(sc.warmth, "%.6g")},
         {"limited", sc.knob_res.limited},
-        {"base", {{"e", num(sc.knob_base[0], "%.9g")},
-                  {"g", num(sc.knob_base[1], "%.9g")},
-                  {"b", num(sc.knob_base[2], "%.9g")}}},
+        {"base", std::isfinite(sc.knob_base_a)
+                     ? ordered_json{{"e", num(sc.knob_base[0], "%.9g")}, {"g", num(sc.knob_base[1], "%.9g")},
+                                    {"b", num(sc.knob_base[2], "%.9g")}, {"a", num(sc.knob_base_a, "%.17g")}}
+                     : ordered_json{{"e", num(sc.knob_base[0], "%.9g")}, {"g", num(sc.knob_base[1], "%.9g")},
+                                    {"b", num(sc.knob_base[2], "%.9g")}}},
         {"egb", {{"e", num(sc.knob_res.e, "%.9g")},
                  {"g", num(sc.knob_res.g, "%.9g")},
                  {"b", num(sc.knob_res.b, "%.9g")}}},
