@@ -205,7 +205,7 @@ struct PrintMaterial {
 // Computed here:
 //
 //   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
-//   the observer              the CIE 1931 2 degree observer (cie_tables.h) under D50 for a paper, D55 for a print
+//   the observer              the CIE 1931 2 degree observer (np_print.cc's CIE tables) under D50 for a paper, D55 for a print
 //                             film (info.support), adapted to D65 with CAT02 for sRGB
 //   aim                       the exposure of each layer that prints an 18 % grey
 //   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
@@ -377,10 +377,6 @@ const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
 constexpr bool kPrintTiltLinear = true;
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
                    double t[3], bool linear = kPrintTiltLinear);
-// A self-check of print_tilt_at in both forms on brackets given out of order (each bracket's own tilt at its A_mid,
-// the nearest's or the interpolated tilt midway between two, held beyond the end ones); prints each case, returns the
-// number that failed. make check_print (check_print.cc) runs it.
-int print_tilt_selfcheck();
 // The same from a bundle's density brackets.
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
 // The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the

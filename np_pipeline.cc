@@ -1679,14 +1679,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
         std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film", scan.print_floor_k);
       if (estimate) {
-        // With no --roi the shares are of the search's crop, the whole scan with the holder's light (said above).
+        // With no --roi the shares are of the search's crop, the whole scan (said above).
         log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the %s is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
                  "of this roll's unexposed film>\n",
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
                  raised, 100.0 * s.print_cr.past_knee[c],
-                 scan.print_noroi_warned ? "search's crop (the whole scan, the light included)" : "crop",
+                 !scan.has_roi ? "search's crop (the whole scan)" : "crop",
                  100.0 * s.print_cr.past_cut[c], name);
       } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
         log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
@@ -1697,7 +1697,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
                  "<capture of this roll's unexposed film> if this is not one\n",
                  100.0 * s.print_cr.past_cut[c],
-                 scan.print_noroi_warned ? "search's crop (the whole scan, the light included)" : "crop", name,
+                 !scan.has_roi ? "search's crop (the whole scan)" : "crop", name,
                  scan.film_base.source.c_str());
       }
     }
@@ -1748,16 +1748,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // detector's crop of the half-size image |half| when the detection ran and is at or above kBaseMinFrameConf (the
   // level the film base takes the detector's patch at), else the whole scan. Without a frame the scan's bare light
   // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film: on the
-  // 50 TriLED test frames without --roi it raised the factor on 27, by up to 2.5x (station designs/print_search_ways.md).
+  // 50 TriLED test frames without --roi it raised the factor by more than 1 % on 27, by up to 2.5x (station
+  // designs/print_search_ways.md).
   // Light inside the frame is not masked (the detector's light mask takes thin film for light on some frames); the
   // record's factor and frame show what was read. The print's search itself reads the search frame (without --roi, the
   // whole scan). A caller that gains a print (negicc-station) chooses the frame here, as this does.
-  // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), used only when |half|
-  // is that mosaic halved (a decode turned against the sensor does not map; as the base's patch). A --roi auto that fell
+  // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), mapped onto |half| by
+  // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned against
+  // the sensor does not map). A --roi auto that fell
   // back to the whole image is the whole scan. frame_conf is written only where the detection decided the frame.
   auto floor_print_base = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
                               int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
+    // A print without --roi: its search reads the whole scan (whatever the base, a capture included). Said once.
+    if (print && s.is_bundle && !s.white_light && !scan.has_roi && !scan.print_floor_applied)
+      log_warn("no --roi: the print's search reads the whole scan; give --roi or --roi auto\n");
     if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
       return;
     negicc::RgbView floor_frame = frame;
@@ -1768,11 +1773,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (fell_back) scan.print_floor_frame_conf = scan.frame_det.conf;
     } else {
       scan.print_floor_frame = "whole_scan";
-      const bool aligned = det && std::abs(2 * half.width - sensor_w) <= 4 && std::abs(2 * half.height - sensor_h) <= 4;
+      const double sx = sensor_w > 0 ? half.width / (double)sensor_w : 0.0, sy = sensor_h > 0 ? half.height / (double)sensor_h : 0.0;
+      const bool aligned = det && sx > 0.0 && sy > 0.0 && std::fabs(sx - sy) <= 0.02 * std::max(sx, sy);
       if (aligned) scan.print_floor_frame_conf = det->conf;
       if (aligned && det->ok && det->conf >= negicc::kBaseMinFrameConf) {
-        int b[4] = {det->crop[0] / 2, det->crop[1] / 2, std::max(1, (det->crop[0] + det->crop[2]) / 2 - det->crop[0] / 2),
-                    std::max(1, (det->crop[1] + det->crop[3]) / 2 - det->crop[1] / 2)};
+        const int x0 = (int)(det->crop[0] * sx), y0 = (int)(det->crop[1] * sy);
+        int b[4] = {x0, y0, std::max(1, (int)((det->crop[0] + det->crop[2]) * sx) - x0),
+                    std::max(1, (int)((det->crop[1] + det->crop[3]) * sy) - y0)};
         clamp_rect(b, half.width, half.height);
         floor_frame = half.crop_and_orient(b[0], b[1], b[2], b[3], scan.rot_cw, scan.hflip, scan.vflip);
         scan.print_floor_frame = "detected";
@@ -1785,17 +1792,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
     scan.print_floor_k = k;
-    // No --roi: the print's search reads the whole scan, and what of its crop is thinner than the picture's thinnest film
-    // (the base after the floor) is said, above the percentile's own margin (100 - kBasePercentile %).
-    if (!scan.has_roi) {
-      scan.print_noroi_thin_share = print_share_thinner(s.bundle, frame, ParamSearchOptions{}.crop_ratio, raised_rgb);
-      if (100.0 * scan.print_noroi_thin_share > 100.0 - negicc::kBasePercentile) {
-        scan.print_noroi_warned = true;
-        log_warn("no --roi: the print's search reads the whole scan, the holder's light included (%.2f %% of its crop is "
-                 "thinner than the picture's thinnest film); give --roi or --roi auto\n",
-                 100.0 * scan.print_noroi_thin_share);
-      }
-    }
     for (int c = 0; c < 3; ++c) scan.print_floor_found_rgb[c] = fb[c];
     if (k > 1.0f) {
       if (!scan.film_base.found) {
@@ -1973,8 +1969,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG and three
-      // captures have no detection without --roi auto, so their floor reads the whole scan.
+      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG, three captures
+      // and a linear DNG have no detection without --roi auto, so their floor reads the whole scan.
       floor_print_base(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h, scan_shutter_s,
                        scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {

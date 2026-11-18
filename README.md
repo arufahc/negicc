@@ -256,25 +256,26 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
     --film_base base.ARW --roi auto -o print.tif scan.ARW
 ```
 
-Each RGB-LED profile set carries one print ICC per print material (`profiles/<film>-A7R4-TriLED/print_<print>.icc`,
-and its `README.md` gives the math). The automatic search runs on the print itself: its printing exposure is one
-continuous level, then the colour balance, and the paper's own curve sets the tone, so the toning step does not run.
-The print is shown relative to its paper, the paper's base at the display's white. A print profile given as a file
-gets its ICC computed. With a density output, each material's CLF prints the frame as the picture does, except where the scan is
-thinner than the film base (the picture passes the soft knee there and the density file does not): `--print` runs the print's
-search for each material it writes a CLF for (about 9 s each on a 96-core x86 machine; `--print all`, eight
-searches, about 70 s), and a print's `cli_equivalent` given to a density output writes the same CLF for the one
-material whose picture it came from. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
-set saved before it had a grey balance curve cannot print.
+This writes the print on the chosen material as an sRGB picture. The automatic search runs on the print itself: its
+printing exposure, then its colour balance. The paper's curve gives the tone, so the toning step does not run. The
+print is shown relative to its paper's white. A white-LED scan takes `--print` with a density output only. DESIGN.md
+has the rest.
 
-One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search
-chose:
+| Material | Type | Viewing light | Its paper white, L\* a\* b\* under that light (shown at the display's white) |
+|---|---|---|---|
+| Kodak Professional Portra Endura (`kodak_portra_endura`) | paper | D50 | 92.1, +0.15, +0.80 |
+| Kodak Professional Supra Endura (`kodak_supra_endura`) | paper | D50 | 92.7, +0.09, +0.39 |
+| Kodak Professional Ultra Endura (`kodak_ultra_endura`) | paper | D50 | 82.9, +0.62, −4.10 |
+| Kodak Professional Endura Premier (`kodak_endura_premier`) | paper | D50 | 90.9, +0.56, −2.73 |
+| Kodak Ektacolor Edge (`kodak_ektacolor_edge`) | paper | D50 | 90.9, +0.16, +0.06 |
+| Fujifilm Crystal Archive Type II (`fujifilm_crystal_archive_typeii`) | paper | D50 | 92.7, +0.07, +0.45 |
+| Kodak Vision 2383 (`kodak_2383`) | print film | D55 | 94.4, +0.23, +5.97 |
+| Kodak Vision Premier 2393 (`kodak_2393`) | print film | D55 | 94.5, −0.12, +1.84 |
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: negicc's picture without `--print`. Then the six papers and the two print films, all at one exposure
-and balance, so only the print material changes. Rendered before the print's own search: at the scene's search's
-bracket, exposure and balance, against a perfect white.*
+*Top left: the picture without `--print`. Then the six papers and the two print films, each rendered at one bracket,
+exposure and balance, against a perfect white.*
 
 ## Options
 
@@ -286,7 +287,7 @@ bracket, exposure and balance, against a perfect white.*
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
-| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, at the bracket, exposure and gains the search chose on the scene. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
+| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |

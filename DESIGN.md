@@ -622,26 +622,20 @@ were constructed"). The print's lightness is searched once and continuously, in 
      takes the detector's patch at), else the whole scan; the sidecar records which (`film_base.print_floor.frame`,
      with the detection's confidence where it decided the frame). The detection is the one the film base reads: the
      CFA route's, and a single RAW's on the LibRaw route (used when that decode is the mosaic halved, not turned); TIFF,
-     JPEG and three captures have none without `--roi auto`, so their floor reads the whole scan, and a `--roi auto`
+     JPEG, three captures and a linear DNG have none without `--roi auto`, so their floor reads the whole scan, and a `--roi auto`
      that fell back to the whole image is recorded as the whole scan. Without a frame the scan's bare light (the holder's gaps, perforations, the
      strip's edges) lies in the crop and reads as the thinnest film: on the 50 TriLED test frames without `--roi`, the
-     whole scan raised the factor on 27 of them, by up to 2.5x, where the detected frame agrees with the frame's own
+     whole scan raised the factor by more than 1 % on 27 of them, by up to 2.5x, where the detected frame agrees with the frame's own
      `--roi` within 2 % on 47 (at most 2.4 %, 1004_0026; every detection at 0.68 or above; station
      `designs/print_search_ways.md`, "The floor's frame", with its scripts). Light inside the frame
      (perforations within a `--roi`) is not masked, since the detector's light mask also takes thin film for light, and
      the record's factor shows what was read. The print's search itself reads the search frame, which without `--roi`
      is the whole scan, bare light included: there the floor's frame and the search's crop differ, and such a print
-     meters and balances on the light too (give `--roi` or `--roi auto`). The print says so when more than 100 −
-     `kBasePercentile` (0.5) % of the search's crop is thinner than the picture's thinnest film (the base after the
-     floor; `print_share_thinner`, every 4th pixel as the floor reads): "no --roi: the print's search reads the whole
-     scan, the holder's light included (N % of its crop is thinner than the picture's thinnest film)". The base
-     warnings beside it then say that their shares are of the search's crop (the whole scan, the light included), not
-     of the picture's frame: on 1004_0036, 12.12 % of the whole scan is thinner than the picture's thinnest film, and
-     11.07 % of it past the cut is that light. Without `--print`, nothing changes. So the same frame's density file differs with and without
+     meters and balances on the light too. A print without `--roi` always says so ("no --roi: the print's search reads
+     the whole scan; give --roi or --roi auto"), whatever its base, and the base warnings beside it say that their
+     shares are of the search's crop (the whole scan). Without `--print`, nothing changes. So the same frame's density file differs with and without
      `--print` when its base is an estimate (written against the raised base with it, against the base as found
-     without it), and the sidecar says which (`film_base.print_floor`). `make check_print` checks the
-     arithmetic on synthetic frames, the branch with no base read from the scan included (the bundle's base scaled
-     once by the exposures, then raised).
+     without it), and the sidecar says which (`film_base.print_floor`). 
    - **Why:** E held at 1 in reference units (the rule before) made the print depend on how long the scan was exposed:
      the base read at n0 / e_norm, 0.82 to 3.30 on the test frames. Taking the base's level in full instead, an
      estimated base far below the film's thinnest areas cut the shadows: 1006_0007 on its estimate (0.31 of its capture
@@ -788,13 +782,6 @@ darker than the picture's thinnest film, and with it 1006_0007 prints without a 
 **Checks.** On Portra 400 frames (TriLED), through the bundles carrying each bracket's own tilt; each bullet names the
 commit it was run at (on wp0, x86-64, CPU):
 
-- `make check_print` (check_print.cc; not an option of neg_process, the owner's decision of 2026-11-17 on the two
-  self-check flags: "Remove them") checks the bracket term, `print_tilt_at`, in both forms on brackets given out of
-  order: each bracket's own tilt at its `A_mid`, the nearest bracket's or the interpolated tilt between two, held
-  beyond the end ones, and that the shipped rule (the default) is the linear one (11 of 11; run at 9161629). The same program checks the floor, `print_floor_base`, on synthetic frames (5 of 5): four grey (a found base, none
-  found, a raised base, film all denser than the base) and one coloured, through a crosstalk that is not symmetric with
-  a patch thin in blue, which tells the largest channel from another, the matrix from its transpose, and the base's
-  colour kept from one value for all.
 - At `A = A_mid` of each of the seven brackets the print profile at `A` gives the bracket's print to the pixel
   (frames 1004_0014 and 1006_0007; Portra Endura and Ultra Endura; measured at the continuous search's commit, before
   the tilts shipped).
@@ -847,7 +834,7 @@ built; the print material's is used when a CLF is written.
 | The response curves of Status M, RP 180 and APD | The standards | `F`, `P` | Not shipped |
 | The print material's spectral sensitivity | The print material | `P` | The spektrafilm print profile |
 | The print material's curve per layer, dye spectra and base | The print material | The print | The spektrafilm print profile (`3rd_party/spektrafilm/profiles/`, or a file given to `--print`) |
-| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `cie_tables.h` |
+| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `np_print.cc` (its CIE tables block) |
 
 The camera has no spectral data here. The crosstalk correction stands in for its response curves.
 
