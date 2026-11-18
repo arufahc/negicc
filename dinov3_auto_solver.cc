@@ -716,11 +716,8 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     const double t0_r = omp_get_wtime();
     SolverConfig pin_cfg = cfg;
     float pin_q995 = 0.0f;
-    if (cfg.shoulder_auto) {
-      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass is render time
+    if (cfg.shoulder_auto)  // the extra pre-shoulder pass is render time (t0_r)
       pin_cfg.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, &pin_q995);
-      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
-    }
     render_crop_preview(pin_cfg, merged_norm, view, 1.0f, 1.0f, 1.0f, preview_u8.data());
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
     if (!infer_checked(eng, preview_u8.data(), w, h, grid_w, grid_h, inf, out)) return false;
@@ -778,11 +775,8 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     // x_hi from the render at this iteration's incoming parameters, held through the (E, g, b) sweeps below.
     SolverConfig itc = cfg;
     float it_q995 = 0.0f;
-    if (cfg.shoulder_auto) {
-      const double t0_m = omp_get_wtime();  // the extra pre-shoulder pass per iteration is render time
+    if (cfg.shoulder_auto)  // the extra pre-shoulder pass per iteration is render time (t0_r)
       itc.shoulder = measure_shoulder_x_hi(cfg, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b, &it_q995);
-      out.timing_render_ms += (omp_get_wtime() - t0_m) * 1000.0;
-    }
     render_crop_preview(itc, merged_norm, view, (float)curr.e, (float)curr.g, (float)curr.b,
                         preview_u8.data());
     out.timing_render_ms += (omp_get_wtime() - t0_r) * 1000.0;
