@@ -1,11 +1,12 @@
 # Tone heads
 
 Predict, from a preview's frozen DINOv3 features, the tone a lab scan of the frame would have: 11 descriptors of its
-pixels at network size, each with a mean and a standard deviation. `neg_process` uses three of them for the white-light
-tone stage (`tone_stage.cc`): the shadow level L2 (L* at 2 %), the highlight level L98 (L* at 98 %) and the tonal range
-R9010 (L* at 90 % minus L* at 10 %). One monotone L* curve then moves the image all the way to the predicted L2 and
-half way to the predicted L98 and R9010, holding L50; it is applied in the conversion kernel on display linear sRGB,
-holding each colour's a* and b* to first order. The heads predict tone only; colour is the curve fit's.
+pixels at network size, each with a mean and a standard deviation. `neg_process` uses three of them for the tone
+stage (`tone_stage.cc`), on both lights: the shadow level L2 (L* at 2 %), the highlight level L98 (L* at 98 %) and
+the tonal range R9010 (L* at 90 % minus L* at 10 %). One monotone L* curve then moves the image all the way to the
+predicted L2 and half way to the predicted L98 and R9010, holding L50; it is applied in the conversion kernel on
+display linear sRGB, holding each colour's a* and b* to first order. The heads predict tone only; colour is the
+search's (and, on white light, the curve fit's).
 
 - Input: 1920 features, the backbone's pooled output (the CLS token of layer 12, the mean patch token of layer 9 and
   of layer 12: 1152) and the patch tokens' standard deviation over the patches (layers 9 and 12: 768;
@@ -52,22 +53,24 @@ negicc renders, flattening or steepening a render by 4-10 L* moves the predictio
 - `tone_head.pt`: the trained PyTorch dict `{kind: "pool", state, xm, xs, ym, ys, tgt, pool: "A"}` (sha256 in
   `metadata.json`).
 - `tone_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs it
-  in plain C++ (`ToneHead` in `dinov3_engine.h`), once per frame, on features an inference of the white-light fit already produced.
-  Format in `export_tone_head.py`.
+  in plain C++ (`ToneHead` in `dinov3_engine.h`), once per frame, on the features of the tone stage's own inference
+  on the final render's preview (below). Format in `export_tone_head.py`.
 - `export_tone_head.py`: writes `tone_head.bin` from `tone_head.pt`; `--check` compares PyTorch with the exported
   weights on random features.
 
 ```bash
-python3 models/tone_head/export_tone_head.py --check   # needs torch and numpy
+python3 models/tone_head/export_tone_head.py --check   # needs torch and numpy 2 (the .pt pickles numpy._core)
 ```
 
 ## Using it in neg_process
 
 Runs after every bundle search with `-P srgb`, on white-light and TriLED bundles, with or without the curve fit
-(`--tone_stage off` leaves it out; `--tone_stage curve:...` replays a recorded curve). The engine then also gives the tokens' spread with every inference of
-the search (`set_token_spread`); the heads run once, on the features of one inference on the final render's preview
-(the search's intent preview only if that inference fails), the only network inference after the search. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's descriptors
-before the stage, the targets, the curve (four numbers) and the clipping before (on the clip check's sample) and after.
+(`--tone_stage off` leaves it out; `--tone_stage curve:...` replays a recorded curve). The engine then also gives the
+tokens' spread with every inference of the search (`set_token_spread`); the heads run once, on the features of one
+inference on the final render's preview (the search's intent preview only if that inference fails), the only network
+inference after the search. The sidecar's `tone_stage` records which (`features`), the predictions, the final render's
+descriptors before the stage, the targets, the curve (four numbers) and the clipping before (on the clip check's sample)
+and after.
 
 To try retrained heads, export them with `export_tone_head.py` and pass the `.bin` with `--dino tone:<file>`, or
 replace `tone_head.bin` and rebuild. The sidecar's `heads.tone` records which file ran, with its size and CRC-32.

@@ -665,11 +665,12 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   return ok;
 }
 
-// The paper's white (the owner's choice, "paper white is display white"): a print profile made media-relative, as the
-// ICC defines it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the paper's base; each of
-// X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white and none
-// of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have an sRGB channel above 1,
-// which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the base.
+// The paper's white is the display's white: a print profile made media-relative, as the ICC defines it, as an eye
+// adapted to the paper sees it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the
+// paper's base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the
+// display's white and none of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have
+// an sRGB channel above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute.
+// paper_xyz gets the base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
   const double d50[3] = {0.9642, 1.0, 0.8249};
@@ -827,12 +828,12 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
-  // --print. The search (bracket, E, g, b) always runs on the chart profiles, as for the density output's CLF, whose
-  // frame matrix puts the search's mid grey on the print's. With a picture output on a narrow-band bundle the
-  // conversion then renders the chosen bracket's print profile: the bundle's print ICC with that bracket's curves
-  // (np_print.h bracket_print_profiles), built here for every bracket. A density output writes a CLF per material, as
-  // before. On a white-light bundle the curve fit composes into the chart profiles, so its print is a density
-  // output's CLF alone.
+  // --print. With a picture output on a narrow-band bundle the print's own search (A, g, b) runs on the print profile,
+  // with no chart profile, and the conversion renders that profile at the search's A: the bundle's print ICC
+  // (np_print.h bracket_print_profiles), built here and made relative to the paper's white. A density output writes a
+  // CLF per material; on a narrow-band bundle each material's print is searched for its CLF (density_print_searches).
+  // On a white-light bundle the curve fit composes into the chart profiles, so its print is a density output's CLF
+  // alone.
   if (!o.prints.empty()) {
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
@@ -866,8 +867,8 @@ int prepare(const Options& o, Setup& s) {
         s.print_iccs.push_back(std::move(icc));
       }
       for (ParsedFilmProfile& p : s.print_profs) p.rebind_pointers();
-      // The paper's white (the owner's choice, "paper white is display white"): the print is media-relative
-      // (to_paper_white); the profile an output embeds carries the same scaled table.
+      // The paper's white is the display's white: the print is media-relative (to_paper_white); the profile an output
+      // embeds carries the same scaled table.
       for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p, s.print_paper_xyz);
       {
         double k[3];
@@ -1577,9 +1578,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.has_rolloff = true;
     return true;
   };
-  // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
-  // g, b on the combined profile the curves were replayed into) in place of the search.
-  // The bundle search: on a print (--print with a picture output) the print's own search, the scene's otherwise.
   // A TriLED density run with --print: each material's own print search, so that its CLF prints the frame as the
   // picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's suggested
   // balance, as without --print.
@@ -1643,6 +1641,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     return true;
   };
+  // The bundle search: on a print (--print with a picture output) the print's own search, the scene's otherwise.
   auto bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                            const ParamSearchOptions& opts) -> bool {
     if (s.print_profs.empty()) {
@@ -1663,11 +1662,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
       // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
       // Also whatever the base's source: a rebate read on clipped film (a long scan) is a measured base in name only,
-      // and film thinner than the base passes the knee at E. kPrintCutWarnShare: the share of the crop past the cut in a
-      // channel from which the print says so (new constant, 1 %). On the 50 TriLED test frames no print reaches it now,
-      // with their captures or on the base a default run finds (the gains act after the knee, and a base not a capture
-      // is held no darker than the thinnest film); every crushed print found before was above it (6 frames with the
-      // gains in the matrix, up to 60 % past the knee on 1006_0007's estimate taken as it is).
+      // and film thinner than the base passes the knee at E. kPrintCutWarnShare: the share of the crop past the cut in
+      // a channel from which the print says so, 1 %. It lies between the two cases: a print with a captured base, or on
+      // a base held no darker than the thinnest film, stays below it (the gains act after the knee), while a print
+      // crushed by an estimated base taken as it is has tens of percent of the crop past the knee.
       constexpr double kPrintCutWarnShare = 0.01;
       int c = 0;
       for (int k = 1; k < 3; ++k)
@@ -1707,6 +1705,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
              s.print_cr.converged ? "" : ", not converged", s.print_cr.wish_mean_l, 100.0 * s.print_cr.above_knee);
     return true;
   };
+  // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
+  // g, b on the combined profile the curves were replayed into) in place of the search.
   auto restore_cached_auto = [&]() {
     if (!s.print_profs.empty() && std::isfinite(s.cached_sidecar.print_a))
       s.print_a = s.cached_sidecar.print_a;
@@ -1732,31 +1732,24 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.rolloff_iso = scan_iso;
   };
 
-  // The film base read from the scan for a bundle conversion (film_base_detector.h): from the whole half-size image
-  // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
-  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the
-  // detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the
-  // detector, so the base comes from the statistics.
-  // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it is.
-  // A print on a base that is not a capture: the base held no darker than the picture's thinnest film (the owner's
-  // option 1, print_base_floor), on the frame the search crops. The raised base replaces the found one for the
-  // whole conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
+  // A print on a base that is not a capture: the base held no darker than the picture's thinnest film
+  // (print_base_floor), on the frame the search crops. The raised base replaces the found one for the whole
+  // conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
   // derives the same; a capture (given, or a capture's values kept from an earlier run) is taken as it is, and so is
   // any base without --print. Called once per conversion, with the frame, before the search.
   //
   // The floor reads the picture's frame: the search's frame when a --roi is given (or --roi auto's), else the frame
   // detector's crop of the half-size image |half| when the detection ran and is at or above kBaseMinFrameConf (the
   // level the film base takes the detector's patch at), else the whole scan. Without a frame the scan's bare light
-  // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film: on the
-  // 50 TriLED test frames without --roi it raised the factor by more than 1 % on 27, by up to 2.5x (station
-  // designs/print_search_ways.md).
+  // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film, which
+  // can raise the factor by up to 2.5 times.
   // Light inside the frame is not masked (the detector's light mask takes thin film for light on some frames); the
   // record's factor and frame show what was read. The print's search itself reads the search frame (without --roi, the
   // whole scan). A caller that gains a print (negicc-station) chooses the frame here, as this does.
   // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), mapped onto |half| by
-  // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned against
-  // the sensor does not map). A --roi auto that fell
-  // back to the whole image is the whole scan. frame_conf is written only where the detection decided the frame.
+  // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned
+  // against the sensor does not map). A --roi auto that fell back to the whole image is the whole scan. frame_conf is
+  // written only where the detection decided the frame.
   auto floor_print_base = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
                               int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
@@ -1805,6 +1798,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
   };
 
+  // The film base read from the scan for a bundle conversion (film_base_detector.h): from the whole half-size image
+  // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
+  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the detector
+  // on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the detector, so
+  // the base comes from the statistics.
+  // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it
+  // is.
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
     if (!s.is_bundle) return;
     if (scan.has_given_base) {  // --film_base's capture, or a previous run's: logged where it was read
@@ -1969,8 +1969,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG, three captures
-      // and a linear DNG have no detection without --roi auto, so their floor reads the whole scan.
+      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG, three
+      // captures and a linear DNG have no detection without --roi auto, so their floor reads the whole scan.
       floor_print_base(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h, scan_shutter_s,
                        scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -2805,10 +2805,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
     if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search or a reused run's)
       if (c.station_params) {
-        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix at
-        // E alone, so that film at the base's density never passes the knee whatever the gains: with them in the matrix
-        // a gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF applies
-        // them the same way.
+        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix
+        // at E alone, so that film at the base's density never passes the knee whatever the gains: with them in the
+        // matrix a gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF
+        // applies them the same way.
         const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
         negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
         s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
