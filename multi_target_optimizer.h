@@ -407,7 +407,9 @@ float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame
                        double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
 
 struct ContinuousPrint {
-  std::function<void(double a, ParsedFilmProfile& prof)> set_curves_at;   // the print's input tables at A
+  // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
+  // renders the print (np_print.h PrintContinuum::trc_at).
+  std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
   std::function<double(double dl)> green_apd;                             // G_green
   double n0 = 1.0;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
@@ -431,7 +433,8 @@ struct ContinuousPrintResult {
   float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
   const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
 };
-// print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A).
+// print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A,
+// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders the print).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                              const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);

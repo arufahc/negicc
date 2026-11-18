@@ -1911,14 +1911,18 @@ PrintCurves PrintContinuum::curves_at(double a, const double gains[3]) const {
   return bracket_print_curves(g, paper, a, n0, t, gains);
 }
 
-void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3]) const {
+void PrintContinuum::trc_at(double a, const double gains[3], std::vector<float> trc[3]) const {
   const PrintCurves cv = curves_at(a, gains);
   for (int c = 0; c < 3; ++c) {
-    prof.in_trc[c].resize(cv[c].size());
+    trc[c].resize(cv[c].size());
     for (size_t i = 0; i < cv[c].size(); ++i)
-      prof.in_trc[c][i] = (float)std::lround(std::min(std::max(cv[c][i], 0.0), 1.0) * 65535.0) / 65535.0f;
-    prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
+      trc[c][i] = (float)std::lround(std::min(std::max(cv[c][i], 0.0), 1.0) * 65535.0) / 65535.0f;
   }
+}
+
+void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3]) const {
+  trc_at(a, gains, prof.in_trc);
+  for (int c = 0; c < 3; ++c) prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
   prof.rebind_pointers();
 }
 

@@ -17,6 +17,7 @@
 #define DINOV3_AUTO_SOLVER_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,8 +43,15 @@ struct IntentLoss {
   float clip = 0.0f;  // in percent [0, 100]
 };
 
+// The input curves of a profile with the gains g and b in them, after the knee (the print, np_print.h PrintContinuum):
+// three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
+using GainCurves = std::function<void(float g, float b, std::vector<float> trc[3])>;
+
 struct SolverConfig {
   const ProfileData* prof = nullptr;
+  // When set, a candidate's g and b go into prof's input curves, after the knee, and its matrix carries E alone, as
+  // the print's conversion renders it; intent_cells and intent_loss (the search's optimiser) read it.
+  const GainCurves* gain_curves = nullptr;
   float knee = 0.95f;
   bool verbose = true;  // the solver's diagnostic lines (shoulder), as the multi-target search's verbose
   // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
@@ -125,6 +133,11 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
 // renders it (displayed value, after the shoulder), n_px x 3 values into lab_out.
 void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                   const IntentGains& cand, float* lab_out);
+
+// The pipeline configuration and the matrix (written to m) cfg renders candidate cand with: the gains in the matrix,
+// or, with cfg.gain_curves, in prof's input curves (trc holds the tables the configuration points into).
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand, float m[9],
+                                        std::vector<float> trc[3]);
 
 // Batched loss calculation across candidate matrices
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,

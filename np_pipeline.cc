@@ -900,7 +900,9 @@ int prepare(const Options& o, Setup& s) {
       s.print_a = NAN;   // the print's search sets it (or a reused run's)
       {
         const PrintContinuum* pc = &s.print_cont;
-        s.print_cp.set_curves_at = [pc](double a, ParsedFilmProfile& prof) { pc->set_curves_at(a, prof); };
+        s.print_cp.trc_at = [pc](double a, const double gains[3], std::vector<float> trc[3]) {
+          pc->trc_at(a, gains, trc);
+        };
         s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
         s.print_cp.n0 = pc->n0;
         s.print_cp.a_lo = pc->a_lo();
@@ -1677,7 +1679,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       to_paper_white(prof);
       const PrintContinuum& pc = prints.continuum;
       ContinuousPrint cp;
-      cp.set_curves_at = [&pc](double a, ParsedFilmProfile& p) { pc.set_curves_at(a, p); };
+      cp.trc_at = [&pc](double a, const double gains[3], std::vector<float> trc[3]) { pc.trc_at(a, gains, trc); };
       cp.green_apd = [&pc](double dl) { return pc.green_apd(dl); };
       cp.n0 = pc.n0;
       cp.a_lo = pc.a_lo();

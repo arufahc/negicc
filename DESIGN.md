@@ -372,8 +372,9 @@ not the optimiser's reading of it, matches the field.
    deepest metered bracket's (its metered `E` furthest inside its usable range), or the best-fit one's when none
    meters.
 3. **Screening.** Each metered bracket's `(E, g, b)` is optimised against the bootstrap field over its usable range,
-   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered). The brackets are ranked
-   by that loss.
+   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered), each aimed at the field
+   minus its own correction (below): the one of its bootstrap render, or, when one render made the field, the one of
+   a render at the `E` it is screened from with the bootstrap's gains. The brackets are ranked by that loss.
 4. **Tournament.** The best two run a fixed-point loop (`SearchFrame::fixed_point`), with `E` held within ±0.5 stop of
    its screened value. Each step measures the shoulder's `x_hi`, renders the preview, updates the correction,
    predicts a field, puts the lightness target in its `L*`, measures the residual, and optimises the next `(E, g, b)`.
@@ -683,7 +684,9 @@ alone.
 
 A print is searched on its own profile, not on the chart profiles: its lightness once and continuously in `A`, its
 colour in `g` and `b` (`multi_target_optimizer.cc`: `search_print_continuous`). It runs on the material's print
-profile, made relative to the paper's white (5.7), with its curves written for each `A` it tries (5.5).
+profile, made relative to the paper's white (5.7), with its curves written for each `A`, `g` and `b` it tries and
+the matrix at `E` alone, as the conversion renders the print (5.5): every preview, every optimiser cell and the shares
+at white below score the picture the conversion writes.
 
 1. **E is held** where the frame's film base reads `n0` (search units `E = e_norm`; the result's `E` is 1), so the
    print is the negative's own density above its base, as the brackets were measured, whatever the scan's exposure.
@@ -691,8 +694,9 @@ profile, made relative to the paper's white (5.7), with its curves written for e
    `g = b = 1`) prints at `L*` 50, by bisection over the curve's green APD range.
 3. **The lightness target** is the mean of the fields predicted from the print at `A0 − h`, `A0` and `A0 + h`,
    `h = log10(2) / 2` (half a stop of printing exposure). Its `L*` is held for the rest of the search.
-4. **g and b are screened** at `A0` against that field on the optimiser's grids. `g = b = 1` is the film's own
-   neutral (a grey on the curve prints grey), but the frame's light need not be.
+4. **g and b are screened** at `A0` against that field, minus the correction of the render at `A0`, on the
+   optimiser's grids. `g = b = 1` is the film's own neutral (a grey on the curve prints grey), but the frame's light
+   need not be.
 5. **The fixed point over (A, g, b).** Each step renders the print at its `A`, updates the optimiser's correction,
    predicts `a*` and `b*` from the render (`L*` is the target) and measures the residual. It then solves `A`: from the
    current `A`, steps of 0.1 APD downhill to bracket the minimum, then golden section to 0.001, with `g` and `b`
