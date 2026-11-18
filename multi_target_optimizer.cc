@@ -1771,14 +1771,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // is the screening's field and the frame's lightness wish.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
-  auto mean_field = [&](const std::vector<Depth>& ds, const Enclosure& alone, float e_alone, std::vector<float>& mu,
-                        std::vector<float>& sig) {
-    std::vector<std::pair<int, float>> renders;
-    if (ds.empty() || pin_e) {
-      renders.push_back({alone.target_idx, e_alone});
-    } else {
-      for (const auto& d : ds) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
-    }
+  // The bootstrap's renders, (bracket, E) each, at the bootstrap gains.
+  std::vector<std::pair<int, float>> renders;
+  if (depths.empty() || pin_e) {
+    renders.push_back({cand1.target_idx, e1_init});
+  } else {
+    for (const auto& d : depths) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
+  }
+  auto mean_field = [&](std::vector<float>& mu, std::vector<float>& sig) {
     std::vector<float> m, sg;
     for (size_t k = 0; k < renders.size(); ++k) {
       fr.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
@@ -1796,7 +1796,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     if (verbose) std::cout << "Auto: bootstrap field averaged over " << renders.size() << " render(s)\n";
     return true;
   };
-  if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
+  if (!mean_field(mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
 
   // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
@@ -2038,12 +2038,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   //   tier 2: median L* >= 48 and >= 7.5% above 242 in the worst channel, or, on bracket index 3 and above, >= 11%
   //           above 235 in the worst channel.
   // When the chosen bracket is feasible, E is raised toward the bracket's e_min by at most 0.15 stop (a nudge, not a
-  // re-solve: the loop's intent stays close). When it is not, the bootstrap field (the first one when no bracket
-  // metered), the screening and the tournament run again on the same windows with the enclosure penalties in place of
-  // the pull toward the centre (pullback_search), and the runs are ranked by the enclosure-regularised residual
-  // (tourney_score); on TriLED among the converged runs when any converged, on white light regardless of convergence.
-  // The result is taken only if it clips at most 0.5 percentage point more, does not darken the midtones past what
-  // the scene allows, and moves to a later bracket or raises E by more than 2%.
+  // re-solve: the loop's intent stays close). When it is not, the screening and the tournament run again on the
+  // bootstrap field (the first one, which is also the field when no bracket metered) and the same windows with the
+  // enclosure penalties in place of the pull toward the centre (pullback_search), and the runs are ranked by the
+  // enclosure-regularised residual (tourney_score); on TriLED among the converged runs when any converged, on white
+  // light regardless of convergence. The result is taken only if it clips at most 0.5 percentage point more, does not
+  // darken the midtones past what the scene allows, and moves to a later bracket or raises E by more than 2%.
   // The thresholds are stated values, not derived (DESIGN.md 4.2, "Limits").
   // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
   // E: it only moves E or the bracket.
@@ -2066,24 +2066,20 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
-      // The re-search window of each metered bracket: its usable range, as in the main search (bracket_enclosure). The
-      // re-search differs from the main search by its penalties on E outside the calibrated range, not by its window.
-      std::vector<Depth> depths_res;
-      for (const auto& c : pool) {
-        const auto d = std::find_if(depths.begin(), depths.end(),
-                                    [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
-        if (d == depths.end()) continue;
-        depths_res.push_back(metered(c, d->e_met, c.search_lo, c.search_hi));
-      }
-      // The re-search's screening field: the mean over its metered brackets' renders, as the first one (the frame's
-      // lightness wish stays the first field's).
-      std::vector<float> mu_res = mu1, sig_res = sig1;
-      if (!depths_res.empty()) {
-        deepest_first(depths_res);
-        if (!mean_field(depths_res, depths_res[0].cand, depths_res[0].e_met, mu_res, sig_res)) return false;
+      // The re-search screens the same metered brackets on the same windows (their usable range, bracket_enclosure)
+      // against the same bootstrap field as the main search: it differs from it by its penalties on E outside the
+      // calibrated range, not by its window or its field, so the field is not predicted again. The screening starts,
+      // as the first one did, from the bootstrap renders' corrections, which the tournament has since replaced: each
+      // metered bracket is rendered again at its bootstrap parameters to measure its correction (no inference). When no
+      // bracket metered, the bootstrap rendered one bracket and the corrections stay those the tournament left.
+      if (!depths.empty()) {
+        for (const auto& r : renders) {
+          fr.render_preview(r.first, {r.second, boot_g, boot_b}, preview);
+          fr.update_correction(r.first, {r.second, boot_g, boot_b}, preview);
+        }
       }
       std::vector<FixedPointResult> res_adaptive;
-      if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
+      if (!tournament(screen_all(depths, mu1, sig1, true), true, res_adaptive)) return false;
       if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
