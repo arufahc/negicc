@@ -790,15 +790,18 @@ int parse_options(int ac, char* av[], Options& o) {
     const Refused refused[] = {
         {"--target", o.target_given},  {"-E", o.exposure_given},
         {"--gain_g", o.gain_g_given},  {"--gain_b", o.gain_b_given},
-        {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
-        {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
+        // the knobs move a print's CLF (each material's own print search): they apply with --print
+        {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
+        {"--tint", parser.is_used("--tint") && o.prints.empty()},
+        {"--warmth", parser.is_used("--warmth") && o.prints.empty()}, {"--dino", parser.is_used("--dino")},
         {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
         {"--fit_curves", fit_set},             {"--tone_stage", tone_set},
     };
     for (const Refused& r : refused) {
       if (r.used) {
         log_error("%s does not apply to a density output (-P %s): it writes the negative's density above the film "
-                  "base, with no given bracket, exposure, gains, curves, tone stage or look\n", r.flag, o.colorspace.c_str());
+                  "base, with no given bracket, exposure, gains, curves, tone stage or look (the knobs apply to its "
+                  "print CLFs, with --print)\n", r.flag, o.colorspace.c_str());
         return 1;
       }
     }
