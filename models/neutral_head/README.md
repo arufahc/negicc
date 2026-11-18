@@ -48,7 +48,7 @@ four selection rules (low-key merge, collinearity drop, chart-like gate, shadow 
   exported weights on random tokens.
 
 ```bash
-python3 models/neutral_head/export_neutral_head.py --check   # needs torch and numpy
+python3 models/neutral_head/export_neutral_head.py --check   # needs torch and numpy 2 (the .pt pickles numpy._core)
 ```
 
 ## Using it in neg_process

@@ -106,9 +106,9 @@ using negicc::compute_inner_crop;
 
 // ---- Bracket enclosure -------------------------------------------------------------------------------------
 
-// The range of E that keeps the scene inside a bracket's calibrated range. The bracket's grey wedge was
-// calibrated over green values tgt_min_g .. tgt_max_g in its own capture; E scales the scene's green 0.5 % and 99.5 %
-// points (g_lo, g_hi, at the reference exposure) onto them:
+// The range of E that keeps the scene inside a bracket's calibrated range. The bracket's patches, all of them, span
+// green values tgt_min_g .. tgt_max_g in its own capture; E scales the scene's green 0.5 % and 99.5 % points (g_lo,
+// g_hi, at the reference exposure) onto them:
 //
 //   e_min = g_min / g_lo * k,   e_max = g_max / g_hi * k,   k = reference exposure / the bracket's exposure.
 //
@@ -131,18 +131,17 @@ struct Enclosure {
 };
 
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
-// (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
-// station's copy follows in the station change that moves its negicc pin.)
+// (This port differs from that reference: the search window is the usable range on every bracket.)
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r);
 
-// The centre the search's exposure penalty pulls E toward (compute_penalties: 5 log2(E / centre)^2), or 0 for none.
-// For a bracket whose usable range is inverted (the scene overflows it by more than the two tolerances together) there
-// is no pull. Its window, ordered, runs from E = e_max x 2^1.2, where the shadows sit exactly at their tolerance and the
+// The centre the search's exposure penalty pulls E toward (compute_penalties: 5 log2(E / centre)^2), or 0 for none. For
+// a bracket whose usable range is inverted (the scene overflows it by more than the two tolerances together) there is
+// no pull. Its window, ordered, runs from E = e_max x 2^1.2, where the shadows sit exactly at their tolerance and the
 // highlights carry all the overflow, to E = e_min / 2^1.5, where the reverse holds; outside it one end is sacrificed
 // more than needed while the other is already inside. Where to stand among those compromises is the question the intent
-// field answers, so inside the window the field decides E, with the white-clip penalty kept and the window's two ends as
-// its bounds. A pull toward e_center answered it with "split the overflow equally in log E": on a night scene of 8.1 EV
-// (8dda4a7e7e) that put E in the middle of the scene's log range, a picture with a median of L* 2.
+// field answers, so inside the window the field decides E, with the white-clip penalty kept and the window's two ends
+// as its bounds. A pull toward e_center would answer it with "split the overflow equally in log E": on a night scene of
+// 8.1 EV that puts E in the middle of the scene's log range, a picture with a median of L* 2.
 float pull_centre(const Enclosure& c) { return c.usable_inverted ? 0.0f : c.e_center; }
 
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r) {
@@ -312,8 +311,8 @@ class GreyPoint {
     return ok;
   }
 
-  // Solves the gains (E, g, b) that move the grey that base renders as neutral L* 50 (at log_t0) to target = (L*, a*, b*).
-  // Returns the residual dE76 of the Newton solve.
+  // Solves the gains (E, g, b) that move the grey that base renders as neutral L* 50 (at log_t0) to
+  // target = (L*, a*, b*). Returns the residual dE76 of the Newton solve.
   float gains(const float log_t0[3], const float base[3], const float target[3], float egb_out[3]) const {
     float log_t[3] = {log_t0[0], log_t0[1], log_t0[2]};
     const float err = newton(target, log_t, 16);
@@ -417,8 +416,8 @@ bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, floa
 // longer side scaled to the engine's max_size, each side rounded to whole patches of patch_size pixels, so
 // grid_w x grid_h patches (32 x 21 for a 3:2 landscape crop at 512 and 16).
 // py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
-// (Since negicc#101 the search uses this grid only for the optimiser's cells, corrected per bracket by the trained cells
-// of its last preview (update_correction); the station's copy of that correction follows when its negicc pin moves.)
+// The search uses this grid only for the optimiser's cells, corrected per bracket by the trained cells of its last
+// preview (update_correction); the station's copy has no such correction.
 struct FrameStats {
   float g_lo = 0.0f, g_hi = 0.0f;
   float log_avg_rgb[3] = {0, 0, 0};  // geometric mean in [0, 1]
@@ -756,8 +755,8 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
-  // For --probe_intent: the preview's trained cells (trained_cells_lab), what the residual reads and what the network is
-  // trained to predict.
+  // For --probe_intent: the preview's trained cells (trained_cells_lab), what the residual reads and what the network
+  // is trained to predict.
   std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
     std::vector<float> lab((size_t)stats_.grid_w * stats_.grid_h * 3);
     trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(), lab.data());
@@ -780,8 +779,6 @@ class SearchFrame {
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
 
-  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
-  // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   // The optimiser's correction for one bracket (DESIGN.md, "The Auto search"): intent_loss renders the
   // patch-averaged camera RGB, and rendering an average is not the average of the render, so its cells read darker
   // than the picture's (2.1 L* on TriLED, 1.7 on white LED, differently per frame) and bluer. After each preview of a
@@ -802,6 +799,8 @@ class SearchFrame {
     for (size_t i = 0; i < picture.size(); ++i) c[i] = picture[i] - optimiser[i];
   }
 
+  // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
+  // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
     float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
@@ -945,9 +944,9 @@ class SearchFrame {
   // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
   // searches g and b on wider grids (dinov3_auto_solver.cc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
-  // (Differs from that reference since negicc#101: the field the optimiser aims at is corrected per bracket by the
-  // picture its last preview gave (update_correction), and a bracket whose usable range is inverted gets no centre
-  // pull (pull_centre); the station's copy follows when its negicc pin moves.)
+  // (This port differs from that reference: the field the optimiser aims at is corrected per bracket by the picture
+  // its last preview gave (update_correction), and a bracket whose usable range is inverted gets no centre pull
+  // (pull_centre).)
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
                 bool pullback_search = false) {
@@ -997,8 +996,8 @@ class SearchFrame {
   // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
   // an unordered one is ordered here and keeps the caller's centre.
   // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
-  // (Differs from that reference since negicc#97: lightness wish, bootstrap mean, usable-range windows; the
-  // station's copy follows in the station change that moves its negicc pin.)
+  // (This port differs from that reference: L* is held to the frame's lightness wish, and the correction of
+  // update_correction is measured at every step.)
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
@@ -1092,10 +1091,10 @@ class SearchFrame {
     return true;
   }
 
-  // Re-scores the best step with its x_hi and with the shoulder off against the field it was scored against. The
-  // guard compares the L* loss alone: the shoulder removes lightness, so a 2% worse mean of L*, a*, b* would be about
-  // 6% on L* (the a* and b* terms barely move). The penalties do not depend on the shoulder. The shoulder is kept either
-  // way: the guard is only recorded when the loss is more than 2% worse, so the evaluation sees how often it disagrees.
+  // Re-scores the best step with its x_hi and with the shoulder off against the field it was scored against. The guard
+  // compares the L* loss alone: the shoulder removes lightness, so a 2% worse mean of L*, a*, b* would be about 6% on
+  // L* (the a* and b* terms barely move). The penalties do not depend on the shoulder. The shoulder is kept either way:
+  // the guard is only recorded when the loss is more than 2% worse, so the evaluation sees how often it disagrees.
   void shoulder_guard(int target_idx, const ConversionParams& p, const std::vector<float>& mu,
                       const std::vector<float>& sigma, FixedPointResult& fp) {
     negicc::PipelineConfig pc{};
@@ -1449,13 +1448,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       (double)scan_shutter_s, (double)scan_iso, opts, out);
 }
 
-// Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
-// profile bundle, the intent engine, the scan and its exposure; screens the brackets against the bootstrap field (the
-// mean over every metered bracket's render), runs the best through a fixed-point tournament (predicting a* and b*
-// again as the render changes, L* held to the frame's lightness wish), moves to a denser
-// bracket or pulls E back where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket,
-// (E, g, b, x_hi) and the winning inference's intent field, neutral-patch probabilities and tone features to the
-// white-light stages (run_white_light_fit).
 namespace {
 // Inside an entry point of the bundle search, process-wide, so that a pass started on another thread (which the
 // contract does not allow) is counted too.
@@ -1497,6 +1489,13 @@ void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   negicc::cpu_highlight_clip(a);
 }
 
+// Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
+// profile bundle, the intent engine, the scan and its exposure; screens the brackets against the bootstrap field (the
+// mean over every metered bracket's render), runs the best through a fixed-point tournament (predicting a* and b*
+// again as the render changes, L* held to the frame's lightness wish), moves to a denser bracket or pulls E back
+// where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket, (E, g, b, x_hi) and the
+// winning inference's intent field, neutral-patch probabilities and tone features to the white-light stages
+// (run_white_light_fit).
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s_in, double scan_iso_in, const ParamSearchOptions& opts,
                               ParamSearchResult& out) {
@@ -1611,7 +1610,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         return rank(a) < rank(b);
       });
 
-  // Step 2: meter each admissible bracket to L* 50 and bootstrap from the one deepest inside its bounds.
+  // Step 2: meter each admissible bracket to L* 50; the bootstrap field is the mean over every metered bracket's
+  // render.
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (select_metered_bootstrap_candidate)
   std::vector<Enclosure> pool;
   for (const auto& r : enclosure)
@@ -1624,7 +1624,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   }
   // A metered bracket: its E for L* 50 (e_met), the window [lo, hi] E is searched in, and the depth of e_met inside
   // that window in stops, less SLACK_PENALTY_SCALE per stop of overflow on an infeasible bracket. The deepest bracket
-  // renders the bootstrap: its metered E sits furthest from the ends of its search window.
+  // (its metered E furthest from the ends of its search window) renders the bootstrap alone when E is pinned.
   struct Depth {
     Enclosure cand;
     float e_met, depth, lo, hi;
@@ -1673,10 +1673,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     std::cout << os.str();
   }
 
-  // The bootstrap field: the mean of the fields predicted from every metered bracket's render at its metered E (the
-  // deepest bracket alone when E is pinned or none metered). A field from one bracket depended on which bracket was
-  // deepest, and the two deepest are often within 0.02 stop of each other: a 1 % tighter crop could swap them and move
-  // the result by several L*. The mean has no such switch. It is the screening's field and the frame's lightness wish.
+  // The bootstrap field: the mean of the fields predicted from every metered bracket's render at its metered E,
+  // clamped to its search window. When E is pinned, the deepest metered bracket renders it alone at the pinned E; when
+  // no bracket meters, the best-fit bracket renders it alone at its e_center (at the pinned E when E is pinned). A
+  // field from one bracket would depend on which bracket is deepest, and the two deepest are often within 0.02 stop of
+  // each other: a 1 % tighter crop could swap them and move the result by several L*. The mean has no such switch. It
+  // is the screening's field and the frame's lightness wish.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
   auto mean_field = [&](const std::vector<Depth>& ds, const Enclosure& alone, float e_alone, std::vector<float>& mu,
@@ -1762,9 +1764,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     return true;
   }
 
-  // Step 3: screen the metered brackets (every bracket of the pool when none metered) against one intent field, best
-  // first. The pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the
-  // centre (pullback_search).
+  // Step 3: screen the metered brackets (every bracket of the pool, from its e_center, when none metered) against the
+  // bootstrap field, each aimed at the field minus its own correction (SearchFrame::search), best first. The
+  // pullback's re-search (Step 6) screens with the enclosure penalties in place of the pull toward the centre
+  // (pullback_search).
   auto screen_all = [&](const std::vector<Depth>& ds, const std::vector<float>& mu, const std::vector<float>& sigma,
                         bool pullback_search) {
     std::vector<Screened> rows;
@@ -1945,13 +1948,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   //   tier 2: median L* >= 48 and >= 7.5% above 242 in the worst channel, or, on bracket index 3 and above, >= 11%
   //           above 235 in the worst channel.
   // When the chosen bracket is feasible, E is raised toward the bracket's e_min by at most 0.15 stop (a nudge, not a
-  // re-solve: the loop's intent stays close). When it is not, Steps 2-4 run again on windows that reach a little
-  // further (pullback_search: enclosure penalties instead of the pull toward the centre), ranked by the
-  // enclosure-regularised residual (tourney_score) among the converged runs when any converged, on white light as on
-  // TriLED, and the result is taken only if it clips no more, does not darken the midtones past what the scene allows,
-  // and moves to a later bracket or raises E by more than 2%.
-  // The thresholds are negicc-station's, ported unchanged so both pick the same result.
-  // A pinned E stays: the pullback only moves E or the bracket.
+  // re-solve: the loop's intent stays close). When it is not, the bootstrap field, the screening and the tournament
+  // run again on the same windows with the enclosure penalties in place of the pull toward the centre
+  // (pullback_search), and the runs are ranked by the enclosure-regularised residual (tourney_score); on TriLED among
+  // the converged runs when any converged, on white light regardless of convergence. The result is taken only if it
+  // clips no more, does not darken the midtones past what the scene allows, and moves to a later bracket or raises E
+  // by more than 2%.
+  // The thresholds are negicc-station's.
+  // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
+  // E: it only moves E or the bracket.
   if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1 && !pin_e) {
     const float ceil_242[3] = {242.0f, 242.0f, 242.0f};
     const float ceil_235[3] = {235.0f, 235.0f, 235.0f};
@@ -2813,8 +2818,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   }
   // E = 1 relative to the frame's own film base: the base reads n0, as the brackets were measured. The search runs on
   // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
-  // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0
-  // (station designs/print_search_ways.md, "Roll 1006, diagnosed"). The result's E (E / e_norm) is then 1.
+  // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0. The
+  // result's E (E / e_norm) is then 1.
   const float E = e_norm;
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);

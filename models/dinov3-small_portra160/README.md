@@ -6,7 +6,8 @@ the conversion closest to it.
 
 - Input: patch tokens of the frozen DINOv3 ViT-S/16 backbone (layers 9 and 12, 768 values
   per patch). The backbone is not trained.
-- Model: a small MLP (595,590 parameters) giving mu and log variance.
+- Model: a small MLP (595,590 parameters) with three outputs, mu, sigma and log variance; `neg_process` reads mu and
+  sigma.
 - Training data: 1845 photographs of Kodak Portra 160.
 - Validation error: 4.85 L*, 5.07 a*b* (mean absolute) on the validation photographers the seed was chosen with.
 - Training: cosine schedule over 15 epochs, final epoch kept, loss weighted per patch; seed 43 of 42, 43, 44 by the

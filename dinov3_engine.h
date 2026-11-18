@@ -146,7 +146,7 @@ std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx
 // Token heads
 // The small heads that read the DINOv3 tokens alongside the intent adapter, each a plain C++ implementation that
 // needs no runtime of its own: the neutral-patch head (NeutralHead), which gives the white-light curve fit its neutral
-// anchors, and the tone heads (ToneHead), which give the white-light tone stage its targets.
+// anchors, and the tone heads (ToneHead), which give the tone stage its targets on both lights.
 // --------------------------------------------------------------------------------------------------------------------
 
 // The neutral-patch head: per DINOv3 patch, the probability that the patch is neutral grey in a good rendering of
@@ -230,7 +230,7 @@ private:
     float b2_ = 0.0f;
 };
 
-// The white-light tone heads: from the frozen DINOv3 features of a preview, the tone a lab scan of the frame would
+// The tone heads of the tone stage (both lights): from the frozen DINOv3 features of a preview, the tone a lab scan of the frame would
 // have, as 11 descriptors of its pixel L* and chroma at network size (mean and standard deviation of each):
 //   L2 L5 L10 L50 L90 L95 L98 (L* percentiles), IQR (L75 - L25), R9010 (L90 - L10), Cmean (mean C*ab), C90.
 // Input: the 1920 pooled features [CLS of layer 12, mean patch token of layer 9, mean patch token of layer 12 (the
@@ -397,7 +397,7 @@ public:
     void set_neutral_head(const void* data, size_t size);
     bool has_neutral_head() const { return neutral_head_ != nullptr; }
     // With it on, infer() also gives DinoV3InferenceResult::token_sd, the spread of the backbone's tokens over the
-    // patches: with the pooled features, the input of the white-light tone heads (ToneHead). Like the neutral head
+    // patches: with the pooled features, the input of the tone heads (ToneHead). Like the neutral head
     // it needs the tokens on the host (one copy per inference when the backbone and adapter run on the GPU).
     void set_token_spread(bool on) { token_spread_ = on; }
 
