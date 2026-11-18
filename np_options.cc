@@ -17,6 +17,7 @@
 #include <cstdio>
 #include "np_log.h"
 #include "np_options.h"
+#include "np_output.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -166,12 +167,18 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
 
 int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
-    // --print without a name lists the print materials built in, and does nothing else.
-    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+    // --print alone lists the print materials built in, and does nothing else. Given a conversion's other arguments
+    // without its name, it is left to the parser, which says that --print needs one.
+    if (strcmp(av[i], "--print") == 0 && ac == 2) {
       for (const PrintMaterial& m : builtin_print_materials()) {
         log_info("--print %s  (%s)\n", m.id.c_str(), m.name.c_str());
       }
       return -1;
+    }
+    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+      log_error("--print needs a print material (a built-in id, 'all' or a spektrafilm profile's path); --print alone "
+                "lists them\n");
+      return 1;
     }
     if (strcmp(av[i], "--list_profiles") == 0) {
       for (const std::string& key : list_embedded_bundles()) {
@@ -194,7 +201,7 @@ int parse_options(int ac, char* av[], Options& o) {
       return -1;
     }
   }
-  argparse::ArgumentParser parser("neg_process");
+  argparse::ArgumentParser parser("neg_process", neg_process_version());
   parser.add_argument("-C", "--no_crop")
     .help("No cropping according to aspect ratio in RAW file.")
     .default_value(false)
@@ -317,7 +324,9 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--film_format")
     .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
           "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
-          "around (the rebate; default: every format, as negicc-station).")
+          "around (the rebate; default: every format, as negicc-station). The sidecar's cli_equivalent gives the format the "
+          "film base was read with when it was not given (--roi auto's 35mm), so that its explicit --roi reads the same "
+          "base; a given one is left to the caller with the other set-up options.")
     .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
@@ -371,10 +380,14 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--probe_intent")
     .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "
           "of this frame to this JSON file and stop without converting. Renders every metered bracket at its metered "
-          "exposure, then each --probe_params set at each --probe_stops offset. Needs a bundle search (no pins).")
+          "exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture output the "
+          "print's search writes the file instead (its mid grey A at each --probe_stops offset; --probe_params does "
+          "not apply) and the conversion goes on. Needs the bundle search to run: refused where it does not (a single "
+          "ICC profile, given gains on TriLED), and a previous run's <output>.json is not reused with it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
-    .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target index, E in the search's units).")
+    .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
+          "search's units).")
     .default_value(std::string(""));
   parser.add_argument("--probe_stops")
     .help("With --probe_intent: exposure offsets in stops applied to each --probe_params set, e.g. -0.5 0 0.5.")
@@ -474,8 +487,15 @@ int parse_options(int ac, char* av[], Options& o) {
     while (std::getline(all, item, ';')) {
       std::array<float, 4> p{};
       if (item.empty()) continue;
-      if (std::sscanf(item.c_str(), "%f,%f,%f,%f", &p[0], &p[1], &p[2], &p[3]) != 4) {
-        log_error("--probe_params: \"%s\" is not target,E,g,b\n", item.c_str());
+      int target = -1, used = 0;
+      if (std::sscanf(item.c_str(), "%d,%f,%f,%f%n", &target, &p[1], &p[2], &p[3], &used) != 4 ||
+          used != (int)item.size()) {
+        log_error("--probe_params: \"%s\" is not target,E,g,b (target an integer)\n", item.c_str());
+        return 1;
+      }
+      p[0] = (float)target;
+      if (!(std::isfinite(p[1]) && p[1] > 0.0f && std::isfinite(p[2]) && p[2] > 0.0f && std::isfinite(p[3]) && p[3] > 0.0f)) {
+        log_error("--probe_params: \"%s\": E, g and b must be positive numbers\n", item.c_str());
         return 1;
       }
       o.probe_params.push_back(p);
