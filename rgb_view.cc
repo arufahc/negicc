@@ -728,6 +728,7 @@ void cpu_render(const RenderArgs& a) {
     }
 
     if (a.stats) *a.stats = PositiveStats{};
+    const bool tone = a.cfg.encoding == ENCODE_SRGB && a.cfg.tone.lut && a.cfg.tone.n > 0;
     const InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0)
                                ? a.stats_crop
                                : InnerCrop{0, 0, a.width, a.height};
@@ -767,8 +768,10 @@ void cpu_render(const RenderArgs& a) {
                     px = a.in + i * 3;
                 }
                 const Rgb lin = convert_pixel_linear(a.cfg, a.matrix, px);  // pre-shoulder: clip rules
-                const Rgb disp = to_display(a.cfg, lin);                    // post-shoulder: render and Lab
-                const Rgb v = encode_output(disp, a.cfg.encoding);
+                const Rgb disp = to_display(a.cfg, lin);                    // post-shoulder: Lab
+                // The picture and its RGB histogram go through the tone stage when cfg has one, as convert_pixel
+                // applies it; the clip rules and the Lab statistics read the values before it.
+                const Rgb v = encode_output(tone ? apply_tone(a.cfg.tone, disp) : disp, a.cfg.encoding);
                 const uint8_t r8 = quantize_u8(v.r);
                 const uint8_t g8 = quantize_u8(v.g);
                 const uint8_t b8 = quantize_u8(v.b);
