@@ -23,7 +23,9 @@ make dinov3_model && make -j$(nproc) neg_process                # add USE_CUDA=1
 ```
 
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
-([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT.
+([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT. ONNX Runtime is
+linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the first time (needs `curl`;
+[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)).
 
 ## Use
 
@@ -262,8 +264,11 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
 
 This writes the print on the chosen material as an sRGB picture. The automatic search runs on the print itself: its
 printing exposure, then its colour balance. The paper's curve gives the tone, so the toning step does not run. The
-print is shown relative to its paper's white. A white-LED scan takes `--print` with a density output only. DESIGN.md
-has the rest.
+print is shown relative to its paper's white. A white-LED scan takes `--print` with a density output only.
+
+On a print, `--brightness` moves the printing exposure and `--tint` and `--warmth` move the print's colour balance; the
+scan's exposure stays as the search left it. A density output with `--print` takes them too, for its CLFs, so the CLF
+prints the frame as the picture with the same knobs does. DESIGN.md has the rest.
 
 The paper whites below are those of the Portra 400 RGB-LED set's print ICCs (`DESIGN.md`, "The print's white").
 
@@ -299,7 +304,7 @@ print search (`--print <material> -P srgb`) and shown relative to its paper's wh
 | `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
-| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. |
+| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs. |
 | `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED). Eight or ten numbers replay the curves recorded in a sidecar. |
 | `--tone_stage auto\|off\|on\|curve:<numbers>` | The contrast step. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |

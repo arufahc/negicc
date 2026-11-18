@@ -357,6 +357,17 @@ struct KnobSolveResult {
 // L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof.
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
                       float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof = nullptr);
+struct PrintKnobResult {
+  double a = 0.0;                           // the print's mid grey A after the knobs
+  float g = 1.0f, b = 1.0f;                 // its gains (in the print's curves)
+  bool limited = false;
+  float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the grey's Lab through the print at (a, g, b)
+};
+// the knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
+// print_at(a, g, b, prof) builds the print profile at mid grey a with gains g, b in its curves.
+bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
+                       double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
+                       PrintKnobResult& out);
 // The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof.
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]);

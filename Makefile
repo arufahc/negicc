@@ -3,6 +3,7 @@
 #   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
 #   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs them)
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to link ONNX Runtime statically)
+#   make onnxruntime_prebuilt  # ONNX Runtime's shared library from its PyPI wheel, which neg_process links by default
 #   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
 #   make deps               # bin_out/liblcms2.a and bin_out/libz.a, from the 3rd_party/lcms2 and zlib submodules
@@ -10,7 +11,7 @@
 PYTHON ?= python3
 CMAKE ?= cmake
 
-.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps onnxruntime onnxruntime_prebuilt neg_process dinov3_model dinov3_engine clean clean_lib clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -155,6 +156,9 @@ STATIC ?= 0
 ORT_STATIC ?= $(STATIC)
 
 ORT_SRC_DIR = 3rd_party/onnxruntime
+# ONNX Runtime's headers and its shared library from Microsoft's PyPI wheel (3rd_party/onnxruntime_prebuilt/README.md):
+# the dynamic build's fallback when no other ONNX Runtime is found.
+ORT_PREBUILT_DIR = 3rd_party/onnxruntime_prebuilt
 ORT_BUILD_DIR = bin_out/onnxruntime
 ORT_STATIC_LIB = bin_out/libonnxruntime.a
 ORT_CMAKE_TARGETS = onnxruntime_session onnxruntime_optimizer onnxruntime_providers onnxruntime_lora \
@@ -173,7 +177,7 @@ else ifeq ($(ORT_STATIC),0)
     ifneq ($(strip $(ORT_CANDIDATES)),)
         ORT_DIR ?= $(patsubst %/include/onnxruntime_cxx_api.h,%,$(firstword $(ORT_CANDIDATES)))
     else
-        ORT_DIR ?= 3rd_party/onnxruntime
+        ORT_DIR ?= $(ORT_PREBUILT_DIR)
     endif
     ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
     ifeq ($(ARCH),aarch64)
@@ -181,16 +185,29 @@ else ifeq ($(ORT_STATIC),0)
     else
         ORT_LIB_DIR ?= $(ORT_DIR)/lib/x86_64
     endif
+    # The run path: the library's directory, and the binary's own directory (where the release archive puts the
+    # library, as libonnxruntime.so.1).
     ifneq ($(filter /%,$(ORT_LIB_DIR)),)
-        ORT_RPATH = -Wl,-rpath,'$(ORT_LIB_DIR)'
+        ORT_RPATH = -Wl,-rpath,'$(ORT_LIB_DIR)' -Wl,-rpath,'$$ORIGIN'
     else
-        ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)'
+        ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)' -Wl,-rpath,'$$ORIGIN'
     endif
-    ORT_DEPS =
+    # The prebuilt library is fetched (fetch.sh) before the link when it is not there yet.
+    ifeq ($(ORT_DIR),$(ORT_PREBUILT_DIR))
+        ORT_DEPS = $(ORT_LIB_DIR)/libonnxruntime.so
+    else
+        ORT_DEPS =
+    endif
     ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime $(ORT_RPATH)
 else
     $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
+
+$(ORT_PREBUILT_DIR)/lib/%/libonnxruntime.so:
+	$(ORT_PREBUILT_DIR)/fetch.sh
+
+onnxruntime_prebuilt:
+	$(ORT_PREBUILT_DIR)/fetch.sh
 
 $(ORT_STATIC_LIB):
 	test -f $(ORT_SRC_DIR)/cmake/CMakeLists.txt || git submodule update --init --checkout --depth 1 $(ORT_SRC_DIR)
