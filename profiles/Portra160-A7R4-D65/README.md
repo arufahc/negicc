@@ -79,9 +79,8 @@ Each is an ICC v2 input profile (RGB to PCS XYZ D50) shaped like the chart profi
 
 ### What they compute
 
-For the profile's input x (the scan after the crosstalk correction, or decoded to linear Rec.2020 under a white light;
-the film base at n0 =
-normalization_target / 65535, after neg_process's soft knee at 0.95), in each channel c:
+For the profile's input x (the scan decoded to linear Rec.2020 through the camera's colour matrix; the film base at
+n0 = normalization_target / 65535, after neg_process's soft knee at 0.95), in each channel c:
 
 ```
 light density    dL_c  = -log10(unknee(x_c) / n0)
@@ -116,13 +115,14 @@ The profile splits this where a table samples it well:
 ```
 input curve_c(x)  = Paper_c((G_c(dL_c) - A) (1 + t_c))
 table(a)          = the chain above, from alpha_c = Paper_c^-1(a_c)
-Paper_c(alpha_i)  = 0.75 curve_c(aim_c - eta_c alpha_i) / top_c + 0.25 (1 - i / (N - 1)),   eta = P (1, 1, 1)
+Paper_c(alpha_i)  = 0.75 D_c(aim_c - eta_c alpha_i) / top_c + 0.25 (1 - i / (N - 1)),   eta = P (1, 1, 1)
 ```
 
-Paper_c is the dye amount layer c takes on a grey alpha above the mid grey, scaled to [0, 1] per channel on
-alpha_i = -1.5 + 0.005 i (N = 661, -1.5 .. 1.8) with a 0.25 linear ramp across the grid (top_c: the channel's largest
-value; P: the print matrix for Academy Printing Density, so P M = Q L). The paper's S-curve is in the input curves, each
-channel's curve spans [0, 1] with a positive slope across the toe and shoulder, and the table holds the dyes' colour
-and the print matrix's mixing off the grey axis. The table has no bracket in it: every bracket's profile is this table
-with its own curves.
+Paper_c is 0.75 of the dye amount layer c takes on a grey alpha above the mid grey, scaled to [0, 1] per channel, plus
+0.25 of a linear ramp that falls from 1 to 0 across the grid alpha_i = -1.5 + 0.005 i (N = 661, -1.5 .. 1.8). D_c(log E)
+is the material's dye amount of layer c, held non-increasing in alpha_i; top_c is its value at alpha_0 = -1.5, the
+largest on the grid; P is the print matrix for Academy Printing Density, so P M = Q L. An alpha_c outside the grid is
+held at its end. The paper's S-curve is in the input curves, each channel's curve spans [0, 1] with a positive slope
+across the toe and shoulder, and the table holds the dyes' colour and the print matrix's mixing off the grey axis. The
+table has no bracket in it: every bracket's profile is this table with its own curves.
 <!-- end of print profiles -->
