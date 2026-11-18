@@ -16,10 +16,10 @@ DNG, TIFF or JPEG and it runs `neg_process` on it. The longer story of how the m
 ## Build
 
 ```bash
-sudo apt-get install build-essential git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
-pip install torch transformers onnx                             # only needed for `make dinov3_model`
+sudo apt-get install build-essential curl git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
+pip install torch transformers onnx                                 # only needed for `make dinov3_model`
 git clone --recursive https://github.com/arufahc/negicc.git && cd negicc
-make dinov3_model && make -j$(nproc) neg_process                # add USE_CUDA=1 for an NVIDIA GPU
+make dinov3_model && make -j$(nproc) neg_process                    # add USE_CUDA=1 for an NVIDIA GPU
 ```
 
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
@@ -153,7 +153,7 @@ lab scans:
 
 ![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
-*Made at commit `16aeec2` (2026-11-04), with an earlier intent adapter than the one shipped now.*
+*Made at commit `4b17b76` (2026-11-04), with an earlier intent adapter than the one shipped now.*
 
 A conversion goes through these steps:
 
@@ -176,7 +176,7 @@ the uniform colour cast that comes from the LED lights being set to different po
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
-*Made at commit `16aeec2` (2026-11-04), with an earlier intent adapter than the one shipped now.*
+*Made at commit `4b17b76` (2026-11-04), with an earlier intent adapter than the one shipped now.*
 
 #### Curve fitting (white light only)
 
@@ -337,7 +337,7 @@ photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
 (`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two tables,
 and the pictures made through one are free. The `film_model` block of every profile set's `bundle.json` holds
-spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each RGB-LED profile set
+spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each profile set
 (`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
 The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
 the pictures made with a print ICC.

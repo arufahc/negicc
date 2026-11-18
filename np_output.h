@@ -99,7 +99,9 @@ struct Sidecar {
   float knee = 0.95f;
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
-  std::string dino_model, dino_backend;
+  std::string dino_model, dino_backend, dino_arg;
+  bool dino_iters_given = false;
+  int dino_iters = 4;
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
   const int* auto_frame_half = nullptr;
   std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar

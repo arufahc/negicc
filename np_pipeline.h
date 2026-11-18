@@ -103,10 +103,10 @@ struct Setup {
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
-  // --print with a picture output on a narrow-band bundle: the print material, and each bracket's print profile
+  // --print with a picture output on a profile bundle: the print material, and each bracket's print profile
   // (np_print.h bracket_print_profiles, in bundle.targets' order). Auto searches the print itself
-  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a), or, on a reused run,
-  // at the bracket's own. Empty without.
+  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a: the search's, or the
+  // reused run's). Empty without.
   std::string print_id, print_name;
   std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
   bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)

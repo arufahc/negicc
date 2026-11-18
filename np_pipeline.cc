@@ -846,7 +846,7 @@ int prepare(const Options& o, Setup& s) {
   // and the conversion renders that profile at the search's A: the bundle's print ICC (np_print.h
   // bracket_print_profiles), built here and made relative to the paper's white. A density output writes a CLF per
   // material, each material's print searched for its CLF (density_print_searches). A white-light bundle takes the same
-  // print on its decode, with no curve fit (station designs/white_light_print_icc.md, arm A): the fit composes into
+  // print on its decode, with no curve fit: the fit composes into
   // the chart profiles, which a print does not use.
   if (!o.prints.empty()) {
     if (!s.is_bundle) {
@@ -976,7 +976,7 @@ int prepare(const Options& o, Setup& s) {
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
 
-  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md): white light only. A TriLED
+  // Fitted G/B input curves (input_curves.h): white light only. A TriLED
   // bundle's curves are measured under the light the scan was made with, so fitting them per frame has no basis; the
   // white-light fit corrects for a lamp and camera the profiles were not made with. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
@@ -1005,7 +1005,7 @@ int prepare(const Options& o, Setup& s) {
                                (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
-  // A print (--print on a TriLED bundle) has its tone from the print material's own curve: no tone stage.
+  // A print (--print on a profile bundle) has its tone from the print material's own curve: no tone stage.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
   const bool tone_wanted = o.tone_stage != Options::kToneStageOff && !o.tone_replay_given && o.colorspace == "srgb" &&
                            s.print_id.empty();
@@ -1757,9 +1757,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // crushed by an estimated base taken as it is has tens of percent of the crop past the knee.
       constexpr double kPrintCutWarnShare = 0.01;
       int c = 0;
-      for (int k = 1; k < 3; ++k)
-        if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c]) c = k;
+      for (int k = 1; k < 3; ++k) {
+        if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c] ||
+            (s.print_cr.past_cut[k] == s.print_cr.past_cut[c] &&
+             s.print_cr.past_knee[k] > s.print_cr.past_knee[c])) {
+          c = k;
+        }
+      }
       const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
+      const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
+                                         : "give --film_base <capture of this roll's unexposed film>";
       const bool bundle_base = !scan.film_base.found || scan.film_base.source == "bundle";
       const bool estimate = bundle_base || scan.film_base.source == "statistics";
       char raised[160] = "";
@@ -1768,24 +1775,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (estimate) {
         // With no --roi the shares are of the search's crop, the whole scan (said above).
         log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the %s is past the "
-                 "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; give --film_base <capture "
-                 "of this roll's unexposed film>\n",
+                 "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; %s\n",
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
                  raised, 100.0 * s.print_cr.past_knee[c],
                  !scan.has_roi ? "search's crop (the whole scan)" : "crop",
-                 100.0 * s.print_cr.past_cut[c], name);
+                 100.0 * s.print_cr.past_cut[c], name, remedy);
       } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
         log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
-                 "base (a long scan clips unexposed film); give --film_base <capture of this roll's unexposed film>\n",
-                 scan.film_base.source.c_str(), raised);
-      } else if (s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
-        log_warn("%.2f %% of the %s is past the cut (no detail kept) in %s at the print's settings, with the film base "
-                 "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; give --film_base "
-                 "<capture of this roll's unexposed film> if this is not one\n",
-                 100.0 * s.print_cr.past_cut[c],
-                 !scan.has_roi ? "search's crop (the whole scan)" : "crop", name,
-                 scan.film_base.source.c_str());
+                 "base (a long scan clips unexposed film); %s\n",
+                 scan.film_base.source.c_str(), raised, remedy);
+      } else if (scan.has_roi && s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
+        log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
+                 "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; %s if this is not "
+                 "one\n",
+                 100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str(), remedy);
       }
     }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
@@ -2907,7 +2911,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
     if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search or a reused run's)
       if (c.station_params) {
-        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix
+        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(x) g_c / n0)), and the matrix
         // at E alone, so that film at the base's density never passes the knee whatever the gains: with them in the
         // matrix a gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF
         // applies them the same way.
@@ -3293,6 +3297,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.dino_model = s.dino_path;
   sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
                                          : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);
+  sc.dino_arg = o.dino_arg;
+  sc.dino_iters_given = o.dino_iters_given;
+  sc.dino_iters = o.dino_iters;
   sc.auto_res = scan.has_auto_res && !s.has_cached_sidecar ? &scan.auto_res : nullptr;
   if (s.has_cached_sidecar) {
     // The previous run's search records, its intent field and its curves' record carry over unchanged.
@@ -3317,6 +3324,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.warmth = o.warmth;
     for (int i = 0; i < 3; ++i) sc.knob_base[i] = scan.knob_base[i];
     sc.knob_res = scan.knob_res;
+  } else if (s.density && o.knobs_given && !o.prints.empty()) {
+    sc.brightness = o.brightness;
+    sc.tint = o.tint;
+    sc.warmth = o.warmth;
   }
   sc.auto_frame_half = scan.auto_frame_half;
   sc.colorspace = cs_name;

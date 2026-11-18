@@ -272,10 +272,10 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
   return j;
 }
 
-// The intent field the parameter search converted against (designs/plan_intent_field_sidecar.md in
-// negicc-station): per DINOv3 grid cell, row-major over the oriented frame, the Lab colour the intent adapter predicts
-// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran. source: "auto" (the
-// bundle search, on the frame's inner crop_ratio crop) or "dino" (the single-bracket search, on the whole frame).
+// The intent field the parameter search converted against: per DINOv3 grid cell, row-major over the oriented frame,
+// the Lab colour the intent adapter predicts (mu) and its tolerance (sigma). The same block as the station's sidecar.
+// Null when no search ran. source: "auto" (the bundle search, on the frame's inner crop_ratio crop) or "dino" (the
+// single-bracket search, on the whole frame).
 // The model's short name (the backbone's directory, e.g. dinov3-small), not the path the build embedded it from.
 static std::string model_stem(std::string path) {
   const std::string kBuiltIn = "[built-in] ";
@@ -316,7 +316,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
   return j;
 }
 
-// The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
+// The fitted G/B input curves of the conversion's bracket (input_curves.h): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
 // (--fit_curves with the recorded numbers, as the cli_equivalent writes them) rebuilds the same tables.
@@ -677,7 +677,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
-  // if any, and re-running it re-runs the search (deterministic), then the same knobs on its result.
+  // if any, and re-running it re-runs the search (deterministic, with --dino and --dino_iters when given), then the
+  // same knobs on its result.
   if (!sc.print_id.empty() && sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -685,6 +686,8 @@ bool write_json_sidecar(const Sidecar& sc) {
       for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
         cli.push_back(std::to_string(v));
     }
+    if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
+    if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
     if (sc.has_knobs) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
       if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
@@ -694,10 +697,11 @@ bool write_json_sidecar(const Sidecar& sc) {
   // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
   // built-in material's, or none).
   if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
-  // A density output takes no exposure, gains or bracket: its replay is the frame alone, --fit_curves off when the run
-  // turned the white-light fit off (the print CLF's mid grey and slopes depend on it), and the --print materials as
-  // given: with --print the base not a capture is raised to the picture's thinnest film (print_floor_base) and the
-  // densities are written against it, so the replay needs --print to write the same file and its CLFs.
+  // A density output takes no exposure, gains or bracket: its replay is the frame, --fit_curves off when a white-light
+  // run without --print turned the fit off (for its suggested balance), and the --print materials and any knobs on
+  // their CLFs as given: with --print the base not a capture is raised to the picture's thinnest film
+  // (print_floor_base) and the densities are written against it, so the replay needs --print to write the same file
+  // and its CLFs.
   if (!sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -707,6 +711,11 @@ bool write_json_sidecar(const Sidecar& sc) {
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
+    if (!sc.density_prints.empty()) {
+      if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
+      if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
+      if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
+    }
   }
   // The format the film base's frame detection looked for when the run was not given one (--roi auto's default,
   // 35mm): an explicit --roi without it looks for every format, which may place the base's patch elsewhere.
