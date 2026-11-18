@@ -1664,17 +1664,14 @@ void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, doub
 }
 
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
-                   double t[3], bool linear) {
+                   double t[3]) {
   for (int c = 0; c < 3; ++c) t[c] = 0.0;
   if (a_mid.empty() || a_mid.size() != tilt.size()) return;
   std::vector<size_t> o(a_mid.size());
   for (size_t i = 0; i < o.size(); ++i) o[i] = i;
   std::sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
-  if (!linear || o.size() == 1) {
-    size_t k = o[0];
-    for (size_t i : o)
-      if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = i;
-    for (int c = 0; c < 3; ++c) t[c] = tilt[k][c];
+  if (o.size() == 1) {   // one bracket: its tilt
+    for (int c = 0; c < 3; ++c) t[c] = tilt[o[0]][c];
     return;
   }
   size_t k = 0;   // the segment o[k], o[k + 1]
@@ -1693,13 +1690,6 @@ void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]) {
     tl.push_back({b.tilt[0], b.tilt[1], b.tilt[2]});
   }
   print_tilt_at(am, tl, a, t);
-}
-
-const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a) {
-  const DensityBracket* best = nullptr;
-  for (const DensityBracket& b : bundle.density_brackets)
-    if (!best || std::fabs(bracket_mid_apd(bundle, b) - a) < std::fabs(bracket_mid_apd(bundle, *best) - a)) best = &b;
-  return best;
 }
 
 void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]) {
@@ -1965,13 +1955,6 @@ bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves) 
 }
 
 void PrintContinuum::tilt_at(double a, double t[3]) const { print_tilt_at(a_mid, tilt, a, t); }
-
-int PrintContinuum::nearest(double a) const {
-  int k = 0;
-  for (size_t i = 1; i < a_mid.size(); ++i)
-    if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[k] - a)) k = (int)i;
-  return k;
-}
 
 PrintCurves PrintContinuum::curves_at(double a, const double gains[3]) const {
   static const double zero[3] = {0.0, 0.0, 0.0};

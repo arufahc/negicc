@@ -15,18 +15,19 @@ and opencv-python.
 The CLF reader covers the nodes neg_process writes: Matrix (3x3 or 3x4), Range, LUT1D (linear), LUT3D (tetrahedral)
 and Exponent (monCurveRev)."""
 import argparse
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-import cv2
-import numpy as np
-
-
-def nums(node):
-    return np.array(node.find("Array").text.split(), float)
+try:
+    import cv2
+    import numpy as np
+except ImportError as e:   # said after the arguments are read, so that --help works without them
+    cv2 = np = None
+    missing = e.name
 
 
 def apply_clf(path, x):
@@ -129,7 +130,10 @@ def ciede2000(a, b):
 
 
 def read(path):
-    return cv2.imread(path, cv2.IMREAD_UNCHANGED)[..., :3][..., ::-1].astype(np.float32) / 65535.0
+    im = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if im is None:
+        raise SystemExit("cannot read " + path)
+    return im[..., :3][..., ::-1].astype(np.float32) / float(np.iinfo(im.dtype).max)
 
 
 def small(srgb, side=1000):
@@ -143,8 +147,7 @@ def small(srgb, side=1000):
 def clf_full(path, dens, band=256):
     """The CLF applied to the density file at full resolution, in bands of rows (sRGB-encoded, clipped to 0..1). It is
     applied before any shrink: an average of densities is not the density of the average, so shrinking the density file
-    first would differ from the picture wherever the frame has detail (0.5 to 0.6 mean and 1.3 to 1.6 at the 95th
-    percentile on detailed frames, against 0.37 and 0.6 this way)."""
+    first would differ from the picture wherever the frame has detail."""
     return np.concatenate([np.clip(apply_clf(path, dens[y:y + band].astype(np.float64)), 0.0, 1.0).astype(np.float32)
                            for y in range(0, dens.shape[0], band)], 0)
 
@@ -158,25 +161,33 @@ def main():
     ap.add_argument("args", nargs=argparse.REMAINDER)
     a = ap.parse_args()
     args = a.args[1:] if a.args and a.args[0] == "--" else a.args
+    if not args:
+        ap.error("give neg_process's arguments after --, the scan last")
+    if cv2 is None:
+        raise SystemExit(f"needs numpy and opencv-python ({missing} is not installed)")
+
+    def run(cmd, what):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            raise SystemExit(f"the {what} run failed: " + " ".join(cmd) + "\n" + r.stdout + r.stderr)
+
     ok = True
     with tempfile.TemporaryDirectory() as t:
         dens = os.path.join(t, "d.tif")
-        cmd = [a.neg_process, *args[:-1], "-P", "apd", *sum((["--print", m] for m in a.material), []), "-o", dens, args[-1]]
-        if subprocess.run(cmd, capture_output=True).returncode:
-            raise SystemExit("the density run failed: " + " ".join(cmd))
+        run([a.neg_process, *args[:-1], "-P", "apd", *sum((["--print", m] for m in a.material), []), "-o", dens,
+             args[-1]], "density")
         x = read(dens)
-        for m in a.material:
-            pic = os.path.join(t, f"p_{m}.tif")
-            cmd = [a.neg_process, *args[:-1], "-P", "srgb", "--print", m, "-o", pic, args[-1]]
-            if subprocess.run(cmd, capture_output=True).returncode:
-                raise SystemExit("the picture run failed: " + " ".join(cmd))
-            out = clf_full(f"{dens}.{m}.clf", x)
+        for i, m in enumerate(a.material):
+            pic = os.path.join(t, f"p_{i}.tif")
+            run([a.neg_process, *args[:-1], "-P", "srgb", "--print", m, "-o", pic, args[-1]], "picture")
+            side = json.load(open(pic + ".json"))
+            # The CLF is named after the material's id, which a material given as a file takes from its profile.
+            out = clf_full(f"{dens}.{side['profile']['print']['id']}.clf", x)
             de = ciede2000(lab(small(out)), lab(small(read(pic))))
             mean, p95 = float(de.mean()), float(np.percentile(de, 95))
             good = mean <= a.mean and p95 <= a.p95
             ok &= good
-            import json
-            knee = json.load(open(pic + ".json"))["profile"]["print"].get("search", {}).get("above_knee_pct")
+            knee = side["profile"]["print"].get("search", {}).get("above_knee_pct")
             knee_text = f"; crop above the knee at E = 1: {knee:.2f} %" if knee is not None else ""
             print(f"{m}: picture against the CLF on the density file, CIEDE2000 mean {mean:.3f}, 95th percentile "
                   f"{p95:.3f} ({'within' if good else 'OUTSIDE'} {a.mean} / {a.p95}){knee_text}")
