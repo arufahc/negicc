@@ -326,8 +326,23 @@ how they take the scan into that table:
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each made by its
-own print search (`--print <material> -P srgb`) and shown relative to its paper's white.*
+*Top left: scene colour matching (without `--print`; mean L\* 52.9, median L\* 66.0). Then the six papers and the two
+print films, each rendered by its own automatic print search (`--print <material> -P srgb`) and shown relative to its
+paper's white — they are not forced to the same lightness, because each material's characteristic S-curve has its own
+toe and contrast. To match a print's overall lightness to the scene conversion with `--brightness <stops>` (computed
+from the relative luminance of the scene's and the print's mean L\*):*
+
+| Grid cell | Material (`--print`) | Auto mean / median L\* | `--brightness` to match scene mean L\* (median L\*) |
+|---|---|---|---|
+| Top left | Scene picture (no `--print`) | 52.9 / 66.0 | `0.00` (`0.00`) |
+| Top middle | Kodak Portra Endura (`kodak_portra_endura`) | 47.1 / 61.2 | `+0.38` (`+0.26`) |
+| Top right | Kodak Supra Endura (`kodak_supra_endura`) | 46.6 / 61.8 | `+0.42` (`+0.23`) |
+| Middle left | Kodak Ultra Endura (`kodak_ultra_endura`) | 44.8 / 60.1 | `+0.54` (`+0.32`) |
+| Center | Kodak Endura Premier (`kodak_endura_premier`) | 43.4 / 56.7 | `+0.65` (`+0.52`) |
+| Middle right | Kodak Ektacolor Edge (`kodak_ektacolor_edge`) | 44.8 / 57.8 | `+0.54` (`+0.46`) |
+| Bottom left | Fujifilm Crystal Archive Type II (`fujifilm_crystal_archive_typeii`) | 45.4 / 60.3 | `+0.50` (`+0.31`) |
+| Bottom middle | Kodak Vision 2383 (`kodak_2383`) | 46.8 / 63.5 | `+0.40` (`+0.14`) |
+| Bottom right | Kodak Vision Premier 2393 (`kodak_2393`) | 46.3 / 63.1 | `+0.44` (`+0.15`) |
 
 ## Options
 
