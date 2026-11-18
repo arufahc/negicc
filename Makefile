@@ -179,7 +179,12 @@ else ifeq ($(ORT_STATIC),0)
     else
         ORT_DIR ?= $(ORT_PREBUILT_DIR)
     endif
-    ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
+    # The source tree's session headers only when ORT_DIR is that tree: no second ONNX Runtime's headers on the path.
+    ifeq ($(ORT_DIR),$(ORT_SRC_DIR))
+        ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
+    else
+        ORT_INC = -isystem $(ORT_DIR)/include
+    endif
     ifeq ($(ARCH),aarch64)
         ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
     else
