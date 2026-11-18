@@ -848,9 +848,9 @@ int prepare(const Options& o, Setup& s) {
                 "computed for the bundle's film\n");
       return 1;
     }
-    if (s.white_light && o.fit_curves == Options::kFitCurvesOn) {
-      log_error("--fit_curves on does not apply with --print on a white-light bundle: the print is made by its own "
-                "search, without the curve fit\n");
+    if (s.white_light && (o.fit_curves == Options::kFitCurvesOn || o.input_curves_given)) {
+      log_error("%s does not apply with --print on a white-light bundle: the print is made by its own search, "
+                "without the curve fit\n", o.input_curves_given ? "--fit_curves with recorded curves" : "--fit_curves on");
       return 1;
     }
     if (!s.density) {
@@ -1619,9 +1619,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.has_rolloff = true;
     return true;
   };
-  // A TriLED density run with --print: each material's own print search, so that its CLF prints the frame as the
-  // picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's suggested
-  // balance, as without --print.
+  // A density run with --print, on either light: each material's own print search, so that its CLF prints the frame
+  // as the picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's
+  // suggested balance, as without --print.
   auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                     const ParamSearchOptions& opts) -> bool {
     std::vector<std::string> ids;
@@ -3199,7 +3199,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
-  sc.density_fit_off = s.density && s.white_light && o.fit_curves == Options::kFitCurvesOff;
+  sc.density_fit_off = s.density && s.white_light && o.prints.empty() && o.fit_curves == Options::kFitCurvesOff;
   if (s.density) sc.density_prints = o.prints;
   sc.print_id = s.print_id;
   sc.print_name = s.print_name;

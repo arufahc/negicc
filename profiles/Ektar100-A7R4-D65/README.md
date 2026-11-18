@@ -75,8 +75,7 @@ The print materials are spektrafilm's print profiles (Andrea Volpato, CC BY-SA 4
 
 Each is an ICC v2 input profile (RGB to PCS XYZ D50) shaped like the chart profiles beside it: an A2B0 with three
 4096-entry input curves, a 45 x 45 x 45 table and identity output curves. Its own curves are for the middle bracket
-(Target 4). neg_process keeps the table and writes the curves of the frame's bracket when it
-converts.
+(Target 4). neg_process keeps the table and writes the curves for the A the print's search finds when it converts.
 
 ### What they compute
 
@@ -102,10 +101,10 @@ the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts
   and 0.7992, blue 1.5868 and 1.7433 at the first and the last step
   (`grey_balance_curves.tangents`), and most of the table past the last step comes from them.
 - **A**, the print's mid grey: a bracket's own `A_mid` (the green APD of its 18 % grey step, gs10, from
-  `density_matrices.brackets.<bracket>.grey_light_density`), or the A the print's search finds.
-- **b_c**, each bracket's tilt relative to the curve (`density_matrices.brackets.<bracket>.grey_relative.b`):
-  neg_process takes it linear in A between the two brackets whose A_mid enclose A, held beyond the end
-  ones (its kPrintTiltLinear), so at a bracket's own A_mid it is that bracket's
+  `density_matrices.brackets.targets.<bracket>.grey_light_density`), or the A the print's search finds.
+- **b_c**, each bracket's tilt relative to the curve
+  (`density_matrices.brackets.targets.<bracket>.grey_relative.b`): neg_process takes it linear in A between the two
+  brackets whose A_mid enclose A, held beyond the end ones, so at a bracket's own A_mid it is that bracket's tilt.
 - **M**, the bundle's matrix for Academy Printing Density (`film_to_measure` times `light_to_film`).
 - **Q L**, from the light's density to the density the print material reads: Q from the film model's dye amounts
   to the print's own density under a 3200 K printer lamp, least squares over the film's sample colours

@@ -25367,7 +25367,7 @@
   "source_sha256": "523434ba4601e82c78d88fed3382a1b1482c9d89848b42967b526e13110e6867",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "34b97d75fbbd866aadea80c4e62afb759032a24b",
+  "station_commit": "2f13005a5e4e1a12c4d1e87fd2e9988028be4637",
   "tilt_form": "own"
  }
 }

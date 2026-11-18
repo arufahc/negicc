@@ -183,7 +183,7 @@ struct FilmModel {
   std::vector<double> neutral[3];             // dye amounts along log_exposure
 };
 
-// The film's grey balance curve (density_matrices.grey_balance_curves, narrow-band bundles): for each light channel c,
+// The film's grey balance curve (density_matrices.grey_balance_curves, under either light): for each light channel c,
 // apd[c][i] is the APD (Academy Printing Density) of the film's grey that has light density start + step i in
 // channel c, rising. From the chart's grey steps of every bracket (negicc-station src/print_icc.py).
 struct GreyBalanceCurves {
@@ -225,7 +225,7 @@ struct ProfileBundle {
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
   std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
-  GreyBalanceCurves grey_balance;                 // not present in a white-light bundle or one from before it
+  GreyBalanceCurves grey_balance;                 // not present in a bundle from before it
   std::vector<BundlePrint> prints;                // the bundle's print ICCs, by print material id
   FilmModel film_model;                           // not present in a bundle from before the field
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
