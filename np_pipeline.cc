@@ -1628,6 +1628,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
+    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured for it.
+    if (!s.print_id.empty()) return true;
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
       // The curve fit measured the roll-off on this frame, at these E, g and b, on this combined profile, as below
       // (its last re-meter pass): the same numbers, not measured a third time.
