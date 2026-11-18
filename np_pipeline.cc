@@ -1698,6 +1698,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.above_knee = cr.above_knee;
       for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
       ps.stopped_by = cr.stopped_by;
+      ps.a0 = cr.a0;
+      ps.wish_l = cr.wish_mean_l;
+      for (int c = 0; c < 3; ++c) {
+        ps.above_white_pct[c] = cr.above_white_pct[c];
+        ps.at_white_pct[c] = cr.at_white_pct[c];
+      }
       if (o.knobs_given) {
         // The knobs on this print as on the picture (solve_knobs_and_rolloff): A, g and b moved on its profile, E held.
         auto print_at = [&](double a, double g, double b, ParsedFilmProfile& p) {
