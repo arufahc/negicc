@@ -369,7 +369,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
           "curve fit and the tone plan through a pass-through renderer that forwards each pass to the CPU and counts "
           "it, count every pass of theirs that runs outside it, and print both; exit 1 when one does. The output must "
-          "equal the conversion without it, bit for bit (tools/check_renderer.sh).")
+          "equal the conversion without it, bit for bit.")
     .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "

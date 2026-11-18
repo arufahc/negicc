@@ -311,7 +311,7 @@ print search (`--print <material> -P srgb`) and shown relative to its paper's wh
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. |
-| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (`tools/check_renderer.sh`), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
+| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the curve fit and the tone plan through a pass-through renderer; the picture must equal a plain conversion's), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with
 
