@@ -76,9 +76,10 @@ struct Sidecar {
   double print_floor_found_rgb[3] = {0, 0, 0};
   std::string print_floor_found_source;
   float print_floor_k = 1.0f;
-  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's), "detected" (no --roi: the frame
-  // detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection); the
-  // detection's confidence when one ran (else -1).
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
+  // frame detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection, or a
+  // --roi auto that fell back to the whole image). The detection's confidence only where the detection decided the
+  // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
   std::string print_floor_frame;
   float print_floor_frame_conf = -1.0f;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
