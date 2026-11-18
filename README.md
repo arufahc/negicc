@@ -213,26 +213,25 @@ was.
 
 ## Scans from other cameras
 
-A scan from any camera under a white light (`--light_source d65`) can be converted either for **scene colour
-matching** (through the IT8 chart profiles, the white-light curve fit and the tone stage) or for **print emulation**
-(through a print material profile or a density file with a CLF):
+Scans from any camera under white light (`--light_source d65`) can be converted for scene colour matching or for print
+emulation:
 
 ```sh
-# Scene colour matching: IT8 chart profiles, white-light curve fit and tone stage
+# Scene colour matching
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
 
-# Print emulation directly to a picture (print material ICC; no curve fit or tone stage)
+# Print emulation directly to a picture (print material ICC)
 bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
 
-# Print emulation via a 16-bit ADX16 (or 10-bit Cineon DPX) density file and a CLF transform
+# Print emulation through an ADX16 (or Cineon DPX) density file and a CLF
 bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
 ```
 
-Below are three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps
-the profiles were not made with. Left: the scan as the camera saw it. Right: scene colour matching (`--film_stock
-portra400 --light_source d65 --roi auto -P srgb`, everything else automatic). They were rendered at commit `e7e2fad`
-(2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from the profile
-to sRGB have changed since, so the current build may render them differently.
+Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
+were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic. They were rendered at commit
+`e7e2fad` (2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from
+the profile to sRGB have changed since, so the current build may render them differently.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
@@ -253,19 +252,18 @@ If one of them is yours and you want it removed, open an issue.
 
 ## Print emulation
 
-Print emulation models shining a 3200 K printer lamp through the negative onto a print material — one of six darkroom
-papers (such as Kodak Portra Endura) or two cinema print films (Kodak Vision 2383 and 2393) from
-[spektrafilm](https://github.com/andreavolpato/spektrafilm) (`--print` alone lists them, or takes a `.json` file).
+Print emulation models shining a printer lamp through the negative onto darkroom paper or motion-picture print film.
+Eight materials from [spektrafilm](https://github.com/andreavolpato/spektrafilm) are built in — six papers (such as
+Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print` alone lists them.
 
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 
 *Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film.*
 
-There are two ways to run it. Both run the same print search (finding the printing exposure `A` and the colour balance
-`g`, `b` on the print itself) and produce the same print:
+There are two ways to run it, and both give the same picture:
 
-1. **Print material emulation ICC (`--print <material> -P srgb`)** — converts the scan directly to a 16-bit sRGB TIFF
-   through the material's print ICC profile (`print_<material>.icc`):
+1. **Print material ICC (`--print <material> -P srgb`)** — writes the print directly as a 16-bit sRGB TIFF through
+   the material's print ICC profile (`print_<material>.icc`):
 
    ```sh
    bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
@@ -273,8 +271,8 @@ There are two ways to run it. Both run the same print search (finding the printi
    ```
 
 2. **Cineon / ADX16 density file and CLF (`-P rp180|apd|statusm --print <material>`)** — writes the negative's
-   measured density above the film base to a 10-bit Cineon DPX (`-P rp180 -o scan.dpx`) or a 16-bit ADX16 TIFF
-   (`-P apd -o scan.tif`), and writes a Common LUT Format transform (`<output>.<material>.clf`) beside it:
+   density above the film base to a 10-bit Cineon DPX (`-P rp180 -o scan.dpx`) or a 16-bit ADX16 TIFF
+   (`-P apd -o scan.tif`), with a CLF transform (`<output>.<material>.clf`) beside it:
 
    ```sh
    bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
@@ -282,33 +280,22 @@ There are two ways to run it. Both run the same print search (finding the printi
    oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
    ```
 
-### Shared 3D cLUT: log-space matrix vs. input TRC curves
+Both paths use the same 3D colour table (cLUT) for the print material's dyes. The only difference is how the scan
+reaches that table: in the density file and CLF, the pixels are already in log density, so a 3×3 matrix in log space
+applies the printing exposure and colour balance before the paper's tone curve; in the print ICC, the input TRC curves
+do the same job directly on the linear scan values.
 
-The two paths share the same 45 × 45 × 45 colour table (cLUT), which maps the print material's dye amounts to colour
-under its viewing light (D50 for paper, D55 for print film), shown relative to the paper's white. They differ only in
-how they take the scan into that table:
+![Print TRC Curves and 3D cLUT Gamut](samples/print_trc_and_clut.png)
 
-- **In the density file + CLF**, the pixel values in the file are already logarithmic densities above the film base.
-  The CLF applies a **3 × 3 matrix in log (density) space** (shifting by the printing exposure `A` and colour balance,
-  scaling by the film's grey-balance slopes, and multiplying by the print matrix `P`), followed by a 1D LUT of the
-  paper's characteristic S-curve per layer.
-- **In the print ICC**, the input is linear film transmittance after the soft knee. Its **4096-entry input TRC curves**
-  perform the exact same work in one step: they take `-log10` to light density, walk the film's grey balance curve
-  `G_c` at the printing exposure `A` and bracket tilt, and fold in the paper's S-curve (`Paper_c`) so the 45³ cLUT only
-  has to interpolate dye colour and off-axis channel mixing.
-
-![Print TRC Curves and Shared 45x45x45 Print cLUT Gamut](samples/print_trc_and_clut.png)
-
-On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's original tone curve.
-Under the narrow-band RGB LED (`--light_source tri`), the print emulation matches the full spectral print model to 0.6
-to 1.5 ΔE₀₀ on average; under broadband white light (`--light_source d65`), where the lamp and camera spectra are not
-measured, a printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
+On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's own tone curve.
+Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the spectral print model to 0.6 to 1.5
+ΔE₀₀ on average; under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
+printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each searched by its
-own print search (`--print <material> -P srgb`) and matched to the scene conversion's lightness with `--brightness`
-(the offset in stops is in each cell's title).*
+*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
+scene conversion's lightness with `--brightness` (the offset in stops is in each cell's title).*
 
 ## Options
 
