@@ -2038,12 +2038,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   //   tier 2: median L* >= 48 and >= 7.5% above 242 in the worst channel, or, on bracket index 3 and above, >= 11%
   //           above 235 in the worst channel.
   // When the chosen bracket is feasible, E is raised toward the bracket's e_min by at most 0.15 stop (a nudge, not a
-  // re-solve: the loop's intent stays close). When it is not, the bootstrap field, the screening and the tournament
-  // run again on the same windows with the enclosure penalties in place of the pull toward the centre
-  // (pullback_search), and the runs are ranked by the enclosure-regularised residual (tourney_score); on TriLED among
-  // the converged runs when any converged, on white light regardless of convergence. The result is taken only if it
-  // clips no more, does not darken the midtones past what the scene allows, and moves to a later bracket or raises E
-  // by more than 2%.
+  // re-solve: the loop's intent stays close). When it is not, the bootstrap field (the first one when no bracket
+  // metered), the screening and the tournament run again on the same windows with the enclosure penalties in place of
+  // the pull toward the centre (pullback_search), and the runs are ranked by the enclosure-regularised residual
+  // (tourney_score); on TriLED among the converged runs when any converged, on white light regardless of convergence.
+  // The result is taken only if it clips at most 0.5 percentage point more, does not darken the midtones past what
+  // the scene allows, and moves to a later bracket or raises E by more than 2%.
   // The thresholds are negicc-station's.
   // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
   // E: it only moves E or the bracket.

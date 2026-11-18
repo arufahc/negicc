@@ -97,6 +97,15 @@ Rec.2020 already and are not converted. A TIFF with `--light_source tri` is take
 (black subtracted, no white balance or colour matrix) and goes through the crosstalk correction (2.4); a TIFF with an
 embedded profile or 8-bit samples is refused there.
 
+Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
+(`np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
+third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
+the capture's own channel is kept; a TIFF gives its channel as it is read. When all three captures record shutter and
+ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
+half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame, it is the mean of each 2×2 block
+of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
+`-g` or `-b` give one.
+
 ## 2.2 Flat field
 
 The flat field removes the light's and the lens's falloff. It is measured on the empty gate (`--flat`, an `.npz`
@@ -376,8 +385,9 @@ not the optimiser's reading of it, matches the field.
 6. **Highlight pullback.** A bright frame with highlights crowding the top was rendered too bright: median `L*` ≥ 58
    with ≥ 2.2 % of the crop above sRGB 242 in a channel, or median `L*` ≥ 48 with ≥ 7.5 % above 242 (or, on `Target 4`
    and denser brackets, ≥ 11 % above 235). On a feasible bracket with `E` below `e_min`, `E` is raised toward `e_min` by
-   at most 0.15 stop. On an infeasible one, the bootstrap field, the screening and the tournament (steps 2 to 4, on the
-   brackets already metered, with the same lightness target) run again with penalties
+   at most 0.15 stop. On an infeasible one, steps 2 to 4 run again with the same lightness target: the bootstrap field
+   is made again from the metered brackets' renders (when no bracket metered, the first field is kept), the brackets
+   step 3 screened are screened again, and the best two run the tournament, with penalties
    `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below
    `e_min` or above `e_max`; `slack`: stops by which the scene overflows the bracket); the runs are ranked by their
    residual plus the same penalties, on TriLED among the converged runs when any converged. When the winner puts the

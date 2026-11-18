@@ -53,7 +53,8 @@ struct RgbImage {
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
 //      run Steps 2-4 again with penalties on E outside the bracket's calibrated range in place of the pull toward the
-//      centre, and take the result if it clips no more and moves to a later bracket or a higher E.
+//      centre, and take the result if it clips at most 0.5 percentage point more and moves to a later bracket or a
+//      higher E.
 //
 // Every render carries the highlight roll-off (color_pipeline.h shoulder_x_hi_anchored): the fixed-point loop
 // measures its x_hi at each iteration's incoming parameters, and the search measures it once more at its final
