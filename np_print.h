@@ -198,7 +198,6 @@ struct PrintMaterial {
   std::vector<double> observer[3];            // X, Y, Z weights on the grid (viewing light x observer)
   double white[3] = {1, 1, 1};
   double aim[3] = {0, 0, 0};
-  double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
 };
 
 // A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.
@@ -206,7 +205,7 @@ struct PrintMaterial {
 //
 //   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
 //   the observer              the CIE 1931 2 degree observer (np_print.cc's CIE tables) under D50 for a paper, D55 for a print
-//                             film (info.support), adapted to D65 with CAT02 for sRGB
+//                             film (info.support)
 //   aim                       the exposure of each layer that prints an 18 % grey
 //   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
 //                             no light_density_factors: F its film_to_measure (dye amounts to the measure's density),

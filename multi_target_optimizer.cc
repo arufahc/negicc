@@ -587,27 +587,22 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
 
 // ---- Highlight ceiling and clipping ------------------------------------------------------------------------
 
-// ICC PCS L*a*b* (D50) to 8-bit sRGB code values in [0, 255], through Bradford D50 -> D65.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb)
+// ICC PCS L*a*b* (D50) to 8-bit sRGB code values in [0, 255], through the same PCS -> linear sRGB as the outputs
+// (color_pipeline.h pcs_to_linear_srgb_unclamped: the embedded profile's colorants), so a bracket's ceiling is in the
+// codes its pictures are written in.
+// py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb; there through Bradford and the textbook matrix)
 void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
-  static const float kD50[3] = {0.9642f, 1.0f, 0.8249f};
-  static const float kBradford[3][3] = {{0.9555766f, -0.0230393f, 0.0631636f},
-                                        {-0.0282895f, 1.0099416f, 0.0210077f},
-                                        {0.0122982f, -0.0204830f, 1.3299098f}};
-  static const float kXyzToSrgb[3][3] = {{3.2406255f, -1.5372080f, -0.4986286f},
-                                         {-0.9689307f, 1.8757561f, 0.0415175f},
-                                         {0.0557101f, -0.2040211f, 1.0569959f}};
+  const float kD50[3] = {(float)negicc::kPcsWhite[0], 1.0f, (float)negicc::kPcsWhite[2]};   // the PCS white
   const float fy = (lab[0] + 16.0f) / 116.0f;
   const float f[3] = {fy + lab[1] / 500.0f, fy, fy - lab[2] / 200.0f};
-  float xyz[3], d65[3];
+  float xyz[3];
   for (int c = 0; c < 3; ++c) {
     const float f3 = f[c] * f[c] * f[c];
     xyz[c] = (f3 > 0.008856f ? f3 : (f[c] - 16.0f / 116.0f) / 7.787f) * kD50[c];
   }
-  for (int r = 0; r < 3; ++r) d65[r] = kBradford[r][0] * xyz[0] + kBradford[r][1] * xyz[1] + kBradford[r][2] * xyz[2];
+  const negicc::Rgb l = negicc::pcs_to_linear_srgb_unclamped({xyz[0], xyz[1], xyz[2]});
   for (int r = 0; r < 3; ++r) {
-    const float lin = std::clamp(kXyzToSrgb[r][0] * d65[0] + kXyzToSrgb[r][1] * d65[1] + kXyzToSrgb[r][2] * d65[2],
-                                 0.0f, 1.0f);
+    const float lin = std::clamp(r == 0 ? l.r : r == 1 ? l.g : l.b, 0.0f, 1.0f);
     const float enc = (lin <= 0.0031308f) ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f;
     out[r] = std::clamp(enc, 0.0f, 1.0f) * 255.0f;
   }

@@ -438,6 +438,8 @@ bool density_balance_offset(const DensityRecord& rec, double offset[3], double* 
   return true;
 }
 
+void print_pcs_adaptation(const PrintMaterial& m, double pcs[9]);   // below, beside the print's table
+
 namespace {
 
 std::string date_time(long long timestamp, char sep) {
@@ -1000,20 +1002,6 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
       m.white[c] += m.observer[c][i];
     }
   }
-  // XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02.
-  const double cat02[9] = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834};
-  const double xyz_to_srgb[9] = {3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
-                                 0.0415560, 0.0556434,  -0.2040259, 1.0572252};
-  const double d65[3] = {0.3127 / 0.3290, 1.0, (1.0 - 0.3127 - 0.3290) / 0.3290};
-  double cat_inverse[9], scaled[9];
-  invert3(cat02, cat_inverse);
-  for (int r = 0; r < 3; ++r) {
-    const double to = cat02[r * 3] * d65[0] + cat02[r * 3 + 1] * d65[1] + cat02[r * 3 + 2] * d65[2];
-    const double from = cat02[r * 3] * m.white[0] + cat02[r * 3 + 1] * m.white[1] + cat02[r * 3 + 2] * m.white[2];
-    for (int c = 0; c < 3; ++c) scaled[r * 3 + c] = cat02[r * 3 + c] * to / from;
-  }
-  multiply3(cat_inverse, scaled, scaled);
-  multiply3(xyz_to_srgb, scaled, m.to_srgb);
   // aim: the exposure of each layer at which the print is an 18 % grey under its light. Newton's method on the three
   // exposures, with the Jacobian by differences.
   double e[3] = {0.0, 0.0, 0.0};
@@ -1122,12 +1110,21 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   snprintf(buf, sizeof buf, "  <LUT3D inBitDepth=\"32f\" outBitDepth=\"32f\" interpolation=\"tetrahedral\">\n"
                             "    <Array dim=\"%d %d %d 3\">\n", cube, cube, cube);
   s += buf;
-  // The cube: dye amounts 0..top on each axis, blue changing fastest, to linear sRGB, relative to the paper's white:
-  // each of X, Y and Z scaled by the viewing light's over the paper's (the ICC's media-relative colorimetry), so the
-  // paper renders at the display's white, as the print ICC's picture does (np_pipeline: the print's white).
-  double paper[3], rel[3];
+  // The cube: dye amounts 0..top on each axis, blue changing fastest, to linear sRGB through the picture's own chain:
+  // XYZ under the viewing light to the PCS (print_pcs_adaptation, as the print ICC's table), relative to the paper (each of
+  // X, Y and Z scaled so that the paper lands on the PCS white, kPcsWhite, as np_pipeline's to_paper_white scales the
+  // print ICC), then the PCS to linear sRGB of the outputs (the inverse of the embedded profile's colorants,
+  // kPcsToLinearSrgb). So the paper renders at the display's white and the CLF aims at the sRGB the picture is written in.
+  double paper[3], pcs[9], paper_pcs[3], to_srgb[9];
   print_paper_xyz(m, paper);
-  for (int c = 0; c < 3; ++c) rel[c] = m.white[c] / paper[c];
+  print_pcs_adaptation(m, pcs);
+  for (int r = 0; r < 3; ++r) paper_pcs[r] = pcs[r * 3] * paper[0] + pcs[r * 3 + 1] * paper[1] + pcs[r * 3 + 2] * paper[2];
+  for (int r = 0; r < 3; ++r)
+    for (int c = 0; c < 3; ++c) {
+      double v = 0.0;
+      for (int k = 0; k < 3; ++k) v += negicc::kPcsToLinearSrgb[r * 3 + k] * (negicc::kPcsWhite[k] / paper_pcs[k]) * pcs[k * 3 + c];
+      to_srgb[r * 3 + c] = v;
+    }
   const size_t points = (size_t)cube * cube * cube;
   std::vector<double> rgb(points * 3);
   #pragma omp parallel for schedule(static)
@@ -1136,9 +1133,8 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
     const double amount[3] = {top * r / (cube - 1), top * g / (cube - 1), top * b / (cube - 1)};
     double xyz[3];
     amounts_to_xyz(m, amount, xyz);
-    for (int c = 0; c < 3; ++c) xyz[c] *= rel[c];
     for (int c = 0; c < 3; ++c) {
-      rgb[idx * 3 + c] = m.to_srgb[c * 3] * xyz[0] + m.to_srgb[c * 3 + 1] * xyz[1] + m.to_srgb[c * 3 + 2] * xyz[2];
+      rgb[idx * 3 + c] = to_srgb[c * 3] * xyz[0] + to_srgb[c * 3 + 1] * xyz[1] + to_srgb[c * 3 + 2] * xyz[2];
     }
   }
   for (size_t idx = 0; idx < points; ++idx) {
@@ -1613,7 +1609,7 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
-constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
+constexpr double kD50[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};   // the PCS white
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
 constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
 
@@ -1731,26 +1727,10 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
   return out;
 }
 
-std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
-                                const PrintCurves& paper) {
-  // Q L = P M and w = M^-1 (1, 1, 1).
-  double ql[9], inv[9], w[3];
-  for (int r = 0; r < 3; ++r)
-    for (int c = 0; c < 3; ++c)
-      ql[r * 3 + c] = p_apd[r * 3] * m_apd[c] + p_apd[r * 3 + 1] * m_apd[3 + c] + p_apd[r * 3 + 2] * m_apd[6 + c];
-  {
-    const double* a = m_apd;
-    const double det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) +
-                       a[2] * (a[3] * a[7] - a[4] * a[6]);
-    inv[0] = (a[4] * a[8] - a[5] * a[7]) / det;  inv[1] = (a[2] * a[7] - a[1] * a[8]) / det;
-    inv[2] = (a[1] * a[5] - a[2] * a[4]) / det;  inv[3] = (a[5] * a[6] - a[3] * a[8]) / det;
-    inv[4] = (a[0] * a[8] - a[2] * a[6]) / det;  inv[5] = (a[2] * a[3] - a[0] * a[5]) / det;
-    inv[6] = (a[3] * a[7] - a[4] * a[6]) / det;  inv[7] = (a[1] * a[6] - a[0] * a[7]) / det;
-    inv[8] = (a[0] * a[4] - a[1] * a[3]) / det;
-  }
-  for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] + inv[r * 3 + 1] + inv[r * 3 + 2];
-  // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film.
-  double pcs[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+// XYZ under the material's viewing light to the PCS (D50): the identity for a paper (viewed under D50), Bradford from the
+// light's white to D50 for a print film. The print ICC's table and the CLF's cube both take it.
+void print_pcs_adaptation(const PrintMaterial& m, double pcs[9]) {
+  for (int i = 0; i < 9; ++i) pcs[i] = (i % 4 == 0) ? 1.0 : 0.0;
   if (m.viewing_illuminant != "D50") {
     static const double B[9] = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
     double src[3] = {m.white[0] / m.white[1], 1.0, m.white[2] / m.white[1]}, gain[3];
@@ -1778,6 +1758,29 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
         pcs[r * 3 + c] = v;
       }
   }
+}
+
+std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
+                                const PrintCurves& paper) {
+  // Q L = P M and w = M^-1 (1, 1, 1).
+  double ql[9], inv[9], w[3];
+  for (int r = 0; r < 3; ++r)
+    for (int c = 0; c < 3; ++c)
+      ql[r * 3 + c] = p_apd[r * 3] * m_apd[c] + p_apd[r * 3 + 1] * m_apd[3 + c] + p_apd[r * 3 + 2] * m_apd[6 + c];
+  {
+    const double* a = m_apd;
+    const double det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) +
+                       a[2] * (a[3] * a[7] - a[4] * a[6]);
+    inv[0] = (a[4] * a[8] - a[5] * a[7]) / det;  inv[1] = (a[2] * a[7] - a[1] * a[8]) / det;
+    inv[2] = (a[1] * a[5] - a[2] * a[4]) / det;  inv[3] = (a[5] * a[6] - a[3] * a[8]) / det;
+    inv[4] = (a[0] * a[8] - a[2] * a[6]) / det;  inv[5] = (a[2] * a[3] - a[0] * a[5]) / det;
+    inv[6] = (a[3] * a[7] - a[4] * a[6]) / det;  inv[7] = (a[1] * a[6] - a[0] * a[7]) / det;
+    inv[8] = (a[0] * a[4] - a[1] * a[3]) / det;
+  }
+  for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] + inv[r * 3 + 1] + inv[r * 3 + 2];
+  // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film.
+  double pcs[9];
+  print_pcs_adaptation(m, pcs);
   // The nodes' alpha: Paper_c inverted (it is decreasing, so read reversed).
   std::vector<double> alpha_grid(kPaperAlphaPoints), node_alpha[3];
   for (int i = 0; i < kPaperAlphaPoints; ++i) alpha_grid[kPaperAlphaPoints - 1 - i] = kPaperAlphaStart + kPaperAlphaStep * i;
