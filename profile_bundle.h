@@ -171,11 +171,6 @@ struct DensityBracket {
   // read. Zero without grey_relative: the curve alone.
   bool has_tilt = false;
   double tilt[3] = {0.0, 0.0, 0.0};
-  // Every grey step of the bracket as the light's density above the film base, and which of them is the mid grey
-  // (grey_steps_light_density, grey_step_index). A white-light bundle has them: a frame's fitted input curves change
-  // which film renders as each step (np_print.h fitted_grey_scale). Empty in a narrow-band bundle.
-  std::vector<std::array<double, 3>> grey_steps;
-  int grey_step = -1;
 };
 
 // The film stock's spectra (the bundle's film_model), on 380-780 nm at 1 nm: the spectral density of a unit amount
@@ -189,7 +184,7 @@ struct FilmModel {
   std::vector<double> neutral[3];             // dye amounts along log_exposure
 };
 
-// The film's grey balance curve (density_matrices.grey_balance_curves, narrow-band bundles): for each light channel c,
+// The film's grey balance curve (density_matrices.grey_balance_curves, under either light): for each light channel c,
 // apd[c][i] is the APD (Academy Printing Density) of the film's grey that has light density start + step i in
 // channel c, rising. From the chart's grey steps of every bracket, computed by the profiling tool.
 struct GreyBalanceCurves {
@@ -231,7 +226,7 @@ struct ProfileBundle {
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
   std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
-  GreyBalanceCurves grey_balance;                 // not present in a white-light bundle or one from before it
+  GreyBalanceCurves grey_balance;                 // not present in a bundle from before it
   std::vector<BundlePrint> prints;                // the bundle's print ICCs, by print material id
   FilmModel film_model;                           // not present in a bundle from before the field
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none

@@ -306,16 +306,16 @@ int parse_options(int ac, char* av[], Options& o) {
           "beside the file uses it.");
   parser.add_argument("--print")
     .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
-          "file). On a TriLED bundle with -P srgb (or another picture output) the output is the print: Auto searches "
+          "file). With -P srgb (or another picture output) the output is the print: Auto searches "
           "the print itself (its mid grey A as a continuous printing exposure, E held, then g and b; DESIGN.md, \"The "
           "print's search\") and the conversion renders it there; a print is made by its own search, so --target, -E, "
           "--gain_g and --gain_b are refused with it, and re-running reproduces it. It needs the bundle's "
           "grey_balance_curves. With a density "
           "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
           "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
-          "or 'all' for those built in. On a TriLED bundle each material's print is searched as for a picture output, "
-          "and its CLF carries that print's A, g and b. On a white-light bundle --print takes a density output and gives the CLFs. Without a name, --print "
-          "lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
+          "or 'all' for those built in. Each material's print is searched as for a picture output, and its CLF "
+          "carries that print's A, g and b. On a white-light bundle the print takes no curve fit. Without a name, "
+          "--print lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
@@ -828,9 +828,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle the curve fit
-  // runs too (--fit_curves stays auto): its curves are not applied either, the print CLF takes its mid grey and
-  // slopes from them (np_print.h FramePrint). A narrow-band bundle has no curve fit.
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle without --print
+  // the curve fit runs too (--fit_curves stays auto): its curves are not applied, and its E, g and b are the suggested
+  // balance. With --print each material's own print search gives its CLF, with no fit. A narrow-band bundle has no
+  // curve fit.
   o.tone_stage = Options::kToneStageOff;
   return 0;
 }

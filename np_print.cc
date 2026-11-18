@@ -1152,45 +1152,6 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   return s;
 }
 
-// The soft knee the white-light conversion renders through (multi_target_optimizer.cc AUTO_KNEE).
-constexpr double kCurveKnee = 0.95;
-
-std::vector<std::array<double, 3>> fitted_grey_scale(const DensityRecord& rec,
-                                                     const std::vector<std::array<double, 3>>& steps) {
-  const double n0 = (rec.bundle ? rec.bundle->normalization_target : 55000.0) / 65535.0;
-  const double gains[3] = {rec.balance_e, rec.balance_e * rec.balance_g, rec.balance_e * rec.balance_b};
-  // color_pipeline.h knee_compress inverted: the identity up to the knee, then knee + delta tanh((w - knee) / delta).
-  auto unknee = [](double v) {
-    if (v <= kCurveKnee) return v;
-    const double delta = 1.0 - kCurveKnee;
-    return kCurveKnee + delta * std::atanh(std::min((v - kCurveKnee) / delta, 0.998));   // knee_compress caps at 0.9999
-  };
-  std::vector<std::array<double, 3>> out(steps.size());
-  for (size_t i = 0; i < steps.size(); ++i) {
-    for (int c = 0; c < 3; ++c) {
-      double v = n0 * std::pow(10.0, -steps[i][c]);      // what the profile renders as this step
-      const int ch = c - 1;                              // the record's curves: green, blue
-      if (ch >= 0 && rec.has_curves && (rec.curve_a[ch] != 0.0 || rec.curve_k[ch] != 0.0) && v < rec.curve_ref[ch]) {
-        // input_curves.h curve_stops, in double, inverted by bisection.
-        const double a = rec.curve_a[ch], k = rec.curve_k[ch], med = rec.curve_u_med[ch], hold = rec.curve_u_hold[ch];
-        auto f = [&](double x) {
-          if (x < hold) return hold * (1.0 + a + k * std::tanh(hold - med)) + (x - hold);
-          return x * (1.0 + a + k * std::tanh(x - med));
-        };
-        const double target = std::log2(v / rec.curve_ref[ch]);
-        double lo = -64.0, hi = 0.0;
-        for (int it = 0; it < 80; ++it) {
-          const double mid = 0.5 * (lo + hi);
-          if (f(mid) < target) lo = mid; else hi = mid;
-        }
-        v = rec.curve_ref[ch] * std::exp2(0.5 * (lo + hi));
-      }
-      out[i][c] = -std::log10(unknee(v) / (gains[c] * n0));
-    }
-  }
-  return out;
-}
-
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err) {
   if (!rec.bundle || !rec.matrix) return err = "no bundle", false;
   const ProfileBundle& bundle = *rec.bundle;
@@ -1276,34 +1237,6 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.grey[c] = 0.0;
     for (int k = 0; k < 3; ++k) p.grey[c] += m[c * 3 + k] * (light[k] + shift);
   }
-  // A white-light frame with fitted curves: the mid grey and the slopes of the grey scale those curves describe.
-  // py-ref: negicc_station/src/print_emulation.py (frame_print)
-  const DensityMatrix& slopes_in = bundle.density_matrix[kDensityApd];
-  if (p.searched && rec.has_curves && !bracket->grey_steps.empty() && slopes_in.present) {
-    const std::vector<std::array<double, 3>> scale = fitted_grey_scale(rec, bracket->grey_steps);
-    const std::array<double, 3>& mid = scale[bracket->grey_step];
-    auto through = [](const double* mat, const double v[3], int row) {
-      return mat[row * 3] * v[0] + mat[row * 3 + 1] * v[1] + mat[row * 3 + 2] * v[2];
-    };
-    // Slopes: 1 / (least-squares ratio of the red, or blue, to the green density of the steps, each less the mid
-    // grey's), in Academy Printing Density, as the profile builder computes a bracket's.
-    double num[3] = {0, 0, 0};
-    for (const std::array<double, 3>& step : scale) {
-      const double rel[3] = {step[0] - mid[0], step[1] - mid[1], step[2] - mid[2]};
-      const double green = through(slopes_in.m, rel, 1);
-      for (int c = 0; c < 3; ++c) num[c] += through(slopes_in.m, rel, c) * green;
-    }
-    if (num[0] > 0.0 && num[1] > 0.0 && num[2] > 0.0) {
-      // The mid grey: the fitted mid step in the file's measure, less the gains' share, so that D + balance - grey is
-      // zero for the film the conversion renders as mid grey (the balance is M [0, -log10 g, -log10 b]).
-      const double gain_part[3] = {0.0, -std::log10(rec.balance_g), -std::log10(rec.balance_b)};
-      for (int c = 0; c < 3; ++c) {
-        p.grey[c] = through(m, mid.data(), c) + through(m, gain_part, c);
-        p.slopes[c] = num[1] / num[c];
-      }
-      p.fitted = true;
-    }
-  }
   out = p;
   return true;
 }
@@ -1386,11 +1319,6 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
                   "gains (the nearest bracket: " + xml(print.bracket) + "); balanced, it prints as the print's mid grey. "
                   "The slopes are that curve's contrast there times one plus the brackets' tilt at A (grey_relative.b, "
                   "linear in A between the brackets): they give the film's grey scale equal contrast in the three "
-                  "channels"
-            : print.fitted
-            ? "The mid grey and the slopes are those of the grey scale the picture conversion renders on the bracket " +
-                  xml(print.bracket) + " with this frame's exposure, gains and fitted input curves: the mid grey "
-                  "prints as the print's mid grey, and the slopes give that grey scale equal contrast in the three "
                   "channels"
             : print.from_curve
                   ? "The mid grey is the film's grey balance curve's grey at the green density of the chart's mid grey on "
@@ -1533,7 +1461,6 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
           {"grey_and_slopes_from", p.print_searched ? "the film's grey balance curve at the print's own mid grey A, "
                                                       "the slopes times one plus the brackets' tilt at A"
-                                   : p.fitted       ? "the grey scale this frame's fitted input curves describe"
                                    : p.from_curve ? "the film's grey balance curve at the bracket's mid grey, the slopes "
                                                     "times one plus the bracket's tilt"
                                                   : "the bracket's entry in the profile set"}};
@@ -1561,12 +1488,11 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
     j["print"] = {
         {"what", "how this frame prints on each print material: the frame's mid grey lands on the print's mid grey, "
                  "and the slopes give the film's grey scale equal contrast in the three channels. With the print's own "
-                 "search on a material (TriLED), the mid grey A, the exposure and the gains are that search's, and the "
-                 "mid grey and the slopes are the film's grey balance curve's at A "
+                 "search on a material, under either light, the mid grey A, the exposure and the gains are that "
+                 "search's, and the mid grey and the slopes are the film's grey balance curve's at A "
                  "(density_matrices.grey_balance_curves). Otherwise the bracket and the exposure are the picture "
                  "conversion's search's; the mid grey and the slopes are the film's grey balance curve's at the "
-                 "bracket's mid grey, or the bracket's in the profile set (density_matrices.brackets), or, for a "
-                 "white-light frame whose input curves were fitted, those of the grey scale the fitted curves describe "
+                 "bracket's mid grey, or the bracket's in the profile set (density_matrices.brackets) "
                  "(grey_and_slopes_from). The curve's slopes are multiplied by one plus the brackets' tilt "
                  "(grey_relative.b) at the mid grey"},
         {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
