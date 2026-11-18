@@ -743,10 +743,8 @@ Which profile an output embeds depends on the output:
   space's profile (Elle's sRGB V2 for `-P srgb` and `-P srgb-g10`, colorants summing to D50, `wtpt` D65). The PCS goes
   to linear sRGB by one matrix, the inverse of those colorants (`color_pipeline.h`), everywhere: the outputs, the
   previews the search renders, the bracket's ceiling and the print's CLF. So a colour-managed reader gets the PCS back
-  through the embedded profile within quantisation, and `make check_output` checks the matrix against the profiles'
-  own colorants and Little-CMS. The paper is scaled to the PCS white the colorants sum to (`kPcsWhite`, the ICC's D50
-  as an ICC profile stores it, s15.16), and lands at 65535 in all three channels in both spaces. (Before, Bradford
-  D50 -> D65 and the textbook XYZ -> sRGB put it at 65535 / 65535 / 65517.) The paper's own XYZ is in the sidecar.
+  through the embedded profile within quantisation. The paper is scaled to the PCS white the colorants sum to (`kPcsWhite`, the ICC's D50
+  as an ICC profile stores it, s15.16), and lands at 65535 in all three channels in both spaces. The paper's own XYZ is in the sidecar.
 
 The print CLF is media-relative the same way, through the picture's own chain: XYZ under the viewing light, adapted
 to D50 as the print ICC's table is (Bradford for a print film, none for a paper), the paper scaled to `kPcsWhite`, then

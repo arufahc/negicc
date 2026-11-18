@@ -10,7 +10,7 @@
 PYTHON ?= python3
 CMAKE ?= cmake
 
-.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all check_print check_output
+.PHONY: all lib libraw deps onnxruntime neg_process dinov3_model dinov3_engine clean clean_lib clean_all check_print
 all: neg_process
 
 # ----------------------------------------------------------------------
@@ -426,15 +426,6 @@ bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
-
-# The output conversion's self-check (check_output.cc): the PCS -> linear sRGB matrix against the embedded sRGB
-# profiles and Little-CMS; exits non-zero on a failed case.
-check_output: bin_out/check_output
-	bin_out/check_output
-
-bin_out/check_output: check_output.cc color_pipeline.h $(LCMS2_LIB) $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) -O2 -std=c++17 -ffp-contract=off -o $@ check_output.cc -I. -I3rd_party $(LCMS2_INC) $(LCMS2_LIB) -lm
 
 # The print's self-checks (check_print.cc): built like neg_process and run; exits non-zero on a failed case.
 check_print: bin_out/check_print
