@@ -616,7 +616,8 @@ bool write_json_sidecar(const Sidecar& sc) {
                                            {"last_move", {num(sc.print_last_move[0], "%.4g"), num(sc.print_last_move[1], "%.4g"),
                                                           num(sc.print_last_move[2], "%.4g")}}};
       } else if (!sc.cached_print_search_json_str.empty()) {
-        // A run that reused <output>.json (the knobs) prints at that run's A: its search's record carries over.
+        // A run that reused <output>.json (the knobs) starts from that run's A (knobs.base.a): its search's record
+        // carries over.
         j["profile"]["print"]["search"] = ordered_json::parse(sc.cached_print_search_json_str);
       }
     }
