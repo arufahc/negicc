@@ -25,7 +25,9 @@ jobs:
 
       - name: Initialize ONNX Runtime submodule
         run: |
-          git submodule update --init --checkout --depth 1 3rd_party/onnxruntime
+          # actions/checkout leaves this repository's token as an extra header for github.com; sent to another
+          # repository it is refused and the clone stops asking for a user name. Clear it for this public clone.
+          git -c http.https://github.com/.extraheader= submodule update --init --checkout --depth 1 3rd_party/onnxruntime
           echo "ORT_COMMIT=$(git -C 3rd_party/onnxruntime rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Cache static ONNX Runtime build
