@@ -135,14 +135,6 @@ std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx
 bool cuda_device_available();
 
 // --------------------------------------------------------------------------------------------------------------------
-// ONNX Runtime CPU runners
-// --------------------------------------------------------------------------------------------------------------------
-
-// Creates an ONNX Runtime CPU runner.
-std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads);
-std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads);
-
-// --------------------------------------------------------------------------------------------------------------------
 // Token heads
 // The small heads that read the DINOv3 tokens alongside the intent adapter, each a plain C++ implementation that
 // needs no runtime of its own: the neutral-patch head (NeutralHead), which gives the white-light curve fit its neutral

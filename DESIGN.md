@@ -784,9 +784,7 @@ S_c           = (k_green / k_c) (1 + t_c(A)),   k_c = Σ_j M_cj dn_j/dA      (S_
 equal contrast in the three channels. With `--print` on a TriLED bundle the density run searches each material's print
 (5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is
 then computed from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The print CLF is
-relative to the paper's white like the print ICC. `tools/check_print_clf.py` applies a CLF to the density file and
-compares it with the picture (CIEDE2000 at 1000 pixels, the CLF applied at full resolution before both are shrunk in
-linear light).
+relative to the paper's white like the print ICC.
 
 | Parameter | Value | Purpose |
 |---|---|---|

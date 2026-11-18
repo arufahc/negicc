@@ -282,7 +282,7 @@ void otsu(const std::vector<float>& values, float& t, double& m_lo, double& m_hi
     const long w1 = w0[kBins - 1] - w0[i];
     const double m1 = (s0[kBins - 1] - s0[i]) / (double)std::max(w1, 1L);
     const double d = m0 - m1;
-    const double between = (double)(w0[i] * w1) * (d * d);
+    const double between = (double)w0[i] * (double)w1 * (d * d);   // in double: long is 32 bits on Windows
     if (i == 0 || between > best_between) {
       best = i;
       best_between = between;
