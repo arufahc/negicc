@@ -195,7 +195,7 @@ struct ParamSearchOptions {
   int pin_target = -1;
   unsigned pin_mask = 0;
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
-  // neg_process's --probe_intent (a measurement aid for negicc-station's goal harness): when probe_path is set, the
+  // neg_process's --probe_intent (a measurement aid): when probe_path is set, the
   // search writes what the intent network predicts from chosen renders to that JSON file and stops after its bootstrap,
   // before screening (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the bootstrap's
   // gains (and at the E its window clamps it to, where that differs), then every probe_params set (target index, E in

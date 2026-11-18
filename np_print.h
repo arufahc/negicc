@@ -338,7 +338,7 @@ void remove_print_clfs(const DensityPrints& prints);
 // (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print
 // material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3
 // table, identity output curves), so the conversion and the output run it as they run them. The bundle carries one
-// print ICC per print material (print_profiles, built by negicc-station src/print_icc.py when the bundle was saved);
+// print ICC per print material (print_profiles, built by the profiling tool when it saved the bundle);
 // its table serves every bracket, and each bracket's three input curves are computed here:
 //
 //     curve_c(v) = Paper_c((G_c(-log10(unknee(v) / n0)) - A_mid) (1 + b_c))
@@ -355,10 +355,9 @@ void remove_print_clfs(const DensityPrints& prints);
 // and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none for a paper).
 // A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is computed
 // here, gets its table computed here (print_table).
-// py-ref: negicc_station/src/print_icc.py
 // The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence,
 // and that and by whom it was modified); the print CLF's description says the same. The profile-building tools write
-// the same text into the bundle's print ICCs (negicc-station src/print_icc.py).
+// the same text into the bundle's print ICCs.
 constexpr const char* kPrintIccCopyright =
     "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
     "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
@@ -408,7 +407,7 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
 std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
                                      const std::string& description, const std::string& copyright,
                                      const std::array<int, 6>& date);
-// The date a bundle's print ICCs carry: its station file's timestamp (profile_<Key>_<YYYYMMDD>_<HHMMSS>), else
+// The date a bundle's print ICCs carry: its source file's timestamp (profile_<Key>_<YYYYMMDD>_<HHMMSS>), else
 // 2026-01-01 00:00:00.
 std::array<int, 6> bundle_date(const ProfileBundle& bundle);
 // The SHA-256 of bytes, as 64 lowercase hex digits.

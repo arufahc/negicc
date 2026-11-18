@@ -190,7 +190,7 @@ struct FilmModel {
 
 // The film's grey balance curve (density_matrices.grey_balance_curves, narrow-band bundles): for each light channel c,
 // apd[c][i] is the APD (Academy Printing Density) of the film's grey that has light density start + step i in
-// channel c, rising. From the chart's grey steps of every bracket (negicc-station src/print_icc.py).
+// channel c, rising. From the chart's grey steps of every bracket, computed by the profiling tool.
 struct GreyBalanceCurves {
   bool present = false;
   double start = 0.0, step = 0.01;

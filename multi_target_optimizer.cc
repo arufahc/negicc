@@ -1422,7 +1422,7 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   return true;
 }
 
-// The knobs on a print (negicc #120; station designs/print_search_ways.md, "The knobs on a print"): brightness moves the print's mid grey A (its
+// The knobs on a print (negicc #120): brightness moves the print's mid grey A (its
 // curves recomputed at A), tint and warmth move g and b (in the print's curves), E held. The grey is the film point the
 // print at (a0, g0, b0) renders as neutral L* 50; the solve finds (A, g, b) so that it renders at the target through the
 // print at (A, g, b). Newton on (A, ln g, ln b) with central differences (kPrintKnobDA in A, GreyPoint's FD_STEP in
@@ -2044,7 +2044,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // (tourney_score); on TriLED among the converged runs when any converged, on white light regardless of convergence.
   // The result is taken only if it clips at most 0.5 percentage point more, does not darken the midtones past what
   // the scene allows, and moves to a later bracket or raises E by more than 2%.
-  // The thresholds are negicc-station's.
+  // The thresholds are stated values, not derived (DESIGN.md 4.2, "Limits").
   // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
   // E: it only moves E or the bracket.
   if (out.clip_fallback != ClipFallbackOutcome::kTaken && bundle.targets.size() > 1 && !pin_e) {
