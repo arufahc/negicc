@@ -753,6 +753,7 @@ class SearchFrame {
   }
 
   const InnerCrop& inner_crop() const { return crop_; }
+  const FrameStats& stats() const { return stats_; }
   // For --probe_intent: the preview's trained cells (trained_cells_lab), what the residual reads and what the network
   // is trained to predict.
   std::vector<float> patch_lab(const std::vector<uint8_t>& preview) const {
@@ -773,7 +774,6 @@ class SearchFrame {
     intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
     return lab;
   }
-  const FrameStats& stats() const { return stats_; }
   const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
@@ -1444,10 +1444,10 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
                        double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
                        PrintKnobResult& out) {
-  constexpr double kPrintKnobDA = 1e-3;      // APD: the step of d Lab / d A (new constant, declared)
-  constexpr double kPrintKnobMaxDA = 0.1;    // APD: the largest Newton step in A (new constant: the paper's curve is
+  constexpr double kPrintKnobDA = 1e-3;      // APD: the step of d Lab / d A
+  constexpr double kPrintKnobMaxDA = 0.1;    // APD: the largest Newton step in A (the paper's curve is
                                              // steep, and a full step overshoots there)
-  constexpr int kPrintKnobIter = 30;         // Newton iterations at most (new constant, declared)
+  constexpr int kPrintKnobIter = 30;         // Newton iterations at most
   constexpr double FD_STEP = 0.05, MAX_LOG_STEP = 0.25;   // ln g, ln b: GreyPoint's own values
   constexpr float TOLERANCE = 0.02f;         // GreyPoint's: every Lab component within it ends the solve
   constexpr float REACHABLE = 0.25f;         // as solve_grey_knobs
@@ -1591,6 +1591,32 @@ void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   pass_audit().clips++;
   const InRenderer in_renderer;
   negicc::cpu_highlight_clip(a);
+}
+
+// For --probe_intent: the mean of a flat (c0, c1, c2) cell vector per channel, and writing the probe file.
+static std::vector<double> probe_mean3(const std::vector<float>& v) {
+  double s[3] = {0, 0, 0};
+  const size_t n = v.size() / 3;
+  for (size_t i = 0; i < n; ++i)
+    for (int c = 0; c < 3; ++c) s[c] += v[i * 3 + c];
+  // No cells: NaN, which the JSON writes as null, so that "no cells" stays apart from a black, neutral Lab.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  return n ? std::vector<double>{s[0] / n, s[1] / n, s[2] / n} : std::vector<double>{nan, nan, nan};
+}
+
+static bool write_probe_file(const std::string& path, const nlohmann::json& doc, size_t n_renders, bool verbose) {
+  std::ofstream f(path);
+  if (!f) {
+    std::cerr << "ERROR! Cannot write the probe file " << path << std::endl;
+    return false;
+  }
+  f << doc.dump() << "\n";
+  if (!f) {
+    std::cerr << "ERROR! Cannot write the probe file " << path << std::endl;
+    return false;
+  }
+  if (verbose) std::cout << "Auto: probe: " << n_renders << " renders written to " << path << "\n";
+  return true;
 }
 
 // Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
@@ -1785,14 +1811,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // is the screening's field and the frame's lightness wish.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
-  auto mean_field = [&](const std::vector<Depth>& ds, const Enclosure& alone, float e_alone, std::vector<float>& mu,
-                        std::vector<float>& sig) {
-    std::vector<std::pair<int, float>> renders;
-    if (ds.empty() || pin_e) {
-      renders.push_back({alone.target_idx, e_alone});
-    } else {
-      for (const auto& d : ds) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
-    }
+  // The bootstrap's renders, (bracket, E) each, at the bootstrap gains.
+  std::vector<std::pair<int, float>> renders;
+  if (depths.empty() || pin_e) {
+    renders.push_back({cand1.target_idx, e1_init});
+  } else {
+    for (const auto& d : depths) renders.push_back({d.cand.target_idx, std::clamp(d.e_met, d.lo, d.hi)});
+  }
+  auto mean_field = [&](std::vector<float>& mu, std::vector<float>& sig) {
     std::vector<float> m, sg;
     for (size_t k = 0; k < renders.size(); ++k) {
       fr.render_preview(renders[k].first, {renders[k].second, boot_g, boot_b}, preview);
@@ -1810,7 +1836,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     if (verbose) std::cout << "Auto: bootstrap field averaged over " << renders.size() << " render(s)\n";
     return true;
   };
-  if (!mean_field(depths, cand1, e1_init, mu1, sig1)) return false;
+  if (!mean_field(mu1, sig1)) return false;
   fr.set_lightness_wish(mu1, sig1);
 
   // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
@@ -1818,22 +1844,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     nlohmann::json recs = nlohmann::json::array();
     std::vector<uint8_t> pv;
     std::vector<float> mu, sg;
-    auto mean3 = [](const std::vector<float>& v) {
-      double s[3] = {0, 0, 0};
-      const size_t n = v.size() / 3;
-      for (size_t i = 0; i < n; ++i)
-        for (int c = 0; c < 3; ++c) s[c] += v[i * 3 + c];
-      return std::vector<double>{s[0] / n, s[1] / n, s[2] / n};
-    };
     auto record = [&](const char* kind, int set_idx, float stop, int target_idx, const ConversionParams& cp) -> bool {
       fr.render_preview(target_idx, cp, pv);
       if (!fr.predict(pv, mu, sg)) return false;
       const std::vector<float> lab = fr.patch_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
       recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
                       {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
-                      {"shoulder", cp.shoulder}, {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)},
-                      {"optimiser_render", mean3(opt)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab},
-                      {"optimiser_cells", opt}});
+                      {"shoulder", cp.shoulder}, {"wish", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
+                      {"render", probe_mean3(lab)}, {"optimiser_render", probe_mean3(opt)}, {"mu", mu},
+                      {"sigma_cells", sg}, {"render_cells", lab}, {"optimiser_cells", opt}});
       return true;
     };
     int k = 0;
@@ -1854,17 +1873,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         if (!record("params", (int)si, stop, t, cp)) return false;
       }
     }
-    const nlohmann::json doc = {{"grid_w", stats.grid_w}, {"grid_h", stats.grid_h}, {"e_norm", out.e_norm},
-                                {"has_crosstalk", bundle.has_crosstalk}, {"bootstrap_target", cand1.target_idx},
-                                {"bootstrap_e", e1_init}, {"records", recs}};
-    std::ofstream f(opts.probe_path);
-    if (!f) {
-      std::cerr << "ERROR! Cannot write the probe file " << opts.probe_path << std::endl;
-      return false;
-    }
-    f << doc.dump() << "\n";
+    const nlohmann::json doc = {{"search", "scene"}, {"grid_w", stats.grid_w}, {"grid_h", stats.grid_h},
+                                {"e_norm", out.e_norm}, {"has_crosstalk", bundle.has_crosstalk},
+                                {"bootstrap_target", cand1.target_idx}, {"bootstrap_e", e1_init}, {"records", recs}};
+    if (!write_probe_file(opts.probe_path, doc, recs.size(), verbose)) return false;
     out.probed = true;
-    if (verbose) std::cout << "Auto: probe: " << recs.size() << " renders written to " << opts.probe_path << "\n";
     return true;
   }
 
@@ -2068,12 +2081,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   //   tier 2: median L* >= 48 and >= 7.5% above 242 in the worst channel, or, on bracket index 3 and above, >= 11%
   //           above 235 in the worst channel.
   // When the chosen bracket is feasible, E is raised toward the bracket's e_min by at most 0.15 stop (a nudge, not a
-  // re-solve: the loop's intent stays close). When it is not, the bootstrap field (the first one when no bracket
-  // metered), the screening and the tournament run again on the same windows with the enclosure penalties in place of
-  // the pull toward the centre (pullback_search), and the runs are ranked by the enclosure-regularised residual
-  // (tourney_score); on TriLED among the converged runs when any converged, on white light regardless of convergence.
-  // The result is taken only if it clips at most 0.5 percentage point more, does not darken the midtones past what
-  // the scene allows, and moves to a later bracket or raises E by more than 2%.
+  // re-solve: the loop's intent stays close). When it is not, the screening and the tournament run again on the
+  // bootstrap field (the first one, which is also the field when no bracket metered) and the same windows with the
+  // enclosure penalties in place of the pull toward the centre (pullback_search), and the runs are ranked by the
+  // enclosure-regularised residual (tourney_score); on TriLED among the converged runs when any converged, on white
+  // light regardless of convergence. The result is taken only if it clips at most 0.5 percentage point more, does not
+  // darken the midtones past what the scene allows, and moves to a later bracket or raises E by more than 2%.
   // The thresholds are stated values, not derived (DESIGN.md 4.2, "Limits").
   // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
   // E: it only moves E or the bracket.
@@ -2096,24 +2109,20 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         out.highlight_pullback = true;
       }
     } else if ((!has_enc_chosen || !enc_chosen.feasible) && (tier1_hi || tier2_hi)) {
-      // The re-search window of each metered bracket: its usable range, as in the main search (bracket_enclosure). The
-      // re-search differs from the main search by its penalties on E outside the calibrated range, not by its window.
-      std::vector<Depth> depths_res;
-      for (const auto& c : pool) {
-        const auto d = std::find_if(depths.begin(), depths.end(),
-                                    [&](const Depth& x) { return x.cand.target_idx == c.target_idx; });
-        if (d == depths.end()) continue;
-        depths_res.push_back(metered(c, d->e_met, c.search_lo, c.search_hi));
-      }
-      // The re-search's screening field: the mean over its metered brackets' renders, as the first one (the frame's
-      // lightness wish stays the first field's).
-      std::vector<float> mu_res = mu1, sig_res = sig1;
-      if (!depths_res.empty()) {
-        deepest_first(depths_res);
-        if (!mean_field(depths_res, depths_res[0].cand, depths_res[0].e_met, mu_res, sig_res)) return false;
+      // The re-search screens the same metered brackets on the same windows (their usable range, bracket_enclosure)
+      // against the same bootstrap field as the main search: it differs from it by its penalties on E outside the
+      // calibrated range, not by its window or its field, so the field is not predicted again. The screening starts,
+      // as the first one did, from the bootstrap renders' corrections, which the tournament has since replaced: each
+      // metered bracket is rendered again at its bootstrap parameters to measure its correction (no inference). When no
+      // bracket metered, the bootstrap rendered one bracket and the corrections stay those the tournament left.
+      if (!depths.empty()) {
+        for (const auto& r : renders) {
+          fr.render_preview(r.first, {r.second, boot_g, boot_b}, preview);
+          fr.update_correction(r.first, {r.second, boot_g, boot_b}, preview);
+        }
       }
       std::vector<FixedPointResult> res_adaptive;
-      if (!tournament(screen_all(depths_res, mu_res, sig_res, true), true, res_adaptive)) return false;
+      if (!tournament(screen_all(depths, mu1, sig1, true), true, res_adaptive)) return false;
       if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
@@ -2409,7 +2418,7 @@ class WhiteLightFitCore {
         kept_grid_.insert(kept_grid_.end(), d_.grid + i * 3, d_.grid + i * 3 + 3);
         try_idx.push_back(i);
       }
-      // Only with enough picture left (at least 16 cells and a quarter of the grid, enough to constrain the fit's six
+      // Only with enough picture left (at least 16 cells and a quarter of the grid, enough to constrain the fit's four
       // numbers); else the whole grid.
       if (kept_grid_.size() / 3 >= std::max<size_t>(16, n / 4) && kept_grid_.size() / 3 < n) {
         out_.cells_excluded = (int)(n - kept_grid_.size() / 3);
@@ -3076,7 +3085,10 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       break;
     }
     prev_err = err;
-    // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned).
+    // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned). Every A tried is
+    // aimed at the field minus the correction measured at this step's A above: update_correction keys it by the
+    // print's one target, whose curves change with A, and it is not measured again at each A (that would take a
+    // render each), so the line search takes the correction to change little across the A it tries.
     ConversionParams gb;
     auto loss = [&](double x, ConversionParams& p) {
       set_curves_at(x);
@@ -3141,25 +3153,20 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   // (stops of printing exposure, A + stop log10 2); written beside the search, which goes on to convert.
   if (!opts.probe_path.empty()) {
     nlohmann::json recs = nlohmann::json::array();
-    auto mean3 = [](const std::vector<float>& v) {
-      double sm[3] = {0, 0, 0};
-      const size_t k = v.size() / 3;
-      for (size_t i = 0; i < k; ++i)
-        for (int c = 0; c < 3; ++c) sm[c] += v[i * 3 + c];
-      return std::vector<double>{sm[0] / k, sm[1] / k, sm[2] / k};
-    };
     for (const float stop : opts.probe_stops) {
       const double ap = std::clamp(best_a + stop * kStop, cp.a_lo, cp.a_hi);
+      const double applied_stop = (ap - best_a) / kStop;
       set_curves_at(ap);
       fr.render_preview(0, best, preview);
       if (!fr.predict(preview, mu, sg)) return false;
       const std::vector<float> lab = fr.patch_lab(preview);
-      recs.push_back({{"kind", "params"}, {"stop", stop}, {"a", ap}, {"e", best.e}, {"g", best.g}, {"b", best.b},
-                      {"wish", mean3(mu)}, {"sigma", mean3(sg)}, {"render", mean3(lab)}, {"mu", mu},
-                      {"sigma_cells", sg}, {"render_cells", lab}});
+      recs.push_back({{"kind", "params"}, {"stop", applied_stop}, {"requested_stop", stop}, {"a", ap}, {"e", best.e},
+                      {"g", best.g}, {"b", best.b}, {"wish", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
+                      {"render", probe_mean3(lab)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}});
     }
-    std::ofstream f(opts.probe_path);
-    f << nlohmann::json({{"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a}, {"records", recs}}).dump();
+    const nlohmann::json doc = {{"search", "print"}, {"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a},
+                                {"records", recs}};
+    if (!write_probe_file(opts.probe_path, doc, recs.size(), opts.verbose)) return false;
   }
   set_curves_at(best_a);
   {   // the crop's share with a channel above 1 that the print cuts (above 1.002 linear, a margin over the paper's

@@ -394,15 +394,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // no bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
 // The print's film base held no darker than the picture's thinnest film, for a base that is not a capture (the
 // scan's rebate or statistics, or the bundle's): a base darker than the thinnest film would push thin film past the
-// knee and cut the print's shadows. The factor k = max(1, the largest over the three channels of the inner crop's
+// knee and cut the print's shadows. The factor β = max(1, the largest over the three channels of the inner crop's
 // kBasePercentile point of (X px)_c / fb_c), X the bundle's crosstalk matrix and fb the base in the conversion's film
-// base space (fb_c reads n0 at the print's E). The base the print takes is fb k, its colour kept; on a base already
-// raised k is 1. Every 4th pixel each way.
+// base space (fb_c reads n0 at the print's E). The base the print takes is fb β, its colour kept; on a base already
+// raised β is 1. Every 4th pixel each way.
 float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
 // The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
 // found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
-// conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times k) at the
-// scan's exposure, in the conversion's film base space, and returns k.
+// conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times β) at the
+// scan's exposure, in the conversion's film base space, and returns β.
 float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
                        double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
 
@@ -443,7 +443,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
-// ---- Fitted G/B input curves (negicc-station designs/plan_fit_curves.md, input_curves.h) ----------------------
+// ---- Fitted G/B input curves (input_curves.h) -------------------------------------------------------------------
 
 // Composes the G and B input tables of prof with curves, in place (its own tables, then rebound), so every copy of
 // the bracket's profile (the search's renders, the grey point, the export) is the combined profile. No curves: no
