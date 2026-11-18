@@ -233,16 +233,13 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 // the profile the sRGB outputs embed sum to exactly this, so it is the white the outputs write at full scale (a print's
 // paper is scaled to it). The decimal (0.9642, 1, 0.8249) differs from it in the sixth decimal.
 constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
-// PCS -> linear sRGB in double, for host code (the print's CLF): the same matrix as pcs_to_linear_srgb_unclamped below,
-// whose float literals are these rounded.
-constexpr double kPcsToLinearSrgb[9] = {3.13427485, -1.61727573, -0.490724277, -0.978795611, 1.91616171, 0.0334533327,
-                                        0.0719770074, -0.228984979, 1.40571822};
 // PCS -> linear sRGB: the inverse of the colorants (rXYZ, gXYZ, bXYZ, D50-adapted) of the profile neg_process embeds in
 // its sRGB outputs, Elle Stone's sRGB V2 (3rd_party/elle_icc_profiles; the sRGB-TRC and the gamma 1.0 profiles carry
 // the same colorants). So the codes written mean, through the embedded profile, the PCS they were computed from: a
 // colour-managed reader gets the PCS back within quantisation, and kPcsWhite maps to (1, 1, 1). It replaces Bradford
-// D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it in the fourth decimal. Unclamped; inline
-// so device code can use it.
+// D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it in the fourth decimal. The print CLF
+// keeps the standard sRGB (np_print.cc print_clf_nodes), as it carries no profile. Unclamped; inline so device code
+// can use it.
 NEGICC_HD Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
     return { v.r * 3.13427485f + v.g * -1.61727573f + v.b * -0.490724277f,
              v.r * -0.978795611f + v.g * 1.91616171f + v.b * 0.0334533327f,
