@@ -346,16 +346,12 @@ double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracke
 // curve_grey and curve_slopes at a mid grey A (green APD) in place of a bracket's.
 void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
 void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
-// The bracket whose mid grey is nearest A (null without brackets).
-const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
-// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: the tilt of the bracket nearest A
-// (kPrintTiltLinear false), or the tilt linear in A between the two neighbouring brackets, held beyond the end ones
-// (kPrintTiltLinear true, as shipped: each bracket keeps its own tilt, and linear between them is that without the
-// nearest rule's step at a midpoint). At a bracket's own A_mid both give that bracket's tilt. a_mid and tilt per
-// bracket, in any order; zeros without brackets.
-constexpr bool kPrintTiltLinear = true;
+// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: each bracket has its own tilt,
+// and between two brackets' A_mid the tilt is interpolated linearly in A, held beyond the end ones, so at a bracket's
+// own A_mid it is that bracket's tilt; a bundle with one bracket has that bracket's tilt. a_mid and tilt per bracket,
+// in any order; zeros without brackets.
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
-                   double t[3], bool linear = kPrintTiltLinear);
+                   double t[3]);
 // The same from a bundle's density brackets.
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
 // The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
@@ -406,7 +402,6 @@ struct PrintContinuum {
   double n0 = 1.0;
   std::vector<double> a_mid;                  // per bundle.targets, in its order
   std::vector<std::array<double, 3>> tilt;    // per bundle.targets
-  int nearest(double a) const;                // the bracket whose A_mid is nearest A (the first of a tie)
   void tilt_at(double a, double t[3]) const;  // print_tilt_at over these brackets
   // gains (r, g, b): the print's gains in its curves, after the knee (null: none).
   PrintCurves curves_at(double a, const double gains[3] = nullptr) const;

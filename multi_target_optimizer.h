@@ -143,8 +143,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 //
 // neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
 // pass that runs outside it (PassAudit), on any thread; its picture must equal the conversion without it, bit for bit.
-// tools/check_renderer.sh runs it, and must be run, on a TriLED scan and on a white-light scan with the curve fit,
-// before a change to the search, the curve fit, the tone plan or this interface is merged.
+// Run it, and compare its picture with a plain conversion's, on a TriLED scan and on a white-light scan with -P srgb
+// (the curve fit and the tone plan), before a change to the search, the curve fit, the tone plan or this interface is
+// merged.
 struct PreviewRenderer {
   virtual ~PreviewRenderer() = default;
   virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }

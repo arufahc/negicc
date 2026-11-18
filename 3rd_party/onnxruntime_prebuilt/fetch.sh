@@ -22,7 +22,12 @@ case "$arch" in
 esac
 
 lib="lib/$arch/libonnxruntime.so.1.30.0"
+links() {
+  ln -sf libonnxruntime.so.1.30.0 "lib/$arch/libonnxruntime.so.1"
+  ln -sf libonnxruntime.so.1 "lib/$arch/libonnxruntime.so"
+}
 if [ -f "$lib" ] && echo "$lib_sha  $lib" | sha256sum -c --status; then
+  links
   echo "fetch.sh: $lib is already here"
   exit 0
 fi
@@ -39,6 +44,5 @@ with zipfile.ZipFile(sys.argv[1]) as z, open(sys.argv[2], "wb") as f:
 EOF
 echo "$lib_sha  $lib" | sha256sum -c --status || { rm -f "$lib"; echo "fetch.sh: the library's SHA-256 differs" >&2; exit 1; }
 chmod 755 "$lib"
-ln -sf libonnxruntime.so.1.30.0 "lib/$arch/libonnxruntime.so.1"
-ln -sf libonnxruntime.so.1 "lib/$arch/libonnxruntime.so"
+links
 echo "fetch.sh: $lib"
