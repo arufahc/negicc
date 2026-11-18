@@ -1178,7 +1178,8 @@ int prepare(const Options& o, Setup& s) {
       }
       // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
       // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
-      if (s.fit_curves_active) {
+      // EXPERIMENT (arm C): also for the fit on a white-light print
+      if (s.fit_curves_active || (std::getenv("NEGICC_EXP_PRINT_FIT") && s.white_light && !o.prints.empty())) {
         std::vector<char> file;
         const void* data = nullptr;
         size_t size = 0;
@@ -1663,7 +1664,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // its curves (arm A's print exactly) takes the bracket's place for the fit, which bends the green and blue input
     // curves and moves its own E, g and b (from 1, 1 for the gains) against the intent field predicted again from the
     // print's preview; no roll-off (srgb-linear: a print has no shoulder). The bracket's chart profile is restored.
-    if (std::getenv("NEGICC_EXP_PRINT_FIT") && s.white_light) {
+    const char* exp_arm = std::getenv("NEGICC_EXP_PRINT_FIT");
+    if (exp_arm && std::string(exp_arm) != "B" && s.white_light) {
       const int idx = scan.auto_res.target_idx;
       ParsedFilmProfile chart = bundle.targets[idx].film_prof;
       ParsedFilmProfile& t = bundle.targets[idx].film_prof;
@@ -1703,6 +1705,55 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       log_info("EXPERIMENT print fit: E %.4f -> %.4f, g 1 -> %.4f, b 1 -> %.4f (print gains %.4f %.4f kept), curves %s, "
                "fallback %s\n", r.params.e, fit.params.e, fit.params.g, fit.params.b, gains[1], gains[2],
                fit.fit.curves.active() ? "bent" : "none", fit.fallback ? fit.fallback : "none");
+      log_info("EXPERIMENT print fit diag: anchors %d, evidence m %.3f, shrink %.3f, span_L %.2f, neutral_auto m %d a %.3f b %.3f, "
+               "neutral_export m %d a %.3f b %.3f, loss auto L %.3f ab %.3f -> fit L %.3f ab %.3f, repredicted %d, guard_p %s, "
+               "curves aG %.4f kG %.4f aB %.4f kB %.4f\n", (int)fit.neutral_anchors, fit.fit.evidence, fit.fit.shrink, fit.fit.span_L,
+               fit.neutral_auto.m, fit.neutral_auto.a_bar, fit.neutral_auto.b_bar, fit.neutral_export.m, fit.neutral_export.a_bar,
+               fit.neutral_export.b_bar, fit.parts_auto.L, fit.parts_auto.ab, fit.parts_fit.L, fit.parts_fit.ab,
+               (int)fit.intent_repredicted, fit.guard_p_source, fit.fit.curves.a[0], fit.fit.curves.k[0], fit.fit.curves.a[1],
+               fit.fit.curves.k[1]);
+    }
+    // EXPERIMENT (arm B; NEGICC_EXP_PRINT_FIT=B): the scene conversion's search and curve fit as today (through the
+    // chart profile), its correction relative to the scene's Auto composed in front of the print: the gain ratios
+    // g_fit / g_auto, b_fit / b_auto join the print's gains after the knee; the fit's curve, anchored at the fit's
+    // E, g, b in the scene's units, re-anchored to the print's input (ref / (E_fit g_fit,c)), so below the knee it bends
+    // the film as on the scene. The print's A is its search's (NEGICC_EXP_PRINT_A moves it, for a level match).
+    if (exp_arm && std::string(exp_arm) == "B" && s.white_light) {
+      ParamSearchResult sr;
+      if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, sr)) return false;
+      const int idx = sr.target_idx;
+      ParsedFilmProfile chart = bundle.targets[idx].film_prof;
+      ParamSearchOptions fso = opts;
+      fso.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
+      fso.film_base_is_rebate = scan.film_base.is_rebate();
+      negicc::CurveFitOptions fo;
+      WhiteLightFitResult sf;
+      const bool ok = run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fso, sr, fo, ENCODE_SRGB, nullptr, sf);
+      bundle.targets[idx].film_prof = chart;
+      bundle.targets[idx].film_prof.rebind_pointers();
+      if (!ok) {
+        log_error("EXPERIMENT: the scene's curve fit failed\n");
+        return false;
+      }
+      negicc::InputCurves cv = sf.fit.curves;
+      cv.ref[0] /= sf.params.e * sf.params.g;
+      cv.ref[1] /= sf.params.e * sf.params.b;
+      s.exp_print_fit = true;
+      s.exp_fit_prescaled = true;
+      s.exp_fit_curves = cv;
+      s.exp_fit_params = sf.params;
+      s.exp_fit_params.e = 1.0f;
+      s.exp_fit_params.g = sf.params.g / sr.params.g;
+      s.exp_fit_params.b = sf.params.b / sr.params.b;
+      log_info("EXPERIMENT scene fit for the print: scene Auto %s E %.4f g %.4f b %.4f -> fit E %.4f g %.4f b %.4f; "
+               "correction g x%.4f b x%.4f, curves aG %.4f kG %.4f aB %.4f kB %.4f, anchors %d m %.1f\n",
+               bundle.targets[idx].name.c_str(), sr.params.e, sr.params.g, sr.params.b, sf.params.e, sf.params.g,
+               sf.params.b, s.exp_fit_params.g, s.exp_fit_params.b, cv.a[0], cv.k[0], cv.a[1], cv.k[1],
+               (int)sf.neutral_anchors, sf.fit.evidence);
+    }
+    if (const char* pa = std::getenv("NEGICC_EXP_PRINT_A")) {
+      s.print_a = std::atof(pa);
+      log_info("EXPERIMENT print A set to %.6f\n", s.print_a);
     }
     {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
@@ -2865,8 +2916,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
           const double both[3] = {1.0, gains[1] * s.exp_fit_params.g, gains[2] * s.exp_fit_params.b};
           s.print_cont.set_curves_at(s.print_a, c.film_prof, both);
           negicc::InputCurves cv = s.exp_fit_curves;
-          cv.ref[0] /= s.exp_fit_params.g;
-          cv.ref[1] /= s.exp_fit_params.b;
+          if (!s.exp_fit_prescaled) {
+            cv.ref[0] /= s.exp_fit_params.g;
+            cv.ref[1] /= s.exp_fit_params.b;
+          }
           apply_input_curves(c.film_prof, cv);
         }
         set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));

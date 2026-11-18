@@ -155,6 +155,7 @@ struct Setup {
   // EXPERIMENT (white-light print, arm C; NEGICC_EXP_PRINT_FIT=1): the curve fit run on the print at its search's A,
   // composed into the print the conversion renders, with the fit's E, g and b in the matrix.
   bool exp_print_fit = false;
+  bool exp_fit_prescaled = false;   // arm B: exp_fit_curves' refs already in the print's units
   negicc::InputCurves exp_fit_curves;
   ConversionParams exp_fit_params;
   ParsedFilmProfile curves_base_prof;
