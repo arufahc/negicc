@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The print's two paths against each other (DESIGN.md, "Direct sRGB output: the print ICC", Checks): a TriLED scan
+"""The print's two paths against each other (DESIGN.md, "The density file and its CLF"): a TriLED scan
 converted twice by neg_process, as a print picture (-P srgb --print <material>) and as a density file with the print's
 CLF (-P apd --print <material>); the CLF is applied here to the density file and the result compared with the picture,
 CIEDE2000 per pixel at 1000 px on the long side (the CLF applied at full resolution, then both pictures shrunk in

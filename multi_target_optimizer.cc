@@ -161,8 +161,8 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
   const float usable_capacity_ev = std::log2(tgt_max / tgt_min) + usable_hi_ev + usable_sh_ev;
   r.admissible = std::log2(g_hi / g_lo) <= usable_capacity_ev;
   // Every bracket, feasible or not, is searched over its usable range: no window that differs between brackets, so
-  // no bracket wins or loses because its window let it reach a lightness another's did not (DESIGN.md, "One
-  // lightness wish per frame"). The order is kept for an inadmissible bracket, whose range can invert.
+  // no bracket wins or loses because its window let it reach a lightness another's did not (DESIGN.md, "The
+  // Auto search"). The order is kept for an inadmissible bracket, whose range can invert.
   r.usable_inverted = u_min > u_max;
   r.search_lo = std::min(u_min, u_max);
   r.search_hi = std::max(u_min, u_max);
@@ -782,7 +782,7 @@ class SearchFrame {
 
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
-  // The optimiser's correction for one bracket (DESIGN.md, "The picture the search scores"): intent_loss renders the
+  // The optimiser's correction for one bracket (DESIGN.md, "The Auto search"): intent_loss renders the
   // patch-averaged camera RGB, and rendering an average is not the average of the render, so its cells read darker
   // than the picture's (2.1 L* on TriLED, 1.7 on white LED, differently per frame) and bluer. After each preview of a
   // bracket, the trained cells of that preview minus the optimiser's cells at the same parameters are kept, and the
@@ -863,8 +863,8 @@ class SearchFrame {
   // The tone heads' input from the last predict() (FixedPointResult::tone_features; empty without the token spread).
   const std::vector<float>& last_tone_features() const { return last_tone_features_; }
   // The frame's one lightness wish: the L* channel (mu and sigma) of the bootstrap field. Every fixed-point loop
-  // scores and searches L* against it, while a* and b* are re-predicted from each step's render (DESIGN.md, "One
-  // lightness wish per frame").
+  // scores and searches L* against it, while a* and b* are re-predicted from each step's render (DESIGN.md, "The
+  // Auto search").
   void set_lightness_wish(const std::vector<float>& mu, const std::vector<float>& sigma) {
     const size_t n = mu.size() / 3;
     wish_mu_l_.resize(n);
