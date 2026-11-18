@@ -100,7 +100,9 @@ embedded profile or 8-bit samples is refused there.
 Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
 (`np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
 third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
-the capture's own channel is kept; a TIFF gives its channel as it is read. When all three captures record shutter and
+the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit linear camera RGB with
+no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single TIFF is under an
+RGB-LED profile set). When all three captures record shutter and
 ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
 half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame, it is the mean of each 2×2 block
 of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
@@ -756,19 +758,19 @@ it has not been checked against a data sheet.
 ## 5.8 The film base of a print
 
 A print's level is relative to the film base (5.6, step 1), so a base darker than the film's thinnest areas would
-push thin film past the knee and cut the shadows. On a TriLED scan with `--print`, when the base is not a capture
-(the rebate, the thinnest film or the bundle's), it is held no darker than the picture's thinnest film
+push thin film past the knee and cut the shadows. On a scan with `--print` under either light, when the base is not
+a capture (the rebate, the thinnest film or the bundle's), it is held no darker than the picture's thinnest film
 (`multi_target_optimizer.cc`: `print_base_floor`): its level is multiplied by
 
 ```
 β = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
 ```
 
-with the colour kept. 99.5 % is the base detector's own percentile (`kBasePercentile`). The crop is the picture's
-frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the frame detector's crop when its confidence is
-at least 0.5, else the whole scan. The raised base serves the whole conversion, the density file included, so its
-CLF still prints the picture's print. The sidecar records the base as found and `β` (`film_base.print_floor`). A
-captured base is taken as it is.
+with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile
+(`kBasePercentile`). The crop is the picture's frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the
+frame detector's crop when its confidence is at least 0.5, else the whole scan. The raised base serves the whole
+conversion, the density file included, so its CLF still prints the picture's print. The sidecar records the base as
+found and `β` (`film_base.print_floor`). A captured base is taken as it is.
 
 ## 5.9 The density file and its CLF
 
@@ -837,7 +839,7 @@ print's own search (5.6) runs on the white-light decode, and each material's CLF
 |---|---|---|
 | Light assumed | D65, CIE 1931 2°, linear Rec.2020 | Stands in for the light's and the camera's spectra. |
 | `F` | the narrow-band set's | It depends on the film and the measure alone. |
-| Film base | the rebate, else the thinnest film | `--film_base` with a capture is for TriLED scans. |
+| Film base | the rebate, else the thinnest film, held no darker than the picture's thinnest film (5.8) | `--film_base` with a capture is for TriLED scans. |
 
 **Limits.** The assumption is as good as the camera's colour matrix. Over the 2016 chart patches of each stock read
 under both lights, the APD of a white-light reading is 0.03 to 0.09 RMS from the narrow-band reading, 1.5 to 2 times
@@ -895,8 +897,9 @@ The camera has no spectral data here; the crosstalk correction stands in for its
   densitometer.
 - **The print material is a model.** Its curves, dyes and sensitivity are spektrafilm's, the lamp is a blackbody, and
   no print has been compared with a real one.
-- **A print without a captured base** keeps the estimate's colour in its shadows; a capture of the roll's unexposed
-  film is the remedy, and the warning says so.
+- **A print on an estimated base** keeps the estimate's colour in its shadows; on TriLED a capture of the roll's
+  unexposed film (`--film_base`) is the remedy, and on white light a crop that shows some rebate (`--roi`), as the
+  warning says.
 - **A print without `--roi`** searches the whole scan, bare light included; it says so.
 - **The tilt removes the film's own drift** of its greys from shadows to highlights (`t_c` in the print ICC's curves,
   with it the slopes `S` in the CLF). Whether a print should keep it has not been judged.

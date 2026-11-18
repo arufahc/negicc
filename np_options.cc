@@ -167,8 +167,9 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
 
 int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
-    // --print alone lists the print materials built in, and does nothing else. Given a conversion's other arguments
-    // without its name, it is left to the parser, which says that --print needs one.
+    // --print alone lists the print materials built in, and does nothing else. Given with a conversion's other
+    // arguments and no material (at the end of the command line or before another flag), it is refused here so that
+    // the next flag is not taken as the material's name.
     if (strcmp(av[i], "--print") == 0 && ac == 2) {
       for (const PrintMaterial& m : builtin_print_materials()) {
         log_info("--print %s  (%s)\n", m.id.c_str(), m.name.c_str());
@@ -262,8 +263,9 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--brightness")
     .help("Brightness offset after the parameter search and the curve fit, in stops of the reference grey's "
           "luminance (as in negicc-station). It moves the result, whether searched or given (-E sets what it starts "
-          "from, not the final exposure), and the tone curve is applied on top unchanged. Reuses the Auto or DINOv3 "
-          "result in <output>.json when this build wrote it from the same input files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
+          "from, not the final exposure), and the tone curve is applied on top unchanged; on a print (--print) it "
+          "moves the print's mid grey A while E is held (a density output takes it only with --print, for its CLFs). "
+          "Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")
@@ -311,8 +313,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "print's search\") and the conversion renders it there; a print is made by its own search, so --target, -E, "
           "--gain_g and --gain_b are refused with it, and re-running reproduces it. It needs the bundle's "
           "grey_balance_curves. With a density "
-          "output (-P statusm, rp180 or apd) the density file is written as before, and beside it goes a CLF per "
-          "material that renders it as that print, as sRGB (<output>.<print>.clf); give it once per print material, "
+          "output (-P statusm, rp180 or apd) the density file is written, and beside it goes a CLF per "
+          "material that renders it as that print, as sRGB (<output>.<material>.clf); give it once per print material, "
           "or 'all' for those built in. Each material's print is searched as for a picture output, and its CLF "
           "carries that print's A, g and b. On a white-light bundle the print takes no curve fit. Without a name, "
           "--print lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
@@ -406,7 +408,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "(unless given), and the curve fit and the tone stage run. The clip fallback, which only changes the "
           "bracket, is left out. With a TriLED bundle the single-bracket solver runs on it.")
     .default_value(std::string(""));
-  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
+  // Fitted G/B input curves (input_curves.h).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
@@ -608,6 +610,7 @@ int parse_options(int ac, char* av[], Options& o) {
     // else the whole entry is the intent adapter's path (so "adapter_dir" and drive letters such as "C:\..." keep
     // their meaning). A word of two or more letters before the colon that is not a head is an error.
     const std::string v = parser.get<std::string>("--dino");
+    o.dino_arg = v;
     std::stringstream ss(v);
     std::string entry;
     bool seen[3] = {false, false, false};
@@ -808,14 +811,19 @@ int parse_options(int ac, char* av[], Options& o) {
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given},  {"-E", o.exposure_given},
-        {"--gain_g", o.gain_g_given},  {"--gain_b", o.gain_b_given},
+        {"--target", o.target_given},
+        {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},
+        {"--gain_b", o.gain_b_given},
         // the knobs move a print's CLF (each material's own print search): they apply with --print
         {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
         {"--tint", parser.is_used("--tint") && o.prints.empty()},
-        {"--warmth", parser.is_used("--warmth") && o.prints.empty()}, {"--dino", parser.is_used("--dino")},
-        {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
-        {"--fit_curves", fit_set},             {"--tone_stage", tone_set},
+        {"--warmth", parser.is_used("--warmth") && o.prints.empty()},
+        {"--dino", parser.is_used("--dino")},
+        {"--dino_backend", parser.is_used("--dino_backend")},
+        {"--dino_iters", o.dino_iters_given},
+        {"--fit_curves", fit_set},
+        {"--tone_stage", tone_set},
     };
     for (const Refused& r : refused) {
       if (r.used) {

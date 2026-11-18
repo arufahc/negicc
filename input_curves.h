@@ -1,7 +1,7 @@
 #ifndef NEGICC_INPUT_CURVES_H
 #define NEGICC_INPUT_CURVES_H
 
-// Fitted G and B input curves (negicc-station designs/plan_fit_curves.md): per channel, on the value v entering the
+// Fitted G and B input curves: per channel, on the value v entering the
 // profile's input TRC (after the input matrix and the knee),
 //
 //   u = log2(v / ref)  for v < ref,   s = 1 + a + k tanh((u - u_med) / 1 stop),   v' = ref 2^(u s);   v >= ref: v

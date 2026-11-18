@@ -4,7 +4,7 @@ The print profiles of [spektrafilm](https://github.com/andreavolpato/spektrafilm
 commit `3bb2c2d2801ff68b92019cf1dbcbb133d60832bc` (`src/spektrafilm/data/profiles/`). `SHA256SUMS` has each file's
 hash.
 
-`neg_process` builds them in. With `--print <material> -P srgb` on an RGB-LED scan it computes from one of them a
+`neg_process` builds them in. With `--print <material> -P srgb` on a profile set it computes from one of them a
 print ICC and writes the print itself as a picture; for a density file written with `--print <material>` it computes
 a CLF that renders the file as a print on that material (`np_print.h`, and "Print emulation" in `DESIGN.md`).
 `--print` alone lists them.
@@ -23,7 +23,7 @@ a CLF that renders the file as a print on that material (`np_print.h`, and "Prin
 **Licence.** The profiles are under CC BY-SA 4.0 (`SPEKTRAFILM_LICENSE.txt`), not under negicc's licence. A CLF that
 `neg_process` writes with one carries that notice for its two tables, the curve per layer and the colour cube, which
 derive from this data. Its matrices are computed and are not under that licence, and neither are the pictures made
-through a CLF. The same holds for a print ICC: those of the RGB-LED profile sets (`profiles/*/print_<material>.icc`),
+through a CLF. The same holds for a print ICC: those of the profile sets (`profiles/*/print_<material>.icc`),
 and those `neg_process` computes for a material given as a file, carry the notice in their copyright tag for their
 table and input curves, which derive from this data; the pictures made through one are not under that licence.
 
