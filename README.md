@@ -163,7 +163,7 @@ lab scans:
 
 ![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
 
-*Made at commit `16aeec2` (2026-11-04), with an earlier intent adapter than the one shipped now.*
+*As committed in `e7fa5a1` (2026-10-31), with an earlier intent adapter than the one shipped now.*
 
 A conversion goes through these steps:
 
@@ -186,7 +186,7 @@ the uniform colour cast that comes from the LED lights being set to different po
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
-*Made at commit `16aeec2` (2026-11-04), with an earlier intent adapter than the one shipped now.*
+*As committed in `9f9c790` (2026-10-31), with an earlier intent adapter than the one shipped now.*
 
 #### Curve fitting (white light only)
 

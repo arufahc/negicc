@@ -31,12 +31,12 @@
 #include "embedded_data.h"
 #include "np_log.h"
 
-// ---- BEGIN CIE TABLES (copied from the tables of the companion profiling tool) ----
+// ---- BEGIN CIE TABLES (written by the companion profiling tools, not in this repository) ----
 // The CIE 1931 2 degree standard observer and the relative spectral power of CIE illuminants D50 and D55, on
 // 380-780 nm at 1 nm, as colour-science 0.4.7 gives them (D50 and D55 interpolated from the CIE's 5 nm tables).
 // Three z_bar values at 650-652 nm are interpolation residue of the order of 1e-22, one of them negative, where the
-// CIE's table is 0. No tool in this repository writes or checks this block: a change to the tables is made by hand.
-// Used for the colour of a print.
+// CIE's table is 0. Used for the colour of a print. export_cie_header.py of the companion profiling tools writes
+// and checks this block from a CSV whose SHA-256 begins b69d080c7b908b1e; nothing in this repository does.
 constexpr int kCieSamples = 401;
 constexpr double kCieFirstNm = 380.0;   // 1 nm steps
 
@@ -1213,7 +1213,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   // The exposure E multiplies the light's channels before the bracket's profile reads them: the film that the
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
   // py-ref: negicc_station/src/print_emulation.py (frame_grey)
-  // A narrow-band bundle with the film's grey balance curve: the mid grey and the slopes are the curve's, as in its
+  // A bundle with the film's grey balance curve: the mid grey and the slopes are the curve's, as in its
   // print ICCs.
   const double* m = rec.matrix->m;
   const double shift = std::log10(p.exposure);
@@ -1231,8 +1231,8 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   } else if (bundle.grey_balance.present && bundle.density_matrix[kDensityApd].present) {
     curve_grey(bundle, *bracket, light);
     curve_slopes(bundle, *bracket, p.slopes);
-    // The bracket's tilt relative to the curve, as its print ICC's curves take it: (G_c - A_mid)(1 + b_c) has the
-    // slope (1 + b_c) times the curve's at the mid grey.
+    // The bracket's tilt relative to the curve, as its print ICC's curves take it: (G_c - A_mid)(1 + t_c) has the
+    // slope (1 + t_c) times the curve's at the mid grey.
     for (int c = 0; c < 3; ++c) p.slopes[c] *= 1.0 + bracket->tilt[c];
     p.from_curve = true;
   } else if (!bracket->has_slopes) {
