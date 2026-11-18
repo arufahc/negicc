@@ -175,6 +175,11 @@ int parse_options(int ac, char* av[], Options& o) {
       }
       return -1;
     }
+    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+      log_error("--print needs a print material (a built-in id, 'all' or a spektrafilm profile's path); --print alone "
+                "lists them\n");
+      return 1;
+    }
     if (strcmp(av[i], "--list_profiles") == 0) {
       for (const std::string& key : list_embedded_bundles()) {
         // Every bundle listed is one that loads: the build runs this after linking, so a bundle the parser rejects
@@ -320,7 +325,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
           "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
           "around (the rebate; default: every format, as negicc-station). The sidecar's cli_equivalent gives the format the "
-          "film base was read with, so that its explicit --roi reads the same base.")
+          "film base was read with when it was not given (--roi auto's 35mm), so that its explicit --roi reads the same "
+          "base; a given one is left to the caller with the other set-up options.")
     .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
@@ -488,6 +494,10 @@ int parse_options(int ac, char* av[], Options& o) {
         return 1;
       }
       p[0] = (float)target;
+      if (!(std::isfinite(p[1]) && p[1] > 0.0f && std::isfinite(p[2]) && p[2] > 0.0f && std::isfinite(p[3]) && p[3] > 0.0f)) {
+        log_error("--probe_params: \"%s\": E, g and b must be positive numbers\n", item.c_str());
+        return 1;
+      }
       o.probe_params.push_back(p);
     }
     o.probe_stops = parser.get<std::vector<float>>("--probe_stops");

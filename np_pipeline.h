@@ -236,8 +236,8 @@ struct Scan {
 
   FrameDetection frame_det;              // --roi auto
   // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
-  // no detection ran); cli_equivalent gives it as --film_format, so that a replay with the explicit --roi reads the
-  // same base.
+  // no detection ran); cli_equivalent gives it as --film_format when the run was not given one, so that a replay with
+  // the explicit --roi reads the same base.
   FilmFormat base_det_format = FILM_FORMAT_AUTO;
   int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
   bool has_roi = false;
