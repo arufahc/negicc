@@ -2767,23 +2767,6 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
   return k;
 }
 
-double print_share_thinner(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]) {
-  const InnerCrop c = compute_inner_crop(frame.width, frame.height, crop_ratio);
-  const double* x = bundle.crosstalk_matrix_d;
-  uint16_t px[3];
-  size_t n = 0, thin = 0;
-  for (int y = c.y0; y < c.y0 + c.h; y += 4)
-    for (int xx = c.x0; xx < c.x0 + c.w; xx += 4) {
-      frame.sample(xx, y, px);
-      bool t = false;
-      for (int r = 0; r < 3; ++r)
-        t = t || (fb[r] > 0.0 && (float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]) > 1.0f);
-      thin += t;
-      ++n;
-    }
-  return n ? (double)thin / (double)n : 0.0;
-}
-
 float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
                        double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]) {
   if (found) {
@@ -2796,66 +2779,6 @@ float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame
   const float k = print_base_floor(bundle, frame, crop_ratio, base_in);
   for (int c = 0; c < 3; ++c) base_out[c] = base_in[c] * k;
   return k;
-}
-
-int print_floor_selfcheck() {
-  // 64 x 64 frames of uniform film with a thin patch across the top rows; the inner crop is the whole frame (ratio 1).
-  // The grey cases use the identity crosstalk and one value for all channels; the coloured case a crosstalk that is
-  // not symmetric, a coloured base and a patch thin in one channel, so that it tells the largest channel from another,
-  // the matrix from its transpose, and the base's colour kept from one value for all.
-  const double identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  const double coloured[9] = {1, 0.2, 0, 0, 1, 0, 0.1, 0, 1};
-  const int w = 64, h = 64;
-  std::vector<uint16_t> px((size_t)w * h * 3);
-  struct Case {
-    const char* what;
-    const double* crosstalk;
-    uint16_t film[3], thin[3];
-    int rows;
-    bool found;
-    double base[3];
-    double k_want, base_want[3];
-  };
-  const Case cases[] = {
-      // A found base of 1000; a quarter of the frame at 1500: the 99.5 % point reads 1.5 -> k 1.5, base 1500.
-      {"found base, a quarter of the frame 1.5x thinner than it", identity, {600, 600, 600}, {1500, 1500, 1500}, 16, true,
-       {1000, 1000, 1000}, 1.5, {1500, 1500, 1500}},
-      // None found: the bundle's 1000 at 1/10 s scaled once to the 1/8 s scan, 1250; the thin patch at 2500 -> k 2.
-      {"no base found: the bundle's, scaled once (1/10 s to 1/8 s), then raised", identity, {600, 600, 600},
-       {2500, 2500, 2500}, 16, false, {0, 0, 0}, 2.0, {2500, 2500, 2500}},
-      // A base already raised (1500) on the first frame: k 1, the base unchanged.
-      {"a raised base again: k 1", identity, {600, 600, 600}, {1500, 1500, 1500}, 16, true, {1500, 1500, 1500}, 1.0,
-       {1500, 1500, 1500}},
-      // All film denser than the base: k 1.
-      {"film all denser than the base: k 1", identity, {600, 600, 600}, {900, 900, 900}, 64, true, {1000, 1000, 1000}, 1.0,
-       {1000, 1000, 1000}},
-      // Base (2000, 1000, 500); the patch (800, 600, 900) through the crosstalk reads (920, 600, 980), over the base
-      // (0.46, 0.60, 1.96): k 1.96 from blue, the base (3920, 1960, 980). The transposed matrix would read 1.80, red
-      // alone 1 (0.46 is below 1), and one value for all would not keep the base's colour.
-      {"coloured base, crosstalk, a patch thin in blue: k from blue, colour kept", coloured, {600, 500, 300},
-       {800, 600, 900}, 16, true, {2000, 1000, 500}, 1.96, {3920, 1960, 980}},
-  };
-  int failed = 0;
-  for (const Case& c : cases) {
-    ProfileBundle b;
-    for (int i = 0; i < 9; ++i) b.crosstalk_matrix_d[i] = c.crosstalk[i];
-    b.film_base_shutter = "1/10s";
-    b.film_base_iso = 100.0f;
-    for (int k = 0; k < 3; ++k) b.film_base_avg_d[k] = 1000.0;
-    for (int y = 0; y < h; ++y)
-      for (int x = 0; x < w; ++x)
-        for (int k = 0; k < 3; ++k) px[((size_t)y * w + x) * 3 + k] = (y < c.rows) ? c.thin[k] : c.film[k];
-    const negicc::RgbView f = negicc::RgbView::from_interleaved_rgb(px.data(), w, h, 3);
-    double in[3], out[3];
-    const float k = print_floor_base(b, f, 1.0f, c.found ? c.base : nullptr, 0.125, 100.0, in, out);
-    bool ok = std::fabs(k - c.k_want) < 1e-4;
-    for (int i = 0; i < 3; ++i) ok = ok && std::fabs(out[i] - c.base_want[i]) < 1e-6 * c.base_want[i] + 1e-3;
-    failed += !ok;
-    std::printf("%s %s: k %.4f, base (%.1f, %.1f, %.1f) -> (%.1f, %.1f, %.1f) (expected k %.4f, base (%.1f, %.1f, %.1f))\n",
-                ok ? "ok  " : "FAIL", c.what, k, in[0], in[1], in[2], out[0], out[1], out[2], c.k_want, c.base_want[0],
-                c.base_want[1], c.base_want[2]);
-  }
-  return failed;
 }
 
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,

@@ -256,25 +256,15 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
     --film_base base.ARW --roi auto -o print.tif scan.ARW
 ```
 
-Each RGB-LED profile set carries one print ICC per print material (`profiles/<film>-A7R4-TriLED/print_<print>.icc`,
-and its `README.md` gives the math). The automatic search runs on the print itself: its printing exposure is one
-continuous level, then the colour balance, and the paper's own curve sets the tone, so the toning step does not run.
-The print is shown relative to its paper, the paper's base at the display's white. A print profile given as a file
-gets its ICC computed. With a density output, each material's CLF prints the frame as the picture does, except where the scan is
-thinner than the film base (the picture passes the soft knee there and the density file does not): `--print` runs the print's
-search for each material it writes a CLF for (about 9 s each on a 96-core x86 machine; `--print all`, eight
-searches, about 70 s), and a print's `cli_equivalent` given to a density output writes the same CLF for the one
-material whose picture it came from. A white-LED scan takes `--print` with a density output only, and an RGB-LED profile
-set saved before it had a grey balance curve cannot print.
-
-One RGB-LED negative of Portra 400 on every print material built in, at the bracket, exposure and balance the search
-chose:
+This writes the print on the chosen material as an sRGB picture. The automatic search runs on the print itself: its
+printing exposure, then its colour balance. The paper's curve gives the tone, so the toning step does not run. The
+print is shown relative to its paper's white. A white-LED scan takes `--print` with a density output only. DESIGN.md
+has the rest.
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: negicc's picture without `--print`. Then the six papers and the two print films, all at one exposure
-and balance, so only the print material changes. Rendered before the print's own search: at the scene's search's
-bracket, exposure and balance, against a perfect white.*
+*Top left: the picture without `--print`. Then the six papers and the two print films, each rendered at one bracket,
+exposure and balance, against a perfect white.*
 
 ## Options
 
