@@ -310,7 +310,7 @@ z2 = 1 / (3N) Σ_i Σ_{k∈L,a,b} ((lab_ik − μ_ik) / σ_ik)^2
 ```
 
 Under a Gaussian model per cell this is the negative log-likelihood, so cells the network is unsure of count for
-little. The network's lightness follows the picture it is shown, so the search fixes one lightness wish per frame
+little. The network's lightness follows the picture it is shown, so the search fixes one lightness target per frame
 (step 2) and lets only `a*` and `b*` be predicted again from each render.
 
 **The (E, g, b) optimiser** (`dinov3_auto_solver.cc`: `optimize_target_for_intent`) is a coordinate descent against a
@@ -324,7 +324,7 @@ not a full preview:
 
 The penalties are `15 ((clip − 2.5) / 2)^2` once more than 2.5 % of the cells' channels clip white, and
 `5 log2(E / e_centre)^2` toward the bracket's centre (none for a bracket whose usable range is inverted: there the
-field decides where to stand between the two ends). Rendering an average is not the average of the render (a
+intent field alone places `E` between the two ends). Rendering an average is not the average of the render (a
 negative's bright grains render dark and its dark grains bright), so after each preview of a bracket the difference
 between the preview's cells and the optimiser's cells at the same parameters is kept, and the bracket's next
 optimisation aims at `μ` minus that difference (`SearchFrame::update_correction`). At the fixed point the picture,
@@ -335,17 +335,17 @@ not the optimiser's reading of it, matches the field.
 1. **Brackets and their ranges.** In a set of five or more brackets, those whose grey scale spans less than 0.75 of
    the widest one's are left out (at least three are kept: `filter_admissible_targets`). Each remaining bracket gets
    its calibrated and usable range (3.3).
-2. **Metering and the lightness wish.** Each admissible bracket is metered: the `E` at which the scene's
+2. **Metering and the lightness target.** Each admissible bracket is metered: the `E` at which the scene's
    log-average renders at `L*` 50 with gains 1.10 and 1.15, by bisection (`exposure_for_lightness`; a bracket that
    cannot render a neutral `L*` 50 within 0.25 ΔE is not metered). Every metered bracket is rendered at its metered
    `E`, clamped to its usable range, and the predicted fields are averaged: the **bootstrap field**. Its `L*` is the
-   frame's lightness wish for the rest of the search. When no bracket meters, the bracket whose range the scene fills
+   frame's lightness target for the rest of the search. When no bracket meters, the bracket whose range the scene fills
    best (`|fill − 0.85| + 0.5` per stop of overflow) renders it alone.
 3. **Screening.** Each metered bracket's `(E, g, b)` is optimised against the bootstrap field over its usable range,
    from gains 1.22 and 1.15. The brackets are ranked by that loss.
 4. **Tournament.** The best two run a fixed-point loop (`SearchFrame::fixed_point`), with `E` held within ±0.5 stop of
    its screened value. Each step measures the shoulder's `x_hi`, renders the preview, updates the correction,
-   predicts a field, puts the lightness wish in its `L*`, measures the residual, and optimises the next `(E, g, b)`.
+   predicts a field, puts the lightness target in its `L*`, measures the residual, and optimises the next `(E, g, b)`.
    A loop stops when `|ΔE| + |Δg| + |Δb| ≤ 0.02`; on TriLED also when the residual changes by 1.5 % or less; on white
    light when the residual has passed its minimum. It is diverged when the residual grows by more than 25 % and more
    than 1.5, and stops after 8 steps (`--dino_iters`). Each loop keeps its lowest-residual step. The lower residual
@@ -372,7 +372,7 @@ The search's parameters, in the order the steps use them:
 | Admissible brackets | span ≥ 0.75 of the widest, at least 3 | A bracket calibrating a much shorter range cannot hold a whole scene. |
 | Overflow tolerances | 1.5 stops of highlight, 1.2 of shadow | How far a scene may exceed a bracket's calibrated range: the usable range and admissibility. |
 | Metering | `L*` 50 at gains 1.10, 1.15 | The exposure each bracket starts from. |
-| Bootstrap field | mean over every metered bracket | No single bracket sets the frame's lightness wish. |
+| Bootstrap field | mean over every metered bracket | No single bracket sets the frame's lightness target. |
 | Best-fit fallback | fill 0.85; 0.5 per stop of overflow | The bracket that renders the bootstrap when none meters. |
 | Screening start | gains 1.22, 1.15 | Where the screening's optimisation of the gains begins. |
 | Clip penalty | above 2.5 % of channels | The search avoids renders that clip white. |
@@ -642,12 +642,12 @@ profile, made relative to the paper's white (5.7), with its curves written for e
    print is the negative's own density above its base, as the brackets were measured, whatever the scan's exposure.
 2. **A0 is metered** as the scene's search meters a bracket: the `A` at which the frame's log-average cell (at
    `g = b = 1`) prints at `L*` 50, by bisection over the curve's green APD range.
-3. **The lightness wish** is the mean of the fields predicted from the print at `A0 − h`, `A0` and `A0 + h`,
+3. **The lightness target** is the mean of the fields predicted from the print at `A0 − h`, `A0` and `A0 + h`,
    `h = log10(2) / 2` (half a stop of printing exposure). Its `L*` is held for the rest of the search.
 4. **g and b are screened** at `A0` against that field on the optimiser's grids. `g = b = 1` is the film's own
    neutral (a grey on the curve prints grey), but the frame's light need not be.
 5. **The fixed point over (A, g, b).** Each step renders the print at its `A`, updates the optimiser's correction,
-   predicts `a*` and `b*` from the render (`L*` is the wish) and measures the residual. It then solves `A`: from the
+   predicts `a*` and `b*` from the render (`L*` is the target) and measures the residual. It then solves `A`: from the
    current `A`, steps of 0.1 APD downhill to bracket the minimum, then golden section to 0.001, with `g` and `b`
    optimised at each `A` (`E` pinned). It stops when the residual changes by 1.5 % or less, or one step after the
    parameters move by 0.02 or less (`A` counted in stops, `ΔA / log10 2`), and keeps the lowest-residual step; at
@@ -663,7 +663,7 @@ deterministic on the same build, machine and backend. `--brightness`, `--tint` a
 and move `E`, `g` and `b` (solved through the bracket's chart profile). A picture output with `--print` needs a
 TriLED bundle with grey balance curves; a white-light scan takes `--print` with a density output only.
 
-The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid`, the search (`a0`, the wish, the steps), and
+The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid`, the search (`a0`, the lightness target, the steps), and
 per channel the shares of the crop past the knee and past the cut at `E`.
 
 ## 5.7 The print's white
