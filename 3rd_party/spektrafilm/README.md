@@ -4,9 +4,10 @@ The print profiles of [spektrafilm](https://github.com/andreavolpato/spektrafilm
 commit `3bb2c2d2801ff68b92019cf1dbcbb133d60832bc` (`src/spektrafilm/data/profiles/`). `SHA256SUMS` has each file's
 hash.
 
-`neg_process` builds them in. For a density file written with `--print <print>` it computes from one of them a CLF
-that renders the file as a print on that material (`np_print.h`, and "Print emulation" in `DESIGN.md`). `--print`
-alone lists them.
+`neg_process` builds them in. With `--print <material> -P srgb` on an RGB-LED scan it computes from one of them a
+print ICC and writes the print itself as a picture; for a density file written with `--print <material>` it computes
+a CLF that renders the file as a print on that material (`np_print.h`, and "Print emulation" in `DESIGN.md`).
+`--print` alone lists them.
 
 | File | Print material |
 |---|---|

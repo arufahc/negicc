@@ -1,6 +1,7 @@
 # Portra160-A7R4-D65
 
-Profiles for Kodak Portra 160 scanned with Sony ILCE-7RM4 (Linear Rec.2020) under a white (D65) light, for `neg_process --film_stock portra160 --light_source d65`.
+Profiles for Kodak Portra 160 scanned with Sony ILCE-7RM4 (Linear Rec.2020) under a white (D65) light, for
+`neg_process --film_stock portra160 --light_source d65`.
 
 How they were built: an IT8 target (R190808) was photographed on this film stock at 7 exposures. Each developed
 frame (a bracket) was scanned with this camera and light, and its patches were matched to the target's reference
@@ -31,11 +32,11 @@ barely visible).
 | +3 EV | `Target_7.icc` | 0.80 | 0.65 | 2.25 | 1.65 |
 
 **Fitted** is ArgyllCMS `profcheck` on all 288 chart patches the profile was built from (the output is stored in
-`bundle.json`). It shows how well the profile fits its own data, so it flatters the profile. **Held out** is the
-error on patches the profile never saw: each bracket's profile was rebuilt twice, each time leaving out alternate
-halves of the 264 colour patches, and checked on the half it left out. The 24 grey patches, which set the tone curves, stay in every build.
-That is the better guide to the error on colours in a real photograph. The profiles are not de-glared: removing the
-chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.
+`bundle.json`). It shows how well the profile fits its own data, so it flatters the profile. **Held out** is the error
+on patches the profile never saw: each bracket's profile was rebuilt twice, each time leaving out alternate halves of
+the 264 colour patches, and checked on the half it left out. The 24 grey patches, which set the tone curves, stay in
+every build. That is the better guide to the error on colours in a real photograph. The profiles are not de-glared:
+removing the chart's veiling glare before fitting was tried, did not help overall, and the bundles ship as measured.
 
 ## Dynamic range
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exports the white-light tone heads (tone_head.pt) to tone_head.bin, the flat file neg_process embeds.
+"""Exports the tone heads (tone_head.pt) to tone_head.bin, the flat file neg_process embeds.
 
 tone_head.pt is a dict {kind: "pool", state, xm, xs, ym, ys, tgt, pool}: state is the state_dict of
 Sequential(Linear(1920, 512), GELU, Dropout(0.2), Linear(512, 256), GELU, Linear(256, 22)); xm, xs standardise the
