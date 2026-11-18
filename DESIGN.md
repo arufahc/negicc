@@ -687,8 +687,12 @@ highlight shoulder and no tone stage: the paper's curve gives the tone and rolls
 
 A print is made by its own search: `--target`, `-E`, `--gain_g` and `--gain_b` are refused with `--print`, and
 `--tone_stage` with `--print` is refused. Running the sidecar's `cli_equivalent` again re-runs the search, which is
-deterministic on the same build, machine and backend. `--brightness`, `--tint` and `--warmth` keep the recorded `A`
-and move `E`, `g` and `b` (solved through the bracket's chart profile). A picture output with `--print` needs a
+deterministic on the same build, machine and backend. `--brightness` moves the print's `A`, and `--tint` and
+`--warmth` its `g` and `b`, with `E` held (`solve_print_knobs`): solved on the print profile so that the film the
+print at the search's values renders as neutral L* 50 renders at the knobs' target, by Newton on (`A`, `ln g`,
+`ln b`); an unreachable target is scaled back as for a picture. The sidecar's `knobs.base.a` records the search's
+`A`, which a run reusing the sidecar starts from. A density output with `--print` moves each material's print search
+the same way before its CLF is built. A picture output with `--print` needs a
 TriLED bundle with grey balance curves; a white-light scan takes `--print` with a density output only.
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
