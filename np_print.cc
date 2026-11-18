@@ -1661,20 +1661,19 @@ void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]) {
 }
 
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
-  double top = 0.0;
-  for (int c = 0; c < 3; ++c)
-    for (double v : m.curves[c]) top = std::max(top, v);
-  top = std::ceil(top * 10.0) / 10.0;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {
-    const double k = p_apd[c * 3] + p_apd[c * 3 + 1] + p_apd[c * 3 + 2];
+    const double eta = p_apd[c * 3] + p_apd[c * 3 + 1] + p_apd[c * 3 + 2];
     out[c].resize(kPaperAlphaPoints);
     double run = INFINITY;
     for (int i = 0; i < kPaperAlphaPoints; ++i) {
       const double alpha = kPaperAlphaStart + kPaperAlphaStep * i;
-      run = std::min(run, interp(m.log_exposure, m.curves[c], m.aim[c] - k * alpha) / top);
-      out[c][i] = run - 1e-6 * i;
+      run = std::min(run, std::max(0.0, interp(m.log_exposure, m.curves[c], m.aim[c] - eta * alpha)));
+      out[c][i] = run;
     }
+    const double top = out[c][0];
+    for (int i = 0; i < kPaperAlphaPoints; ++i)
+      out[c][i] = 0.75 * (out[c][i] / top) + 0.25 * (1.0 - (double)i / (kPaperAlphaPoints - 1));
   }
   return out;
 }
