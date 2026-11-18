@@ -492,7 +492,7 @@ result is greener does it run again with the excess green penalised (weight 4).
 
 Bounds: the slope term within 0.35; the curve within 2.2 stops of the profile's own; the green gain within 0.75 stop
 and the blue within 1.25 stops of Auto's; the median `L*` 18 to 85; at least 8 cells in range; on a frame that is the
-whole image (`--roi auto` fell back), holder-dark cells, and cells at the base's level when the base is a rebate,
+whole image (`--roi auto` fell back, or a given `--roi` covers it), holder-dark cells, and cells at the base's level when the base is a rebate,
 are left out.
 
 **Limits.** The half-mass 12, the slope span, the systematic error, the lean and the guard's weight are stated
@@ -693,7 +693,7 @@ TriLED bundle with grey balance curves; a white-light scan takes `--print` with 
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
 and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
-the crop above the knee (`above_knee`), the film base's factor (`base_factor`, 5.8), per channel the shares of the
+the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, 5.8), per channel the shares of the
 crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
 (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
 move (`last_move`).
@@ -776,7 +776,8 @@ S_c           = (k_green / k_c) (1 + t_c(A)),   k_c = Σ_j M_cj dn_j/dA      (S_
 `dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
 `1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has
 equal contrast in the three channels. With `--print` on a TriLED bundle the density run searches each material's print
-(5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints. The print CLF is
+(5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is
+then computed from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The print CLF is
 relative to the paper's white like the print ICC. `tools/check_print_clf.py` applies a CLF to the density file and
 compares it with the picture (CIEDE2000 at 1000 pixels, the CLF applied at full resolution before both are shrunk in
 linear light).
