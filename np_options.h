@@ -83,7 +83,7 @@ struct Options {
   int dino_iters = 4;
   // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid
   // (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
-  // FILE and neg_process stops without converting.
+  // FILE and neg_process stops without converting (the print's search writes it and the conversion goes on).
   std::string probe_intent;
   bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting pass-through renderer
   std::vector<std::array<float, 4>> probe_params;

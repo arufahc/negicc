@@ -64,7 +64,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF_NAME}"
             TITLE="neg_process ${TAG}"
-            NOTES="Standalone Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
+            NOTES="Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             if gh release view "${TAG}" >/dev/null 2>&1; then
               gh release upload "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 --clobber
             else
@@ -74,7 +74,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
             TAG="latest"
             TITLE="neg_process (${GITHUB_SHA::7})"
-            NOTES="Standalone Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
+            NOTES="Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             git tag -f "${TAG}" "${GITHUB_SHA}"
             git push -f origin "refs/tags/${TAG}"
             if gh release view "${TAG}" >/dev/null 2>&1; then

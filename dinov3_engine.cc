@@ -402,7 +402,7 @@ public:
 
     void set_options(int num_threads) {
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
-        opts_.SetIntraOpNumThreads(std::min(num_threads, hw));
+        opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     }
