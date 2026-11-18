@@ -687,8 +687,9 @@ profile, made relative to the paper's white (5.7), with its curves written for e
    `g = b = 1`) prints at `L*` 50, by bisection over the curve's green APD range.
 3. **The lightness target** is the mean of the fields predicted from the print at `A0 − h`, `A0` and `A0 + h`,
    `h = log10(2) / 2` (half a stop of printing exposure). Its `L*` is held for the rest of the search.
-4. **g and b are screened** at `A0` against that field on the optimiser's grids. `g = b = 1` is the film's own
-   neutral (a grey on the curve prints grey), but the frame's light need not be.
+4. **g and b are screened** at `A0` against that field, minus the correction of the render at `A0`, on the
+   optimiser's grids. `g = b = 1` is the film's own neutral (a grey on the curve prints grey), but the frame's light
+   need not be.
 5. **The fixed point over (A, g, b).** Each step renders the print at its `A`, updates the optimiser's correction,
    predicts `a*` and `b*` from the render (`L*` is the target) and measures the residual. It then solves `A`: from the
    current `A`, steps of 0.1 APD downhill to bracket the minimum, then golden section to 0.001, with `g` and `b`

@@ -2980,6 +2980,9 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   for (size_t k = 0; k < boot.size(); ++k) {
     cp.set_curves_at(std::clamp(boot[k], cp.a_lo, cp.a_hi), prof);
     fr.render_preview(0, {E, 1.0f, 1.0f}, preview);
+    // The render at A0 gives the correction the screening at A0 below aims with, as each bracket's bootstrap render
+    // gives the scene's screening its correction.
+    if (boot[k] == a0) fr.update_correction(0, {E, 1.0f, 1.0f}, preview);
     if (!fr.predict(preview, mu, sg)) return false;
     if (k == 0) {
       mu1.assign(mu.size(), 0.0f);
@@ -3000,8 +3003,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
               << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)"
               << (cr.a0_at_range_end ? " (A0 at an end of the range: bootstrap renders there share an A)" : "") << "\n";
   }
-  // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field (the optimiser's wide
-  // grids, as the scene search screens its brackets).
+  // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field minus the correction of
+  // the render at A0 (the optimiser's wide grids, as the scene search screens its brackets).
   fr.set_pins(PIN_E, E, 1.0f, 1.0f);
   float e_bounds[3] = {E, E, E};
   ConversionParams curr{E, 1.0f, 1.0f, 1.0f};
