@@ -96,6 +96,8 @@ def tetrahedral(t, x):
 
 
 def lab(srgb):
+    # Both pictures compared are sRGB codes: CIELAB relative to sRGB's own white (textbook sRGB -> XYZ D65), as
+    # color_pipeline.h linear_srgb_to_lab, independent of the PCS -> sRGB conversion.
     lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
     m = np.array([[0.4124564, 0.3575761, 0.1804375], [0.2126729, 0.7151522, 0.0721750], [0.0193339, 0.1191920, 0.9503041]])
     xyz = lin @ m.T / np.array([0.95047, 1.0, 1.08883])

@@ -29,11 +29,15 @@
   submodules pin the same versions (the two headers byte for byte), so nothing changes but where they come from. To
   move one: check out another tag in the submodule, commit it, and check that the TriLED conversions stay
   bit-identical (negicc-station's `tools/triled_parity.py`).
+- `onnxruntime_prebuilt/`: ONNX Runtime v1.30.0's headers (MIT, see `onnxruntime_prebuilt/LICENSE`) and `fetch.sh`,
+  which takes its shared library from Microsoft's `onnxruntime` wheel on PyPI, checked by SHA-256. The default build
+  links against it when no other ONNX Runtime is found, and fetches the library first if it is missing; see
+  `onnxruntime_prebuilt/README.md`.
 - `onnxruntime/`: [ONNX Runtime](https://github.com/microsoft/onnxruntime), a shallow git submodule pinned to release
-  v1.30.0 (MIT, see `onnxruntime/LICENSE`), with `update = none` so a plain `git submodule update --init --recursive`
-  does not clone it when linking a prebuilt `libonnxruntime.so`. With `STATIC=1` (`make neg_process STATIC=1`), the
-  Makefile fetches the submodule automatically if needed, builds its static archives with CMake into
-  `bin_out/libonnxruntime.a`, and links ONNX Runtime statically into `bin_out/neg_process`.
+  v1.30.0 (MIT), with `update = none` so a plain `git submodule update --init --recursive` does not clone it. It is used
+  only by `STATIC=1` (`make neg_process STATIC=1`): the Makefile fetches the submodule if needed, builds its static
+  archives with CMake into `bin_out/libonnxruntime.a`, and links ONNX Runtime statically into `bin_out/neg_process`.
+  That needs the submodule's source to be fetchable from its URL.
 - `tiff_head.h`: LibRaw's TIFF header writer (`src/write/file_write.cpp`), which is not public API, copied here.
 - `tiff.h`: TIFF tag definitions used by `tiff_head.h`.
 - `elle_icc_profiles/`: see the directory.

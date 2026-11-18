@@ -116,6 +116,11 @@ struct DensityRecord {
     double above_knee = 0.0;            // the crop's share above the knee at the bootstrap
     double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
     std::string stopped_by;             // parameters, residual or steps
+    // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
+    // search's, and the print's grey where the knobs put it
+    bool knobs = false, knobs_limited = false;
+    double knob_base_a = 0.0, knob_base_g = 1.0, knob_base_b = 1.0;
+    double knob_grey_lab[3] = {0, 0, 0};
   };
   std::map<std::string, PrintSearch> print_search;
 };
@@ -257,6 +262,8 @@ struct FramePrint {
   double last_move[3] = {0, 0, 0}, above_knee = 0.0;
   double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
   std::string stopped_by;
+  bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
+  double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
   double grey_density = 0.70;
 };
 // False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.

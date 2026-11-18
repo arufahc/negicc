@@ -76,6 +76,7 @@ struct Sidecar {
   double print_floor_found_rgb[3] = {0, 0, 0};
   std::string print_floor_found_source;
   float print_floor_k = 1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (knobs.base.a)
   // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
   // frame detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection, or a
   // --roi auto that fell back to the whole image). The detection's confidence only where the detection decided the
@@ -156,7 +157,8 @@ struct Sidecar {
   // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
   double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
   double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
-  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the paper's white the print is relative to (PCS D50)
+  // The paper's white the print is relative to (PCS D50).
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;

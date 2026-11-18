@@ -476,6 +476,10 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
         j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
       s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
+    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
+    if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
+        j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
+      s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
     s.cached_sidecar.target_idx = tgt_idx;
     s.cached_sidecar.target_name = s.bundle.targets[tgt_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -598,6 +602,10 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
         j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
       s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
+    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
+    if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
+        j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
+      s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
     s.cached_sidecar.target_idx = expected_idx;
     if (s.is_bundle && expected_idx >= 0) s.cached_sidecar.target_name = s.bundle.targets[expected_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -673,7 +681,7 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 // paper_xyz gets the base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
-  const double d50[3] = {0.9642, 1.0, 0.8249};
+  const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale
   size_t best = 0;
   for (size_t i = 1; i < p.clut.size(); i += 3)
     if (p.clut[i] > p.clut[best * 3 + 1]) best = i / 3;
@@ -872,7 +880,7 @@ int prepare(const Options& o, Setup& s) {
       for (ParsedFilmProfile& p : s.print_profs) to_paper_white(p, s.print_paper_xyz);
       {
         double k[3];
-        const double d50[3] = {0.9642, 1.0, 0.8249};
+        const double* d50 = negicc::kPcsWhite;
         for (int c = 0; c < 3; ++c) k[c] = d50[c] / s.print_paper_xyz[c];
         // The table is now media-relative: the paper's XYZ goes into wtpt, as the ICC means a media-relative table (a
         // viewer on the relative intent shows the picture; on the absolute intent it gets the paper back). negicc
@@ -1488,7 +1496,39 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
-    if (o.knobs_given && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
+    // on a print the knobs act on the print's own A, g and b, solved on its profile; E held.
+    // A density output's knobs move its print CLFs (density_print_searches), not its suggested balance.
+    const bool knobs_here = o.knobs_given && !s.density;
+    if (knobs_here && !s.print_profs.empty() && std::isfinite(s.print_a) && target_idx >= 0 &&
+        target_idx < (int)s.print_profs.size()) {
+      scan.knob_base[0] = base_e;
+      scan.knob_base[1] = base_g;
+      scan.knob_base[2] = base_b;
+      scan.knob_base_a = s.print_a;
+      auto print_at = [&](double a, double g, double b, ParsedFilmProfile& prof) {
+        prof = s.print_profs[target_idx];
+        prof.rebind_pointers();
+        const double gains[3] = {1.0, g, b};
+        s.print_cont.set_curves_at(a, prof, gains);
+      };
+      PrintKnobResult pk;
+      if (!solve_print_knobs(print_at, s.print_a, base_g, base_b, o.brightness, o.tint, o.warmth, pk)) {
+        log_error("Failed to solve the knobs on the print\n");
+        return false;
+      }
+      s.print_a = pk.a;
+      scan.knob_res.e = base_e;
+      scan.knob_res.g = pk.g;
+      scan.knob_res.b = pk.b;
+      scan.knob_res.limited = pk.limited;
+      for (int i = 0; i < 3; ++i) scan.knob_res.grey_lab[i] = pk.grey_lab[i];
+      scan.has_knob_res = true;
+      log_info("Knobs on the print: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f (E %.4f held); the grey L* %.3f a* %.3f "
+               "b* %.3f%s\n", scan.knob_base_a, pk.a, base_g, pk.g, base_b, pk.b, base_e, pk.grey_lab[0], pk.grey_lab[1],
+               pk.grey_lab[2], pk.limited ? " (limited)" : "");
+      return true;
+    }
+    if (knobs_here && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
       scan.knob_base[2] = base_b;
@@ -1636,6 +1676,32 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.above_knee = cr.above_knee;
       for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
       ps.stopped_by = cr.stopped_by;
+      if (o.knobs_given) {
+        // The knobs on this print as on the picture (solve_knobs_and_rolloff): A, g and b moved on its profile, E held.
+        auto print_at = [&](double a, double g, double b, ParsedFilmProfile& p) {
+          p = prof;
+          p.rebind_pointers();
+          const double gains[3] = {1.0, g, b};
+          pc.set_curves_at(a, p, gains);
+        };
+        PrintKnobResult pk;
+        if (!solve_print_knobs(print_at, cr.a, res.params.g, res.params.b, o.brightness, o.tint, o.warmth, pk)) {
+          log_error("Failed to solve the knobs on the print %s\n", prints.id.c_str());
+          return false;
+        }
+        ps.knobs = true;
+        ps.knobs_limited = pk.limited;
+        ps.knob_base_a = ps.a;
+        ps.knob_base_g = ps.g;
+        ps.knob_base_b = ps.b;
+        for (int c = 0; c < 3; ++c) ps.knob_grey_lab[c] = pk.grey_lab[c];
+        ps.a = pk.a;
+        ps.g = pk.g;
+        ps.b = pk.b;
+        log_info("Knobs on %s's CLF: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f; the grey L* %.3f a* %.3f b* %.3f%s\n",
+                 prints.id.c_str(), ps.knob_base_a, ps.a, ps.knob_base_g, ps.g, ps.knob_base_b, ps.b, pk.grey_lab[0],
+                 pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");
+      }
       s.density_print_search[prints.id] = ps;
       log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
                ps.bracket.c_str(), ps.g, ps.b);
@@ -3126,6 +3192,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_floor_applied = scan.print_floor_applied;
   sc.print_floor_found_source = scan.print_floor_found_source;
   sc.print_floor_k = scan.print_floor_k;
+  sc.knob_base_a = scan.knob_base_a;
   sc.print_floor_frame = scan.print_floor_frame;
   sc.print_floor_frame_conf = scan.print_floor_frame_conf;
   for (int k = 0; k < 3; ++k) sc.print_floor_found_rgb[k] = scan.print_floor_found_rgb[k];
