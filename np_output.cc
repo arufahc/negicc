@@ -579,7 +579,10 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (!sc.print_id.empty()) {
       j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
                                {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
-                               {"curves", "computed for the bracket from the bundle's grey_balance_curves"}};
+                               {"curves", std::isfinite(sc.print_a)
+                                              ? "computed at the print's mid grey A (a) from the bundle's "
+                                                "grey_balance_curves, with the gains g and b after the knee"
+                                              : "computed for the bracket from the bundle's grey_balance_curves"}};
       // A material given as a file: which file, and its content, so the replay can be checked against it.
       if (!sc.print_file.empty()) {
         j["profile"]["print"]["file"] = sc.print_file;
@@ -598,7 +601,7 @@ bool write_json_sidecar(const Sidecar& sc) {
         j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
                                            {"steps", sc.print_steps}, {"converged", sc.print_converged},
                                            {"stopped_by", sc.print_stopped_by},
-                                           {"above_knee", num(sc.print_above_knee, "%.6g")},
+                                           {"above_knee_pct", num(100.0 * sc.print_above_knee, "%.4g")},
                                            {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
                                            {"past_knee_pct", {num(100.0 * sc.print_past_knee[0], "%.4g"), num(100.0 * sc.print_past_knee[1], "%.4g"),
                                                               num(100.0 * sc.print_past_knee[2], "%.4g")}},
@@ -611,6 +614,9 @@ bool write_json_sidecar(const Sidecar& sc) {
                                            {"a0_at_range_end", sc.print_a0_at_end},
                                            {"last_move", {num(sc.print_last_move[0], "%.4g"), num(sc.print_last_move[1], "%.4g"),
                                                           num(sc.print_last_move[2], "%.4g")}}};
+      } else if (!sc.cached_print_search_json_str.empty()) {
+        // A run that reused <output>.json (the knobs) prints at that run's A: its search's record carries over.
+        j["profile"]["print"]["search"] = ordered_json::parse(sc.cached_print_search_json_str);
       }
     }
   } else {
@@ -700,6 +706,9 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
   }
+  // The format the film base's frame detection looked for (--roi auto's, 35mm unless --film_format gave another): an
+  // explicit --roi without it looks for every format, which may place the base's patch elsewhere.
+  if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 
   // auto: the conversion parameter search (multi_target_optimizer.h)

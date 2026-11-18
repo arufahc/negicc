@@ -63,6 +63,7 @@ struct CachedSidecar {
   std::string target_name;
   float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
   double print_a = NAN;                  // a print's mid grey A (profile.print.a); NaN: none
+  std::string print_search_json_str;     // the print's search that found it (profile.print.search); empty: none
   std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
   std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
   std::string dino_backend;
@@ -234,6 +235,10 @@ struct Scan {
   std::string input_source = "raw";      // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
 
   FrameDetection frame_det;              // --roi auto
+  // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
+  // no detection ran); cli_equivalent gives it as --film_format, so that a replay with the explicit --roi reads the
+  // same base.
+  FilmFormat base_det_format = FILM_FORMAT_AUTO;
   int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
   bool has_roi = false;
   int rot_cw = 0;
@@ -274,6 +279,7 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
+  bool frame_is_whole = false;           // that frame is the whole half-size image
   // Where the fit runs: the curve fit's re-metered E and fitted g and b on the combined profile, which the
   // conversion takes in place of the search's (auto_res keeps the search's own).
   bool has_curve_params = false;

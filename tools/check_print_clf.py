@@ -176,8 +176,8 @@ def main():
             good = mean <= a.mean and p95 <= a.p95
             ok &= good
             import json
-            knee = json.load(open(pic + ".json"))["profile"]["print"].get("search", {}).get("above_knee")
-            knee_text = f"; crop above the knee at E = 1: {100 * knee:.2f} %" if knee is not None else ""
+            knee = json.load(open(pic + ".json"))["profile"]["print"].get("search", {}).get("above_knee_pct")
+            knee_text = f"; crop above the knee at E = 1: {knee:.2f} %" if knee is not None else ""
             print(f"{m}: picture against the CLF on the density file, CIEDE2000 mean {mean:.3f}, 95th percentile "
                   f"{p95:.3f} ({'within' if good else 'OUTSIDE'} {a.mean} / {a.p95}){knee_text}")
     sys.exit(0 if ok else 1)

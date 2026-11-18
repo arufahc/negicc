@@ -369,11 +369,11 @@ void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
 void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
 // The bracket whose mid grey is nearest A (null without brackets).
 const DensityBracket* nearest_bracket(const ProfileBundle& bundle, double a);
-// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: the tilt of the bracket nearest
-// A (kPrintTiltLinear false), or the tilt linear in A between the two neighbouring brackets, held beyond the end ones
-// (kPrintTiltLinear true, as shipped: the owner chose each bracket's own tilt, "Tilt per bracket makes more sense",
-// 2026-11-17, and linear between them is that without the nearest rule's step at a midpoint). At a bracket's own A_mid
-// both give that bracket's tilt. a_mid and tilt per bracket, in any order; zeros without brackets.
+// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: each bracket has its own tilt,
+// and between two brackets' A_mid the tilt is interpolated linearly in A, held beyond the end ones, so at a bracket's
+// own A_mid it is that bracket's tilt. kPrintTiltLinear false takes the tilt of the bracket nearest A instead (no
+// caller uses it); a bundle with one bracket has that bracket's tilt. a_mid and tilt per bracket, in any order; zeros
+// without brackets.
 constexpr bool kPrintTiltLinear = true;
 void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
                    double t[3], bool linear = kPrintTiltLinear);

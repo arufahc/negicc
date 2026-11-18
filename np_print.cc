@@ -392,14 +392,12 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
                            {"at_density_floor", {c.floor[0], c.floor[1], c.floor[2]}},
                            {"pixels", c.pixels}};
   }
-  double unused[3];
-  if (density_balance_offset(rec, unused)) {
-    // The picture conversion multiplies the light's green and blue channels by g and b to balance the frame; in
-    // density that is an offset per channel. Through the measure's matrix, and with their mean taken out so that the
-    // file's overall level stays, the offsets are the colour balance alone. The exposure E is recorded and left to
-    // the grade: it is relative to the picture conversion's film profile, which a density file does not use.
-    double measure[3], mean = 0.0;
-    density_balance_offset(rec, measure, &mean);
+  // The picture conversion multiplies the light's green and blue channels by g and b to balance the frame; in
+  // density that is an offset per channel. Through the measure's matrix, and with their mean taken out so that the
+  // file's overall level stays, the offsets are the colour balance alone. The exposure E is recorded and left to
+  // the grade: it is relative to the picture conversion's film profile, which a density file does not use.
+  double measure[3], mean = 0.0;
+  if (density_balance_offset(rec, measure, &mean)) {
     j["suggested_balance"] = {
         {"from", "the picture conversion's parameter search on this frame; not applied to the densities"},
         {"exposure", rec.balance_e},
@@ -414,7 +412,9 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
         {"use", "D + density_offset (code + code_offset) has the colour balance the picture conversion gives this "
                 "frame; the offsets sum to zero, so the overall level is unchanged and the exposure is left to the "
                 "grade. The gains also shift the level, by density_offset_mean_removed in every channel; the print "
-                "CLF beside the file, which sets the exposure, applies density_offset + density_offset_mean_removed"}};
+                "CLF beside the file, which sets the exposure, applies density_offset + density_offset_mean_removed, "
+                "except for a print material with its own print search, whose CLF applies the offsets of that "
+                "search's gains (print.materials.<id>.balance)"}};
   }
   // How the frame prints on each print material (below), computed for this frame and not applied to it.
   if (!rec.print_json.empty()) j["print"] = ordered_json::parse(rec.print_json, nullptr, false);
@@ -1248,7 +1248,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   for (int c = 0; c < 3; ++c) p.slopes[c] = bracket->slopes[c];
   if (by_print) {
     // The print at its own search's mid grey A, as the picture conversion renders it: the curve's grey and tangent at
-    // A, and the tilt of the bracket nearest A.
+    // A, and the brackets' tilt at A (print_tilt_at: linear in A between the two brackets around it).
     curve_grey_at(bundle, p.a, light);
     curve_slopes_at(bundle, p.a, p.slopes);
     double t[3];
@@ -1302,6 +1302,23 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   return true;
 }
 
+// The density offsets bal the print CLF applies for the frame's colour balance, level included (the zero-sum offsets
+// plus the mean taken out of them): from the material's own print search's gains when it has one, else from the
+// picture conversion's search. False when there is no balance (bal is then zero).
+static bool print_balance(const DensityRecord& rec, const FramePrint& print, double bal[3]) {
+  DensityRecord own = rec;   // the material's own print search: its gains in place of the picture conversion's
+  if (print.print_searched) {
+    own.has_balance = true;
+    own.balance_e = print.exposure;
+    own.balance_g = print.gain_g;
+    own.balance_b = print.gain_b;
+  }
+  double mean = 0.0;
+  const bool balanced = density_balance_offset(own, bal, &mean);
+  for (int c = 0; c < 3; ++c) bal[c] += mean;
+  return balanced;
+}
+
 std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes) {
   // x: the file's code / max code.  D_j = (x_j * max - offset) / (scale * k_j);  with the balance bal and the frame's
   // mid grey,  pd_i = grey_density + s_i * sum_j P_ij (D_j + bal_j - grey_j).
@@ -1312,16 +1329,8 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
   // comes out at grey_density in all three channels.
   const DensityEncoding& e = rec.encoding;
   const double max_code = (double)e.max_code();
-  double bal[3], bal_mean = 0.0;
-  DensityRecord own = rec;   // the material's own print search: its gains in place of the picture conversion's
-  if (print.print_searched) {
-    own.has_balance = true;
-    own.balance_e = print.exposure;
-    own.balance_g = print.gain_g;
-    own.balance_b = print.gain_b;
-  }
-  const bool balanced = density_balance_offset(own, bal, &bal_mean);
-  for (double& v : bal) v += bal_mean;
+  double bal[3];
+  const bool balanced = print_balance(rec, print, bal);
   double a[9], b[3];
   for (int i = 0; i < 3; ++i) {
     double shift = 0.0;
@@ -1364,7 +1373,15 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
        num("%.4f %.4f %.4f", print.slopes[0], print.slopes[1], print.slopes[2]) +
        " about the frame's mid grey, density " + num("%.4f %.4f %.4f", print.grey[0], print.grey[1], print.grey[2]) +
        ". " +
-       (print.fitted
+       (print.print_searched
+            ? "The mid grey is the film's grey balance curve's grey at the print's own mid grey A " +
+                  num("%.4f", print.a, 0.0, 0.0) +
+                  ", which this material's own print search found on this frame, with that search's exposure and "
+                  "gains (the nearest bracket: " + xml(print.bracket) + "); balanced, it prints as the print's mid grey. "
+                  "The slopes are that curve's contrast there times one plus the brackets' tilt at A (grey_relative.b, "
+                  "linear in A between the brackets): they give the film's grey scale equal contrast in the three "
+                  "channels"
+            : print.fitted
             ? "The mid grey and the slopes are those of the grey scale the picture conversion renders on the bracket " +
                   xml(print.bracket) + " with this frame's exposure, gains and fitted input curves: the mid grey "
                   "prints as the print's mid grey, and the slopes give that grey scale equal contrast in the three "
@@ -1374,8 +1391,9 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
                     "the bracket " + xml(print.bracket) +
                         (print.searched ? " and at the exposure the picture conversion's search gave this frame"
                                         : " (no search: the middle bracket)") +
-                        "; balanced, it prints as the print's mid grey. The slopes are that curve's contrast there: "
-                        "they give the film's grey scale equal contrast in the three channels"
+                        "; balanced, it prints as the print's mid grey. The slopes are that curve's contrast there "
+                        "times one plus the bracket's tilt (grey_relative.b): they give the film's grey scale equal "
+                        "contrast in the three channels"
                   : "The mid grey is the chart's on the bracket " + xml(print.bracket) +
                         (print.searched ? " and at the exposure the picture conversion's search gave this frame"
                                         : " (no search: the middle bracket)") +
@@ -1501,21 +1519,27 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
           {"to_print_density_for", p.to_print_for},
           {"bracket", p.bracket},
-          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the nearest bracket)"
+          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the bracket nearest "
+                                              "its mid grey A, named only: the tilt is interpolated at A)"
                            : p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
           {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
-          {"grey_and_slopes_from", p.print_searched ? "the film's grey balance curve at the print's own mid grey A"
+          {"grey_and_slopes_from", p.print_searched ? "the film's grey balance curve at the print's own mid grey A, "
+                                                      "the slopes times one plus the brackets' tilt at A"
                                    : p.fitted       ? "the grey scale this frame's fitted input curves describe"
-                                   : p.from_curve ? "the film's grey balance curve at the bracket's mid grey"
+                                   : p.from_curve ? "the film's grey balance curve at the bracket's mid grey, the slopes "
+                                                    "times one plus the bracket's tilt"
                                                   : "the bracket's entry in the profile set"}};
       if (p.print_searched) {
         one["mid_grey_a"] = p.a;
         one["gains"] = {p.gain_g, p.gain_b};
+        double bal[3];
+        print_balance(rec, p, bal);
+        one["balance"] = {bal[0], bal[1], bal[2]};   // the formula's balance for this material, as its CLF applies it
         one["search"] = {{"converged", p.converged}, {"stopped_by", p.stopped_by}, {"steps", p.steps},
                          {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
-                         {"above_knee", p.above_knee},
+                         {"above_knee_pct", 100.0 * p.above_knee},
                          {"past_knee_pct", {100.0 * p.past_knee[0], 100.0 * p.past_knee[1], 100.0 * p.past_knee[2]}},
                          {"past_cut_pct", {100.0 * p.past_cut[0], 100.0 * p.past_cut[1], 100.0 * p.past_cut[2]}}};
       }
@@ -1523,13 +1547,18 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
     }
     j["print"] = {
         {"what", "how this frame prints on each print material: the frame's mid grey lands on the print's mid grey, "
-                 "and the slopes give the film's grey scale equal contrast in the three channels. The bracket and the "
-                 "exposure are the search's; the mid grey and the slopes are the film's grey balance curve's at the bracket's mid grey "
-                 "(density_matrices.grey_balance_curves), or the bracket's in the profile set "
-                 "(density_matrices.brackets), or, for a white-light frame whose input curves were fitted, those of "
-                 "the grey scale the fitted curves describe (grey_and_slopes_from)"},
+                 "and the slopes give the film's grey scale equal contrast in the three channels. With the print's own "
+                 "search on a material (TriLED), the mid grey A, the exposure and the gains are that search's, and the "
+                 "mid grey and the slopes are the film's grey balance curve's at A "
+                 "(density_matrices.grey_balance_curves). Otherwise the bracket and the exposure are the picture "
+                 "conversion's search's; the mid grey and the slopes are the film's grey balance curve's at the "
+                 "bracket's mid grey, or the bracket's in the profile set (density_matrices.brackets), or, for a "
+                 "white-light frame whose input curves were fitted, those of the grey scale the fitted curves describe "
+                 "(grey_and_slopes_from). The curve's slopes are multiplied by one plus the brackets' tilt "
+                 "(grey_relative.b) at the mid grey"},
         {"formula", "print density = 0.70 + slopes * (to_print_density @ (D + balance - frame_grey_density)), "
-                    "balance = suggested_balance.density_offset + density_offset_mean_removed"},
+                    "balance = the material's balance where it has its own print search (materials.<id>.balance, "
+                    "from its gains), else suggested_balance.density_offset + density_offset_mean_removed"},
         {"applied", "no: the densities are as read. The CLF beside the file for each print material "
                     "(<output>.<print>.clf) applies the balance, the exposure and the slopes; apply them once, there "
                     "or by hand, not both"},
@@ -1651,7 +1680,8 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
   size_t k = 0;   // the segment o[k], o[k + 1]
   while (k + 2 < o.size() && a > a_mid[o[k + 1]]) ++k;
   const size_t i = o[k], j = o[k + 1];
-  const double f = std::clamp((a - a_mid[i]) / (a_mid[j] - a_mid[i]), 0.0, 1.0);
+  // Two brackets at the same A_mid: the first one's tilt (no division by zero).
+  const double f = a_mid[j] > a_mid[i] ? std::clamp((a - a_mid[i]) / (a_mid[j] - a_mid[i]), 0.0, 1.0) : 0.0;
   for (int c = 0; c < 3; ++c) t[c] = tilt[i][c] + f * (tilt[j][c] - tilt[i][c]);
 }
 

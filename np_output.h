@@ -63,6 +63,7 @@ struct Sidecar {
   const int* roi = nullptr;              // x, y, w, h when has_roi
   std::string roi_source;
   const FrameDetection* frame_det = nullptr;  // --roi auto's detection
+  std::string film_format;               // the format the film base's frame detection looked for; empty: every format
   int rot_cw = 0;
   bool hflip = false, vflip = false;
   int out_w = 0, out_h = 0;
@@ -104,6 +105,7 @@ struct Sidecar {
   std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
   std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
   std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar
+  std::string cached_print_search_json_str;  // preserved "profile.print.search" JSON when reusing a sidecar
   double cached_dino_views_ms = 0.0, cached_dino_render_ms = 0.0;
   double cached_dino_infer_ms = 0.0, cached_dino_search_ms = 0.0;
   bool has_knobs = false;
