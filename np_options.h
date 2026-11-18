@@ -51,7 +51,7 @@ struct Options {
   bool row_given[3] = {false, false, false};
   float exposure_comp = 1.0f;                  // -E
   bool exposure_given = false;                 // -E (the search keeps it)
-  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search)
+  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search on TriLED; held on white light)
   bool gain_g_given = false, gain_b_given = false;
   float brightness = 0.0f;                     // --brightness (stops of the grey's luminance)
   float tint = 0.0f;                           // --tint (a* of the grey)
@@ -81,7 +81,7 @@ struct Options {
   double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
-  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops "s,...": a measurement aid for negicc-station's
+  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid for negicc-station's
   // goal harness (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
   // FILE and neg_process stops without converting.
   std::string probe_intent;
@@ -116,7 +116,9 @@ struct Options {
   bool density = false;
   DensityMeasure density_measure = kDensityStatusM;
   bool output_dpx = false;
-  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
+  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile): with a
+  // picture output the first is the print the conversion renders; with a density output a CLF is written beside the
+  // file for each.
   std::vector<std::string> prints;
   bool no_metadata = false;
 };

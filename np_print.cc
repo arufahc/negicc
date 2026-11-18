@@ -31,10 +31,12 @@
 #include "embedded_data.h"
 #include "np_log.h"
 
-// ---- BEGIN CIE TABLES (written by negicc-station tools/export_cie_header.py; do not edit by hand) ----
+// ---- BEGIN CIE TABLES (copied from the cie_tables.h that negicc-station tools/export_cie_header.py writes) ----
 // The CIE 1931 2 degree standard observer and the relative spectral power of CIE illuminants D50 and D55, on
-// 380-780 nm at 1 nm, as tabulated by the CIE (from colour-science 0.4.7; D50 and D55 interpolated from 5 nm),
-// from negicc-station's data/cie/cie_1931_2deg_d50_d55.csv. Used for the colour of a print.
+// 380-780 nm at 1 nm, as colour-science 0.4.7 gives them (D50 and D55 interpolated from the CIE's 5 nm tables), from
+// negicc-station's data/cie/cie_1931_2deg_d50_d55.csv. Three z_bar values at 650-652 nm are interpolation residue of
+// the order of 1e-22, one of them negative, where the CIE's table is 0. No tool writes or checks this block: a change
+// to the tables is made by hand from that tool's output. Used for the colour of a print.
 constexpr int kCieSamples = 401;
 constexpr double kCieFirstNm = 380.0;   // 1 nm steps
 
