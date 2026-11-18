@@ -77,15 +77,25 @@ A RAW is opened with LibRaw and its black level is subtracted per channel (`np_i
   channel is within 64 of white. Four pixel-shift captures (Sony A7R IV) are merged instead
   (`cpu_pixel_shift_merge`). Other RAWs go through LibRaw's `dcraw_process` to camera RGB.
 
-Under the white light the scan goes through LibRaw (`np_input.cc`: `prepare_white_light_mosaic`,
-`decode_white_light`): the camera's daylight white balance and the flat field are applied on the mosaic, the
-camera channels are multiplied by gains that put this scan's film base on the profile's (2.3), and LibRaw demosaics
-bilinearly to linear Rec.2020 through its camera matrix, with no rescaling. A TIFF or JPEG under white light is
-converted to linear Rec.2020 through its embedded profile (`to_linear_rec2020`).
+Both RGB-LED images above are those of the default `-q -1`. With `-q 0` or more a single RAW is demosaiced by
+LibRaw's `dcraw_process` at that quality (4 is DCB), and its half-size image is LibRaw's half-size decode, a copy
+(`read_half_size`). A pixel-shift set is always merged.
 
 Under the RGB LED the bands are narrow and the three layers of the film are seen almost separately; the ratio
 debayer exists because film grain is independent in the three layers, so the gradients an edge-directed demosaic
 follows are mostly grain.
+
+Under the white light the scan goes through LibRaw (`np_input.cc`: `prepare_white_light_mosaic`,
+`decode_white_light`): the camera's daylight white balance and the flat field are applied on the mosaic, the
+camera channels are multiplied by gains that put this scan's film base on the profile's (2.3), and LibRaw demosaics
+to linear Rec.2020 through its camera matrix, with no rescaling: bilinearly, or at the quality `-q` gives. A linear
+DNG takes the white-light path with its own colour data; it needs a white-light profile set.
+
+A TIFF or JPEG under white light is converted to linear Rec.2020 (`to_linear_rec2020`): through its embedded ICC
+profile when it has one; without one, 8-bit samples are taken as sRGB, and 16-bit samples are taken as linear
+Rec.2020 already and are not converted. A TIFF with `--light_source tri` is taken as the scanning camera's linear RGB
+(black subtracted, no white balance or colour matrix) and goes through the crosstalk correction (2.4); a TIFF with an
+embedded profile or 8-bit samples is refused there.
 
 ## 2.2 Flat field
 
@@ -213,12 +223,12 @@ reference exposure (1/8 s, ISO 100) over the bracket's capture exposure:
 e_min = g_min / g_lo × k        e_max = g_max / g_hi × k        e_centre = sqrt(e_min e_max)
 usable range: e_min / 2^1.5 … e_max × 2^1.2
 ```
-
 Every `E` between `e_min` and `e_max` keeps the whole scene inside the calibrated range (the bracket is **feasible**
-when `e_min ≤ e_max`). The usable range lets the highlights exceed it by 1.5 stops and the shadows by 1.2. A bracket
-is **admissible** for the frame when the scene's span `log2(g_hi / g_lo)` is at most the bracket's span plus 2.7
-stops. When the scene exceeds a bracket by more than the two tolerances together, the usable range is inverted: no
-`E` keeps both ends within tolerance, and the range is the set of compromises between them.
+when `e_min ≤ e_max`). The usable range lets the highlights exceed it by 1.5 stops and the shadows by 1.2. A bracket is
+**admissible** for the frame when the scene's span `log2(g_hi / g_lo)` is at most the bracket's span over all its
+patches, `log2(g_max / g_min)`, plus 2.7 stops. When the scene exceeds a bracket by more than the two tolerances
+together, the usable range is inverted: no `E` keeps both ends within tolerance, and the range is the set of compromises
+between them.
 
 ## 3.4 The profiles' prediction errors
 
@@ -257,7 +267,10 @@ The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small 
 predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
 the mean CIELAB of photographs on that stock in their finished positive scans (2,908 for Portra 400), resampled in
 linear light to the network's input and averaged over the cell's 16 × 16 pixels. `σ` has no target: it is learned
-with the Gaussian negative log-likelihood loss.
+with a heteroscedastic Huber loss on the standardised residual `r = |lab − μ| / σ`, `H(r) + log σ` with `H` Gaussian
+(`r² / 2`) within one `σ` and linear beyond, so that a few badly predicted cells do not dominate. After training, `σ`
+is calibrated per channel on the validation photographers: multiplied by 1.24 to 1.45 (each adapter's
+`metadata.json`, `sigma_scale`), the mean unchanged.
 
 The **neutral head** (`models/neutral_head`) predicts per cell `p`, the probability that the cell should render grey,
 whatever cast the render has; the white-light curve fit uses it. The **tone heads** (`models/tone_head`) predict, from
@@ -314,8 +327,8 @@ little. The network's lightness follows the picture it is shown, so the search f
 (step 2) and lets only `a*` and `b*` be predicted again from each render.
 
 **The (E, g, b) optimiser** (`dinov3_auto_solver.cc`: `optimize_target_for_intent`) is a coordinate descent against a
-fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_cells`),
-not a full preview:
+fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_loss`;
+`intent_cells` gives the same cells for the correction below), not a full preview:
 
 1. `E` over 13 points across its window (plus ±0.03 and ±0.06 around a start), then ±1 and ±2 steps of 1/40 of the
    window, scored on the `L*` loss plus the penalties;
@@ -332,17 +345,23 @@ not the optimiser's reading of it, matches the field.
 
 **The steps:**
 
-1. **Brackets and their ranges.** In a set of five or more brackets, those whose grey scale spans less than 0.75 of
-   the widest one's are left out (at least three are kept: `filter_admissible_targets`). Each remaining bracket gets
-   its calibrated and usable range (3.3).
-2. **Metering and the lightness target.** Each admissible bracket is metered: the `E` at which the scene's
-   log-average renders at `L*` 50 with gains 1.10 and 1.15, by bisection (`exposure_for_lightness`; a bracket that
-   cannot render a neutral `L*` 50 within 0.25 ΔE is not metered). Every metered bracket is rendered at its metered
-   `E`, clamped to its usable range, and the predicted fields are averaged: the **bootstrap field**. Its `L*` is the
-   frame's lightness target for the rest of the search. When no bracket meters, the bracket whose range the scene fills
-   best (`|fill − 0.85| + 0.5` per stop of overflow) renders it alone.
+1. **Brackets and their ranges.** In a set of five or more brackets, those whose grey scale (`gs0` to `gs23`) spans
+   less than 0.75 of the widest one's are left out (at least three are kept: `filter_admissible_targets`; this is a
+   width test of the bracket alone, not the admissibility of 3.3). Each remaining bracket gets its calibrated and
+   usable range (3.3), and whether it is admissible. With `--target` the given bracket alone is kept, admissible or
+   not.
+2. **Metering and the lightness target.** Each admissible bracket (every bracket of step 1 when none is admissible)
+   is metered: the `E` at which the scene's log-average renders at `L*` 50 with gains 1.10 and 1.15, by bisection
+   (`exposure_for_lightness`; a bracket that cannot render a neutral `L*` 50 within 0.25 ΔE is not metered). Every
+   metered bracket is rendered at its metered `E`, clamped to its usable range, and the predicted fields are averaged:
+   the **bootstrap field**. Its `L*` is the frame's lightness target for the rest of the search. When no bracket
+   meters, the bracket whose range the scene fills best (`|fill − 0.85| + 0.5` per stop of overflow, an admissible one
+   when there is one) renders it alone at its `e_centre`. With `-E` one render makes the field, at the given `E`: the
+   deepest metered bracket's (its metered `E` furthest inside its usable range), or the best-fit one's when none
+   meters.
 3. **Screening.** Each metered bracket's `(E, g, b)` is optimised against the bootstrap field over its usable range,
-   from gains 1.22 and 1.15. The brackets are ranked by that loss.
+   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered). The brackets are ranked
+   by that loss.
 4. **Tournament.** The best two run a fixed-point loop (`SearchFrame::fixed_point`), with `E` held within ±0.5 stop of
    its screened value. Each step measures the shoulder's `x_hi`, renders the preview, updates the correction,
    predicts a field, puts the lightness target in its `L*`, measures the residual, and optimises the next `(E, g, b)`.
@@ -351,16 +370,22 @@ not the optimiser's reading of it, matches the field.
    than 1.5, and stops after 8 steps (`--dino_iters`). Each loop keeps its lowest-residual step. The lower residual
    wins; on TriLED among the converged loops when any converged.
 5. **Clip fallback.** When the winner white-clips more than 0.03 % of the crop (a channel at 16-bit code 65400 or
-   above), the next denser bracket is taken if it at least halves the clipping, moves the median `L*` by
-   no more than −4.5 to +0.5, and has a residual no more than 10 % higher.
+   above), the next denser bracket, when it was screened and is admissible, runs the loop of step 4 (or keeps its
+   tournament run) and is taken if it at least halves the clipping, moves the median `L*` by no more than −4.5 to
+   +0.5, and has a residual no more than 10 % higher. A bracket given with `--target` stays.
 6. **Highlight pullback.** A bright frame with highlights crowding the top was rendered too bright: median `L*` ≥ 58
-   with ≥ 2.2 % of the crop above sRGB 242 in a channel, or median `L*` ≥ 48 with ≥ 7.5 % above 242 (or, on bracket
-   4 and denser, ≥ 11 % above 235). On a feasible bracket with `E` below `e_min`, `E` is raised toward `e_min` by at
-   most 0.15 stop. On an infeasible one, steps 2 to 4 run again with penalties `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in
-   place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below `e_min` or above `e_max`; `slack`: stops by
-   which the scene overflows the bracket), and the result is taken if it clips no
-   more, keeps the median `L*` at 48 or within 6 of the first choice's, and moves to a denser bracket or raises `E` by
-   more than 2 %. Dark and backlit frames are left alone.
+   with ≥ 2.2 % of the crop above sRGB 242 in a channel, or median `L*` ≥ 48 with ≥ 7.5 % above 242 (or, on `Target 4`
+   and denser brackets, ≥ 11 % above 235). On a feasible bracket with `E` below `e_min`, `E` is raised toward `e_min` by
+   at most 0.15 stop. On an infeasible one, the bootstrap field, the screening and the tournament (steps 2 to 4, on the
+   brackets already metered, with the same lightness target) run again with penalties
+   `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below
+   `e_min` or above `e_max`; `slack`: stops by which the scene overflows the bracket); the runs are ranked by their
+   residual plus the same penalties, on TriLED among the converged runs when any converged. When the winner puts the
+   median `L*` more than 7.5 below the first choice's (on a frame with median `L*` ≥ 58; 4.5 otherwise), its `E` is
+   lowered, which brightens it, by 0.038 stop per `L*` of the excess, once. The result is taken if the share of the crop
+   above 242 grows by no more than 0.5 percentage point, the median `L*` stays at 48 or within 6 of the first choice's,
+   and it moves to a denser bracket or raises `E` by more than 2 %. Dark and backlit frames are left alone, and the
+   pullback does not run after the clip fallback took the next bracket, with `-E`, or on a one-bracket set.
 7. **Final shoulder.** `x_hi` is measured once more at the final parameters.
 
 The search's parameters, in the order the steps use them:
@@ -369,7 +394,7 @@ The search's parameters, in the order the steps use them:
 |---|---|---|
 | Inner crop | 90 % | The statistics and previews leave out the frame's border. |
 | Scene range | 0.5 % to 99.5 % of green | A few specular highlights or dust specks do not set the scene's range. |
-| Admissible brackets | span ≥ 0.75 of the widest, at least 3 | A bracket calibrating a much shorter range cannot hold a whole scene. |
+| Wide brackets | in a set of five or more: grey scale span ≥ 0.75 of the widest, at least 3 | A bracket calibrating a much shorter range cannot hold a whole scene. |
 | Overflow tolerances | 1.5 stops of highlight, 1.2 of shadow | How far a scene may exceed a bracket's calibrated range: the usable range and admissibility. |
 | Metering | `L*` 50 at gains 1.10, 1.15 | The exposure each bracket starts from. |
 | Bootstrap field | mean over every metered bracket | No single bracket sets the frame's lightness target. |
@@ -408,8 +433,9 @@ f(u)  = u (1 + a + k tanh(u − u_med))          held at slope 1 below the dense
 x'    = ref 2^f(u)
 ```
 
-`u_med` is the median cell's `u`. The fitted curve is composed into the bracket's input tables (stage "profile
-tables": `apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined profile.
+`a` is the channel's bend, the slope term the fit solves; `k`, a bend around the median, is 0 in the fit. `u_med` is the
+median cell's `u`. The fitted curve is composed into the bracket's input tables (stage "profile tables":
+`apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined profile.
 
 **The anchors.** Every cell that Auto's render puts between `L*` 2 and 92 is an anchor, weighted by `p²`:
 
@@ -551,9 +577,10 @@ D       = M D_light                                 the measure's density,  M = 
 film's dyes. `F` takes the dye amounts to the measure and depends on the film's dyes and the measure's response, not
 on the light. Each is a least-squares 3×3 with no offset, fitted on 3000 sample colours of a model of the film (its
 dye amounts along its neutral scale between log exposure −1.5 and 1.0, with a log-normal colour variation;
-`bundle.json`: `density_matrices.light_to_film`, `film_to_measure`). A scanner with another light replaces `L` alone.
-Status M alone is calibrated on the chart: `φ` (`light_density_factors`) holds the chart's grey scale to the film
-model's Status M with one factor on the green and one on the blue LED density, applied when within 0.10 of 1.
+`bundle.json`: `density_matrices.light_to_film` and `density_matrices.<measure>.film_to_measure`). A scanner with
+another light replaces `L` alone. Status M alone is calibrated on the chart: `φ` (`light_density_factors`) holds the
+chart's grey scale to the film model's Status M with one factor on the green and one on the blue LED density,
+applied when within 0.10 of 1.
 
 **The grey balance curve.** `G_c(d)` is the APD of the film's grey that has light density `d` in channel `c`
 (`density_matrices.grey_balance_curves`). It comes from the grey steps of all seven brackets (168 points): the red
@@ -562,7 +589,8 @@ then through `M` for APD. 501 points per channel, light density −0.5 to 4.5 in
 
 **A bracket's mid grey and tilt.** The chart's 18 % grey step `gs10` of each bracket, through the APD matrix, gives
 its mid grey as green APD, `A_mid` (`bracket_mid_apd`). The bracket's grey steps, against the curve, give its tilt
-`t_c`: the slope of its grey scale relative to the curve (`density_matrices.brackets.<bracket>.grey_relative.b`).
+`t_c`: the slope of its grey scale relative to the curve
+(`density_matrices.brackets.targets.<bracket>.grey_relative.b`).
 The film's channels change their relation with exposure, more on some stocks than others, which a per-bracket tilt
 follows:
 
@@ -663,8 +691,12 @@ deterministic on the same build, machine and backend. `--brightness`, `--tint` a
 and move `E`, `g` and `b` (solved through the bracket's chart profile). A picture output with `--print` needs a
 TriLED bundle with grey balance curves; a white-light scan takes `--print` with a density output only.
 
-The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid`, the search (`a0`, the lightness target, the steps), and
-per channel the shares of the crop past the knee and past the cut at `E`.
+The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
+and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
+the crop above the knee (`above_knee`), the film base's factor (`base_factor`, 5.8), per channel the shares of the
+crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
+(`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
+move (`last_move`).
 
 ## 5.7 The print's white
 
@@ -742,11 +774,12 @@ S_c           = (k_green / k_c) (1 + t_c(A)),   k_c = Σ_j M_cj dn_j/dA      (S_
 ```
 
 `dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
-`1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has equal contrast in the
-three channels. With `--print` on a TriLED bundle the density run searches each material's print (5.6) and its CLF
-carries that `A`, `g` and `b`, so the CLF prints what the picture output prints. The print CLF is relative to the
-paper's white like the print ICC. `tools/check_print_clf.py` applies a CLF to the density file and compares it with
-the picture (CIEDE2000 at 1000 pixels, the CLF applied at full resolution before both are shrunk in linear light).
+`1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has
+equal contrast in the three channels. With `--print` on a TriLED bundle the density run searches each material's print
+(5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints. The print CLF is
+relative to the paper's white like the print ICC. `tools/check_print_clf.py` applies a CLF to the density file and
+compares it with the picture (CIEDE2000 at 1000 pixels, the CLF applied at full resolution before both are shrunk in
+linear light).
 
 | Parameter | Value | Purpose |
 |---|---|---|
@@ -813,14 +846,18 @@ For RP 180, APD, white-light sets and uncalibrated Status M the second term vani
 calibrated Status M file it undoes `φ`, so the chart calibration belongs to the Status M readout alone and the APD
 slopes apply once. The standard measures' response curves are not shipped, so `P` is not fitted against them.
 
-**The density matrices' accuracy** on the film model (`fit_rms_density`, `fit_max_density`), over the three stocks
-and densities up to about 2.2 above the base; errors against the model, not the film:
+**The density matrices' accuracy** on the film model (`fit_rms_density`, `fit_max_density`) for the RGB-LED profile
+sets, over the three stocks and densities up to about 2.2 above the base; errors against the model, not the film:
 
 | Measure | RMS (density) | Worst (density) |
 |---|---|---|
 | Status M | up to 0.004 | up to 0.04, in green |
 | RP 180 | up to 0.004 red and green, 0.010 blue | up to 0.10, in blue |
 | APD | up to 0.010 red, 0.002 green and blue | up to 0.08, in red |
+
+On the white-light profile sets, whose `L` reads the film through the CIE observer and the Rec.2020 matrix (5.10),
+the matrices fit the model less closely: RMS up to 0.012 (Status M), 0.018 (RP 180) and 0.016 (APD), and the worst
+up to 0.15, 0.22 and 0.20, each largest in green.
 
 The datasheets give no base density below about 400 nm or above about 700 nm, and the nearest measured value is held
 there; RP 180 blue and APD red respond partly outside that range (`response_outside_film_data`).
