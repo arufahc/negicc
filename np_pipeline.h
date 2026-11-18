@@ -114,7 +114,8 @@ struct Setup {
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
   ContinuousPrint print_cp;           // the search's view of it
   double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
-  double print_paper_xyz[3] = {0.9642, 1.0, 0.8249};   // the lightest node of the print's table: the paper's white
+  // The lightest node of the print's table: the paper's white.
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   ContinuousPrintResult print_cr;     // the print's search
   std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a TriLED density run's, per material
   bool print_searched = false;

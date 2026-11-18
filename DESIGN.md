@@ -289,7 +289,7 @@ Every output pixel goes through these stages once (`color_pipeline.h`: `convert_
 x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
 y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
 XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
-rgb   = srgb_from_XYZ(bradford_D50→D65(XYZ)),  clamped at 0               linear sRGB, up to about 1.33
+rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
 rgb'  = shoulder(rgb), clamped to [0, 1]                                  sRGB output only
 rgb'' = tone(rgb')                                                        sRGB output, after a search only
 out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
@@ -706,8 +706,10 @@ move (`last_move`).
 
 The table's lightest node is the paper's base under its viewing light, against a perfect white (`Y` = 1). The print
 is shown relative to its paper, as the ICC defines media-relative colorimetry: each of X, Y and Z of every node is
-scaled by D50's over the paper base's, so the base becomes D50, the display's white, in the preview the search sees
-and in the output (`np_pipeline.cc`: `to_paper_white`). The paper's tint is then not shown, as an eye adapted to the
+scaled by the PCS white's over the paper base's, so the base becomes the display's white in the preview the search
+sees and in the output (`np_pipeline.cc`: `to_paper_white`). The PCS white is D50 as an ICC profile stores it,
+(63190, 65536, 54061) / 65536 (`kPcsWhite`), which the sRGB profile's colorants sum to, so the base is written at 65535
+in all three channels. The paper's tint is then not shown, as an eye adapted to the
 paper does not see it. A saturated light colour can still have an sRGB channel above 1, which is cut
 (`profile.print.search.above_white_pct`).
 
