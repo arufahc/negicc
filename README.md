@@ -299,40 +299,16 @@ how they take the scan into that table:
 
 ![Print TRC Curves and Shared 45x45x45 Print cLUT Gamut](samples/print_trc_and_clut.png)
 
-### Tone curve and TriLED vs. D65 accuracy
-
-- **Tone stage disabled:** When `--print` is used, the DINOv3 tone curve stage (`--tone_stage`) and the scene
-  highlight shoulder are disabled so that the output shows the print material's own characteristic S-curve, toe and
-  paper-white shoulder unmodified. (`--brightness` adjusts the printing exposure `A`, and `--tint` and `--warmth`
-  adjust the print's colour balance, for both the picture output and the density CLFs.)
-- **TriLED vs. D65 white light:** Under the narrow-band RGB LED (`--light_source tri`), the three LED spectra are
-  measured and separate the film's three dye layers directly: against the full spectral print model (integrating the
-  film's dye spectra under the 3200 K printer lamp), the 3 × 3 print matrix fits the printing density to 0.005–0.009
-  RMS and reproduces the spectral print to **0.6 to 1.5 ΔE₀₀ on average** (median 0.4 to 0.7 ΔE₀₀ across the three film
-  stocks; the print ICC's 45³ table adds only 0.04 ΔE₀₀ of interpolation error). Under broadband white light
-  (`--light_source d65`), no lamp or camera spectrum is measured — the decoded channels are taken as standard linear
-  Rec.2020 under D65, with no curve fit applied on a print — so the density reading is 0.03 to 0.09 APD RMS from the
-  narrow-band reading, and a chart patch printed from a white-light scan differs from the same patch printed from an
-  RGB-LED scan by **2.7 to 3.3 ΔE₀₀ on average**.
-
-| Material | Type | Viewing light | Its paper white, L\* a\* b\* under that light (shown at the display's white) |
-|---|---|---|---|
-| Kodak Professional Portra Endura (`kodak_portra_endura`) | paper | D50 | 92.1, +0.15, +0.80 |
-| Kodak Professional Supra Endura (`kodak_supra_endura`) | paper | D50 | 92.7, +0.09, +0.39 |
-| Kodak Professional Ultra Endura (`kodak_ultra_endura`) | paper | D50 | 82.9, +0.62, −4.10 |
-| Kodak Professional Endura Premier (`kodak_endura_premier`) | paper | D50 | 90.9, +0.56, −2.73 |
-| Kodak Ektacolor Edge (`kodak_ektacolor_edge`) | paper | D50 | 90.9, +0.16, +0.06 |
-| Fujifilm Crystal Archive Type II (`fujifilm_crystal_archive_typeii`) | paper | D50 | 92.7, +0.07, +0.45 |
-| Kodak Vision 2383 (`kodak_2383`) | print film | D55 | 94.4, +0.23, +5.97 |
-| Kodak Vision Premier 2393 (`kodak_2393`) | print film | D55 | 94.5, −0.12, +1.84 |
+On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's original tone curve.
+Under the narrow-band RGB LED (`--light_source tri`), the print emulation matches the full spectral print model to 0.6
+to 1.5 ΔE₀₀ on average; under broadband white light (`--light_source d65`), where the lamp and camera spectra are not
+measured, a printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each searched by its
-own print search (`--print <material> -P srgb`), shown relative to its paper's white, and matched to the scene
-conversion's lightness with `--brightness` (the offset in stops is shown in each cell's title: Portra Endura `+0.41`,
-Supra Endura `+0.45`, Ultra Endura `+0.55`, Endura Premier `+0.68`, Ektacolor Edge `+0.56`, Crystal Archive Type II
-`+0.51`, Vision 2383 `+0.40`, Vision Premier 2393 `+0.42`).*
+own print search (`--print <material> -P srgb`) and matched to the scene conversion's lightness with `--brightness`
+(the offset in stops is in each cell's title).*
 
 ## Options
 
