@@ -707,8 +707,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
   }
-  // The format the film base's frame detection looked for (--roi auto's, 35mm unless --film_format gave another): an
-  // explicit --roi without it looks for every format, which may place the base's patch elsewhere.
+  // The format the film base's frame detection looked for when the run was not given one (--roi auto's default,
+  // 35mm): an explicit --roi without it looks for every format, which may place the base's patch elsewhere.
   if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 

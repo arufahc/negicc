@@ -1994,8 +1994,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       negicc::RgbView half_view = read_base(raw);
       negicc::RgbView frame =
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
-      // A single RAW's base detection (find_frame, below) serves the floor as on the CFA path; TIFF, JPEG, three
-      // captures and a linear DNG have no detection without --roi auto, so their floor reads the whole scan.
+      // A single RAW's or linear DNG's base detection (find_frame, below) serves the floor as on the CFA path; TIFF,
+      // JPEG and three captures have no detection without --roi auto, so their floor reads the whole scan.
       floor_print_base(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h, scan_shutter_s,
                        scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
@@ -2060,7 +2060,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // (RawProcessor::load_raw_white_light), and reads the base from its rebate patch; neg_process does the same, with
   // --film_format when given (every format otherwise, as the station), so both read the same base. With --roi auto
   // the detection that found the frame serves (base_det: above).
-  if (!o.roi_auto && s.is_bundle && o.files.size() == 1 && o.input_mode == InputMode::kRaw) {
+  // A linear DNG too: --roi auto detects on it (film_image_from_raw reads its RGB), so its replay with the recorded
+  // --roi must as well.
+  if (!o.roi_auto && s.is_bundle && o.files.size() == 1 &&
+      (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng)) {
     find_frame = [&](LibRaw& raw, int roi[4]) {
       FilmImage mosaic;
       if (film_image_from_raw(raw, mosaic)) {
@@ -3156,7 +3159,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.roi = scan.roi;
   sc.roi_source = roi_source;
   sc.frame_det = o.roi_auto ? &scan.frame_det : nullptr;
-  if (scan.base_det_format != FILM_FORMAT_AUTO) sc.film_format = film_format_name(scan.base_det_format);
+  // Only a format the run was not given (--roi auto's default): a given --film_format is the caller's, as the other
+  // set-up flags are, and the parser refuses it twice.
+  if (scan.base_det_format != FILM_FORMAT_AUTO && !o.film_format_given)
+    sc.film_format = film_format_name(scan.base_det_format);
   sc.rot_cw = scan.rot_cw;
   sc.hflip = scan.hflip;
   sc.vflip = scan.vflip;
