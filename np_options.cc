@@ -811,14 +811,19 @@ int parse_options(int ac, char* av[], Options& o) {
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given},  {"-E", o.exposure_given},
-        {"--gain_g", o.gain_g_given},  {"--gain_b", o.gain_b_given},
+        {"--target", o.target_given},
+        {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},
+        {"--gain_b", o.gain_b_given},
         // the knobs move a print's CLF (each material's own print search): they apply with --print
         {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
         {"--tint", parser.is_used("--tint") && o.prints.empty()},
-        {"--warmth", parser.is_used("--warmth") && o.prints.empty()}, {"--dino", parser.is_used("--dino")},
-        {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
-        {"--fit_curves", fit_set},             {"--tone_stage", tone_set},
+        {"--warmth", parser.is_used("--warmth") && o.prints.empty()},
+        {"--dino", parser.is_used("--dino")},
+        {"--dino_backend", parser.is_used("--dino_backend")},
+        {"--dino_iters", o.dino_iters_given},
+        {"--fit_curves", fit_set},
+        {"--tone_stage", tone_set},
     };
     for (const Refused& r : refused) {
       if (r.used) {

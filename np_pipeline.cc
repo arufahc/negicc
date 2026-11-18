@@ -1628,6 +1628,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
+    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured for it.
+    if (!s.print_id.empty()) return true;
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
       // The curve fit measured the roll-off on this frame, at these E, g and b, on this combined profile, as below
       // (its last re-meter pass): the same numbers, not measured a third time.
@@ -1698,6 +1700,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.above_knee = cr.above_knee;
       for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
       ps.stopped_by = cr.stopped_by;
+      ps.a0 = cr.a0;
+      ps.wish_l = cr.wish_mean_l;
+      for (int c = 0; c < 3; ++c) {
+        ps.above_white_pct[c] = cr.above_white_pct[c];
+        ps.at_white_pct[c] = cr.at_white_pct[c];
+      }
       if (o.knobs_given) {
         // The knobs on this print as on the picture (solve_knobs_and_rolloff): A, g and b moved on its profile, E held.
         auto print_at = [&](double a, double g, double b, ParsedFilmProfile& p) {

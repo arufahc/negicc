@@ -251,26 +251,26 @@ class PatchedHeaderStream : public LibRaw_bigfile_datastream {
 int open_raw_file(LibRaw* proc, const std::string& fn) {
   int ret = proc->open_file(fn.c_str());
   if (ret == LIBRAW_FILE_UNSUPPORTED) {
-    PatchedHeaderStream stream(fn.c_str());
-    if (stream.valid() && stream.is_patched()) {
-      ret = proc->open_datastream(&stream);
-      if (ret == LIBRAW_SUCCESS) return ret;
+    // LibRaw keeps reading the stream after it opens (unpack, unpack_thumb), so the stream lives on the heap and proc
+    // owns it, as LibRaw::open_file owns its own: input_internal makes LibRaw delete it on recycle() and in its
+    // destructor.
+    PatchedHeaderStream* stream = new PatchedHeaderStream(fn.c_str());
+    if (stream->valid() && stream->is_patched()) {
+      internal_data_t& id = proc->get_internal_data_pointer()->internal_data;
+      id.input_internal = 0;
+      ret = proc->open_datastream(stream);
+      if (ret == LIBRAW_SUCCESS) {
+        id.input_internal = 1;
+        return ret;
+      }
     }
+    delete stream;
   }
   return ret;
 }
 
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
-  int ret = proc->open_file(fn.c_str());
-  if (ret == LIBRAW_FILE_UNSUPPORTED) {
-    PatchedHeaderStream stream(fn.c_str());
-    if (stream.valid() && stream.is_patched()) {
-      ret = proc->open_datastream(&stream);
-      if (ret != LIBRAW_SUCCESS) return ret;
-      log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
-      return proc->unpack();
-    }
-  }
+  const int ret = open_raw_file(proc, fn);
   if (ret != LIBRAW_SUCCESS) return ret;
   log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   return proc->unpack();
@@ -1298,6 +1298,14 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
         if (negicc::is_jpeg_file(files[k]) || !negicc::read_tiff(files[k], img, err)) {
           log_error("%s: %s\n", files[k].c_str(),
                   err.empty() ? "three captures must be RAWs, DNGs or TIFFs" : err.c_str());
+          return delete proc, nullptr;
+        }
+        // A capture is one channel of linear camera RGB, as a RAW capture is read: a TIFF with an ICC profile or
+        // 8-bit samples is colour-managed, which the single TIFF converts (a d65 bundle) and three captures cannot.
+        if (!img.icc.empty() || img.bits != 16) {
+          log_error("%s is colour-managed (%s), not the linear camera RGB three captures are read as: give 16-bit "
+                    "linear TIFFs without an ICC profile, or the RAWs\n", files[k].c_str(),
+                    !img.icc.empty() ? "it has an ICC profile" : "8 bits");
           return delete proc, nullptr;
         }
         cw = img.width;

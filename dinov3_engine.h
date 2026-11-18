@@ -222,8 +222,9 @@ private:
     float b2_ = 0.0f;
 };
 
-// The tone heads of the tone stage (both lights): from the frozen DINOv3 features of a preview, the tone a lab scan of the frame would
-// have, as 11 descriptors of its pixel L* and chroma at network size (mean and standard deviation of each):
+// The tone heads of the tone stage (both lights): from the frozen DINOv3 features of a preview, the tone a lab scan of
+// the frame would have, as 11 descriptors of its pixel L* and chroma at network size (mean and standard deviation of
+// each):
 //   L2 L5 L10 L50 L90 L95 L98 (L* percentiles), IQR (L75 - L25), R9010 (L90 - L10), Cmean (mean C*ab), C90.
 // Input: the 1920 pooled features [CLS of layer 12, mean patch token of layer 9, mean patch token of layer 12 (the
 // backbone's "pooled" output, 1152), the patch tokens' standard deviation (DinoV3InferenceResult::token_sd, 768)],

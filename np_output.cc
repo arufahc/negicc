@@ -540,7 +540,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     det["reason"] = d->reason;
     det["frame_conf"] = num(d->frame_conf, "%.3f");
     det["light_clipped"] = d->light_clipped;
-    det["thinnest_over_patch_stops"] = d->has_outshone ? num(d->thinnest_over_patch_stops, "%.4f") : ordered_json(nullptr);
+    det["thinnest_over_patch_stops"] =
+        d->has_outshone ? num(d->thinnest_over_patch_stops, "%.4f") : ordered_json(nullptr);
     fb["detector"] = det;
   } else {
     fb["detector"] = nullptr;
@@ -549,12 +550,14 @@ bool write_json_sidecar(const Sidecar& sc) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
   // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's
-  // thinnest film (print_base_floor); the base as found and the factor.
+  // thinnest film (print_floor_base, with print_base_floor's factor); the base as found and the factor.
   if (sc.print_floor_applied) {
-    fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is scaled to it; "
-                                    "film_base_rgb is the bundle's at its own exposure when nothing was raised)"},
+    fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is "
+                                    "scaled to it; film_base_rgb is the bundle's at its own exposure when nothing was "
+                                    "raised)"},
                          {"found_source", sc.print_floor_found_source},
-                         {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"), num(sc.print_floor_found_rgb[1], "%.10g"),
+                         {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"),
+                                        num(sc.print_floor_found_rgb[1], "%.10g"),
                                         num(sc.print_floor_found_rgb[2], "%.10g")}},
                          {"factor", num(sc.print_floor_k, "%.6g")},
                          {"frame", sc.print_floor_frame},
@@ -591,30 +594,34 @@ bool write_json_sidecar(const Sidecar& sc) {
       }
       // The print's white, its mid grey A and the bracket's own, and its search (np_pipeline: search_print_continuous).
       j["profile"]["print"]["white"] = "paper";   // media-relative: the paper's base at the display's white
-      j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"), num(sc.print_paper_xyz[1], "%.6g"),
+      j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"),
+                                                  num(sc.print_paper_xyz[1], "%.6g"),
                                                   num(sc.print_paper_xyz[2], "%.6g")};
       if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
-      if (std::isfinite(sc.print_tilt[0]))   // the brackets' tilt (grey_relative.b) at that A, linear in A between brackets
-        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"), num(sc.print_tilt[2], "%.9g")};
+      // The brackets' tilt (grey_relative.b) at that A, linear in A between brackets.
+      if (std::isfinite(sc.print_tilt[0]))
+        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"),
+                                         num(sc.print_tilt[2], "%.9g")};
       if (sc.print_searched) {
-        j["profile"]["print"]["search"] = {{"a0", num(sc.print_a0, "%.9g")}, {"wish_L", num(sc.print_wish_l, "%.6g")},
-                                           {"steps", sc.print_steps}, {"converged", sc.print_converged},
-                                           {"stopped_by", sc.print_stopped_by},
-                                           {"above_knee_pct", num(100.0 * sc.print_above_knee, "%.4g")},
-                                           {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
-                                           {"past_knee_pct", {num(100.0 * sc.print_past_knee[0], "%.4g"), num(100.0 * sc.print_past_knee[1], "%.4g"),
-                                                              num(100.0 * sc.print_past_knee[2], "%.4g")}},
-                                           {"past_cut_pct", {num(100.0 * sc.print_past_cut[0], "%.4g"), num(100.0 * sc.print_past_cut[1], "%.4g"),
-                                                             num(100.0 * sc.print_past_cut[2], "%.4g")}},
-                                           {"above_white_pct", {num(sc.print_above_white[0], "%.4g"), num(sc.print_above_white[1], "%.4g"),
-                                                                num(sc.print_above_white[2], "%.4g")}},
-                                           {"at_white_pct", {num(sc.print_at_white[0], "%.4g"), num(sc.print_at_white[1], "%.4g"),
-                                                             num(sc.print_at_white[2], "%.4g")}},
-                                           {"a0_at_range_end", sc.print_a0_at_end},
-                                           {"last_move", {num(sc.print_last_move[0], "%.4g"), num(sc.print_last_move[1], "%.4g"),
-                                                          num(sc.print_last_move[2], "%.4g")}}};
+        auto three = [&](const float* v, double scale) {
+          return ordered_json{num(scale * v[0], "%.4g"), num(scale * v[1], "%.4g"), num(scale * v[2], "%.4g")};
+        };
+        j["profile"]["print"]["search"] = {
+            {"a0", num(sc.print_a0, "%.9g")},
+            {"wish_L", num(sc.print_wish_l, "%.6g")},
+            {"steps", sc.print_steps},
+            {"converged", sc.print_converged},
+            {"stopped_by", sc.print_stopped_by},
+            {"above_knee_pct", num(100.0 * sc.print_above_knee, "%.4g")},
+            {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
+            {"past_knee_pct", three(sc.print_past_knee, 100.0)},
+            {"past_cut_pct", three(sc.print_past_cut, 100.0)},
+            {"above_white_pct", three(sc.print_above_white, 1.0)},
+            {"at_white_pct", three(sc.print_at_white, 1.0)},
+            {"a0_at_range_end", sc.print_a0_at_end},
+            {"last_move", three(sc.print_last_move, 1.0)}};
       } else if (!sc.cached_print_search_json_str.empty()) {
         // A run that reused <output>.json (the knobs) starts from that run's A (knobs.base.a): its search's record
         // carries over.
@@ -645,7 +652,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
       cli.push_back(std::to_string(v));
   }
-  if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  if (sc.is_bundle && sc.bundle_target_idx >= 0)
+    cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.
