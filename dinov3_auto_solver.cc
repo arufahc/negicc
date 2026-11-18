@@ -78,11 +78,27 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
   }
 }
 
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand, float m[9],
+                                        std::vector<float> trc[3]) {
+  if (!cfg.gain_curves) {
+    negicc::candidate_matrix(merged, cand.e, cand.g, cand.b, m);
+    return make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
+  }
+  (*cfg.gain_curves)(cand.g, cand.b, trc);
+  ProfileData prof = *cfg.prof;
+  for (int c = 0; c < 3; ++c) {
+    prof.in_trc[c] = trc[c].data();
+    prof.in_trc_size[c] = (int)trc[c].size();
+  }
+  negicc::candidate_matrix(merged, cand.e, 1.0f, 1.0f, m);
+  return make_pipeline_config(prof, cfg.knee, cfg.shoulder);
+}
+
 void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                   const IntentGains& cand, float* lab_out) {
-  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
   float m[9];
-  negicc::candidate_matrix(merged, cand.e, cand.g, cand.b, m);
+  std::vector<float> trc[3];
+  const negicc::PipelineConfig pc = candidate_config(cfg, merged, cand, m, trc);
   for (int i = 0; i < n_px; ++i) {
     const negicc::Rgb lin = negicc::convert_pixel_linear(pc, m, grid_rgb16 + i * 3);
     const negicc::Lab lab = negicc::linear_srgb_to_lab(negicc::to_display(pc, lin));
@@ -94,11 +110,15 @@ void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* 
 
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                  const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out) {
-  const negicc::PipelineConfig pc = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
+  const negicc::PipelineConfig pc_matrix = make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
   #pragma omp parallel for schedule(dynamic)
   for (int c = 0; c < n_cand; ++c) {
     float m[9];
-    negicc::candidate_matrix(merged, cand[c].e, cand[c].g, cand[c].b, m);
+    std::vector<float> trc[3];
+    negicc::PipelineConfig pc_curves;
+    if (cfg.gain_curves) pc_curves = candidate_config(cfg, merged, cand[c], m, trc);
+    else negicc::candidate_matrix(merged, cand[c].e, cand[c].g, cand[c].b, m);
+    const negicc::PipelineConfig& pc = cfg.gain_curves ? pc_curves : pc_matrix;
     double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
     for (int i = 0; i < n_px; ++i) {
       const uint16_t* px = grid_rgb16 + i * 3;

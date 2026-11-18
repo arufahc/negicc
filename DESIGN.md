@@ -679,7 +679,9 @@ alone.
 
 A print is searched on its own profile, not on the chart profiles: its lightness once and continuously in `A`, its
 colour in `g` and `b` (`multi_target_optimizer.cc`: `search_print_continuous`). It runs on the material's print
-profile, made relative to the paper's white (5.7), with its curves written for each `A` it tries (5.5).
+profile, made relative to the paper's white (5.7), with its curves written for each `A`, `g` and `b` it tries and
+the matrix at `E` alone, as the conversion renders the print (5.5): every preview, every optimiser cell and the shares
+at white below score the picture the conversion writes.
 
 1. **E is held** where the frame's film base reads `n0` (search units `E = e_norm`; the result's `E` is 1), so the
    print is the negative's own density above its base, as the brackets were measured, whatever the scan's exposure.
