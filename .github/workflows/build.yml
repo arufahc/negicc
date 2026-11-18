@@ -24,8 +24,11 @@ jobs:
           submodules: recursive
 
       - name: Initialize ONNX Runtime submodule
+        # actions/checkout skips this submodule (update = none in .gitmodules) and leaves this repository's token in
+        # http.https://github.com/.extraheader; sent to microsoft/onnxruntime, it is refused and the clone stops at a
+        # credential prompt. An empty value clears the header for this public clone only.
         run: |
-          git submodule update --init --checkout --depth 1 3rd_party/onnxruntime
+          git -c http.https://github.com/.extraheader= submodule update --init --checkout --depth 1 3rd_party/onnxruntime
           echo "ORT_COMMIT=$(git -C 3rd_party/onnxruntime rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Cache static ONNX Runtime build
