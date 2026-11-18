@@ -306,12 +306,14 @@ how they take the scan into that table:
   paper-white shoulder unmodified. (`--brightness` adjusts the printing exposure `A`, and `--tint` and `--warmth`
   adjust the print's colour balance, for both the picture output and the density CLFs.)
 - **TriLED vs. D65 white light:** Under the narrow-band RGB LED (`--light_source tri`), the three LED spectra are
-  measured and separate the film's three dye layers directly, fitting the film model's Academy Printing Density to
-  within 0.010 RMS (and the print ICC's table sampling error is 0.04 ΔE₀₀ on the chart). Under broadband white light
+  measured and separate the film's three dye layers directly: against the full spectral print model (integrating the
+  film's dye spectra under the 3200 K printer lamp), the 3 × 3 print matrix fits the printing density to 0.005–0.009
+  RMS and reproduces the spectral print to **0.6 to 1.5 ΔE₀₀ on average** (median 0.4 to 0.7 ΔE₀₀ across the three film
+  stocks; the print ICC's 45³ table adds only 0.04 ΔE₀₀ of interpolation error). Under broadband white light
   (`--light_source d65`), no lamp or camera spectrum is measured — the decoded channels are taken as standard linear
   Rec.2020 under D65, with no curve fit applied on a print — so the density reading is 0.03 to 0.09 APD RMS from the
   narrow-band reading, and a chart patch printed from a white-light scan differs from the same patch printed from an
-  RGB-LED scan by 2.7 to 3.3 ΔE₀₀ on average.
+  RGB-LED scan by **2.7 to 3.3 ΔE₀₀ on average**.
 
 | Material | Type | Viewing light | Its paper white, L\* a\* b\* under that light (shown at the display's white) |
 |---|---|---|---|
@@ -326,23 +328,11 @@ how they take the scan into that table:
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: scene colour matching (without `--print`; mean L\* 52.9, median L\* 66.0). Then the six papers and the two
-print films, each rendered by its own automatic print search (`--print <material> -P srgb`) and shown relative to its
-paper's white — they are not forced to the same lightness, because each material's characteristic S-curve has its own
-toe and contrast. To match a print's overall lightness to the scene conversion with `--brightness <stops>` (computed
-from the relative luminance of the scene's and the print's mean L\*):*
-
-| Grid cell | Material (`--print`) | Auto mean / median L\* | `--brightness` to match scene mean L\* (median L\*) |
-|---|---|---|---|
-| Top left | Scene picture (no `--print`) | 52.9 / 66.0 | `0.00` (`0.00`) |
-| Top middle | Kodak Portra Endura (`kodak_portra_endura`) | 47.1 / 61.2 | `+0.38` (`+0.26`) |
-| Top right | Kodak Supra Endura (`kodak_supra_endura`) | 46.6 / 61.8 | `+0.42` (`+0.23`) |
-| Middle left | Kodak Ultra Endura (`kodak_ultra_endura`) | 44.8 / 60.1 | `+0.54` (`+0.32`) |
-| Center | Kodak Endura Premier (`kodak_endura_premier`) | 43.4 / 56.7 | `+0.65` (`+0.52`) |
-| Middle right | Kodak Ektacolor Edge (`kodak_ektacolor_edge`) | 44.8 / 57.8 | `+0.54` (`+0.46`) |
-| Bottom left | Fujifilm Crystal Archive Type II (`fujifilm_crystal_archive_typeii`) | 45.4 / 60.3 | `+0.50` (`+0.31`) |
-| Bottom middle | Kodak Vision 2383 (`kodak_2383`) | 46.8 / 63.5 | `+0.40` (`+0.14`) |
-| Bottom right | Kodak Vision Premier 2393 (`kodak_2393`) | 46.3 / 63.1 | `+0.44` (`+0.15`) |
+*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each searched by its
+own print search (`--print <material> -P srgb`), shown relative to its paper's white, and matched to the scene
+conversion's lightness with `--brightness` (the offset in stops is shown in each cell's title: Portra Endura `+0.41`,
+Supra Endura `+0.45`, Ultra Endura `+0.55`, Endura Premier `+0.68`, Ektacolor Edge `+0.56`, Crystal Archive Type II
+`+0.51`, Vision 2383 `+0.40`, Vision Premier 2393 `+0.42`).*
 
 ## Options
 
