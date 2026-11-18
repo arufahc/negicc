@@ -1427,6 +1427,101 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   return true;
 }
 
+// The knobs on a print (negicc #120; station designs/print_search_ways.md, "The knobs on a print"): brightness moves the print's mid grey A (its
+// curves recomputed at A), tint and warmth move g and b (in the print's curves), E held. The grey is the film point the
+// print at (a0, g0, b0) renders as neutral L* 50; the solve finds (A, g, b) so that it renders at the target through the
+// print at (A, g, b). Newton on (A, ln g, ln b) with central differences (kPrintKnobDA in A, GreyPoint's FD_STEP in
+// ln g and ln b); unreachable targets are scaled back as solve_grey_knobs scales them.
+bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
+                       double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
+                       PrintKnobResult& out) {
+  constexpr double kPrintKnobDA = 1e-3;      // APD: the step of d Lab / d A (new constant, declared)
+  constexpr double kPrintKnobMaxDA = 0.1;    // APD: the largest Newton step in A (new constant: the paper's curve is
+                                             // steep, and a full step overshoots there)
+  constexpr int kPrintKnobIter = 30;         // Newton iterations at most (new constant, declared)
+  constexpr double FD_STEP = 0.05, MAX_LOG_STEP = 0.25;   // ln g, ln b: GreyPoint's own values
+  constexpr float TOLERANCE = 0.02f;         // GreyPoint's: every Lab component within it ends the solve
+  constexpr float REACHABLE = 0.25f;         // as solve_grey_knobs
+  out = PrintKnobResult{};
+  out.a = a0; out.g = g0; out.b = b0;
+  ParsedFilmProfile prof;
+  print_at(a0, g0, b0, prof);
+  float log_t0[3];
+  if (!GreyPoint(prof.data).reference_grey(log_t0)) return false;
+  const float one[3] = {1.0f, 1.0f, 1.0f};
+  auto render = [&](double a, double lg, double lb, float lab[3]) {
+    ParsedFilmProfile p;
+    print_at(a, std::exp(lg), std::exp(lb), p);
+    GreyPoint(p.data).grey(log_t0, one, one, lab);
+  };
+  auto solve_to = [&](const float target[3], double x_out[3]) -> float {
+    double x[3] = {a0, std::log((double)g0), std::log((double)b0)};
+    float lab[3];
+    render(x[0], x[1], x[2], lab);
+    float err = 0.0f;
+    for (int it = 0; it < kPrintKnobIter; ++it) {
+      double r[3];
+      bool within = true;
+      for (int c = 0; c < 3; ++c) { r[c] = target[c] - lab[c]; within = within && std::fabs(r[c]) <= TOLERANCE; }
+      if (within) break;
+      double J[9];
+      const double h[3] = {kPrintKnobDA, FD_STEP, FD_STEP};
+      for (int v = 0; v < 3; ++v) {     // central differences, as GreyPoint
+        double xp[3] = {x[0], x[1], x[2]}, xm[3] = {x[0], x[1], x[2]};
+        xp[v] += h[v];
+        xm[v] -= h[v];
+        float lp[3], lm[3];
+        render(xp[0], xp[1], xp[2], lp);
+        render(xm[0], xm[1], xm[2], lm);
+        for (int c = 0; c < 3; ++c) J[c * 3 + v] = (lp[c] - lm[c]) / (2.0 * h[v]);
+      }
+      const double det = J[0] * (J[4] * J[8] - J[5] * J[7]) - J[1] * (J[3] * J[8] - J[5] * J[6]) + J[2] * (J[3] * J[7] - J[4] * J[6]);
+      if (!(std::fabs(det) > 1e-12)) break;
+      double inv[9] = {(J[4] * J[8] - J[5] * J[7]) / det, (J[2] * J[7] - J[1] * J[8]) / det, (J[1] * J[5] - J[2] * J[4]) / det,
+                       (J[5] * J[6] - J[3] * J[8]) / det, (J[0] * J[8] - J[2] * J[6]) / det, (J[2] * J[3] - J[0] * J[5]) / det,
+                       (J[3] * J[7] - J[4] * J[6]) / det, (J[1] * J[6] - J[0] * J[7]) / det, (J[0] * J[4] - J[1] * J[3]) / det};
+      double step[3];
+      for (int v = 0; v < 3; ++v) step[v] = inv[v * 3] * r[0] + inv[v * 3 + 1] * r[1] + inv[v * 3 + 2] * r[2];
+      step[0] = std::clamp(step[0], -kPrintKnobMaxDA, kPrintKnobMaxDA);
+      step[1] = std::clamp(step[1], -MAX_LOG_STEP, MAX_LOG_STEP);
+      step[2] = std::clamp(step[2], -MAX_LOG_STEP, MAX_LOG_STEP);
+      for (int v = 0; v < 3; ++v) x[v] += step[v];
+      render(x[0], x[1], x[2], lab);
+    }
+    float e2 = 0.0f;
+    for (int c = 0; c < 3; ++c) e2 += (target[c] - lab[c]) * (target[c] - lab[c]);
+    for (int v = 0; v < 3; ++v) x_out[v] = x[v];
+    return std::sqrt(e2);
+  };
+  const float full[3] = {lstar_after_stops(50.0f, brightness_stops), tint_a, warmth_b};
+  double x[3];
+  auto take = [&](const double xv[3], bool limited) {
+    out.a = xv[0]; out.g = (float)std::exp(xv[1]); out.b = (float)std::exp(xv[2]); out.limited = limited;
+    render(xv[0], xv[1], xv[2], out.grey_lab);
+  };
+  if (solve_to(full, x) <= REACHABLE) { take(x, false); return true; }
+  auto largest = [&](auto make_target, double best[3]) -> bool {
+    float lo = 0.0f, hi = 1.0f; bool found = false;
+    for (int i = 0; i < 7; ++i) {
+      const float f = 0.5f * (lo + hi); float tgt[3]; double xr[3];
+      make_target(f, tgt);
+      if (solve_to(tgt, xr) <= REACHABLE) { lo = f; for (int v = 0; v < 3; ++v) best[v] = xr[v]; found = true; }
+      else hi = f;
+    }
+    return found;
+  };
+  const float colour_only[3] = {50.0f, tint_a, warmth_b};
+  double best[3] = {a0, std::log((double)g0), std::log((double)b0)}, xc[3];
+  if (solve_to(colour_only, xc) <= REACHABLE) {
+    for (int v = 0; v < 3; ++v) best[v] = xc[v];
+    largest([&](float f, float t[3]) { t[0] = 50.0f + f * (full[0] - 50.0f); t[1] = tint_a; t[2] = warmth_b; }, best);
+  } else {
+    largest([&](float f, float t[3]) { t[0] = 50.0f + f * (full[0] - 50.0f); t[1] = f * tint_a; t[2] = f * warmth_b; }, best);
+  }
+  take(best, true);
+  return true;
+}
+
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]) {
   float log_t0[3];

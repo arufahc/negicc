@@ -261,6 +261,7 @@ struct Scan {
   // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
   std::string print_floor_frame;
   float print_floor_frame_conf = -1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (recorded as knobs.base.a)
   bool has_base_capture = false;
   FilmBaseCapture base_capture;
   std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)
