@@ -548,8 +548,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!sc.film_base_capture_json.empty()) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
-  // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's thinnest
-  // film (print_base_floor); the base as found and the factor.
+  // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's
+  // thinnest film (print_base_floor); the base as found and the factor.
   if (sc.print_floor_applied) {
     fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is scaled to it; "
                                     "film_base_rgb is the bundle's at its own exposure when nothing was raised)"},
@@ -563,8 +563,9 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
-  // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain round-trips
-  // through: with six decimals a replay from the sidecar (negicc-station's) balanced the mosaic with other gains.
+  // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain
+  // round-trips through: with six decimals a replay from the sidecar (negicc-station's) balanced the mosaic with other
+  // gains.
   const float* k = sc.balance_gains;
   fb["balance_gains"] =
       k ? ordered_json{num(k[0], "%.9g"), num(k[1], "%.9g"), num(k[2], "%.9g")} : ordered_json(nullptr);
@@ -668,8 +669,6 @@ bool write_json_sidecar(const Sidecar& sc) {
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
     cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
   }
-  // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
-  // built-in material's, or none).
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
   // if any, and re-running it re-runs the search (deterministic), then the same knobs on its result.
   if (!sc.print_id.empty() && sc.density_json.empty()) {
@@ -685,6 +684,8 @@ bool write_json_sidecar(const Sidecar& sc) {
       if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
     }
   }
+  // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
+  // built-in material's, or none).
   if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
   // A density output takes no exposure, gains or bracket: its replay is the frame alone, --fit_curves off when the run
   // turned the white-light fit off (the print CLF's mid grey and slopes depend on it), and the --print materials as

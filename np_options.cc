@@ -269,8 +269,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "positive: yellow, as in negicc-station). Reuses <output>.json when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
-  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film), as
-  // negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; np_film_base.h);
+  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film),
+  // as negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; np_film_base.h);
   // --film_base_rgb, which took it as numbers or from the rebate, is gone.
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
@@ -757,9 +757,8 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
-  // A print is made by its own search (the owner, 2026-11-17: "Remove, just rerun."): no given bracket, exposure or
-  // gains with --print, on a picture or a density output, so that no print differs silently from its Auto; re-running
-  // the same command reproduces it.
+  // A print is made by its own search: no given bracket, exposure or gains with --print, on a picture or a density
+  // output, so that no print differs silently from its Auto; re-running the same command reproduces it.
   if (!o.prints.empty() && (o.target_given || o.exposure_given || o.gain_g_given || o.gain_b_given)) {
     log_error("--target, -E, --gain_g and --gain_b do not apply with --print: a print is made by its own search, and "
               "re-running reproduces it\n");
