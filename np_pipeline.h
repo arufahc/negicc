@@ -152,6 +152,11 @@ struct Setup {
   // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
   // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
   int curves_base_idx = -1;
+  // EXPERIMENT (white-light print, arm C; NEGICC_EXP_PRINT_FIT=1): the curve fit run on the print at its search's A,
+  // composed into the print the conversion renders, with the fit's E, g and b in the matrix.
+  bool exp_print_fit = false;
+  negicc::InputCurves exp_fit_curves;
+  ConversionParams exp_fit_params;
   ParsedFilmProfile curves_base_prof;
 };
 

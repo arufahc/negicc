@@ -1659,6 +1659,51 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     s.print_a = s.print_cr.a;
     s.print_searched = true;
+    // EXPERIMENT (arm C): the white-light curve fit on the print. The print profile at the search's A with its gains in
+    // its curves (arm A's print exactly) takes the bracket's place for the fit, which bends the green and blue input
+    // curves and moves its own E, g and b (from 1, 1 for the gains) against the intent field predicted again from the
+    // print's preview; no roll-off (srgb-linear: a print has no shoulder). The bracket's chart profile is restored.
+    if (std::getenv("NEGICC_EXP_PRINT_FIT") && s.white_light) {
+      const int idx = scan.auto_res.target_idx;
+      ParsedFilmProfile chart = bundle.targets[idx].film_prof;
+      ParsedFilmProfile& t = bundle.targets[idx].film_prof;
+      t = s.print_profs[idx];
+      t.rebind_pointers();
+      const double gains[3] = {1.0, (double)scan.auto_res.params.g, (double)scan.auto_res.params.b};
+      s.print_cont.set_curves_at(s.print_a, t, gains);
+      ParamSearchResult r = scan.auto_res;
+      r.params.g = 1.0f;
+      r.params.b = 1.0f;
+      r.intent_params.g = -1.0f;   // the field is predicted again from the print's preview at r.params
+      r.e_range_lo = r.e_range_hi = 0.0f;
+      ParamSearchOptions fso = opts;
+      fso.fallback_crop = o.roi_auto && scan.frame_det.conf < kLowFrameConfidence;
+      fso.film_base_is_rebate = scan.film_base.is_rebate();
+      fso.pin_mask |= PIN_E;   // the print's level is its search's (A): the fit moves the curves, g and b only
+      negicc::CurveFitOptions fo;
+      WhiteLightFitResult fit;
+      bool ok = false;
+      try {
+        ok = run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fso, r, fo, ENCODE_SRGB_LINEAR,
+                                 nullptr, fit);
+      } catch (...) {
+        bundle.targets[idx].film_prof = chart;
+        bundle.targets[idx].film_prof.rebind_pointers();
+        throw;
+      }
+      bundle.targets[idx].film_prof = chart;
+      bundle.targets[idx].film_prof.rebind_pointers();
+      if (!ok) {
+        log_error("EXPERIMENT: the curve fit on the print failed\n");
+        return false;
+      }
+      s.exp_print_fit = true;
+      s.exp_fit_curves = fit.fit.curves;
+      s.exp_fit_params = fit.params;
+      log_info("EXPERIMENT print fit: E %.4f -> %.4f, g 1 -> %.4f, b 1 -> %.4f (print gains %.4f %.4f kept), curves %s, "
+               "fallback %s\n", r.params.e, fit.params.e, fit.params.g, fit.params.b, gains[1], gains[2],
+               fit.fit.curves.active() ? "bent" : "none", fit.fallback ? fit.fallback : "none");
+    }
     {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
       // the frame's thin film past the knee or the cut. Said as the density output says it, with what it does here.
@@ -2813,6 +2858,17 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
         const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
         negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
         s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
+        if (s.exp_print_fit) {
+          // EXPERIMENT (arm C): the fit's g and b join the print's gains in its curves, after the knee, as arm A's do
+          // (in the matrix they put the base past the knee); the fit's curve, composed in front, is anchored on the base
+          // without them (ref / g_c), so that below the knee it renders as the fit measured it. E is held (PIN_E).
+          const double both[3] = {1.0, gains[1] * s.exp_fit_params.g, gains[2] * s.exp_fit_params.b};
+          s.print_cont.set_curves_at(s.print_a, c.film_prof, both);
+          negicc::InputCurves cv = s.exp_fit_curves;
+          cv.ref[0] /= s.exp_fit_params.g;
+          cv.ref[1] /= s.exp_fit_params.b;
+          apply_input_curves(c.film_prof, cv);
+        }
         set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));
       } else {
         s.print_cont.set_curves_at(s.print_a, c.film_prof);
