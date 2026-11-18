@@ -736,6 +736,9 @@ class SearchFrame {
 
   // The shoulder: a fixed x_hi for every render, or (auto) the one each ConversionParams carries, which
   // fixed_point() measures. The screening passes carry 1.
+  // The print's gains in its curves (SolverConfig::gain_curves) for every render and optimiser pass; null: in the
+  // matrix. The callee outlives the frame.
+  void set_gain_curves(const GainCurves* gc) { gain_curves_ = gc; }
   void set_shoulder(float x_hi, bool automatic) {
     shoulder_fixed_ = x_hi;
     shoulder_auto_ = automatic;
@@ -765,6 +768,7 @@ class SearchFrame {
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = cp.shoulder;
+    cfg.gain_curves = gain_curves_;
     const int n = stats_.grid_w * stats_.grid_h;
     std::vector<float> lab((size_t)n * 3);
     intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
@@ -788,6 +792,7 @@ class SearchFrame {
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = params.shoulder;
+    cfg.gain_curves = gain_curves_;
     intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {params.e, params.g, params.b}, optimiser.data());
     std::vector<float>& c = correction_[target_idx];
     c.resize(picture.size());
@@ -798,8 +803,15 @@ class SearchFrame {
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
     const Clock::time_point t0 = Clock::now();
-    float m[9];  // input_matrix_ with its rows scaled by E, E g and E b
-    negicc::candidate_matrix(input_matrix_, params.e, params.g, params.b, m);
+    // input_matrix_ with its rows scaled by E, E g and E b (with gain curves: by E, and g and b in the curves)
+    SolverConfig sc;
+    sc.prof = &bundle_.targets[target_idx].film_prof.data;
+    sc.knee = AUTO_KNEE;
+    sc.shoulder = shoulder_of(params);
+    sc.gain_curves = gain_curves_;
+    float m[9];
+    std::vector<float> trc[3];
+    const negicc::PipelineConfig pc = candidate_config(sc, input_matrix_, {params.e, params.g, params.b}, m, trc);
     out.resize((size_t)crop_.w * crop_.h * 3);
     negicc::RgbView crop_view = frame_.crop_and_orient(crop_.x0, crop_.y0, crop_.w, crop_.h, 0, false, false);
     negicc::RenderArgs ra{};
@@ -807,7 +819,7 @@ class SearchFrame {
     ra.width = crop_.w;
     ra.height = crop_.h;
     ra.matrix = m;
-    ra.cfg = make_pipeline_config(bundle_.targets[target_idx].film_prof.data, AUTO_KNEE, shoulder_of(params));
+    ra.cfg = pc;
     ra.out_type = 1;
     ra.out = out.data();
     render(ra);
@@ -950,6 +962,7 @@ class SearchFrame {
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
     cfg.shoulder = initial ? shoulder_of(*initial) : shoulder_fixed_;
+    cfg.gain_curves = gain_curves_;
     if (pullback_search) {
       Enclosure enc;
       const float g_scale = bundle_.has_crosstalk ? 1.0f : e_norm_;
@@ -1186,6 +1199,7 @@ class SearchFrame {
   float input_matrix_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // M_frame / e_norm: the matrix the search runs on
   float e_norm_ = 1.0f;
   PreviewRenderer* renderer_ = nullptr;   // ParamSearchOptions::renderer: null for the CPU's passes
+  const GainCurves* gain_curves_ = nullptr;   // set_gain_curves
   float shoulder_fixed_ = 1.0f;
   unsigned pin_mask_ = 0;
   float pin_e_ = 1.0f, pin_g_ = 1.0f, pin_b_ = 1.0f;
@@ -1895,6 +1909,22 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     });
     return rows;
   };
+  // Each screened bracket is aimed at the field minus its own correction, and the screening ranks their losses. The
+  // bootstrap measured a correction for each bracket it rendered; when it rendered one bracket alone (E pinned, or no
+  // bracket metered), every other screened bracket is rendered once at the E its screening starts from (the pinned E,
+  // else its e_center) and the bootstrap gains, as the bootstrap's bracket was, to measure its own (no inference).
+  if (depths.empty() || pin_e) {
+    auto measure = [&](int target_idx, float e) {
+      if (target_idx == cand1.target_idx) return;
+      fr.render_preview(target_idx, {e, boot_g, boot_b}, preview);
+      fr.update_correction(target_idx, {e, boot_g, boot_b}, preview);
+    };
+    if (!depths.empty()) {
+      for (const auto& d : depths) measure(d.cand.target_idx, pin_e_search);
+    } else {
+      for (const auto& c : pool) measure(c.target_idx, pin_e ? pin_e_search : c.e_center);
+    }
+  }
   const std::vector<Screened> screening = screen_all(depths, mu1, sig1, false);
   for (const auto& s : screening) out.screening.push_back(s.result);
   if (verbose) {
@@ -2891,7 +2921,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.set_curves_at || !cp.green_apd ||
+  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at || !cp.green_apd ||
       !(cp.a_hi > cp.a_lo)) {
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
@@ -2902,9 +2932,24 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   pb.targets[0].film_prof = print_base;
   pb.targets[0].film_prof.rebind_pointers();
   ParsedFilmProfile& prof = pb.targets[0].film_prof;
+  // The print at A: its input tables at A (cur_a), without gains, in prof. Every render and optimiser pass at (A, g, b)
+  // puts g and b into the tables at cur_a, after the knee, with the matrix at E alone (gain_curves), as the conversion
+  // renders the print, so the search scores the picture the conversion writes.
+  double cur_a = 0.0;
+  auto set_curves_at = [&](double a) {
+    cur_a = a;
+    cp.trc_at(a, nullptr, prof.in_trc);
+    for (int c = 0; c < 3; ++c) prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
+    prof.rebind_pointers();
+  };
+  const GainCurves gain_curves = [&](float g, float b, std::vector<float> trc[3]) {
+    const double gains[3] = {1.0, g, b};
+    cp.trc_at(cur_a, gains, trc);
+  };
   out = ParamSearchResult{};
   SearchFrame fr(pb, engine, opts.verbose, opts.max_steps, out);
   fr.set_renderer(opts.renderer);
+  fr.set_gain_curves(&gain_curves);
   fr.set_shoulder(1.0f, false);   // a print keeps no highlight shoulder (the paper rolls off to its white)
   fr.set_frame(frame, opts.crop_ratio);
   const FrameScale scale = frame_scale(pb, (float)scan_shutter_s, (float)scan_iso, opts);
@@ -2952,7 +2997,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     uint16_t px[3];
     for (int c = 0; c < 3; ++c) px[c] = (uint16_t)std::lround(std::clamp(st.log_avg_rgb[c], 0.0f, 1.0f) * 65535.0f);
     auto lstar = [&](double a) {
-      cp.set_curves_at(a, prof);
+      set_curves_at(a);
       const negicc::PipelineConfig pc = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
       return negicc::linear_srgb_to_lab(negicc::convert_pixel_display(pc, m, px)).L;
     };
@@ -2971,8 +3016,11 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   std::vector<double> boot = {a0};
   if (cp.boot_h > 0.0) boot = {a0 - cp.boot_h, a0, a0 + cp.boot_h};
   for (size_t k = 0; k < boot.size(); ++k) {
-    cp.set_curves_at(std::clamp(boot[k], cp.a_lo, cp.a_hi), prof);
+    set_curves_at(std::clamp(boot[k], cp.a_lo, cp.a_hi));
     fr.render_preview(0, {E, 1.0f, 1.0f}, preview);
+    // The render at A0 gives the correction the screening at A0 below aims with, as each bracket's bootstrap render
+    // gives the scene's screening its correction.
+    if (boot[k] == a0) fr.update_correction(0, {E, 1.0f, 1.0f}, preview);
     if (!fr.predict(preview, mu, sg)) return false;
     if (k == 0) {
       mu1.assign(mu.size(), 0.0f);
@@ -2993,13 +3041,13 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
               << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l << " from " << boot.size() << " render(s)"
               << (cr.a0_at_range_end ? " (A0 at an end of the range: bootstrap renders there share an A)" : "") << "\n";
   }
-  // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field (the optimiser's wide
-  // grids, as the scene search screens its brackets).
+  // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field minus the correction of
+  // the render at A0 (the optimiser's wide grids, as the scene search screens its brackets).
   fr.set_pins(PIN_E, E, 1.0f, 1.0f);
   float e_bounds[3] = {E, E, E};
   ConversionParams curr{E, 1.0f, 1.0f, 1.0f};
   {
-    cp.set_curves_at(a0, prof);
+    set_curves_at(a0);
     ConversionParams scr;
     fr.search(0, mu1, sig1, nullptr, e_bounds, scr);
     curr.g = scr.g;
@@ -3011,7 +3059,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   std::vector<float> best_mu, best_sg;
   bool stop_next = false;
   for (int it = 0; it < std::max(1, opts.max_steps); ++it) {
-    cp.set_curves_at(a, prof);
+    set_curves_at(a);
     fr.render_preview(0, curr, preview);
     fr.update_correction(0, curr, preview);
     if (!fr.predict(preview, mu, sg)) return false;
@@ -3043,7 +3091,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     // render each), so the line search takes the correction to change little across the A it tries.
     ConversionParams gb;
     auto loss = [&](double x, ConversionParams& p) {
-      cp.set_curves_at(x, prof);
+      set_curves_at(x);
       return fr.search(0, mu, sg, &curr, e_bounds, p);
     };
     // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
@@ -3108,7 +3156,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     for (const float stop : opts.probe_stops) {
       const double ap = std::clamp(best_a + stop * kStop, cp.a_lo, cp.a_hi);
       const double applied_stop = (ap - best_a) / kStop;
-      cp.set_curves_at(ap, prof);
+      set_curves_at(ap);
       fr.render_preview(0, best, preview);
       if (!fr.predict(preview, mu, sg)) return false;
       const std::vector<float> lab = fr.patch_lab(preview);
@@ -3120,11 +3168,17 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
                                 {"records", recs}};
     if (!write_probe_file(opts.probe_path, doc, recs.size(), opts.verbose)) return false;
   }
-  cp.set_curves_at(best_a, prof);
+  set_curves_at(best_a);
   {   // the crop's share with a channel above 1 that the print cuts (above 1.002 linear, a margin over the paper's
-      // white, whose sRGB values relative to the paper are 1.0001, 1.0000, 0.9994), and its share at the paper's white
+      // white, whose sRGB values relative to the paper are 1.0001, 1.0000, 0.9994), and its share at the paper's white,
+      // in the picture the conversion writes (g and b in the curves, the matrix at E alone)
+    SolverConfig sc;
+    sc.prof = &prof.data;
+    sc.knee = AUTO_KNEE;
+    sc.gain_curves = &gain_curves;
     float mb[9];
-    negicc::candidate_matrix(fr.input_matrix(), best.e, best.g, best.b, mb);
+    std::vector<float> trc[3];
+    const negicc::PipelineConfig white_cfg = candidate_config(sc, fr.input_matrix(), {best.e, best.g, best.b}, mb, trc);
     const InnerCrop& c0 = fr.inner_crop();
     auto share = [&](float ceil, float out3[3]) {
       std::vector<float> hc(5, 0.0f);
@@ -3135,7 +3189,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       ha.crop = {c0.x0, c0.y0, c0.w, c0.h};
       ha.matrices = mb;
       ha.n = 1;
-      ha.cfg = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
+      ha.cfg = white_cfg;
       for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = ceil;
       ha.out = hc.data();
       if (opts.renderer) opts.renderer->highlight_clip(ha); else negicc::cpu_highlight_clip(ha);

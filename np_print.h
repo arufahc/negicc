@@ -408,6 +408,8 @@ struct PrintContinuum {
   // gains (r, g, b): the print's gains in its curves, after the knee (null: none).
   PrintCurves curves_at(double a, const double gains[3] = nullptr) const;
   void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
+  // The tables set_curves_at writes into prof.in_trc.
+  void trc_at(double a, const double gains[3], std::vector<float> trc[3]) const;
   double green_apd(double dl) const;          // G_green at light density dl
   double a_lo() const;                        // the range A is searched in: the curve's green APD range
   double a_hi() const;
