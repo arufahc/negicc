@@ -274,8 +274,8 @@ has the rest.
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: the picture without `--print`. Then the six papers and the two print films, each rendered at one bracket,
-exposure and balance, against a perfect white.*
+*Top left: negicc's picture, without `--print`. Then the six papers and the two print films, each made by its own
+print search (`--print <material> -P srgb`) and shown relative to its paper's white.*
 
 ## Options
 

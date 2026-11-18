@@ -326,8 +326,8 @@ void remove_print_clfs(const DensityPrints& prints);
 
 // ---- The print ICC: a frame printed as the picture conversion renders it ---------------------------------------------
 //
-// With --print and a picture output on a narrow-band bundle, the search runs on the chart profiles and the conversion
-// renders the chosen bracket's print profile in place of its chart profile: the film printed on the print material,
+// With --print and a picture output on a narrow-band bundle, the print's own search runs on the print profile
+// (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print material,
 // shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3 table,
 // identity output curves), so the conversion and the output run it as they run them.
 // The bundle carries one print ICC per print material (print_profiles, built by negicc-station src/print_icc.py when
@@ -418,8 +418,8 @@ void print_paper_xyz(const PrintMaterial& m, double xyz[3]);
 bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
 
 // The print at a continuous mid grey A (np_pipeline: the print search): the input curves above with A for
-// A_mid and the tilt of the bracket whose A_mid is nearest A, as it is (the owner's choice: the brackets' discrete
-// terms first). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
+// A_mid and the brackets' tilt at A (print_tilt_at: linear in A between the two neighbouring brackets, held beyond
+// the end ones). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
 // codes an ICC holds, as code / 65535).
 struct PrintContinuum {
   GreyBalanceCurves g;

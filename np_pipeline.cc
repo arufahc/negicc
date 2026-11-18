@@ -2807,7 +2807,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       if (c.station_params) {
         // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(v) g_c / n0)), and the matrix at
         // E alone, so that film at the base's density never passes the knee whatever the gains: with them in the matrix
-        // a gain of 1.2 put the base past the knee (DESIGN.md, "The gains and the knee"). The CLF applies them the same way.
+        // a gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF applies
+        // them the same way.
         const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
         negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
         s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
