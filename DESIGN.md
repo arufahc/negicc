@@ -650,15 +650,18 @@ XYZ     = the print of pd (5.3), adapted from D55 to D50 (Bradford) for a print 
 the input curves and the table keeps only colour:
 
 ```
-curve_c(x)     = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))
-table(a)       = the chain above from alpha_c = Paper_c⁻¹(a_c)
-Paper_c(alpha) = curve_c(aim_c − η_c alpha) / top,     η = P (1, 1, 1),  P for APD
+curve_c(x)       = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))
+table(a)         = the chain above from alpha_c = Paper_c⁻¹(a_c)
+Paper_c(alpha_i) = 0.75 curve_c(aim_c − η_c alpha_i) / top_c + 0.25 (1 − i / (N − 1)),   η = P (1, 1, 1),  P for APD
 ```
 
-`Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey (`top`: the curves' largest value
-rounded up to 0.1), tabulated on alpha −3 to 5 in steps of 0.005 and held strictly decreasing, so it inverts the same
-way for every `A`. The table therefore has no bracket and no `A` in it: one table serves every print of the material,
-and two prints differ only in their curves. The table's sampling error is 0.04 ΔE00 on the chart.
+`Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey, scaled to `[0, 1]` per channel on
+`alpha_i = −1.5 + 0.005 i` (`N = 661`, −1.5 to 1.8) with a 0.25 linear ramp across the grid (`top_c`: the channel's
+largest value), held strictly decreasing on `[0, 1]`, so it spans the full table in every channel, keeps a positive
+slope across the toe and shoulder where `Q L` mixes the channels under white light, and inverts the same way for every
+`A`. The table therefore has no bracket and no `A` in it: one table serves every print of the material, and two prints
+differ only in their curves. The table's sampling error on the chart is at most 0.4 ΔE00 on TriLED and 0.8 ΔE00 on
+white light (median under 0.1).
 
 The profile-building tools write one print ICC per material into the bundle (`print_*.icc`, curves for the middle
 bracket). `neg_process` uses the bundle's table when its curves equal the ones computed here to one 16-bit code, and

@@ -23443,7 +23443,7 @@
  "film_model": {
   "name": "kodak_ektar_100",
   "source": "The film profile of this stock in spektrafilm (Andrea Volpato, https://github.com/andreavolpato/spektrafilm). A model built from the datasheet.",
-  "licence": "CC BY-SA 4.0, as spektrafilm's profiles: https://github.com/andreavolpato/spektrafilm/blob/main/SPEKTRAFILM_LICENSE.txt. It covers this block only.",
+  "licence": "CC BY-SA 4.0, as spektrafilm's profiles: https://github.com/andreavolpato/spektrafilm/blob/3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt. It covers this block only.",
   "modified": "by Alpha Lam: dye spectra and base resampled to 1 nm, gaps held at the nearest measured value; the other fields of the profile left out",
   "wavelength_nm": {
    "start": 380.0,
@@ -26106,7 +26106,7 @@
    "spektrafilm_sha256": "0db98e5b8e2ed5248696e62bc39b7f21459a8812d64049b1275d7be995af873b",
    "reference_bracket": "Target 4",
    "icc_profile": "print_fujifilm_crystal_archive_typeii.icc",
-   "icc_profile_sha256": "23bdf10b3ea0eb434cfa3ac27159d0b19c951aee3ec84e14b4ca0a7a002ea42a"
+   "icc_profile_sha256": "2b395444eb441f58988d6045a79460d774a3f29541a36b2d1a2b33de9262859f"
   },
   "kodak_2383": {
    "name": "Kodak Vision 2383",
@@ -26114,7 +26114,7 @@
    "spektrafilm_sha256": "eb7fdfa3b75a909bf5c400802f7401160c8017ed1ac3e8e0d1c8448d56fbe184",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2383.icc",
-   "icc_profile_sha256": "0f1a8a7d481bd285ccf4b5f2fa82be2f87965bfbf5a8ff91cbb47ffce0325af5"
+   "icc_profile_sha256": "7f379ecf0b6b705746c9f8ee2c0d9cd7a3714f9e3bf8113e81cc55d1c860e261"
   },
   "kodak_2393": {
    "name": "Kodak Vision Premier 2393",
@@ -26122,7 +26122,7 @@
    "spektrafilm_sha256": "b564aece5e9fe43a5c7878d661a8c260c9f73a647a55899596c78487c79678dc",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2393.icc",
-   "icc_profile_sha256": "066e0b2fce4b9198307d368af8ad158831020a434d4f17260123e53c8366563a"
+   "icc_profile_sha256": "ce78ca577a8d18f2c1bcdbc9f53c61491762d3a3eec93f543f952be68cd7be79"
   },
   "kodak_ektacolor_edge": {
    "name": "Kodak Ektacolor Edge",
@@ -26130,7 +26130,7 @@
    "spektrafilm_sha256": "5db23694d478c35cc0f96d42f94da79e552b2f8eb0853767449a24ac0f0f890e",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ektacolor_edge.icc",
-   "icc_profile_sha256": "e0745448e9f180cd91f99f67bccaeb48b41649d6c76928ce03bdce0c3ff03a39"
+   "icc_profile_sha256": "e7b9ce1adfce7f61fc35e84d6b67fd2a4973469046a4bdb1ca965606df95daf7"
   },
   "kodak_endura_premier": {
    "name": "Kodak Professional Endura Premier",
@@ -26138,7 +26138,7 @@
    "spektrafilm_sha256": "fd37807d61eb730cda54e85d36640e35a0f8da58666bfc6aa83db888b2e364c2",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_endura_premier.icc",
-   "icc_profile_sha256": "28eb16760519488e927792ecbc1f1e47424cb2ff6f005e1ac5a7fd5a6894b169"
+   "icc_profile_sha256": "9ac923706e424798304731b39757f6b323bbfba9a4935dcbb7e054cb802d5a9f"
   },
   "kodak_portra_endura": {
    "name": "Kodak Professional Portra Endura",
@@ -26146,7 +26146,7 @@
    "spektrafilm_sha256": "e3bb6069e02d088d8080d38ce28035816038f62786e2aff9176bf4aeeb4820a0",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_portra_endura.icc",
-   "icc_profile_sha256": "f16fc2cdfa167c418b30e324fffe22fd507fab463680ee81f01361e57c40817b"
+   "icc_profile_sha256": "9d29a5d8baaf4c78a01d6865ac2dcd0f9042c3352e2412b1fc1c764f3e35133d"
   },
   "kodak_supra_endura": {
    "name": "Kodak Professional Supra Endura",
@@ -26154,7 +26154,7 @@
    "spektrafilm_sha256": "3a0928013effbb33e81acd01db426937faa3a12021a267c54b4d96e916286bd6",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_supra_endura.icc",
-   "icc_profile_sha256": "ed84b6a901c747ab1ddb61c7c386b9f522df5b51a13f31004be84759e9b8a5b9"
+   "icc_profile_sha256": "47de4a0f7ec0401005990fb444ce3e77ae0e7b96465832528b43800c5e83ca96"
   },
   "kodak_ultra_endura": {
    "name": "Kodak Professional Ultra Endura",
@@ -26162,17 +26162,17 @@
    "spektrafilm_sha256": "319fa2514e9a6809fd09ce587c4f714effc035e7f9ebaeb3b55d9bc1b52c2a72",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ultra_endura.icc",
-   "icc_profile_sha256": "8ce62e8d331bc4fb3fa62bf6e18c36932bdd3ca0a1bfeb6c952f6a09e85a212e"
+   "icc_profile_sha256": "ba08268acd6e557a227ede11d435b9866a10272861a87d3023f7f65be38cadbd"
   }
  },
  "export": {
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "cff0d4697671aaa563fdc21a4e693aefbb234cd206580479297132db62c52b2e",
+  "source_sha256": "40e439715c03d1caf76622f24248b0e97481671aba674d2de883b6e217bbcb46",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "a3fd2ba78c91a0fabece5318884d097daa641cc2",
+  "station_commit": "5f63812bca4a534cf65a0cb8fd67b426714d9b06",
   "tilt_form": "own"
  }
 }

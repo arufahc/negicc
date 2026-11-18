@@ -305,27 +305,28 @@ void remove_print_clfs(const DensityPrints& prints);
 
 // ---- The print ICC: a frame printed as the picture conversion renders it ---------------------------------------------
 //
-// With --print and a picture output on a narrow-band bundle, the print's own search runs on the print profile
+// With --print and a picture output on a profile bundle, the print's own search runs on the print profile
 // (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print
 // material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3
 // table, identity output curves), so the conversion and the output run it as they run them. The bundle carries one
 // print ICC per print material (print_profiles, built by the profiling tool when it saved the bundle);
 // its table serves every bracket, and each bracket's three input curves are computed here:
 //
-//     curve_c(v) = Paper_c((G_c(-log10(unknee(v) / n0)) - A_mid) (1 + b_c))
+//     curve_c(x) = Paper_c((G_c(-log10(unknee(x) / n0)) - A_mid) (1 + t_c))
 //
 //   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
 //   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
-//   b_c       the bracket's tilt relative to the curve (DensityBracket::tilt; 0 without grey_relative)
-//   Paper_c   the dye amount layer c takes on a grey alpha above the mid grey: curve_c(aim_c - k_c alpha) / top,
-//             k = P (1, 1, 1) with P the material's print matrix for APD, top the curves' largest value rounded up
-//             to 0.1; held strictly decreasing (paper_curve)
+//   t_c       the bracket's tilt relative to the curve (DensityBracket::tilt; 0 without grey_relative)
+//   Paper_c   0.75 curve_c(aim_c - eta_c alpha_i) / top_c + 0.25 (1 - i / (kPaperAlphaPoints - 1)) on
+//             alpha_i = kPaperAlphaStart + kPaperAlphaStep i (-1.5 .. 1.8), eta = P (1, 1, 1) with P the material's
+//             print matrix for APD, top_c the channel's largest value; held strictly decreasing on [0, 1]
+//             (paper_curve)
 //   unknee    the inverse of the soft knee at kKnee the conversion applies before the profile
 //
-// and the table, at node a: alpha_c = Paper_c^-1(a_c), printing density 0.70 + Q L (w alpha) with w = M^-1 (1, 1, 1)
-// and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none for a paper).
-// A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is computed
-// here, gets its table computed here (print_table).
+// and the table, at node a: alpha_c = Paper_c^-1(a_c), printing density 0.70 + Q L (psi alpha) with
+// psi = M^-1 (1, 1, 1) and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none
+// for a paper). A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is
+// computed here, gets its table computed here (print_table).
 // The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence,
 // and that and by whom it was modified); the print CLF's description says the same. The profile-building tools write
 // the same text into the bundle's print ICCs.
@@ -336,8 +337,8 @@ constexpr const char* kPrintIccCopyright =
     "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
 constexpr int kPrintIccCube = 45;
-constexpr double kPaperAlphaStart = -3.0, kPaperAlphaStep = 0.005;
-constexpr int kPaperAlphaPoints = 1601;
+constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
+constexpr int kPaperAlphaPoints = 661;
 using PrintCurves = std::array<std::vector<double>, 3>;
 
 // The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
@@ -362,8 +363,8 @@ void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, doub
 void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]);
 // Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
-// A bracket's input curves on v = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp). gains (r, g, b): the
-// print's gains as a density offset after the knee, dL_c = -log10(unknee(v) g_c / n0) (null: none).
+// A bracket's input curves on x = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp). gains (r, g, b): the
+// print's gains as a density offset after the knee, dL_c = -log10(unknee(x) g_c / n0) (null: none).
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
                                  const double tilt[3], const double gains[3] = nullptr);
 // The table: kPrintIccCube^3 XYZ D50, red slowest.
