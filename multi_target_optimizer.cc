@@ -3024,7 +3024,10 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       break;
     }
     prev_err = err;
-    // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned).
+    // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned). Every A tried is
+    // aimed at the field minus the correction measured at this step's A above: update_correction keys it by the
+    // print's one target, whose curves change with A, and it is not measured again at each A (that would take a
+    // render each), so the line search takes the correction to change little across the A it tries.
     ConversionParams gb;
     auto loss = [&](double x, ConversionParams& p) {
       cp.set_curves_at(x, prof);
