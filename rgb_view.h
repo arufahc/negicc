@@ -164,7 +164,9 @@ void resample_linear_rgb16(
     uint16_t* dst, int dst_w, int dst_h
 );
 
-// Positive image statistics accumulated over an inner crop during render.
+// Positive image statistics accumulated over an inner crop during render: the RGB histogram of the picture written
+// (through cfg.tone when it has one, as convert_pixel), the clip shares and the Lab statistics of the display value
+// before the tone stage.
 struct PositiveStats {
     uint32_t hist_rgb[3][256] = {};
     uint32_t hist_L[kLabBins] = {};
