@@ -2792,9 +2792,9 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !bundle.has_crosstalk || !print_base.data.has_profile || !cp.set_curves_at || !cp.green_apd ||
+  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.set_curves_at || !cp.green_apd ||
       !(cp.a_hi > cp.a_lo)) {
-    std::cerr << "ERROR! The continuous print search needs a TriLED bundle's print" << std::endl;
+    std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
   }
   constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
@@ -2819,8 +2819,10 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   // E = 1 relative to the frame's own film base: the base reads n0, as the brackets were measured. The search runs on
   // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
   // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0. The
-  // result's E (E / e_norm) is then 1.
-  const float E = e_norm;
+  // result's E (E / e_norm) is then 1. On white light the search runs on M_frame itself (SearchFrame::set_frame_matrix),
+  // so E = 1 puts the base at n0.
+  const bool white_light = !bundle.has_crosstalk;
+  const float E = white_light ? 1.0f : e_norm;
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
   // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).
@@ -3051,7 +3053,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     if (std::fabs(cp.a_mid[i] - best_a) < std::fabs(cp.a_mid[nearest] - best_a)) nearest = (int)i;
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
-  out.params = {E / e_norm, best.g, best.b, best.shoulder};
+  out.params = {white_light ? E : E / e_norm, best.g, best.b, best.shoulder};   // as search_conversion_params
   {
     // The shares past the knee and past the cut per channel at the final settings (every 4th pixel each way): the
     // picture applies the gains in its curves, after the knee, so the knee sees the matrix at E alone.

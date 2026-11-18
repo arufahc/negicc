@@ -804,9 +804,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle the curve fit
-  // runs too (--fit_curves stays auto): its curves are not applied either, the print CLF takes its mid grey and
-  // slopes from them (np_print.h FramePrint). A narrow-band bundle has no curve fit.
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle without --print
+  // the curve fit runs too (--fit_curves stays auto): its curves are not applied, and its E, g and b are the suggested
+  // balance. With --print each material's own print search gives its CLF, with no fit. A narrow-band bundle has no
+  // curve fit.
   o.tone_stage = Options::kToneStageOff;
   return 0;
 }

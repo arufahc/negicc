@@ -170,11 +170,6 @@ struct DensityBracket {
   // grey (np_print.h PrintContinuum); the offset a_c is not read. Zero without grey_relative: the curve alone.
   bool has_tilt = false;
   double tilt[3] = {0.0, 0.0, 0.0};
-  // Every grey step of the bracket as the light's density above the film base, and which of them is the mid grey
-  // (grey_steps_light_density, grey_step_index). A white-light bundle has them: a frame's fitted input curves change
-  // which film renders as each step (np_print.h fitted_grey_scale). Empty in a narrow-band bundle.
-  std::vector<std::array<double, 3>> grey_steps;
-  int grey_step = -1;
 };
 
 // The film stock's spectra (the bundle's film_model), on 380-780 nm at 1 nm: the spectral density of a unit amount

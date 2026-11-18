@@ -828,24 +828,24 @@ int prepare(const Options& o, Setup& s) {
     }
     s.density = true;
   }
-  // --print. With a picture output on a narrow-band bundle the print's own search (A, g, b) runs on the print profile,
-  // with no chart profile, and the conversion renders that profile at the search's A: the bundle's print ICC
-  // (np_print.h bracket_print_profiles), built here and made relative to the paper's white. A density output writes a
-  // CLF per material; on a narrow-band bundle each material's print is searched for its CLF (density_print_searches).
-  // On a white-light bundle the curve fit composes into the chart profiles, so its print is a density output's CLF
-  // alone.
+  // --print. With a picture output the print's own search (A, g, b) runs on the print profile, with no chart profile,
+  // and the conversion renders that profile at the search's A: the bundle's print ICC (np_print.h
+  // bracket_print_profiles), built here and made relative to the paper's white. A density output writes a CLF per
+  // material, each material's print searched for its CLF (density_print_searches). A white-light bundle takes the same
+  // print on its decode, with no curve fit (station designs/white_light_print_icc.md, arm A): the fit composes into
+  // the chart profiles, which a print does not use.
   if (!o.prints.empty()) {
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
                 "computed for the bundle's film\n");
       return 1;
     }
-    if (s.white_light && !s.density) {
-      log_error("--print with a picture output needs a TriLED bundle; on a white-light bundle give a density output "
-                "(-P statusm, rp180 or apd) for its print CLF\n");
+    if (s.white_light && o.fit_curves == Options::kFitCurvesOn) {
+      log_error("--fit_curves on does not apply with --print on a white-light bundle: the print is made by its own "
+                "search, without the curve fit\n");
       return 1;
     }
-    if (!s.white_light && !s.density) {
+    if (!s.density) {
       const std::string& print = o.prints.front();
       BracketPrints prints;
       std::string why;
@@ -985,7 +985,8 @@ int prepare(const Options& o, Setup& s) {
   // srgb-g10 write; a custom -P goes through its ICC profile with LittleCMS, which the fit does not model, while the
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
-  // A density output on white light fits as -P srgb does: the fit's result goes into the print CLF, not the pixels.
+  // A density output on white light fits as -P srgb does: its E, g and b are the file's suggested balance, not the
+  // pixels' (with --print no fit runs: fit_curves_active).
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear" ||
                                (s.density && s.white_light);
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
@@ -1049,7 +1050,7 @@ int prepare(const Options& o, Setup& s) {
   // --fit_curves auto or on: the curve fit wherever it applies (on has checked above that it does), nothing
   // elsewhere; off: none. --tone_stage likewise, after every bundle search with -P srgb.
   s.fit_curves_active = o.fit_curves != Options::kFitCurvesOff && s.is_bundle && s.white_light && !s.has_crosstalk &&
-                        fit_encoding_ok && s.bundle_search;
+                        fit_encoding_ok && s.bundle_search && o.prints.empty();   // a print takes no curve fit
   s.tone_active = tone_wanted && s.is_bundle && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
@@ -1646,7 +1647,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                            const ParamSearchOptions& opts) -> bool {
     if (s.print_profs.empty()) {
       if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) return false;
-      if (s.density && !s.white_light && !o.prints.empty() && !scan.auto_res.probed &&
+      if (s.density && !o.prints.empty() && !scan.auto_res.probed &&
           !density_print_searches(frame, scan_shutter_s, scan_iso, opts)) {
         return false;
       }
@@ -1754,9 +1755,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                               int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
     // A print without --roi: its search reads the whole scan (whatever the base, a capture included). Said once.
-    if (print && s.is_bundle && !s.white_light && !scan.has_roi && !scan.print_floor_applied)
+    if (print && s.is_bundle && !scan.has_roi && !scan.print_floor_applied)
       log_warn("no --roi: the print's search reads the whole scan; give --roi or --roi auto\n");
-    if (!s.is_bundle || s.white_light || !s.bundle.has_crosstalk || !print || scan.has_given_base || scan.print_floor_applied)
+    if (!s.is_bundle || !print || scan.has_given_base || scan.print_floor_applied)   // white light too (crosstalk: identity)
       return;
     negicc::RgbView floor_frame = frame;
     scan.print_floor_frame_conf = -1.0f;
@@ -3042,17 +3043,6 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       rec.balance_target = c.bundle_target_name;
     }
     rec.print_search = s.density_print_search;
-    // The curves the white-light fit found (or a previous run's, from the sidecar): for the print, not the pixels.
-    if (s.white_light && s.input_curves.active()) {
-      rec.has_curves = true;
-      for (int k = 0; k < 2; ++k) {
-        rec.curve_a[k] = s.input_curves.a[k];
-        rec.curve_k[k] = s.input_curves.k[k];
-        rec.curve_u_med[k] = s.input_curves.u_med[k];
-        rec.curve_u_hold[k] = s.input_curves.u_hold(k);
-        rec.curve_ref[k] = s.input_curves.ref[k];
-      }
-    }
     rec.tool_version = std::string("neg_process ") + neg_process_version();
     // The prints of the file (np_print.h), for the print materials --print names: how the frame prints on each,
     // recorded in the metadata, and the CLFs that go beside it. Without --print there are none.

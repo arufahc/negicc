@@ -240,11 +240,9 @@ how the print is computed.
 
 A white-LED scan takes the same options (`--light_source d65`). Its density is less exact than an RGB-LED scan's:
 no spectrum of the light is measured, so the scan's channels are taken to be linear Rec.2020. The film base comes
-from the scan itself, since `--film_base` with a capture is for RGB-LED scans. The curve fit runs as it does for a
-picture and changes no pixel of the density file; the CLF takes the frame's mid grey and slopes from it. With
-`--fit_curves off` the CLF takes the mid grey and slopes of the frame's bracket in the profile set. On an RGB-LED scan
-the density run searches each material's print as it does for the print as a picture (below), and the CLF carries
-that print's exposure and balance, so it prints what the picture output prints.
+from the scan itself, since `--film_base` with a capture is for RGB-LED scans. On either light the density run
+searches each material's print as it does for the print as a picture (below), and the CLF carries that print's
+exposure and balance, so it prints what the picture output prints.
 
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 
@@ -252,8 +250,7 @@ that print's exposure and balance, so it prints what the picture output prints.
 
 ### The print as a picture
 
-On an RGB-LED scan, `--print <print>` with `-P srgb` writes the print itself, with no density file or CLF in
-between:
+`--print <print>` with `-P srgb` writes the print itself, with no density file or CLF in between:
 
 ```sh
 bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
@@ -262,8 +259,9 @@ bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_port
 
 This writes the print on the chosen material as an sRGB picture. The automatic search runs on the print itself: its
 printing exposure, then its colour balance. The paper's curve gives the tone, so the toning step does not run. The
-print is shown relative to its paper's white. A white-LED scan takes `--print` with a density output only. DESIGN.md
-has the rest.
+print is shown relative to its paper's white. A white-LED scan's print takes no curve fit, and it carries the
+white-LED reading's error: on the test chart, a patch printed from the white-LED scan differs from the same patch
+printed from the RGB-LED scan by 2.7 to 3.3 CIEDE2000 on average. DESIGN.md has the rest.
 
 The paper whites below are those of the Portra 400 RGB-LED set's print ICCs (`DESIGN.md`, "The print's white").
 
@@ -293,14 +291,14 @@ print search (`--print <material> -P srgb`) and shown relative to its paper's wh
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
 | `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
-| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. On an RGB-LED scan with a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
+| `--print <print>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. With a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. |
-| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED). Eight or ten numbers replay the curves recorded in a sidecar. |
+| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED, nor to a print). Eight or ten numbers replay the curves recorded in a sidecar. |
 | `--tone_stage auto\|off\|on\|curve:<numbers>` | The contrast step. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). |
