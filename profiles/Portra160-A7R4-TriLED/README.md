@@ -74,12 +74,12 @@ Each is an ICC v2 input profile (RGB to PCS XYZ D50) shaped like the chart profi
 
 ### What they compute
 
-For the profile's input v (the scan after the crosstalk correction, the film base at n0 =
+For the profile's input x (the scan after the crosstalk correction, the film base at n0 =
 normalization_target / 65535, after neg_process's soft knee at 0.95), in each channel c:
 
 ```
-light density    dL_c  = -log10(unknee(v_c) / n0)
-grey balance     alpha_c = (G_c(dL_c) - A) (1 + b_c)
+light density    dL_c  = -log10(unknee(x_c) / n0)
+grey balance     alpha_c = (G_c(dL_c) - A) (1 + t_c)
 print density    pd = 0.70 + Q L (w alpha),   w = M^-1 (1, 1, 1)
 the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts (its curve per layer)
                  ->  its colour under its viewing light (CIE 1931 2 degree)  ->  XYZ, adapted to D50 (Bradford)
@@ -96,7 +96,7 @@ the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts
   (`grey_balance_curves.tangents`), and most of the table past the last step comes from them.
 - **A**, the print's mid grey: a bracket's own `A_mid` (the green APD of its 18 % grey step, gs10, from
   `density_matrices.brackets.targets.<bracket>.grey_light_density`), or the A the print's search finds.
-- **b_c**, each bracket's tilt relative to the curve
+- **t_c**, each bracket's tilt relative to the curve
   (`density_matrices.brackets.targets.<bracket>.grey_relative.b`): neg_process takes it linear in A between the two
   brackets whose A_mid enclose A, held beyond the end ones, so at a bracket's own A_mid it is that bracket's tilt.
 - **M**, the bundle's matrix for Academy Printing Density (`film_to_measure` times `light_to_film`).
@@ -108,7 +108,7 @@ the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts
 The profile splits this where a table samples it well:
 
 ```
-input curve_c(v)  = Paper_c((G_c(dL_c) - A) (1 + b_c))
+input curve_c(x)  = Paper_c((G_c(dL_c) - A) (1 + t_c))
 table(a)          = the chain above, from alpha_c = Paper_c^-1(a_c)
 Paper_c(alpha)    = curve_c(aim_c - k_c alpha) / top,   k = P (1, 1, 1)
 ```
