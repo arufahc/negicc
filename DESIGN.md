@@ -763,11 +763,11 @@ a capture (the rebate, the thinnest film or the bundle's), it is held no darker 
 β = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
 ```
 
-with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile (`kBasePercentile`). The crop is the picture's
-frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the frame detector's crop when its confidence is
-at least 0.5, else the whole scan. The raised base serves the whole conversion, the density file included, so its
-CLF still prints the picture's print. The sidecar records the base as found and `β` (`film_base.print_floor`). A
-captured base is taken as it is.
+with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile
+(`kBasePercentile`). The crop is the picture's frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the
+frame detector's crop when its confidence is at least 0.5, else the whole scan. The raised base serves the whole
+conversion, the density file included, so its CLF still prints the picture's print. The sidecar records the base as
+found and `β` (`film_base.print_floor`). A captured base is taken as it is.
 
 ## 5.9 The density file and its CLF
 

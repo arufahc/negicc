@@ -1585,7 +1585,9 @@ static std::vector<double> probe_mean3(const std::vector<float>& v) {
   const size_t n = v.size() / 3;
   for (size_t i = 0; i < n; ++i)
     for (int c = 0; c < 3; ++c) s[c] += v[i * 3 + c];
-  return n ? std::vector<double>{s[0] / n, s[1] / n, s[2] / n} : std::vector<double>{0.0, 0.0, 0.0};
+  // No cells: NaN, which the JSON writes as null, so that "no cells" stays apart from a black, neutral Lab.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  return n ? std::vector<double>{s[0] / n, s[1] / n, s[2] / n} : std::vector<double>{nan, nan, nan};
 }
 
 static bool write_probe_file(const std::string& path, const nlohmann::json& doc, size_t n_renders, bool verbose) {

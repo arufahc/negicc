@@ -1789,15 +1789,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  raised, 100.0 * s.print_cr.past_knee[c],
                  !scan.has_roi ? "search's crop (the whole scan)" : "crop",
                  100.0 * s.print_cr.past_cut[c], name, remedy);
-      } else if (raised[0]) {   // a rebate read from the scan and raised: a rebate on clipped film reads darker than the film
-        log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not the "
-                 "base (a long scan clips unexposed film); %s\n",
-                 scan.film_base.source.c_str(), raised, remedy);
-      } else if (scan.has_roi && s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
-        log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film base "
-                 "from %s: a rebate read on a scan long enough to clip unexposed film is not the base; %s if this is not "
-                 "one\n",
-                 100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str(), remedy);
+      } else {
+        // The base was read (a rebate, or a capture on TriLED), so a crop does not help: the cause these two name is a
+        // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture.
+        const char* read_remedy = s.white_light ? "scan with a shorter exposure, so that unexposed film does not clip"
+                                                : "give --film_base <capture of this roll's unexposed film>";
+        if (raised[0]) {   // a rebate read and raised: a rebate on clipped film reads darker than the film
+          log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not "
+                   "the base (a long scan clips unexposed film); %s\n",
+                   scan.film_base.source.c_str(), raised, read_remedy);
+        } else if (scan.has_roi && s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
+          log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film "
+                   "base from %s: a rebate read on a scan long enough to clip unexposed film is not the base; if this "
+                   "one is not, %s\n",
+                   100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str(), read_remedy);
+        }
       }
     }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "

@@ -69,7 +69,7 @@ struct Options {
 
   // Parameter search
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
-  // the built-in ones; empty: the built-in one.
+  // the built-in ones; empty: the built-in one. dino_arg is --dino's value as given, which the replay line repeats.
   std::string dino_arg, dino_adapter, neutral_head_file, tone_head_file;
   // The tone stage (tone_stage.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
   // white light and TriLED alike, whether or not the curve fit runs; on does the same and is an error where it does
@@ -81,7 +81,7 @@ struct Options {
   double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
-  bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting pass-through renderer
+  bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting renderer
   // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid
   // (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
   // FILE and neg_process stops without converting (the print's search writes it and the conversion goes on).

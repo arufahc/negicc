@@ -31,11 +31,12 @@
 #include "embedded_data.h"
 #include "np_log.h"
 
-// ---- BEGIN CIE TABLES (written and checked by export_cie_header.py; CSV SHA-256 b69d080c7b908b1e) ----
+// ---- BEGIN CIE TABLES (written by the companion profiling tools, not in this repository) ----
 // The CIE 1931 2 degree standard observer and the relative spectral power of CIE illuminants D50 and D55, on
 // 380-780 nm at 1 nm, as colour-science 0.4.7 gives them (D50 and D55 interpolated from the CIE's 5 nm tables).
 // Three z_bar values at 650-652 nm are interpolation residue of the order of 1e-22, one of them negative, where the
-// CIE's table is 0. Used for the colour of a print.
+// CIE's table is 0. Used for the colour of a print. export_cie_header.py of the companion profiling tools writes
+// and checks this block from a CSV whose SHA-256 begins b69d080c7b908b1e; nothing in this repository does.
 constexpr int kCieSamples = 401;
 constexpr double kCieFirstNm = 380.0;   // 1 nm steps
 
