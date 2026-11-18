@@ -549,7 +549,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
   // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's
-  // thinnest film (print_base_floor); the base as found and the factor.
+  // thinnest film (print_floor_base, with print_base_floor's factor); the base as found and the factor.
   if (sc.print_floor_applied) {
     fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is scaled to it; "
                                     "film_base_rgb is the bundle's at its own exposure when nothing was raised)"},
