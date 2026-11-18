@@ -16,10 +16,10 @@ DNG, TIFF or JPEG and it runs `neg_process` on it. The longer story of how the m
 ## Build
 
 ```bash
-sudo apt-get install build-essential git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
-pip install torch transformers onnx                             # only needed for `make dinov3_model`
+sudo apt-get install build-essential curl git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
+pip install torch transformers onnx                                 # only needed for `make dinov3_model`
 git clone --recursive https://github.com/arufahc/negicc.git && cd negicc
-make dinov3_model && make -j$(nproc) neg_process                # add USE_CUDA=1 for an NVIDIA GPU
+make dinov3_model && make -j$(nproc) neg_process                    # add USE_CUDA=1 for an NVIDIA GPU
 ```
 
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
@@ -120,8 +120,17 @@ Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positi
 
 ### The profiles
 
-For each stock an IT8 chart was photographed onto the film at seven exposures, from three stops under to three stops
-over, and each frame was scanned under both lights.
+Each profile set (`profiles/<Stock>-A7R4-<Light>/`) carries two sets of ICC profiles built from the same film
+measurements:
+
+- **Scene measured colour** (`Target_1.icc` … `Target_7.icc`): seven exposure brackets that match the negative to the
+  measured colours of an IT8 chart in the scene.
+- **Print material emulation** (`print_<material>.icc`, used with `--print <material>`): eight print profiles that
+  model the negative printed onto darkroom papers and motion-picture print films
+  ([spektrafilm](https://github.com/andreavolpato/spektrafilm)).
+
+For the scene profiles, an IT8 chart was photographed onto each stock at seven exposures, from three stops under to
+three stops over, and each frame was scanned under both lights.
 
 ![IT8 used for profiling](samples/it8.png)
 
@@ -135,9 +144,10 @@ the profile that renders it best among those whose range can hold the scene.
 
 ![Profile accuracy per bracket](samples/profile_accuracy.png)
 
-Under the RGB LED the profiles reproduce the chart to a mean of 0.5 to 1.1 ΔE₀₀ on the patches they were fitted to
-(ArgyllCMS `profcheck`), and 2 to 4 on patches held out of the fit; each profile set's README has its numbers, for
-example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md).
+Under the RGB LED the scene profiles reproduce the chart to a mean of 0.5 to 1.1 ΔE₀₀ on the patches they were fitted
+to (ArgyllCMS `profcheck`), and 2 to 4 on patches held out of the fit; each profile set's README has its numbers, for
+example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md). The print emulation profiles use the same shape (input
+TRC curves followed by a 45³ colour table) and are described under [Print emulation](#print-emulation) below.
 
 ### Choosing exposure and colour
 
@@ -203,11 +213,26 @@ was.
 
 ## Scans from other cameras
 
-Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the
-profiles were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic. They were rendered at
-commit `e7e2fad` (2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the
-conversion from the profile to sRGB have changed since, so the current build may render them differently.
+A scan from any camera under a white light (`--light_source d65`) can be converted either for **scene colour
+matching** (through the IT8 chart profiles, the white-light curve fit and the tone stage) or for **print emulation**
+(through a print material profile or a density file with a CLF):
+
+```sh
+# Scene colour matching: IT8 chart profiles, white-light curve fit and tone stage
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
+
+# Print emulation directly to a picture (print material ICC; no curve fit or tone stage)
+bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
+
+# Print emulation via a 16-bit ADX16 (or 10-bit Cineon DPX) density file and a CLF transform
+bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
+```
+
+Below are three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps
+the profiles were not made with. Left: the scan as the camera saw it. Right: scene colour matching (`--film_stock
+portra400 --light_source d65 --roi auto -P srgb`, everything else automatic). They were rendered at commit `e7e2fad`
+(2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from the profile
+to sRGB have changed since, so the current build may render them differently.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
@@ -226,56 +251,67 @@ DanielE, 2026-07-11.
 The RAW files and the pictures belong to the photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
-## Density files and print emulation
+## Print emulation
 
-`-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
-place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `rp180` in a DPX is a Cineon file and
-`apd` in a TIFF is ADX16.
-
-```sh
-bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
-    --film_base base.ARW --roi auto -o scan.tif scan.ARW
-oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
-```
-
-With `--print <material>`, `neg_process` also writes a CLF transform beside the density file, and any tool that reads
-CLF renders the file through it as a print on that material. The print materials are the print profiles of
-[spektrafilm](https://github.com/andreavolpato/spektrafilm): eight are built in (six papers, among them Kodak
-Portra Endura, and the print films Kodak Vision 2383 and 2393; `--print` alone lists them), and `<material>` may also
-be the path of another spektrafilm print profile. Without `--print` only the density file is written.
-The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
-how the print is computed.
-
-A white-light scan takes the same options (`--light_source d65`). Its density is less exact than an RGB-LED scan's:
-no spectrum of the light is measured, so the scan's channels are taken to be linear Rec.2020. The film base comes
-from the scan itself, since `--film_base` with a capture is for RGB-LED scans. On either light the density run
-searches each material's print as it does for the print as a picture (below), and the CLF carries that print's
-exposure and balance, so it prints what the picture output prints.
+Print emulation models shining a 3200 K printer lamp through the negative onto a print material — one of six darkroom
+papers (such as Kodak Portra Endura) or two cinema print films (Kodak Vision 2383 and 2393) from
+[spektrafilm](https://github.com/andreavolpato/spektrafilm) (`--print` alone lists them, or takes a `.json` file).
 
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
 
-*Left to right: negicc's picture, the print on Portra Endura paper, the print on Vision 2383 film.*
+*Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film.*
 
-### The print as a picture
+There are two ways to run it. Both run the same print search (finding the printing exposure `A` and the colour balance
+`g`, `b` on the print itself) and produce the same print:
 
-`--print <material>` with `-P srgb` writes the print itself, with no density file or CLF in between:
+1. **Print material emulation ICC (`--print <material> -P srgb`)** — converts the scan directly to a 16-bit sRGB TIFF
+   through the material's print ICC profile (`print_<material>.icc`):
 
-```sh
-bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
-    --film_base base.ARW --roi auto -o print.tif scan.ARW
-```
+   ```sh
+   bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
+       --film_base base.ARW --roi auto -o print.tif scan.ARW
+   ```
 
-This writes the print on the chosen material as an sRGB picture. The automatic search runs on the print itself: its
-printing exposure, then its colour balance. The paper's curve gives the tone, so the tone stage does not run. The
-print is shown relative to its paper's white. A white-light scan's print takes no curve fit, and it carries the
-white-light reading's error: on the test chart, a patch printed from the white-light scan differs from the same patch
-printed from the RGB-LED scan by 2.7 to 3.3 CIEDE2000 on average.
+2. **Cineon / ADX16 density file and CLF (`-P rp180|apd|statusm --print <material>`)** — writes the negative's
+   measured density above the film base to a 10-bit Cineon DPX (`-P rp180 -o scan.dpx`) or a 16-bit ADX16 TIFF
+   (`-P apd -o scan.tif`), and writes a Common LUT Format transform (`<output>.<material>.clf`) beside it:
 
-On a print, `--brightness` moves the printing exposure and `--tint` and `--warmth` move the print's colour balance; the
-scan's exposure stays as the search left it. A density output with `--print` takes them too, for its CLFs, so the CLF
-prints the frame as the picture with the same knobs does. DESIGN.md has the rest.
+   ```sh
+   bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
+       --film_base base.ARW --roi auto -o scan.tif scan.ARW
+   oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
+   ```
 
-The paper whites below are those of the Portra 400 RGB-LED set's print ICCs (`DESIGN.md`, "The print's white").
+### Shared 3D cLUT: log-space matrix vs. input TRC curves
+
+The two paths share the same 45 × 45 × 45 colour table (cLUT), which maps the print material's dye amounts to colour
+under its viewing light (D50 for paper, D55 for print film), shown relative to the paper's white. They differ only in
+how they take the scan into that table:
+
+- **In the density file + CLF**, the pixel values in the file are already logarithmic densities above the film base.
+  The CLF applies a **3 × 3 matrix in log (density) space** (shifting by the printing exposure `A` and colour balance,
+  scaling by the film's grey-balance slopes, and multiplying by the print matrix `P`), followed by a 1D LUT of the
+  paper's characteristic S-curve per layer.
+- **In the print ICC**, the input is linear film transmittance after the soft knee. Its **4096-entry input TRC curves**
+  perform the exact same work in one step: they take `-log10` to light density, walk the film's grey balance curve
+  `G_c` at the printing exposure `A` and bracket tilt, and fold in the paper's S-curve (`Paper_c`) so the 45³ cLUT only
+  has to interpolate dye colour and off-axis channel mixing.
+
+![Print TRC Curves and Shared 45x45x45 Print cLUT Gamut](samples/print_trc_and_clut.png)
+
+### Tone curve and TriLED vs. D65 accuracy
+
+- **Tone stage disabled:** When `--print` is used, the DINOv3 tone curve stage (`--tone_stage`) and the scene
+  highlight shoulder are disabled so that the output shows the print material's own characteristic S-curve, toe and
+  paper-white shoulder unmodified. (`--brightness` adjusts the printing exposure `A`, and `--tint` and `--warmth`
+  adjust the print's colour balance, for both the picture output and the density CLFs.)
+- **TriLED vs. D65 white light:** Under the narrow-band RGB LED (`--light_source tri`), the three LED spectra are
+  measured and separate the film's three dye layers directly, fitting the film model's Academy Printing Density to
+  within 0.010 RMS (and the print ICC's table sampling error is 0.04 ΔE₀₀ on the chart). Under broadband white light
+  (`--light_source d65`), no lamp or camera spectrum is measured — the decoded channels are taken as standard linear
+  Rec.2020 under D65, with no curve fit applied on a print — so the density reading is 0.03 to 0.09 APD RMS from the
+  narrow-band reading, and a chart patch printed from a white-light scan differs from the same patch printed from an
+  RGB-LED scan by 2.7 to 3.3 ΔE₀₀ on average.
 
 | Material | Type | Viewing light | Its paper white, L\* a\* b\* under that light (shown at the display's white) |
 |---|---|---|---|
@@ -290,8 +326,8 @@ The paper whites below are those of the Portra 400 RGB-LED set's print ICCs (`DE
 
 ![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
 
-*Top left: negicc's picture, without `--print`. Then the six papers and the two print films, each made by its own
-print search (`--print <material> -P srgb`) and shown relative to its paper's white.*
+*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each made by its
+own print search (`--print <material> -P srgb`) and shown relative to its paper's white.*
 
 ## Options
 
@@ -337,7 +373,7 @@ photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
 (`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two tables,
 and the pictures made through one are free. The `film_model` block of every profile set's `bundle.json` holds
-spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each RGB-LED profile set
+spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each profile set
 (`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
 The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
 the pictures made with a print ICC.
