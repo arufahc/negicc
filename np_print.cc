@@ -1485,8 +1485,8 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
                          {"above_white_pct", {p.above_white_pct[0], p.above_white_pct[1], p.above_white_pct[2]}},
                          {"at_white_pct", {p.at_white_pct[0], p.at_white_pct[1], p.at_white_pct[2]}}};
         if (p.knobs) {
-          one["knobs"] = {{"what", "--brightness, --tint and --warmth on this print: mid_grey_a and gains are the moved "
-                                   "ones (A, g and b solved on the print's profile, E held), from the search's"},
+          one["knobs"] = {{"what", "--brightness, --tint and --warmth on this print: mid_grey_a and gains are the "
+                                   "moved ones (A, g and b solved on the print's profile, E held), from the search's"},
                           {"search", {{"a", p.knob_base_a}, {"g", p.knob_base_g}, {"b", p.knob_base_b}}},
                           {"grey_lab", {p.knob_grey_lab[0], p.knob_grey_lab[1], p.knob_grey_lab[2]}},
                           {"limited", p.knobs_limited}};
