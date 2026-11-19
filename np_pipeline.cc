@@ -1926,9 +1926,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, white, scan.film_base);
     const negicc::FilmBaseDetection& fb = scan.film_base;
     if (fb.rebate_clipped) {
-      log_warn("the scan clips its film base (the rebate is at the sensor's clip): the base is read from the "
-               "thinnest film instead, below the true base; give --film_base <capture of unexposed film> or scan at "
-               "a shorter exposure\n");
+      log_warn("the scan clips its film base (the rebate is at the sensor's clip): the base is read from %s instead, "
+               "below the true base; give --film_base <capture of unexposed film> or scan at a shorter exposure\n",
+               found ? "the thinnest film" : "the profile bundle");
     }
     if (found) {
       log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", fb.source.c_str(), fb.rgb[0], fb.rgb[1], fb.rgb[2]);

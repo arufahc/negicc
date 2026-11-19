@@ -556,6 +556,12 @@ void thinnest_film_base(const RgbView& half, float white, float out[3]) {
   thinnest_film_base_impl(half, false, white, out);
 }
 
+// Appends a reason to a comma-separated list (no comma before the first).
+static void add_reason(std::string& reason, const char* why) {
+  if (!reason.empty()) reason += ',';
+  reason += why;
+}
+
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
                       const double* crosstalk, float white, FilmBaseDetection& out) {
   out = FilmBaseDetection{};
@@ -570,11 +576,11 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     out.light_clipped = det->light_clipped;
     // A failed or unconfident detection (where neg_process takes the whole image instead of its frame) does not place
     // its patch: on a frame it did not find, the patch may lie on picture.
-    if (det->ok && det->has_base && det->conf < kBaseMinFrameConf) out.reason += ",frame_conf_low";
+    if (det->ok && det->has_base && det->conf < kBaseMinFrameConf) add_reason(out.reason, "frame_conf_low");
     if (det->ok && det->has_base && det->conf >= kBaseMinFrameConf && sensor_w > 0 && sensor_h > 0) {
       const double sx = W / (double)sensor_w, sy = H / (double)sensor_h;
       if (std::fabs(sx - sy) > 0.02 * std::max(sx, sy)) {
-        out.reason += ",decode_not_sensor_aligned";  // the decode is not the sensor's area scaled (turned)
+        add_reason(out.reason, "decode_not_sensor_aligned");  // the decode is not the sensor's area scaled (turned)
       } else {
         const int x = det->base_box[0], y = det->base_box[1], w = det->base_box[2], h = det->base_box[3];
         const double x0 = x + kBasePatchInset * w, x1 = x + (1.0 - kBasePatchInset) * w;
@@ -585,7 +591,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         b[2] = std::min(W, b[2]);
         b[3] = std::min(H, b[3]);
         if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
-          out.reason += ",patch_too_small";
+          add_reason(out.reason, "patch_too_small");
         } else {
           has_box = true;
           box[0] = b[0];
@@ -604,7 +610,7 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
       clipped_share(without_flat(half), box, kSensorClip * white) > kBaseClipFraction) {
     has_box = false;
     out.rebate_clipped = true;
-    out.reason += ",rebate_clipped";
+    add_reason(out.reason, "rebate_clipped");
   }
   if (has_box) {
     std::vector<uint16_t> ch[3];
