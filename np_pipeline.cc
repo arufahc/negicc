@@ -977,6 +977,18 @@ int prepare(const Options& o, Setup& s) {
   s.raw_decode = s.white_light ? RawDecode::kWhiteLight
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
+  // Pixel shift merges the four captures' CFA as camera RGB (no LibRaw decode): it needs a profile that reads camera
+  // RGB, and takes no -q.
+  if (o.files.size() == 4 && s.raw_decode != RawDecode::kCameraRgb) {
+    log_error("4-shot pixel shift merges the captures' camera RGB: it needs a TriLED (camera_raw_rgb) profile bundle, "
+              "or -r, -g and -b with -p (a profile of the corrected camera RGB)\n");
+    return 1;
+  }
+  if (o.files.size() == 4 && o.quality >= 0) {
+    log_error("-q does not apply to 4-shot pixel shift: the four captures fill each pixel's colours, with no "
+              "demosaicing\n");
+    return 1;
+  }
 
   // Fitted G/B input curves (input_curves.h): white light only. A TriLED
   // bundle's curves are measured under the light the scan was made with, so fitting them per frame has no basis; the
@@ -1957,13 +1969,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
     negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
         &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
-    // The film base from the whole scan's statistics (there is no mosaic for the frame detector on this path).
     // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
     // own size put the base patch off the image, so neg_process fell back to the statistics).
-    // A single RAW's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, white light or
-    // not; before, only white light used it, so TriLED with -q >= 0 (this path, not the CFA one) lost the rebate
-    // base and read it from the statistics.
-    const bool raw_det = s.white_light || (o.input_mode == InputMode::kRaw && o.files.size() == 1);
+    // A single RAW's or linear DNG's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, on
+    // either light. An RGB file (TIFF, JPEG) and three captures have no mosaic: their base comes from the statistics,
+    // with no detection recorded for it.
+    const bool raw_det = o.files.size() == 1 &&
+                         (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng);
     detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
                 raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
     return half_view;
