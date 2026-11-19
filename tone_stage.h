@@ -33,7 +33,8 @@
 // difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
 // not re-balanced, and no pixel is converted to Lab.
 //
-//   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,  h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
+//   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,
+//   h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
 //
 // The four curve numbers are solved so the render's own descriptors move toward the heads' predictions: since f is
 // monotone, the toned render's percentiles are f of the render's, so L2' = f(L2), L50' = f(L50), L98' = f(L98) and

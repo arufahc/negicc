@@ -53,9 +53,9 @@ constexpr float kSensorClip = 0.98f;      // a sample at or above this fraction 
                                           // field, but after it on the LibRaw path with --flat) is clipped
 constexpr double kBaseClipFraction = 0.001;  // a patch, tile or region with more clipped pixels is clipped
 constexpr double kRebateMargin = 0.5;     // stops: the thinnest film may exceed a base patch by at most this
-constexpr double kBasePercentile = 99.5;  // per-channel percentile of film pixels taken as the film base (the statistics'
-                                          // step; also the print's floor on a base that is not a capture, the
-                                          // rebate included: print_base_floor)
+constexpr double kBasePercentile = 99.5;  // per-channel percentile of film pixels taken as the film base (the
+                                          // statistics' step; also the print's floor on a base that is not a capture,
+                                          // the rebate included: print_base_floor)
 constexpr int kBaseWorkSize = 512;        // long side (px) of the image the thinnest film is read on
 constexpr float kBaseMinFrameConf = 0.5f; // the detection's confidence below which its patch is not used (the frame
                                           // detection neg_process falls back from at the same level)

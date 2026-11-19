@@ -96,7 +96,8 @@ void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const st
         a = make_trt_adapter(engine_data, engine_size);
     } else {
         if (!onnx_data || onnx_size == 0) {
-            throw std::runtime_error("DinoV3Engine: intent adapter " + name + " has no adapter.onnx for the CPU backbone");
+            throw std::runtime_error("DinoV3Engine: intent adapter " + name +
+                                     " has no adapter.onnx for the CPU backbone");
         }
         a = make_ort_adapter(onnx_data, onnx_size, num_threads);
     }
@@ -170,7 +171,8 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     if (dir_exists(model_spec)) {
         // The backbone alone (adapters supplied separately) wins over a fused model in the same directory.
         const std::string stem =
-            (file_exists(join_path(model_spec, "backbone.onnx")) || file_exists(join_path(model_spec, "backbone.engine")))
+            (file_exists(join_path(model_spec, "backbone.onnx")) ||
+             file_exists(join_path(model_spec, "backbone.engine")))
                 ? "backbone" : "model";
         if (file_exists(join_path(model_spec, stem + ".onnx"))) onnx_path = join_path(model_spec, stem + ".onnx");
         if (file_exists(join_path(model_spec, stem + ".engine"))) engine_path = join_path(model_spec, stem + ".engine");
@@ -340,7 +342,8 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
         const auto tn0 = std::chrono::high_resolution_clock::now();
         res.neutral_p.resize((size_t)res.num_patches);
         neutral_head_->run(tokens.data(), res.num_patches, res.neutral_p.data());
-        res.neutral_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
+        res.neutral_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
     }
 
     if (token_spread_ && !tokens.empty() && res.num_patches > 1) {

@@ -422,24 +422,29 @@ struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;
   int steps = 0;
   bool converged = false;
-  float above_knee = 0.0f;           // the share of the inner crop above the knee at the bootstrap (the search's E, g = b = 1)
+  float above_knee = 0.0f;           // the share of the inner crop above the knee at the bootstrap (the search's E,
+                                     // g = b = 1)
   // At the final settings, per channel (the gains are in the print's curves, after the knee, so this is at E alone):
   // the share of the inner crop past the knee (input above 0.95, 0.054 density thinner than the base) and past the cut
   // (above 1.1227, where the knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no
   // detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
   float wish_mean_l = 0.0f;          // the held wish's mean L*
-  float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result: cut
-  float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white and above
+  float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result:
+                                          // cut
+  float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white
+                                          // and above
   bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
   float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
-  const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
+  const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within
+                                      // TOL_REL_ERR), "steps"
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A,
 // with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders it).
-bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
-                             DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
-                             const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);
+bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base,
+                             const ContinuousPrint& cp, DinoV3Engine& engine, const negicc::RgbView& frame,
+                             double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
+                             ParamSearchResult& out, ContinuousPrintResult& cr);
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,

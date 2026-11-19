@@ -125,7 +125,8 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
       stocks.push_back(path.substr(kPrefix.size(), path.size() - kPrefix.size() - std::strlen("/adapter.onnx")));
     }
   }
-  std::sort(stocks.begin(), stocks.end(), [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+  std::sort(stocks.begin(), stocks.end(),
+            [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
   // The name, then each directory above it (a profile inside a bundle's directory names the stock there).
   std::vector<std::string> names = {profile_name};
   std::string p = profile_name;

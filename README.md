@@ -255,7 +255,8 @@ Print emulation models shining a printer lamp through the negative onto darkroom
 Eight materials from [spektrafilm](https://github.com/andreavolpato/spektrafilm) are built in — six papers (such as
 Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print` alone lists them.
 
-![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
+![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision
+2383](samples/print_emulation.jpg)
 
 *Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film.*
 
@@ -292,7 +293,8 @@ Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the 
 ΔE₀₀ on average; under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
 printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
 
-![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
+![The same negative as negicc's picture and as a print on each of the eight print
+materials](samples/print_materials_triled.jpg)
 
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
 scene conversion's lightness with `--brightness` (the offset in stops is in each cell's title).*

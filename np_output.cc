@@ -396,10 +396,14 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
                     {"neutral", ordered_json{{"anchors", f->neutral_anchors ? "head" : "none"},
                                              {"m", f->neutral_export.m},
-                                             {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
-                                             {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
-                                             {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
-                                             {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
+                                             {"auto_a", n9(f->neutral_auto.a_bar)},
+                                             {"auto_b", n9(f->neutral_auto.b_bar)},
+                                             {"export_a", n9(f->neutral_export.a_bar)},
+                                             {"export_b", n9(f->neutral_export.b_bar)},
+                                             {"auto_ka", n9(f->neutral_auto.k_a)},
+                                             {"auto_kb", n9(f->neutral_auto.k_b)},
+                                             {"export_ka", n9(f->neutral_export.k_a)},
+                                             {"export_kb", n9(f->neutral_export.k_b)},
                                              // The evidence mass (sum of p^2 over the cells in range, as the
                                              // last fit pass saw them at its roll-off; earlier builds wrote it at
                                              // Auto's roll-off, up to 2 % apart), the shrink weight

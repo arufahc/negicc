@@ -1182,7 +1182,8 @@ inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const
     lo = e_lo;
     hi = e_hi;
     const float L_lo = median_at(lo), L_hi = median_at(hi);
-    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E (0.05 L* LUT tolerance)
+    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E
+                                                      // (0.05 L* LUT tolerance)
     if (dark_at_lo || L_hi - 0.05f > target_L) {      // or lighter even at the highest
       if (clipped) *clipped = true;
       return L_lo < target_L ? lo : hi;

@@ -97,16 +97,16 @@ Rec.2020 already and are not converted. A TIFF with `--light_source tri` is take
 (black subtracted, no white balance or colour matrix) and goes through the crosstalk correction (2.4); a TIFF with an
 embedded profile or 8-bit samples is refused there.
 
-Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
-or a single ICC profile (`-p`; `np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
-third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
-the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit linear camera RGB with
-no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single TIFF is under an
-RGB-LED profile set). When all three captures record shutter and
-ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
-half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame (a given one, or `--roi auto`'s
-when its detection is confident), it is the mean of each 2×2 block of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
-`-g` or `-b` give one.
+Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set or
+a single ICC profile (`-p`; `np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the
+second, blue from the third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the
+quality `-q` gives) and the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit
+linear camera RGB with no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single
+TIFF is under an RGB-LED profile set). When all three captures record shutter and ISO, the green and blue channels are
+scaled to the first capture's exposure. The half-size image is each RAW's own half-size decode, or the mean of each 2×2
+block of a TIFF; when `--roi` cuts a frame (a given one, or `--roi auto`'s when its detection is confident), it is the
+mean of each 2×2 block of the assembled image. Each channel comes from the capture under its own light, so `X` is the
+identity unless `-r`, `-g` or `-b` give one.
 
 ## 2.2 Flat field
 

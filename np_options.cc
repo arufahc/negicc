@@ -208,7 +208,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("-q", "--quality")
-    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear 0; >=0 passes qual to LibRaw, e.g. 4 for DCB).")
+    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear 0; >=0 passes qual to LibRaw, e.g. 4 "
+          "for DCB).")
     .scan<'i', int>()
     .default_value(-1);
   parser.add_argument("-r", "--r_coeff")
@@ -267,7 +268,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "luminance. It moves the result, whether searched or given (-E sets what it starts "
           "from, not the final exposure), and the tone curve is applied on top unchanged; on a print (--print) it "
           "moves the print's mid grey A while E is held (a density output takes it only with --print, for its CLFs). "
-          "Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
+          "Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input files (size "
+          "and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")
@@ -290,10 +292,10 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020). Required for a RAW; "
-          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes either: "
-          "with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are sRGB and "
-          "16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light (black "
-          "subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
+          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes "
+          "either: with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are "
+          "sRGB and 16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light "
+          "(black subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
   parser.add_argument("-p", "--film_profile")
     .help("Profile in place of the built-in bundle: a profile bundle JSON with its ICC profiles inside (base64), or "
           "a split bundle's directory (a bundle.json with its ICC profiles beside it, as in profiles/), or a single "
@@ -511,7 +513,8 @@ int parse_options(int ac, char* av[], Options& o) {
         return 1;
       }
       p[0] = (float)target;
-      if (!(std::isfinite(p[1]) && p[1] > 0.0f && std::isfinite(p[2]) && p[2] > 0.0f && std::isfinite(p[3]) && p[3] > 0.0f)) {
+      if (!(std::isfinite(p[1]) && p[1] > 0.0f && std::isfinite(p[2]) && p[2] > 0.0f && std::isfinite(p[3]) &&
+            p[3] > 0.0f)) {
         log_error("--probe_params: \"%s\": E, g and b must be positive numbers\n", item.c_str());
         return 1;
       }
@@ -777,7 +780,8 @@ int parse_options(int ac, char* av[], Options& o) {
       if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
         std::string text, stem, why;
         PrintMaterial material;
-        if (!read_print_file(id, text, stem, why) || !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
+        if (!read_print_file(id, text, stem, why) ||
+            !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
           log_error("--print %s: %s\n", id.c_str(), why.c_str());
           return 1;
         }

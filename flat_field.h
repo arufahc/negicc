@@ -108,9 +108,9 @@ public:
     // row of cfa. Throws std::invalid_argument if width / 2 x height / 2 is not the size the grid was measured on.
     void apply_cfa(uint16_t* cfa, size_t pitch, int width, int height, const uint8_t pattern[36]) const;
 
-    // The gain grid and the lookup tables of a width x height decode (half: half-size, else full-size), in
-    // host or GPU-visible memory, for flat_divide in the fused crop + flat debayers. Built once per size and kept
-    // while the FlatField lives (a few hundred kB). Throws std::invalid_argument as apply() for a decode of another size.
+    // The gain grid and the lookup tables of a width x height decode (half: half-size, else full-size), in host or
+    // GPU-visible memory, for flat_divide in the fused crop + flat debayers. Built once per size and kept while the
+    // FlatField lives (a few hundred kB). Throws std::invalid_argument as apply() for a decode of another size.
     std::shared_ptr<const FlatTables> tables(int width, int height, bool half) const;
 
 private:

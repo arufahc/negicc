@@ -176,9 +176,10 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     v.stride = (ptrdiff_t)period * (ptrdiff_t)cfa_pitch;
     v.cfa_step = (uint8_t)period;
     // TODO: For X-Trans (`period == 6`), `sensor_dxx = 3, sensor_dyy = 3` with `sensor_x0 = 0, sensor_y0 = 0` samples
-    // the half-size flat field at the top-left of each 6x6 cell `(3*x, 3*y)` rather than the cell center `(3*x+1, 3*y+1)`
-    // or per-channel photosite offsets `(ch_x0, ch_y0)`, and reads only 1 green photosite (`g2_ptr == nullptr`) per 6x6
-    // cell. Evaluate centering the flat-field coordinate and multi-green averaging on X-Trans in a follow-up.
+    // the half-size flat field at the top-left of each 6x6 cell `(3*x, 3*y)` rather than the cell center
+    // `(3*x+1, 3*y+1)` or per-channel photosite offsets `(ch_x0, ch_y0)`, and reads only 1 green photosite
+    // (`g2_ptr == nullptr`) per 6x6 cell. Evaluate centering the flat-field coordinate and multi-green averaging on
+    // X-Trans in a follow-up.
     v.sensor_x0 = cfa_x0 / 2;
     v.sensor_y0 = cfa_y0 / 2;
     v.sensor_dxx = period / 2;
@@ -666,7 +667,8 @@ void extract_and_transform_roi(
     int rot_cw, bool hflip, bool vflip,
     int dst_w, int dst_h
 ) {
-    RgbView v = RgbView::from_interleaved_rgb(src, src_w, src_h, 3).crop_and_orient(rx, ry, rw, rh, rot_cw, hflip, vflip);
+    RgbView v = RgbView::from_interleaved_rgb(src, src_w, src_h, 3)
+        .crop_and_orient(rx, ry, rw, rh, rot_cw, hflip, vflip);
     if (!v.valid() || v.width != dst_w || v.height != dst_h) {
         throw std::invalid_argument("extract_and_transform_roi: ROI dimensions do not match dst_w x dst_h");
     }
@@ -1034,7 +1036,8 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a) {
     for (int y2 = 0; y2 < a.dst_h; ++y2) {
         for (int x2 = 0; x2 < a.dst_w; ++x2) {
             int x_rel = 0, y_rel = 0;
-            map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, half_rw, half_rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+            map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, half_rw, half_rh, a.rot_cw, a.hflip, a.vflip,
+                                     x_rel, y_rel);
 
             const int r = a.ry + y_rel * 2;
             const int c = a.rx + x_rel * 2;
@@ -1118,62 +1121,90 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
                     const float r11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
                     R = 0.25f * (r00 + r01 + r10 + r11);
                 } else if (r_even && !c_even) {
-                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
-                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                                get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                                get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
                 } else {
-                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
-                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                                get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                                get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
                 }
             } else {
                 if (r_even && c_even) {
                     R = c_center;
                 } else if (r_even && !c_even) {
-                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
                     const float rl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
                     const float rr = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
                     R = (G + k) * (0.5f * (rl + rr)) - k;
                 } else if (!r_even && c_even) {
-                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
                     const float ru = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
                     const float rd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
                     R = (G + k) * (0.5f * (ru + rd)) - k;
                 } else {
-                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float r00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
-                    const float r01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
-                    const float r10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
-                    const float r11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float r00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g00 + k);
+                    const float r01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g01 + k);
+                    const float r10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g10 + k);
+                    const float r11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g11 + k);
                     R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
                 }
 
                 if (!r_even && !c_even) {
                     B = c_center;
                 } else if (!r_even && c_even) {
-                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
                     const float bl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
                     const float br = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
                     B = (G + k) * (0.5f * (bl + br)) - k;
                 } else if (r_even && !c_even) {
-                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
                     const float bu = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
                     const float bd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
                     B = (G + k) * (0.5f * (bu + bd)) - k;
                 } else {
-                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
-                    const float b00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
-                    const float b01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
-                    const float b10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
-                    const float b11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
+                                                                 a.white_level, eps);
+                    const float b00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g00 + k);
+                    const float b01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g01 + k);
+                    const float b10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g10 + k);
+                    const float b11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                                      (g11 + k);
                     B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
                 }
             }

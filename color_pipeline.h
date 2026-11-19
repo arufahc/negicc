@@ -195,12 +195,12 @@ NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int
     // Four vertices and weights of the tetrahedron containing (dr, dg, db).
     const float *a, *p, *q;
     float w0, w1, w2, w3;
-    if (dr >= dg && dg >= db)      { a = v100; p = v110; q = v111; w0 = 1.0f - dr; w1 = dr - dg; w2 = dg - db; w3 = db; }
-    else if (dr >= db && db > dg)  { a = v100; p = v101; q = v111; w0 = 1.0f - dr; w1 = dr - db; w2 = db - dg; w3 = dg; }
-    else if (db > dr && dr >= dg)  { a = v001; p = v101; q = v111; w0 = 1.0f - db; w1 = db - dr; w2 = dr - dg; w3 = dg; }
-    else if (dg > dr && dr >= db)  { a = v010; p = v110; q = v111; w0 = 1.0f - dg; w1 = dg - dr; w2 = dr - db; w3 = db; }
-    else if (dg >= db && db > dr)  { a = v010; p = v011; q = v111; w0 = 1.0f - dg; w1 = dg - db; w2 = db - dr; w3 = dr; }
-    else                           { a = v001; p = v011; q = v111; w0 = 1.0f - db; w1 = db - dg; w2 = dg - dr; w3 = dr; }
+    if (dr >= dg && dg >= db)     { a = v100; p = v110; q = v111; w0 = 1.0f - dr; w1 = dr - dg; w2 = dg - db; w3 = db; }
+    else if (dr >= db && db > dg) { a = v100; p = v101; q = v111; w0 = 1.0f - dr; w1 = dr - db; w2 = db - dg; w3 = dg; }
+    else if (db > dr && dr >= dg) { a = v001; p = v101; q = v111; w0 = 1.0f - db; w1 = db - dr; w2 = dr - dg; w3 = dg; }
+    else if (dg > dr && dr >= db) { a = v010; p = v110; q = v111; w0 = 1.0f - dg; w1 = dg - dr; w2 = dr - db; w3 = db; }
+    else if (dg >= db && db > dr) { a = v010; p = v011; q = v111; w0 = 1.0f - dg; w1 = dg - db; w2 = db - dr; w3 = dr; }
+    else                          { a = v001; p = v011; q = v111; w0 = 1.0f - db; w1 = db - dg; w2 = dg - dr; w3 = dr; }
     return { v000[0] * w0 + a[0] * w1 + p[0] * w2 + q[0] * w3,
              v000[1] * w0 + a[1] * w1 + p[1] * w2 + q[1] * w3,
              v000[2] * w0 + a[2] * w1 + p[2] * w2 + q[2] * w3 };

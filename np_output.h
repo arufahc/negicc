@@ -151,7 +151,8 @@ struct Sidecar {
   std::string film_base_capture_json;
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
-  bool density_fit_off = false;      // a white-light density run without --print, with --fit_curves off: its replay keeps it
+  bool density_fit_off = false;      // a white-light density run without --print, with --fit_curves off: its replay
+                                     // keeps it
   // A density run's --print materials as given (built-in ids, 'all', or files): its replay gives them again, so the
   // base's floor (raised only with --print) and the CLFs are made again. Empty: no --print.
   std::vector<std::string> density_prints;

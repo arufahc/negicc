@@ -51,11 +51,11 @@
 //                          or open (image border),
 //                          the format's frame length laid from a trusted end where the measured length is not kept.
 //                          The primary is the complete frame nearest the image centre (else the most visible); the
-//                          neighbours are walked at the measured pitch. Then the strip's edges and ends (film base), the sprocket holes, and
-//                          candidate base patches (gaps and rebate next to the primary). Without an axis hint, a
-//                          square frame, a reading that is not confident, or one that found no film gap on the axis
-//                          the border vote named is read again on the other strip axis; the other reading replaces
-//                          it when it has evidence of its own and wins better_strip (try_alt).
+//                          neighbours are walked at the measured pitch. Then the strip's edges and ends (film base),
+//                          the sprocket holes, and candidate base patches (gaps and rebate next to the primary).
+//                          Without an axis hint, a square frame, a reading that is not confident, or one that found no
+//                          film gap on the axis the border vote named is read again on the other strip axis; the other
+//                          reading replaces it when it has evidence of its own and wins better_strip (try_alt).
 //     c. refine_edge_full  each edge of the primary moved to the steepest log-luminance step within a few pixels, on
 //                          the full-resolution image (bilinear samples, 48 profiles per edge).
 //  6. detect_film_frame    the format (or the best of all formats for AUTO), the crop (largest axis-aligned rectangle
@@ -2635,7 +2635,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     conf *= 0.8f;
     reasons.push_back("weak_transverse_edges");
   }
-  const bool has_hard_bound = edge0 || edge1 || end0 || end1 || cands[pi].lt == 2 || cands[pi].rt == 2 || !holes.empty();
+  const bool has_hard_bound =
+      edge0 || edge1 || end0 || end1 || cands[pi].lt == 2 || cands[pi].rt == 2 || !holes.empty();
   const bool strip_reaches_border_or_edge = (edge0 || s0 <= 2) || (edge1 || s1 >= VH - 2);
   const bool has_base_bound = strip_reaches_border_or_edge && st_tb >= 0.4f &&
                               (cands[pi].lt == 1 || cands[pi].rt == 1 || !res_out.base_patches.empty());
