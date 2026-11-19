@@ -107,8 +107,8 @@ FormatGeom format_geom(FilmFormat f) {
   }
 }
 
-// 35mm perforation (KS, Kodak Standard; SMPTE 139): width along the strip, height across, pitch (mm): 1.981 x 2.794 on
-// a 4.75 pitch, to two decimals.
+// 35mm perforation (KS, Kodak Standard; SMPTE 139): width along the strip, height across and pitch in mm. They are
+// 1.981 x 2.794 on a 4.75 pitch, given to two decimals.
 constexpr float kHoleW = 1.98f, kHoleH = 2.79f, kHolePitch = 4.75f;
 
 // p-th quantile (0..1). Takes a copy, partially sorted.

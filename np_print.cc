@@ -982,7 +982,7 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
     err = "a field of the spektrafilm print profile is missing or malformed";
     return false;
   }
-  // What the print's own density is read with: each layer's sensitivity under the printer lamp, a 3200 K blackbody:
+  // What the print's own density is read with: each layer's sensitivity under the printer lamp, a 3200 K blackbody.
   // Planck's law in relative units, with the second radiation constant c2 = 1.4388e-2 m K that ITS-90 fixes.
   std::vector<double> response[3];
   for (int c = 0; c < 3; ++c) {
@@ -1008,9 +1008,7 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
   }
   // XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02. cat02: the CIECAM02 chromatic adaptation
   // matrix (CIE 159:2004). xyz_to_srgb: XYZ D65 -> linear sRGB as Bruce Lindbloom tabulates it (brucelindbloom.com,
-  // computed with ASTM E308-01's D65 white 0.95047, 1, 1.08883). d65: D65 from its chromaticity (0.3127, 0.3290), the
-  // white of sRGB and of ITU-R BT.2020-2 Table 3; its X and Z (0.950456, 1.089058) differ from that matrix's white in
-  // the fifth and fourth decimals.
+  // computed with ASTM E308-01's D65 white 0.95047, 1, 1.08883).
   const double cat02[9] = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834};
   const double xyz_to_srgb[9] = {3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
                                  0.0415560, 0.0556434,  -0.2040259, 1.0572252};

@@ -23,10 +23,10 @@
 //     T = v / base_level,  D_light = -log10(max(T, kDensityMinT)),  D = M * D_light,  code = round(offset + scale * D)
 //
 // M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
-// offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), the offsets and
-// scales of ADX10 and ADX16 (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), so RP 180 density in a DPX
-// is a Cineon file. Academy Printing Density is written as ADX (SMPTE ST 2065-3): the same offsets and scales with the
-// standard's channel factors on the density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
+// offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
+// density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these offsets
+// and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors on the
+// density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
 // Status M and RP 180 take no factors (k = 1).
 //
 // Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the

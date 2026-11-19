@@ -217,8 +217,8 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
             const double cb = srgb_lin(b_sum * inv_pixels / 255.0);
 
             // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of
-            // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and rounded CIE 1976 constants (0.008856, 7.787,
-            // 903.3).
+            // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and CIE 15's exact break and slope (kLabEpsilon,
+            // kLabKappa).
             const double Y = 0.212671 * cr + 0.715160 * cg + 0.072169 * cb;
             const double L = (Y > negicc::kLabEpsilon) ? (116.0 * std::cbrt(Y) - 16.0) : (negicc::kLabKappa * Y);
 

@@ -351,8 +351,7 @@ NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
 // colour difference from that neutral, v - Y (white 1, 1, 1), is added back scaled by f'(Y) / f'(Y') (at most 8), which
 // holds its a* and b* to first order: out = Y' + (v - Y) f'(Y) / f'(Y'). No Lab conversion of the pixel.
 // Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion: the Y row
-// of Bruce Lindbloom's sRGB -> XYZ matrix (brucelindbloom.com, computed with ASTM E308-01's D65 white 0.95047, 1,
-// 1.08883), which differs in the sixth decimal from the row of linear_srgb_to_lab and the tone stage's descriptors.
+// of OpenCV's cvtColor RGB -> XYZ matrix, the row linear_srgb_to_lab and the tone stage's descriptors read.
 NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
     const float y0 = 0.212671f * v.r + 0.715160f * v.g + 0.072169f * v.b;   // as tone_stage.cc's planner reads Y
     const float y1 = tone_table_Y(tt, y0);
@@ -374,9 +373,9 @@ NEGICC_HD uint8_t quantize_u8(float v) { return (uint8_t)roundf(v * 255.0f); }
 NEGICC_HD uint16_t quantize_u16(float v) { return (uint16_t)roundf(v * 65535.0f); }
 
 // ---- Scoring: sRGB -> CIELAB (D65) -------------------------------------------------------------------------
-// The matrix, the white (0.950456, 1, 1.088754: the matrix's row sums) and the rounded CIE 1976 constants 0.008856
-// ((6/29)^3), 7.787 (841/108) and 903.3 ((29/3)^3) are those of OpenCV's cvtColor RGB -> Lab (its imgproc colour
-// conversions documentation).
+// The matrix and the white (0.950456, 1, 1.088754: the matrix's row sums) are those of OpenCV's cvtColor RGB -> Lab
+// (its imgproc colour conversions documentation). The break and slope are CIE 15's exact kLabEpsilon and kLabKappa,
+// where OpenCV rounds them to 0.008856, 7.787 (kLabKappa / 116) and 903.3.
 struct Lab {
     float L, a, b;
 };
