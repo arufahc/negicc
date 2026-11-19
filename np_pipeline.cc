@@ -831,10 +831,10 @@ int prepare(const Options& o, Setup& s) {
               "scan's camera RGB, through the bundle's crosstalk correction\n");
     return 1;
   }
-  // The density output: the bundle's matrix for the measure, on a TriLED bundle.
+  // The density output: the bundle's matrix for the measure, on either light.
   if (o.density) {
     if (!s.is_bundle) {
-      log_error("-P %s needs a profile bundle (--film_stock and --light_source tri, or -p a bundle): the density "
+      log_error("-P %s needs a profile bundle (--film_stock and --light_source, or -p a bundle): the density "
                 "matrices are the bundle's\n", o.colorspace.c_str());
       return 1;
     }
@@ -1580,9 +1580,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
            : s.manual_target_idx >= 0 ? s.manual_target_idx
                                       : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
   };
-  // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
-  // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
-  // highlight roll-off measured at them.
   // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
   // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
   // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
@@ -1590,6 +1587,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     p.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence : scan.has_roi && scan.frame_is_whole;
     p.film_base_is_rebate = scan.film_base.is_rebate();
   };
+  // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
+  // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
+  // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e

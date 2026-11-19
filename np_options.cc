@@ -212,19 +212,22 @@ int parse_options(int ac, char* av[], Options& o) {
     .scan<'i', int>()
     .default_value(-1);
   parser.add_argument("-r", "--r_coeff")
-    .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW. "
+    .help("R (corrected) value is dot product of the vector r1 r2 r3, three separate numbers (-r 1 0 0), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{1, 0, 0})
     .scan<'g', float>();
   parser.add_argument("-g", "--g_coeff")
-    .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW. "
+    .help("G (corrected) value is dot product of the vector g1 g2 g3, three separate numbers (-g 0 1 0), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 1, 0})
     .scan<'g', float>();
   parser.add_argument("-b", "--b_coeff")
-    .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW. "
+    .help("B (corrected) value is dot product of the vector b1 b2 b3, three separate numbers (-b 0 0 1), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
@@ -247,10 +250,10 @@ int parse_options(int ac, char* av[], Options& o) {
     .implicit_value(true);
   parser.add_argument("--gain_g")
     .help("Gain of the G channel relative to R (with a bundle, 1 renders the film base neutral). Defaults to 1.0. "
-          "Given with a bundle (either light), the bundle search and the curve fit hold it and solve the rest; with "
-          "-E, --target and --gain_b given too there is nothing to search, and the "
-          "search runs only for the curve fit (white light) and the tone stage (--tone_stage off, with --fit_curves "
-          "off on white light, converts with the given values alone). Given with an ICC profile, it turns the "
+          "Given with a bundle (either light), the bundle search and, on white light, the curve fit hold it and solve "
+          "the rest; with -E, --target and --gain_b given too there is nothing to search, and the search runs only for "
+          "the curve fit (white light) and the tone stage (--tone_stage off, with --fit_curves off on white light, "
+          "converts with the given values alone). Given with an ICC profile, it turns the "
           "parameter search off. --tint and --warmth move the result, a given gain too.")
     .scan<'g', float>()
     .default_value(1.0f);
@@ -327,8 +330,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
           "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
           "around (the rebate; default: every format). The sidecar's cli_equivalent gives the format the "
-          "film base was read with when it was not given (--roi auto's 35mm), so that its explicit --roi reads the same "
-          "base; a given one is left to the caller with the other set-up options.")
+          "film base was read with whenever its detection used one, given or --roi auto's 35mm, as it gives the frame, "
+          "so that its explicit --roi reads the same base.")
     .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
@@ -360,15 +363,17 @@ int parse_options(int ac, char* av[], Options& o) {
           "Giving this flag is an error.");
   parser.add_argument("--tone_stage")
     .help("auto (default), on, off, or a recorded curve: curve:black,white,gamma,contrast. auto: the tone stage "
-          "runs after every bundle search with -P srgb, on white-light and TriLED bundles alike and whether or not "
-          "the curve fit runs, and nowhere else (another or no -P, given parameters that leave nothing to search, a "
-          "single ICC profile), so it can be passed for every scan. on: the same, and an error where it does not "
+          "runs on every bundle conversion with -P srgb that is not a print, on white-light and TriLED bundles alike, "
+          "whether or not the curve fit runs and with or without given --target, -E and gains (with all four given "
+          "the search runs for it), and nowhere else (another or no -P, a print, a single ICC profile), so it can be "
+          "passed for every scan. on: the same, and an error where it does not "
           "apply. off: no tone stage. The stage: tone heads on DINOv3 features of the final render's preview "
           "predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, and one "
           "monotone L* curve, applied in the conversion itself, moves the image all the way to the predicted shadow "
           "level and half way to the highlight level and range, holding the mid-tones and each colour's a* and b*. "
           "A recorded curve (a sidecar's cli_equivalent) is replayed with --target, -E, --gain_g and --gain_b, "
-          "without searching or predicting.")
+          "without searching or predicting; one outside the stage's limits (black -15 to 15, white 80 to 110, gamma "
+          "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")

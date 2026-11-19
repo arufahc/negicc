@@ -182,9 +182,10 @@ struct ParamSearchOptions {
   // True when the custom film base was sampled from the scan itself (e.g. rebate), so exposure_ratio is 1.0.
   bool film_base_from_scan = false;
   bool verbose = true;
-  // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence): it may hold
-  // rebate, bare light or holder. The curve fit then leaves out the grid cells that are holder-dark, and (when
-  // film_base_is_rebate is true) those at the film base's level (run_white_light_fit). When the film base
+  // The frame is not a detected film frame but the whole image (--roi auto fell back below its confidence, or a given
+  // --roi is the whole image): it may hold rebate, bare light or holder. The curve fit and the knobs' re-anchoring of
+  // the curves (reanchor_input_curves) then leave out the grid cells that are holder-dark, and (when
+  // film_base_is_rebate is true) those at the film base's level (fallback_picture_cells). When the film base
   // came from the scan's statistics (the 99.5th percentile of the film itself), its level is the thinnest picture
   // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;

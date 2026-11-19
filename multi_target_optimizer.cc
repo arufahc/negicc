@@ -2239,9 +2239,6 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
   prof.rebind_pointers();
 }
 
-// What anchors the curves on a frame (negicc::CurveFrame) from its statistics: the search's matrix, the knee, and the
-// film base read from the scan (opts), else the brightest grid cell per channel, as the station takes it. stats must
-// outlive the result (its grid is not copied).
 // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
 // bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of the film
 // itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops below the
@@ -2265,6 +2262,9 @@ static std::vector<size_t> fallback_picture_cells(const uint16_t* grid, size_t n
   return kept;
 }
 
+// What anchors the curves on a frame (negicc::CurveFrame) from its statistics: the search's matrix, the knee, and the
+// film base read from the scan (opts), else the brightest grid cell per channel, as the station takes it. stats must
+// outlive the result (its grid is not copied).
 static negicc::CurveFrame curve_frame_of(const FrameStats& stats, const float* merged, const ParamSearchOptions& opts) {
   negicc::CurveFrame cf;
   cf.merged = merged;

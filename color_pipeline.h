@@ -388,7 +388,9 @@ NEGICC_HD float lab_f(float t) {
 // Independent of the PCS conversion above: it reads a picture's linear sRGB and gives L*a*b* relative to sRGB's own
 // white (the textbook sRGB -> XYZ D65, divided by D65's X and Z, so (1, 1, 1) is L* 100, a* b* 0). It is the colour of
 // what is displayed, the space the intent adapters' training targets were made in by the profile-building tools, and is
-// kept as it is: making it the inverse of the PCS conversion would move every trained cell.
+// kept as it is: making it the inverse of the PCS conversion would move every trained cell. Its break and slope are
+// CIE 15's exact ones where the targets' conversion rounds them (0.008856, 903.3): the two differ only below the break,
+// by at most 3.3e-5 in L* and 1.6e-4 in a* or b*, far below the 8-bit step the targets were made from.
 NEGICC_HD Lab linear_srgb_to_lab(Rgb lin) {
     const float r = lin.r, g = lin.g, b = lin.b;
     const float X = (0.412453f * r + 0.357580f * g + 0.180423f * b) / 0.950456f;

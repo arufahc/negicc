@@ -137,7 +137,8 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
    inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop, and on TriLED
    when the sensor clipped it (more than 0.1 % of its pixels at 98 % of the white level in a channel, read before the
-   flat field): clipped film reads the clip, not the base. neg_process then warns that the scan clips its film base
+   flat field, except on the LibRaw path with `--flat`, where the flat has already divided the mosaic): clipped film
+   reads the clip, not the base. neg_process then warns that the scan clips its film base
    and suggests a capture (item 1) or a shorter scan. The patch is used on a single RAW or linear DNG, whose
    detection runs on its raw data with `--roi auto` and with a given `--roi` alike; an RGB file and three captures go
    to item 3.
@@ -450,8 +451,8 @@ The search's parameters, in the order the steps use them:
 **Given values.** On a bundle, under either light, `--target`, `-E`, `--gain_g` and `--gain_b` are held and the rest
 is searched; with all four given the search runs only for the curve fit (white light) and the tone stage. A single
 ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or nothing runs the single-bracket solver
-(`solve_dinov3_intent`) and a given gain turns the search off. `--brightness`, `--tint` and `--warmth` move the result afterwards, in stops of the reference grey's
-luminance and in its `a*` and `b*`.
+(`solve_dinov3_intent`) and a given gain turns the search off. `--brightness`, `--tint` and `--warmth` move the
+result afterwards, in stops of the reference grey's luminance and in its `a*` and `b*`.
 
 **Limits.** The search does not always reach the same answer from different starts. The thresholds of steps 1, 5 and
 6 and the tolerances of 3.3 are stated values, not derived.
@@ -576,7 +577,7 @@ which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `appl
 | Highlight move | 0.5 | Half way to the predicted highlight level. |
 | Range move | 0.5 | Half way to the predicted tonal range. |
 | Clip allowance | 0.5 % of pixels | Beyond it, the highlight and range moves are scaled to 0.75, 0.5, 0.25 or 0 until it holds. |
-| Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number. |
+| Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
 
 **Limits.** The moves were chosen by comparing pictures, not derived. The clip check measures every 8th pixel of the
 whole export, film borders included, while the curve is planned on the inner crop.
@@ -752,11 +753,12 @@ either light (5.10).
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
 and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
-the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per channel
-the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
-(`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
-move (`last_move`). The shares describe the print at the search's result: the knobs move `a`, `g` and `b` and leave
-them as the search measured them, and a density output's `search` records the same.
+the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per
+channel the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and
+at white (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the
+last step's move (`last_move`). The shares describe the print at the search's result: the knobs move `a`, `g` and `b`
+and leave them as the search measured them. A density output's `search`, one per material, records the same but
+`base_factor` and `a0_at_range_end`: the base's factor is the conversion's, in the sidecar's `film_base.print_floor`.
 
 ## 5.7 The print's white
 
@@ -874,9 +876,10 @@ print's own search (5.6) runs on the white-light decode, and each material's CLF
   defined to be, the CIE 1931 observer under D65 through the Rec.2020 matrix; `L` is fitted on the same 3000 film
   samples seen that way. `F` is the narrow-band set's. The grey balance curve, the brackets' `A_mid` and tilts and the
   print ICCs are built from the white-light reading of the chart, as for TriLED.
-- **No curve fit on a print.** The fit (4.3) composes into the chart profiles, which a print does not use;
-  `--fit_curves on` with `--print` is refused. A density file without `--print` still runs the fit, which changes no
-  pixel and gives the file's suggested balance; with `--print` its suggested balance is the scene search's own.
+- **No curve fit on a print.** The fit (4.3) composes into the chart profiles, which a print does not use; any
+  `--fit_curves` but `auto` with `--print` is refused. A density file without `--print` still runs the fit, which
+  changes no pixel and gives the file's suggested balance; with `--print` its suggested balance is the scene search's
+  own.
 
 | Parameter | Value | Purpose |
 |---|---|---|
