@@ -324,7 +324,7 @@ bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 
 lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(TIFF_LIB) $(JPEG_LIB)
 
-GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo "master")
+GIT_VERSION ?= $(shell git describe --always --dirty --tags --exclude latest 2>/dev/null || echo "master")
 
 bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out

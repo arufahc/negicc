@@ -295,17 +295,24 @@ so that they read the content and not the render's own cast or levels.
 
 ## 4.1 The per-pixel conversion
 
-Every output pixel goes through these stages once (`color_pipeline.h`: `convert_pixel`):
+With `-P srgb` or `-P srgb-g10`, every output pixel goes through these stages once (`color_pipeline.h`:
+`convert_pixel`):
 
 ```
 x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
 y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
 XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
 rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
-rgb'  = shoulder(rgb), clamped to [0, 1]                                  sRGB output only
-rgb'' = tone(rgb')                                                        sRGB output, after a search only
+rgb'  = shoulder(rgb), clamped to [0, 1]                                  shoulder: -P srgb, not a print; clamp: both
+rgb'' = tone(rgb')                                                        -P srgb, with a tone curve (below)
 out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
 ```
+
+The tone curve is the tone stage's after a search, or a recorded one (`--tone_stage curve:…`, or a previous run's
+on a knob run). With `-P <ICC profile>` a pixel takes the first three stages (`convert_pixel_pcs`) and then goes from
+XYZ to the profile through Little-CMS, perceptual intent: no `C⁻¹`, shoulder or tone. Without `-P` the output is the
+corrected camera RGB, the first stage alone (the matrix and the knee, `convert_pixel_corrected`), with the bracket's
+ICC profile embedded.
 
 **The highlight shoulder** compresses what the profile's headroom holds above the chart's white instead of
 clipping it. Per channel, in stops `t = log2(x)`, it is the identity up to a knee `t_k`, then
