@@ -976,7 +976,8 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
     err = "a field of the spektrafilm print profile is missing or malformed";
     return false;
   }
-  // What the print's own density is read with: each layer's sensitivity under the printer lamp, a 3200 K blackbody.
+  // What the print's own density is read with: each layer's sensitivity under the printer lamp, a 3200 K blackbody:
+  // Planck's law in relative units, with the second radiation constant c2 = 1.4388e-2 m K that ITS-90 fixes.
   std::vector<double> response[3];
   for (int c = 0; c < 3; ++c) {
     response[c].resize(kCieSamples);
@@ -999,7 +1000,11 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
       m.white[c] += m.observer[c][i];
     }
   }
-  // XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02.
+  // XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02. cat02: the CIECAM02 chromatic adaptation
+  // matrix (CIE 159:2004). xyz_to_srgb: XYZ D65 -> linear sRGB as Bruce Lindbloom tabulates it (brucelindbloom.com,
+  // computed with ASTM E308-01's D65 white 0.95047, 1, 1.08883). d65: D65 from its chromaticity (0.3127, 0.3290), the
+  // white of sRGB and of ITU-R BT.2020-2 Table 3; its X and Z (0.950456, 1.089058) differ from that matrix's white in
+  // the fifth and fourth decimals.
   const double cat02[9] = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834};
   const double xyz_to_srgb[9] = {3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
                                  0.0415560, 0.0556434,  -0.2040259, 1.0572252};
@@ -1145,6 +1150,8 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
     s += buf;
   }
   s += "    </Array>\n  </LUT3D>\n";
+  // monCurveRev with exponent 2.4 and offset 0.055: the sRGB encoding (IEC 61966-2-1) as the Academy's Common LUT
+  // Format v3.0 Exponent element writes it.
   s += "  <Exponent inBitDepth=\"32f\" outBitDepth=\"32f\" style=\"monCurveRev\">\n"
        "    <ExponentParams exponent=\"2.4\" offset=\"0.055\" />\n  </Exponent>\n";
   return s;
@@ -1590,6 +1597,8 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
+// D50 to four decimals, as ICC.1:2001-04 (A.1) and ICC.1:2022 (7.2.16) give the PCS illuminant; put_s15 stores it as
+// the s15Fixed16Number negicc::kPcsWhite is, (63190, 65536, 54061) / 65536.
 constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
 
@@ -1719,7 +1728,8 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
     inv[8] = (a[0] * a[4] - a[1] * a[3]) / det;
   }
   for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] + inv[r * 3 + 1] + inv[r * 3 + 2];
-  // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film.
+  // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film. B: the linearised
+  // Bradford matrix of ICC.1:2022 Annex E.3 (equation E.1).
   double pcs[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   if (m.viewing_illuminant != "D50") {
     static const double B[9] = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
@@ -1791,7 +1801,8 @@ std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
   return d;
 }
 
-// A textDescriptionType tag (ICC v2) holding description as its ASCII text, with empty Unicode and ScriptCode parts.
+// A textDescriptionType tag (ICC v2; ICC.1:2001-04 6.5.17) holding description as its ASCII text, with empty Unicode
+// and ScriptCode parts.
 static std::vector<uint8_t> icc_desc_tag(const std::string& description) {
   // The ASCII part holds 7-bit text (ICC.1:2001-04 6.5.17): each character outside it (a UTF-8 material name's) is
   // written as one '?', as the station's write_icc writes it (Python's encode("ascii", "replace")).
@@ -1854,6 +1865,8 @@ static bool set_icc_description(std::vector<uint8_t>& icc, const std::string& de
   return true;
 }
 
+// The layout is ICC.1:2001-04's (version 2.4.0, 02400000h, 6.1.3): the 128-byte header (6.1), the tag table, and the
+// tags A2B0 as a lut16Type (mft2, 6.5.7), cprt as a textType (6.5.18) and wtpt as an XYZType (6.5.26).
 std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
                                      const std::string& description, const std::string& copyright,
                                      const std::array<int, 6>& date) {
@@ -2112,7 +2125,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   return true;
 }
 
-// FIPS 180-4 SHA-256.
+// FIPS 180-4 SHA-256: k, the constants of 4.2.2; h, the initial hash value of 5.3.3.
 std::string sha256_hex(const std::string& bytes) {
   static const uint32_t k[64] = {
       0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,

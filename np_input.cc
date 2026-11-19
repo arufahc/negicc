@@ -1130,7 +1130,7 @@ bool to_linear_rec2020(RgbImage& img, std::string& source, std::string& err) {
     source = "linear";
     return true;
   }
-  // Linear Rec.2020: ITU-R BT.2020 primaries, D65 white, a gamma of 1.
+  // Linear Rec.2020: ITU-R BT.2020 primaries, D65 white, a gamma of 1 (the chromaticities of ITU-R BT.2020-2 Table 3).
   const cmsCIExyY d65 = {0.3127, 0.3290, 1.0};
   const cmsCIExyYTRIPLE primaries = {{0.708, 0.292, 1.0}, {0.170, 0.797, 1.0}, {0.131, 0.046, 1.0}};
   cmsToneCurve* linear = cmsBuildGamma(nullptr, 1.0);

@@ -107,7 +107,8 @@ constexpr float kShoulderExponent = 2.0f;
 constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 
-// ICC PCS encoding scale applied after the output TRCs (1 + 32767/32768).
+// ICC PCS encoding scale applied after the output TRCs: 1 + 32767/32768, the PCS XYZ value of code FFFFh, the largest
+// u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ.
 constexpr float kPcsScale = 1.99996948f;
 
 NEGICC_HD float clamp01(float v) {
@@ -229,7 +230,8 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 }
 
 // ---- Stage: PCS (XYZ D50) -> linear sRGB -------------------------------------------------------------------
-// The PCS white: the ICC's D50 as an ICC profile stores it, in s15.16, (63190, 65536, 54061) / 65536. The colorants of
+// The PCS white: the ICC's D50 as an ICC profile stores it, in s15.16, (63190, 65536, 54061) / 65536: the PCS
+// illuminant (ICC.1:2022 7.2.16, which gives it to four decimals) as an s15Fixed16Number (4.6). The colorants of
 // the profile the sRGB outputs embed sum to exactly this, so it is the white the outputs write at full scale (a print's
 // paper is scaled to it). The decimal (0.9642, 1, 0.8249) differs from it in the sixth decimal.
 constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
@@ -261,6 +263,7 @@ NEGICC_HD Rgb pcs_to_linear_srgb_pre_shoulder(Rgb v) {
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
+// The sRGB transfer curve of IEC 61966-2-1 (0.41666667 is 1 / 2.4); srgb_decode is its inverse.
 NEGICC_HD float srgb_encode(float l) {
     return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
 }
@@ -320,7 +323,9 @@ NEGICC_HD Rgb convert_pixel_display(const PipelineConfig& cfg, const float* matr
 }
 
 // ---- Stage: tone (sRGB export only) ------------------------------------------------------------------
-// The derivative of CIE Lab's f (the cube root above the linear segment).
+// The derivative of CIE Lab's f (the cube root above the linear segment). The constants are CIE 1976 L*a*b*'s exact
+// ones (CIE 15; ICC.1:2022 Annex A, equations A.7 to A.12): the break (6/29)^3 = 216/24389 and the linear segment's
+// slope 841/108 = 24389 / 27 / 116.
 NEGICC_HD float tone_lab_fprime(float t) {
     return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;
 }
@@ -340,7 +345,9 @@ NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
 // The tone curve on one display linear sRGB pixel v: its luminance Y moves to Y' on the white point's neutral, and its
 // colour difference from that neutral, v - Y (white 1, 1, 1), is added back scaled by f'(Y) / f'(Y') (at most 8), which
 // holds its a* and b* to first order: out = Y' + (v - Y) f'(Y) / f'(Y'). No Lab conversion of the pixel.
-// Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion.
+// Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion: the Y row
+// of Bruce Lindbloom's sRGB -> XYZ matrix (brucelindbloom.com, computed with ASTM E308-01's D65 white 0.95047, 1,
+// 1.08883), which differs in the sixth decimal from the row of linear_srgb_to_lab and the tone stage's descriptors.
 NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
     const float y0 = 0.2126729f * v.r + 0.7151522f * v.g + 0.0721750f * v.b;
     const float y1 = tone_table_Y(tt, y0);
@@ -362,6 +369,9 @@ NEGICC_HD uint8_t quantize_u8(float v) { return (uint8_t)roundf(v * 255.0f); }
 NEGICC_HD uint16_t quantize_u16(float v) { return (uint16_t)roundf(v * 65535.0f); }
 
 // ---- Scoring: sRGB -> CIELAB (D65) -------------------------------------------------------------------------
+// The matrix, the white (0.950456, 1, 1.088754: the matrix's row sums) and the rounded CIE 1976 constants 0.008856
+// ((6/29)^3), 7.787 (841/108) and 903.3 ((29/3)^3) are those of OpenCV's cvtColor RGB -> Lab (its imgproc colour
+// conversions documentation).
 struct Lab {
     float L, a, b;
 };
@@ -485,6 +495,7 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
     const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
     const double ln2 = std::log(2.0);
+    // srgb_encode and srgb_decode (IEC 61966-2-1) in double precision.
     auto enc = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
     auto dec = [](double s) { return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4); };
     auto slope = [&](double t) { return (1.055 / 2.4) * std::pow(std::exp2(t), 1.0 / 2.4) * ln2; };
