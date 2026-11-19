@@ -28,7 +28,10 @@
 //     sensor units (TriLED) bare light is what the sensor clipped in all three channels: light is brighter than the
 //     base in every channel, while film near the clip clips first in its brightest channel, and the base is nearly
 //     neutral in the camera's channels, so colour does not tell thin film from light. On a white-light decode
-//     (Rec.2020, white-balanced) bare light is clipped in a channel, or bright and less orange than the film.
+//     (Rec.2020, white-balanced) bare light is a part clipped in a channel (its maxima at a plateau) whose median blue
+//     is above the film's 99.5th percentile of blue, with the bright unclipped light connected to it, or a neutral
+//     part bluer than the orange film: film transmits no more blue than its base, so a flat stretch of film that
+//     forms a plateau is not taken for light.
 //
 // The white-light arithmetic follows negicc-station's auto_crop.py (downsample, classify) and the film_base_detect.py
 // this replaced, as numpy 2 and OpenCV compute them, float32 where they are float32.

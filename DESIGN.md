@@ -142,8 +142,10 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    three channels (98 % of the white level, before the flat field), in parts that reach the image border or are the
    size of a sprocket hole: light is brighter than the base in every channel, film near the clip clips first in its
    brightest channel, and the base is nearly neutral in the camera's channels, so colour does not tell thin film
-   from light. On white light bare light is clipped in a channel (at the plateau of its maxima), or bright and less
-   orange than the film.
+   from light. On white light bare light is a part clipped in a channel (at the plateau of its maxima) whose median
+   blue is above the 99.5th percentile of the film's blue, with the bright unclipped light connected to it, or a
+   neutral part bluer than the orange film: film transmits no more blue than its base, so a flat stretch of film
+   that forms a plateau is not taken for light.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
 The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):
