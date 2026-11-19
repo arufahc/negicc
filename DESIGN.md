@@ -20,8 +20,8 @@ bands, one red, one green and one blue LED; the camera's raw channels are used d
 (`--light_source d65`) is broad-band; the scan is decoded through the camera's colour matrix to linear Rec.2020.
 
 Each film stock has a **profile set** (a bundle: `profiles/<Stock>-<Camera>-<Light>/`) per light. It holds seven
-ICC profiles, one per exposure bracket of a chart (section 3), the measurements they were built from, and the
-matrices and curves the print emulation needs.
+chart ICC profiles, one per exposure bracket of a chart (section 3), eight print ICC profiles, one per print material
+(5.4), the measurements they were built from, and the matrices and curves the print emulation needs.
 
 The stages, and which run for each output:
 
@@ -120,7 +120,9 @@ v_c(x, y) = round(v_raw_c(x, y) / gain_c(x, y))
 ```
 
 The half-size view divides as it samples; the full-resolution debayer divides as it writes; the white-light decode
-divides the mosaic. A film base capture is divided by the same flat.
+divides the mosaic. A RAW that LibRaw demosaics under the RGB LED (2.1: `-q 0` or more, or another camera's RAW) has
+its mosaic divided in place before LibRaw reads it (`FlatField::apply_cfa`). A film base capture is divided by the
+same flat.
 
 ## 2.3 Film base removal
 
@@ -135,7 +137,7 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
    inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
-   pixels, with bare light and the black holder masked out.
+   pixels on the long side, with bare light and the black holder masked out.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
 The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):
@@ -265,9 +267,10 @@ it; it is the better guide to a photograph.
 | Ektar 100, white | in-sample | 1.45 / 14.1 | 0.80 / 6.8 | 0.63 / 2.8 | 0.65 / 3.4 | 0.79 / 3.1 | 0.92 / 4.1 | 1.05 / 4.1 |
 | | held out | 3.18 | 2.13 | 1.78 | 1.84 | 2.18 | 2.76 | 3.05 |
 
-On the patches it was fitted to, a white-light profile is less exact than a TriLED one; on held-out patches it is
-as exact or more. The chart therefore does not show the larger frame-to-frame cast of a white-light conversion,
-which the curve fit (4.3) corrects.
+On the patches it was fitted to, a white-light profile is less exact than a TriLED one. On held-out patches it is
+more exact in 18 of the 21 cells, by up to 1.41 (Ektar 100, 0 EV), and less exact by at most 0.13 in the other three
+(−3 EV on Portra 160 and Ektar 100, −2 EV on Portra 160). The chart therefore does not show the larger
+frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corrects.
 
 ## 3.5 The networks
 
@@ -315,8 +318,8 @@ s(t) = C − (C − s_k) (1 − (t − t_k) / (t_hi − t_k))^2         in encod
 ```
 
 reaching the ceiling `C` = 0.988 (code 252) at `x_hi` and staying there; `t_k` is solved so the join has a continuous
-slope. `x_hi` is chosen per frame so that the 99.5 % point of the frame's largest channel lands on sRGB 242
-(`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 the ceiling ramps in from 1.
+slope. `x_hi` is chosen per frame so that the 99.5 % point of each pixel's largest channel, `max(R, G, B)`, lands on
+sRGB 242 (`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 the ceiling ramps in from 1.
 
 The tone stage (4.4) changes lightness only. A print (5.4) takes neither the shoulder nor the tone stage.
 
@@ -457,8 +460,8 @@ profile.
 
 ```
 m = Σ_i p_i²         ω_i = p_i² / m   (plus 10⁻³ spread evenly, so m = 0 is defined)
-ā = Σ_i ω_i a_i      b̄ = Σ_i ω_i b_i
-k_a = 50 cov_ω(L, a) / (var_ω(L) + 25)          (likewise k_b)
+ā = Σ_i ω_i a*_i     b̄ = Σ_i ω_i b*_i
+k_a = 50 cov_ω(L*, a*) / (var_ω(L*) + 25)          (likewise k_b)
 ```
 
 `m` is the frame's neutral evidence. A neutral surface has `a* = b* = 0` at every lightness, so the gains move `ā` and
@@ -468,7 +471,7 @@ the evidence:
 ```
 w        = m / (m + 12)
 target ā = (1 − w) ā_Auto          target b̄ = (1 − w) b̄_Auto
-target k_a = (1 − w s) k_a_Auto,   s = var_ω(L) / (var_ω(L) + 36)       (likewise k_b)
+target k_a = (1 − w s) k_a_Auto,   s = var_ω(L*) / (var_ω(L*) + 36)       (likewise k_b)
 ```
 
 With no evidence the targets are Auto's own values. `s` shrinks the slope correction when the anchors cover a narrow
@@ -478,20 +481,24 @@ range of lightness.
 
 ```
 α_i  = (1 / σ_a,i²) / Σ_j (1 / σ_a,j²)          over every fit cell
-s_a  = Σ_i α_i (a_i − μ_a,i)
+s_a  = Σ_i α_i (a*_i − μ_a,i)
+dL   = (Σ_i α_i L*_i − Σ_i ω_i L*_i) / 50 × (var_ω(L*) + 25) / max(var_ω(L*), 25)
 intent term = (s_a − (k_a − target k_a) dL − SE) / sqrt(SE² + 1)
 anchor term = (ā − target ā) / σ_anc,            σ_anc² = (144 + m) / (m + 12)
 ```
 
 `SE` is the standard error of `s_a`, from sums over 4 × 4 blocks of cells (neighbouring cells are not independent),
 detrended in `L*`. `dL` is the gap between the field's and the anchors' mean lightness per 50 `L*`, so a change of
-slope is not read as a shift of `a*`. Subtracting `SE` leans the target toward magenta by one standard error. The 1
-under the root and the 1 that `σ_anc` approaches are each estimate's systematic error in `a*`.
+slope is not read as a shift of `a*`; its factor undoes the damping by `var_ω(L*) + 25` in `k_a`, and stops at 2 when
+the anchors span little lightness, so a slope measured over a narrow span is not amplified. Subtracting `SE` leans
+the target toward magenta by one standard error. The 1 under the root and the 1 that `σ_anc` approaches are each
+estimate's systematic error in `a*`.
 
 **The solve.** One Levenberg-Marquardt solve over four numbers, the green and blue gains and the green and blue slope
 terms (`input_curves.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against its
-target, the two trends `k_a` and `k_b` against theirs, the intent term and a ridge on the slope terms; the `a*` and `b*`
-terms are divided by 1.5. `E` is re-solved at every step so the median lightness stays where Auto put it.
+target, the two trends `k_a` and `k_b` against theirs (weighted by `0.5 sqrt(var_ω(L*) / (var_ω(L*) + 100))`), the
+intent term and a ridge on the slope terms; the `a*` and `b*` terms are divided by 1.5. `E` is re-solved at every
+step so the median lightness stays where Auto put it.
 
 **The never-greener guard.** The fit may not end greener than Auto's render. It runs freely first; only if its
 result is greener does it run again with the excess green penalised (weight 4).
@@ -509,8 +516,8 @@ result is greener does it run again with the excess green penalised (weight 4).
 
 Bounds: the slope term within 0.35; the curve within 2.2 stops of the profile's own; the green gain within 0.75 stop
 and the blue within 1.25 stops of Auto's; the median `L*` 18 to 85; at least 8 cells in range; on a frame that is the
-whole image (`--roi auto` fell back, or a given `--roi` covers it), holder-dark cells, and cells at the base's level when the base is a rebate,
-are left out.
+whole image (`--roi auto` fell back, or a given `--roi` covers it), holder-dark cells, and cells at the base's level
+when the base is a rebate, are left out.
 
 **Limits.** The half-mass 12, the slope span, the systematic error, the lean and the guard's weight are stated
 values, not derived. The fit removes most of a uniform cast but little of a cast that differs between shadows and
