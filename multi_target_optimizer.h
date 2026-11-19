@@ -175,7 +175,7 @@ struct PassThroughRenderer : PreviewRenderer {
 // constructor throws without a device (a USE_CUDA=0 build has none).
 // - The frame: bind_frame copies the bound frame to the device once, each pixel as the view samples it (a CFA
 //   view's flat field included), unless device_frame gives the address at which the GPU already reads it (a caller
-//   whose frame is in mapped memory: negicc-station's session buffers). A pass's view, the bound frame or an upright
+//   whose frame is already in pinned, mapped memory). A pass's view, the bound frame or an upright
 //   crop of it, is read there at its offset; any other view throws.
 // - The tables: each profile's cLUT and output tables are copied once per renderer (the search keeps them for its
 //   whole run); its input tables, and a tone table, are compared on every call and copied when they changed, never
