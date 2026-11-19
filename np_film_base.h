@@ -65,7 +65,6 @@ constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread 
 constexpr double kBaseSpreadFactor = 1.5;     // ... and up to this many times the median tile's spread
 constexpr double kBaseTileMargin = 0.02;      // density: how far from the group's brightest tile a kept tile may lie
 constexpr double kBaseColourTol = 0.25;       // density: how far a tile's G/R and B/R may lie from the bundle's base
-constexpr double kBaseClipFraction = 0.001;   // a tile (or a given region) with more clipped pixels is clipped
 
 struct FilmBaseCapture {
   double rgb[3] = {0.0, 0.0, 0.0};         // the film base: through the crosstalk matrix, at the scan's exposure
