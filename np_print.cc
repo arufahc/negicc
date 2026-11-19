@@ -611,6 +611,12 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
     log_error("Internal error: a DPX holds 10-bit density codes\n");
     return -1;
   }
+  // The layout is SMPTE ST 268:2014's (DPX, header version V2.0): the file (768 bytes, 5.1), image (640, 5.2) and
+  // image source (256, 5.3, the orientation information below) headers make the generic 1664, the film (256, 6.1) and
+  // television (128, 6.2) headers the industry 384, so the user-defined data starts at 2048 (clause 7; at most 1 MB,
+  // 4.1). An undefined integer or real field holds all ones (4.2). Descriptor 50 is R, G, B (Table 1); transfer and
+  // colorimetric codes 0 and 1 are user defined and printing density (Tables 5A and 5B); packing 1 is filled to 32-bit
+  // words, method A (Table 3B).
   // The user-defined data: a 32-byte identification, then the metadata JSON; the image starts on a multiple of 8.
   const uint32_t kHeader = 2048, kUserId = 32, kMaxUser = 1024 * 1024;
   uint32_t user_size = kUserId + (uint32_t)description.size() + 1;

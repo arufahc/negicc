@@ -915,6 +915,7 @@ bool is_jpeg_file(const std::string& path) {
   if (!f) return false;
   const size_t n = fread(sig, 1, 3, f);
   fclose(f);
+  // SOI (FFD8) and the next marker's FF (ITU-T T.81 Table B.1).
   return n == 3 && sig[0] == 0xFF && sig[1] == 0xD8 && sig[2] == 0xFF;
 }
 
@@ -932,7 +933,7 @@ void tiff_handler(const char* module, const char* fmt, va_list ap) {
 void tiff_warning(const char*, const char*, va_list) {}
 
 // Copies sample `src_sample` of `n` pixels (stride `src_stride` samples) to channel `dst_ch` of out, scaling 8-bit
-// samples to 16 bits.
+// samples to 16 bits: v * 257 = (v << 8) | v, 0 -> 0 and 255 -> 65535 (ICC.1:2022 A.4: (2^16 - 1) / (2^8 - 1)).
 void put_samples(const uint8_t* src, int bits, int src_stride, int src_sample, int n, uint16_t* dst, int dst_stride,
                  int dst_ch) {
   if (bits == 8) {
@@ -1075,7 +1076,8 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
   }
   jpeg_create_decompress(&cinfo);
   jpeg_stdio_src(&cinfo, f);
-  jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);  // the ICC profile's chunks
+  // The ICC profile's chunks: APP2 segments beginning "ICC_PROFILE" (ICC.1:2001-04 Annex B.4)
+  jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);
   jpeg_read_header(&cinfo, TRUE);
   out = RgbImage();
   JOCTET* icc = nullptr;
@@ -1097,7 +1099,7 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
     const JDIMENSION y = cinfo.output_scanline;
     jpeg_read_scanlines(&cinfo, rows, 1);
     uint16_t* dst = out.pixels.data() + (size_t)y * out.width * 3;
-    for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);
+    for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);   // 8 to 16 bits, as put_samples
   }
   jpeg_finish_decompress(&cinfo);
   jpeg_destroy_decompress(&cinfo);

@@ -77,7 +77,7 @@
 
 namespace {
 
-constexpr float kPi = 3.14159265358979f;
+constexpr float kPi = 3.14159265358979f;   // pi in single precision
 
 // Stops below the film base still counted as base (classify), and the spread a line of film base may have.
 constexpr float kBaseMargin = 0.30f;
@@ -88,6 +88,9 @@ enum PixelClass : uint8_t { CL_INVALID = 0, CL_IMAGE = 1, CL_BASE = 2, CL_LIGHT 
 // Film format geometry in mm. along: the frame's length along the strip; across: its height across the strip;
 // film_width: the strip; gap_*: the gap between frames; len_tol: tolerated deviation of a measured frame length
 // from along before the nominal length is used; sprockets: perforated (35mm).
+// 135 film is specified in ISO 1007 and 120 film in ISO 732. The values are nominal: a 35 mm strip with a 36 x 24 mm
+// frame, and a 61.5 mm strip whose frames are 56 mm across and 41.5, 56, 69.5 or 84 mm along; a camera's gate can
+// differ from them.
 struct FormatGeom {
   float along, across, film_width, gap_nominal, gap_min, gap_max, len_tol;
   bool sprockets;
@@ -104,7 +107,8 @@ FormatGeom format_geom(FilmFormat f) {
   }
 }
 
-// 35mm perforation (KS): width along the strip, height across, pitch (mm).
+// 35mm perforation (KS, Kodak Standard; SMPTE 139): width along the strip, height across, pitch (mm): 1.981 x 2.794 on
+// a 4.75 pitch, to two decimals.
 constexpr float kHoleW = 1.98f, kHoleH = 2.79f, kHolePitch = 4.75f;
 
 // p-th quantile (0..1). Takes a copy, partially sorted.
@@ -2231,7 +2235,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
                 (int)std::lround(0.4f * across_px) + 3, ps0, ps1, pe0, pe1);
     if (pe0 && pe1 && across_px > 0.0f) {
       const float ratio = (ps1 - ps0) / across_px, expected = fg.film_width / fg.across;
-      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;
+      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;   // the other format's (format_geom)
       format_mismatch = (ratio / expected < 0.92f || ratio / expected > 1.08f) &&
                         std::fabs(std::log(ratio / other)) < std::fabs(std::log(ratio / expected));
     }

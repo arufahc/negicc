@@ -36,6 +36,8 @@ enum class InputFormat : int {
     TODO_3X_MONO = 5,
 };
 
+// The colour (0 R, 1 G, 2 B, 3 a second green where the pattern marks one) of photosite (r, c) of a Bayer mosaic
+// described by LibRaw's idata.filters: two bits per cell, as LibRaw's (and dcraw's) FC(row, col).
 inline int bayer_color_at(int r, int c, unsigned int filters) {
     return (filters >> (((((unsigned int)r << 1) & 14u) | ((unsigned int)c & 1u)) << 1)) & 3;
 }

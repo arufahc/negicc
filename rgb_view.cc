@@ -159,6 +159,8 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     RgbView v;
     v.flat = flat_args;
     v.flat_tables = std::move(flat_pin);
+    // LibRaw's idata.filters: 9 is Fujifilm X-Trans (a 6x6 pattern, xtrans_col36), 0 no CFA and 1 Leaf's 16x16
+    // pattern (neither read here); a Bayer mosaic is a 2x2 bitmask (above 1000, bayer_color_at).
     const int period = (filters == 9) ? 6 : 2;
     if (filters == 0 || filters == 1) return v;
     if (!cfa || sensor_w < period || sensor_h < period) return v;
