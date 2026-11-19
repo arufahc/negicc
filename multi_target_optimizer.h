@@ -120,9 +120,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 // The passes over the frame the bundle search renders: the preview of the inner crop and the clip statistics (the
 // roll-off's 99.5 % point, white-clip shares). The defaults are negicc::cpu_render and negicc::cpu_highlight_clip; a
 // caller that renders the same pipeline elsewhere (the station's GPU) overrides them. search_conversion_params,
-// run_white_light_fit (the curve fit, its roll-off and its tone plan) and plan_auto_tone_stage send every pass of
-// theirs through it (reanchor_input_curves renders nothing); the passes are serial, called from the caller's thread
-// one at a time.
+// search_print_continuous, run_white_light_fit (the curve fit, its roll-off and its tone plan) and
+// plan_auto_tone_stage send every pass of theirs through it (reanchor_input_curves renders nothing); the passes are
+// serial, called from the caller's thread one at a time.
 //
 // What stays and what changes between calls:
 // - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same
@@ -144,8 +144,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 // WhiteLightFitResult, ToneStagePlan) are then partly filled, and a caller must not read them.
 //
 // neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
-// pass that runs outside it (PassAudit), on any thread; its picture must equal the conversion without it, bit for bit.
-// Run it, and compare its picture with a plain conversion's, on a TriLED scan and on a white-light scan with -P srgb
+// pass that runs outside it (PassAudit), on any thread, and fails when a pass ran outside it or none ran at all; its
+// picture must equal the conversion without it, bit for bit, which nothing checks for it. Run it, and compare its
+// picture with a plain conversion's (cmp), on a TriLED scan and on a white-light scan with -P srgb
 // (the curve fit and the tone plan), before a change to the search, the curve fit, the tone plan or this interface is
 // merged.
 struct PreviewRenderer {
@@ -366,10 +367,11 @@ struct PrintKnobResult {
   float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the grey's Lab through the print at (a, g, b)
 };
 // The knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
-// print_at(a, g, b, prof) builds the print profile at mid grey a with gains g, b in its curves.
+// print_at(a, g, b, prof) builds the print profile at mid grey a with gains g, b in its curves; A stays within
+// [a_lo, a_hi], the range the print's curves are defined on (PrintContinuum::a_lo, a_hi).
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
-                       double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
-                       PrintKnobResult& out);
+                       double a0, float g0, float b0, double a_lo, double a_hi, float brightness_stops, float tint_a,
+                       float warmth_b, PrintKnobResult& out);
 // The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof.
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]);
@@ -411,8 +413,6 @@ struct ContinuousPrint {
   // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
   // renders the print (np_print.h PrintContinuum::trc_at).
   std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
-  std::function<double(double dl)> green_apd;                             // G_green
-  double n0 = 1.0;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
   double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)

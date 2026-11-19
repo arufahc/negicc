@@ -1440,10 +1440,11 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
 // warmth move g and b (in the print's curves), E held. The grey is the film point the print at (a0, g0, b0) renders as
 // neutral L* 50; the solve finds (A, g, b) so that it renders at the target through the print at (A, g, b). Newton on
 // (A, ln g, ln b) with central differences (kPrintKnobDA in A, GreyPoint's FD_STEP in ln g and ln b); unreachable
-// targets are scaled back as solve_grey_knobs scales them.
+// targets are scaled back as solve_grey_knobs scales them. A stays in [a_lo, a_hi]: the print's curves hold flat past
+// the ends of the grey balance curve, where the grey would not move with A.
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
-                       double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
-                       PrintKnobResult& out) {
+                       double a0, float g0, float b0, double a_lo, double a_hi, float brightness_stops, float tint_a,
+                       float warmth_b, PrintKnobResult& out) {
   constexpr double kPrintKnobDA = 1e-3;      // APD: the step of d Lab / d A
   constexpr double kPrintKnobMaxDA = 0.1;    // APD: the largest Newton step in A (the paper's curve is
                                              // steep, and a full step overshoots there)
@@ -1453,6 +1454,10 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
   constexpr float REACHABLE = 0.25f;         // as solve_grey_knobs
   out = PrintKnobResult{};
   out.a = a0; out.g = g0; out.b = b0;
+  if (!std::isfinite(a0) || !std::isfinite(g0) || !std::isfinite(b0) || !(g0 > 0.0f) || !(b0 > 0.0f) ||
+      !std::isfinite(a_lo) || !std::isfinite(a_hi) || !(a_lo < a_hi) || !(a_lo <= a0 && a0 <= a_hi)) {
+    return false;
+  }
   ParsedFilmProfile prof;
   print_at(a0, g0, b0, prof);
   float log_t0[3];
@@ -1463,11 +1468,14 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
     print_at(a, std::exp(lg), std::exp(lb), p);
     GreyPoint(p.data).grey(log_t0, one, one, lab);
   };
+  if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {   // as solve_grey_knobs: nothing to move
+    render(a0, std::log((double)g0), std::log((double)b0), out.grey_lab);
+    return true;
+  }
   auto solve_to = [&](const float target[3], double x_out[3]) -> float {
     double x[3] = {a0, std::log((double)g0), std::log((double)b0)};
     float lab[3];
     render(x[0], x[1], x[2], lab);
-    float err = 0.0f;
     for (int it = 0; it < kPrintKnobIter; ++it) {
       double r[3];
       bool within = true;
@@ -1475,14 +1483,18 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
       if (within) break;
       double J[9];
       const double h[3] = {kPrintKnobDA, FD_STEP, FD_STEP};
-      for (int v = 0; v < 3; ++v) {     // central differences, as GreyPoint
+      for (int v = 0; v < 3; ++v) {     // central differences, as GreyPoint; one-sided at an end of A's range
         double xp[3] = {x[0], x[1], x[2]}, xm[3] = {x[0], x[1], x[2]};
         xp[v] += h[v];
         xm[v] -= h[v];
+        if (v == 0) {
+          xp[0] = std::min(xp[0], a_hi);
+          xm[0] = std::max(xm[0], a_lo);
+        }
         float lp[3], lm[3];
         render(xp[0], xp[1], xp[2], lp);
         render(xm[0], xm[1], xm[2], lm);
-        for (int c = 0; c < 3; ++c) J[c * 3 + v] = (lp[c] - lm[c]) / (2.0 * h[v]);
+        for (int c = 0; c < 3; ++c) J[c * 3 + v] = (lp[c] - lm[c]) / (xp[v] - xm[v]);
       }
       const double det = J[0] * (J[4] * J[8] - J[5] * J[7]) - J[1] * (J[3] * J[8] - J[5] * J[6]) + J[2] * (J[3] * J[7] - J[4] * J[6]);
       if (!(std::fabs(det) > 1e-12)) break;
@@ -1495,6 +1507,7 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
       step[1] = std::clamp(step[1], -MAX_LOG_STEP, MAX_LOG_STEP);
       step[2] = std::clamp(step[2], -MAX_LOG_STEP, MAX_LOG_STEP);
       for (int v = 0; v < 3; ++v) x[v] += step[v];
+      x[0] = std::clamp(x[0], a_lo, a_hi);
       render(x[0], x[1], x[2], lab);
     }
     float e2 = 0.0f;
@@ -2889,11 +2902,11 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
     for (int xx = c.x0; xx < c.x0 + c.w; xx += 4) {
       frame.sample(xx, y, px);
       for (int r = 0; r < 3; ++r)
-        v[r].push_back((float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]));
+        if (fb[r] > 0.0) v[r].push_back((float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]));
     }
   float k = 1.0f;
   for (int r = 0; r < 3; ++r) {
-    if (v[r].empty() || !(fb[r] > 0.0)) continue;
+    if (v[r].empty()) continue;   // also a channel without a positive base
     const size_t q = std::min(v[r].size() - 1, (size_t)(negicc::kBasePercentile / 100.0 * v[r].size()));
     std::nth_element(v[r].begin(), v[r].begin() + q, v[r].end());
     k = std::max(k, v[r][q]);
@@ -2921,7 +2934,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at || !cp.green_apd ||
+  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at ||
       !(cp.a_hi > cp.a_lo)) {
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
@@ -3085,6 +3098,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       break;
     }
     prev_err = err;
+    // The last step allowed: its result is scored above, and a further move would be neither rendered nor scored.
+    if (it + 1 >= std::max(1, opts.max_steps)) break;
     // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned). Every A tried is
     // aimed at the field minus the correction measured at this step's A above: update_correction keys it by the
     // print's one target, whose curves change with A, and it is not measured again at each A (that would take a
@@ -3097,12 +3112,12 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
     // neighbours are lower, each side is marched and the lower of the two brackets kept.
     auto clampA = [&](double x) { return std::clamp(x, cp.a_lo, cp.a_hi); };
-    struct Bracket { double lo, mid, hi; float f; };
+    struct Bracket { double lo, hi; float f; };
     auto march = [&](double x0, float f0, double dir) {
       double xm = x0, xo = clampA(x0 - dir * kContinuousStep);
       float fm = f0;
       double xn = clampA(xm + dir * kContinuousStep);
-      float fn = loss(xn, gb);
+      float fn = xn == xm ? fm : loss(xn, gb);   // at an end of the range: no step to take
       while (fn < fm && xn != xm) {
         xo = xm;
         xm = xn;
@@ -3111,13 +3126,14 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
         if (xn == xm) break;
         fn = loss(xn, gb);
       }
-      return Bracket{std::min(xo, xn), xm, std::max(xo, xn), fm};
+      return Bracket{std::min(xo, xn), std::max(xo, xn), fm};
     };
     const double x0 = clampA(a);
     const float f0 = loss(x0, gb);
     const double xl0 = clampA(x0 - kContinuousStep), xr0 = clampA(x0 + kContinuousStep);
-    const float fl0 = loss(xl0, gb), fr0 = loss(xr0, gb);
-    Bracket br{xl0, x0, xr0, f0};
+    // At an end of the range a neighbour is x0 itself: its loss is f0, not computed again.
+    const float fl0 = xl0 == x0 ? f0 : loss(xl0, gb), fr0 = xr0 == x0 ? f0 : loss(xr0, gb);
+    Bracket br{xl0, xr0, f0};
     if (fl0 < f0 && fr0 < f0) {
       const Bracket left = march(xl0, fl0, -1.0), right = march(xr0, fr0, 1.0);
       br = left.f <= right.f ? left : right;

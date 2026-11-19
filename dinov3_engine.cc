@@ -126,6 +126,13 @@ void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
     std::vector<uint8_t> onnx, engine;
     if (file_exists(onnx_p.string())) onnx = read_file(onnx_p.string());
     if (file_exists(engine_p.string())) engine = read_file(engine_p.string());
+    // An engine older than its .onnx holds the earlier weights: the .onnx is taken (make dinov3_engine rebuilds it).
+    if (!onnx.empty() && !engine.empty() &&
+        std::filesystem::last_write_time(engine_p) < std::filesystem::last_write_time(onnx_p)) {
+        std::cerr << "Warning: " << engine_p.string() << " is older than " << onnx_p.string()
+                  << ": the adapter runs from the .onnx (make dinov3_engine rebuilds the engine)" << std::endl;
+        engine.clear();
+    }
     if (onnx.empty() && engine.empty()) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
     // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session;
     // TensorRT copies the engine while deserialising it.

@@ -376,18 +376,20 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
-          "curve fit and the tone plan through a pass-through renderer that forwards each pass to the CPU and counts "
-          "it, count every pass of theirs that runs outside it, and print both; exit 1 when one does. The output must "
-          "equal the conversion without it, bit for bit.")
+          "print's search, the curve fit and the tone plan through a pass-through renderer that forwards each pass to "
+          "the CPU and counts it, count every pass of theirs that runs outside it, and print both; exit 1 when one "
+          "does, or when no pass ran. The output must equal the conversion without it, bit for bit: compare the two "
+          "outputs yourself (cmp).")
     .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (for tools that study the search): write what the intent network predicts from chosen "
           "renders of this frame to this JSON file and stop without converting. Renders every metered bracket at its "
           "metered exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture "
           "output the print's search writes the file instead (its mid grey A at each --probe_stops offset; "
-          "--probe_params does not apply) and the conversion goes on. Needs the bundle search to run: refused where it "
-          "does not (a single ICC profile, given gains on TriLED), and a previous run's <output>.json is not reused "
-          "with it.")
+          "--probe_params does not apply) and the conversion goes on. Needs the bundle search to run: refused where "
+          "it does not (a single ICC profile; on TriLED, any of --target, -E, --gain_g and --gain_b; on white light, "
+          "recorded curves or a recorded tone curve, or all four with neither the curve fit nor the tone stage), and "
+          "a previous run's <output>.json is not reused with it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
     .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
@@ -423,7 +425,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "input tables composed with the curves (the combined profile); "
           "needs a white-light bundle and -P srgb or srgb-g10. A given g or b is held by the fit and a given E is "
           "not re-metered; with --target, -E, --gain_g and --gain_b all given only the curves are fitted. off: "
-          "no fit (the tone stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
+          "no fit, on a white-light bundle (refused where no fit can run: TriLED, an ICC profile, --print; the tone "
+          "stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
           "--tone_stage off, when neither ran, so its given values replay as recorded. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
           "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
@@ -484,6 +487,13 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
+  // The probe's sets and offsets do nothing without the probe file they go into.
+  for (const char* f : {"--probe_params", "--probe_stops"}) {
+    if (parser.is_used(f) && o.probe_intent.empty()) {
+      log_error("%s needs --probe_intent: it sets what the probe file records\n", f);
+      return 1;
+    }
+  }
   o.check_renderer = parser.get<bool>("--check_renderer");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
@@ -804,9 +814,9 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
-  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light without
-  // --print the fit gives the file's suggested balance, not its pixels; with --print no fit runs. Recorded curves
-  // replay a bracket, E and gains, which a density output does not take.
+  // --fit_curves off, auto or on is taken here (np_pipeline.cc refuses it on a TriLED bundle and with --print): on
+  // white light without --print the fit gives the file's suggested balance, not its pixels. Recorded curves replay a
+  // bracket, E and gains, which a density output does not take.
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;
@@ -820,9 +830,6 @@ int parse_options(int ac, char* av[], Options& o) {
         {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
         {"--tint", parser.is_used("--tint") && o.prints.empty()},
         {"--warmth", parser.is_used("--warmth") && o.prints.empty()},
-        {"--dino", parser.is_used("--dino")},
-        {"--dino_backend", parser.is_used("--dino_backend")},
-        {"--dino_iters", o.dino_iters_given},
         {"--fit_curves", fit_set},
         {"--tone_stage", tone_set},
     };

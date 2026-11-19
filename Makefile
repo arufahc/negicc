@@ -171,6 +171,9 @@ ifeq ($(ORT_STATIC),1)
     ORT_DEPS = $(ORT_STATIC_LIB)
     ORT_LDFLAGS = $(ORT_STATIC_LIB) -ldl -lpthread -lrt -Wl,--gc-sections -Wl,-z,noexecstack
 else ifeq ($(ORT_STATIC),0)
+    # An ONNX Runtime already in the release layout (include/, lib/<arch>/) is taken first: one in 3rd_party, or beside
+    # this checkout (a parent project's, when negicc is its submodule); else the pinned prebuilt one is fetched. The
+    # link says which (bin_out/neg_process).
     ORT_CANDIDATES := $(wildcard 3rd_party/onnxruntime/include/onnxruntime_cxx_api.h \
                                  ../onnxruntime/include/onnxruntime_cxx_api.h \
                                  ../negicc-station/3rd_party/onnxruntime/include/onnxruntime_cxx_api.h)
@@ -179,12 +182,7 @@ else ifeq ($(ORT_STATIC),0)
     else
         ORT_DIR ?= $(ORT_PREBUILT_DIR)
     endif
-    # The source tree's session headers only when ORT_DIR is that tree: no second ONNX Runtime's headers on the path.
-    ifeq ($(ORT_DIR),$(ORT_SRC_DIR))
-        ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
-    else
-        ORT_INC = -isystem $(ORT_DIR)/include
-    endif
+    ORT_INC = -isystem $(ORT_DIR)/include
     ifeq ($(ARCH),aarch64)
         ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
     else
@@ -198,7 +196,7 @@ else ifeq ($(ORT_STATIC),0)
         ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)' -Wl,-rpath,'$$ORIGIN'
     endif
     # The prebuilt library is fetched (fetch.sh) before the link when it is not there yet.
-    ifeq ($(ORT_DIR),$(ORT_PREBUILT_DIR))
+    ifeq ($(abspath $(ORT_DIR)),$(abspath $(ORT_PREBUILT_DIR)))
         ORT_DEPS = $(ORT_LIB_DIR)/libonnxruntime.so
     else
         ORT_DEPS =
@@ -208,8 +206,10 @@ else
     $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
 
-$(ORT_PREBUILT_DIR)/lib/%/libonnxruntime.so:
+ifneq ($(ORT_DEPS),)
+$(ORT_DEPS):
 	$(ORT_PREBUILT_DIR)/fetch.sh
+endif
 
 onnxruntime_prebuilt:
 	$(ORT_PREBUILT_DIR)/fetch.sh
@@ -324,7 +324,7 @@ bin_out/libnegicc_dinov3.a: $(DINOV3_OBJS) $(BUILD_STAMP)
 
 lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(TIFF_LIB) $(JPEG_LIB)
 
-GIT_VERSION ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo "master")
+GIT_VERSION ?= $(shell git describe --always --dirty --tags --exclude latest 2>/dev/null || echo "master")
 
 bin_out/film_frame_detector.o: film_frame_detector.cc film_frame_detector.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -342,17 +342,22 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
 # also its TensorRT engine (make dinov3_engine, on the machine that runs it), which falls back to the .onnx when it
-# cannot be loaded. Without the backbone neg_process still builds, but converts only with --gain_g or --gain_b given.
+# cannot be loaded. Without the backbone neg_process still builds, but converts only without the search: with
+# --gain_g or --gain_b on a TriLED bundle or an ICC profile; on a white-light bundle with --target, -E, --gain_g and
+# --gain_b, --fit_curves off and --tone_stage off. A print and a density output need it.
 # USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
 # models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3_engine.h) of the white-light
 # curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
 # tone stage (both lights).
-BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
+# A USE_CUDA=1 build embeds an engine for the backbone (when it is there) and for every adapter: listed whether or
+# not they exist, so that a missing or stale one stops the build (the rules after dinov3_engine).
+BACKBONE_ONNX = $(wildcard models/dinov3-small/backbone.onnx)
+ENGINE_FILES = $(if $(filter 1,$(USE_CUDA)),$(BACKBONE_ONNX:.onnx=.engine) \
+                 $(patsubst %.onnx,%.engine,$(wildcard models/dinov3-small_*/adapter.onnx)))
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc 3rd_party/spektrafilm/profiles/*.json models/dinov3-small_*/adapter.onnx \
-                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
-                                $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
-              $(wildcard $(BACKBONE_FILES))
+                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin)) \
+              $(BACKBONE_ONNX) $(ENGINE_FILES)
 
 EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
 
@@ -445,6 +450,7 @@ neg_process: bin_out/neg_process
 
 bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
+	@echo "ONNX Runtime: $(if $(filter 1,$(ORT_STATIC)),static from $(ORT_SRC_DIR),$(ORT_LIB_DIR))"
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
@@ -460,6 +466,15 @@ dinov3_model:
 # runs them (engines are device-specific and not checked in). On the Orin Nano: about 41 s + 10 s per adapter.
 dinov3_engine:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
+
+# An engine missing, or older than the .onnx it is compiled from (it holds the earlier weights): a USE_CUDA=1 build
+# that would embed it stops and asks for the engines.
+ifeq ($(USE_CUDA),1)
+models/dinov3-small_%/adapter.engine: models/dinov3-small_%/adapter.onnx
+	@echo "$@ is missing or older than $<: run make dinov3_engine on this machine" >&2; exit 1
+models/dinov3-small/backbone.engine: models/dinov3-small/backbone.onnx
+	@echo "$@ is missing or older than $<: run make dinov3_engine on this machine" >&2; exit 1
+endif
 
 clean: clean_lib
 
