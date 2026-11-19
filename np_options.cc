@@ -387,6 +387,14 @@ int parse_options(int ac, char* av[], Options& o) {
           "does, or when no pass ran. The output must equal the conversion without it, bit for bit: compare the two "
           "outputs yourself (cmp).")
     .flag();
+  parser.add_argument("--search_renderer")
+    .help("Where the bundle search, the print's search, the curve fit and the tone plan run their passes over the "
+          "frame (the preview renders and the clip passes): cpu (default), gpu (the CUDA device, USE_CUDA=1 builds) "
+          "or compare (a parity check: every pass on both from the same inputs, the search reading the CPU's; prints "
+          "how far the GPU's passes are from the CPU's and exits 1 when a preview's mean change in L* exceeds 0.05, a "
+          "clip share 0.01 % or a median L* one bin). The GPU's passes differ from the CPU's in the last place of "
+          "powf, tanhf and cbrtf, so its result is not guaranteed equal to the CPU's: compare tells.")
+    .default_value(std::string("cpu"));
   parser.add_argument("--probe_intent")
     .help("Measurement aid (for tools that study the search): write what the intent network predicts from chosen "
           "renders of this frame to this JSON file and stop without converting. Renders every metered bracket at its "
@@ -500,6 +508,16 @@ int parse_options(int ac, char* av[], Options& o) {
     }
   }
   o.check_renderer = parser.get<bool>("--check_renderer");
+  o.search_renderer = parser.get<std::string>("--search_renderer");
+  if (o.search_renderer != "cpu" && o.search_renderer != "gpu" && o.search_renderer != "compare") {
+    log_error("--search_renderer must be cpu, gpu or compare, got '%s'\n", o.search_renderer.c_str());
+    return 1;
+  }
+  if (o.check_renderer && o.search_renderer != "cpu") {
+    log_error("--check_renderer counts the passes of the CPU's renderer: not with --search_renderer %s\n",
+              o.search_renderer.c_str());
+    return 1;
+  }
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;

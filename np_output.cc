@@ -229,6 +229,7 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["backend"] = sc.dino_backend;
   j["inferences"] = a.inferences;
   j["time_ms"] = num(sc.t_auto_ms, "%.1f");
+  if (sc.search_renderer != "cpu") j["renderer"] = sc.search_renderer;
   return j;
 }
 

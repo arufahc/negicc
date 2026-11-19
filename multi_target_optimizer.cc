@@ -1614,6 +1614,273 @@ void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   negicc::cpu_highlight_clip(a);
 }
 
+// ---- The GPU renderer (multi_target_optimizer.h GpuRenderer) -------------------------------------------------------
+
+namespace {
+
+// A device buffer that grows, freed with the renderer.
+struct DeviceBuffer {
+  void* ptr = nullptr;
+  size_t size = 0;
+  void* get(size_t bytes) {
+    if (bytes > size) {
+      negicc::gpu_free(ptr);
+      ptr = nullptr;
+      size = 0;
+      ptr = negicc::gpu_malloc(bytes);
+      size = bytes;
+    }
+    return ptr;
+  }
+  ~DeviceBuffer() { negicc::gpu_free(ptr); }
+};
+
+// One table on the device, with the host contents it was copied from (compared on every call).
+struct DeviceTable {
+  DeviceBuffer buf;
+  std::vector<float> host;
+  const float* sync(const float* src, int n) {
+    if (!src || n <= 0) return nullptr;
+    if ((int)host.size() != n || std::memcmp(host.data(), src, (size_t)n * sizeof(float)) != 0) {
+      host.assign(src, src + n);
+      negicc::gpu_upload(buf.get((size_t)n * sizeof(float)), src, (size_t)n * sizeof(float));
+    }
+    return static_cast<const float*>(buf.ptr);
+  }
+};
+
+struct DeviceProfile {
+  DeviceTable clut, out_trc[3], in_trc[3];
+};
+
+bool same_view(const negicc::RgbView& a, const negicc::RgbView& b) {
+  return a.width == b.width && a.height == b.height && a.r_ptr == b.r_ptr && a.g_ptr == b.g_ptr &&
+         a.g2_ptr == b.g2_ptr && a.b_ptr == b.b_ptr && a.pitch == b.pitch && a.stride == b.stride &&
+         a.flat.gain == b.flat.gain && a.flat.ax_i == b.flat.ax_i && a.flat.ay_i == b.flat.ay_i;
+}
+
+}  // namespace
+
+struct GpuRenderer::Impl {
+  negicc::RgbView frame;            // the bound frame, as given
+  bool bound = false;
+  const uint16_t* dev_frame = nullptr;
+  bool copied = false;              // dev_frame is the renderer's copy: contiguous, frame.width x frame.height
+  DeviceBuffer frame_copy, out;
+  DeviceTable tone;
+  // Per profile, keyed by its cLUT and first output table, which the search keeps for its whole run.
+  std::map<std::pair<const float*, const float*>, std::unique_ptr<DeviceProfile>> profiles;
+
+  // The pass's view on the device: the bound frame or an upright crop of it, at its offset.
+  negicc::RgbView device_view(const negicc::RgbView* v) const {
+    if (!bound) throw std::runtime_error("GPU renderer: a pass before bind_frame");
+    if (!v) throw std::runtime_error("GPU renderer: a pass without a view of the bound frame");
+    if (v->pitch != frame.pitch || v->stride != frame.stride)
+      throw std::runtime_error("GPU renderer: a view that is not an upright crop of the bound frame");
+    negicc::RgbView d = *v;
+    d.g2_ptr = nullptr;
+    d.flat = negicc::FlatSampleArgs{};
+    d.flat_tables.reset();
+    if (!copied) {
+      const ptrdiff_t off = v->r_ptr - frame.r_ptr;
+      d.r_ptr = dev_frame + off;
+      d.g_ptr = d.r_ptr + 1;
+      d.b_ptr = d.r_ptr + 2;
+      return d;
+    }
+    // The copy is the frame in its own coordinates: find the crop's origin (x, y), with
+    // v->r_ptr = frame.r_ptr + y * stride + x * pitch.
+    const ptrdiff_t off = v->r_ptr - frame.r_ptr;
+    for (int y = 0; y + v->height <= frame.height; ++y) {
+      const ptrdiff_t rem = off - (ptrdiff_t)y * frame.stride;
+      if (frame.pitch == 0 || rem % frame.pitch != 0) continue;
+      const ptrdiff_t x = rem / frame.pitch;
+      if (x < 0 || x + v->width > frame.width) continue;
+      if (v->g_ptr - frame.g_ptr != off || v->b_ptr - frame.b_ptr != off) break;
+      d.r_ptr = dev_frame + ((size_t)y * frame.width + (size_t)x) * 3;
+      d.g_ptr = d.r_ptr + 1;
+      d.b_ptr = d.r_ptr + 2;
+      d.pitch = 3;
+      d.stride = 3 * (ptrdiff_t)frame.width;
+      return d;
+    }
+    throw std::runtime_error("GPU renderer: a view that is not inside the bound frame");
+  }
+
+  negicc::PipelineConfig device_config(const negicc::PipelineConfig& c) {
+    negicc::PipelineConfig d = c;
+    const negicc::ProfileData& p = c.profile;
+    if (p.has_profile) {
+      auto& dp = profiles[{p.clut, p.out_trc[0]}];
+      if (!dp) dp = std::make_unique<DeviceProfile>();
+      d.profile.clut = dp->clut.sync(p.clut, p.clut_dim[0] * p.clut_dim[1] * p.clut_dim[2] * 3);
+      for (int ch = 0; ch < 3; ++ch) {
+        d.profile.out_trc[ch] = dp->out_trc[ch].sync(p.out_trc[ch], p.out_trc_size[ch]);
+        d.profile.in_trc[ch] = dp->in_trc[ch].sync(p.in_trc[ch], p.in_trc_size[ch]);
+      }
+    }
+    if (c.tone.lut && c.tone.n > 0) d.tone.lut = tone.sync(c.tone.lut, c.tone.n + 1);
+    return d;
+  }
+};
+
+GpuRenderer::GpuRenderer() : impl_(std::make_unique<Impl>()) {
+  if (!negicc::gpu_device_available()) throw std::runtime_error("no CUDA device for the GPU renderer");
+}
+GpuRenderer::~GpuRenderer() = default;
+
+void GpuRenderer::bind_frame(const negicc::RgbView& frame) {
+  ++binds;
+  Impl& m = *impl_;
+  if (m.bound && same_view(m.frame, frame)) return;   // the same frame again (each roll-off measurement binds it)
+  m.frame = frame;
+  m.bound = false;
+  const uint16_t* given = device_frame ? device_frame(frame) : nullptr;
+  if (given) {
+    if (frame.g2_ptr || frame.flat.gain || frame.g_ptr != frame.r_ptr + 1 || frame.b_ptr != frame.r_ptr + 2)
+      throw std::runtime_error("GPU renderer: a frame read in place must be interleaved RGB without a flat field");
+    m.dev_frame = given;
+    m.copied = false;
+  } else {
+    const int w = frame.width, h = frame.height;
+    std::vector<uint16_t> host((size_t)w * h * 3);
+#pragma omp parallel for schedule(static)
+    for (int y = 0; y < h; ++y)
+      for (int x = 0; x < w; ++x) frame.sample(x, y, host.data() + ((size_t)y * w + x) * 3);
+    void* dev = m.frame_copy.get(host.size() * sizeof(uint16_t));
+    negicc::gpu_upload(dev, host.data(), host.size() * sizeof(uint16_t));
+    m.dev_frame = static_cast<const uint16_t*>(dev);
+    m.copied = true;
+  }
+  m.bound = true;
+}
+
+void GpuRenderer::render(const negicc::RenderArgs& a) {
+  ++renders;
+  Impl& m = *impl_;
+  const negicc::RgbView view = m.device_view(a.in_view);
+  negicc::RenderArgs d = a;
+  d.in = nullptr;
+  d.in_view = &view;
+  d.cfg = m.device_config(a.cfg);
+  const size_t elem = a.out_type == 1 ? 1 : a.out_type == 0 ? 2 : 4;
+  const size_t bytes = (size_t)a.width * a.height * 3 * elem;
+  d.out = m.out.get(std::max<size_t>(bytes, 1));
+  negicc::gpu_render(d);
+  negicc::gpu_download(a.out, d.out, bytes);
+}
+
+void GpuRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
+  ++clips;
+  Impl& m = *impl_;
+  const negicc::RgbView view = m.device_view(a.in_view);
+  negicc::HighlightClipArgs d = a;
+  d.in = nullptr;
+  d.in_view = &view;
+  d.cfg = m.device_config(a.cfg);
+  negicc::gpu_highlight_clip(d);
+}
+
+// ---- The comparison (multi_target_optimizer.h CompareRenderer) ------------------------------------------------------
+
+void CompareRenderer::bind_frame(const negicc::RgbView& frame) { gpu.bind_frame(frame); }
+
+void CompareRenderer::render(const negicc::RenderArgs& a) {
+  negicc::cpu_render(a);
+  const size_t elem = a.out_type == 1 ? 1 : a.out_type == 0 ? 2 : 4;
+  const size_t n = (size_t)a.width * a.height * 3;
+  std::vector<uint8_t> other(n * elem);
+  negicc::PositiveStats other_stats{};
+  negicc::RenderArgs g = a;
+  g.out = other.data();
+  g.stats = a.stats ? &other_stats : nullptr;
+  gpu.render(g);
+  Pass p;
+  p.render = true;
+  p.values = (long long)n;
+  auto value = [&](const void* buf, size_t i) -> double {
+    if (elem == 1) return static_cast<const uint8_t*>(buf)[i];
+    if (elem == 2) return static_cast<const uint16_t*>(buf)[i];
+    return static_cast<const float*>(buf)[i];
+  };
+  for (size_t i = 0; i < n; ++i) {
+    const double diff = std::fabs(value(a.out, i) - value(other.data(), i));
+    if (diff > 0.0) ++p.differing;
+    p.max_abs = std::max(p.max_abs, diff);
+  }
+  if (elem == 1 && n) {   // an 8-bit preview: L* per pixel where the two differ
+    const uint8_t* c = static_cast<const uint8_t*>(a.out);
+    auto lstar = [](const uint8_t* v) { return negicc::srgb_to_lab({v[0] / 255.0f, v[1] / 255.0f, v[2] / 255.0f}).L; };
+    double sum = 0.0;
+    for (size_t i = 0; i < n; i += 3) {
+      if (c[i] == other[i] && c[i + 1] == other[i + 1] && c[i + 2] == other[i + 2]) continue;
+      const double dl = std::fabs((double)lstar(c + i) - (double)lstar(other.data() + i));
+      sum += dl;
+      p.max_dl = std::max(p.max_dl, dl);
+    }
+    p.mean_dl = sum / (double)(n / 3);
+  }
+  if (a.stats) p.max_share = std::fabs((double)a.stats->white_clip - (double)other_stats.white_clip);
+  passes.push_back(p);
+}
+
+void CompareRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
+  negicc::cpu_highlight_clip(a);
+  std::vector<float> out((size_t)a.n * 5);
+  std::vector<uint64_t> hist(a.max_hist ? (size_t)a.n * negicc::kMaxHistBins : 0);
+  negicc::HighlightClipArgs g = a;
+  g.out = out.data();
+  g.max_hist = a.max_hist ? hist.data() : nullptr;
+  gpu.highlight_clip(g);
+  Pass p;
+  p.values = (long long)a.n * 5;
+  for (int c = 0; c < a.n; ++c)
+    for (int k = 0; k < 5; ++k) {
+      const double diff = std::fabs((double)a.out[c * 5 + k] - (double)out[c * 5 + k]);
+      if (diff > 0.0) ++p.differing;
+      p.max_abs = std::max(p.max_abs, diff);
+      if (k < 4) p.max_share = std::max(p.max_share, diff);
+      else p.max_median_l = std::max(p.max_median_l, diff);
+    }
+  for (size_t i = 0; i < hist.size(); ++i)
+    p.max_hist = std::max(p.max_hist, std::fabs((double)a.max_hist[i] - (double)hist[i]));
+  passes.push_back(p);
+}
+
+bool CompareRenderer::within_tolerance() const {
+  for (const Pass& p : passes) {
+    if (p.render && p.mean_dl > kCompareMeanDL) return false;
+    if (p.max_share > kCompareShare || p.max_median_l > kCompareMedianL + 1e-9) return false;
+  }
+  return !passes.empty();
+}
+
+std::string CompareRenderer::summary() const {
+  long renders = 0, renders_diff = 0, clips = 0, clips_diff = 0;
+  double mean_dl = 0.0, max_dl = 0.0, max_code = 0.0, share = 0.0, median = 0.0, hist = 0.0;
+  for (const Pass& p : passes) {
+    if (p.render) {
+      ++renders;
+      renders_diff += p.differing > 0;
+      mean_dl = std::max(mean_dl, p.mean_dl);
+      max_dl = std::max(max_dl, p.max_dl);
+      max_code = std::max(max_code, p.max_abs);
+    } else {
+      ++clips;
+      clips_diff += p.differing > 0;
+      median = std::max(median, p.max_median_l);
+      hist = std::max(hist, p.max_hist);
+    }
+    share = std::max(share, p.max_share);
+  }
+  std::ostringstream s;
+  s << renders << " previews (" << renders_diff << " differ; largest mean change " << std::setprecision(3) << mean_dl
+    << " L*, largest pixel change " << max_dl << " L*, largest value difference " << max_code << "), " << clips
+    << " clip passes (" << clips_diff << " differ; shares " << share << " %, median " << median
+    << " L*, max-channel histogram " << hist << ")";
+  return s.str();
+}
+
 // For --probe_intent: the mean of a flat (c0, c1, c2) cell vector per channel, and writing the probe file.
 static std::vector<double> probe_mean3(const std::vector<float>& v) {
   double s[3] = {0, 0, 0};

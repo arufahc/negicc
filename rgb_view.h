@@ -314,6 +314,19 @@ void cpu_intent_loss(const IntentLossArgs& a);
 void cpu_highlight_clip(const HighlightClipArgs& a);
 void cpu_lab_stats(const LabStatsArgs& a);
 
+// The same two passes on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; without CUDA gpu_device_available() is
+// false and the others throw). Every pointer the pass reads per pixel is device memory: in, or in_view's channel
+// pointers (an interleaved RGB view without a flat field), cfg's tables, and a render's out. A render's stats, and a
+// clip pass's matrices, out and max_hist, are host memory. The GPU renderer (multi_target_optimizer.h GpuRenderer)
+// makes those copies; gpu_malloc, gpu_free, gpu_upload and gpu_download are the device memory it uses.
+bool gpu_device_available();
+void* gpu_malloc(size_t bytes);
+void gpu_free(void* p);
+void gpu_upload(void* dst_device, const void* src_host, size_t bytes);
+void gpu_download(void* dst_host, const void* src_device, size_t bytes);
+void gpu_render(const RenderArgs& a);
+void gpu_highlight_clip(const HighlightClipArgs& a);
+
 void cpu_preview_debayer(const PreviewDebayerArgs& a);
 // -----------------------------------------------------------------------------------------------------------------
 // Grain-aware debayer (single-shot RGGB scans under a narrowband RGB light)

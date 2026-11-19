@@ -51,6 +51,7 @@ struct FileFingerprint {
 
 struct Sidecar {
   std::string output_path;               // the TIFF; the sidecar is <output_path>.json
+  std::string search_renderer = "cpu";   // --search_renderer; the auto block records it when it is not the CPU
   int argc = 0;
   char** argv = nullptr;
   const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)

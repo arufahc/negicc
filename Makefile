@@ -289,6 +289,19 @@ DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3
               bin_out/film_base_detector.o bin_out/tone_stage.o bin_out/profile_bundle.o \
               bin_out/multi_target_optimizer.o
 
+# The bundle search's passes on the GPU (gpu_passes.cu) with USE_CUDA=1: nvcc for the device's compute capability
+# (CUDA_ARCH: 87 for the Orin), --fmad=false as the host's -ffp-contract=off, so both round the pipeline's stages
+# alike (rgb_view.h gpu_render; without CUDA rgb_view.cc has stubs).
+CUDA_ARCH ?= 87
+ifeq ($(USE_CUDA),1)
+DINOV3_OBJS += bin_out/gpu_passes.o
+endif
+
+bin_out/gpu_passes.o: gpu_passes.cu rgb_view.h color_pipeline.h flat_field.h $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(NVCC) -c gpu_passes.cu -o $@ -O3 --fmad=false -std=c++17 -Xcompiler -fPIC -I. \
+	    -gencode arch=compute_$(CUDA_ARCH),code=sm_$(CUDA_ARCH)
+
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_engine.cc -o $@

@@ -236,7 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
-      {"", "--print", 1, false},           {"", "--check_renderer", 0, true},
+      {"", "--print", 1, false},           {"", "--check_renderer", 0, true},    {"", "--search_renderer", 1, true},
       {"", "--probe_intent", 1, true},    {"", "--probe_params", 1, true},      {"", "--probe_stops", -16, true},
   };
   auto is_number = [](const std::string& t) {
@@ -706,8 +706,24 @@ static PassThroughRenderer& pass_through_renderer() {
   return r;
 }
 
+// The renderer of the search's passes: --check_renderer's counting one, --search_renderer's GPU or comparison, or
+// null (the CPU's).
+static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
+  if (o.check_renderer) return &pass_through_renderer();
+  return s.renderer.get();
+}
+
 int prepare(const Options& o, Setup& s) {
   if (o.check_renderer) negicc::cpu_pass_hook = audit_cpu_pass;
+  if (o.search_renderer != "cpu") {
+    try {
+      if (o.search_renderer == "gpu") s.renderer = std::make_unique<GpuRenderer>();
+      else s.renderer = std::make_unique<CompareRenderer>();
+    } catch (const std::exception& e) {
+      log_error("--search_renderer %s: %s\n", o.search_renderer.c_str(), e.what());
+      return 1;
+    }
+  }
   if (!o.flat.empty()) {
     try {
       s.flat_field = negicc::load_flat_field_file(o.flat);
@@ -1321,6 +1337,12 @@ int prepare(const Options& o, Setup& s) {
               "tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n");
     return 1;
   }
+  if (o.search_renderer != "cpu" && (!s.bundle_search || !s.replay_source.empty())) {
+    log_error("--search_renderer %s needs the bundle search to run: not with given values, recorded curves or a "
+              "recorded tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n",
+              o.search_renderer.c_str());
+    return 1;
+  }
   return 0;
 }
 
@@ -1657,7 +1679,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
         grey_prof.rebind_pointers();
         ParamSearchOptions ro;
-        if (o.check_renderer) ro.renderer = &pass_through_renderer();
+        ro.renderer = search_renderer(o, s);
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
         set_fit_frame(ro);
@@ -2186,7 +2208,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // Auto's time (the sidecar's auto.time_ms): the search and the curve fit, as on the CFA path.
         const double t_auto_0 = omp_get_wtime();
         ParamSearchOptions opts;
-        if (o.check_renderer) opts.renderer = &pass_through_renderer();
+        opts.renderer = search_renderer(o, s);
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2503,7 +2525,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
-      if (o.check_renderer) opts.renderer = &pass_through_renderer();
+      opts.renderer = search_renderer(o, s);
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -3321,6 +3343,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.shoulder.has_knee = false;
   }
   sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar ? &c.dino_res : nullptr;
+  sc.search_renderer = o.search_renderer;
   sc.dino_model = s.dino_path;
   sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
                                          : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);
@@ -3387,6 +3410,19 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.tone_plan = &s.tone_plan;
   }
   write_json_sidecar(sc);
+  if (const auto* g = dynamic_cast<const GpuRenderer*>(s.renderer.get())) {
+    log_info("GPU renderer: %ld binds, %ld previews and %ld clip passes on the device\n", g->binds, g->renders,
+             g->clips);
+  }
+  if (const auto* cmp = dynamic_cast<const CompareRenderer*>(s.renderer.get())) {
+    log_info("Renderer comparison, GPU against CPU: %s\n", cmp->summary().c_str());
+    if (!cmp->within_tolerance()) {
+      log_error("Renderer comparison: a GPU pass is outside the tolerance (a preview's mean change %g L*, a share "
+                "%g %%, a median %g L*), or no pass ran\n", CompareRenderer::kCompareMeanDL,
+                CompareRenderer::kCompareShare, CompareRenderer::kCompareMedianL);
+      return 1;
+    }
+  }
   if (o.check_renderer) {
     const PassAudit& pa = pass_audit();
     log_info("Renderer check: %ld binds, %ld previews and %ld clip passes through the renderer; %ld passes of the "

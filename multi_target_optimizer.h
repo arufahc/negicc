@@ -20,6 +20,7 @@
 #include <chrono>
 #include <string>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "rgb_view.h"
@@ -168,6 +169,59 @@ struct PassThroughRenderer : PreviewRenderer {
   void bind_frame(const negicc::RgbView& frame) override;
   void render(const negicc::RenderArgs& a) override;
   void highlight_clip(const negicc::HighlightClipArgs& a) override;
+};
+
+// The passes on a CUDA device (rgb_view.h gpu_render and gpu_highlight_clip; neg_process --search_renderer gpu). The
+// constructor throws without a device (a USE_CUDA=0 build has none).
+// - The frame: bind_frame copies the bound frame to the device once, each pixel as the view samples it (a CFA
+//   view's flat field included), unless device_frame gives the address at which the GPU already reads it (a caller
+//   whose frame is in mapped memory: negicc-station's session buffers). A pass's view, the bound frame or an upright
+//   crop of it, is read there at its offset; any other view throws.
+// - The tables: each profile's cLUT and output tables are copied once per renderer (the search keeps them for its
+//   whole run); its input tables, and a tone table, are compared on every call and copied when they changed, never
+//   keyed by their address (the curve fit changes them in place).
+// - The output: a render is written to device memory and copied into the search's buffer.
+// A failed pass throws std::runtime_error, which leaves the search to its caller.
+struct GpuRenderer : PreviewRenderer {
+  GpuRenderer();
+  ~GpuRenderer() override;
+  GpuRenderer(const GpuRenderer&) = delete;
+  GpuRenderer& operator=(const GpuRenderer&) = delete;
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
+  // For a frame the GPU reads in place: the device address of frame.r_ptr (an interleaved RGB view without a flat
+  // field, whose pitch and stride hold on the device), or null to have the frame copied.
+  std::function<const uint16_t*(const negicc::RgbView& frame)> device_frame;
+  long binds = 0, renders = 0, clips = 0;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+// The CPU and the GPU passes compared (neg_process --search_renderer compare): every pass runs on both from the same
+// inputs and the search reads the CPU's, so the search is the CPU's and each GPU pass is measured against it. A
+// preview: how many values differ, the largest difference, and the largest and mean change in L* per pixel of an
+// 8-bit preview (what the network reads). A clip pass: the largest difference of its three exceedance shares, its
+// white-clip share, its median L* and its max-channel histogram. within_tolerance(): every preview's mean change in
+// L* per pixel at most kCompareMeanDL, every share within kCompareShare %, every median within one histogram bin.
+struct CompareRenderer : PreviewRenderer {
+  static constexpr double kCompareMeanDL = 0.05;   // L*: the tolerance on a preview, mean over its pixels
+  static constexpr double kCompareShare = 0.01;    // %: each clip share
+  static constexpr double kCompareMedianL = 0.1;   // L*: the median, one bin of the clip pass's histogram
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
+  bool within_tolerance() const;
+  std::string summary() const;   // one line for the log
+  struct Pass {
+    bool render = false;
+    long long values = 0, differing = 0;
+    double max_abs = 0.0, max_dl = 0.0, mean_dl = 0.0, max_share = 0.0, max_median_l = 0.0, max_hist = 0.0;
+  };
+  std::vector<Pass> passes;
+  GpuRenderer gpu;
 };
 
 struct ParamSearchOptions {
