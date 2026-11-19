@@ -665,7 +665,7 @@ XYZ     = the print of pd (5.3), adapted from D55 to D50 (Bradford) for a print 
 the input curves and the table keeps only colour:
 
 ```
-curve_c(x)       = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))
+in_c(x)          = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))       the profile's input curve (4.1)
 table(a)         = the chain above from alpha_c = Paper_c⁻¹(a_c)
 Paper_c(alpha_i) = 0.75 curve_c(aim_c − η_c alpha_i) / top_c + 0.25 (1 − i / (N − 1)),   η = P (1, 1, 1),  P for APD
 ```
@@ -788,7 +788,7 @@ whole image; else, with no `--roi`, the frame detector's crop when the detection
 of at least 0.5 and its two scales onto the half-size image agree within 2 %; else the whole scan. A TIFF, a JPEG and
 three captures run no frame detection without `--roi auto`, so there the floor reads the whole scan. The raised base
 serves the whole conversion, the density file included, so its CLF still prints the picture's print. The sidecar
-records the base as found and `β` (`film_base.print_floor`). A captured base is taken as it is.
+records the base as found and `β` (`film_base.print_floor.factor`). A captured base is taken as it is.
 
 ## 5.9 The density file and its CLF
 

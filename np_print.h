@@ -316,7 +316,7 @@ void remove_print_clfs(const DensityPrints& prints);
 // print ICC per print material (print_profiles, built by the profiling tool when it saved the bundle);
 // its table serves every bracket, and each bracket's three input curves are computed here:
 //
-//     curve_c(x) = Paper_c((G_c(-log10(unknee(x) / n0)) - A_mid) (1 + t_c))
+//     in_c(x) = Paper_c((G_c(-log10(unknee(x) / n0)) - A_mid) (1 + t_c))
 //
 //   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
 //   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
@@ -363,9 +363,9 @@ void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
 // curve has it. A print CLF of a bundle with grey_balance_curves, under either light, takes it as the frame's mid grey
 // (frame_print).
 void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
-// The slopes a print CLF takes for the bracket from the curve: with n(g) the light densities of the curve's grey at
-// green APD g, k_c = sum_j M_cj dn_j/dg at the mid grey (dn_j/dg = 1 / G_j', G_j' a central difference of one step
-// of the curve's table), slopes = (k_green / k_red, 1, k_green / k_blue).
+// The slopes a print CLF takes for the bracket from the curve (DESIGN.md 5.9): with n(A) the light densities of the
+// curve's grey at green APD A, gamma_c = sum_j M_cj dn_j/dA at the mid grey (dn_j/dA = 1 / G_j', G_j' a central
+// difference of one step of the curve's table), slopes = (gamma_green / gamma_red, 1, gamma_green / gamma_blue).
 void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]);
 // Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
 PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);

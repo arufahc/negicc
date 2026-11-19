@@ -110,7 +110,7 @@ using negicc::compute_inner_crop;
 // green values tgt_min_g .. tgt_max_g in its own capture; E scales the scene's green 0.5 % and 99.5 % points (g_lo,
 // g_hi, at the reference exposure) onto them:
 //
-//   e_min = g_min / g_lo * k,   e_max = g_max / g_hi * k,   k = reference exposure / the bracket's exposure.
+//   e_min = g_min / g_lo * rho_b,   e_max = g_max / g_hi * rho_b,   rho_b = reference exposure / the bracket's exposure
 //
 // With e_min <= e_max (feasible) every E in between keeps the whole scene calibrated. The search may go beyond the
 // calibrated range by the usable tolerance, 1.5 stops on the highlight side and 1.2 on the shadow side, on every
@@ -1436,11 +1436,11 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   return true;
 }
 
-// The knobs on a print (negicc #120): brightness moves the print's mid grey A (its
-// curves recomputed at A), tint and warmth move g and b (in the print's curves), E held. The grey is the film point the
-// print at (a0, g0, b0) renders as neutral L* 50; the solve finds (A, g, b) so that it renders at the target through the
-// print at (A, g, b). Newton on (A, ln g, ln b) with central differences (kPrintKnobDA in A, GreyPoint's FD_STEP in
-// ln g and ln b); unreachable targets are scaled back as solve_grey_knobs scales them.
+// The knobs on a print (negicc #120): brightness moves the print's mid grey A (its curves recomputed at A), tint and
+// warmth move g and b (in the print's curves), E held. The grey is the film point the print at (a0, g0, b0) renders as
+// neutral L* 50; the solve finds (A, g, b) so that it renders at the target through the print at (A, g, b). Newton on
+// (A, ln g, ln b) with central differences (kPrintKnobDA in A, GreyPoint's FD_STEP in ln g and ln b); unreachable
+// targets are scaled back as solve_grey_knobs scales them.
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
                        double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
                        PrintKnobResult& out) {
@@ -2136,9 +2136,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
           hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];
           dl = hc_res_242.median_L - hc_242.median_L;
         }
-        // Taken when it clips no more (at most 0.5 percentage point more of the crop above 242 in the worst channel),
-        // keeps the midtones at L* 48 or within 6 of the first choice's, and actually moves: a later bracket, or E up
-        // by more than 2%.
+        // Taken when it clips at most 0.5 percentage point more of the crop above 242 in the worst channel, keeps the
+        // midtones at L* 48 or within 6 of the first choice's, and actually moves: a later bracket, or E up by more
+        // than 2%.
         const float min_allowed_L = std::min(48.0f, hc_242.median_L - 6.0f);
         const float exc_res_242 = max_excess(hc_res_242);
         if (exc_res_242 <= exc_242 + 0.005f && hc_res_242.median_L >= min_allowed_L &&

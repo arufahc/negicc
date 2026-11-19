@@ -197,14 +197,14 @@ struct ParamSearchOptions {
   int pin_target = -1;
   unsigned pin_mask = 0;
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
-  // neg_process's --probe_intent (a measurement aid): when probe_path is set, the
-  // search writes what the intent network predicts from chosen renders to that JSON file and stops after its bootstrap,
-  // before screening (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the bootstrap's
-  // gains (and at the E its window clamps it to, where that differs), then every probe_params set (target index, E in
-  // the search's units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured at each as the
-  // fixed-point loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as the
-  // residual reads them and as the training targets are made) and optimiser_cells (what intent_loss scores at those
-  // parameters, before the per-bracket correction).
+  // neg_process's --probe_intent (a measurement aid): when probe_path is set, the search writes what the intent network
+  // predicts from chosen renders to that JSON file and stops after its bootstrap, before screening
+  // (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the bootstrap's gains (and at
+  // the E its window clamps it to, where that differs), then every probe_params set (target index, E in the search's
+  // units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured at each as the fixed-point
+  // loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as the residual reads
+  // them and as the training targets are made) and optimiser_cells (what intent_loss scores at those parameters, before
+  // the per-bracket correction).
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
@@ -396,9 +396,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // The print's film base held no darker than the picture's thinnest film, for a base that is not a capture (the
 // scan's rebate or statistics, or the bundle's): a base darker than the thinnest film would push thin film past the
 // knee and cut the print's shadows. The factor β = max(1, the largest over the three channels of the inner crop's
-// kBasePercentile point of (X px)_c / fb_c), X the bundle's crosstalk matrix and fb the base in the conversion's film
-// base space (fb_c reads n0 at the print's E). The base the print takes is fb β, its colour kept; on a base already
-// raised β is 1. Every 4th pixel each way.
+// kBasePercentile point of (X v)_c / fb_c) (DESIGN.md 5.8), v a pixel of the frame, X the bundle's crosstalk matrix
+// and fb the base (f in DESIGN.md) in the conversion's film base space (fb_c reads n0 at the print's E). The base the
+// print takes is fb β, its colour kept; on a base already raised β is 1. Every 4th pixel each way.
 float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
 // The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
 // found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
