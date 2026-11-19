@@ -1647,7 +1647,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   };
   // A density run with --print, on either light: each material's own print search, so that its CLF prints the frame
   // as the picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's
-  // suggested balance, as without --print.
+  // suggested balance: on TriLED as without --print; on white light the search's own, where without --print it is the
+  // curve fit's (with --print no fit runs).
   auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                     const ParamSearchOptions& opts) -> bool {
     std::vector<std::string> ids;

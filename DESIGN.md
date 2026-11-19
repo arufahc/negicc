@@ -778,10 +778,12 @@ a capture (the rebate, the thinnest film or the bundle's), it is held no darker 
 ```
 
 with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile
-(`kBasePercentile`). The crop is the picture's frame: the given `--roi` (or `--roi auto`'s), else, with no `--roi`, the
-frame detector's crop when its confidence is at least 0.5, else the whole scan. The raised base serves the whole
-conversion, the density file included, so its CLF still prints the picture's print. The sidecar records the base as
-found and `β` (`film_base.print_floor`). A captured base is taken as it is.
+(`kBasePercentile`). The crop is the picture's frame: the given `--roi`, or `--roi auto`'s unless it fell back to the
+whole image; else, with no `--roi`, the frame detector's crop when the detection succeeded (`ok`) with a confidence
+of at least 0.5 and its two scales onto the half-size image agree within 2 %; else the whole scan. A TIFF, a JPEG and
+three captures run no frame detection without `--roi auto`, so there the floor reads the whole scan. The raised base
+serves the whole conversion, the density file included, so its CLF still prints the picture's print. The sidecar
+records the base as found and `β` (`film_base.print_floor`). A captured base is taken as it is.
 
 ## 5.9 The density file and its CLF
 
@@ -844,7 +846,7 @@ print's own search (5.6) runs on the white-light decode, and each material's CLF
   print ICCs are built from the white-light reading of the chart, as for TriLED.
 - **No curve fit on a print.** The fit (4.3) composes into the chart profiles, which a print does not use;
   `--fit_curves on` with `--print` is refused. A density file without `--print` still runs the fit, which changes no
-  pixel and gives the file's suggested balance.
+  pixel and gives the file's suggested balance; with `--print` its suggested balance is the scene search's own.
 
 | Parameter | Value | Purpose |
 |---|---|---|

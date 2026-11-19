@@ -1167,8 +1167,8 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   p.grey_density = material.grey_density;
   for (int k = 0; k < 9; ++k) p.to_print[k] = to_print->m[k];
   p.to_print_for = to_print->film;
-  // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure. A TriLED frame's
-  // material with its own print search takes that search's A, E and gains (below).
+  // The frame's bracket and exposure: the search's, else the middle bracket at its own exposure. A material with its
+  // own print search (a density run with --print, on either light) takes that search's A, E and gains (below).
   p.searched = rec.has_balance && rec.balance_e > 0.0;
   p.bracket = p.searched ? rec.balance_target : bundle.targets[bundle.targets.size() / 2].name;
   p.exposure = p.searched ? rec.balance_e : 1.0;

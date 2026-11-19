@@ -104,9 +104,10 @@ struct DensityRecord {
   // The metadata's "print" block, as JSON text: how the frame prints on each print material
   // (DensityPrints::metadata_json). Empty: none.
   std::string print_json;
-  // A TriLED frame with --print: each material's own print search (np_pipeline; search_print_continuous), by material
-  // id: its mid grey A, E (the -E units), g, b and the nearest bracket. Its CLF prints the frame as the picture
-  // conversion would print it on that material. Empty: the CLFs take the picture conversion's search (white light).
+  // A density run with --print, on either light: each material's own print search (np_pipeline;
+  // search_print_continuous), by material id: its mid grey A, E (the -E units), g, b and the nearest bracket. Its CLF
+  // prints the frame as the picture conversion would print it on that material. Empty (a material without a print
+  // search): its CLF takes the scene's search.
   struct PrintSearch {
     double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
     std::string bracket;
@@ -238,10 +239,10 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //
 //   grey      the frame's mid grey as the measure's density: the bracket's mid grey, denser by log10(E) in every
 //             light channel for the exposure E the search found. With the balance (the gains g and b, level
-//             included) it prints as the print's mid grey. A narrow-band bundle with the film's grey balance curve
-//             takes the curve's grey at the bracket's mid grey APD (curve_grey), as its print ICCs do.
+//             included) it prints as the print's mid grey. A bundle with the film's grey balance curve, under
+//             either light, takes the curve's grey at the bracket's mid grey APD (curve_grey), as its print ICCs do.
 //   slopes    they give the film's grey scale equal contrast in the three channels: from the grey balance curve
-//             (curve_slopes), else the bracket's own.
+//             (curve_slopes), else the bracket's own (read only for a bundle without the curve).
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
 //
@@ -278,10 +279,6 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
 // place the balance, the exposure and the slopes are applied.
 std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
 
-// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
-// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write,
-// named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits one file, its code scale, measure
-// and channel factors).
 // The print materials built into neg_process (3rd_party/spektrafilm/profiles/<id>.json), in the order of their ids,
 // with their matrices for the film of bundle; without a bundle, or with one that has no film_model, they have no
 // matrix (enough to list them). One that cannot be read is left out, with a warning.
@@ -300,6 +297,10 @@ struct DensityPrints {
   std::vector<std::string> paths;
   std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
 };
+// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
+// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write,
+// named after the whole output as the sidecar is (<output>.<material>.clf: a CLF fits one file, its code scale,
+// measure and channel factors).
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids);
 // Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
@@ -331,8 +332,9 @@ void remove_print_clfs(const DensityPrints& prints);
 // for a paper). A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is
 // computed here, gets its table computed here (print_table).
 // The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence,
-// and that and by whom it was modified); the print CLF's description says the same. The profile-building tools write
-// the same text into the bundle's print ICCs.
+// and that and by whom it was modified). The profile-building tools write the same text into the bundle's print ICCs.
+// The print CLF's description (np_print.cc frame_print_clf) gives the same attribution in its own words, with the
+// licence at spektrafilm's main branch rather than at this pinned commit.
 constexpr const char* kPrintIccCopyright =
     "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
     "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
@@ -358,7 +360,8 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
 // The same from a bundle's density brackets.
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
 // The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
-// curve has it. A print CLF of a narrow-band bundle takes it as the frame's mid grey (frame_print).
+// curve has it. A print CLF of a bundle with grey_balance_curves, under either light, takes it as the frame's mid grey
+// (frame_print).
 void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
 // The slopes a print CLF takes for the bracket from the curve: with n(g) the light densities of the curve's grey at
 // green APD g, k_c = sum_j M_cj dn_j/dg at the mid grey (dn_j/dg = 1 / G_j', G_j' a central difference of one step

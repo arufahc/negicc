@@ -304,8 +304,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
           "bundle whose density matrices were built in, TriLED or white light, and none of the exposure, gain, "
           "curve, tone or look options; the colour balance the search finds is recorded in the file, not applied. "
-          "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
-          "beside the file uses it.");
+          "On white light without --print the curve fit runs (--fit_curves off turns it off); it changes no pixel and "
+          "gives the file's suggested balance. With --print no fit runs.");
   parser.add_argument("--print")
     .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
           "file). With -P srgb (or another picture output) the output is the print: Auto searches "
@@ -803,9 +803,9 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
-  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
-  // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
-  // density output does not take.
+  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light without
+  // --print the fit gives the file's suggested balance, not its pixels; with --print no fit runs. Recorded curves
+  // replay a bracket, E and gains, which a density output does not take.
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;

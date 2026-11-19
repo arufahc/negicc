@@ -382,16 +382,16 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
-// The print's search (--print with Auto on a TriLED bundle with grey_balance_curves): the print searched with its mid
-// grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the search's
-// reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the A at
-// which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness wish from
-// the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b screened
-// at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its A,
-// measures the optimiser's correction, predicts a* b* (L* is the wish) and solves A (bracketed by steps of 0.1 APD
-// downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E pinned). The
-// scene loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament,
-// no bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+// The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
+// its mid grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the
+// search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
+// A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness wish
+// from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
+// screened at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its
+// A, measures the optimiser's correction, predicts a* b* (L* is the wish) and solves A (bracketed by steps of 0.1 APD
+// downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E pinned). The scene
+// loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
+// bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
 // The print's film base held no darker than the picture's thinnest film, for a base that is not a capture (the
 // scan's rebate or statistics, or the bundle's): a base darker than the thinnest film would push thin film past the
 // knee and cut the print's shadows. The factor β = max(1, the largest over the three channels of the inner crop's

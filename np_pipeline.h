@@ -118,7 +118,7 @@ struct Setup {
   // The lightest node of the print's table: the paper's white.
   double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   ContinuousPrintResult print_cr;     // the print's search
-  std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a TriLED density run's, per material
+  std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a density run's --print, per material
   bool print_searched = false;
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
