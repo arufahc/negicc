@@ -155,10 +155,11 @@ struct Sidecar {
   // A density run's --print materials as given (built-in ids, 'all', or files): its replay gives them again, so the
   // base's floor (raised only with --print) and the CLFs are made again. Empty: no --print.
   std::vector<std::string> density_prints;
-  std::string print_id, print_name;  // --print on a TriLED bundle: the print ICC that replaced the chart profiles
+  std::string print_id, print_name;  // --print with a picture output: the print ICC that replaced the chart profiles
   std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
   bool print_from_bundle = false;
-  // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, where its white sits, and its search.
+  // The print's mid grey A (NaN: the bracket's own), the chosen bracket's A_mid, and the search's A0 (the A at which
+  // the frame's log-average cell prints at L* 50).
   double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
   double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
   // The paper's white the print is relative to (PCS D50).

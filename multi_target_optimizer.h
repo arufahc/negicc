@@ -120,8 +120,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 // The passes over the frame the bundle search renders: the preview of the inner crop and the clip statistics (the
 // roll-off's 99.5 % point, white-clip shares). The defaults are negicc::cpu_render and negicc::cpu_highlight_clip; a
 // caller that renders the same pipeline elsewhere (the station's GPU) overrides them. search_conversion_params,
-// search_print_continuous, run_white_light_fit (the curve fit, its roll-off and its tone plan), plan_auto_tone_stage
-// and reanchor_input_curves send every pass of theirs through it; the passes are serial, called from the caller's thread one at a time.
+// search_print_continuous, run_white_light_fit (the curve fit, its roll-off and its tone plan) and
+// plan_auto_tone_stage send every pass of theirs through it (reanchor_input_curves renders nothing); the passes are
+// serial, called from the caller's thread one at a time.
 //
 // What stays and what changes between calls:
 // - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same
@@ -197,14 +198,14 @@ struct ParamSearchOptions {
   int pin_target = -1;
   unsigned pin_mask = 0;
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
-  // neg_process's --probe_intent (a measurement aid): when probe_path is set, the
-  // search writes what the intent network predicts from chosen renders to that JSON file and stops after its bootstrap,
-  // before screening (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the bootstrap's
-  // gains (and at the E its window clamps it to, where that differs), then every probe_params set (target index, E in
-  // the search's units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured at each as the
-  // fixed-point loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as the
-  // residual reads them and as the training targets are made) and optimiser_cells (what intent_loss scores at those
-  // parameters, before the per-bracket correction).
+  // neg_process's --probe_intent (a measurement aid): when probe_path is set, the search writes what the intent network
+  // predicts from chosen renders to that JSON file and stops after its bootstrap, before screening
+  // (ParamSearchResult::probed). Rendered: every metered bracket at its metered E with the bootstrap's gains (and at
+  // the E its window clamps it to, where that differs), then every probe_params set (target index, E in the search's
+  // units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured at each as the fixed-point
+  // loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as the residual reads
+  // them and as the training targets are made) and optimiser_cells (what intent_loss scores at those parameters, before
+  // the per-bracket correction).
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
@@ -384,22 +385,22 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
-// The print's search (--print with Auto on a TriLED bundle with grey_balance_curves): the print searched with its mid
-// grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the search's
-// reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the A at
-// which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness wish from
-// the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b screened
-// at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its A,
-// measures the optimiser's correction, predicts a* b* (L* is the wish) and solves A (bracketed by steps of 0.1 APD
-// downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E pinned). The
-// scene loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament,
-// no bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+// The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
+// its mid grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the
+// search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
+// A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness wish
+// from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
+// screened at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its
+// A, measures the optimiser's correction, predicts a* b* (L* is the wish) and solves A (bracketed by steps of 0.1 APD
+// downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E pinned). The scene
+// loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
+// bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
 // The print's film base held no darker than the picture's thinnest film, for a base that is not a capture (the
 // scan's rebate or statistics, or the bundle's): a base darker than the thinnest film would push thin film past the
 // knee and cut the print's shadows. The factor β = max(1, the largest over the three channels of the inner crop's
-// kBasePercentile point of (X px)_c / fb_c), X the bundle's crosstalk matrix and fb the base in the conversion's film
-// base space (fb_c reads n0 at the print's E). The base the print takes is fb β, its colour kept; on a base already
-// raised β is 1. Every 4th pixel each way.
+// kBasePercentile point of (X v)_c / fb_c) (DESIGN.md 5.8), v a pixel of the frame, X the bundle's crosstalk matrix
+// and fb the base (f in DESIGN.md) in the conversion's film base space (fb_c reads n0 at the print's E). The base the
+// print takes is fb β, its colour kept; on a base already raised β is 1. Every 4th pixel each way.
 float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
 // The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
 // found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
@@ -434,7 +435,7 @@ struct ContinuousPrintResult {
   const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A,
-// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders the print).
+// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders it).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                              const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);

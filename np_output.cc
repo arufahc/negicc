@@ -272,10 +272,6 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
   return j;
 }
 
-// The intent field the parameter search converted against: per DINOv3 grid cell, row-major over the oriented frame,
-// the Lab colour the intent adapter predicts (mu) and its tolerance (sigma). The same block as the station's sidecar.
-// Null when no search ran. source: "auto" (the bundle search, on the frame's inner crop_ratio crop) or "dino" (the
-// single-bracket search, on the whole frame).
 // The model's short name (the backbone's directory, e.g. dinov3-small), not the path the build embedded it from.
 static std::string model_stem(std::string path) {
   const std::string kBuiltIn = "[built-in] ";
@@ -291,6 +287,12 @@ static std::string model_stem(std::string path) {
   return dot == std::string::npos ? file : file.substr(0, dot);
 }
 
+// The intent field the parameter search converted against: per DINOv3 grid cell, row-major over the oriented frame,
+// the Lab colour (mu) and its tolerance (sigma) of the chosen step. The same block as the station's sidecar. Null when
+// no search ran. source: "auto" (the bundle search or the print's search, on the frame's inner crop_ratio crop): a*
+// and b* as the intent adapter predicted them from the chosen step's render, L* the frame's lightness wish (the
+// bootstrap field's; DESIGN.md 4.2); "dino" (the single-bracket search, on the whole frame): its best step's
+// prediction in all three.
 static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
                                       int grid_h, int target_idx, const char* source, float crop_ratio,
                                       const Sidecar& sc) {

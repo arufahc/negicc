@@ -160,8 +160,8 @@ struct DensityMatrix {
 struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
-  // The bracket's own slopes, when the bundle keeps them (a white-light bundle, or one from before the grey balance
-  // curve); a narrow-band bundle with grey_balance_curves takes its slopes from the curve (np_print.h curve_slopes).
+  // The bracket's own slopes, when the bundle keeps them. They are read only for a bundle without grey_balance_curves;
+  // a bundle with the curve, under either light, takes its slopes from the curve (np_print.h curve_slopes).
   bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
   // The bracket's slope relative to the grey balance curve (density_matrices.brackets.targets.<bracket>.grey_relative.b),
