@@ -364,7 +364,7 @@ struct PrintKnobResult {
   bool limited = false;
   float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the grey's Lab through the print at (a, g, b)
 };
-// the knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
+// The knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
 // print_at(a, g, b, prof) builds the print profile at mid grey a with gains g, b in its curves.
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
                        double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,

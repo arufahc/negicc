@@ -586,20 +586,18 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
     return -1;
   }
   bool ok = fwrite(head.data(), 1, head.size(), fp) == head.size();
-  if (channels == 3) {
-    const size_t n = (size_t)width * height;
-    ok = ok && fwrite(pixels, 6, n, fp) == n;
-  } else {
-    std::vector<uint16_t> row((size_t)width * 3);
-    for (int j = 0; ok && j < height; ++j) {
-      const uint16_t* src = pixels + (size_t)j * width * channels;
-      for (int i = 0; i < width; ++i) {
-        row[(size_t)i * 3] = src[(size_t)i * channels];
-        row[(size_t)i * 3 + 1] = src[(size_t)i * channels + 1];
-        row[(size_t)i * 3 + 2] = src[(size_t)i * channels + 2];
+  // The samples little-endian, as the header says ("II"), whatever the host's byte order; three per pixel.
+  std::vector<uint8_t> row((size_t)width * 6);
+  for (int j = 0; ok && j < height; ++j) {
+    const uint16_t* src = pixels + (size_t)j * width * channels;
+    for (int i = 0; i < width; ++i) {
+      for (int c = 0; c < 3; ++c) {
+        const uint16_t v = src[(size_t)i * channels + c];
+        row[(size_t)i * 6 + 2 * c] = (uint8_t)(v & 0xff);
+        row[(size_t)i * 6 + 2 * c + 1] = (uint8_t)(v >> 8);
       }
-      ok = fwrite(row.data(), 6, (size_t)width, fp) == (size_t)width;
     }
+    ok = fwrite(row.data(), 1, row.size(), fp) == row.size();
   }
   ok = (fclose(fp) == 0) && ok;
   if (!ok) log_error("Failed to write %s\n", path.c_str());
@@ -1417,14 +1415,14 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
     PrintMaterial material;
     if (!read_print_file(id, text, stem, err) || !rec.bundle ||
         !load_spektrafilm_print(text, stem, *rec.bundle, material, err)) {
-      log_warn("No print CLF for %s: %s\n", id.c_str(), err.empty() ? "no profile bundle" : err.c_str());
-      continue;
+      out.error = "no print CLF for " + id + ": " + (err.empty() ? "no profile bundle" : err);
+      return out;
     }
     materials.push_back(std::move(material));
   }
   if (!materials.empty() && (!rec.bundle || !rec.bundle->film_model.present)) {
-    log_warn("No print CLF: the profile bundle has no film_model, which a print's matrix is computed from: rebuild "
-             "it with the profile-building tools\n");
+    out.error = "no print CLF: the profile bundle has no film_model, which a print's matrix is computed from: rebuild "
+                "it with the profile-building tools";
     return out;
   }
   for (PrintMaterial& material : materials) {
@@ -1438,8 +1436,8 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
       continue;
     }
     if (!frame_print(rec, material, print, err)) {
-      log_warn("No print CLF for %s: %s\n", material.id.c_str(), err.c_str());
-      continue;
+      out.error = "no print CLF for " + material.id + ": " + err;
+      return out;
     }
     out.paths.push_back(output + "." + material.id + ".clf");
     out.materials.push_back(std::move(material));

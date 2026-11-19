@@ -347,6 +347,21 @@ static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, c
   return true;
 }
 
+// A previous run's print, for a run that reuses its sidecar: profile.print's A and its search's record; a knob run's
+// sidecar records the A before the knobs (knobs.base.a), which the reusing run starts from.
+static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c) {
+  const nlohmann::ordered_json none;
+  const auto& prof = j.contains("profile") && j["profile"].is_object() ? j["profile"] : none;
+  const auto& print = prof.is_object() && prof.contains("print") && prof["print"].is_object() ? prof["print"] : none;
+  if (print.is_object() && print.contains("a") && print["a"].is_number()) {
+    c.print_a = print["a"].get<double>();
+    if (print.contains("search") && print["search"].is_object()) c.print_search_json_str = print["search"].dump();
+  }
+  const auto& knobs = j.contains("knobs") && j["knobs"].is_object() ? j["knobs"] : none;
+  const auto& base = knobs.is_object() && knobs.contains("base") && knobs["base"].is_object() ? knobs["base"] : none;
+  if (base.is_object() && base.contains("a") && base["a"].is_number()) c.print_a = base["a"].get<double>();
+}
+
 // The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
 // serve this conversion.
 static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
@@ -476,16 +491,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     s.has_cached_sidecar = true;
     s.bundle_search = true;
     s.cached_sidecar.is_auto = true;
-    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
-        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number()) {
-      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
-      if (j["profile"]["print"].contains("search") && j["profile"]["print"]["search"].is_object())
-        s.cached_sidecar.print_search_json_str = j["profile"]["print"]["search"].dump();
-    }
-    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
-    if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
-        j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
-      s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
+    read_cached_print(j, s.cached_sidecar);
     s.cached_sidecar.target_idx = tgt_idx;
     s.cached_sidecar.target_name = s.bundle.targets[tgt_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -605,13 +611,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
 
     s.has_cached_sidecar = true;
     s.cached_sidecar.is_auto = false;
-    if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
-        j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
-      s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
-    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
-    if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
-        j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
-      s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
+    read_cached_print(j, s.cached_sidecar);
     s.cached_sidecar.target_idx = expected_idx;
     if (s.is_bundle && expected_idx >= 0) s.cached_sidecar.target_name = s.bundle.targets[expected_idx].name;
     s.cached_sidecar.base_e = base_e;
@@ -1520,7 +1520,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
-    // on a print the knobs act on the print's own A, g and b, solved on its profile; E held.
+    // On a print the knobs act on the print's own A, g and b, solved on its profile; E held.
     // A density output's knobs move its print CLFs (density_print_searches), not its suggested balance.
     const bool knobs_here = o.knobs_given && !s.density;
     if (knobs_here && !s.print_profs.empty() && std::isfinite(s.print_a) && target_idx >= 0 &&
@@ -1658,12 +1658,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ids.push_back(id);
       }
     }
+    // A bundle without the film's grey balance curve has no print search: its CLFs take the scene search's bracket
+    // and slopes (frame_print). Any other failure is the material's, and fails the run as on a picture output.
+    if (!bundle.grey_balance.present) {
+      log_warn("No print search for the CLFs: the profile bundle has no grey_balance_curves; they take the scene "
+               "search's bracket\n");
+      return true;
+    }
     for (const std::string& id : ids) {
       BracketPrints prints;
       std::string why;
       if (!bracket_print_profiles(bundle, id, prints, why)) {
-        log_warn("No print search for %s: %s\n", id.c_str(), why.c_str());
-        continue;
+        log_error("--print %s: %s\n", id.c_str(), why.c_str());
+        return false;
       }
       if (s.density_print_search.count(prints.id)) continue;
       std::vector<uint8_t>& icc = prints.icc[prints.icc.size() / 2];
@@ -1672,8 +1679,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const bool ok = h && parse_film_profile_pipeline(h, prof);
       if (h) cmsCloseProfile(h);
       if (!ok) {
-        log_warn("No print search for %s: its print ICC cannot be read\n", id.c_str());
-        continue;
+        log_error("--print %s: its print ICC cannot be read\n", id.c_str());
+        return false;
       }
       prof.rebind_pointers();
       to_paper_white(prof);
@@ -1735,8 +1742,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");
       }
       s.density_print_search[prints.id] = ps;
-      log_info("Print search for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f\n", prints.id.c_str(), ps.a,
-               ps.bracket.c_str(), ps.g, ps.b);
+      log_info("Print for %s's CLF: A %.4f (nearest %s), g %.4f, b %.4f%s\n", prints.id.c_str(), ps.a,
+               ps.bracket.c_str(), ps.g, ps.b, ps.knobs ? ", the search's moved by the knobs" : "");
     }
     return true;
   };
@@ -2688,7 +2695,13 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
     }
     log_knobs();
-    log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
+    if (!s.print_id.empty()) {
+      // A print is made by its own search, which takes no -E, gains or --target: its A, g and b.
+      log_info("Print: A %.6g g %.9g b %.9g (E held; nearest %s)%s\n\n", s.print_a, fg, fb,
+               bundle.targets[c.bundle_target_idx].name.c_str(), scan.has_knob_res ? ", moved by the knobs" : "");
+    } else {
+      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
+    }
   } else if (s.use_dino) {
     if (!s.is_bundle && !c.film_prof.data.has_profile) {
       log_error("The parameter search requires a film profile to evaluate intent losses.\n");
@@ -3168,6 +3181,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     // The prints of the file (np_print.h), for the print materials --print names: how the frame prints on each,
     // recorded in the metadata, and the CLFs that go beside it. Without --print there are none.
     const DensityPrints prints = density_prints(rec, o.output, o.prints);
+    if (!prints.error.empty()) {   // a print asked for and not made fails the run, as on a picture output
+      log_error("--print: %s\n", prints.error.c_str());
+      return 1;
+    }
     rec.print_json = prints.metadata_json;
     density_json = density_metadata_json(rec);
     DensityFileInfo info;

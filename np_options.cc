@@ -815,7 +815,7 @@ int parse_options(int ac, char* av[], Options& o) {
         {"-E", o.exposure_given},
         {"--gain_g", o.gain_g_given},
         {"--gain_b", o.gain_b_given},
-        // the knobs move a print's CLF (each material's own print search): they apply with --print
+        // The knobs move a print's CLF (each material's own print search): they apply with --print
         {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
         {"--tint", parser.is_used("--tint") && o.prints.empty()},
         {"--warmth", parser.is_used("--warmth") && o.prints.empty()},

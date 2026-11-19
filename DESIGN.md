@@ -723,7 +723,8 @@ and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `conv
 the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per channel
 the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
 (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
-move (`last_move`).
+move (`last_move`). The shares describe the print at the search's result: the knobs move `a`, `g` and `b` and leave
+them as the search measured them, and a density output's `search` records the same.
 
 ## 5.7 The print's white
 
