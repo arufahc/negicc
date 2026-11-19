@@ -135,11 +135,21 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    the base's colour), taken through `X` and scaled by the scan's exposure over the capture's (shutter × ISO).
    `--film_base auto` (the default) reuses a capture recorded in the output's sidecar from the same inputs.
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
-   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop. It is used on a
-   single RAW or linear DNG, whose detection runs on its raw data with `--roi auto` and with a given `--roi` alike;
-   an RGB file and three captures go to item 3.
+   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop, and on TriLED
+   when the sensor clipped it (more than 0.1 % of its pixels at 98 % of the white level in a channel, read before the
+   flat field): clipped film reads the clip, not the base. neg_process then warns that the scan clips its film base
+   and suggests a capture (item 1) or a shorter scan. The patch is used on a single RAW or linear DNG, whose
+   detection runs on its raw data with `--roi auto` and with a given `--roi` alike; an RGB file and three captures go
+   to item 3.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
-   pixels on the long side, with bare light and the black holder masked out.
+   pixels on the long side, with bare light and the black holder masked out. On TriLED bare light is what the
+   sensor clipped in all three channels (98 % of the white level, before the flat field), in parts that reach the
+   image border or are the size of a sprocket hole: light is brighter than the base in every channel, film near the
+   clip clips first in its brightest channel, and the base is nearly neutral in the camera's channels, so colour does
+   not tell thin film from light. On white light bare light is a part clipped in a channel (at the plateau of its
+   maxima) whose median blue is above the 99.5th percentile of the film's blue, with the bright unclipped light
+   connected to it, or a neutral part bluer than the orange film: film transmits no more blue than its base, so a
+   flat stretch of film that forms a plateau is not taken for light.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
 The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):
