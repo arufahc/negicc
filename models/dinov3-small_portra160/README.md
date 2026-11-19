@@ -15,8 +15,10 @@ the conversion closest to it.
   at most 8.00. This adapter misses the a*b* gate (5.07; the other two seeds 5.20 and 5.09) and is shipped with
   `all_passed` false.
 - Training: cosine schedule over 15 epochs, final epoch kept, loss weighted per patch; seed 43 of 42, 43, 44 by the
-  calibrated validation loss. Sigma calibrated per channel on the validation photographers (scale 1.26, 1.24, 1.39 for
-  L*, a*, b*, folded into the variance head's bias); the mean is not changed.
+  calibrated validation loss (2.11716; seed 44 2.11779, seed 42 2.12958). The validation loss without the calibration
+  ranks seed 42 first (2.15880 against 2.15911 for seed 43; `metadata.json` at commit `3be27f1`), so the calibration
+  decided which seed ships. Sigma calibrated per channel on the validation photographers (scale 1.26, 1.24, 1.39 for L*,
+  a*, b*, folded into the variance head's bias); the mean is not changed.
 - Held-out photographers (in neither training nor validation): mean absolute error 4.18 L* per photographer; mean signed
   error -0.32 L*, -1.07 a*, -1.42 b*. These are means per photographer, not over patches as the validation error is; no
   held-out a*b* absolute error is given, and none of the held-out numbers is in `metadata.json`.

@@ -134,7 +134,8 @@ bool base_from_tiles(const negicc::RgbView& view, const negicc::RgbView& raw, in
   std::vector<const Tile*> lit;
   std::vector<float> spreads;
   for (const Tile& t : tiles) {
-    if (t.st.n && t.st.clipped <= kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 && t.st.med[2] > 0.0) {
+    if (t.st.n && t.st.clipped <= negicc::kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 &&
+        t.st.med[2] > 0.0) {
       lit.push_back(&t);
       spreads.push_back((float)t.st.spread);
     }
@@ -282,7 +283,7 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
       negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr, flat_args, flat_tables);
   // The same mosaic without the flat field, for the clipping (region_stats).
   const negicc::RgbView raw_view = negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr);
-  const float clip = 0.98f * white_level;
+  const float clip = negicc::kSensorClip * white_level;
 
   if (roi) {
     if (roi[0] < 0 || roi[1] < 0 || roi[2] <= 0 || roi[3] <= 0 || (long long)roi[0] + roi[2] > src_w ||
@@ -300,7 +301,7 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
       err = "the film base region of " + path + " holds no light";
       return false;
     }
-    if (st.clipped > kBaseClipFraction) {
+    if (st.clipped > negicc::kBaseClipFraction) {
       err = "the film base region of " + path + " is clipped (" + std::to_string(100.0 * st.clipped) +
             "% of its pixels): capture the film base at a shorter exposure";
       return false;
@@ -318,8 +319,8 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     // The thinnest film on the capture, as a TriLED scan's base is read when it shows no rebate; on the mosaic as
     // recorded it must not be clipped.
     float thin[3] = {0.0f, 0.0f, 0.0f}, thin_raw[3] = {0.0f, 0.0f, 0.0f};
-    negicc::thinnest_film_base(view, thin);
-    negicc::thinnest_film_base(raw_view, thin_raw);
+    negicc::thinnest_film_base(view, white_level, thin);
+    negicc::thinnest_film_base(raw_view, white_level, thin_raw);
     if (!(thin[0] > 1.0f) || !(thin[1] > 1.0f) || !(thin[2] > 1.0f)) {
       err = "no usable film base on " + path + " (no smooth film)";
       return false;

@@ -597,7 +597,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (auto it = targets.begin(); it != targets.end(); ++it) {
         DensityBracket bracket;
         bracket.name = it.key();
-        // The slopes are optional: a narrow-band bundle with the grey balance curve keeps none.
+        // The slopes are optional: only a bundle without the grey balance curve reads them (frame_print).
         bracket.has_slopes = it.value().is_object() && it.value().contains("slopes") &&
                              three(it.value()["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
                              bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;

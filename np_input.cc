@@ -779,10 +779,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       free_half();
     }
   } else {
+    float flat_white = 0.0f;   // the white level less the black subtract_cfa_black_in_place took off
     if (flat) {
-      float dummy_white = 0.0f;
       if (!proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3 ||
-          !subtract_cfa_black_in_place(proc, dummy_white)) {
+          !subtract_cfa_black_in_place(proc, flat_white)) {
         log_error("--flat requires a 3-colour CFA RAW file with valid sensor margins\n");
         delete proc;
         return NULL;
@@ -807,7 +807,17 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       proc->imgdata.params.user_black = 0;
       for (int i = 0; i < 4; ++i) proc->imgdata.params.user_cblack[i] = 0;
     }
-    if (analyse && !read_half_size(proc, analyse)) {
+    // The black was subtracted above, before the flat: the half-size image's clip is the white level less it, which
+    // LibRaw's maximum (restored as recorded, with no black left to take off) does not say. Given to the analysis
+    // (the film base's clip test) for its duration only, so the decode is as before.
+    const HalfSizeAnalysis analyse_flat = [&](const LibRaw& r) {   // r is *proc (read_half_size)
+      const unsigned recorded = proc->imgdata.color.maximum;
+      proc->imgdata.color.maximum = (unsigned)flat_white;
+      const bool ok = analyse(r);
+      proc->imgdata.color.maximum = recorded;
+      return ok;
+    };
+    if (analyse && !read_half_size(proc, flat ? analyse_flat : analyse)) {
       delete proc;
       return NULL;
     }
@@ -1373,6 +1383,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     if (!half) return delete proc, nullptr;
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+    half->imgdata.color.maximum = (unsigned)white;   // the image's clip, as a RAW's half-size image carries it
     // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
     half->imgdata.rawdata.sizes.width = (ushort)w;
     half->imgdata.rawdata.sizes.height = (ushort)h;
