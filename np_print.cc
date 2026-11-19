@@ -1794,11 +1794,14 @@ std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
 
 // A textDescriptionType tag (ICC v2) holding description as its ASCII text, with empty Unicode and ScriptCode parts.
 static std::vector<uint8_t> icc_desc_tag(const std::string& description) {
-  // The ASCII part holds 7-bit text (ICC.1:2001-04 6.5.17): a byte outside printable ASCII (a UTF-8 material name's)
-  // is written as '?'.
-  std::string ascii = description;
-  for (char& ch : ascii)
-    if ((unsigned char)ch < 0x20 || (unsigned char)ch > 0x7e) ch = '?';
+  // The ASCII part holds 7-bit text (ICC.1:2001-04 6.5.17): each character outside it (a UTF-8 material name's) is
+  // written as one '?', as the station's write_icc writes it (Python's encode("ascii", "replace")).
+  std::string ascii;
+  for (const char ch : description) {
+    const unsigned char u = (unsigned char)ch;
+    if (u < 0x80) ascii += ch;
+    else if (u >= 0xc0) ascii += '?';   // a character's first byte; its continuation bytes (0x80 to 0xbf) are dropped
+  }
   std::vector<uint8_t> desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
   put_u32(desc, (uint32_t)ascii.size() + 1);
   desc.insert(desc.end(), ascii.begin(), ascii.end());
