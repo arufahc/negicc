@@ -1269,6 +1269,13 @@ int prepare(const Options& o, Setup& s) {
     log_info("DINOv3 engine loaded [%s] adapter %s (memory: %.1f MB)\n", s.engine.backend_name(),
            s.engine.adapter_name().c_str(), (double)s.engine.memory_bytes() / (1024.0 * 1024.0));
   }
+  // --check_renderer checks the bundle search's passes (the scene's or the print's, with the curve fit and the tone
+  // plan after it): refused before anything is written where none runs.
+  if (o.check_renderer && (!s.bundle_search || !s.replay_source.empty())) {
+    log_error("--check_renderer needs the bundle search to run: not with given values, recorded curves or a recorded "
+              "tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n");
+    return 1;
+  }
   return 0;
 }
 

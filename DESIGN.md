@@ -303,7 +303,7 @@ x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
 y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
 XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
 rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
-rgb'  = shoulder(rgb), clamped to [0, 1]                                  shoulder with -P srgb only; clamp on both
+rgb'  = shoulder(rgb), clamped to [0, 1]                                  shoulder: -P srgb, not a print; clamp: both
 rgb'' = tone(rgb')                                                        -P srgb, with a tone curve (below)
 out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
 ```
