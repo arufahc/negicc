@@ -1056,7 +1056,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     // undamping stops at 2 so a slope measured over a narrow span is not amplified).
     dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 25.0);
   }
-  constexpr double c_res = 1.0 / 1.5;
+  constexpr double c_res = 1.0 / 1.5;   // the factor 1/1.5 of r0, r1 and r4 (the joint fit's notes above)
   const double r4_scale = c_res / std::sqrt(se * se + kHeadSystematicSd * kHeadSystematicSd);
   bool guard_path = false;
   std::vector<Lab> labs;

@@ -178,7 +178,8 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 
 struct PrintMaterial {
   std::string id, name, viewing_illuminant;
-  double grey_density = 0.70;                 // the printing density exposed as the print's mid grey
+  // The printing density exposed as the print's mid grey: a stated value (DESIGN.md), which cancels inside the CLF.
+  double grey_density = 0.70;
   // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
   // Academy Printing Density), for the film model named (the bundle's the material was loaded for).
   struct ToPrint {
@@ -346,6 +347,7 @@ constexpr int kPrintIccPoints = 4096;
 // The largest XYZ a lut16 (PCS XYZ) holds: code FFFFh as a u1Fixed15Number (ICC.1:2022 4.8 and 6.3.4.2 Table 11).
 constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
 constexpr int kPrintIccCube = 45;
+// Paper_c's grid: -1.5 to 1.8 in steps of 0.005, 661 points.
 constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
 constexpr int kPaperAlphaPoints = 661;
 using PrintCurves = std::array<std::vector<double>, 3>;

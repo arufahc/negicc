@@ -415,7 +415,7 @@ NEGICC_HD bool channel_black_clipped(float v) { return v * 65535.0f < 200.5f; }
 NEGICC_HD bool linear_channel_white_clipped(float l) { return l >= 0.9953029f; }
 NEGICC_HD bool linear_channel_black_clipped(float l) { return l < 0.00023679829f; }
 
-// L* histograms: kLabBins bins over [0, 100].
+// L* histograms: kLabBins bins over [0, 100], each 0.1 L* wide.
 constexpr int kLabBins = 1000;
 NEGICC_HD int lab_bin(float L) {
     int k = (int)(L * (kLabBins / 100.0f));
@@ -443,7 +443,8 @@ NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
 }
 
 // The DINOv3 input size of a w x h image: its longer side scaled to max_size, both sides rounded to whole
-// patch_size patches (grid_w x grid_h of them).
+// patch_size patches (grid_w x grid_h of them). The defaults are the backbone's image_size and patch_size
+// (models/dinov3-small/backbone.json).
 struct AspectPreservedShape {
     int target_w = 16, target_h = 16;
     int grid_w = 1, grid_h = 1;
@@ -463,7 +464,8 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     return {gw * p, gh * p, gw, gh};
 }
 
-// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi).
+// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi): bins 1/2048
+// wide, over a range above the pre-shoulder values (up to about 1.33 on the grey axis).
 constexpr int kMaxHistBins = 4096;
 constexpr float kMaxHistRange = 2.0f;
 NEGICC_HD int max_hist_bin(float v) {
@@ -537,7 +539,7 @@ inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
         set_shoulder(c, x_hi, n);
         return srgb_encode(apply_shoulder_channel(c, q));
     };
-    float lo = 1.0002f, hi = kShoulderXHiLimit;
+    float lo = 1.0002f, hi = kShoulderXHiLimit;   // lo: just above kShoulderOff, so set_shoulder turns the shoulder on
     if (code_at_q(hi) > anchor) return hi;
     if (!(code_at_q(lo) > anchor)) return lo;
     for (int i = 0; i < 60; ++i) {

@@ -1689,6 +1689,7 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
       run = std::min(run, std::max(0.0, interp(m.log_exposure, m.curves[c], m.aim[c] - eta * alpha)));
       out[c][i] = run;
     }
+    // The 0.25 linear ramp makes each Paper_c strictly decreasing, so print_table can invert it.
     const double top = out[c][0];
     for (int i = 0; i < kPaperAlphaPoints; ++i)
       out[c][i] = 0.75 * (out[c][i] / top) + 0.25 * (1.0 - (double)i / (kPaperAlphaPoints - 1));
@@ -1698,6 +1699,8 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]) {
 
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
                                  const double tilt[3], const double gains[3]) {
+  // The knee's inverse caps atanh's argument at 0.998, and the light density floors u g_c at 1e-7 before the log, so
+  // both stay finite; the 1e-9 i ramp keeps each curve strictly increasing.
   const double d = 1.0 - kPrintKnee;
   PrintCurves out;
   for (int c = 0; c < 3; ++c) {

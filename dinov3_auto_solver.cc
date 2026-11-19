@@ -26,6 +26,7 @@
 #include "dinov3_preprocess.h"
 #include "profile_bundle.h"
 
+// The fixed-point loop stops when |dE| + |dg| + |db| <= TOL_PARAM or the relative residual change <= TOL_REL_ERR.
 static constexpr double TOL_PARAM = 0.02;
 static constexpr double TOL_REL_ERR = 0.015;
 

@@ -142,6 +142,7 @@ static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets
             r[8] = kToneTopSlope * (tone_curve_L(100.0, c) - std::min(100.0, f98 + (100.0 - cur.L98)));
         }
     };
+    // kR: the residuals r[0] to r[8]; kP: the curve's four numbers (black, white, gamma, contrast).
     constexpr int kR = 9, kP = 4;
     auto cost_of = [&](const double* q) {
         double r[kR];

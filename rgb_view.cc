@@ -106,6 +106,7 @@ const RawStatTables& raw_stat_tables() {
         for (int v = 0; v < 65536; ++v) {
             const double dv = std::max((double)v, 1.0);
             t.log_lut[v] = std::log(dv);
+            // Stops below 16384 (2^14), in 160 bins of 1/16 stop over [-10, 0), the ends clamped.
             const double ev = std::log2(dv / 16384.0);
             const int bin = (int)((ev + 10.0) * 16.0);
             t.ev_bin[v] = (uint8_t)std::clamp(bin, 0, 159);
