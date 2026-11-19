@@ -659,13 +659,21 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   const std::string had_dino_path = s.dino_path;
   std::string why = "it does not match this conversion";
   bool ok = false;
-  if (!j.is_object()) {
+  if (s.density && !o.prints.empty()) {
+    // The knobs move each material's print search (density_print_searches), which runs again for them.
+    why = "a density output's knobs move its print searches, which run again";
+  } else if (!j.is_object()) {
     why = "it is not JSON";
   } else {
     try {
       ok = load_cached_sidecar(j, o, s, why);
     } catch (const std::exception& e) {  // a field of the wrong type
       why = std::string("it cannot be read (") + e.what() + ")";
+      ok = false;
+    }
+    // A print's knobs move the print's A: a sidecar without it has no print result to move.
+    if (ok && !s.print_profs.empty() && !std::isfinite(s.cached_sidecar.print_a)) {
+      why = "it records no print mid grey A (profile.print.a)";
       ok = false;
     }
   }
@@ -1162,9 +1170,12 @@ int prepare(const Options& o, Setup& s) {
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
+      // A white-light bundle holds given gains in its search (pinned_search), so they alone do not turn it off.
       log_error("This neg_process was built without the DINOv3 backbone of the parameter search (make "
-                      "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild); give --gain_g or --gain_b "
-                      "to convert without it\n");
+                "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild); %s to convert without it\n",
+                s.is_bundle && s.white_light
+                    ? "give --target, -E, --gain_g and --gain_b with --fit_curves off and --tone_stage off"
+                    : "give --gain_g or --gain_b");
       return 1;
     }
     s.dino_path = std::string("[built-in] ") + backbone->name;
@@ -1536,7 +1547,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         s.print_cont.set_curves_at(a, prof, gains);
       };
       PrintKnobResult pk;
-      if (!solve_print_knobs(print_at, s.print_a, base_g, base_b, o.brightness, o.tint, o.warmth, pk)) {
+      if (!solve_print_knobs(print_at, s.print_a, base_g, base_b, s.print_cont.a_lo(), s.print_cont.a_hi(),
+                             o.brightness, o.tint, o.warmth, pk)) {
         log_error("Failed to solve the knobs on the print\n");
         return false;
       }
@@ -1717,7 +1729,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           pc.set_curves_at(a, p, gains);
         };
         PrintKnobResult pk;
-        if (!solve_print_knobs(print_at, cr.a, res.params.g, res.params.b, o.brightness, o.tint, o.warmth, pk)) {
+        if (!solve_print_knobs(print_at, cr.a, res.params.g, res.params.b, pc.a_lo(), pc.a_hi(), o.brightness, o.tint,
+                               o.warmth, pk)) {
           log_error("Failed to solve the knobs on the print %s\n", prints.id.c_str());
           return false;
         }
@@ -1726,10 +1739,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ps.knob_base_a = ps.a;
         ps.knob_base_g = ps.g;
         ps.knob_base_b = ps.b;
+        ps.knob_given[0] = o.brightness;
+        ps.knob_given[1] = o.tint;
+        ps.knob_given[2] = o.warmth;
         for (int c = 0; c < 3; ++c) ps.knob_grey_lab[c] = pk.grey_lab[c];
         ps.a = pk.a;
         ps.g = pk.g;
         ps.b = pk.b;
+        // The bracket is the one nearest the moved A, as the search names the one nearest its own (the CLF is computed
+        // at A from the curve; the bracket only names it).
+        int nearest = 0;
+        for (size_t i = 0; i < pc.a_mid.size(); ++i)
+          if (std::fabs(pc.a_mid[i] - ps.a) < std::fabs(pc.a_mid[nearest] - ps.a)) nearest = (int)i;
+        ps.bracket = bundle.targets[nearest].name;
         log_info("Knobs on %s's CLF: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f; the grey L* %.3f a* %.3f b* %.3f%s\n",
                  prints.id.c_str(), ps.knob_base_a, ps.a, ps.knob_base_g, ps.g, ps.knob_base_b, ps.b, pk.grey_lab[0],
                  pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");

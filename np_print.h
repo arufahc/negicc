@@ -119,9 +119,10 @@ struct DensityRecord {
     double a0 = 0.0, wish_l = 0.0;      // the A its bootstrap started from; the mean L* of the lightness wish it held
     double above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // at the result, per channel (percent)
     // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
-    // search's, and the print's grey where the knobs put it
+    // search's, the knobs as given (brightness in stops, tint a*, warmth b*), and the print's grey where they put it
     bool knobs = false, knobs_limited = false;
     double knob_base_a = 0.0, knob_base_g = 1.0, knob_base_b = 1.0;
+    double knob_given[3] = {0, 0, 0};
     double knob_grey_lab[3] = {0, 0, 0};
   };
   std::map<std::string, PrintSearch> print_search;
@@ -267,6 +268,7 @@ struct FramePrint {
   double a0 = 0.0, wish_l = 0.0, above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // (PrintSearch)
   bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
   double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
+  double knob_given[3] = {0, 0, 0};            // brightness, tint, warmth as given
   double grey_density = 0.70;
 };
 // False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.

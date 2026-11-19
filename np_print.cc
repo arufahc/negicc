@@ -1201,6 +1201,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.knob_base_g = own->second.knob_base_g;
     p.knob_base_b = own->second.knob_base_b;
     for (int c = 0; c < 3; ++c) p.knob_grey_lab[c] = own->second.knob_grey_lab[c];
+    for (int c = 0; c < 3; ++c) p.knob_given[c] = own->second.knob_given[c];
   }
   const DensityBracket* bracket = nullptr;
   for (const DensityBracket& b : bundle.density_brackets) {
@@ -1487,6 +1488,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
         if (p.knobs) {
           one["knobs"] = {{"what", "--brightness, --tint and --warmth on this print: mid_grey_a and gains are the "
                                    "moved ones (A, g and b solved on the print's profile, E held), from the search's"},
+                          {"brightness", p.knob_given[0]}, {"tint", p.knob_given[1]}, {"warmth", p.knob_given[2]},
                           {"search", {{"a", p.knob_base_a}, {"g", p.knob_base_g}, {"b", p.knob_base_b}}},
                           {"grey_lab", {p.knob_grey_lab[0], p.knob_grey_lab[1], p.knob_grey_lab[2]}},
                           {"limited", p.knobs_limited}};
