@@ -314,7 +314,7 @@ struct ParamSearchResult {
 // A bracket's exposure range on a frame, as the bundle search's Step 1 meters it (bracket_enclosure): the scene's
 // green 0.5% and 99.5% points over the inner crop (crop_ratio), scaled by e_norm on white-light bundles, onto the
 // bracket's calibrated range. E is in the units of -E and of Auto's result (ParamSearchResult::params), so the default
-// exposure of given values and the centre of the single-bracket search are the ones Auto meters for that bracket.
+// exposure of given values is the one Auto meters for that bracket.
 struct BracketExposure {
   bool valid = false;       // the bracket has patch readings
   bool feasible = false;    // e_min <= e_max

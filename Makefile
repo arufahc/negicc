@@ -201,17 +201,17 @@ else ifeq ($(ORT_STATIC),0)
     endif
     # The prebuilt library is fetched (fetch.sh) before the link when it is not there yet.
     ifeq ($(abspath $(ORT_DIR)),$(abspath $(ORT_PREBUILT_DIR)))
-        ORT_DEPS = $(ORT_LIB_DIR)/libonnxruntime.so
-    else
-        ORT_DEPS =
+        ORT_FETCHED = $(ORT_LIB_DIR)/libonnxruntime.so
     endif
+    ORT_DEPS = $(ORT_FETCHED)
     ORT_LDFLAGS = -L$(ORT_LIB_DIR) -lonnxruntime $(ORT_RPATH)
 else
     $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
 
-ifneq ($(ORT_DEPS),)
-$(ORT_DEPS):
+# Only the prebuilt library is fetched; the static one has its own recipe below.
+ifneq ($(ORT_FETCHED),)
+$(ORT_FETCHED):
 	$(ORT_PREBUILT_DIR)/fetch.sh
 endif
 

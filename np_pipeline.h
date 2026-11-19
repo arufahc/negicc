@@ -298,8 +298,7 @@ struct Scan {
 
   // The highlight roll-off of every bundle conversion, measured on the half-size frame as the bracket search measures
   // it: Auto's result and given values in decode, while that frame exists (render frees the mosaic; LibRaw's
-  // half-size decode is analysed and gone); the single-bracket search in solve, at its final E, g, b, on
-  // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
+  // half-size decode is analysed and gone).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
   // The tone stage as convert applied it to the final image (Setup::tone_stage has the plan).
@@ -308,14 +307,10 @@ struct Scan {
   ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)
   ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
-  std::vector<uint16_t> rolloff_frame;
-  int rolloff_frame_w = 0, rolloff_frame_h = 0;
-  double rolloff_shutter_s = kDefaultScanShutterS, rolloff_iso = kDefaultScanIso;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
-  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs, the roll-off and the
-  // frame's copy for the single-bracket search (decode), and that search's roll-off and knobs (solve).
+  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs and the roll-off.
   double t_analysis_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
 

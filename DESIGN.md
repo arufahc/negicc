@@ -143,14 +143,16 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    detection runs on its raw data with `--roi auto` and with a given `--roi` alike; an RGB file and three captures go
    to item 3.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
-   pixels on the long side, with bare light and the black holder masked out. On TriLED bare light is what the
-   sensor clipped in all three channels (98 % of the white level, before the flat field), in parts that reach the
-   image border or are the size of a sprocket hole: light is brighter than the base in every channel, film near the
-   clip clips first in its brightest channel, and the base is nearly neutral in the camera's channels, so colour does
-   not tell thin film from light. On white light bare light is a part clipped in a channel (at the plateau of its
-   maxima) whose median blue is above the 99.5th percentile of the film's blue, with the bright unclipped light
-   connected to it, or a neutral part bluer than the orange film: film transmits no more blue than its base, so a
-   flat stretch of film that forms a plateau is not taken for light.
+   pixels on the long side, with bare light and the black holder masked out. On TriLED bare light is what the sensor
+   clipped in all three channels (98 % of the white level, before the flat field), in parts that reach the image
+   border or are the size of a sprocket hole: light is brighter than the base in every channel, film near the clip
+   clips first in its brightest channel, and the base is nearly neutral in the camera's channels, so colour does not
+   tell thin film from light. On white light bare light is a part clipped in a channel (at the plateau of its maxima)
+   whose median blue is above the 99.5th percentile of the film's blue, with the bright unclipped light connected to
+   it, or a neutral part bluer than the orange film: film transmits no more blue than its base, so a flat stretch of
+   film that forms a plateau is not taken for light. On TriLED, when the same percentile read before the flat field
+   is at 98 % of the white level in a channel, the film's thinnest part clipped and the base read from it is the
+   clip: neg_process warns, as for a clipped rebate.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
 The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):

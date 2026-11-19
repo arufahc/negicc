@@ -444,8 +444,11 @@ bool density_balance_offset(const DensityRecord& rec, double offset[3], double* 
 
 namespace {
 
+// The capture's time as the TIFF and DPX date fields write it; empty when the input records none, so that the file is
+// the same on every run (its replay included) and claims no time it does not know.
 std::string date_time(long long timestamp, char sep) {
-  time_t t = timestamp > 0 ? (time_t)timestamp : time(nullptr);
+  if (timestamp <= 0) return "";
+  time_t t = (time_t)timestamp;
   struct tm tm_buf;
   localtime_r(&t, &tm_buf);
   char buf[80];
@@ -501,7 +504,7 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
   const std::string date = date_time(info.timestamp, ' ');
   std::vector<TiffEntry> entries;
   std::vector<uint8_t> extra;
-  const int n_entries = 18 + (info.make.empty() ? 0 : 1) + (info.model.empty() ? 0 : 1);
+  const int n_entries = 17 + (date.empty() ? 0 : 1) + (info.make.empty() ? 0 : 1) + (info.model.empty() ? 0 : 1);
   const uint32_t ifd_offset = 8;
   const uint32_t extra_offset = ifd_offset + 2 + (uint32_t)n_entries * 12 + 4;
   auto add_extra = [&](const void* data, size_t n) {
@@ -554,7 +557,7 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
   entries.push_back({284, 3, 1, 1});                       // PlanarConfiguration: chunky
   entries.push_back({296, 3, 1, 2});                       // ResolutionUnit: inch
   ascii(305, info.software);                               // Software
-  ascii(306, date);                                        // DateTime
+  if (!date.empty()) ascii(306, date);                     // DateTime: the capture's, when the input records one
   if ((int)entries.size() != n_entries) {
     log_error("Internal error: the TIFF directory has %d entries, expected %d\n", (int)entries.size(), n_entries);
     return -1;
@@ -648,7 +651,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
     const size_t slash = path.find_last_of("/\\");
     put_str(p + 36, 100, slash == std::string::npos ? path : path.substr(slash + 1));
   }
-  put_str(p + 136, 24, date_time(info.timestamp, ':'));   // the capture's time, as the TIFF's DateTime
+  put_str(p + 136, 24, date_time(info.timestamp, ':'));   // the capture's time, as the TIFF's DateTime (none: blank)
   put_str(p + 160, 100, info.software);
   be32(p + 660, 0xffffffffu);      // not encrypted
   // Image information (640 bytes).

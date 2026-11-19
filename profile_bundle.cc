@@ -1008,7 +1008,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
@@ -1073,7 +1073,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
@@ -1084,25 +1084,6 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
     tgt.fill_ratio = (g_hi / g_lo) / (tgt.tgt_max_g / tgt.tgt_min_g);
     if (tgt.is_feasible) num_feasible++;
   }
-}
-
-void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt) {
-  cfg.prof = &tgt.film_prof.data;
-  if (tgt.e_center <= 0.0f || tgt.e_min <= 0.0f || tgt.e_max <= 0.0f) {
-    cfg.has_custom_bounds = false;
-    cfg.custom_e_center = 1.0f;
-    cfg.custom_e_bounds[0] = 0.354f;
-    cfg.custom_e_bounds[1] = 2.828f;
-    cfg.custom_e_bounds[2] = 1.0f;
-    return;
-  }
-  cfg.has_custom_bounds = true;
-  cfg.custom_e_center = tgt.e_center;
-  const float lo = std::min(tgt.e_min, tgt.e_max);
-  const float hi = std::max(tgt.e_min, tgt.e_max);
-  cfg.custom_e_bounds[0] = lo / cfg.custom_e_center;
-  cfg.custom_e_bounds[1] = hi / cfg.custom_e_center;
-  cfg.custom_e_bounds[2] = 1.0f;
 }
 
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx) {

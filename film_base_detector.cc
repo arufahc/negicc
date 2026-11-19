@@ -322,7 +322,8 @@ double clipped_share(const RgbView& sensor, const int box[4], float clip) {
 
 }  // namespace
 
-static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3]) {
+static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3],
+                                    bool* at_clip = nullptr) {
   int w = 0, h = 0;
   std::vector<float> v = downsample(half, w, h);
   const size_t n = (size_t)w * h;
@@ -487,6 +488,17 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
       if (film[i]) tmp.push_back(v[i * 3 + c]);
     out[c] = tmp.empty() ? 0.0f : percentile_f32(tmp, kBasePercentile);
   }
+  // Sensor units: whether the thinnest film, read on the same pixels before the flat field, is at the clip in a channel
+  // (more than 100 - kBasePercentile % of the film clipped there): a base read from it is the clip, not the base.
+  if (at_clip) {
+    *at_clip = false;
+    for (int c = 0; c < 3 && sv && white > 0.0f && !*at_clip; ++c) {
+      tmp.clear();
+      for (size_t i = 0; i < n; ++i)
+        if (film[i]) tmp.push_back(sv[i * 3 + c]);
+      *at_clip = !tmp.empty() && percentile_f32(tmp, kBasePercentile) >= clip;
+    }
+  }
 }
 
 void thinnest_film_base(const RgbView& half, float white, float out[3]) {
@@ -541,7 +553,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     }
   }
   const bool white_light = crosstalk == nullptr;
-  thinnest_film_base_impl(half, white_light, white, out.thinnest);
+  thinnest_film_base_impl(half, white_light, white, out.thinnest, &out.thinnest_clipped);
+  if (out.thinnest_clipped) add_reason(out.reason, "thinnest_clipped");
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
   // A patch the sensor clipped reads the clip, not the base (sensor units only: a white-light decode has no white).
   if (has_box && !white_light && white > 0.0f &&
