@@ -20,7 +20,9 @@
 //     next to the frame (an inter-frame gap or the rebate) and validates it (the spread of its green density). The
 //     base is the median per channel of the half-size decode over the inner part of that patch. The base is the
 //     thinnest film on the scan, so a patch the scan's thinnest film (2.) outshines by more than kRebateMargin stops in
-//     a channel is picture, not base, and is not taken.
+//     a channel is picture, not base, and is not taken. Nor is a patch the sensor clipped (more than
+//     kBaseClipFraction of its pixels at kSensorClip of the white level in a channel): clipped film reads the clip,
+//     not the base.
 //  2. statistics: else the thinnest film on the scan: the 99.5th percentile per channel of the film pixels of the
 //     half-size decode reduced to kBaseWorkSize pixels, with bare light and black holder masked out. On a decode in
 //     sensor units (TriLED) bare light is what the sensor clipped in all three channels: light is brighter than the
@@ -46,6 +48,7 @@ constexpr double kBasePatchInset = 0.15;  // fraction of the patch's box dropped
 constexpr int kBaseMinSamples = 32;       // pixels the inner box must hold
 constexpr float kSensorClip = 0.98f;      // a sample at or above this fraction of the white level (before the flat
                                           // field) is clipped
+constexpr double kBaseClipFraction = 0.001;  // a patch, tile or region with more clipped pixels is clipped
 constexpr double kRebateMargin = 0.5;     // stops: the thinnest film may exceed a base patch by at most this
 constexpr double kBasePercentile = 99.5;  // per-channel percentile of film pixels taken as the film base (the statistics'
                                           // step; also the print's floor on an estimated base, print_base_floor)
@@ -63,6 +66,7 @@ struct FilmBaseDetection {
   double rgb[3] = {0.0, 0.0, 0.0};    // the film base: decode_rgb through the crosstalk matrix
   double decode_rgb[3] = {0.0, 0.0, 0.0};  // in the half-size decode's units
   float thinnest[3] = {0.0f, 0.0f, 0.0f};  // the thinnest film (2.), in the decode's units
+  bool rebate_clipped = false;        // the frame detector's patch was refused because the sensor clipped it
   bool has_box = false;               // source rebate: the sampled patch in the half-size decode (x, y, w, h)
   int box[4] = {0, 0, 0, 0};
   // The frame detector's record (when it ran): its reason, its patch's green density spread, its frame confidence,

@@ -134,7 +134,8 @@ bool base_from_tiles(const negicc::RgbView& view, const negicc::RgbView& raw, in
   std::vector<const Tile*> lit;
   std::vector<float> spreads;
   for (const Tile& t : tiles) {
-    if (t.st.n && t.st.clipped <= kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 && t.st.med[2] > 0.0) {
+    if (t.st.n && t.st.clipped <= negicc::kBaseClipFraction && t.st.med[0] > 0.0 && t.st.med[1] > 0.0 &&
+        t.st.med[2] > 0.0) {
       lit.push_back(&t);
       spreads.push_back((float)t.st.spread);
     }
@@ -300,7 +301,7 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
       err = "the film base region of " + path + " holds no light";
       return false;
     }
-    if (st.clipped > kBaseClipFraction) {
+    if (st.clipped > negicc::kBaseClipFraction) {
       err = "the film base region of " + path + " is clipped (" + std::to_string(100.0 * st.clipped) +
             "% of its pixels): capture the film base at a shorter exposure";
       return false;

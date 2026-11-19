@@ -133,7 +133,10 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    the base's colour), taken through `X` and scaled by the scan's exposure over the capture's (shutter × ISO).
    `--film_base auto` (the default) reuses a capture recorded in the output's sidecar from the same inputs.
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
-   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop.
+   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop, and on TriLED
+   when the sensor clipped it (more than 0.1 % of its pixels at 98 % of the white level in a channel, read before the
+   flat field): clipped film reads the clip, not the base. neg_process then warns that the scan clips its film base
+   and suggests a capture (item 1) or a shorter scan.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
    pixels, with bare light and the black holder masked out. On TriLED bare light is what the sensor clipped in all
    three channels (98 % of the white level, before the flat field), in parts that reach the image border or are the

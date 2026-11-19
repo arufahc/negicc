@@ -317,6 +317,19 @@ RgbView without_flat(const RgbView& half) {
 // A sample of the decode before the flat field clipped in every channel (light, step 2.).
 bool clipped_all(const float* px, float clip) { return px[0] >= clip && px[1] >= clip && px[2] >= clip; }
 
+// The share of the box's samples (before the flat field) clipped in some channel (a rebate patch, step 1.).
+double clipped_share(const RgbView& sensor, const int box[4], float clip) {
+  long clipped = 0;
+  uint16_t px[3];
+  for (int y = box[1]; y < box[1] + box[3]; ++y) {
+    for (int x = box[0]; x < box[0] + box[2]; ++x) {
+      sensor.sample(x, y, px);
+      clipped += (px[0] >= clip || px[1] >= clip || px[2] >= clip) ? 1 : 0;
+    }
+  }
+  return (double)clipped / std::max(1.0, (double)box[2] * box[3]);
+}
+
 }  // namespace
 
 static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3]) {
@@ -586,6 +599,13 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
   const bool white_light = crosstalk == nullptr;
   thinnest_film_base_impl(half, white_light, white, out.thinnest);
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
+  // A patch the sensor clipped reads the clip, not the base (sensor units only: a white-light decode has no white).
+  if (has_box && !white_light && white > 0.0f &&
+      clipped_share(without_flat(half), box, kSensorClip * white) > kBaseClipFraction) {
+    has_box = false;
+    out.rebate_clipped = true;
+    out.reason += ",rebate_clipped";
+  }
   if (has_box) {
     std::vector<uint16_t> ch[3];
     for (auto& c : ch) c.reserve((size_t)box[2] * box[3]);
