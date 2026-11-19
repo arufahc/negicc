@@ -25,7 +25,8 @@ make dinov3_model && make -j$(nproc) neg_process                    # add USE_CU
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
 ([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT. ONNX Runtime is
 linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the first time (needs `curl` and `python3`;
-[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)).
+[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)), unless an ONNX Runtime in the
+same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
 
 ## Use
 
@@ -229,9 +230,7 @@ bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kod
 
 Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
 were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic. They were rendered at commit
-`e7e2fad` (2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from
-the profile to sRGB have changed since, so the current build may render them differently.
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
@@ -313,11 +312,11 @@ scene conversion's lightness with `--brightness` (the offset in stops is in each
 | `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White light: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
-| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs. |
+| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
 | `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED, nor to a print). Eight or ten numbers replay the curves recorded in a sidecar. |
 | `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
-| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries `--film_format` only when the run was not given it (`--roi auto`'s 35mm); a given one is the caller's to pass again, with the other set-up options. |
+| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
 | `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |
 | `-q`, `--quality` | Demosaic: −1 automatic, or a LibRaw quality (4 is DCB). |
 | `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's). |
@@ -325,7 +324,7 @@ scene conversion's lightness with `--brightness` (the offset in stops is in each
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. |
-| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the curve fit and the tone plan through a pass-through renderer; the picture must equal a plain conversion's), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
+| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a pass-through renderer; the picture must equal a plain conversion's, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with
 

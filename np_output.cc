@@ -718,6 +718,9 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
+    // The search's model and iterations, as on a print: the recorded balance and each print's search depend on them.
+    if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
+    if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
     if (!sc.density_prints.empty()) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
@@ -725,8 +728,9 @@ bool write_json_sidecar(const Sidecar& sc) {
       if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
     }
   }
-  // The format the film base's frame detection looked for when the run was not given one (--roi auto's default,
-  // 35mm): an explicit --roi without it looks for every format, which may place the base's patch elsewhere.
+  // The format the film base's frame detection looked for, given or --roi auto's default (35mm): an explicit --roi
+  // without it looks for every format, which may place the base's patch elsewhere. None when the base's detection
+  // looked for every format (the CFA path's, which runs again for the base), as its replay does.
   if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 

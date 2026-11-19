@@ -347,8 +347,8 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     iso = raw->imgdata.other.iso_speed > 0 ? std::round((double)raw->imgdata.other.iso_speed) : 0.0;
   }
   if (!(shutter > 0.0) || !(iso > 0.0)) {
-    if (!(shutter > 0.0)) shutter = 0.125;
-    if (!(iso > 0.0)) iso = 100.0;
+    if (!(shutter > 0.0)) shutter = kDefaultScanShutterS;
+    if (!(iso > 0.0)) iso = kDefaultScanIso;
     log_warn("the film base capture %s records no exposure; taking %.4g s at ISO %.0f to scale it to the scan's\n",
              path.c_str(), shutter, iso);
   }

@@ -98,14 +98,14 @@ Rec.2020 already and are not converted. A TIFF with `--light_source tri` is take
 embedded profile or 8-bit samples is refused there.
 
 Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
-(`np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
+or a single ICC profile (`-p`; `np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
 third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
 the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit linear camera RGB with
 no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single TIFF is under an
 RGB-LED profile set). When all three captures record shutter and
 ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
-half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame, it is the mean of each 2×2 block
-of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
+half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame (a given one, or `--roi auto`'s
+when its detection is confident), it is the mean of each 2×2 block of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
 `-g` or `-b` give one.
 
 ## 2.2 Flat field
@@ -136,7 +136,9 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop, and on TriLED
    when the sensor clipped it (more than 0.1 % of its pixels at 98 % of the white level in a channel, read before the
    flat field): clipped film reads the clip, not the base. neg_process then warns that the scan clips its film base
-   and suggests a capture (item 1) or a shorter scan.
+   and suggests a capture (item 1) or a shorter scan. The patch is used on a single RAW or linear DNG, whose
+   detection runs on its raw data with `--roi auto` and with a given `--roi` alike; an RGB file and three captures go
+   to item 3.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
    pixels, with bare light and the black holder masked out. On TriLED bare light is what the sensor clipped in all
    three channels (98 % of the white level, before the flat field), in parts that reach the image border or are the
@@ -305,17 +307,24 @@ so that they read the content and not the render's own cast or levels.
 
 ## 4.1 The per-pixel conversion
 
-Every output pixel goes through these stages once (`color_pipeline.h`: `convert_pixel`):
+With `-P srgb` or `-P srgb-g10`, every output pixel goes through these stages once (`color_pipeline.h`:
+`convert_pixel`):
 
 ```
 x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
 y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
 XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
 rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
-rgb'  = shoulder(rgb), clamped to [0, 1]                                  sRGB output only
-rgb'' = tone(rgb')                                                        sRGB output, after a search only
+rgb'  = shoulder(rgb), clamped to [0, 1]                                  shoulder: -P srgb, not a print; clamp: both
+rgb'' = tone(rgb')                                                        -P srgb, with a tone curve (below)
 out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
 ```
+
+The tone curve is the tone stage's after a search, or a recorded one (`--tone_stage curve:…`, or a previous run's
+on a knob run). With `-P <ICC profile>` a pixel takes the first three stages (`convert_pixel_pcs`) and then goes from
+XYZ to the profile through Little-CMS, perceptual intent: no `C⁻¹`, shoulder or tone. Without `-P` the output is the
+corrected camera RGB, the first stage alone (the matrix and the knee, `convert_pixel_corrected`), with the bracket's
+ICC profile embedded.
 
 **The highlight shoulder** compresses what the profile's headroom holds above the chart's white instead of
 clipping it. Per channel, in stops `t = log2(x)`, it is the identity up to a knee `t_k`, then
@@ -733,7 +742,8 @@ and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `conv
 the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per channel
 the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and at white
 (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the last step's
-move (`last_move`).
+move (`last_move`). The shares describe the print at the search's result: the knobs move `a`, `g` and `b` and leave
+them as the search measured them, and a density output's `search` records the same.
 
 ## 5.7 The print's white
 
