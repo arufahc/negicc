@@ -57,6 +57,9 @@
 #include "tone_stage.h"
 
 // Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
+// The scan's exposure where its file records none (Scan::scan_exposure): 1/8 s at ISO 100.
+constexpr double kDefaultScanShutterS = 0.125, kDefaultScanIso = 100.0;
+
 struct CachedSidecar {
   bool is_auto = false;                  // true: cached from "auto"; false: cached from "dino"
   int target_idx = -1;
@@ -310,7 +313,7 @@ struct Scan {
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   std::vector<uint16_t> rolloff_frame;
   int rolloff_frame_w = 0, rolloff_frame_h = 0;
-  double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;
+  double rolloff_shutter_s = kDefaultScanShutterS, rolloff_iso = kDefaultScanIso;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;

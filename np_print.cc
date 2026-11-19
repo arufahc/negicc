@@ -1592,7 +1592,6 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
 
 constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
-constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
 
 }  // namespace
 
@@ -1926,7 +1925,6 @@ void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const doub
   prof.rebind_pointers();
 }
 
-double PrintContinuum::green_apd(double dl) const { return on_grid(g.apd[1], g.start, g.step, dl); }
 double PrintContinuum::a_lo() const { return *std::min_element(g.apd[1].begin(), g.apd[1].end()); }
 double PrintContinuum::a_hi() const { return *std::max_element(g.apd[1].begin(), g.apd[1].end()); }
 

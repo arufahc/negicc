@@ -54,10 +54,10 @@ void Scan::scan_exposure(const LibRaw& r, double& shutter_out, double& iso_out) 
   const bool have_iso = (has_exif_exp && exif_iso_d > 0.0) || r.imgdata.other.iso_speed > 0;
   shutter_out = (has_exif_exp && exif_shutter_d > 0.0)
                     ? exif_shutter_d
-                    : (r.imgdata.other.shutter > 0 ? (double)r.imgdata.other.shutter : 0.125);
+                    : (r.imgdata.other.shutter > 0 ? (double)r.imgdata.other.shutter : kDefaultScanShutterS);
   iso_out = (has_exif_exp && exif_iso_d > 0.0)
                 ? std::round(exif_iso_d)
-                : (r.imgdata.other.iso_speed > 0 ? std::round((double)r.imgdata.other.iso_speed) : 100.0);
+                : (r.imgdata.other.iso_speed > 0 ? std::round((double)r.imgdata.other.iso_speed) : kDefaultScanIso);
   if ((!have_shutter || !have_iso) && !warned_default_exposure) {
     warned_default_exposure = true;
     log_warn("Missing EXIF exposure metadata in %s; falling back to %.4g s, ISO %.0f\n",
@@ -686,7 +686,6 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 // an sRGB channel above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute.
 // paper_xyz gets the base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
-  constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
   const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale
   size_t best = 0;
   for (size_t i = 1; i < p.clut.size(); i += 3)
@@ -903,8 +902,6 @@ int prepare(const Options& o, Setup& s) {
         s.print_cp.trc_at = [pc](double a, const double gains[3], std::vector<float> trc[3]) {
           pc->trc_at(a, gains, trc);
         };
-        s.print_cp.green_apd = [pc](double dl) { return pc->green_apd(dl); };
-        s.print_cp.n0 = pc->n0;
         s.print_cp.a_lo = pc->a_lo();
         s.print_cp.a_hi = pc->a_hi();
         s.print_cp.a_mid = pc->a_mid;
@@ -1680,8 +1677,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const PrintContinuum& pc = prints.continuum;
       ContinuousPrint cp;
       cp.trc_at = [&pc](double a, const double gains[3], std::vector<float> trc[3]) { pc.trc_at(a, gains, trc); };
-      cp.green_apd = [&pc](double dl) { return pc.green_apd(dl); };
-      cp.n0 = pc.n0;
       cp.a_lo = pc.a_lo();
       cp.a_hi = pc.a_hi();
       cp.a_mid = pc.a_mid;
@@ -2053,7 +2048,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   HalfSizeAnalysis analyse;
   if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
-      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(raw, scan_shutter_s, scan_iso);
       // An RGB file or three captures with --roi auto: the detection ran on the whole image before this analysis,
       // which sees the whole image too, so the frame is placed from it here (the RAW path's find_frame does so before
@@ -2408,7 +2403,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         scan.rot_cw, scan.hflip, scan.vflip);
     oriented_half_view = search_half_view;
     {
-      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h, scan_shutter_s,
                        scan_iso);
@@ -2419,7 +2414,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       restore_cached_auto();
     } else if (s.bundle_search) {
       const double t_auto_0 = omp_get_wtime();
-      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
       if (o.check_renderer) opts.renderer = &pass_through_renderer();
@@ -2447,7 +2442,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
     }
     if (s.is_bundle) {
-      double scan_shutter_s = 0.125, scan_iso = 100.0;
+      double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       const double t_analysis_0 = omp_get_wtime();  // timings_ms.analysis, as on the LibRaw path
       if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
@@ -2621,7 +2616,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   float station_base[9];
   double row_scale[3] = {1.0, 1.0, 1.0};
   if (s.is_bundle) {
-    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
     compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(), scan.film_base_rgb() != nullptr,
                                   station_base, nullptr, row_scale);
@@ -2882,7 +2877,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
     // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
-    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
     if (scan.has_knob_res) {
       apply_station(scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
@@ -2919,27 +2914,23 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     c.embedded_icc = bundle.targets[c.bundle_target_idx].icc_bytes;
   }
   // A print: the conversion renders the print profile at the print's mid grey A (its search's or a reused run's).
-  // Given values do not apply with --print (parse_options), so every print has an A; without one the print profile
-  // would stay as built for the chosen bracket.
+  // Given values do not apply with --print (parse_options), so every print has its search's A, g and b.
   if (s.is_bundle && c.bundle_target_idx >= 0 && !s.print_profs.empty()) {
     c.film_prof = s.print_profs[c.bundle_target_idx];
     c.film_prof.rebind_pointers();
     c.embedded_icc = s.print_iccs[c.bundle_target_idx];
-    if (std::isfinite(s.print_a)) {   // the print at its mid grey A (the print's search or a reused run's)
-      if (c.station_params) {
-        // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(x) g_c / n0)), and the matrix
-        // at E alone, so that film at the base's density never passes the knee whatever the gains: with them in the
-        // matrix a gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF
-        // applies them the same way.
-        const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
-        negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
-        s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
-        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));
-      } else {
-        s.print_cont.set_curves_at(s.print_a, c.film_prof);
-        set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a));
-      }
+    if (!std::isfinite(s.print_a) || !c.station_params) {
+      log_error("Internal error: a print without its search's A, g and b\n");
+      return 1;
     }
+    // The print's g and b in its input curves, after the knee (dL_c = -log10(unknee(x) g_c / n0)), and the matrix at E
+    // alone, so that film at the base's density never passes the knee whatever the gains: with them in the matrix a
+    // gain of 1.2 put the base past the knee (DESIGN.md, "The print's exposure and its curves"). The CLF applies them
+    // the same way.
+    const double gains[3] = {1.0, (double)(*c.station_params)[1], (double)(*c.station_params)[2]};
+    negicc::candidate_matrix(station_base, (*c.station_params)[0], 1.0f, 1.0f, c.merged_matrix);
+    s.print_cont.set_curves_at(s.print_a, c.film_prof, gains);
+    set_print_icc_curves(c.embedded_icc, s.print_cont.curves_at(s.print_a, gains));
   }
   // A print keeps no highlight shoulder: the paper's own shoulder rolls the highlights off to its white.
   if (s.is_bundle && c.bundle_target_idx >= 0 && c.station_params && s.print_id.empty()) {
@@ -2974,7 +2965,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // measure's matrix. No knee, no film profile.
     out.encoding = ENCODE_DENSITY;
     const double t_start = omp_get_wtime();
-    double scan_shutter_s = 0.125, scan_iso = 100.0;
+    double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*scan.proc, scan_shutter_s, scan_iso);
     DensityOutput& d = c.density;
     compute_station_merged_matrix(s.bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(),
