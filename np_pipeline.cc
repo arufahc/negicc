@@ -1066,10 +1066,9 @@ int prepare(const Options& o, Setup& s) {
     }
   }
   if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
-    log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
-                    "--film_profile) without --gain_g or --gain_b (on a white-light bundle they may be given, unless "
-                    "--target, -E and both gains are given with --fit_curves off and --tone_stage off, or recorded "
-                    "values)\n");
+    log_error("--dino requires the parameter search: a profile bundle, unless --target, -E and both gains are given "
+              "with neither the curve fit nor the tone stage running, or recorded values; or an ICC profile without "
+              "--gain_g or --gain_b\n");
     return 1;
   }
   if (fit_on && !fit_encoding_ok) {
@@ -1173,8 +1172,8 @@ int prepare(const Options& o, Setup& s) {
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
-      // A white-light bundle holds given gains in its search (pinned_search), so they alone do not turn it off. A
-      // print and a density output are made by the search and take no given values: they need the backbone.
+      // A bundle holds given gains in its search (pinned_search), so they alone do not turn it off. A print and a
+      // density output are made by the search and take no given values: they need the backbone.
       log_error("This neg_process was built without the DINOv3 backbone of the parameter search (make "
                 "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild)%s\n",
                 !s.print_id.empty() || s.density
@@ -1182,6 +1181,8 @@ int prepare(const Options& o, Setup& s) {
                 : s.is_bundle && s.white_light
                     ? "; give --target, -E, --gain_g and --gain_b with --fit_curves off and --tone_stage off to "
                       "convert without it"
+                : s.is_bundle
+                    ? "; give --target, -E, --gain_g and --gain_b with --tone_stage off to convert without it"
                     : "; give --gain_g or --gain_b to convert without it");
       return 1;
     }

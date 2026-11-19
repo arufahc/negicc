@@ -385,7 +385,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture output the "
           "print's search writes the file instead (its mid grey A at each --probe_stops offset; --probe_params does "
           "not apply) and the conversion goes on. Needs the bundle search to run: refused where it does not (a single "
-          "ICC profile, given gains on TriLED), and a previous run's <output>.json is not reused with it.")
+          "ICC profile with given gains; a bundle with all of --target, -E and the gains given and neither the curve fit nor "
+          "the tone stage running; recorded values), and a previous run's <output>.json is not reused with it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
     .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
