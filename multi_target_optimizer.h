@@ -120,8 +120,8 @@ const char* to_string(ClipFallbackOutcome outcome);
 // The passes over the frame the bundle search renders: the preview of the inner crop and the clip statistics (the
 // roll-off's 99.5 % point, white-clip shares). The defaults are negicc::cpu_render and negicc::cpu_highlight_clip; a
 // caller that renders the same pipeline elsewhere (the station's GPU) overrides them. search_conversion_params,
-// run_white_light_fit (the curve fit, its roll-off and its tone plan), plan_auto_tone_stage and reanchor_input_curves
-// send every pass of theirs through it; the passes are serial, called from the caller's thread one at a time.
+// search_print_continuous, run_white_light_fit (the curve fit, its roll-off and its tone plan), plan_auto_tone_stage
+// and reanchor_input_curves send every pass of theirs through it; the passes are serial, called from the caller's thread one at a time.
 //
 // What stays and what changes between calls:
 // - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same
@@ -143,8 +143,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 // WhiteLightFitResult, ToneStagePlan) are then partly filled, and a caller must not read them.
 //
 // neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
-// pass that runs outside it (PassAudit), on any thread; its picture must equal the conversion without it, bit for bit.
-// Run it, and compare its picture with a plain conversion's, on a TriLED scan and on a white-light scan with -P srgb
+// pass that runs outside it (PassAudit), on any thread, and fails when a pass ran outside it or none ran at all; its
+// picture must equal the conversion without it, bit for bit, which nothing checks for it. Run it, and compare its
+// picture with a plain conversion's (cmp), on a TriLED scan and on a white-light scan with -P srgb
 // (the curve fit and the tone plan), before a change to the search, the curve fit, the tone plan or this interface is
 // merged.
 struct PreviewRenderer {

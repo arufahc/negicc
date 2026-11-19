@@ -3383,6 +3383,11 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       log_error("Renderer check: %ld passes of the search ran outside the renderer\n", pa.outside);
       return 1;
     }
+    if (pa.binds + pa.renders + pa.clips == 0) {
+      log_error("Renderer check: no pass of the search ran, so nothing was checked (given values, or a previous "
+                "run's <output>.json reused)\n");
+      return 1;
+    }
   }
   return 0;
 }
