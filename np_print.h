@@ -24,9 +24,10 @@
 //
 // M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
 // offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
-// density in a DPX is a Cineon file. Academy Printing Density is written as ADX (SMPTE ST 2065-3): the same offsets
-// and scales with the standard's channel factors on the density, code = offset + scale * k * D with k = 1.00, 0.92,
-// 0.95 for R, G, B. Status M and RP 180 take no factors (k = 1).
+// density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these offsets
+// and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors on the
+// density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
+// Status M and RP 180 take no factors (k = 1).
 //
 // Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the
 // encoding, the film base, the matrix applied and the light's record with its spectrum. A TIFF has it in its
@@ -178,7 +179,8 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 
 struct PrintMaterial {
   std::string id, name, viewing_illuminant;
-  double grey_density = 0.70;                 // the printing density exposed as the print's mid grey
+  // The printing density exposed as the print's mid grey: a stated value (DESIGN.md), which cancels inside the CLF.
+  double grey_density = 0.70;
   // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
   // Academy Printing Density), for the film model named (the bundle's the material was loaded for).
   struct ToPrint {
@@ -344,8 +346,10 @@ constexpr const char* kPrintIccCopyright =
     "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
     "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
-constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 (PCS XYZ) holds
+// The largest XYZ a lut16 (PCS XYZ) holds: code FFFFh as a u1Fixed15Number (ICC.1:2022 4.8 and 6.3.4.2 Table 11).
+constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
 constexpr int kPrintIccCube = 45;
+// Paper_c's grid: -1.5 to 1.8 in steps of 0.005, 661 points.
 constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
 constexpr int kPaperAlphaPoints = 661;
 using PrintCurves = std::array<std::vector<double>, 3>;

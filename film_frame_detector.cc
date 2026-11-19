@@ -77,7 +77,7 @@
 
 namespace {
 
-constexpr float kPi = 3.14159265358979f;
+constexpr float kPi = 3.14159265358979f;   // pi in single precision
 
 // Stops below the film base still counted as base (classify), and the spread a line of film base may have.
 constexpr float kBaseMargin = 0.30f;
@@ -88,6 +88,9 @@ enum PixelClass : uint8_t { CL_INVALID = 0, CL_IMAGE = 1, CL_BASE = 2, CL_LIGHT 
 // Film format geometry in mm. along: the frame's length along the strip; across: its height across the strip;
 // film_width: the strip; gap_*: the gap between frames; len_tol: tolerated deviation of a measured frame length
 // from along before the nominal length is used; sprockets: perforated (35mm).
+// 135 film is specified in ISO 1007 and 120 film in ISO 732. The values are nominal: a 35 mm strip with a 36 x 24 mm
+// frame, and a 61.5 mm strip whose frames are 56 mm across and 41.5, 56, 69.5 or 84 mm along; a camera's gate can
+// differ from them.
 struct FormatGeom {
   float along, across, film_width, gap_nominal, gap_min, gap_max, len_tol;
   bool sprockets;
@@ -104,7 +107,8 @@ FormatGeom format_geom(FilmFormat f) {
   }
 }
 
-// 35mm perforation (KS): width along the strip, height across, pitch (mm).
+// 35mm perforation (KS, Kodak Standard; SMPTE 139): width along the strip, height across and pitch in mm. They are
+// 1.981 x 2.794 on a 4.75 pitch, given to two decimals.
 constexpr float kHoleW = 1.98f, kHoleH = 2.79f, kHolePitch = 4.75f;
 
 // p-th quantile (0..1). Takes a copy, partially sorted.
@@ -300,6 +304,8 @@ float estimate_rotation(const WorkImage& wi, float max_deg, float* confidence) {
   const int W = wi.w, H = wi.h;
   Plane L;
   L.init(W, H);
+  // Luminance here is the plain mean of R, G and B; the gradients are the 3 x 3 Sobel operator (Sobel and Feldman,
+  // 1968) scaled by 1/8, so a ramp of one stop per pixel reads 1.
   for (size_t i = 0; i < L.d.size(); ++i)
     L.d[i] = std::log2(std::max((wi.r.d[i] + wi.g.d[i] + wi.b.d[i]) * (1.0f / 3.0f), 1e-5f));
   struct Pt { float x, y, w; };
@@ -708,7 +714,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     const float m = std::min({cv.r.d[i] / refc[0], cv.g.d[i] / refc[1], cv.b.d[i] / refc[2]});
     mall[i] = std::log2(std::max(m, 1e-6f));
   }
-  // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel.
+  // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel (the 3 x 3 operator scaled by 1/8).
   // Floor at black_frac * ref when computing gradients so zero-clipped sensor noise in black borders does not create
   // multi-stop log2 spikes against adjacent near-black pixels.
   std::vector<float> grad(N, 0.0f);
@@ -2055,6 +2061,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     if (mags.size() >= 16) {
       const float med = percentile(mags, 0.5);
       for (float& m : mags) m = std::fabs(m - med);
+      // 1.4826 = 1 / Phi^-1(3/4): the MAD's factor to a normal standard deviation (Rousseeuw and Croux, 1993).
       const float thr = med + 8.0f * 1.4826f * std::max(percentile(mags, 0.5), 1e-4f);
       std::vector<int> edges;
       for (int x = 1; x + 1 < VW; ++x) {
@@ -2231,7 +2238,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
                 (int)std::lround(0.4f * across_px) + 3, ps0, ps1, pe0, pe1);
     if (pe0 && pe1 && across_px > 0.0f) {
       const float ratio = (ps1 - ps0) / across_px, expected = fg.film_width / fg.across;
-      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;
+      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;   // the other format's (format_geom)
       format_mismatch = (ratio / expected < 0.92f || ratio / expected > 1.08f) &&
                         std::fabs(std::log(ratio / other)) < std::fabs(std::log(ratio / expected));
     }

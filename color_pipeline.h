@@ -107,7 +107,8 @@ constexpr float kShoulderExponent = 2.0f;
 constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 
-// ICC PCS encoding scale applied after the output TRCs (1 + 32767/32768).
+// ICC PCS encoding scale applied after the output TRCs: 1 + 32767/32768, the PCS XYZ value of code FFFFh, the largest
+// u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ.
 constexpr float kPcsScale = 1.99996948f;
 
 NEGICC_HD float clamp01(float v) {
@@ -229,7 +230,8 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 }
 
 // ---- Stage: PCS (XYZ D50) -> linear sRGB -------------------------------------------------------------------
-// The PCS white: the ICC's D50 as an ICC profile stores it, in s15.16, (63190, 65536, 54061) / 65536. The colorants of
+// The PCS white: the ICC's D50 as an ICC profile stores it, in s15.16, (63190, 65536, 54061) / 65536: the PCS
+// illuminant (ICC.1:2022 7.2.16, which gives it to four decimals) as an s15Fixed16Number (4.6). The colorants of
 // the profile the sRGB outputs embed sum to exactly this, so it is the white the outputs write at full scale (a print's
 // paper is scaled to it). The decimal (0.9642, 1, 0.8249) differs from it in the sixth decimal.
 constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
@@ -261,6 +263,7 @@ NEGICC_HD Rgb pcs_to_linear_srgb_pre_shoulder(Rgb v) {
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
+// The sRGB transfer curve of IEC 61966-2-1 (0.41666667 is 1 / 2.4); srgb_decode is its inverse.
 NEGICC_HD float srgb_encode(float l) {
     return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
 }
@@ -325,7 +328,9 @@ constexpr double kLabEpsilon = 216.0 / 24389.0;
 constexpr double kLabKappa = 24389.0 / 27.0;
 
 // ---- Stage: tone (sRGB export only) ------------------------------------------------------------------
-// The derivative of CIE Lab's f (the cube root above the linear segment).
+// The derivative of CIE Lab's f (the cube root above the linear segment). The constants are CIE 1976 L*a*b*'s exact
+// ones (CIE 15; ICC.1:2022 Annex A, equations A.7 to A.12): the break (6/29)^3 = 216/24389 and the linear segment's
+// slope 841/108 = 24389 / 27 / 116.
 NEGICC_HD float tone_lab_fprime(float t) {
     return t > (float)kLabEpsilon ? (1.0f / 3.0f) / cbrtf(t * t) : (float)kLabKappa / 116.0f;
 }
@@ -345,7 +350,8 @@ NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
 // The tone curve on one display linear sRGB pixel v: its luminance Y moves to Y' on the white point's neutral, and its
 // colour difference from that neutral, v - Y (white 1, 1, 1), is added back scaled by f'(Y) / f'(Y') (at most 8), which
 // holds its a* and b* to first order: out = Y' + (v - Y) f'(Y) / f'(Y'). No Lab conversion of the pixel.
-// Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion.
+// Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion: the Y row
+// of OpenCV's cvtColor RGB -> XYZ matrix, the row linear_srgb_to_lab and the tone stage's descriptors read.
 NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
     const float y0 = 0.212671f * v.r + 0.715160f * v.g + 0.072169f * v.b;   // as tone_stage.cc's planner reads Y
     const float y1 = tone_table_Y(tt, y0);
@@ -367,6 +373,9 @@ NEGICC_HD uint8_t quantize_u8(float v) { return (uint8_t)roundf(v * 255.0f); }
 NEGICC_HD uint16_t quantize_u16(float v) { return (uint16_t)roundf(v * 65535.0f); }
 
 // ---- Scoring: sRGB -> CIELAB (D65) -------------------------------------------------------------------------
+// The matrix and the white (0.950456, 1, 1.088754: the matrix's row sums) are those of OpenCV's cvtColor RGB -> Lab
+// (its imgproc colour conversions documentation). The break and slope are CIE 15's exact kLabEpsilon and kLabKappa,
+// where OpenCV rounds them to 0.008856, 7.787 (kLabKappa / 116) and 903.3.
 struct Lab {
     float L, a, b;
 };
@@ -410,7 +419,7 @@ NEGICC_HD bool channel_black_clipped(float v) { return v * 65535.0f < 200.5f; }
 NEGICC_HD bool linear_channel_white_clipped(float l) { return l >= 0.9953029f; }
 NEGICC_HD bool linear_channel_black_clipped(float l) { return l < 0.00023679829f; }
 
-// L* histograms: kLabBins bins over [0, 100].
+// L* histograms: kLabBins bins over [0, 100], each 0.1 L* wide.
 constexpr int kLabBins = 1000;
 NEGICC_HD int lab_bin(float L) {
     int k = (int)(L * (kLabBins / 100.0f));
@@ -438,7 +447,8 @@ NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
 }
 
 // The DINOv3 input size of a w x h image: its longer side scaled to max_size, both sides rounded to whole
-// patch_size patches (grid_w x grid_h of them).
+// patch_size patches (grid_w x grid_h of them). The defaults are the backbone's image_size and patch_size
+// (models/dinov3-small/backbone.json).
 struct AspectPreservedShape {
     int target_w = 16, target_h = 16;
     int grid_w = 1, grid_h = 1;
@@ -458,7 +468,8 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     return {gw * p, gh * p, gw, gh};
 }
 
-// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi).
+// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi): bins 1/2048
+// wide, over a range above the pre-shoulder values (up to about 1.33 on the grey axis).
 constexpr int kMaxHistBins = 4096;
 constexpr float kMaxHistRange = 2.0f;
 NEGICC_HD int max_hist_bin(float v) {
@@ -490,6 +501,7 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
     const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
     const double ln2 = std::log(2.0);
+    // srgb_encode and srgb_decode (IEC 61966-2-1) in double precision.
     auto enc = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
     auto dec = [](double s) { return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4); };
     auto slope = [&](double t) { return (1.055 / 2.4) * std::pow(std::exp2(t), 1.0 / 2.4) * ln2; };
@@ -531,7 +543,7 @@ inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
         set_shoulder(c, x_hi, n);
         return srgb_encode(apply_shoulder_channel(c, q));
     };
-    float lo = 1.0002f, hi = kShoulderXHiLimit;
+    float lo = 1.0002f, hi = kShoulderXHiLimit;   // lo: just above kShoulderOff, so set_shoulder turns the shoulder on
     if (code_at_q(hi) > anchor) return hi;
     if (!(code_at_q(lo) > anchor)) return lo;
     for (int i = 0; i < 60; ++i) {

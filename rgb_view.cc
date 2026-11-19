@@ -62,7 +62,8 @@ inline float get_px_refl_cpu(const uint16_t* bayer, int r, int c, int h, int w, 
 }
 
 // Green at photosite (r, c) of an RGGB mosaic: the sample itself on a green site; elsewhere the vertical and the
-// horizontal Hamilton-Adams estimates (neighbour mean plus a quarter of the centre channel's Laplacian), blended
+// horizontal Hamilton-Adams estimates (J. F. Hamilton and J. E. Adams, US patent 5,629,734, 1997: neighbour mean plus
+// a quarter of the centre channel's Laplacian, steered by the green gradient plus that Laplacian), blended
 // with weights 1 / (eps + gradient^2) instead of picking one. A large eps keeps grain-sized gradients from steering
 // the blend; only real edges do.
 inline float reconstruct_green_soft_cpu(const uint16_t* m, int r, int c, int h, int w, size_t pitch,
@@ -105,6 +106,7 @@ const RawStatTables& raw_stat_tables() {
         for (int v = 0; v < 65536; ++v) {
             const double dv = std::max((double)v, 1.0);
             t.log_lut[v] = std::log(dv);
+            // Stops below 16384 (2^14), in 160 bins of 1/16 stop over [-10, 0), the ends clamped.
             const double ev = std::log2(dv / 16384.0);
             const int bin = (int)((ev + 10.0) * 16.0);
             t.ev_bin[v] = (uint8_t)std::clamp(bin, 0, 159);
@@ -113,6 +115,8 @@ const RawStatTables& raw_stat_tables() {
     return t;
 }
 
+// The q-quantile of a 16-bit histogram, interpolated linearly between ranks floor and ceil of q (n - 1): Hyndman and
+// Fan's (1996) definition 7, numpy's default method "linear".
 double u16_percentile_linear(const uint64_t hist[65536], uint64_t total, double q) {
     if (total == 0) return 0.0;
     const double pos = q * (double)(total - 1);
@@ -159,6 +163,8 @@ RgbView RgbView::from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor
     RgbView v;
     v.flat = flat_args;
     v.flat_tables = std::move(flat_pin);
+    // LibRaw's idata.filters: 9 is Fujifilm X-Trans (a 6x6 pattern, xtrans_col36), 0 no CFA and 1 Leaf's 16x16
+    // pattern (neither read here); a Bayer mosaic is a 2x2 bitmask (above 1000, bayer_color_at).
     const int period = (filters == 9) ? 6 : 2;
     if (filters == 0 || filters == 1) return v;
     if (!cfa || sensor_w < period || sensor_h < period) return v;

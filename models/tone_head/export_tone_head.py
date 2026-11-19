@@ -75,6 +75,7 @@ def main():
             o_ += k
         XM, XS, W1, B1, W2, B2, W3, B3, YM, YS = parts
         from math import erf, sqrt
+        # Exact GELU (Hendrycks and Gimpel, 2016), torch.nn.GELU's default.
         gelu = np.vectorize(lambda t: 0.5 * t * (1.0 + erf(t / sqrt(2.0))))
         h = gelu(((x - XM) / XS) @ W1.reshape(a1, d).T + B1)
         h = gelu(h @ W2.reshape(a2, a1).T + B2)

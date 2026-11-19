@@ -690,12 +690,13 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
   return ok;
 }
 
-// The paper's white is the display's white: a print profile made media-relative, as the ICC defines it, as an eye
-// adapted to the paper sees it. The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it) is the
-// paper's base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the
-// display's white and none of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have
-// an sRGB channel above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute.
-// paper_xyz gets the base.
+// The paper's white is the display's white: a print profile made media-relative, as the ICC defines it (ICC.1:2022
+// 6.3.2.2: each of X, Y and Z scaled by the PCS white's over the medium's), as an eye adapted to the paper sees it.
+// The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it, its code scaled by kPcsMax) is the paper's
+// base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white
+// and none of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have an sRGB channel
+// above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the
+// base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale
   size_t best = 0;
@@ -2433,6 +2434,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       FrameDetection base_det;
       FilmImage mosaic;
       const float no_black[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      // A Bayer mosaic: LibRaw's filters is a 2x2 bitmask above 1000 (9 is X-Trans).
       const bool has_det =
           filters > 1000 &&
           film_image_from_cfa(cfa_origin, src_w, src_h, (ptrdiff_t)cfa_pitch, 2,
@@ -2475,6 +2477,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       cfa_rh = std::min(scan.roi[3], src_h - cfa_ry);
     } else if (!o.no_crop && o.files.size() == 1) {
       const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
+      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop.
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
                                   crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
       if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {

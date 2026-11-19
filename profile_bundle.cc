@@ -132,6 +132,7 @@ bool is_json_bundle(const std::string& raw_path) {
   if (n == 0) return false;
 
   size_t i = 0;
+  // A UTF-8 byte order mark (EF BB BF, RFC 3629 section 6) is skipped.
   if (n >= 3 && (uint8_t)buf[0] == 0xEF && (uint8_t)buf[1] == 0xBB && (uint8_t)buf[2] == 0xBF) {
     i = 3;
   }
@@ -144,6 +145,8 @@ bool is_json_bundle(const std::string& raw_path) {
 static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& out) {
   out.clear();
   out.reserve(in.size() * 3 / 4);
+  // The standard base64 alphabet (RFC 4648 section 4, Table 1): A-Z 0-25, a-z 26-51, 0-9 52-61, '+' 62, '/' 63;
+  // '=' (padding) is -2, everything else -1 and skipped.
   static const int8_t T[256] = {
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -257,6 +260,11 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
              : ((uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) | uint32_t(b[3]));
     return true;
   };
+  // A Fujifilm RAF starts with "FUJIFILMCCD-RAW " and has the big-endian offset and length of its embedded JPEG at byte
+  // 84, as LibRaw reads it (identify.cpp); the JPEG's markers (SOI FFD8, APP1 FFE1, SOS FFDA, EOI FFD9) are ITU-T T.81
+  // Table B.1's, and its APP1 holds the Exif TIFF. Any other file is itself the TIFF. The TIFF starts with "II" or "MM"
+  // and 42 (TIFF 6.0, section 2); the Exif tags (CIPA DC-008) are 0x8769 (Exif IFD pointer), 0x829A (ExposureTime, a
+  // RATIONAL) and 0x8827 (PhotographicSensitivity, formerly ISOSpeedRatings, as a SHORT, type 3, or LONG, type 4).
   long tiff_base = 0;
   uint8_t hdr[16];
   if (fread(hdr, 1, 16, fp) == 16 && std::memcmp(hdr, "FUJIFILMCCD-RAW ", 16) == 0) {
@@ -652,6 +660,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       p.spektrafilm_sha256 = text(e, "spektrafilm_sha256", "");
       p.icc_sha256 = text(e, "icc_profile_sha256", "");
       const std::string where = "profile bundle " + raw_path;
+      // An ICC profile is at least its 128-byte header and 4-byte tag count (ICC.1:2022 7.2 and 7.3.2): 132 bytes.
       if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
         // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
         const std::string file = e["icc_profile"].get<std::string>();
@@ -722,6 +731,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
               numbers(fm["log_exposure"], film.log_exposure) && film.log_exposure.size() >= 2 &&
               fm.contains("wavelength_nm") && fm["wavelength_nm"].is_object() &&
               fm["wavelength_nm"].value("start", 0.0) == 380.0 && fm["wavelength_nm"].value("step", 0.0) == 1.0;
+    // 401 samples from 380 nm in 1 nm steps: the grid of np_print.cc's CIE tables (kCieSamples, kCieFirstNm).
     for (int c = 0; ok && c < 3; ++c) {
       ok = numbers(fm["dye_density"][c], film.dye[c]) && film.dye[c].size() == film.base.size() &&
            numbers(fm["neutral_dye_amounts"][c], film.neutral[c]) &&

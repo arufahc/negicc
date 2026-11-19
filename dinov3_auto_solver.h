@@ -105,6 +105,7 @@ struct DinoSolveResult {
   IntentGains solved_absolute;  // E_user * E_c * e_best, g_user * g_best, b_user * b_best
   float e_center = 1.0f;
   bool anchor_clamped = false;  // E_c bisection did not straddle median L* 50
+  // The default e_bounds, as ratios to e_center: 2^-1.5 and 2^1.5, 1.5 stops either way.
   float bounds_lo = 0.35355339f;
   float bounds_hi = 2.82842712f;
   std::vector<DinoIterationLog> iterations;

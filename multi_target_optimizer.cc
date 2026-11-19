@@ -590,6 +590,8 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
 // (color_pipeline.h pcs_to_linear_srgb_unclamped: the embedded profile's colorants), so a bracket's ceiling is in the
 // codes its pictures are written in.
 // py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb; there through Bradford and the textbook matrix)
+// The Lab inverse is CIE 1976 L*a*b*'s with CIE 15's exact break and slope (kLabEpsilon, kLabKappa), relative to the
+// PCS white (ICC.1:2022 7.2.16); the encoding is the sRGB curve of IEC 61966-2-1.
 void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
   const float kD50[3] = {(float)negicc::kPcsWhite[0], 1.0f, (float)negicc::kPcsWhite[2]};   // the PCS white
   const float fy = (lab[0] + 16.0f) / 116.0f;
@@ -1339,7 +1341,8 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
   return shoulder_x_hi_from_hist(hist.data(), q995);
 }
 
-// L* of a grey whose luminance is multiplied by 2 ** stops (CIE L* <-> relative luminance Y).
+// L* of a grey whose luminance is multiplied by 2 ** stops (CIE L* <-> relative luminance Y). CIE 1976 L* with CIE
+// 15's exact kLabKappa and kLabEpsilon, whose product is the break in L*, 8.
 // py-ref: negicc_station/src/grey_point.py (lstar_after_stops)
 static float lstar_after_stops(float L, float stops) {
   double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / negicc::kLabKappa;
@@ -2959,6 +2962,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
   }
+  // kStop: log10(2) to five decimals, a stop of exposure in density.
   constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
   ProfileBundle pb = bundle;   // its one target carries the print at the current A
   pb.targets.resize(1);
@@ -3163,7 +3167,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       br = march(xr0, fr0, 1.0);
     }
     double lo = br.lo, hi = br.hi;
-    const double phi = 0.6180339887498949;
+    const double phi = 0.6180339887498949;   // (sqrt(5) - 1) / 2: golden-section search (Kiefer, 1953)
     double x1 = hi - phi * (hi - lo), x2 = lo + phi * (hi - lo);
     float f1 = loss(x1, gb), f2 = loss(x2, gb);
     while (hi - lo > kContinuousTol) {

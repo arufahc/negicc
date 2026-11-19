@@ -210,6 +210,7 @@ public:
             double z = b2_;
             for (int j = 0; j < h; ++j) {
                 const double a = acc[j];
+                // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
                 z += (double)w2_[j] * (0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)));
             }
             p[i] = (float)(1.0 / (1.0 + std::exp(-z)));
@@ -294,6 +295,7 @@ public:
     // mean[kTargets] and sd[kTargets] from the 1920 features. False when the head is not loaded.
     bool run(const float* features, double* mean, double* sd) const {
         if (!loaded()) return false;
+        // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
         auto gelu = [](double a) { return 0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)); };
         std::vector<double> x(in_dim_), a1(h1_), a2(h2_);
         for (int k = 0; k < in_dim_; ++k) x[k] = (double)((features[k] - xm_[k]) / xs_[k]);  // float, as in training

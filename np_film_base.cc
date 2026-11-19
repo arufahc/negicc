@@ -79,7 +79,7 @@ RegionStats region_stats(const negicc::RgbView& view, const negicc::RgbView& raw
       const double g = std::max(1.0, (double)green[i]);
       dev[i] = (float)std::fabs(std::log10(g / st.med[1]));
     }
-    st.spread = 1.4826 * median_of(dev);
+    st.spread = 1.4826 * median_of(dev);   // MAD to a normal standard deviation: 1 / Phi^-1(3/4)
   }
   return st;
 }
