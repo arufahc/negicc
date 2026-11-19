@@ -304,6 +304,8 @@ float estimate_rotation(const WorkImage& wi, float max_deg, float* confidence) {
   const int W = wi.w, H = wi.h;
   Plane L;
   L.init(W, H);
+  // Luminance here is the plain mean of R, G and B; the gradients are the 3 x 3 Sobel operator (Sobel and Feldman,
+  // 1968) scaled by 1/8, so a ramp of one stop per pixel reads 1.
   for (size_t i = 0; i < L.d.size(); ++i)
     L.d[i] = std::log2(std::max((wi.r.d[i] + wi.g.d[i] + wi.b.d[i]) * (1.0f / 3.0f), 1e-5f));
   struct Pt { float x, y, w; };
@@ -712,7 +714,7 @@ void classify(const Canvas& cv, FilmPolarity pol, ClassInfo& ci) {
     const float m = std::min({cv.r.d[i] / refc[0], cv.g.d[i] / refc[1], cv.b.d[i] / refc[2]});
     mall[i] = std::log2(std::max(m, 1e-6f));
   }
-  // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel.
+  // Local flatness: Sobel magnitude of log2 luminance, stops per canvas pixel (the 3 x 3 operator scaled by 1/8).
   // Floor at black_frac * ref when computing gradients so zero-clipped sensor noise in black borders does not create
   // multi-stop log2 spikes against adjacent near-black pixels.
   std::vector<float> grad(N, 0.0f);
@@ -2059,6 +2061,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     if (mags.size() >= 16) {
       const float med = percentile(mags, 0.5);
       for (float& m : mags) m = std::fabs(m - med);
+      // 1.4826 = 1 / Phi^-1(3/4): the MAD's factor to a normal standard deviation (Rousseeuw and Croux, 1993).
       const float thr = med + 8.0f * 1.4826f * std::max(percentile(mags, 0.5), 1e-4f);
       std::vector<int> edges;
       for (int x = 1; x + 1 < VW; ++x) {

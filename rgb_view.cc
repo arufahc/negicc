@@ -62,7 +62,8 @@ inline float get_px_refl_cpu(const uint16_t* bayer, int r, int c, int h, int w, 
 }
 
 // Green at photosite (r, c) of an RGGB mosaic: the sample itself on a green site; elsewhere the vertical and the
-// horizontal Hamilton-Adams estimates (neighbour mean plus a quarter of the centre channel's Laplacian), blended
+// horizontal Hamilton-Adams estimates (J. F. Hamilton and J. E. Adams, US patent 5,629,734, 1997: neighbour mean plus
+// a quarter of the centre channel's Laplacian, steered by the green gradient plus that Laplacian), blended
 // with weights 1 / (eps + gradient^2) instead of picking one. A large eps keeps grain-sized gradients from steering
 // the blend; only real edges do.
 inline float reconstruct_green_soft_cpu(const uint16_t* m, int r, int c, int h, int w, size_t pitch,
@@ -113,6 +114,8 @@ const RawStatTables& raw_stat_tables() {
     return t;
 }
 
+// The q-quantile of a 16-bit histogram, interpolated linearly between ranks floor and ceil of q (n - 1): Hyndman and
+// Fan's (1996) definition 7, numpy's default method "linear".
 double u16_percentile_linear(const uint64_t hist[65536], uint64_t total, double q) {
     if (total == 0) return 0.0;
     const double pos = q * (double)(total - 1);

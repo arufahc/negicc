@@ -88,6 +88,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
             from = k + 1;
         }
     }
+    // Linear between ranks (Hyndman and Fan's 1996 definition 7, numpy's default).
     auto pct = [&](double p) {
         const double r = p / 100.0 * (double)(n - 1);
         const size_t i = (size_t)r;

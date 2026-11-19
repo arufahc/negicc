@@ -274,6 +274,7 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     // py-ref: negicc_station/src/dino_geometry.py:17-18 @ 2f7ee4a (DINO_MEAN, DINO_STD)
     // py-ref: negicc_station/src/tensorrt_intent_model.py:190-192 @ 2f7ee4a (ImageNet normalization)
     std::vector<float> pixel_values((size_t)3 * res.target_h * res.target_w);
+    // The ImageNet statistics DINOv3's LVD-1689M weights take (facebookresearch/dinov3 README).
     const float mean[3] = {0.485f, 0.456f, 0.406f};
     const float stdev[3] = {0.229f, 0.224f, 0.225f};
     const size_t plane = (size_t)res.target_h * res.target_w;

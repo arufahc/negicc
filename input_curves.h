@@ -622,7 +622,7 @@ class JointCurveModel {
 // magenta keeps its credit, and mid-tones and highlights count as they are.
 constexpr float kGreenGuardTolAb = 0.5f;
 // The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
-// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
+// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20. smoothstep(x) = 3x^2 - 2x^3 on [0, 1], the cubic Hermite step.
 constexpr double kGreenGuardShadowL0 = 15.0;
 constexpr double kGreenGuardShadowWidth = 10.0;
 // A cell's a* as the guard's means count it: a_Auto + d, d = a - a_Auto, with a negative d (the cell greener than at

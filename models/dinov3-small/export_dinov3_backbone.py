@@ -49,6 +49,8 @@ except Exception as e:  # --engine-only needs trtexec alone (no torch on the dev
 
 DEFAULT_SOURCE = "Tooony133/dinov3-vits16-pretrain-lvd1689m"
 DEFAULT_OUT = os.path.dirname(os.path.abspath(__file__))
+# DINOv3 ViT-S/16: 16-pixel patches, 384-wide tokens (so "tokens" is 2 x 384 = 768 and "pooled" 3 x 384 = 1152); its
+# input is at most IMAGE_SIZE on the longer side (color_pipeline.h compute_aspect_preserved_shape).
 IMAGE_SIZE = 512
 PATCH_SIZE = 16
 TONE_MASS_GATE = 0.03  # mass fraction at which a tone bin's pooled features reach full weight
@@ -80,6 +82,8 @@ if torch is not None:
             num_layers = dino.config.num_hidden_layers
             self.l_photo = int(round(num_layers * 0.75))
             self.l_sem = num_layers
+            # The patch tokens follow the CLS token and the register tokens (Darcet et al., "Vision Transformers Need
+            # Registers", ICLR 2024).
             self.k_start = 1 + getattr(dino.config, "num_register_tokens", 0)
 
         def forward(self, pixel_values, pool_weights):

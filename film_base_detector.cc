@@ -31,7 +31,8 @@ constexpr double kLightHoleArea = 0.005;    // a light part inside the scan at m
 constexpr double kLightOfRef = 0.65;        // bare light luminance at least this fraction of the p99.9 luminance
 constexpr int kCarrierPad = 3;              // dark-carrier dilation radius (px on a 1024-px-wide work image)
 
-// numpy's percentile (method linear) of float32 values with a Python float q: the interpolation runs in float32.
+// numpy's percentile (method linear, Hyndman and Fan's 1996 definition 7) of float32 values with a Python float q: the
+// interpolation runs in float32.
 float percentile_f32(std::vector<float>& a, double q) {
   const size_t n = a.size();
   if (n == 0) return std::nanf("");

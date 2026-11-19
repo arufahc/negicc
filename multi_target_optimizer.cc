@@ -2943,6 +2943,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
   }
+  // kStop: log10(2) to five decimals, a stop of exposure in density.
   constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
   ProfileBundle pb = bundle;   // its one target carries the print at the current A
   pb.targets.resize(1);
@@ -3147,7 +3148,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       br = march(xr0, fr0, 1.0);
     }
     double lo = br.lo, hi = br.hi;
-    const double phi = 0.6180339887498949;
+    const double phi = 0.6180339887498949;   // (sqrt(5) - 1) / 2: golden-section search (Kiefer, 1953)
     double x1 = hi - phi * (hi - lo), x2 = lo + phi * (hi - lo);
     float f1 = loss(x1, gb), f2 = loss(x2, gb);
     while (hi - lo > kContinuousTol) {
