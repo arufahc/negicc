@@ -1794,9 +1794,14 @@ std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
 
 // A textDescriptionType tag (ICC v2) holding description as its ASCII text, with empty Unicode and ScriptCode parts.
 static std::vector<uint8_t> icc_desc_tag(const std::string& description) {
+  // The ASCII part holds 7-bit text (ICC.1:2001-04 6.5.17): a byte outside printable ASCII (a UTF-8 material name's)
+  // is written as '?'.
+  std::string ascii = description;
+  for (char& ch : ascii)
+    if ((unsigned char)ch < 0x20 || (unsigned char)ch > 0x7e) ch = '?';
   std::vector<uint8_t> desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
-  put_u32(desc, (uint32_t)description.size() + 1);
-  desc.insert(desc.end(), description.begin(), description.end());
+  put_u32(desc, (uint32_t)ascii.size() + 1);
+  desc.insert(desc.end(), ascii.begin(), ascii.end());
   desc.insert(desc.end(), 1 + 8 + 3 + 67, 0);
   return desc;
 }
@@ -1833,7 +1838,8 @@ static bool set_icc_description(std::vector<uint8_t>& icc, const std::string& de
   for (uint32_t i = 0; i < n; ++i) {
     const std::string sig((const char*)icc.data() + 132 + 12 * i, 4);
     const size_t off = get_u32(icc, 136 + 12 * i), size = get_u32(icc, 140 + 12 * i);
-    if (off + size > icc.size()) return false;
+    // Inside the file and after the tag table, without overflowing.
+    if (off < 132 + 12 * (size_t)n || off > icc.size() || size > icc.size() - off) return false;
     if (sig == "desc") {
       tags.push_back({sig, icc_desc_tag(description)});
       found = true;
@@ -2035,9 +2041,9 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const EmbeddedFile* sf = find_embedded_file("3rd_party/spektrafilm/profiles/" + print + ".json");
     const std::string icc_sha = sha256_hex(std::string(icc.begin(), icc.end()));
     const std::string sf_sha = sf ? sha256_hex(std::string((const char*)sf->data, sf->size)) : "";
-    if (!bp.icc_sha256.empty() && bp.icc_sha256 != icc_sha) {
-      log_warn("The bundle's print ICC for %s is not the file the bundle records (its SHA-256 differs): its table is "
-               "computed here\n", print.c_str());
+    if (bp.icc_in_file ? bp.icc_sha256 != icc_sha : !bp.icc_sha256.empty() && bp.icc_sha256 != icc_sha) {
+      log_warn("The bundle's print ICC for %s is not the file the bundle records (its SHA-256 %s): its table is "
+               "computed here\n", print.c_str(), bp.icc_sha256.empty() ? "is not recorded" : "differs");
       break;
     }
     if (bp.spektrafilm_sha256.empty() || bp.spektrafilm_sha256 != sf_sha) {

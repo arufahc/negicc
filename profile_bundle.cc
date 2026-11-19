@@ -655,6 +655,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
         // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
         const std::string file = e["icc_profile"].get<std::string>();
+        p.icc_in_file = true;
         p.read_icc = [read_file, file, where](std::vector<uint8_t>& icc, std::string& err) {
           if (read_file && read_file(file, icc) && icc.size() >= 132) return true;
           return err = where + ": cannot read print ICC " + file, false;

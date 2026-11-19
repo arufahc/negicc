@@ -197,9 +197,11 @@ struct GreyBalanceCurves {
 // own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h). The ICC itself
 // is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without --print
 // does not keep, and a missing one refuses only the print that needs it. The two SHA-256 (hex; empty when not recorded)
-// are of the spektrafilm profile the ICC was computed from and of the ICC itself.
+// are of the spektrafilm profile the ICC was computed from and of the ICC itself; an exported bundle (its ICC a file
+// beside bundle.json) records the ICC's, a station bundle (the ICC inline) does not.
 struct BundlePrint {
   std::string id, name, reference_bracket, spektrafilm_sha256, icc_sha256;
+  bool icc_in_file = false;
   std::function<bool(std::vector<uint8_t>& icc, std::string& err)> read_icc;
 };
 
