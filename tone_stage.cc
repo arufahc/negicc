@@ -34,10 +34,10 @@ static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
 }
 static inline double tone_lab_f(double t) {
-    return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+    return t > negicc::kLabEpsilon ? std::cbrt(t) : (negicc::kLabKappa * t + 16.0) / 116.0;
 }
 static inline double tone_lab_finv(double t) {
-    return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
+    return t * t * t > negicc::kLabEpsilon ? t * t * t : (116.0 * t - 16.0) / negicc::kLabKappa;
 }
 
 // f(L) without the final clamp to 0..100.
