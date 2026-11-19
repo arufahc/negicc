@@ -1665,14 +1665,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // suggested balance, as without --print.
   auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                     const ParamSearchOptions& opts) -> bool {
+    // In density_prints' order, which writes the CLFs: the built-in materials asked for (or all), then the files in
+    // command-line order; a material id met twice keeps its first search, as its first CLF.
+    const bool all = std::find(o.prints.begin(), o.prints.end(), "all") != o.prints.end();
     std::vector<std::string> ids;
-    for (const std::string& id : o.prints) {
-      if (id == "all") {
-        for (const PrintMaterial& m : builtin_print_materials(&bundle)) ids.push_back(m.id);
-      } else {
-        ids.push_back(id);
-      }
-    }
+    for (const PrintMaterial& m : builtin_print_materials(&bundle))
+      if (all || std::find(o.prints.begin(), o.prints.end(), m.id) != o.prints.end()) ids.push_back(m.id);
+    for (const std::string& id : o.prints)
+      if (is_print_file(id)) ids.push_back(id);
     for (const std::string& id : ids) {
       BracketPrints prints;
       std::string why;
