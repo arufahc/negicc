@@ -977,11 +977,11 @@ int prepare(const Options& o, Setup& s) {
   s.raw_decode = s.white_light ? RawDecode::kWhiteLight
                  : s.has_crosstalk ? RawDecode::kCameraRgb
                                    : RawDecode::kRec2020;
-  // Pixel shift merges the four captures' CFA as camera RGB (no LibRaw decode): it needs a profile that reads camera
-  // RGB, and takes no -q.
-  if (o.files.size() == 4 && s.raw_decode != RawDecode::kCameraRgb) {
+  // Pixel shift merges the four captures' CFA as camera RGB (no LibRaw decode): a profile or an output encoding it
+  // goes through must read camera RGB; without either the merge is written as camera-linear. It takes no -q.
+  if (o.files.size() == 4 && (s.has_profile || !o.colorspace.empty()) && s.raw_decode != RawDecode::kCameraRgb) {
     log_error("4-shot pixel shift merges the captures' camera RGB: it needs a TriLED (camera_raw_rgb) profile bundle, "
-              "or -r, -g and -b with -p (a profile of the corrected camera RGB)\n");
+              "or -r, -g or -b with -p (a profile of the corrected camera RGB)\n");
     return 1;
   }
   if (o.files.size() == 4 && o.quality >= 0) {
@@ -1971,9 +1971,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
     // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
     // own size put the base patch off the image, so neg_process fell back to the statistics).
-    // A single RAW's or linear DNG's detection (--roi auto's, or base_det with a given frame) ran on its mosaic, on
-    // either light. An RGB file (TIFF, JPEG) and three captures have no mosaic: their base comes from the statistics,
-    // with no detection recorded for it.
+    // A single RAW's or linear DNG's detection (--roi auto's, or base_det with a given frame) ran on its raw data (a
+    // RAW's mosaic, a linear DNG's RGB) at the sensor's size, on either light, and runs for a given --roi too, so the
+    // replay reads the same base. An RGB file and three captures detect only for --roi auto's crop, on the assembled
+    // image: their base comes from the statistics, with no detection recorded for it.
     const bool raw_det = o.files.size() == 1 &&
                          (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng);
     detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,

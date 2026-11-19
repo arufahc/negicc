@@ -133,8 +133,9 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    the base's colour), taken through `X` and scaled by the scan's exposure over the capture's (shutter × ISO).
    `--film_base auto` (the default) reuses a capture recorded in the output's sidecar from the same inputs.
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
-   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop. Only a single
-   RAW or linear DNG has one: the detector runs on its mosaic. An RGB file and three captures go to item 3.
+   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop. It is used on a
+   single RAW or linear DNG, whose detection runs on its raw data with `--roi auto` and with a given `--roi` alike;
+   an RGB file and three captures go to item 3.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
    pixels, with bare light and the black holder masked out.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
