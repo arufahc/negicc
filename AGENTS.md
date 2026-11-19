@@ -17,11 +17,15 @@ git config user.name "Alpha Lam" && git config user.email "arufa.hc@gmail.com"
 
 ### No Agent Signatures or Attribution Trailers
 
-Do **NOT** add any agent signatures, `Co-Authored-By` trailers (e.g., `Co-Authored-By: Claude ...`), `Claude-Session` links, `Generated with ...` footers, or agent names in commit authors, committers, commit messages, or pull request descriptions. Individual agents such as Claude must not take credit in commit history, as this project is driven by extensive human direction, domain engineering, and Antigravity collaboration.
+Do **NOT** add any agent signatures, `Co-Authored-By` trailers (e.g., `Co-Authored-By: Claude ...`), `Claude-Session`
+links, `Generated with ...` footers, or agent names in commit authors, committers, commit messages, or pull request
+descriptions. Individual agents such as Claude must not take credit in commit history, as this project is driven by
+extensive human direction, domain engineering, and Antigravity collaboration.
 
 ### Commit Message Style Rules
 
-Do **NOT** use conventional commit prefixes (such as `feat:`, `feat(...)`, `fix:`, `fix(...)`, `refactor:`, `refactor(...)`, `chore:`, `chore(...)`, etc.) in commit messages, titles, or CL descriptions.
+Do **NOT** use conventional commit prefixes (such as `feat:`, `feat(...)`, `fix:`, `fix(...)`, `refactor:`,
+`refactor(...)`, `chore:`, `chore(...)`, etc.) in commit messages, titles, or CL descriptions.
 Write direct, plain English summaries (imperative mood, concise, descriptive), for example:
 - "Add native C++ DINOv3 inference engine, runners, and neg_process integration"
 - "Address review follow-ups for device check, mutex, input validation, and build targets"
@@ -32,10 +36,17 @@ Write direct, plain English summaries (imperative mood, concise, descriptive), f
 
 ### Never Use Hardcoded Absolute Paths
 
-Do **not** embed machine-specific absolute paths (e.g., `/home/user/Projects/...`) anywhere in documentation, markdown files, scripts, or source comments. Use relative paths instead.
+Do **not** embed machine-specific absolute paths (e.g., `/home/user/Projects/...`) anywhere in documentation, markdown
+files, scripts, or source comments. Use relative paths instead.
 
 ---
 
 ## Code Style Rules
 
-- Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`, `np_pipeline.cc`, `tone_stage.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by `negicc-station` (`rgb_view.h`, `rgb_view.cc`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`, `input_curves.h`, `film_base_detector.h`, `film_base_detector.cc`, and `white_light_balance.h`) use `namespace negicc`, and so do the TIFF and JPEG readers in `np_input.h` and `np_input.cc` (`RgbImage`, `read_tiff`, `read_jpeg`, `to_linear_rec2020`) and `dilate` in `film_frame_detector.h`; the rest of `np_input.*` and `film_frame_detector.*` is in the global namespace.
+- Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`,
+  `np_pipeline.cc`, `tone_stage.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by
+  `negicc-station` (`rgb_view.h`, `rgb_view.cc`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`, `input_curves.h`,
+  `film_base_detector.h`, `film_base_detector.cc`, and `white_light_balance.h`) use `namespace negicc`, and so do the
+  TIFF and JPEG readers in `np_input.h` and `np_input.cc` (`RgbImage`, `read_tiff`, `read_jpeg`, `to_linear_rec2020`)
+  and `dilate` in `film_frame_detector.h`; the rest of `np_input.*` and `film_frame_detector.*` is in the global
+  namespace.

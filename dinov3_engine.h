@@ -243,8 +243,8 @@ public:
         return t >= 0 && t < kTargets ? names[t] : "";
     }
 
-    // Parses tone_head.bin (magic "TNH1", uint32 in_dim, hidden1, hidden2, targets, then float32 xm, xs, w1, b1, w2, b2,
-    // w3, b3, ym, ys). False, with the reason in error, when the data is not such a file.
+    // Parses tone_head.bin (magic "TNH1", uint32 in_dim, hidden1, hidden2, targets, then float32 xm, xs, w1, b1, w2,
+    // b2, w3, b3, ym, ys). False, with the reason in error, when the data is not such a file.
     bool load(const void* data, size_t size, std::string& error) {
         in_dim_ = 0;
         const uint8_t* p = static_cast<const uint8_t*>(data);

@@ -25,10 +25,10 @@
 // - A single RAW captured under the narrowband RGB LED (tri) or white (d65) light, e.g.
 //     neg_process --film_stock portra400 --light_source tri --roi 1700 0 6686 6376 -o out.tif scan.ARW
 //   A tri bundle (input_space camera_raw_rgb) converts the sensor RGB with its crosstalk correction; -r, -g and -b
-//   override it with one measured for this capture. A d65 bundle (rec2020_linear) converts LibRaw's white-light
-//   decode (the camera's daylight white balance and colour matrix, to linear Rec.2020) with no crosstalk
-//   correction, as negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station bundle JSON
-//   (e.g. to test parity with negicc-station) or a single ICC profile (for research).
+//   override it with one measured for this capture. A d65 bundle (rec2020_linear) converts LibRaw's white-light decode
+//   (the camera's daylight white balance and colour matrix, to linear Rec.2020) with no crosstalk correction, as
+//   negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station
+//   bundle JSON (e.g. to test parity with negicc-station) or a single ICC profile (for research).
 // - Four RAW files of a Sony A7R IV 4-shot pixel shift capture, merged into one image, the same way.
 // - A linear (demosaiced) DNG, e.g. a film scanner's, decoded by LibRaw as a RAW is: camera RGB and the bundle's
 //   crosstalk correction for a tri bundle, the DNG's colour data to linear Rec.2020 for a d65 bundle. A fourth

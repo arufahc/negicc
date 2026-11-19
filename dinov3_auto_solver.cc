@@ -79,8 +79,8 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
   }
 }
 
-negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand, float m[9],
-                                        std::vector<float> trc[3]) {
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand,
+                                        float m[9], std::vector<float> trc[3]) {
   if (!cfg.gain_curves) {
     negicc::candidate_matrix(merged, cand.e, cand.g, cand.b, m);
     return make_pipeline_config(*cfg.prof, cfg.knee, cfg.shoulder);
@@ -239,7 +239,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   size_t best_k = 0;
   double best_score_e = 0.0;
   for (size_t i = 0; i < e_cands_d.size(); ++i) {
-    const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+    const double score =
+        (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
     if (i == 0 || score < best_score_e) {
       best_score_e = score;
       best_k = i;
@@ -322,7 +323,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     }
   }
 
-  // If the pullback's screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on (e, g, b).
+  // If the pullback's screening (no initial) shifted g or b from defaults, run a second coordinate-descent pass on
+  // (e, g, b).
   if (pullback_search && !initial) {
     if (!(pin_mask & PIN_E)) {
       cands.resize(e_cands_d.size());
@@ -331,7 +333,8 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
       intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
       best_k = 0;
       for (size_t i = 0; i < e_cands_d.size(); ++i) {
-        const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+        const double score =
+            (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
         if (i == 0 || score < best_score_e) {
           best_score_e = score;
           best_k = i;
@@ -388,14 +391,16 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
   }
 
   // Re-align E at the final (best_g, best_b) so L* matches mu_L after chromatic gain updates.
-  if (pullback_search && !(pin_mask & PIN_E) && (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
+  if (pullback_search && !(pin_mask & PIN_E) &&
+      (std::fabs(best_g - curr_g) > 1e-6 || std::fabs(best_b - curr_b) > 1e-6)) {
     cands.resize(e_cands_d.size());
     losses.resize(e_cands_d.size());
     for (size_t i = 0; i < e_cands_d.size(); ++i) cands[i] = {(float)e_cands_d[i], (float)best_g, (float)best_b};
     intent_loss(cfg, merged, grid_rgb16, n_cells, cands.data(), (int)cands.size(), mu, sigma, losses.data());
     best_k = 0;
     for (size_t i = 0; i < e_cands_d.size(); ++i) {
-      const double score = (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
+      const double score =
+          (double)losses[i].L + compute_penalties(cfg, e_cands_d[i], losses[i].clip, e_center, p_clip, p_e);
       if (i == 0 || score < best_score_e) {
         best_score_e = score;
         best_k = i;

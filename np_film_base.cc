@@ -342,7 +342,8 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
   // As the scan's (Scan::scan_exposure): a capture that records none is taken at 1/8 s and ISO 100, with a warning.
   double shutter = 0.0, iso = 0.0;
   const bool has_exif = read_exif_exposure_d(path, shutter, iso);
-  if (!has_exif || !(shutter > 0.0)) shutter = raw->imgdata.other.shutter > 0 ? (double)raw->imgdata.other.shutter : 0.0;
+  if (!has_exif || !(shutter > 0.0))
+    shutter = raw->imgdata.other.shutter > 0 ? (double)raw->imgdata.other.shutter : 0.0;
   if (!has_exif || !(iso > 0.0)) {
     iso = raw->imgdata.other.iso_speed > 0 ? std::round((double)raw->imgdata.other.iso_speed) : 0.0;
   }

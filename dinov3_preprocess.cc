@@ -109,7 +109,8 @@ void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, i
                                      uint8_t* dst, int dst_w, int dst_h) {
     const bool need_h = dst_w != src_w, need_v = dst_h != src_h;
     if (!need_h && !need_v) {
-        for (int y = 0; y < src_h; ++y) std::copy_n(src + (size_t)y * src_stride, (size_t)src_w * 3, dst + (size_t)y * dst_w * 3);
+        for (int y = 0; y < src_h; ++y)
+            std::copy_n(src + (size_t)y * src_stride, (size_t)src_w * 3, dst + (size_t)y * dst_w * 3);
         return;
     }
 

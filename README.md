@@ -43,7 +43,7 @@ bin_out/neg_process --film_stock portra400 --light_source tri -P srgb -o out.tif
 bin_out/neg_process --film_stock ektar100 --light_source tri -P srgb -o out.tif ps1.ARW ps2.ARW ps3.ARW ps4.ARW
 
 # Three separate frames under red, green and blue light.
-bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1 0" -b "0 0 1" -P srgb -o out.tif r.ARW g.ARW b.ARW
+bin_out/neg_process --film_stock portra160 --light_source tri -r 1 0 0 -g 0 1 0 -b 0 0 1 -P srgb -o out.tif r.ARW g.ARW b.ARW
 
 # 6x7 under white light, with LibRaw's DCB demosaic.
 bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
@@ -255,11 +255,12 @@ Print emulation models shining a printer lamp through the negative onto darkroom
 Eight materials from [spektrafilm](https://github.com/andreavolpato/spektrafilm) are built in — six papers (such as
 Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print` alone lists them.
 
-![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
+![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision
+2383](samples/print_emulation.jpg)
 
 *Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film.*
 
-There are two ways to run it, and both give the same picture:
+There are two ways to run it, and both give the same print, apart from the two differences given below:
 
 1. **Print material ICC (`--print <material> -P srgb`)** — writes the print directly as a 16-bit sRGB TIFF through
    the material's print ICC profile (`print_<material>.icc`):
@@ -292,7 +293,8 @@ Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the 
 ΔE₀₀ on average; under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
 printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
 
-![The same negative as negicc's picture and as a print on each of the eight print materials](samples/print_materials_triled.jpg)
+![The same negative as negicc's picture and as a print on each of the eight print
+materials](samples/print_materials_triled.jpg)
 
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
 scene conversion's lightness with `--brightness` (the offset in stops is in each cell's title).*
@@ -314,8 +316,8 @@ scene conversion's lightness with `--brightness` (the offset in stops is in each
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). The search (and the curve fit on white light) keeps them and finds the rest. With an ICC profile (`-p file.icc`), giving either turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
-| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED, nor to a print). Eight or ten numbers replay the curves recorded in a sidecar. |
-| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. |
+| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `off` and `on` are errors where it does not apply (it never applies to the RGB LED, an ICC profile or a print). Eight or ten numbers replay the curves recorded in a sidecar. |
+| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it on every bundle conversion with `-P srgb` that is not a print, on both lights, with given values too. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast); numbers outside the stage's limits are refused. A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. A TriLED replay command from an older build that gives the values without any `--tone_stage` now runs the tone stage; add `--tone_stage off` to reproduce its file. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
 | `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |

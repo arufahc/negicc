@@ -433,8 +433,10 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // mosaic after black subtraction and white balance. load_raw then multiplies the mosaic by the gains that balance the
 // camera channels on the film base (ChannelBalance, scale_white_light_mosaic), so that a light of another colour
 // than the profile's is corrected before the camera matrix mixes the channels, not after.
-// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
-// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
+// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch
+// libraw-from-negicc)
+// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from
+// libraw-from-negicc)
 //
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.
@@ -857,8 +859,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
 
     const int a = (proc->imgdata.idata.filters == 9) ? 6 : 2;
     const int pad = a * 2;
-    const int sensor_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
-    const int sensor_h = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
+    const int sensor_w =
+        proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
+    const int sensor_h =
+        proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
 
     int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
     if (roi) {
@@ -947,7 +951,8 @@ void tiff_warning(const char*, const char*, va_list) {}
 void put_samples(const uint8_t* src, int bits, int src_stride, int src_sample, int n, uint16_t* dst, int dst_stride,
                  int dst_ch) {
   if (bits == 8) {
-    for (int i = 0; i < n; ++i) dst[(size_t)i * dst_stride + dst_ch] = (uint16_t)(src[(size_t)i * src_stride + src_sample] * 257);
+    for (int i = 0; i < n; ++i)
+      dst[(size_t)i * dst_stride + dst_ch] = (uint16_t)(src[(size_t)i * src_stride + src_sample] * 257);
   } else {
     const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
     for (int i = 0; i < n; ++i) dst[(size_t)i * dst_stride + dst_ch] = s[(size_t)i * src_stride + src_sample];
@@ -975,7 +980,8 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_PLANARCONFIG, &planar);
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_SAMPLEFORMAT, &fmt);
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_COMPRESSION, &compression);
-  if (!TIFFGetField(tif.get(), TIFFTAG_PHOTOMETRIC, &photo)) photo = spp >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK;
+  if (!TIFFGetField(tif.get(), TIFFTAG_PHOTOMETRIC, &photo))
+    photo = spp >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK;
   if (photo == PHOTOMETRIC_YCBCR && compression == COMPRESSION_JPEG) {
     TIFFSetField(tif.get(), TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB);  // libjpeg converts to RGB
     photo = PHOTOMETRIC_RGB;

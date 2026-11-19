@@ -52,12 +52,12 @@ namespace negicc {
 constexpr double kBasePatchInset = 0.15;  // fraction of the patch's box dropped on each side (its edges blend)
 constexpr int kBaseMinSamples = 32;       // pixels the inner box must hold
 constexpr float kSensorClip = 0.98f;      // a sample at or above this fraction of the white level (before the flat
-                                          // field) is clipped
+                                          // field, but after it on the LibRaw path with --flat) is clipped
 constexpr double kBaseClipFraction = 0.001;  // a patch, tile or region with more clipped pixels is clipped
 constexpr double kRebateMargin = 0.5;     // stops: the thinnest film may exceed a base patch by at most this
-constexpr double kBasePercentile = 99.5;  // per-channel percentile of film pixels taken as the film base (the statistics'
-                                          // step; also the print's floor on a base that is not a capture, the
-                                          // rebate included: print_base_floor)
+constexpr double kBasePercentile = 99.5;  // per-channel percentile of film pixels taken as the film base (the
+                                          // statistics' step; also the print's floor on a base that is not a capture,
+                                          // the rebate included: print_base_floor)
 constexpr int kBaseWorkSize = 512;        // long side (px) of the image the thinnest film is read on
 constexpr float kBaseMinFrameConf = 0.5f; // the detection's confidence below which its patch is not used (the frame
                                           // detection neg_process falls back from at the same level)
@@ -94,7 +94,7 @@ void thinnest_film_base(const RgbView& half, float white, float out[3]);
 
 // The film base of the scan whose half-size decode (flat field applied) is |half|. |det| is the frame detector's
 // result on the RAW's mosaic of sensor_w x sensor_h photosites (the CFA path's, or the white-light decode's run before
-// it decodes; null when there is none: an RGB file, three captures, a linear DNG); its patch is used only when the
+// it decodes, or a linear DNG's; null when there is none: an RGB file, three captures); its patch is used only when the
 // detection succeeded with confidence at least kBaseMinFrameConf. |crosstalk| the 3x3 row-major crosstalk matrix (null
 // for none: a white-light decode). |white| is the clipping level of half's samples before its flat field (black
 // subtracted, in their units; unused on a white-light decode). False (out.found false) when neither step gives a

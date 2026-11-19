@@ -74,7 +74,8 @@ FlatField::FlatField(std::vector<float> gain, int grid_h, int grid_w, int block,
       m_id(std::move(id)) {
     if (m_gh < 2 || m_gw < 2 || m_block < 1 || m_half_w < 1 || m_half_h < 1)
         throw std::invalid_argument("flat field: grid must be at least 2x2, block and size positive");
-    if (m_gain.size() != (size_t)m_gh * m_gw * 3) throw std::invalid_argument("flat field: gain size != grid_h*grid_w*3");
+    if (m_gain.size() != (size_t)m_gh * m_gw * 3)
+        throw std::invalid_argument("flat field: gain size != grid_h*grid_w*3");
     for (float g : m_gain)
         if (!(g > 0.0f) || !std::isfinite(g)) throw std::invalid_argument("flat field: gains must be finite and > 0");
 }

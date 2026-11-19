@@ -439,8 +439,8 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     std::vector<float> q(n);
     for (size_t i = 0; i < n; ++i) q[i] = std::log2(v[i * 3] / v[i * 3 + 2]);
     // Bare light that did not clip: on the border, the holder's aperture or the sprocket holes. When the film is
-    // strongly orange, mask connected components of neutral bright pixels (reaching the border or holder, or hole-sized)
-    // whose blue channel exceeds the orange film's 99.5th percentile.
+    // strongly orange, mask connected components of neutral bright pixels (reaching the border or holder, or
+    // hole-sized) whose blue channel exceeds the orange film's 99.5th percentile.
     std::vector<float> q_cand;
     for (size_t i = 0; i < n; ++i)
       if (!black[i] && !light[i]) q_cand.push_back(q[i]);
@@ -534,7 +534,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         const int x = det->base_box[0], y = det->base_box[1], w = det->base_box[2], h = det->base_box[3];
         const double x0 = x + kBasePatchInset * w, x1 = x + (1.0 - kBasePatchInset) * w;
         const double y0 = y + kBasePatchInset * h, y1 = y + (1.0 - kBasePatchInset) * h;
-        int b[4] = {(int)std::ceil(x0 * sx), (int)std::ceil(y0 * sy), (int)std::floor(x1 * sx), (int)std::floor(y1 * sy)};
+        int b[4] = {(int)std::ceil(x0 * sx), (int)std::ceil(y0 * sy), (int)std::floor(x1 * sx),
+                    (int)std::floor(y1 * sy)};
         b[0] = std::max(0, b[0]);
         b[1] = std::max(0, b[1]);
         b[2] = std::min(W, b[2]);

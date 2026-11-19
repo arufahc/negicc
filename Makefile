@@ -1,8 +1,10 @@
 # neg_process: converts film negative RAW scans with the profiles and intent adapters built into it.
 #
 #   make dinov3_model       # models/dinov3-small/backbone.onnx, the DINOv3 backbone of the parameter search
-#   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs them)
-#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to link ONNX Runtime statically)
+#   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs
+#                             them)
+#   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to
+#                             link ONNX Runtime statically)
 #   make onnxruntime_prebuilt  # ONNX Runtime's shared library from its PyPI wheel, which neg_process links by default
 #   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
@@ -11,14 +13,15 @@
 PYTHON ?= python3
 CMAKE ?= cmake
 
-.PHONY: all lib libraw deps onnxruntime onnxruntime_prebuilt neg_process dinov3_model dinov3_engine clean clean_lib clean_all
+.PHONY: all lib libraw deps onnxruntime onnxruntime_prebuilt neg_process dinov3_model dinov3_engine clean clean_lib \
+        clean_all
 all: neg_process
 
 # ----------------------------------------------------------------------
 # LibRaw, pinned by the 3rd_party/libraw submodule (see 3rd_party/README.md) and built here as a static library, so
 # neg_process and negicc-station decode with the same LibRaw on every machine instead of the system's libraw-dev.
-# Consumers include "libraw/libraw.h" with $(LIBRAW_INC) (-isystem, so its headers do not warn) and link bin_out/libraw.a followed by the libraries in
-# bin_out/libraw.ldlibs.
+# Consumers include "libraw/libraw.h" with $(LIBRAW_INC) (-isystem, so its headers do not warn) and link
+# bin_out/libraw.a followed by the libraries in bin_out/libraw.ldlibs.
 # ----------------------------------------------------------------------
 LIBRAW_DIR = 3rd_party/libraw
 LIBRAW_INC = -isystem $(LIBRAW_DIR)
@@ -121,7 +124,8 @@ JPEG_SRCS = $(addprefix $(JPEG_DIR)/src/,jcapimin.c jchuff.c jcicc.c jcinit.c jc
               jcomapi.c jcparam.c jcphuff.c jctrans.c jdapimin.c jdatadst.c jdatasrc.c jdhuff.c jdicc.c jdinput.c \
               jdlhuff.c jdmarker.c jdmaster.c jdphuff.c jdtrans.c jerror.c jfdctflt.c jmemmgr.c jmemnobs.c \
               jpeg_nbits.c jaricom.c jcarith.c jdarith.c) \
-            $(filter-out %/template.c %/rdcolmap-% %/rdpng-% %/rdppm-% %/wrgif-% %/wrpng-% %/wrppm-%,$(wildcard $(JPEG_DIR)/src/wrapper/*.c))
+            $(filter-out %/template.c %/rdcolmap-% %/rdpng-% %/rdppm-% %/wrgif-% %/wrpng-% \
+                         %/wrppm-%,$(wildcard $(JPEG_DIR)/src/wrapper/*.c))
 JPEG_OBJS = $(patsubst $(JPEG_DIR)/src/%.c,bin_out/libjpeg/%.o,$(JPEG_SRCS))
 TIFF_OBJS = $(patsubst $(TIFF_DIR)/%.c,bin_out/libtiff/%.o,$(filter-out %/tif_win32.c,$(wildcard $(TIFF_DIR)/tif_*.c)))
 
@@ -254,7 +258,8 @@ ifeq ($(USE_CUDA),1)
         $(error USE_CUDA=1 but nvcc was not found; install CUDA or build with USE_CUDA=0)
     endif
     CUDA_INC = -I/usr/local/cuda/include -I/usr/local/cuda-12.6/include
-    CUDA_LIBS = -L/usr/local/cuda/lib64 -L/usr/local/cuda/targets/aarch64-linux/lib -L/usr/local/cuda-12.6/targets/aarch64-linux/lib -lcudart
+    CUDA_LIBS = -L/usr/local/cuda/lib64 -L/usr/local/cuda/targets/aarch64-linux/lib \
+                -L/usr/local/cuda-12.6/targets/aarch64-linux/lib -lcudart
     DINOV3_EXTRA_INC = -DNEGICC_USE_CUDA=1 $(CUDA_INC) $(TRT_INC)
     DINOV3_EXTRA_LIBS = $(CUDA_LIBS) $(TRT_LIBS)
 else ifeq ($(USE_CUDA),0)
@@ -274,14 +279,15 @@ $(BUILD_STAMP):
 	rm -f bin_out/.use_cuda_*
 	touch $@
 
-DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(LCMS2_INC) $(ZLIB_INC) \
-                  $(JSON_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
+DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char -Wall -Wextra -I. $(LCMS2_INC) \
+                  $(ZLIB_INC) $(JSON_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
-DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_trt_runner.o bin_out/dinov3_auto_solver.o \
-              bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o bin_out/film_base_detector.o bin_out/tone_stage.o \
-              bin_out/profile_bundle.o bin_out/multi_target_optimizer.o
+DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_trt_runner.o \
+              bin_out/dinov3_auto_solver.o bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o \
+              bin_out/film_base_detector.o bin_out/tone_stage.o bin_out/profile_bundle.o \
+              bin_out/multi_target_optimizer.o
 
 bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -291,7 +297,8 @@ bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h color_pipe
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_preprocess.cc -o $@
 
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h rgb_view.h color_pipeline.h flat_field.h \
+                              film_frame_detector.h profile_bundle.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
 
@@ -308,11 +315,14 @@ bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_engine.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_trt_runner.cc -o $@
 
-bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h dinov3_auto_solver.h np_log.h $(BUILD_STAMP)
+bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h rgb_view.h color_pipeline.h flat_field.h \
+                          film_frame_detector.h dinov3_auto_solver.h np_log.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
-bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h dinov3_preprocess.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h dinov3_auto_solver.h dinov3_engine.h $(BUILD_STAMP)
+bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h \
+                                  dinov3_preprocess.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h \
+                                  profile_bundle.h dinov3_auto_solver.h dinov3_engine.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -335,7 +345,8 @@ bin_out/tone_stage.o: tone_stage.cc tone_stage.h color_pipeline.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c tone_stage.cc -o $@
 
-bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_view.h flat_field.h film_frame_detector.h $(BUILD_STAMP)
+bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_view.h flat_field.h film_frame_detector.h \
+                              $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_base_detector.cc -o $@
 
@@ -355,8 +366,9 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 BACKBONE_ONNX = $(wildcard models/dinov3-small/backbone.onnx)
 ENGINE_FILES = $(if $(filter 1,$(USE_CUDA)),$(BACKBONE_ONNX:.onnx=.engine) \
                  $(patsubst %.onnx,%.engine,$(wildcard models/dinov3-small_*/adapter.onnx)))
-EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc 3rd_party/spektrafilm/profiles/*.json models/dinov3-small_*/adapter.onnx \
-                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin)) \
+EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc 3rd_party/spektrafilm/profiles/*.json \
+                                models/dinov3-small_*/adapter.onnx models/neutral_head/neutral_head.bin \
+                                models/tone_head/tone_head.bin)) \
               $(BACKBONE_ONNX) $(ENGINE_FILES)
 
 EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
@@ -390,7 +402,8 @@ define EMBED_TABLE_ASM
     .balign 8
     .globl $(EMBED_TABLE)
 $(EMBED_TABLE):
-$(foreach i,$(EMBED_IDX),    .quad $(EMBED_TABLE)_name_$(i), $(EMBED_TABLE)_data_$(i), $(EMBED_TABLE)_end_$(i) - $(EMBED_TABLE)_data_$(i)$(newline))
+$(foreach i,$(EMBED_IDX),    .quad $(EMBED_TABLE)_name_$(i), $(EMBED_TABLE)_data_$(i), \
+                                   $(EMBED_TABLE)_end_$(i) - $(EMBED_TABLE)_data_$(i)$(newline))
     .globl $(EMBED_COUNT)
 $(EMBED_COUNT):
     .quad $(words $(EMBED_FILES))
@@ -400,7 +413,8 @@ endef
 bin_out:
 	mkdir -p $@
 
-# Track the list of embedded files so removing a file from profiles/ or models/ triggers regeneration of embedded_data.S.
+# Track the list of embedded files so removing a file from profiles/ or models/ triggers regeneration of
+# embedded_data.S.
 EMBED_MANIFEST = bin_out/.embed_manifest
 $(shell mkdir -p bin_out; printf '%s\n' $(EMBED_FILES) > $(EMBED_MANIFEST).tmp; \
         if ! cmp -s $(EMBED_MANIFEST).tmp $(EMBED_MANIFEST) 2>/dev/null; then \
@@ -422,8 +436,8 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 
 # neg_process's own sources (np_*.cc): not in the library negicc-station links. Compiled as
 # neg_process.cc is, so moving code between them leaves its arithmetic as it was.
-NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) \
-              $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
+NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) \
+              $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc np_film_base.cc np_print.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
@@ -448,10 +462,14 @@ NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o $(NP_OB
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
+bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) \
+                     $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	@echo "ONNX Runtime: $(if $(filter 1,$(ORT_STATIC)),static from $(ORT_SRC_DIR),$(ORT_LIB_DIR))"
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) \
+	    bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party \
+	    $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) \
+	    $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
 
@@ -465,7 +483,8 @@ dinov3_model:
 # The backbone's engine and one engine per intent adapter (models/dinov3-small_*/adapter.engine), on the device that
 # runs them (engines are device-specific and not checked in). On the Orin Nano: about 41 s + 10 s per adapter.
 dinov3_engine:
-	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
+	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only \
+	    --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
 
 # An engine missing, or older than the .onnx it is compiled from (it holds the earlier weights): a USE_CUDA=1 build
 # that would embed it stops and asks for the engines.

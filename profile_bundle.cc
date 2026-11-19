@@ -538,7 +538,8 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     double light_to_film[9];
     const bool has_light = dm.contains("light_to_film") && dm["light_to_film"].is_object() &&
                            dm["light_to_film"].contains("matrix") &&
-                           parse_3x3_matrix(dm["light_to_film"]["matrix"], unused, light_to_film) && finite(light_to_film);
+                           parse_3x3_matrix(dm["light_to_film"]["matrix"], unused, light_to_film) &&
+                           finite(light_to_film);
     for (int m = 0; m < kDensityMeasures; ++m) {
       const char* key = density_measure_key((DensityMeasure)m);
       if (!dm.contains(key)) continue;
@@ -618,7 +619,8 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   // The film's grey balance curve: three rising columns on one light-density grid. A block that is not whole is left
   // out, with a warning (a print then says the bundle has no grey balance curve).
   if (j.contains("density_matrices") && j["density_matrices"].is_object() &&
-      j["density_matrices"].contains("grey_balance_curves") && j["density_matrices"]["grey_balance_curves"].is_object()) {
+      j["density_matrices"].contains("grey_balance_curves") &&
+      j["density_matrices"]["grey_balance_curves"].is_object()) {
     const nlohmann::json& g = j["density_matrices"]["grey_balance_curves"];
     GreyBalanceCurves& gb = bundle.grey_balance;
     bool ok = g.contains("light_density_start") && g["light_density_start"].is_number() &&
