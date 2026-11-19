@@ -386,7 +386,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture output the "
           "print's search writes the file instead (its mid grey A at each --probe_stops offset; --probe_params does "
           "not apply) and the conversion goes on. Needs the bundle search to run: refused where it does not (a single "
-          "ICC profile, given gains on TriLED), and a previous run's <output>.json is not reused with it.")
+          "ICC profile; on TriLED, any of --target, -E, --gain_g and --gain_b; on white light, recorded curves or a "
+          "recorded tone curve, or all four with neither the curve fit nor the tone stage), and a previous run's "
+          "<output>.json is not reused with it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
     .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
@@ -483,6 +485,13 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
+  // The probe's sets and offsets do nothing without the probe file they go into.
+  for (const char* f : {"--probe_params", "--probe_stops"}) {
+    if (parser.is_used(f) && o.probe_intent.empty()) {
+      log_error("%s needs --probe_intent: it sets what the probe file records\n", f);
+      return 1;
+    }
+  }
   o.check_renderer = parser.get<bool>("--check_renderer");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
@@ -819,9 +828,6 @@ int parse_options(int ac, char* av[], Options& o) {
         {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
         {"--tint", parser.is_used("--tint") && o.prints.empty()},
         {"--warmth", parser.is_used("--warmth") && o.prints.empty()},
-        {"--dino", parser.is_used("--dino")},
-        {"--dino_backend", parser.is_used("--dino_backend")},
-        {"--dino_iters", o.dino_iters_given},
         {"--fit_curves", fit_set},
         {"--tone_stage", tone_set},
     };
