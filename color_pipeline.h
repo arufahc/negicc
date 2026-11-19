@@ -322,12 +322,17 @@ NEGICC_HD Rgb convert_pixel_display(const PipelineConfig& cfg, const float* matr
     return to_display(cfg, convert_pixel_linear(cfg, matrix, px));
 }
 
+// CIELAB's break and slope as CIE 15 gives them exactly: f(t) = t^(1/3) above kLabEpsilon = (6/29)^3, else
+// (kLabKappa t + 16) / 116, with kLabKappa = (29/3)^3; L* = kLabKappa Y below the break. The two branches meet there.
+constexpr double kLabEpsilon = 216.0 / 24389.0;
+constexpr double kLabKappa = 24389.0 / 27.0;
+
 // ---- Stage: tone (sRGB export only) ------------------------------------------------------------------
 // The derivative of CIE Lab's f (the cube root above the linear segment). The constants are CIE 1976 L*a*b*'s exact
 // ones (CIE 15; ICC.1:2022 Annex A, equations A.7 to A.12): the break (6/29)^3 = 216/24389 and the linear segment's
 // slope 841/108 = 24389 / 27 / 116.
 NEGICC_HD float tone_lab_fprime(float t) {
-    return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;
+    return t > (float)kLabEpsilon ? (1.0f / 3.0f) / cbrtf(t * t) : (float)kLabKappa / 116.0f;
 }
 
 // Y' = f(Y) from the table (tt.n >= 1). Y is clamped to [0, 1] for the lookup (a NaN reads as 0), so the index is in
@@ -349,7 +354,7 @@ NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
 // of Bruce Lindbloom's sRGB -> XYZ matrix (brucelindbloom.com, computed with ASTM E308-01's D65 white 0.95047, 1,
 // 1.08883), which differs in the sixth decimal from the row of linear_srgb_to_lab and the tone stage's descriptors.
 NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
-    const float y0 = 0.2126729f * v.r + 0.7151522f * v.g + 0.0721750f * v.b;
+    const float y0 = 0.212671f * v.r + 0.715160f * v.g + 0.072169f * v.b;   // as tone_stage.cc's planner reads Y
     const float y1 = tone_table_Y(tt, y0);
     const float sc = fminf(tone_lab_fprime(fmaxf(y0, 0.0f)) / tone_lab_fprime(fmaxf(y1, 1e-9f)), 8.0f);
     return { y1 + sc * (v.r - y0), y1 + sc * (v.g - y0), y1 + sc * (v.b - y0) };
@@ -377,7 +382,7 @@ struct Lab {
 };
 
 NEGICC_HD float lab_f(float t) {
-    return (t > 0.008856f) ? cbrtf(t) : (7.787f * t + 16.0f / 116.0f);
+    return (t > (float)kLabEpsilon) ? cbrtf(t) : (((float)kLabKappa * t + 16.0f) / 116.0f);
 }
 
 // Direct linear sRGB D65 -> CIELAB D65 (skips 6x powf of srgb_encode + srgb_decode).
@@ -391,14 +396,14 @@ NEGICC_HD Lab linear_srgb_to_lab(Rgb lin) {
     const float Y = 0.212671f * r + 0.715160f * g + 0.072169f * b;
     const float Z = (0.019334f * r + 0.119193f * g + 0.950227f * b) / 1.088754f;
     const float fx = lab_f(X), fy = lab_f(Y), fz = lab_f(Z);
-    const float L = (Y > 0.008856f) ? (116.0f * fy - 16.0f) : (903.3f * Y);
+    const float L = (Y > (float)kLabEpsilon) ? (116.0f * fy - 16.0f) : ((float)kLabKappa * Y);
     return { L, 500.0f * (fx - fy), 200.0f * (fy - fz) };
 }
 
 // Direct linear sRGB D65 -> CIE L* (1 cbrtf, 0 powf).
 NEGICC_HD float linear_srgb_to_L(Rgb lin) {
     const float Y = 0.212671f * lin.r + 0.715160f * lin.g + 0.072169f * lin.b;
-    return (Y > 0.008856f) ? (116.0f * cbrtf(Y) - 16.0f) : (903.3f * Y);
+    return (Y > (float)kLabEpsilon) ? (116.0f * cbrtf(Y) - 16.0f) : ((float)kLabKappa * Y);
 }
 
 NEGICC_HD Lab srgb_to_lab(Rgb c) {

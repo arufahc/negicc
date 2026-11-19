@@ -220,8 +220,7 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
             // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and rounded CIE 1976 constants (0.008856, 7.787,
             // 903.3).
             const double Y = 0.212671 * cr + 0.715160 * cg + 0.072169 * cb;
-            const double fy = (Y > 0.008856) ? std::cbrt(Y) : (7.787 * Y + 16.0 / 116.0);
-            const double L = (Y > 0.008856) ? (116.0 * fy - 16.0) : (903.3 * Y);
+            const double L = (Y > negicc::kLabEpsilon) ? (116.0 * std::cbrt(Y) - 16.0) : (negicc::kLabKappa * Y);
 
             const double w_sh = std::clamp((kShadowL + kRamp / 2 - L) / kRamp, 0.0, 1.0);
             const double w_hi = std::clamp((L - (kHighlightL - kRamp / 2)) / kRamp, 0.0, 1.0);

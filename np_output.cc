@@ -677,14 +677,13 @@ bool write_json_sidecar(const Sidecar& sc) {
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     cli.insert(cli.end(), {"--tone_stage", v});
   }
-  // A white-light bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone
-  // render these pixels, and --fit_curves off with --tone_stage off keeps the curve fit and the tone stage, which
-  // run after given values too, from running on the replay. (A TriLED bundle's given gains turn the search off, and
-  // with it the tone stage.)
-  if (sc.is_bundle && sc.input_space == InputSpace::kRec2020Linear && cli.size() >= 2 &&
-      std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
+  // A bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone render these
+  // pixels, and --tone_stage off (with --fit_curves off on white light, the fit's light) keeps the stages that run
+  // after given values too from running on the replay.
+  if (sc.is_bundle && cli.size() >= 2 && std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
-    cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
+    if (sc.input_space == InputSpace::kRec2020Linear) cli.insert(cli.end(), {"--fit_curves", "off"});
+    cli.insert(cli.end(), {"--tone_stage", "off"});
   }
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
   // if any, and re-running it re-runs the search (deterministic, with --dino and --dino_iters when given), then the

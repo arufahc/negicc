@@ -568,6 +568,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       tc.white = q[1];
       tc.gamma = q[2];
       tc.contrast = q[3];
+      if (!tone_curve_ok(tc)) return why = "its tone curve is not one the tone stage makes", false;
       s.cached_sidecar.has_tone = true;
     }
     return true;
@@ -1052,22 +1053,23 @@ int prepare(const Options& o, Setup& s) {
   // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
   // which picks the bracket, the exposure and the gains.
   //
-  // White light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the rest
-  // (pinned_search), followed by the curve fit and the tone stage as after an unpinned search, unless turned off.
-  // With all four given there is nothing to search: the search then runs only where the curve fit or the tone stage
-  // runs (they need the search's intent field and frame), and --fit_curves off with --tone_stage off, another -P, or
-  // recorded curves or a recorded tone curve (a sidecar's cli_equivalent) convert with the given values alone.
+  // A bundle, on either light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the
+  // rest (pinned_search), followed by the curve fit (white light) and the tone stage as after an unpinned search,
+  // unless turned off. With all four given there is nothing to search: the search then runs only where the curve fit
+  // or the tone stage runs (they need the search's intent field and frame), and --fit_curves off with --tone_stage
+  // off, another -P, or recorded curves or a recorded tone curve (a sidecar's cli_equivalent) convert with the given
+  // values alone.
   //
-  // TriLED and a single ICC profile: the search runs unless --gain_g or --gain_b is given; with --target or -E (and on
-  // a single ICC profile) the single-bracket solver solves the gains, and the exposure unless -E gives it.
+  // A single ICC profile: the single-bracket solver solves the gains, and the exposure unless -E gives it, unless
+  // --gain_g or --gain_b is given.
   {
     const bool gains_given = o.gain_g_given || o.gain_b_given;
     const bool any_pin = s.manual_target_idx >= 0 || o.exposure_given || gains_given;
     const bool all_pinned = s.manual_target_idx >= 0 && o.exposure_given && o.gain_g_given && o.gain_b_given;
     const bool replay = o.input_curves_given || o.tone_replay_given;
     const bool fit_wanted = o.fit_curves != Options::kFitCurvesOff && fit_encoding_ok;
-    s.pinned_search = s.is_bundle && s.white_light && !s.has_crosstalk && any_pin && !replay &&
-                      (!all_pinned || fit_wanted || tone_wanted);
+    const bool fit_runs = fit_wanted && s.white_light && !s.has_crosstalk;   // the curve fit is white light's
+    s.pinned_search = s.is_bundle && any_pin && !replay && (!all_pinned || fit_runs || tone_wanted);
     s.use_dino = s.has_profile && (!gains_given || s.pinned_search);
     s.bundle_search = s.use_dino && s.is_bundle &&
                       (s.pinned_search || (s.manual_target_idx < 0 && !s.exposure_given));
@@ -1075,9 +1077,8 @@ int prepare(const Options& o, Setup& s) {
   if (!o.probe_intent.empty()) {
     // The probe is written by the bundle search: without it there would be no file and nothing said.
     if (!s.bundle_search) {
-      log_error("--probe_intent needs the bundle search: a profile bundle; on TriLED none of --target, -E, --gain_g "
-                "and --gain_b given; on white light no recorded curves or tone curve, and not all four given unless "
-                "the curve fit or the tone stage runs\n");
+      log_error("--probe_intent needs the bundle search: a profile bundle, no recorded curves or tone curve, and not "
+                "all of --target, -E and the gains given unless the curve fit or the tone stage runs\n");
       return 1;
     }
     for (const std::array<float, 4>& p : o.probe_params) {
@@ -1089,10 +1090,9 @@ int prepare(const Options& o, Setup& s) {
     }
   }
   if ((!o.dino_adapter.empty() || !o.neutral_head_file.empty() || !o.tone_head_file.empty()) && !s.use_dino) {
-    log_error("--dino requires the parameter search: a profile (--film_stock and --light_source, or "
-                    "--film_profile) without --gain_g or --gain_b (on a white-light bundle they may be given, unless "
-                    "--target, -E and both gains are given with --fit_curves off and --tone_stage off, or recorded "
-                    "values)\n");
+    log_error("--dino requires the parameter search: a profile bundle, unless --target, -E and both gains are given "
+              "with neither the curve fit nor the tone stage running, or recorded values; or an ICC profile without "
+              "--gain_g or --gain_b\n");
     return 1;
   }
   if (fit_on && !fit_encoding_ok) {
@@ -1165,6 +1165,12 @@ int prepare(const Options& o, Setup& s) {
     }
     const double* q = o.tone_replay;
     s.tone_curve = {q[0], q[1], q[2], q[3]};
+    if (!tone_curve_ok(s.tone_curve)) {
+      log_error("--tone_stage curve:%g,%g,%g,%g is not a curve the tone stage makes (black %g to %g, white %g to %g, "
+                "gamma %g to %g, contrast %g to %g)\n", q[0], q[1], q[2], q[3], kToneLo[0], kToneHi[0], kToneLo[1],
+                kToneHi[1], kToneLo[2], kToneHi[2], kToneLo[3], kToneHi[3]);
+      return 1;
+    }
     s.has_tone = true;
   }
 
@@ -1197,8 +1203,8 @@ int prepare(const Options& o, Setup& s) {
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
-      // A white-light bundle holds given gains in its search (pinned_search), so they alone do not turn it off. A
-      // print and a density output are made by the search and take no given values: they need the backbone.
+      // A bundle holds given gains in its search (pinned_search), so they alone do not turn it off. A print and a
+      // density output are made by the search and take no given values: they need the backbone.
       log_error("This neg_process was built without the DINOv3 backbone of the parameter search (make "
                 "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild)%s\n",
                 !s.print_id.empty() || s.density
@@ -1206,6 +1212,8 @@ int prepare(const Options& o, Setup& s) {
                 : s.is_bundle && s.white_light
                     ? "; give --target, -E, --gain_g and --gain_b with --fit_curves off and --tone_stage off to "
                       "convert without it"
+                : s.is_bundle
+                    ? "; give --target, -E, --gain_g and --gain_b with --tone_stage off to convert without it"
                     : "; give --gain_g or --gain_b to convert without it");
       return 1;
     }
@@ -1319,6 +1327,19 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
   return 0;
+}
+
+// --target, -E, --gain_g and --gain_b on a pinned search (Setup::pinned_search): held by the search and the curve
+// fit, which solve the rest.
+static void set_search_pins(const Options& o, const Setup& s, ParamSearchOptions& opts) {
+  if (!s.pinned_search) return;
+  opts.pin_target = s.manual_target_idx;
+  if (o.exposure_given) opts.pin_mask |= PIN_E;
+  if (o.gain_g_given) opts.pin_mask |= PIN_G;
+  if (o.gain_b_given) opts.pin_mask |= PIN_B;
+  opts.pin_e = o.exposure_comp;
+  opts.pin_g = o.gain_g;
+  opts.pin_b = o.gain_b;
 }
 
 // The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
@@ -1562,6 +1583,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
   // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
   // highlight roll-off measured at them.
+  // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
+  // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
+  // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
+  auto set_fit_frame = [&](ParamSearchOptions& p) {
+    p.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence : scan.has_roi && scan.frame_is_whole;
+    p.film_base_is_rebate = scan.film_base.is_rebate();
+  };
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
@@ -1635,6 +1663,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.check_renderer) ro.renderer = &pass_through_renderer();
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
+        set_fit_frame(ro);
         const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
         auto reanchor_at = [&](const float to[3]) {
@@ -2093,12 +2122,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
       s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
       s.curves_base_prof.rebind_pointers();
-      // --roi auto that fell back to the whole image, or a given --roi that is the whole image (as --roi auto's
-      // fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder.
       ParamSearchOptions fit_search_opts = opts;
-      fit_search_opts.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence
-                                                 : scan.has_roi && scan.frame_is_whole;
-      fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
+      set_fit_frame(fit_search_opts);
       if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts, scan.auto_res,
                                fit_opts, export_encoding, tone_head, s.curve_fit)) {
         log_error("Fitting the input curves failed\n");
@@ -2171,16 +2196,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
-        if (s.pinned_search) {
-          // --target, -E, --gain_g and --gain_b: held by the search and the curve fit, which solve the rest.
-          opts.pin_target = s.manual_target_idx;
-          if (o.exposure_given) opts.pin_mask |= PIN_E;
-          if (o.gain_g_given) opts.pin_mask |= PIN_G;
-          if (o.gain_b_given) opts.pin_mask |= PIN_B;
-          opts.pin_e = o.exposure_comp;
-          opts.pin_g = o.gain_g;
-          opts.pin_b = o.gain_b;
-        }
+        set_search_pins(o, s, opts);
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
@@ -2504,6 +2520,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+      set_search_pins(o, s, opts);
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;

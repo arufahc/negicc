@@ -153,7 +153,9 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
   if (!(ref > 0.0f) || table_n < 2) return true;
-  float prev = INFINITY;  // f at the entry above; the table is walked from ref down
+  // f at the entry above; the table is walked from ref down, from f = 0 there (the identity at and above ref), so the
+  // curve stays below ref as it leaves it.
+  float prev = 0.0f;
   for (int i = table_n - 1; i >= 1; --i) {
     const float v = static_cast<float>(i) / static_cast<float>(table_n - 1);
     if (!(v < ref)) continue;
@@ -162,7 +164,9 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
     if (!(f < prev) || std::fabs(f - u) > max_dev) return false;
     prev = f;
   }
-  return true;
+  // Entry 0 (v = 0, which input_curve reads at 1e-12): monotonic too. The departure bound is not applied there: tens of
+  // stops below the table's first step every curve with a != k departs that far, and the entry reads 0 either way.
+  return !(ref > 1e-12f) || curve_stops(std::log2(1e-12f / ref), u_med, a, k, u_hold) < prev;
 }
 
 // The smallest sigma the losses divide by. The intent field's sigma is checked positive and finite where it is

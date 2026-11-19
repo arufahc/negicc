@@ -234,12 +234,11 @@ int parse_options(int ac, char* av[], Options& o) {
           "cli_equivalent: auto.e, the search's own; with fitted curves, input_curves.remeter.e, re-metered on the "
           "combined profile; after the knobs, knobs.egb.e): "
           "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
-          "corrected RGB. Given with a white-light (d65) bundle, the bundle search holds it and solves the rest (the "
-          "bracket unless --target gives it, the gains unless given), and the curve fit and the tone stage run on "
-          "the result as after an unpinned search, without re-metering E. Given with a TriLED bundle or an ICC "
-          "profile, the single-bracket solver keeps it and solves only the gains, on the bracket --target picks (or "
-          "the bundle's default). Not given with given gains on TriLED: the centre of the bracket's exposure range "
-          "as the bundle search meters it; with an ICC profile, 1. --brightness moves the result, a given E too.")
+          "corrected RGB. Given with a bundle (either light), the bundle search holds it and solves the rest (the "
+          "bracket unless --target gives it, the gains unless given), and the curve fit (white light) and the tone "
+          "stage run on the result as after an unpinned search, without re-metering E. Given with an ICC profile, "
+          "the single-bracket solver keeps it and solves only the gains; not given there, 1. --brightness moves the "
+          "result, a given E too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--no-metadata")
@@ -247,12 +246,12 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--gain_g")
-    .help("Gain of the G channel relative to R (with a bundle, 1 renders the film base "
-          "neutral). Defaults to 1.0. Given with a white-light (d65) bundle, the bundle search and the curve fit "
-          "hold it and solve the rest; with -E, --target and --gain_b given too there is nothing to search, and the "
-          "search runs only for the curve fit and the tone stage (--fit_curves off --tone_stage off converts with "
-          "the given values alone). Given with a TriLED bundle or an ICC profile, it turns the parameter search off. --tint and "
-          "--warmth move the result, a given gain too.")
+    .help("Gain of the G channel relative to R (with a bundle, 1 renders the film base neutral). Defaults to 1.0. "
+          "Given with a bundle (either light), the bundle search and the curve fit hold it and solve the rest; with "
+          "-E, --target and --gain_b given too there is nothing to search, and the "
+          "search runs only for the curve fit (white light) and the tone stage (--tone_stage off, with --fit_curves "
+          "off on white light, converts with the given values alone). Given with an ICC profile, it turns the "
+          "parameter search off. --tint and --warmth move the result, a given gain too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
@@ -387,9 +386,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "metered exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture "
           "output the print's search writes the file instead (its mid grey A at each --probe_stops offset; "
           "--probe_params does not apply) and the conversion goes on. Needs the bundle search to run: refused where "
-          "it does not (a single ICC profile; on TriLED, any of --target, -E, --gain_g and --gain_b; on white light, "
-          "recorded curves or a recorded tone curve, or all four with neither the curve fit nor the tone stage), and "
-          "a previous run's <output>.json is not reused with it.")
+          "it does not (an ICC profile; a bundle with all of --target, -E and the gains given and neither the curve "
+          "fit nor the tone stage running; recorded values), and a previous run's <output>.json is not reused with "
+          "it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
     .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
@@ -406,10 +405,9 @@ int parse_options(int ac, char* av[], Options& o) {
     .scan<'i', int>()
     .default_value(4);
   parser.add_argument("--target", "--bundle_target")
-    .help("Target index (0-based) or target name in JSON profile bundle. With a white-light (d65) bundle the bundle "
-          "search runs on that bracket alone and everything else is as without --target: E and the gains are solved "
-          "(unless given), and the curve fit and the tone stage run. The clip fallback, which only changes the "
-          "bracket, is left out. With a TriLED bundle the single-bracket solver runs on it.")
+    .help("Target index (0-based) or target name in JSON profile bundle. The bundle search runs on that bracket alone "
+          "and everything else is as without --target: E and the gains are solved (unless given), and the curve fit "
+          "(white light) and the tone stage run. The clip fallback, which only changes the bracket, is left out.")
     .default_value(std::string(""));
   // Fitted G/B input curves (input_curves.h).
   parser.add_argument("--fit_curves")

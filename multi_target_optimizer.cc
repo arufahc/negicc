@@ -599,7 +599,7 @@ void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
   float xyz[3];
   for (int c = 0; c < 3; ++c) {
     const float f3 = f[c] * f[c] * f[c];
-    xyz[c] = (f3 > 0.008856f ? f3 : (f[c] - 16.0f / 116.0f) / 7.787f) * kD50[c];
+    xyz[c] = (f3 > (float)negicc::kLabEpsilon ? f3 : (116.0f * f[c] - 16.0f) / (float)negicc::kLabKappa) * kD50[c];
   }
   const negicc::Rgb l = negicc::pcs_to_linear_srgb_unclamped({xyz[0], xyz[1], xyz[2]});
   for (int r = 0; r < 3; ++r) {
@@ -1346,9 +1346,9 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
 // 903.3 x 0.008856 = 7.9996).
 // py-ref: negicc_station/src/grey_point.py (lstar_after_stops)
 static float lstar_after_stops(float L, float stops) {
-  double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / 903.3;
+  double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / negicc::kLabKappa;
   Y *= std::pow(2.0, (double)stops);
-  return (float)(Y > 0.008856 ? 116.0 * std::cbrt(Y) - 16.0 : 903.3 * Y);
+  return (float)(Y > negicc::kLabEpsilon ? 116.0 * std::cbrt(Y) - 16.0 : negicc::kLabKappa * Y);
 }
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
@@ -1557,7 +1557,7 @@ bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const 
 }
 
 float knob_grey_miss_stops(float brightness_stops, float grey_L) {
-  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / 903.3; };
+  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / negicc::kLabKappa; };
   return (float)std::log2(Y(grey_L) / Y(lstar_after_stops(50.0f, brightness_stops)));
 }
 
@@ -2243,6 +2243,29 @@ void apply_input_curves(ParsedFilmProfile& prof, const ParsedFilmProfile& base, 
 // What anchors the curves on a frame (negicc::CurveFrame) from its statistics: the search's matrix, the knee, and the
 // film base read from the scan (opts), else the brightest grid cell per channel, as the station takes it. stats must
 // outlive the result (its grid is not copied).
+// On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate, gaps,
+// bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of the film
+// itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops below the
+// base) are not picture. The indices of the cells kept, when that leaves enough picture (at least 16 cells and a
+// quarter of the grid, enough to constrain the curve fit's four numbers) and drops some; else none (the whole grid).
+// Both limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9 stops below
+// it. The curve fit (WhiteLightFitCore::prepare) and the knobs' re-anchoring (reanchor_input_curves) both take them.
+static std::vector<size_t> fallback_picture_cells(const uint16_t* grid, size_t n, const float film_base[3],
+                                                  bool base_is_rebate) {
+  constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
+  std::vector<size_t> kept;
+  if (!(film_base[1] > 0.0f && film_base[2] > 0.0f)) return kept;
+  const float base_lim[2] = {film_base[1] * std::exp2(-kBaseCellStops), film_base[2] * std::exp2(-kBaseCellStops)};
+  const float holder_lim = film_base[1] * std::exp2(-kHolderCellStops);
+  for (size_t i = 0; i < n; ++i) {
+    const float g = grid[i * 3 + 1], b = grid[i * 3 + 2];
+    if ((base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
+    kept.push_back(i);
+  }
+  if (kept.size() < std::max<size_t>(16, n / 4) || kept.size() == n) kept.clear();
+  return kept;
+}
+
 static negicc::CurveFrame curve_frame_of(const FrameStats& stats, const float* merged, const ParamSearchOptions& opts) {
   negicc::CurveFrame cf;
   cf.merged = merged;
@@ -2292,8 +2315,20 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   FrameStats stats;
   compute_frame_stats(frame, opts.crop_ratio, engine.max_size(), engine.patch_size(), stats);
   const FrameScale fs = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
-  const negicc::CurveFrame cf = curve_frame_of(stats, fs.frame_matrix, opts);
+  negicc::CurveFrame cf = curve_frame_of(stats, fs.frame_matrix, opts);
   if (cf.n <= 0) return true;
+  // On a fallback crop, the cells the curve fit anchored on (fallback_picture_cells): rebate and holder cells stay put
+  // while picture cells move with the knobs, so counting them would move the anchors by less than the picture does.
+  std::vector<uint16_t> kept_grid;
+  if (opts.fallback_crop) {
+    const std::vector<size_t> kept = fallback_picture_cells(cf.grid, (size_t)cf.n, cf.film_base,
+                                                            opts.film_base_is_rebate);
+    for (size_t i : kept) kept_grid.insert(kept_grid.end(), cf.grid + i * 3, cf.grid + i * 3 + 3);
+    if (!kept.empty()) {
+      cf.grid = kept_grid.data();
+      cf.n = (int)kept.size();
+    }
+  }
   // Moved by the difference of two fresh anchors rather than replaced by the one at to, so a replay's recorded ref and
   // u_med carry over exactly where nothing moves.
   const negicc::InputCurves a0 = negicc::anchor_curves(curves, cf, from[0], from[1], from[2]);
@@ -2401,13 +2436,8 @@ class WhiteLightFitCore {
     }
     cf_.grid = d_.grid;
     cf_.n = (int)n;
-    // On a fallback crop (the whole image, not a detected frame) the grid's cells at the film base's level (rebate,
-    // gaps, bare light: G and B within kBaseCellStops of a rebate base; a statistical base is the 99.5th percentile of
-    // the film itself, so its level is the thinnest picture highlights) or holder-dark (G more than kHolderCellStops
-    // below the base) are not picture: they are left out of the fit, the re-meter and the losses, with their intent
-    // cells. Both limits are assumptions: that the base varies by less than a quarter stop, and that no picture is 9
-    // stops below it.
-    constexpr float kBaseCellStops = 0.25f, kHolderCellStops = 9.0f;
+    // On a fallback crop the cells that are not picture (fallback_picture_cells) are left out of the fit, the re-meter
+    // and the losses, with their intent cells.
     fit_grid_ = d_.grid;
     nf_ = n;
     out_.cells_total = (int)n;
@@ -2424,20 +2454,10 @@ class WhiteLightFitCore {
       m.swap(km);
       s.swap(ks);
     };
-    if (d_.fallback_crop && cf_.film_base[1] > 0.0f && cf_.film_base[2] > 0.0f) {
-      std::vector<size_t> try_idx;
-      const float base_lim[2] = {cf_.film_base[1] * std::exp2(-kBaseCellStops),
-                                 cf_.film_base[2] * std::exp2(-kBaseCellStops)};
-      const float holder_lim = cf_.film_base[1] * std::exp2(-kHolderCellStops);
-      for (size_t i = 0; i < n; ++i) {
-        const float g = d_.grid[i * 3 + 1], b = d_.grid[i * 3 + 2];
-        if ((d_.film_base_is_rebate && g >= base_lim[0] && b >= base_lim[1]) || g <= holder_lim) continue;
-        kept_grid_.insert(kept_grid_.end(), d_.grid + i * 3, d_.grid + i * 3 + 3);
-        try_idx.push_back(i);
-      }
-      // Only with enough picture left (at least 16 cells and a quarter of the grid, enough to constrain the fit's four
-      // numbers); else the whole grid.
-      if (kept_grid_.size() / 3 >= std::max<size_t>(16, n / 4) && kept_grid_.size() / 3 < n) {
+    if (d_.fallback_crop) {
+      std::vector<size_t> try_idx = fallback_picture_cells(d_.grid, n, cf_.film_base, d_.film_base_is_rebate);
+      for (size_t i : try_idx) kept_grid_.insert(kept_grid_.end(), d_.grid + i * 3, d_.grid + i * 3 + 3);
+      if (!try_idx.empty()) {
         out_.cells_excluded = (int)(n - kept_grid_.size() / 3);
         nf_ = kept_grid_.size() / 3;
         fit_grid_ = kept_grid_.data();

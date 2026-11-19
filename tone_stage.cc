@@ -36,10 +36,10 @@ static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
 }
 static inline double tone_lab_f(double t) {
-    return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+    return t > negicc::kLabEpsilon ? std::cbrt(t) : (negicc::kLabKappa * t + 16.0) / 116.0;
 }
 static inline double tone_lab_finv(double t) {
-    return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
+    return t * t * t > negicc::kLabEpsilon ? t * t * t : (116.0 * t - 16.0) / negicc::kLabKappa;
 }
 
 // f(L) without the final clamp to 0..100.
@@ -49,6 +49,13 @@ static inline double tone_curve_L(double L, const ToneCurve& q) {
     x = std::pow(x, q.gamma);
     const double xc = std::pow(x, q.contrast), yc = std::pow(1 - x, q.contrast);
     return q.black + (q.white - q.black) * xc / (xc + yc);
+}
+
+bool tone_curve_ok(const ToneCurve& q) {
+    const double v[4] = {q.black, q.white, q.gamma, q.contrast};
+    for (int i = 0; i < 4; ++i)
+        if (!std::isfinite(v[i]) || v[i] < kToneLo[i] || v[i] > kToneHi[i]) return false;
+    return true;
 }
 
 // The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
