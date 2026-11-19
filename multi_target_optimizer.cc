@@ -2963,8 +2963,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   // E = 1 relative to the frame's own film base: the base reads n0, as the brackets were measured. The search runs on
   // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
   // the base at n0 / e_norm and make the print depend on how long the scan was exposed; E = e_norm puts it at n0. The
-  // result's E (E / e_norm) is then 1. On white light the search runs on M_frame itself (SearchFrame::set_frame_matrix),
-  // so E = 1 puts the base at n0.
+  // result's E (E / e_norm) is then 1. On white light the search runs on M_frame itself
+  // (SearchFrame::set_frame_matrix), so E = 1 puts the base at n0.
   const bool white_light = !bundle.has_crosstalk;
   const float E = white_light ? 1.0f : e_norm;
   float m[9];

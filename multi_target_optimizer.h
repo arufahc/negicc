@@ -365,7 +365,7 @@ struct PrintKnobResult {
   bool limited = false;
   float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the grey's Lab through the print at (a, g, b)
 };
-// the knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
+// The knobs on a print, solved on the print's own profile (multi_target_optimizer.cc).
 // print_at(a, g, b, prof) builds the print profile at mid grey a with gains g, b in its curves.
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
                        double a0, float g0, float b0, float brightness_stops, float tint_a, float warmth_b,
@@ -435,7 +435,7 @@ struct ContinuousPrintResult {
   const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within TOL_REL_ERR), "steps"
 };
 // print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A,
-// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders the print).
+// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders it).
 bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base, const ContinuousPrint& cp,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                              const ParamSearchOptions& opts, ParamSearchResult& out, ContinuousPrintResult& cr);

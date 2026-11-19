@@ -482,7 +482,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       if (j["profile"]["print"].contains("search") && j["profile"]["print"]["search"].is_object())
         s.cached_sidecar.print_search_json_str = j["profile"]["print"]["search"].dump();
     }
-    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
+    // A knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
     if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
         j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
       s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
@@ -608,7 +608,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (j.contains("profile") && j["profile"].is_object() && j["profile"].contains("print") &&
         j["profile"]["print"].is_object() && j["profile"]["print"].contains("a") && j["profile"]["print"]["a"].is_number())
       s.cached_sidecar.print_a = j["profile"]["print"]["a"].get<double>();
-    // a knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
+    // A knob run's sidecar records the print's A before the knobs; a run reusing it starts from there.
     if (j.contains("knobs") && j["knobs"].is_object() && j["knobs"].contains("base") && j["knobs"]["base"].is_object() &&
         j["knobs"]["base"].contains("a") && j["knobs"]["base"]["a"].is_number())
       s.cached_sidecar.print_a = j["knobs"]["base"]["a"].get<double>();
@@ -1520,7 +1520,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
-    // on a print the knobs act on the print's own A, g and b, solved on its profile; E held.
+    // On a print the knobs act on the print's own A, g and b, solved on its profile; E held.
     // A density output's knobs move its print CLFs (density_print_searches), not its suggested balance.
     const bool knobs_here = o.knobs_given && !s.density;
     if (knobs_here && !s.print_profs.empty() && std::isfinite(s.print_a) && target_idx >= 0 &&
@@ -1630,7 +1630,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
-    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured for it.
+    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured.
     if (!s.print_id.empty()) return true;
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
       // The curve fit measured the roll-off on this frame, at these E, g and b, on this combined profile, as below

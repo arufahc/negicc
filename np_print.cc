@@ -452,7 +452,7 @@ std::string date_time(long long timestamp, char sep) {
   return buf;
 }
 
-// ---- TIFF (little-endian, one strip) ---------------------------------------------------------------------------------
+// ---- TIFF (little-endian, one strip) --------------------------------------------------------------------------------
 struct TiffEntry {
   uint16_t tag, type;
   uint32_t count, value;
@@ -466,7 +466,7 @@ void put32(std::vector<uint8_t>& b, uint32_t v) {
   for (int k = 0; k < 4; ++k) b.push_back((uint8_t)((v >> (8 * k)) & 0xff));
 }
 
-// ---- DPX (big-endian) ------------------------------------------------------------------------------------------------
+// ---- DPX (big-endian) -----------------------------------------------------------------------------------------------
 void be16(uint8_t* p, uint16_t v) {
   p[0] = (uint8_t)(v >> 8);
   p[1] = (uint8_t)(v & 0xff);

@@ -20,7 +20,7 @@
 // A pixel, after the film base's merged matrix (crosstalk correction and film base scale; the film base lands on
 // base_level), is a transmittance relative to bare film in each of the scanning light's channels:
 //
-//     T = v / base_level,   D_light = -log10(max(T, kDensityMinT)),   D = M * D_light,   code = round(offset + scale * D)
+//     T = v / base_level,  D_light = -log10(max(T, kDensityMinT)),  D = M * D_light,  code = round(offset + scale * D)
 //
 // M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
 // offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
@@ -171,7 +171,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 //     dye amounts   a_c = curve_c(logE_c)                                   (linear interpolation, held at the ends)
 //     transmittance t(w) = 10^-(sum_c a_c dye_c(w) + base(w))
 //     XYZ           = sum_w t(w) observer(w)
-// and a printing density pd is exposed as  logE = aim - (pd - grey_density),  aim the exposure that prints an 18 % grey.
+// and a printing density pd is exposed as logE = aim - (pd - grey_density), aim the exposure that prints an 18 % grey.
 //
 // py-ref: negicc_station/src/print_emulation.py (PrintModel, frame_grey, print_clf)
 
@@ -205,8 +205,8 @@ struct PrintMaterial {
 // Computed here:
 //
 //   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
-//   the observer              the CIE 1931 2 degree observer (np_print.cc's CIE tables) under D50 for a paper, D55 for a print
-//                             film (info.support), adapted to D65 with CAT02 for sRGB
+//   the observer              the CIE 1931 2 degree observer (np_print.cc's CIE tables) under D50 for a paper, D55 for
+//                             a print film (info.support), adapted to D65 with CAT02 for sRGB
 //   aim                       the exposure of each layer that prints an 18 % grey
 //   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
 //                             no light_density_factors: F its film_to_measure (dye amounts to the measure's density),
@@ -307,7 +307,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
 void remove_print_clfs(const DensityPrints& prints);
 
-// ---- The print ICC: a frame printed as the picture conversion renders it ---------------------------------------------
+// ---- The print ICC: a frame printed as the picture conversion renders it --------------------------------------------
 //
 // With --print and a picture output on a profile bundle, the print's own search runs on the print profile
 // (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print
