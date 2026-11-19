@@ -95,7 +95,7 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
-  // The bundle's search with --target, -E, --gain_g or --gain_b held (white light): Auto with those pinned.
+  // The bundle's search with --target, -E, --gain_g or --gain_b held (either light): Auto with those pinned.
   bool pinned_search = false;
   bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
   bool tone_active = false;              // the tone stage runs (--tone_stage auto or on, where it applies)

@@ -48,16 +48,16 @@ bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1
 # 6x7 under white light, with LibRaw's DCB demosaic.
 bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
 
-# Set the bracket, exposure and gains yourself. On RGB-LED scans, giving a gain turns the automatic search off.
-bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
+# Set the bracket, exposure and gains yourself; --tone_stage off converts with them and nothing else.
+bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 --tone_stage off -P srgb -o out.tif scan.ARW
 
 # White light: fix only the bracket. Everything else is found as usual, on that bracket.
 bin_out/neg_process --film_stock portra400 --light_source d65 --target 4 -P srgb -o out.tif scan.ARW
 ```
 
-On white-light scans, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
-search, the curve fit and the tone stage still run, holding what you gave. Add `--fit_curves off --tone_stage off`
-to convert with the given values and nothing else.
+On either light, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
+search, the tone stage and (on white light) the curve fit still run, holding what you gave. Add `--tone_stage off`
+(and `--fit_curves off` on white light) to convert with the given values and nothing else.
 
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
@@ -312,10 +312,10 @@ scene conversion's lightness with `--brightness` (the offset in stops is in each
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
 | `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
-| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White light: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
+| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). The search (and the curve fit on white light) keeps them and finds the rest. With an ICC profile (`-p file.icc`), giving either turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
 | `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED, nor to a print). Eight or ten numbers replay the curves recorded in a sidecar. |
-| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
+| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
 | `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |

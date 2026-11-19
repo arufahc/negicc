@@ -342,9 +342,9 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds
 # also its TensorRT engine (make dinov3_engine, on the machine that runs it), which falls back to the .onnx when it
-# cannot be loaded. Without the backbone neg_process still builds, but converts only without the search: with
-# --gain_g or --gain_b on a TriLED bundle or an ICC profile; on a white-light bundle with --target, -E, --gain_g and
-# --gain_b, --fit_curves off and --tone_stage off. A print and a density output need it.
+# cannot be loaded. Without the backbone neg_process still builds, but converts only without the search: on a bundle
+# with --target, -E, --gain_g and --gain_b and --tone_stage off (and --fit_curves off on white light); with --gain_g or
+# --gain_b on an ICC profile. A print and a density output need it.
 # USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
 # models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3_engine.h) of the white-light

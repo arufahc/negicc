@@ -447,9 +447,10 @@ The search's parameters, in the order the steps use them:
 | Highlight pullback | `L*` 58 with 2.2 %, `L*` 48 with 7.5 % (11 % above 235); 0.15 stop | Darkens a bright frame whose highlights crowd white. |
 | Highlight roll-off | 99.5 % point to sRGB 242; `x_hi` ≤ 2.5; exponent 2; ceiling 0.988 | Compresses highlights above the chart's white. |
 
-**Given values.** On a white-light bundle, `--target`, `-E`, `--gain_g` and `--gain_b` are held and the rest is
-searched. On a TriLED bundle `--target` or `-E` runs a single-bracket solver on that bracket, and a given gain turns
-the search off. `--brightness`, `--tint` and `--warmth` move the result afterwards, in stops of the reference grey's
+**Given values.** On a bundle, under either light, `--target`, `-E`, `--gain_g` and `--gain_b` are held and the rest
+is searched; with all four given the search runs only for the curve fit (white light) and the tone stage. A single
+ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or nothing runs the single-bracket solver
+(`solve_dinov3_intent`) and a given gain turns the search off. `--brightness`, `--tint` and `--warmth` move the result afterwards, in stops of the reference grey's
 luminance and in its `a*` and `b*`.
 
 **Limits.** The search does not always reach the same answer from different starts. The thresholds of steps 1, 5 and
