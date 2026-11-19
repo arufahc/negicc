@@ -49,6 +49,13 @@ static inline double tone_curve_L(double L, const ToneCurve& q) {
     return q.black + (q.white - q.black) * xc / (xc + yc);
 }
 
+bool tone_curve_ok(const ToneCurve& q) {
+    const double v[4] = {q.black, q.white, q.gamma, q.contrast};
+    for (int i = 0; i < 4; ++i)
+        if (!std::isfinite(v[i]) || v[i] < kToneLo[i] || v[i] > kToneHi[i]) return false;
+    return true;
+}
+
 // The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
 std::vector<float> tone_table(const ToneCurve& q) {
     std::vector<float> lut(kToneTableSize + 1);
