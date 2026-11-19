@@ -9,8 +9,6 @@ bin_out
 __pycache__
 .DS_Store
 \#*
-3rd_party/onnxruntime/*
-!3rd_party/onnxruntime/README.md
 models/dinov3-small/backbone.engine
 models/dinov3-small_*/adapter.engine
 3rd_party/onnxruntime_prebuilt/lib/

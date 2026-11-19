@@ -1679,7 +1679,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  lab1[1], lab1[2], knob_grey_miss_stops(o.brightness, lab1[0]));
       }
     }
-    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured for it.
+    // A print keeps no highlight shoulder (solve: the paper rolls the highlights off), so no roll-off is measured.
     if (!s.print_id.empty()) return true;
     if (!scan.has_knob_res && scan.has_curve_params && s.curve_fit.rolloff_measured) {
       // The curve fit measured the roll-off on this frame, at these E, g and b, on this combined profile, as below
@@ -1696,7 +1696,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   };
   // A density run with --print, on either light: each material's own print search, so that its CLF prints the frame
   // as the picture conversion would (DensityRecord::print_search). The scene's search before it gives the file's
-  // suggested balance, as without --print.
+  // suggested balance: on TriLED as without --print; on white light the search's own, where without --print it is the
+  // curve fit's (with --print no fit runs).
   auto density_print_searches = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                     const ParamSearchOptions& opts) -> bool {
     // In density_prints' order, which writes the CLFs: the built-in materials asked for (or all), then the files in

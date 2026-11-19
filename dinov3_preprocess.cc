@@ -215,8 +215,8 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
             const double cg = srgb_lin(g_sum * inv_pixels / 255.0);
             const double cb = srgb_lin(b_sum * inv_pixels / 255.0);
 
-            // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of the
-            // PCS -> sRGB conversion).
+            // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of
+            // the PCS -> sRGB conversion).
             const double Y = 0.212671 * cr + 0.715160 * cg + 0.072169 * cb;
             const double fy = (Y > 0.008856) ? std::cbrt(Y) : (7.787 * Y + 16.0 / 116.0);
             const double L = (Y > 0.008856) ? (116.0 * fy - 16.0) : (903.3 * Y);
