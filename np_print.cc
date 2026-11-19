@@ -1003,7 +1003,11 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
   const double cat02[9] = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030, 0.0136, 0.9834};
   const double xyz_to_srgb[9] = {3.2404542, -1.5371385, -0.4985314, -0.9692660, 1.8760108,
                                  0.0415560, 0.0556434,  -0.2040259, 1.0572252};
-  const double d65[3] = {0.3127 / 0.3290, 1.0, (1.0 - 0.3127 - 0.3290) / 0.3290};
+  // D65 as the matrix has it (the XYZ it takes to sRGB 1, 1, 1), so the viewing light's white lands on sRGB white
+  // exactly.
+  double srgb_to_xyz[9], d65[3];
+  invert3(xyz_to_srgb, srgb_to_xyz);
+  for (int r = 0; r < 3; ++r) d65[r] = srgb_to_xyz[r * 3] + srgb_to_xyz[r * 3 + 1] + srgb_to_xyz[r * 3 + 2];
   double cat_inverse[9], scaled[9];
   invert3(cat02, cat_inverse);
   for (int r = 0; r < 3; ++r) {

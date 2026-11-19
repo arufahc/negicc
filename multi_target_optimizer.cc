@@ -597,7 +597,7 @@ void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
   float xyz[3];
   for (int c = 0; c < 3; ++c) {
     const float f3 = f[c] * f[c] * f[c];
-    xyz[c] = (f3 > 0.008856f ? f3 : (f[c] - 16.0f / 116.0f) / 7.787f) * kD50[c];
+    xyz[c] = (f3 > (float)negicc::kLabEpsilon ? f3 : (116.0f * f[c] - 16.0f) / (float)negicc::kLabKappa) * kD50[c];
   }
   const negicc::Rgb l = negicc::pcs_to_linear_srgb_unclamped({xyz[0], xyz[1], xyz[2]});
   for (int r = 0; r < 3; ++r) {
@@ -1342,9 +1342,9 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
 // L* of a grey whose luminance is multiplied by 2 ** stops (CIE L* <-> relative luminance Y).
 // py-ref: negicc_station/src/grey_point.py (lstar_after_stops)
 static float lstar_after_stops(float L, float stops) {
-  double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / 903.3;
+  double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / negicc::kLabKappa;
   Y *= std::pow(2.0, (double)stops);
-  return (float)(Y > 0.008856 ? 116.0 * std::cbrt(Y) - 16.0 : 903.3 * Y);
+  return (float)(Y > negicc::kLabEpsilon ? 116.0 * std::cbrt(Y) - 16.0 : negicc::kLabKappa * Y);
 }
 
 // py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
@@ -1553,7 +1553,7 @@ bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const 
 }
 
 float knob_grey_miss_stops(float brightness_stops, float grey_L) {
-  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / 903.3; };
+  auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / negicc::kLabKappa; };
   return (float)std::log2(Y(grey_L) / Y(lstar_after_stops(50.0f, brightness_stops)));
 }
 
