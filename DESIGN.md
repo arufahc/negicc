@@ -98,14 +98,14 @@ Rec.2020 already and are not converted. A TIFF with `--light_source tri` is take
 embedded profile or 8-bit samples is refused there.
 
 Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set
-(`np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
+or a single ICC profile (`-p`; `np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the second, blue from the
 third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the quality `-q` gives) and
 the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit linear camera RGB with
 no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single TIFF is under an
 RGB-LED profile set). When all three captures record shutter and
 ISO, the green and blue channels are scaled to the first capture's exposure. The half-size image is each RAW's own
-half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame, it is the mean of each 2×2 block
-of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
+half-size decode, or the mean of each 2×2 block of a TIFF; when `--roi` cuts a frame (a given one, or `--roi auto`'s
+when its detection is confident), it is the mean of each 2×2 block of the assembled image. Each channel comes from the capture under its own light, so `X` is the identity unless `-r`,
 `-g` or `-b` give one.
 
 ## 2.2 Flat field
@@ -133,7 +133,9 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
    the base's colour), taken through `X` and scaled by the scan's exposure over the capture's (shutter × ISO).
    `--film_base auto` (the default) reuses a capture recorded in the output's sidecar from the same inputs.
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
-   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop.
+   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop. It is used on a
+   single RAW or linear DNG, whose detection runs on its raw data with `--roi auto` and with a given `--roi` alike;
+   an RGB file and three captures go to item 3.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
    pixels, with bare light and the black holder masked out.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
