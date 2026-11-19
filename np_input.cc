@@ -1371,6 +1371,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     if (!half) return delete proc, nullptr;
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+    half->imgdata.color.maximum = (unsigned)white;   // the image's clip, as a RAW's half-size image carries it
     // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
     half->imgdata.rawdata.sizes.width = (ushort)w;
     half->imgdata.rawdata.sizes.height = (ushort)h;

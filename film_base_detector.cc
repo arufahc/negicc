@@ -25,7 +25,6 @@ namespace {
 
 // auto_crop.py's thresholds.
 constexpr float kBlackFraction = 0.002f;    // darker than this fraction of the p99.9 luminance: black (holder)
-constexpr double kClipLevel = 15000.0;      // a channel at or above this: clipped (bare light)
 constexpr double kLightChromaGap = 0.8;     // stops of log2(R/B) between film (orange mask) and bare light
 constexpr double kLightHoleArea = 0.005;    // a light part inside the scan at most this fraction: sprocket hole
 constexpr double kLightOfRef = 0.65;        // bare light luminance at least this fraction of the p99.9 luminance
@@ -307,12 +306,32 @@ void corrected(const double v[3], const double* m, double out[3]) {
   }
 }
 
+// The same samples without the view's flat field: the photosites as the sensor recorded them (pixel x, y of the view
+// keeps its place), for the clip.
+RgbView without_flat(const RgbView& half) {
+  RgbView v = half;
+  v.flat = FlatSampleArgs{};
+  return v;
+}
+
+// A sample of the decode before the flat field clipped in every channel (light, step 2.).
+bool clipped_all(const float* px, float clip) { return px[0] >= clip && px[1] >= clip && px[2] >= clip; }
+
 }  // namespace
 
-static void thinnest_film_base_impl(const RgbView& half, bool white_light, float out[3]) {
+static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3]) {
   int w = 0, h = 0;
   std::vector<float> v = downsample(half, w, h);
   const size_t n = (size_t)w * h;
+  // Sensor units (TriLED): the clip is read on the work image of the samples before the flat field, which divides
+  // each pixel by its own gain.
+  std::vector<float> sensor;
+  if (!white_light && half.flat.gain) {
+    int sw = 0, sh = 0;
+    sensor = downsample(without_flat(half), sw, sh);
+  }
+  const float clip = kSensorClip * white;
+  const float* sv = white_light ? nullptr : (sensor.empty() ? v.data() : sensor.data());
   for (float& x : v) x = std::max(x, 1.0f);
   std::vector<float> lum(n);
   for (size_t i = 0; i < n; ++i) {
@@ -365,11 +384,21 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
     }
   }
   std::vector<uint8_t> black(n), light(n);
-  float clip_c[3] = {(float)kClipLevel, (float)kClipLevel, (float)kClipLevel};
-  if (white_light) {
-    // A white-light decode is in 16-bit linear Rec.2020 (white-balanced by pre_mul, so orange film routinely exceeds
-    // the 14-bit kClipLevel in Red). As in detect_film_frame, a channel is clipped when its work-image maxima sit at a
+  for (size_t i = 0; i < n; ++i) black[i] = lum[i] < black_level;
+  if (!white_light) {
+    // Sensor units: bare light is what the sensor clipped in all three channels (the file comment, 2.), in parts that
+    // can be bare light.
+    bool any_light = false;
+    for (size_t i = 0; i < n; ++i) {
+      light[i] = white > 0.0f && clipped_all(&sv[i * 3], clip);
+      any_light |= light[i] != 0;
+    }
+    if (any_light) light = light_parts(light, lum, ref, w, h, carrier);
+  } else {
+    // A white-light decode is in 16-bit linear Rec.2020 (white-balanced by pre_mul, so orange film routinely exceeds a
+    // 14-bit sensor's clip in Red). As in detect_film_frame, a channel is clipped when its work-image maxima sit at a
     // plateau (>= 0.05% of pixels within 0.5% of the channel maximum, at >= 20% of 65535).
+    float clip_c[3];
     for (int c = 0; c < 3; ++c) {
       float mx = 0.0f;
       for (size_t i = 0; i < n; ++i) mx = std::max(mx, v[i * 3 + c]);
@@ -378,102 +407,101 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
       const bool plateau = cnt >= std::max<size_t>(4, n / 2000) && mx >= 13000.0f;
       clip_c[c] = plateau ? 0.98f * mx : 65000.0f;
     }
-  }
-  bool any_light = false;
-  for (size_t i = 0; i < n; ++i) {
-    black[i] = lum[i] < black_level;
-    light[i] = v[i * 3] >= clip_c[0] || v[i * 3 + 1] >= clip_c[1] || v[i * 3 + 2] >= clip_c[2];
-    any_light |= light[i] != 0;
-  }
-  if (any_light) light = light_parts(light, lum, ref, w, h, carrier);
+    bool any_light = false;
+    for (size_t i = 0; i < n; ++i) {
+      light[i] = v[i * 3] >= clip_c[0] || v[i * 3 + 1] >= clip_c[1] || v[i * 3 + 2] >= clip_c[2];
+      any_light |= light[i] != 0;
+    }
+    if (any_light) light = light_parts(light, lum, ref, w, h, carrier);
 
-  std::vector<float> q(n);
-  for (size_t i = 0; i < n; ++i) q[i] = std::log2(v[i * 3] / v[i * 3 + 2]);
-  size_t n_light = 0, n_cand = 0;
-  std::vector<uint8_t> cand(n);
-  for (size_t i = 0; i < n; ++i) {
-    n_light += light[i];
-    cand[i] = !black[i] && !light[i];
-    n_cand += cand[i];
-  }
-  if ((double)n_light / (double)n < 0.005 && n_cand > 64) {
-    // Bare light that did not clip: bright, and less orange than the film (the orange mask absorbs blue).
-    tmp.clear();
-    for (size_t i = 0; i < n; ++i)
-      if (cand[i]) tmp.push_back(lum[i]);
-    const float med = median_f32(tmp);
-    std::vector<uint8_t> bright(n);
-    std::vector<float> qb;
+    std::vector<float> q(n);
+    for (size_t i = 0; i < n; ++i) q[i] = std::log2(v[i * 3] / v[i * 3 + 2]);
+    size_t n_light = 0, n_cand = 0;
+    std::vector<uint8_t> cand(n);
     for (size_t i = 0; i < n; ++i) {
-      bright[i] = cand[i] && lum[i] >= med;
-      if (bright[i]) qb.push_back(q[i]);
+      n_light += light[i];
+      cand[i] = !black[i] && !light[i];
+      n_cand += cand[i];
     }
-    float t;
-    double m_lo, m_hi, f_lo;
-    otsu(qb, t, m_lo, m_hi, f_lo);
-    std::vector<uint8_t> lo(n);
-    std::vector<float> b_lo, b_hi;
-    for (size_t i = 0; i < n; ++i) {
-      lo[i] = bright[i] && q[i] < t;
-      if (lo[i]) b_lo.push_back(v[i * 3 + 2]);
-      else if (bright[i]) b_hi.push_back(v[i * 3 + 2]);
-    }
-    if (m_hi - m_lo >= kLightChromaGap && 0.01 <= f_lo && f_lo <= 0.99 && !b_lo.empty() && !b_hi.empty() &&
-        median_f32(b_lo) > percentile_f32(b_hi, kBasePercentile)) {
-      const std::vector<uint8_t> parts = light_parts(lo, lum, ref, w, h, carrier);
-      for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
-    }
-  } else if (any_light) {
-    // Bare light partly clipped: its unclipped parts connected to the clipped ones, reaching the border or carrier.
-    const float light_level = (float)(kLightOfRef * ref);
-    std::vector<uint8_t> unclipped(n);
-    for (size_t i = 0; i < n; ++i) unclipped[i] = lum[i] >= light_level && !black[i];
-    std::vector<int> labels;
-    const int nl = label_components(unclipped, w, h, labels);
-    if (nl > 1) {
-      const std::vector<uint8_t> edge = border_labels(labels, w, h, nl, carrier);
-      std::vector<uint8_t> keep(nl, 0);
+    if ((double)n_light / (double)n < 0.005 && n_cand > 64) {
+      // Bare light that did not clip: bright, and less orange than the film (the orange mask absorbs blue).
+      tmp.clear();
       for (size_t i = 0; i < n; ++i)
-        if (light[i]) keep[labels[i]] = 1;
-      for (int l = 0; l < nl; ++l) keep[l] = keep[l] && edge[l];
-      keep[0] = 0;
-      for (size_t i = 0; i < n; ++i) light[i] |= keep[labels[i]];
+        if (cand[i]) tmp.push_back(lum[i]);
+      const float med = median_f32(tmp);
+      std::vector<uint8_t> bright(n);
+      std::vector<float> qb;
+      for (size_t i = 0; i < n; ++i) {
+        bright[i] = cand[i] && lum[i] >= med;
+        if (bright[i]) qb.push_back(q[i]);
+      }
+      float t;
+      double m_lo, m_hi, f_lo;
+      otsu(qb, t, m_lo, m_hi, f_lo);
+      std::vector<uint8_t> lo(n);
+      std::vector<float> b_lo, b_hi;
+      for (size_t i = 0; i < n; ++i) {
+        lo[i] = bright[i] && q[i] < t;
+        if (lo[i]) b_lo.push_back(v[i * 3 + 2]);
+        else if (bright[i]) b_hi.push_back(v[i * 3 + 2]);
+      }
+      if (m_hi - m_lo >= kLightChromaGap && 0.01 <= f_lo && f_lo <= 0.99 && !b_lo.empty() && !b_hi.empty() &&
+          median_f32(b_lo) > percentile_f32(b_hi, kBasePercentile)) {
+        const std::vector<uint8_t> parts = light_parts(lo, lum, ref, w, h, carrier);
+        for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
+      }
+    } else if (any_light) {
+      // Bare light partly clipped: its unclipped parts connected to the clipped ones, reaching the border or carrier.
+      const float light_level = (float)(kLightOfRef * ref);
+      std::vector<uint8_t> unclipped(n);
+      for (size_t i = 0; i < n; ++i) unclipped[i] = lum[i] >= light_level && !black[i];
+      std::vector<int> labels;
+      const int nl = label_components(unclipped, w, h, labels);
+      if (nl > 1) {
+        const std::vector<uint8_t> edge = border_labels(labels, w, h, nl, carrier);
+        std::vector<uint8_t> keep(nl, 0);
+        for (size_t i = 0; i < n; ++i)
+          if (light[i]) keep[labels[i]] = 1;
+        for (int l = 0; l < nl; ++l) keep[l] = keep[l] && edge[l];
+        keep[0] = 0;
+        for (size_t i = 0; i < n; ++i) light[i] |= keep[labels[i]];
+      }
     }
-  }
-  if (white_light && n_cand > 64) {
-    // A cropped white-light scan may still retain a thin sliver of unclipped neutral white light (< 1% of bright
-    // pixels, below Otsu's f_lo >= 0.01 floor) on its border, holder aperture or sprocket holes. When the main film is
-    // strongly orange, mask connected components of neutral bright pixels (reaching the border or holder, or
-    // hole-sized) whose blue channel exceeds the orange film's 99.5th percentile.
-    std::vector<float> q_cand;
-    q_cand.reserve(n_cand);
-    for (size_t i = 0; i < n; ++i)
-      if (!black[i] && !light[i]) q_cand.push_back(q[i]);
-    if (q_cand.size() > 64) {
-      const float q_med = median_f32(q_cand);
-      if (q_med >= 1.2f) {
-        const float q_cut = std::min(1.0f, q_med - (float)kLightChromaGap);
-        std::vector<float> b_orange, lum_orange;
-        for (size_t i = 0; i < n; ++i) {
-          if (!black[i] && !light[i] && q[i] >= q_cut) {
-            b_orange.push_back(v[i * 3 + 2]);
-            lum_orange.push_back(lum[i]);
-          }
-        }
-        if (b_orange.size() > 64) {
-          const float b_ref = percentile_f32(b_orange, kBasePercentile);
-          const double ref_orange = (double)percentile_f32(lum_orange, 99.9);
-          std::vector<uint8_t> neutral(n, 0);
-          bool any_neutral = false;
+    if (n_cand > 64) {
+      // A cropped white-light scan may still retain a thin sliver of unclipped neutral white light (< 1% of bright
+      // pixels, below Otsu's f_lo >= 0.01 floor) on its border, holder aperture or sprocket holes. When the main film
+      // is strongly orange, mask connected components of neutral bright pixels (reaching the border or holder, or
+      // hole-sized) whose blue channel exceeds the orange film's 99.5th percentile.
+      std::vector<float> q_cand;
+      q_cand.reserve(n_cand);
+      for (size_t i = 0; i < n; ++i)
+        if (!black[i] && !light[i]) q_cand.push_back(q[i]);
+      if (q_cand.size() > 64) {
+        const float q_med = median_f32(q_cand);
+        if (q_med >= 1.2f) {
+          const float q_cut = std::min(1.0f, q_med - (float)kLightChromaGap);
+          std::vector<float> b_orange, lum_orange;
           for (size_t i = 0; i < n; ++i) {
-            if (!black[i] && !light[i] && q[i] < q_cut && v[i * 3 + 2] > b_ref) {
-              neutral[i] = 1;
-              any_neutral = true;
+            if (!black[i] && !light[i] && q[i] >= q_cut) {
+              b_orange.push_back(v[i * 3 + 2]);
+              lum_orange.push_back(lum[i]);
             }
           }
-          if (any_neutral) {
-            const std::vector<uint8_t> parts = light_parts(neutral, lum, ref_orange, w, h, carrier);
-            for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
+          if (b_orange.size() > 64) {
+            const float b_ref = percentile_f32(b_orange, kBasePercentile);
+            const double ref_orange = (double)percentile_f32(lum_orange, 99.9);
+            std::vector<uint8_t> neutral(n, 0);
+            bool any_neutral = false;
+            for (size_t i = 0; i < n; ++i) {
+              if (!black[i] && !light[i] && q[i] < q_cut && v[i * 3 + 2] > b_ref) {
+                neutral[i] = 1;
+                any_neutral = true;
+              }
+            }
+            if (any_neutral) {
+              const std::vector<uint8_t> parts = light_parts(neutral, lum, ref_orange, w, h, carrier);
+              for (size_t i = 0; i < n; ++i) light[i] |= parts[i];
+            }
           }
         }
       }
@@ -511,12 +539,12 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
   }
 }
 
-void thinnest_film_base(const RgbView& half, float out[3]) {
-  thinnest_film_base_impl(half, false, out);
+void thinnest_film_base(const RgbView& half, float white, float out[3]) {
+  thinnest_film_base_impl(half, false, white, out);
 }
 
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
-                      const double* crosstalk, FilmBaseDetection& out) {
+                      const double* crosstalk, float white, FilmBaseDetection& out) {
   out = FilmBaseDetection{};
   const int W = half.width, H = half.height;
   bool has_box = false;
@@ -555,7 +583,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
       }
     }
   }
-  thinnest_film_base_impl(half, crosstalk == nullptr, out.thinnest);
+  const bool white_light = crosstalk == nullptr;
+  thinnest_film_base_impl(half, white_light, white, out.thinnest);
   const double thinnest[3] = {out.thinnest[0], out.thinnest[1], out.thinnest[2]};
   if (has_box) {
     std::vector<uint16_t> ch[3];

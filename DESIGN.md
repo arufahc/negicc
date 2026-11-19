@@ -135,7 +135,12 @@ in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
 2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
    inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop.
 3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
-   pixels, with bare light and the black holder masked out.
+   pixels, with bare light and the black holder masked out. On TriLED bare light is what the sensor clipped in all
+   three channels (98 % of the white level, before the flat field), in parts that reach the image border or are the
+   size of a sprocket hole: light is brighter than the base in every channel, film near the clip clips first in its
+   brightest channel, and the base is nearly neutral in the camera's channels, so colour does not tell thin film
+   from light. On white light bare light is clipped in a channel (at the plateau of its maxima), or bright and less
+   orange than the film.
 4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
 The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):

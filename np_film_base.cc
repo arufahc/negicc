@@ -282,7 +282,7 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
       negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr, flat_args, flat_tables);
   // The same mosaic without the flat field, for the clipping (region_stats).
   const negicc::RgbView raw_view = negicc::RgbView::from_cfa_half(origin, pitch, src_w, src_h, filters, nullptr);
-  const float clip = 0.98f * white_level;
+  const float clip = negicc::kSensorClip * white_level;
 
   if (roi) {
     if (roi[0] < 0 || roi[1] < 0 || roi[2] <= 0 || roi[3] <= 0 || (long long)roi[0] + roi[2] > src_w ||
@@ -318,8 +318,8 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     // The thinnest film on the capture, as a TriLED scan's base is read when it shows no rebate; on the mosaic as
     // recorded it must not be clipped.
     float thin[3] = {0.0f, 0.0f, 0.0f}, thin_raw[3] = {0.0f, 0.0f, 0.0f};
-    negicc::thinnest_film_base(view, thin);
-    negicc::thinnest_film_base(raw_view, thin_raw);
+    negicc::thinnest_film_base(view, white_level, thin);
+    negicc::thinnest_film_base(raw_view, white_level, thin_raw);
     if (!(thin[0] > 1.0f) || !(thin[1] > 1.0f) || !(thin[2] > 1.0f)) {
       err = "no usable film base on " + path + " (no smooth film)";
       return false;

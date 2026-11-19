@@ -1852,9 +1852,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // level the film base takes the detector's patch at), else the whole scan. Without a frame the scan's bare light
   // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film, which
   // can raise the factor by up to 2.5 times.
-  // Light inside the frame is not masked (the detector's light mask takes thin film for light on some frames); the
-  // record's factor and frame show what was read. The print's search itself reads the search frame (without --roi, the
-  // whole scan). A caller that gains a print (negicc-station) chooses the frame here, as this does.
+  // Light inside the frame is not masked; the record's factor and frame show what was read. The print's search itself
+  // reads the search frame (without --roi, the whole scan). A caller that gains a print (negicc-station) chooses the
+  // frame here, as this does.
   // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), mapped onto |half| by
   // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned
   // against the sensor does not map). A --roi auto that fell back to the whole image is the whole scan. frame_conf is
@@ -1914,14 +1914,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // the base comes from the statistics.
   // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it
   // is.
-  auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h) {
+  // |white|: the clipping level of half's samples before its flat field (film_base_detector.h).
+  auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
+                         float white) {
     if (!s.is_bundle) return;
     if (scan.has_given_base) {  // --film_base's capture, or a previous run's: logged where it was read
       scan.film_base = scan.given_base;
       return;
     }
     const double* xt = (s.bundle.has_crosstalk && !s.white_light) ? s.bundle.crosstalk_matrix_d : nullptr;
-    const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, scan.film_base);
+    const bool found = negicc::detect_film_base(half, det, sensor_w, sensor_h, xt, white, scan.film_base);
     const negicc::FilmBaseDetection& fb = scan.film_base;
     if (found) {
       log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", fb.source.c_str(), fb.rgb[0], fb.rgb[1], fb.rgb[2]);
@@ -1964,8 +1966,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // not; before, only white light used it, so TriLED with -q >= 0 (this path, not the CFA one) lost the rebate
     // base and read it from the statistics.
     const bool raw_det = s.white_light || (o.input_mode == InputMode::kRaw && o.files.size() == 1);
+    // The half-size image is black-subtracted (LibRaw's raw2image_ex, or the reader's for an RGB file or three
+    // captures), and its clip is imgdata.color.maximum; a flat field, where given, divided the mosaic before it.
     detect_base(half_view, (raw_det && o.roi_auto) ? &scan.frame_det : has_base_det ? &base_det : nullptr,
-                raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0);
+                raw_det ? det_sensor_w : 0, raw_det ? det_sensor_h : 0, (float)raw.imgdata.color.maximum);
     return half_view;
   };
   // The white-light decode's balance of the camera channels on the film base: the base read from its first half-size
@@ -2353,7 +2357,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         detect_film_frame(mosaic, base_params, base_det);
         scan.base_det_format = base_params.format;
       }
-      detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h);
+      detect_base(full_half_view, has_det ? &base_det : nullptr, src_w, src_h, cfa_white_level);
       if (has_det) {
         floor_det = base_det;
         has_floor_det = true;
