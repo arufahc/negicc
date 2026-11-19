@@ -1019,22 +1019,23 @@ int prepare(const Options& o, Setup& s) {
   // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
   // which picks the bracket, the exposure and the gains.
   //
-  // White light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the rest
-  // (pinned_search), followed by the curve fit and the tone stage as after an unpinned search, unless turned off.
-  // With all four given there is nothing to search: the search then runs only where the curve fit or the tone stage
-  // runs (they need the search's intent field and frame), and --fit_curves off with --tone_stage off, another -P, or
-  // recorded curves or a recorded tone curve (a sidecar's cli_equivalent) convert with the given values alone.
+  // A bundle, on either light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the
+  // rest (pinned_search), followed by the curve fit (white light) and the tone stage as after an unpinned search,
+  // unless turned off. With all four given there is nothing to search: the search then runs only where the curve fit
+  // or the tone stage runs (they need the search's intent field and frame), and --fit_curves off with --tone_stage
+  // off, another -P, or recorded curves or a recorded tone curve (a sidecar's cli_equivalent) convert with the given
+  // values alone.
   //
-  // TriLED and a single ICC profile: the search runs unless --gain_g or --gain_b is given; with --target or -E (and on
-  // a single ICC profile) the single-bracket solver solves the gains, and the exposure unless -E gives it.
+  // A single ICC profile: the single-bracket solver solves the gains, and the exposure unless -E gives it, unless
+  // --gain_g or --gain_b is given.
   {
     const bool gains_given = o.gain_g_given || o.gain_b_given;
     const bool any_pin = s.manual_target_idx >= 0 || o.exposure_given || gains_given;
     const bool all_pinned = s.manual_target_idx >= 0 && o.exposure_given && o.gain_g_given && o.gain_b_given;
     const bool replay = o.input_curves_given || o.tone_replay_given;
     const bool fit_wanted = o.fit_curves != Options::kFitCurvesOff && fit_encoding_ok;
-    s.pinned_search = s.is_bundle && s.white_light && !s.has_crosstalk && any_pin && !replay &&
-                      (!all_pinned || fit_wanted || tone_wanted);
+    const bool fit_runs = fit_wanted && s.white_light && !s.has_crosstalk;   // the curve fit is white light's
+    s.pinned_search = s.is_bundle && any_pin && !replay && (!all_pinned || fit_runs || tone_wanted);
     s.use_dino = s.has_profile && (!gains_given || s.pinned_search);
     s.bundle_search = s.use_dino && s.is_bundle &&
                       (s.pinned_search || (s.manual_target_idx < 0 && !s.exposure_given));
@@ -1042,8 +1043,8 @@ int prepare(const Options& o, Setup& s) {
   if (!o.probe_intent.empty()) {
     // The probe is written by the bundle search: without it there would be no file and nothing said.
     if (!s.bundle_search) {
-      log_error("--probe_intent needs the bundle search: a profile bundle without --gain_g or --gain_b on TriLED, "
-                "and not every one of --target, -E and the gains given\n");
+      log_error("--probe_intent needs the bundle search: a profile bundle, no recorded curves or tone curve, and not "
+                "all of --target, -E and the gains given unless the curve fit or the tone stage runs\n");
       return 1;
     }
     for (const std::array<float, 4>& p : o.probe_params) {
@@ -1270,6 +1271,19 @@ int prepare(const Options& o, Setup& s) {
            s.engine.adapter_name().c_str(), (double)s.engine.memory_bytes() / (1024.0 * 1024.0));
   }
   return 0;
+}
+
+// --target, -E, --gain_g and --gain_b on a pinned search (Setup::pinned_search): held by the search and the curve
+// fit, which solve the rest.
+static void set_search_pins(const Options& o, const Setup& s, ParamSearchOptions& opts) {
+  if (!s.pinned_search) return;
+  opts.pin_target = s.manual_target_idx;
+  if (o.exposure_given) opts.pin_mask |= PIN_E;
+  if (o.gain_g_given) opts.pin_mask |= PIN_G;
+  if (o.gain_b_given) opts.pin_mask |= PIN_B;
+  opts.pin_e = o.exposure_comp;
+  opts.pin_g = o.gain_g;
+  opts.pin_b = o.gain_b;
 }
 
 // The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
@@ -2095,16 +2109,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
-        if (s.pinned_search) {
-          // --target, -E, --gain_g and --gain_b: held by the search and the curve fit, which solve the rest.
-          opts.pin_target = s.manual_target_idx;
-          if (o.exposure_given) opts.pin_mask |= PIN_E;
-          if (o.gain_g_given) opts.pin_mask |= PIN_G;
-          if (o.gain_b_given) opts.pin_mask |= PIN_B;
-          opts.pin_e = o.exposure_comp;
-          opts.pin_g = o.gain_g;
-          opts.pin_b = o.gain_b;
-        }
+        set_search_pins(o, s, opts);
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
@@ -2426,6 +2431,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
+      set_search_pins(o, s, opts);
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
