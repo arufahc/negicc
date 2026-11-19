@@ -222,7 +222,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
     const char* shrt;
     const char* lng;
     int arity;  // values; -1: --roi (up to 7 numbers, or auto [h|v]); -16: up to 16 numbers (--probe_stops)
-    bool skip;  // the output and the knobs
+    bool skip;  // the output, the knobs and the development aids (which leave the result as it is)
   };
   static const Opt kOpts[] = {
       {"-C", "--no_crop", 0, false},      {"-q", "--quality", 1, false},        {"-r", "--r_coeff", 3, false},
@@ -236,7 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
-      {"", "--print", 1, false},
+      {"", "--print", 1, false},           {"", "--check_renderer", 0, true},
       {"", "--probe_intent", 1, true},    {"", "--probe_params", 1, true},      {"", "--probe_stops", -16, true},
   };
   auto is_number = [](const std::string& t) {
@@ -869,9 +869,9 @@ int prepare(const Options& o, Setup& s) {
                 "computed for the bundle's film\n");
       return 1;
     }
-    if (s.white_light && (o.fit_curves == Options::kFitCurvesOn || o.input_curves_given)) {
-      log_error("%s does not apply with --print on a white-light bundle: the print is made by its own search, "
-                "without the curve fit\n", o.input_curves_given ? "--fit_curves with recorded curves" : "--fit_curves on");
+    if (o.fit_curves != Options::kFitCurvesAuto || o.input_curves_given) {
+      log_error("--fit_curves does not apply with --print: the print is made by its own search, without the curve "
+                "fit\n");
       return 1;
     }
     if (!s.density) {
@@ -997,6 +997,13 @@ int prepare(const Options& o, Setup& s) {
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
   const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
+  // Where no fit can run, an explicit --fit_curves, off included, is refused rather than ignored (as on a density
+  // output from a TriLED bundle, and with --print).
+  if (o.fit_curves == Options::kFitCurvesOff && (!s.is_bundle || !s.white_light || s.has_crosstalk)) {
+    log_error("--fit_curves off does not apply: the curve fit is a white-light bundle's (d65, rec2020_linear), and a "
+              "TriLED bundle or an ICC profile converts through its measured curves, which are not fitted\n");
+    return 1;
+  }
   if (fit_on || o.input_curves_given) {
     const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {
@@ -1055,8 +1062,9 @@ int prepare(const Options& o, Setup& s) {
   if (!o.probe_intent.empty()) {
     // The probe is written by the bundle search: without it there would be no file and nothing said.
     if (!s.bundle_search) {
-      log_error("--probe_intent needs the bundle search: a profile bundle without --gain_g or --gain_b on TriLED, "
-                "and not every one of --target, -E and the gains given\n");
+      log_error("--probe_intent needs the bundle search: a profile bundle; on TriLED none of --target, -E, --gain_g "
+                "and --gain_b given; on white light no recorded curves or tone curve, and not all four given unless "
+                "the curve fit or the tone stage runs\n");
       return 1;
     }
     for (const std::array<float, 4>& p : o.probe_params) {
@@ -1083,8 +1091,9 @@ int prepare(const Options& o, Setup& s) {
     log_error("--fit_curves on fits after the bundle search, which did not run for these arguments\n");
     return 1;
   }
-  if (tone_on && o.colorspace != "srgb") {
-    log_error("--tone_stage on needs -P srgb: the stage is a lightness curve applied before the sRGB encoding\n");
+  if ((tone_on || o.tone_replay_given) && o.colorspace != "srgb") {
+    log_error("--tone_stage %s needs -P srgb: the stage is a lightness curve applied before the sRGB encoding\n",
+              tone_on ? "on" : "curve:");
     return 1;
   }
   if (tone_on && !(s.is_bundle && s.bundle_search)) {
@@ -3275,10 +3284,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.roi = scan.roi;
   sc.roi_source = roi_source;
   sc.frame_det = o.roi_auto ? &scan.frame_det : nullptr;
-  // Only a format the run was not given (--roi auto's default): a given --film_format is the caller's, as the other
-  // set-up flags are, and the parser refuses it twice.
-  if (scan.base_det_format != FILM_FORMAT_AUTO && !o.film_format_given)
-    sc.film_format = film_format_name(scan.base_det_format);
+  // The format the base detection used, given or --roi auto's default, as the frame (--roi) is recorded given or found:
+  // the replay reads the base around the same format, and its own replay command is the same.
+  if (scan.base_det_format != FILM_FORMAT_AUTO) sc.film_format = film_format_name(scan.base_det_format);
   sc.rot_cw = scan.rot_cw;
   sc.hflip = scan.hflip;
   sc.vflip = scan.vflip;
