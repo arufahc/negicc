@@ -568,6 +568,7 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       tc.white = q[1];
       tc.gamma = q[2];
       tc.contrast = q[3];
+      if (!tone_curve_ok(tc)) return why = "its tone curve is not one the tone stage makes", false;
       s.cached_sidecar.has_tone = true;
     }
     return true;
@@ -1164,6 +1165,12 @@ int prepare(const Options& o, Setup& s) {
     }
     const double* q = o.tone_replay;
     s.tone_curve = {q[0], q[1], q[2], q[3]};
+    if (!tone_curve_ok(s.tone_curve)) {
+      log_error("--tone_stage curve:%g,%g,%g,%g is not a curve the tone stage makes (black %g to %g, white %g to %g, "
+                "gamma %g to %g, contrast %g to %g)\n", q[0], q[1], q[2], q[3], kToneLo[0], kToneHi[0], kToneLo[1],
+                kToneHi[1], kToneLo[2], kToneHi[2], kToneLo[3], kToneHi[3]);
+      return 1;
+    }
     s.has_tone = true;
   }
 
@@ -1561,6 +1568,13 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
   // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
   // highlight roll-off measured at them.
+  // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
+  // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
+  // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
+  auto set_fit_frame = [&](ParamSearchOptions& p) {
+    p.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence : scan.has_roi && scan.frame_is_whole;
+    p.film_base_is_rebate = scan.film_base.is_rebate();
+  };
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
@@ -1634,6 +1648,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (o.check_renderer) ro.renderer = &pass_through_renderer();
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
+        set_fit_frame(ro);
         const float from[3] = {base_e, base_g, base_b};
         float scale[2] = {1.0f, 1.0f};
         auto reanchor_at = [&](const float to[3]) {
@@ -2092,12 +2107,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
       s.curves_base_prof = bundle.targets[s.curves_base_idx].film_prof;
       s.curves_base_prof.rebind_pointers();
-      // --roi auto that fell back to the whole image, or a given --roi that is the whole image (as --roi auto's
-      // fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder.
       ParamSearchOptions fit_search_opts = opts;
-      fit_search_opts.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence
-                                                 : scan.has_roi && scan.frame_is_whole;
-      fit_search_opts.film_base_is_rebate = scan.film_base.is_rebate();
+      set_fit_frame(fit_search_opts);
       if (!run_white_light_fit(bundle, s.engine, frame, scan_shutter_s, scan_iso, fit_search_opts, scan.auto_res,
                                fit_opts, export_encoding, tone_head, s.curve_fit)) {
         log_error("Fitting the input curves failed\n");

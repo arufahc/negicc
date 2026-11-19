@@ -97,6 +97,10 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 // The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
 constexpr int kToneTableSize = 8192;
 std::vector<float> tone_table(const ToneCurve& q);
+// A curve the tone stage can produce: its four numbers finite and within kToneLo..kToneHi (every curve it applies is
+// solved there). A recorded curve outside them (typed by hand, or edited) is refused rather than rendered: a gamma or
+// contrast at or below 0, or white below black, inverts the table, and a contrast far past 1.5 makes it NaN.
+bool tone_curve_ok(const ToneCurve& q);
 
 // Which of kToneClipShares the plan keeps, as an index: 0 (the designed moves) when the designed curve clips no more
 // than kToneClipAllowance beyond white_before (the conversion's own white clipping); else the largest share that does
