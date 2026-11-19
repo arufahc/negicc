@@ -24,7 +24,9 @@
 //     kBaseClipFraction of its pixels at kSensorClip of the white level in a channel): clipped film reads the clip,
 //     not the base.
 //  2. statistics: else the thinnest film on the scan: the 99.5th percentile per channel of the film pixels of the
-//     half-size decode reduced to kBaseWorkSize pixels, with bare light and black holder masked out. On a decode in
+//     half-size decode reduced to kBaseWorkSize pixels, with bare light and black holder masked out. In sensor units
+//     the same percentile read before the flat field at kSensorClip of the white level in a channel means the film's
+//     thinnest part clipped: the base read from it is the clip (thinnest_clipped). On a decode in
 //     sensor units (TriLED) bare light is what the sensor clipped in all three channels: light is brighter than the
 //     base in every channel, while film near the clip clips first in its brightest channel, and the base is nearly
 //     neutral in the camera's channels, so colour does not tell thin film from light. On a white-light decode
@@ -71,6 +73,8 @@ struct FilmBaseDetection {
   double decode_rgb[3] = {0.0, 0.0, 0.0};  // in the half-size decode's units
   float thinnest[3] = {0.0f, 0.0f, 0.0f};  // the thinnest film (2.), in the decode's units
   bool rebate_clipped = false;        // the frame detector's patch was refused because the sensor clipped it
+  bool thinnest_clipped = false;      // sensor units: the thinnest film (2.), read before the flat field, is at the
+                                      // sensor's clip in a channel, so a base read from it is the clip
   bool has_box = false;               // source rebate: the sampled patch in the half-size decode (x, y, w, h)
   int box[4] = {0, 0, 0, 0};
   // The frame detector's record (when it ran): its reason, its patch's green density spread, its frame confidence,

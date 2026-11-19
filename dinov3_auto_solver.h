@@ -53,30 +53,13 @@ struct SolverConfig {
   // the print's conversion renders it; intent_cells and intent_loss (the search's optimiser) read it.
   const GainCurves* gain_curves = nullptr;
   float knee = 0.95f;
-  bool verbose = true;  // the solver's diagnostic lines (shoulder), as the multi-target search's verbose
-  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
-  // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
+  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off.
   float shoulder = 1.0f;
-  bool shoulder_auto = false;
-  bool has_custom_bounds = false;
-  float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
-  float custom_e_center = 0.0f;
   float enc_e_min = 0.0f;
   float enc_e_max = 0.0f;
   // The values pinned parameters (pin_mask) take in optimize_target_for_intent when it is given no start; with a
   // start they stay at the start's.
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
-};
-
-struct ShoulderResult {
-  bool active = false;       // x_hi > 1 was applied
-  bool measured = false;     // x_hi came from the auto measurement
-  float x_hi = 1.0f;         // the frozen parameter
-  float q995 = 0.0f;         // the measured 99.5% point before clamping (auto only)
-  float knee = 1.0f;         // the linear knee x_k
-  bool guard = false;        // the intent loss with the shoulder is more than 2% worse than without
-  float loss_with = 0.0f;    // mean(L, a, b) intent loss of the final params with x_hi
-  float loss_without = 0.0f; // and with the shoulder off
 };
 
 struct DinoIterationLog {
@@ -112,7 +95,6 @@ struct DinoSolveResult {
   std::vector<float> best_mu;
   std::vector<float> best_sigma;
   std::vector<float> tone_mass;
-  ShoulderResult shoulder;
   int grid_w = 0;
   int grid_h = 0;
   int target_w = 0;

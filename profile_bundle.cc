@@ -1084,25 +1084,6 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
   }
 }
 
-void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt) {
-  cfg.prof = &tgt.film_prof.data;
-  if (tgt.e_center <= 0.0f || tgt.e_min <= 0.0f || tgt.e_max <= 0.0f) {
-    cfg.has_custom_bounds = false;
-    cfg.custom_e_center = 1.0f;
-    cfg.custom_e_bounds[0] = 0.354f;
-    cfg.custom_e_bounds[1] = 2.828f;
-    cfg.custom_e_bounds[2] = 1.0f;
-    return;
-  }
-  cfg.has_custom_bounds = true;
-  cfg.custom_e_center = tgt.e_center;
-  const float lo = std::min(tgt.e_min, tgt.e_max);
-  const float hi = std::max(tgt.e_min, tgt.e_max);
-  cfg.custom_e_bounds[0] = lo / cfg.custom_e_center;
-  cfg.custom_e_bounds[1] = hi / cfg.custom_e_center;
-  cfg.custom_e_bounds[2] = 1.0f;
-}
-
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx) {
   if (bundle.targets.empty()) return -1;
   const int n = (int)bundle.targets.size();

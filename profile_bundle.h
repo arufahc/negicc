@@ -264,9 +264,6 @@ bool is_json_bundle(const std::string& resolved_path);
 // Parse AToB0 pipeline tags from an open cmsHPROFILE into ParsedFilmProfile
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof);
 
-// Configure solver bounds and anchor for a specific target bracket
-void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt);
-
 // Reads a file a split bundle names (a target's "icc_profile") into out; false when it cannot.
 using BundleFileReader = std::function<bool(const std::string& name, std::vector<uint8_t>& out)>;
 
