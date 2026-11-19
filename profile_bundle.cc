@@ -648,8 +648,9 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       BundlePrint p;
       p.id = it.key();
       p.name = text(e, "name", p.id);
-      p.viewing_illuminant = text(e, "viewing_illuminant", "");
       p.reference_bracket = text(e, "reference_bracket", "");
+      p.spektrafilm_sha256 = text(e, "spektrafilm_sha256", "");
+      p.icc_sha256 = text(e, "icc_profile_sha256", "");
       const std::string where = "profile bundle " + raw_path;
       if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
         // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
@@ -681,11 +682,15 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
             return decode(again["print_profiles"][id], icc, err);
           };
         } else {
+          // One that does not decode refuses its print when asked, as a missing file does, not the whole bundle.
           std::vector<uint8_t> bytes;
           std::string err;
-          if (!decode(e, bytes, err)) throw std::runtime_error(err);
+          const bool ok = decode(e, bytes, err);
           auto held = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
-          p.read_icc = [held](std::vector<uint8_t>& icc, std::string&) { return icc = *held, true; };
+          p.read_icc = [held, ok, err](std::vector<uint8_t>& icc, std::string& why) {
+            if (!ok) return why = err, false;
+            return icc = *held, true;
+          };
         }
       } else {
         continue;
