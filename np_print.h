@@ -119,9 +119,10 @@ struct DensityRecord {
     double a0 = 0.0, wish_l = 0.0;      // the A its bootstrap started from; the mean L* of the lightness wish it held
     double above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // at the result, per channel (percent)
     // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
-    // search's, and the print's grey where the knobs put it
+    // search's, the knobs as given (brightness in stops, tint a*, warmth b*), and the print's grey where they put it
     bool knobs = false, knobs_limited = false;
     double knob_base_a = 0.0, knob_base_g = 1.0, knob_base_b = 1.0;
+    double knob_given[3] = {0, 0, 0};
     double knob_grey_lab[3] = {0, 0, 0};
   };
   std::map<std::string, PrintSearch> print_search;
@@ -267,6 +268,7 @@ struct FramePrint {
   double a0 = 0.0, wish_l = 0.0, above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // (PrintSearch)
   bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
   double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
+  double knob_given[3] = {0, 0, 0};            // brightness, tint, warmth as given
   double grey_density = 0.70;
 };
 // False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.
@@ -340,6 +342,7 @@ constexpr const char* kPrintIccCopyright =
     "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
     "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
+constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 (PCS XYZ) holds
 constexpr int kPrintIccCube = 45;
 constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
 constexpr int kPaperAlphaPoints = 661;
@@ -412,7 +415,6 @@ struct PrintContinuum {
   void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
   // The tables set_curves_at writes into prof.in_trc.
   void trc_at(double a, const double gains[3], std::vector<float> trc[3]) const;
-  double green_apd(double dl) const;          // G_green at light density dl
   double a_lo() const;                        // the range A is searched in: the curve's green APD range
   double a_hi() const;
 };

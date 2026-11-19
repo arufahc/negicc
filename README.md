@@ -229,9 +229,7 @@ bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kod
 
 Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
 were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic. They were rendered at commit
-`e7e2fad` (2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from
-the profile to sRGB have changed since, so the current build may render them differently.
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
@@ -313,7 +311,7 @@ scene conversion's lightness with `--brightness` (the offset in stops is in each
 | `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White light: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
-| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs. |
+| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
 | `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED, nor to a print). Eight or ten numbers replay the curves recorded in a sidecar. |
 | `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |

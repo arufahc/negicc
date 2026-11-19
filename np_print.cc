@@ -1199,6 +1199,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.knob_base_g = own->second.knob_base_g;
     p.knob_base_b = own->second.knob_base_b;
     for (int c = 0; c < 3; ++c) p.knob_grey_lab[c] = own->second.knob_grey_lab[c];
+    for (int c = 0; c < 3; ++c) p.knob_given[c] = own->second.knob_given[c];
   }
   const DensityBracket* bracket = nullptr;
   for (const DensityBracket& b : bundle.density_brackets) {
@@ -1431,8 +1432,8 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
     // Two materials of one id would share a CLF name: the first is kept.
     const std::string path = output + "." + material.id + ".clf";
     if (std::find(out.paths.begin(), out.paths.end(), path) != out.paths.end()) {
-      log_warn("--print names the print material %s twice: its CLF is written once, for the first\n",
-               material.id.c_str());
+      log_warn("--print names the print material %s twice: its CLF is written once, for the first (built-in "
+               "materials before files)\n", material.id.c_str());
       continue;
     }
     if (!frame_print(rec, material, print, err)) {
@@ -1485,6 +1486,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
         if (p.knobs) {
           one["knobs"] = {{"what", "--brightness, --tint and --warmth on this print: mid_grey_a and gains are the "
                                    "moved ones (A, g and b solved on the print's profile, E held), from the search's"},
+                          {"brightness", p.knob_given[0]}, {"tint", p.knob_given[1]}, {"warmth", p.knob_given[2]},
                           {"search", {{"a", p.knob_base_a}, {"g", p.knob_base_g}, {"b", p.knob_base_b}}},
                           {"grey_lab", {p.knob_grey_lab[0], p.knob_grey_lab[1], p.knob_grey_lab[2]}},
                           {"limited", p.knobs_limited}};
@@ -1590,7 +1592,6 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
 
 constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
-constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 holds
 
 }  // namespace
 
@@ -1629,12 +1630,16 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
 }
 
 void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]) {
+  // Over the brackets of bundle.targets, as the picture's print (bracket_print_profiles' continuum).
   std::vector<double> am;
   std::vector<std::array<double, 3>> tl;
-  for (const DensityBracket& b : bundle.density_brackets) {
-    am.push_back(bracket_mid_apd(bundle, b));
-    tl.push_back({b.tilt[0], b.tilt[1], b.tilt[2]});
-  }
+  for (const BundleTarget& target : bundle.targets)
+    for (const DensityBracket& b : bundle.density_brackets) {
+      if (b.name != target.name) continue;
+      am.push_back(bracket_mid_apd(bundle, b));
+      tl.push_back({b.tilt[0], b.tilt[1], b.tilt[2]});
+      break;
+    }
   print_tilt_at(am, tl, a, t);
 }
 
@@ -1786,6 +1791,69 @@ std::array<int, 6> bundle_date(const ProfileBundle& bundle) {
   return d;
 }
 
+// A textDescriptionType tag (ICC v2) holding description as its ASCII text, with empty Unicode and ScriptCode parts.
+static std::vector<uint8_t> icc_desc_tag(const std::string& description) {
+  // The ASCII part holds 7-bit text (ICC.1:2001-04 6.5.17): each character outside it (a UTF-8 material name's) is
+  // written as one '?', as the station's write_icc writes it (Python's encode("ascii", "replace")).
+  std::string ascii;
+  for (const char ch : description) {
+    const unsigned char u = (unsigned char)ch;
+    if (u < 0x80) ascii += ch;
+    else if (u >= 0xc0) ascii += '?';   // a character's first byte; its continuation bytes (0x80 to 0xbf) are dropped
+  }
+  std::vector<uint8_t> desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
+  put_u32(desc, (uint32_t)ascii.size() + 1);
+  desc.insert(desc.end(), ascii.begin(), ascii.end());
+  desc.insert(desc.end(), 1 + 8 + 3 + 67, 0);
+  return desc;
+}
+
+// A profile from its 128-byte header and its tags in order (each tag's data on a 4-byte boundary); the header's
+// size field is set.
+static std::vector<uint8_t> icc_assemble(std::vector<uint8_t> icc,
+                                         const std::vector<std::pair<std::string, std::vector<uint8_t>>>& tags) {
+  std::vector<uint8_t> table_bytes, body;
+  const size_t start = 128 + 4 + 12 * tags.size();
+  for (const auto& t : tags) {
+    table_bytes.insert(table_bytes.end(), t.first.begin(), t.first.begin() + 4);
+    put_u32(table_bytes, (uint32_t)(start + body.size()));
+    put_u32(table_bytes, (uint32_t)t.second.size());
+    body.insert(body.end(), t.second.begin(), t.second.end());
+    while (body.size() % 4) body.push_back(0);
+  }
+  icc.resize(128);
+  put_u32(icc, (uint32_t)tags.size());
+  icc.insert(icc.end(), table_bytes.begin(), table_bytes.end());
+  icc.insert(icc.end(), body.begin(), body.end());
+  const uint32_t size = (uint32_t)icc.size();
+  for (int k = 0; k < 4; ++k) icc[k] = (uint8_t)(size >> (24 - 8 * k));
+  return icc;
+}
+
+// Replaces the profile's desc tag by one holding description; false when it has none or its tag table is not whole.
+static bool set_icc_description(std::vector<uint8_t>& icc, const std::string& description) {
+  if (icc.size() < 132) return false;
+  const uint32_t n = get_u32(icc, 128);
+  if (132 + 12 * (size_t)n > icc.size()) return false;
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> tags;
+  bool found = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    const std::string sig((const char*)icc.data() + 132 + 12 * i, 4);
+    const size_t off = get_u32(icc, 136 + 12 * i), size = get_u32(icc, 140 + 12 * i);
+    // Inside the file and after the tag table, without overflowing.
+    if (off < 132 + 12 * (size_t)n || off > icc.size() || size > icc.size() - off) return false;
+    if (sig == "desc") {
+      tags.push_back({sig, icc_desc_tag(description)});
+      found = true;
+    } else {
+      tags.push_back({sig, std::vector<uint8_t>(icc.begin() + off, icc.begin() + off + size)});
+    }
+  }
+  if (!found) return false;
+  icc = icc_assemble(std::vector<uint8_t>(icc.begin(), icc.begin() + 128), tags);
+  return true;
+}
+
 std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
                                      const std::string& description, const std::string& copyright,
                                      const std::array<int, 6>& date) {
@@ -1803,28 +1871,13 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
     put_u16(a2b0, 0.0);
     put_u16(a2b0, 1.0);
   }
-  std::vector<uint8_t> desc = {'d', 'e', 's', 'c', 0, 0, 0, 0};
-  put_u32(desc, (uint32_t)description.size() + 1);
-  desc.insert(desc.end(), description.begin(), description.end());
-  desc.insert(desc.end(), 1 + 8 + 3 + 67, 0);
   std::vector<uint8_t> cprt = {'t', 'e', 'x', 't', 0, 0, 0, 0};
   cprt.insert(cprt.end(), copyright.begin(), copyright.end());
   cprt.push_back(0);
   std::vector<uint8_t> wtpt = {'X', 'Y', 'Z', ' ', 0, 0, 0, 0};
   for (double v : kD50) put_s15(wtpt, v);
-  const std::vector<std::pair<const char*, const std::vector<uint8_t>*>> tags = {
-      {"desc", &desc}, {"cprt", &cprt}, {"wtpt", &wtpt}, {"A2B0", &a2b0}};
-  std::vector<uint8_t> table_bytes, body;
-  const size_t start = 128 + 4 + 12 * tags.size();
-  for (const auto& t : tags) {
-    table_bytes.insert(table_bytes.end(), t.first, t.first + 4);
-    put_u32(table_bytes, (uint32_t)(start + body.size()));
-    put_u32(table_bytes, (uint32_t)t.second->size());
-    body.insert(body.end(), t.second->begin(), t.second->end());
-    while (body.size() % 4) body.push_back(0);
-  }
   std::vector<uint8_t> icc;
-  put_u32(icc, (uint32_t)(start + body.size()));
+  put_u32(icc, 0);   // the size: icc_assemble sets it
   put_u32(icc, 0);
   put_u32(icc, 0x02400000);
   for (const char* s : {"scnr", "RGB ", "XYZ "}) icc.insert(icc.end(), s, s + 4);
@@ -1837,10 +1890,8 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   put_u32(icc, 0);
   for (double v : kD50) put_s15(icc, v);
   icc.insert(icc.end(), 48, 0);
-  put_u32(icc, (uint32_t)tags.size());
-  icc.insert(icc.end(), table_bytes.begin(), table_bytes.end());
-  icc.insert(icc.end(), body.begin(), body.end());
-  return icc;
+  return icc_assemble(std::move(icc), {{"desc", icc_desc_tag(description)}, {"cprt", std::move(cprt)},
+                                       {"wtpt", std::move(wtpt)}, {"A2B0", std::move(a2b0)}});
 }
 
 bool set_icc_wtpt(std::vector<uint8_t>& icc, const double xyz[3]) {
@@ -1924,7 +1975,6 @@ void PrintContinuum::set_curves_at(double a, ParsedFilmProfile& prof, const doub
   prof.rebind_pointers();
 }
 
-double PrintContinuum::green_apd(double dl) const { return on_grid(g.apd[1], g.start, g.step, dl); }
 double PrintContinuum::a_lo() const { return *std::min_element(g.apd[1].begin(), g.apd[1].end()); }
 double PrintContinuum::a_hi() const { return *std::max_element(g.apd[1].begin(), g.apd[1].end()); }
 
@@ -1963,8 +2013,10 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
       if (b.name == name) return &b;
     return nullptr;
   };
-  // The table: the bundle's print ICC's when its own curves are those computed here for its bracket (the same film,
-  // print material and math, to one 16-bit step), else computed here.
+  // The table: the bundle's print ICC's when it is the file the bundle records, computed from the spektrafilm profile
+  // built in here, and its own curves are those computed here for its bracket (the same film, print material and math,
+  // to one 16-bit step); else computed here, with a warning saying why.
+  const std::string description = bundle.key + " printed on " + material.name + " (spektrafilm)";
   std::vector<uint8_t> base;
   out = BracketPrints{};
   out.id = material.id;
@@ -1980,7 +2032,26 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     if (!bp.read_icc || !bp.read_icc(icc, err)) return false;
     const DensityBracket* ref = bracket_of(bp.reference_bracket);
     const size_t off = a2b0_lut16(icc);
-    if (!ref || !off) break;
+    if (!ref || !off) {
+      log_warn("The bundle's print ICC for %s %s: its table is computed here\n", print.c_str(),
+               !ref ? ("names a reference bracket the bundle has no density bracket for (" + bp.reference_bracket +
+                       ")").c_str()
+                    : "has no lut16 A2B0 table");
+      break;
+    }
+    const EmbeddedFile* sf = find_embedded_file("3rd_party/spektrafilm/profiles/" + print + ".json");
+    const std::string icc_sha = sha256_hex(std::string(icc.begin(), icc.end()));
+    const std::string sf_sha = sf ? sha256_hex(std::string((const char*)sf->data, sf->size)) : "";
+    if (bp.icc_in_file ? bp.icc_sha256 != icc_sha : !bp.icc_sha256.empty() && bp.icc_sha256 != icc_sha) {
+      log_warn("The bundle's print ICC for %s is not the file the bundle records (its SHA-256 %s): its table is "
+               "computed here\n", print.c_str(), bp.icc_sha256.empty() ? "is not recorded" : "differs");
+      break;
+    }
+    if (bp.spektrafilm_sha256.empty() || bp.spektrafilm_sha256 != sf_sha) {
+      log_warn("The bundle's print ICC for %s was computed from %s spektrafilm profile than the one built in: its "
+               "table is computed here\n", print.c_str(), bp.spektrafilm_sha256.empty() ? "an unrecorded" : "another");
+      break;
+    }
     const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0, ref->tilt);
     const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
     // The three input curves must lie inside the file: a truncated ICC is not read past its end.
@@ -1989,7 +2060,12 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
                icc.size());
       break;
     }
-    long worst = n == mine[0].size() ? 0 : 65535;
+    if (n != mine[0].size()) {
+      log_warn("The bundle's print ICC for %s has %zu input curve entries, %zu computed now: its table is computed "
+               "here\n", print.c_str(), n, mine[0].size());
+      break;
+    }
+    long worst = 0;
     for (int c = 0; c < 3 && worst <= 1; ++c)
       for (size_t i = 0; i < n; ++i) {
         const size_t at = off + 52 + 2 * (c * n + i);
@@ -1997,6 +2073,13 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
         worst = std::max(worst, std::labs(code - std::lround(std::min(std::max(mine[c][i], 0.0), 1.0) * 65535.0)));
       }
     if (worst <= 1) {
+      // Described as the table computed here is: the material, with no bracket (each bracket's curves and then the
+      // print's A replace the file's).
+      if (!set_icc_description(icc, description)) {
+        log_warn("The bundle's print ICC for %s has no description tag to replace: its table is computed here\n",
+                 print.c_str());
+        break;
+      }
       base = std::move(icc);
       out.from_bundle = true;
     } else {
@@ -2010,8 +2093,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
     base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0, mid->tilt),
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
-                           bundle.key + " printed on " + material.name + " (spektrafilm)",
-                           kPrintIccCopyright, bundle_date(bundle));
+                           description, kPrintIccCopyright, bundle_date(bundle));
   }
   for (const BundleTarget& t : bundle.targets) {
     const DensityBracket* b = bracket_of(t.name);
