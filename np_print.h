@@ -301,6 +301,7 @@ struct DensityPrints {
   std::vector<FramePrint> frames;
   std::vector<std::string> paths;
   std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
+  std::string error;                  // a material asked for that has no CLF, and why: the run fails
 };
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids);
