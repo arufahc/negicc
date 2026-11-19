@@ -57,9 +57,6 @@
 #include "tone_stage.h"
 
 // Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
-// The scan's exposure where its file records none (Scan::scan_exposure): 1/8 s at ISO 100.
-constexpr double kDefaultScanShutterS = 0.125, kDefaultScanIso = 100.0;
-
 struct CachedSidecar {
   bool is_auto = false;                  // true: cached from "auto"; false: cached from "dino"
   int target_idx = -1;

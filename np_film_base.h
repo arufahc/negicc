@@ -54,6 +54,10 @@
 
 #include "flat_field.h"
 
+// The exposure of a scan or a film base capture whose file records none (Scan::scan_exposure,
+// read_film_base_capture): 1/8 s at ISO 100.
+constexpr double kDefaultScanShutterS = 0.125, kDefaultScanIso = 100.0;
+
 constexpr int kBaseTileGrid = 96;             // square tiles along the longer side (fewer when they would be under 8 pixels)
 constexpr int kBaseMinTiles = 8;              // tiles that must agree, and at least ...
 constexpr int kBaseMinShare = 200;            // ... one tile in this many
