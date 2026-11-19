@@ -41,8 +41,9 @@ removing the chart's veiling glare before fitting was tried, did not help overal
 ## Dynamic range
 
 Range across each bracket's 24 grey patches (`gs0` to `gs23`) before the camera matrix (`bundle.json`'s patch values
-multiplied by the inverse of `profiling_input_transform.matrix` to recover raw sensor RGB), as 14-bit ADC bit depth
-(`log2(max - min)` out of `16384`) and contrast in stops (`log2(max / min)`).
+multiplied by the inverse of `profiling_input_transform.matrix` to recover raw sensor RGB), as bits
+(`log2(max - min)`, on the scale of the camera's 14-bit raw values; the values are flat-fielded, so they can exceed
+16383) and contrast in stops (`log2(max / min)`).
 
 | Bracket | Profile | Shutter | Bit depth: R / G / B | Bit depth: mean | Stops: R / G / B | Stops: mean |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |

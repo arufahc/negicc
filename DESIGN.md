@@ -405,6 +405,9 @@ not the optimiser's reading of it, matches the field.
    pullback does not run after the clip fallback took the next bracket, with `-E`, or on a one-bracket set.
 7. **Final shoulder.** `x_hi` is measured once more at the final parameters.
 
+The sidecar records the winning step's field as `intent_field` (`μ` and `σ` per cell): its `a*` and `b*` as that step
+predicted them, its `L*` the lightness target of step 2.
+
 The search's parameters, in the order the steps use them:
 
 | Parameter | Value | Purpose |
@@ -626,11 +629,13 @@ A print material is a spektrafilm print profile, read as published: eight are bu
 (`3rd_party/spektrafilm/profiles/`), and `--print <file>` takes another (`load_spektrafilm_print`). From it are
 computed:
 
-- **the observer**: the CIE 1931 2° observer under D50 for a paper, D55 for a print film;
+- **the observer**: the CIE 1931 2° observer under D50 for a paper, D55 for a print film, by the profile's `support`
+  (its `viewing_illuminant`, K75P on the two print films, is not read);
 - **aim**: each layer's log exposure that prints an 18 % grey;
 - **`Q`**: the 3×3 from the film's dye amounts to the print's own density (its layers' sensitivity under a 3200 K
-  blackbody lamp, no heat filter), least squares with no offset on the film model's neutral scale between log
-  exposure −1.5 and 1.0, each point with 27 colour variations (each dye amount times `exp(0.184 z)`, `z` = −1, 0, 1);
+  blackbody lamp, no heat filter, in place of the profile's `reference_illuminant`, TH-KG3), least squares with no
+  offset on the film model's neutral scale between log exposure −1.5 and 1.0, each point with 27 colour variations
+  (each dye amount times `exp(0.184 z)`, `z` = −1, 0, 1);
 - **the print matrix** `P = Q L M⁻¹` for each measure, so `P M = Q L` (for a measure without `φ`, `P = Q F⁻¹`).
 
 The print of a printing density `pd`, per layer `c` and wavelength `λ`:
@@ -800,8 +805,9 @@ spectrum, the film base and the encoding as JSON, in a TIFF's `ImageDescription`
 
 **The CLF** (`<output>.<material>.clf`) renders the file as the print. Its first node is a matrix for the frame; the
 other nodes are the print material's (`print_clf_nodes`): density → log exposure, the curve per layer (4096-point
-LUT1D), dye amounts → linear sRGB (45-point LUT3D), the sRGB curve. On the file's code `q` (code over the largest
-code):
+LUT1D), dye amounts → linear sRGB (45-point LUT3D: XYZ under the viewing light adapted to D65 with CAT02, where the
+print ICC adapts a print film's D55 to the PCS's D50 with Bradford), the sRGB curve. On the file's code `q` (code over
+the largest code):
 
 ```
 D             = (q × largest code − offset) / (scale κ)
@@ -813,10 +819,13 @@ S_c           = (γ_green / γ_c) (1 + t_c(A)),   γ_c = Σ_j M_cj dn_j/dA      
 
 `dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
 `1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has
-equal contrast in the three channels. With `--print` the density run searches each material's print
-(5.6) and its CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is
-then computed from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The print CLF is
-relative to the paper's white like the print ICC.
+equal contrast in the three channels. With `--print` the density run searches each material's print (5.6) and its
+CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is then computed
+from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The two differ
+on film thinner than its base: the picture takes it through the soft knee (2.5), which the print ICC's curves undo
+only up to `x` = 0.95 + 0.05 atanh(0.998) ≈ 1.12 (0.13 below the base's light density at `E = g = b = 1`), while the
+density file keeps it down to its lowest code (density about −0.19). The print CLF is relative to the paper's white like
+the print ICC.
 
 | Parameter | Value | Purpose |
 |---|---|---|

@@ -120,8 +120,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 // The passes over the frame the bundle search renders: the preview of the inner crop and the clip statistics (the
 // roll-off's 99.5 % point, white-clip shares). The defaults are negicc::cpu_render and negicc::cpu_highlight_clip; a
 // caller that renders the same pipeline elsewhere (the station's GPU) overrides them. search_conversion_params,
-// run_white_light_fit (the curve fit, its roll-off and its tone plan), plan_auto_tone_stage and reanchor_input_curves
-// send every pass of theirs through it; the passes are serial, called from the caller's thread one at a time.
+// run_white_light_fit (the curve fit, its roll-off and its tone plan) and plan_auto_tone_stage send every pass of
+// theirs through it (reanchor_input_curves renders nothing); the passes are serial, called from the caller's thread
+// one at a time.
 //
 // What stays and what changes between calls:
 // - bind_frame is called before the passes of each measurement with the frame they crop, and again, with the same

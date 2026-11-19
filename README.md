@@ -283,7 +283,8 @@ There are two ways to run it, and both give the same picture:
 Both paths use the same 3D colour table (cLUT) for the print material's dyes. The only difference is how the scan
 reaches that table: in the density file and CLF, the pixels are already in log density, so a 3×3 matrix in log space
 applies the printing exposure and colour balance before the paper's tone curve; in the print ICC, the input TRC curves
-do the same job directly on the linear scan values.
+do the same job directly on the linear scan values. The two differ on film thinner than its base and in how they
+adapt the viewing light's white ([DESIGN.md](DESIGN.md) 5.9).
 
 ![Print TRC Curves and 3D cLUT Gamut](samples/print_trc_and_clut.png)
 
