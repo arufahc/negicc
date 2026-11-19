@@ -2934,7 +2934,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at || !cp.green_apd ||
+  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at ||
       !(cp.a_hi > cp.a_lo)) {
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;

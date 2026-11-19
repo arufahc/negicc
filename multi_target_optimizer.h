@@ -411,8 +411,6 @@ struct ContinuousPrint {
   // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
   // renders the print (np_print.h PrintContinuum::trc_at).
   std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
-  std::function<double(double dl)> green_apd;                             // G_green
-  double n0 = 1.0;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
   double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)

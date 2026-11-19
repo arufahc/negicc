@@ -341,6 +341,7 @@ constexpr const char* kPrintIccCopyright =
     "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
     "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
+constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;   // the largest XYZ a lut16 (PCS XYZ) holds
 constexpr int kPrintIccCube = 45;
 constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
 constexpr int kPaperAlphaPoints = 661;
@@ -413,7 +414,6 @@ struct PrintContinuum {
   void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
   // The tables set_curves_at writes into prof.in_trc.
   void trc_at(double a, const double gains[3], std::vector<float> trc[3]) const;
-  double green_apd(double dl) const;          // G_green at light density dl
   double a_lo() const;                        // the range A is searched in: the curve's green APD range
   double a_hi() const;
 };
