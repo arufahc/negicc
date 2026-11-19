@@ -25,7 +25,8 @@ make dinov3_model && make -j$(nproc) neg_process                    # add USE_CU
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
 ([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT. ONNX Runtime is
 linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the first time (needs `curl` and `python3`;
-[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)).
+[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)), unless an ONNX Runtime in the
+same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
 
 ## Use
 

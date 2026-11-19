@@ -44,6 +44,19 @@ jobs:
           cp 3rd_party/onnxruntime_prebuilt/LICENSE dist/neg_process-linux-x86_64/LICENSE.onnxruntime
           cp 3rd_party/onnxruntime_prebuilt/ThirdPartyNotices.txt dist/neg_process-linux-x86_64/ThirdPartyNotices.onnxruntime.txt
           cp 3rd_party/spektrafilm/SPEKTRAFILM_LICENSE.txt dist/neg_process-linux-x86_64/LICENSE.spektrafilm
+          # The libraries linked in statically and the profiles embedded.
+          d=dist/neg_process-linux-x86_64
+          cp 3rd_party/libraw/COPYRIGHT $d/COPYRIGHT.libraw
+          cp 3rd_party/libraw/LICENSE.LGPL $d/LICENSE.libraw.LGPL
+          cp 3rd_party/libraw/LICENSE.CDDL $d/LICENSE.libraw.CDDL
+          cp 3rd_party/lcms2/COPYING $d/LICENSE.lcms2
+          cp 3rd_party/libtiff/LICENSE.md $d/LICENSE.libtiff.md
+          cp 3rd_party/libjpeg-turbo/LICENSE.md $d/LICENSE.libjpeg-turbo.md
+          cp 3rd_party/libjpeg-turbo/README.ijg $d/README.ijg
+          cp 3rd_party/zlib/LICENSE $d/LICENSE.zlib
+          cp 3rd_party/json/LICENSE.MIT $d/LICENSE.nlohmann-json
+          cp 3rd_party/argparse/LICENSE $d/LICENSE.argparse
+          cp 3rd_party/elle_icc_profiles/LICENSE $d/LICENSE.elle-icc-profiles
           dist/neg_process-linux-x86_64/neg_process --list_profiles > /dev/null
           tar -C dist -czf dist/neg_process-linux-x86_64.tar.gz neg_process-linux-x86_64
           (cd dist && sha256sum neg_process-linux-x86_64.tar.gz > neg_process-linux-x86_64.tar.gz.sha256)

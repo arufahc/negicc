@@ -171,6 +171,9 @@ ifeq ($(ORT_STATIC),1)
     ORT_DEPS = $(ORT_STATIC_LIB)
     ORT_LDFLAGS = $(ORT_STATIC_LIB) -ldl -lpthread -lrt -Wl,--gc-sections -Wl,-z,noexecstack
 else ifeq ($(ORT_STATIC),0)
+    # An ONNX Runtime already in the release layout (include/, lib/<arch>/) is taken first: one in 3rd_party, or beside
+    # this checkout (a parent project's, when negicc is its submodule); else the pinned prebuilt one is fetched. The
+    # link says which (bin_out/neg_process).
     ORT_CANDIDATES := $(wildcard 3rd_party/onnxruntime/include/onnxruntime_cxx_api.h \
                                  ../onnxruntime/include/onnxruntime_cxx_api.h \
                                  ../negicc-station/3rd_party/onnxruntime/include/onnxruntime_cxx_api.h)
@@ -179,12 +182,7 @@ else ifeq ($(ORT_STATIC),0)
     else
         ORT_DIR ?= $(ORT_PREBUILT_DIR)
     endif
-    # The source tree's session headers only when ORT_DIR is that tree: no second ONNX Runtime's headers on the path.
-    ifeq ($(ORT_DIR),$(ORT_SRC_DIR))
-        ORT_INC = -isystem $(ORT_DIR)/include -isystem $(ORT_SRC_DIR)/include/onnxruntime/core/session
-    else
-        ORT_INC = -isystem $(ORT_DIR)/include
-    endif
+    ORT_INC = -isystem $(ORT_DIR)/include
     ifeq ($(ARCH),aarch64)
         ORT_LIB_DIR ?= $(ORT_DIR)/lib/aarch64
     else
@@ -445,6 +443,7 @@ neg_process: bin_out/neg_process
 
 bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
+	@echo "ONNX Runtime: $(if $(filter 1,$(ORT_STATIC)),static from $(ORT_SRC_DIR),$(ORT_LIB_DIR))"
 	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
@@ -460,6 +459,15 @@ dinov3_model:
 # runs them (engines are device-specific and not checked in). On the Orin Nano: about 41 s + 10 s per adapter.
 dinov3_engine:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
+
+# An engine older than the .onnx it is compiled from holds the earlier weights: a USE_CUDA=1 build that would embed it
+# stops and asks for the engines again.
+ifeq ($(USE_CUDA),1)
+models/dinov3-small_%/adapter.engine: models/dinov3-small_%/adapter.onnx
+	@echo "$@ is older than $<: run make dinov3_engine on this machine" >&2; exit 1
+models/dinov3-small/backbone.engine: models/dinov3-small/backbone.onnx
+	@echo "$@ is older than $<: run make dinov3_engine on this machine" >&2; exit 1
+endif
 
 clean: clean_lib
 
