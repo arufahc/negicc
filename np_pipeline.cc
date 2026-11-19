@@ -671,9 +671,11 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
       why = std::string("it cannot be read (") + e.what() + ")";
       ok = false;
     }
-    // A print's knobs move the print's A: a sidecar without it has no print result to move.
-    if (ok && !s.print_profs.empty() && !std::isfinite(s.cached_sidecar.print_a)) {
-      why = "it records no print mid grey A (profile.print.a)";
+    // A print's knobs move the print's A: a sidecar without it, or with one outside this print's range (another
+    // bundle's curve), has no print result to move.
+    if (ok && !s.print_profs.empty() &&
+        !(s.cached_sidecar.print_a >= s.print_cont.a_lo() && s.cached_sidecar.print_a <= s.print_cont.a_hi())) {
+      why = "it records no print mid grey A (profile.print.a) within this print's range";
       ok = false;
     }
   }
@@ -1170,12 +1172,16 @@ int prepare(const Options& o, Setup& s) {
     const EmbeddedFile* onnx = find_embedded_backbone(false);
     const EmbeddedFile* backbone = trt ? trt : onnx;
     if (!backbone) {
-      // A white-light bundle holds given gains in its search (pinned_search), so they alone do not turn it off.
+      // A white-light bundle holds given gains in its search (pinned_search), so they alone do not turn it off. A
+      // print and a density output are made by the search and take no given values: they need the backbone.
       log_error("This neg_process was built without the DINOv3 backbone of the parameter search (make "
-                "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild); %s to convert without it\n",
-                s.is_bundle && s.white_light
-                    ? "give --target, -E, --gain_g and --gain_b with --fit_curves off and --tone_stage off"
-                    : "give --gain_g or --gain_b");
+                "dinov3_model, or make dinov3_engine for USE_CUDA=1, then rebuild)%s\n",
+                !s.print_id.empty() || s.density
+                    ? ": a print and a density output are made by the search and need it"
+                : s.is_bundle && s.white_light
+                    ? "; give --target, -E, --gain_g and --gain_b with --fit_curves off and --tone_stage off to "
+                      "convert without it"
+                    : "; give --gain_g or --gain_b to convert without it");
       return 1;
     }
     s.dino_path = std::string("[built-in] ") + backbone->name;

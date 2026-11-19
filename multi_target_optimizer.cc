@@ -1455,7 +1455,7 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
   out = PrintKnobResult{};
   out.a = a0; out.g = g0; out.b = b0;
   if (!std::isfinite(a0) || !std::isfinite(g0) || !std::isfinite(b0) || !(g0 > 0.0f) || !(b0 > 0.0f) ||
-      !(a_lo <= a0 && a0 <= a_hi)) {
+      !std::isfinite(a_lo) || !std::isfinite(a_hi) || !(a_lo < a_hi) || !(a_lo <= a0 && a0 <= a_hi)) {
     return false;
   }
   ParsedFilmProfile prof;
