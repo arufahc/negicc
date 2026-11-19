@@ -823,9 +823,9 @@ equal contrast in the three channels. With `--print` the density run searches ea
 CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is then computed
 from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The two differ
 on film thinner than its base: the picture takes it through the soft knee (2.5), which the print ICC's curves undo
-only up to `x` = 0.95 + 0.05 atanh(0.998) ≈ 1.12 (0.13 below the base's light density at `E = g = b = 1`), while the
-density file keeps it down to its lowest code (density about −0.19). The print CLF is relative to the paper's white like
-the print ICC.
+only up to `unknee(x)` = 0.95 + 0.05 atanh(0.998) ≈ 1.12 (0.13 below the base's light density at `E = g = b = 1`),
+while the density file keeps it down to its lowest code (density −0.19 in Status M and RP 180; −0.19, −0.21 and −0.20
+in APD, through its channel factors). The print CLF is relative to the paper's white like the print ICC.
 
 | Parameter | Value | Purpose |
 |---|---|---|
