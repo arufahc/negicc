@@ -196,7 +196,7 @@ else ifeq ($(ORT_STATIC),0)
         ORT_RPATH = -Wl,-rpath,'$$ORIGIN/../$(ORT_LIB_DIR)' -Wl,-rpath,'$$ORIGIN'
     endif
     # The prebuilt library is fetched (fetch.sh) before the link when it is not there yet.
-    ifeq ($(ORT_DIR),$(ORT_PREBUILT_DIR))
+    ifeq ($(abspath $(ORT_DIR)),$(abspath $(ORT_PREBUILT_DIR)))
         ORT_DEPS = $(ORT_LIB_DIR)/libonnxruntime.so
     else
         ORT_DEPS =
@@ -206,8 +206,10 @@ else
     $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
 
-$(ORT_PREBUILT_DIR)/lib/%/libonnxruntime.so:
+ifneq ($(ORT_DEPS),)
+$(ORT_DEPS):
 	$(ORT_PREBUILT_DIR)/fetch.sh
+endif
 
 onnxruntime_prebuilt:
 	$(ORT_PREBUILT_DIR)/fetch.sh
@@ -346,11 +348,14 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3_engine.h) of the white-light
 # curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
 # white-light tone stage.
-BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
+# A USE_CUDA=1 build embeds an engine for the backbone (when it is there) and for every adapter: listed whether or
+# not they exist, so that a missing or stale one stops the build (the rules after dinov3_engine).
+BACKBONE_ONNX = $(wildcard models/dinov3-small/backbone.onnx)
+ENGINE_FILES = $(if $(filter 1,$(USE_CUDA)),$(BACKBONE_ONNX:.onnx=.engine) \
+                 $(patsubst %.onnx,%.engine,$(wildcard models/dinov3-small_*/adapter.onnx)))
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc 3rd_party/spektrafilm/profiles/*.json models/dinov3-small_*/adapter.onnx \
-                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
-                                $(if $(filter 1,$(USE_CUDA)),models/dinov3-small_*/adapter.engine))) \
-              $(wildcard $(BACKBONE_FILES))
+                                models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin)) \
+              $(BACKBONE_ONNX) $(ENGINE_FILES)
 
 EMBED_IDX = $(shell seq 1 $(words $(EMBED_FILES)))
 
@@ -460,13 +465,13 @@ dinov3_model:
 dinov3_engine:
 	$(PYTHON) models/dinov3-small/export_dinov3_backbone.py --engine-only --adapters $(wildcard models/dinov3-small_*/adapter.onnx)
 
-# An engine older than the .onnx it is compiled from holds the earlier weights: a USE_CUDA=1 build that would embed it
-# stops and asks for the engines again.
+# An engine missing, or older than the .onnx it is compiled from (it holds the earlier weights): a USE_CUDA=1 build
+# that would embed it stops and asks for the engines.
 ifeq ($(USE_CUDA),1)
 models/dinov3-small_%/adapter.engine: models/dinov3-small_%/adapter.onnx
-	@echo "$@ is older than $<: run make dinov3_engine on this machine" >&2; exit 1
+	@echo "$@ is missing or older than $<: run make dinov3_engine on this machine" >&2; exit 1
 models/dinov3-small/backbone.engine: models/dinov3-small/backbone.onnx
-	@echo "$@ is older than $<: run make dinov3_engine on this machine" >&2; exit 1
+	@echo "$@ is missing or older than $<: run make dinov3_engine on this machine" >&2; exit 1
 endif
 
 clean: clean_lib
