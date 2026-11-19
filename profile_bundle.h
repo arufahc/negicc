@@ -164,11 +164,12 @@ struct DensityBracket {
   // a bundle with the curve, under either light, takes its slopes from the curve (np_print.h curve_slopes).
   bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
-  // The bracket's slope relative to the grey balance curve (density_matrices.brackets.targets.<bracket>.grey_relative.b),
-  // fitted by the profile-building tools over its grey steps: each step's residual from the curve, r_c = G_green - G_c in
-  // the curve's APD, regressed as a_c + t_c (G_c - A_mid). The print takes the tilt t_c linear in its mid grey A between
-  // the two brackets whose A_mid enclose A, held beyond the end ones (np_print.h print_tilt_at); the offset a_c is not
-  // read. Zero without grey_relative: the curve alone.
+  // The bracket's slope relative to the grey balance curve
+  // (density_matrices.brackets.targets.<bracket>.grey_relative.b), fitted by the profile-building tools over its grey
+  // steps: each step's residual from the curve, r_c = G_green - G_c in the curve's APD, regressed as a_c + t_c
+  // (G_c - A_mid). The print takes the tilt t_c linear in its mid grey A between the two brackets whose A_mid enclose
+  // A, held beyond the end ones (np_print.h print_tilt_at); the offset a_c is not read. Zero without grey_relative: the
+  // curve alone.
   bool has_tilt = false;
   double tilt[3] = {0.0, 0.0, 0.0};
 };

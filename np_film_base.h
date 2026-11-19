@@ -58,10 +58,12 @@
 // read_film_base_capture): 1/8 s at ISO 100.
 constexpr double kDefaultScanShutterS = 0.125, kDefaultScanIso = 100.0;
 
-constexpr int kBaseTileGrid = 96;             // square tiles along the longer side (fewer when they would be under 8 pixels)
+constexpr int kBaseTileGrid = 96;             // square tiles along the longer side (fewer when they would be under 8
+                                              // pixels)
 constexpr int kBaseMinTiles = 8;              // tiles that must agree, and at least ...
 constexpr int kBaseMinShare = 200;            // ... one tile in this many
-constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread up to which it is smooth whatever the rest
+constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread up to which it is smooth whatever the
+                                              // rest
 constexpr double kBaseSpreadFactor = 1.5;     // ... and up to this many times the median tile's spread
 constexpr double kBaseTileMargin = 0.02;      // density: how far from the group's brightest tile a kept tile may lie
 constexpr double kBaseColourTol = 0.25;       // density: how far a tile's G/R and B/R may lie from the bundle's base
@@ -73,7 +75,8 @@ struct FilmBaseCapture {
                                            // tiles' bounding box
   std::string roi_source;                  // "given", "tiles" or "statistics"
   int tiles_kept = 0, tiles_total = 0;     // with the tiles
-  double spread_density = 0.0;             // the spread of the kept tiles' green medians (a given region: of its pixels)
+  double spread_density = 0.0;             // the spread of the kept tiles' green medians (a given region: of its
+                                           // pixels)
   double shutter_s = 0.0, iso = 0.0;       // the capture's exposure
   double exposure_scale = 1.0;             // scan exposure / capture exposure, which rgb carries
 };

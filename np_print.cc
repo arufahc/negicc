@@ -363,9 +363,11 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
                    {"offset", rec.encoding.offset},
                    {"scale", rec.encoding.scale},
                    {"channel_factors", {rec.encoding.k[0], rec.encoding.k[1], rec.encoding.k[2]}},
-                   {"standard", rec.measure == kDensityApd ? "ADX, SMPTE ST 2065-3 (the channel factors applied)"
-                                                           : (rec.measure == kDensityRp180 ? "Cineon scaling" : "none")},
-                   {"formula", "code = offset + scale * k * D, D the density above the film base, k the channel factor"}};
+                   {"standard", rec.measure == kDensityApd
+                                    ? "ADX, SMPTE ST 2065-3 (the channel factors applied)"
+                                    : (rec.measure == kDensityRp180 ? "Cineon scaling" : "none")},
+                   {"formula",
+                    "code = offset + scale * k * D, D the density above the film base, k the channel factor"}};
   j["profile_bundle"] = rec.bundle_key;
   j["film_base"] = {{"rgb", {rec.film_base_rgb[0], rec.film_base_rgb[1], rec.film_base_rgb[2]}},
                     {"source", rec.film_base_source}};
@@ -873,7 +875,8 @@ namespace {
 // (log10) of the most sensitive layer's. False with why in err. Only load_spektrafilm_print calls it, so one reader
 // holds every rule.
 bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
-  if (!j.is_object() || !j.contains("data") || !j["data"].is_object()) return err = "not a spektrafilm profile (no data)", false;
+  if (!j.is_object() || !j.contains("data") || !j["data"].is_object())
+    return err = "not a spektrafilm profile (no data)", false;
   if (!j.contains("info") || !j["info"].is_object()) return err = "a spektrafilm profile without info", false;
   const nlohmann::json& info = j["info"];
   // A print material: spektrafilm also has camera films (stage "filming"), which would compute without complaint.
@@ -883,7 +886,8 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
                                : "a spektrafilm profile of a " + stage + " stock, not of a print material", false;
   }
   // The viewing light comes from the support: D50 for a paper, D55 for a print film.
-  const std::string support = info.contains("support") && info["support"].is_string() ? info["support"].get<std::string>() : "";
+  const std::string support =
+      info.contains("support") && info["support"].is_string() ? info["support"].get<std::string>() : "";
   if (support != "paper" && support != "film") {
     return err = "a spektrafilm print profile whose info.support is '" + support +
                  "', not paper or film: the viewing light is chosen by it", false;
@@ -896,7 +900,8 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
   std::vector<double> log_exposure;
   if (!d.contains("log_exposure") || !read_vector(d["log_exposure"], log_exposure) ||
       log_exposure.size() != d["density_curves"].size()) {
-    return err = "log_exposure of the spektrafilm print profile is missing or not one value per row of density_curves", false;
+    return err = "log_exposure of the spektrafilm print profile is missing or not one value per row of "
+                 "density_curves", false;
   }
   if (!std::is_sorted(log_exposure.begin(), log_exposure.end())) {
     return err = "log_exposure of the spektrafilm print profile is not in ascending order", false;
@@ -916,13 +921,15 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
       const double v = row[c].get<double>();
       if (i == 0) first = v;
       if (v < highest - kMaxCurveDip) {
-        return err = "layer " + std::to_string(c) + "'s curve of the spektrafilm print profile falls with exposure", false;
+        return err = "layer " + std::to_string(c) + "'s curve of the spektrafilm print profile falls with "
+                     "exposure", false;
       }
       highest = std::max(highest, v);
       last = v;
     }
     if (!(last - first > kMinCurveRise)) {
-      return err = "layer " + std::to_string(c) + "'s curve of the spektrafilm print profile does not rise with exposure", false;
+      return err = "layer " + std::to_string(c) +
+                   "'s curve of the spektrafilm print profile does not rise with exposure", false;
     }
   }
   // Each layer is sensitive somewhere: its peak log sensitivity within kMaxSensitivityGap (log10) of the most
@@ -941,7 +948,8 @@ bool check_spektrafilm_print(const nlohmann::json& j, std::string& err) {
   const double best = std::max(peak[0], std::max(peak[1], peak[2]));
   for (int c = 0; c < 3; ++c) {
     if (!(peak[c] > best - kMaxSensitivityGap)) {
-      return err = "layer " + std::to_string(c) + " of the spektrafilm print profile has no spectral sensitivity", false;
+      return err = "layer " + std::to_string(c) + " of the spektrafilm print profile has no spectral "
+                   "sensitivity", false;
     }
   }
   return true;
@@ -1336,13 +1344,14 @@ std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, c
             ? "The mid grey is the film's grey balance curve's grey at the print's own mid grey A " +
                   num("%.4f", print.a, 0.0, 0.0) +
                   ", which this material's own print search found on this frame, with that search's exposure and "
-                  "gains (the nearest bracket: " + xml(print.bracket) + "); balanced, it prints as the print's mid grey. "
+                  "gains (the nearest bracket: " + xml(print.bracket) +
+                  "); balanced, it prints as the print's mid grey. "
                   "The slopes are that curve's contrast there times one plus the brackets' tilt at A (grey_relative.b, "
                   "linear in A between the brackets): they give the film's grey scale equal contrast in the three "
                   "channels"
             : print.from_curve
-                  ? "The mid grey is the film's grey balance curve's grey at the green density of the chart's mid grey on "
-                    "the bracket " + xml(print.bracket) +
+                  ? "The mid grey is the film's grey balance curve's grey at the green density of the chart's mid grey "
+                    "on the bracket " + xml(print.bracket) +
                         (print.searched ? " and at the exposure the picture conversion's search gave this frame"
                                         : " (no search: the middle bracket)") +
                         "; balanced, it prints as the print's mid grey. The slopes are that curve's contrast there "
@@ -1473,16 +1482,17 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
           {"to_print_density", {{t[0], t[1], t[2]}, {t[3], t[4], t[5]}, {t[6], t[7], t[8]}}},
           {"to_print_density_for", p.to_print_for},
           {"bracket", p.bracket},
-          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the bracket nearest "
-                                              "its mid grey A, named only: the tilt is interpolated at A)"
-                           : p.searched ? "the picture conversion's search on this frame" : "the middle bracket (no search)"},
+          {"bracket_from", p.print_searched ? "the print's own search on this frame, on this material (the bracket "
+                                              "nearest its mid grey A, named only: the tilt is interpolated at A)"
+                           : p.searched ? "the picture conversion's search on this frame"
+                                        : "the middle bracket (no search)"},
           {"exposure", p.exposure},
           {"frame_grey_density", {p.grey[0], p.grey[1], p.grey[2]}},
           {"slopes", {p.slopes[0], p.slopes[1], p.slopes[2]}},
           {"grey_and_slopes_from", p.print_searched ? "the film's grey balance curve at the print's own mid grey A, "
                                                       "the slopes times one plus the brackets' tilt at A"
-                                   : p.from_curve ? "the film's grey balance curve at the bracket's mid grey, the slopes "
-                                                    "times one plus the bracket's tilt"
+                                   : p.from_curve ? "the film's grey balance curve at the bracket's mid grey, the "
+                                                    "slopes times one plus the bracket's tilt"
                                                   : "the bracket's entry in the profile set"}};
       if (p.print_searched) {
         one["mid_grey_a"] = p.a;
@@ -1710,8 +1720,9 @@ PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& 
     double run = -INFINITY;
     for (int i = 0; i < kPrintIccPoints; ++i) {
       const double v = (double)i / (kPrintIccPoints - 1);
-      const double u = v <= kPrintKnee ? v
-                                       : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
+      const double u = v <= kPrintKnee
+                           ? v
+                           : kPrintKnee + d * std::atanh(std::min(std::max((v - kPrintKnee) / d, 0.0), 0.998));
       const double dl = -std::log10(std::max(u * (gains ? gains[c] : 1.0), 1e-7) / n0);
       const double alpha = (on_grid(g.apd[c], g.start, g.step, dl) - a_mid) * (1.0 + tilt[c]);
       run = std::max(run, on_grid(paper[c], kPaperAlphaStart, kPaperAlphaStep, alpha));
@@ -1771,7 +1782,8 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
   }
   // The nodes' alpha: Paper_c inverted (it is decreasing, so read reversed).
   std::vector<double> alpha_grid(kPaperAlphaPoints), node_alpha[3];
-  for (int i = 0; i < kPaperAlphaPoints; ++i) alpha_grid[kPaperAlphaPoints - 1 - i] = kPaperAlphaStart + kPaperAlphaStep * i;
+  for (int i = 0; i < kPaperAlphaPoints; ++i)
+    alpha_grid[kPaperAlphaPoints - 1 - i] = kPaperAlphaStart + kPaperAlphaStep * i;
   for (int c = 0; c < 3; ++c) {
     const std::vector<double> rev(paper[c].rbegin(), paper[c].rend());
     for (int i = 0; i < kPrintIccCube; ++i)
@@ -2009,7 +2021,8 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
                  "the profile-building tools", false;
   }
   if (!bundle.density_matrix[kDensityApd].present || !bundle.film_model.present) {
-    return err = "the profile bundle has no APD matrix or film_model: rebuild it with the profile-building tools", false;
+    return err = "the profile bundle has no APD matrix or film_model: rebuild it with the profile-building "
+                 "tools", false;
   }
   // The material: a built-in one by id, or a spektrafilm print profile by path.
   PrintMaterial material;
@@ -2076,7 +2089,8 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
                "table is computed here\n", print.c_str(), bp.spektrafilm_sha256.empty() ? "an unrecorded" : "another");
       break;
     }
-    const PrintCurves mine = bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0, ref->tilt);
+    const PrintCurves mine =
+        bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *ref), n0, ref->tilt);
     const size_t n = (size_t)icc[off + 48] << 8 | icc[off + 49];
     // The three input curves must lie inside the file: a truncated ICC is not read past its end.
     if (off + 52 + 6 * n > icc.size()) {
@@ -2113,9 +2127,11 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     break;
   }
   if (base.empty()) {
-    const DensityBracket* mid = bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
+    const DensityBracket* mid =
+        bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
-    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0, mid->tilt),
+    base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0,
+                                                mid->tilt),
                            print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
                            description, kPrintIccCopyright, bundle_date(bundle));
   }
@@ -2123,7 +2139,8 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* b = bracket_of(t.name);
     if (!b) return err = "the profile bundle has no density_matrices.brackets entry for " + t.name, false;
     std::vector<uint8_t> icc = base;
-    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0, b->tilt))) {
+    if (!set_print_icc_curves(icc, bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *b), n0,
+                                                        b->tilt))) {
       return err = "the print ICC has no lut16 A2B0 to write curves into", false;
     }
     out.icc.push_back(std::move(icc));

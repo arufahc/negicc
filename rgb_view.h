@@ -1,8 +1,9 @@
 // Shared zero-copy CFA downsized view (RgbView) and CPU pipeline kernels used by neg_process and negicc-station.
 //
 // Five-step pipeline architecture:
-//   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for RGB/3xCFA/3xMono),
-//     per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory for 4x pixel shift).
+//   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for
+//     RGB/3xCFA/3xMono), per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory
+//     for 4x pixel shift).
 //   Step 2 (Downsizing): Zero-copy half-size RgbView over the CFA mosaic (r_ptr, g_ptr, g2_ptr, b_ptr, pitch, stride).
 //   Step 3 (Crop, rotate, flip & inline ROI search): detect_film_frame operates inline on the Step 2 view;
 //     crop_and_orient adjusts pointers, pitch, stride, and sensor flat-field coordinates with zero memory copy.
@@ -73,8 +74,8 @@ struct RgbView {
                r_ptr != nullptr && g_ptr == r_ptr + 1 && b_ptr == r_ptr + 2;
     }
 
-    // Construct a zero-copy strided view over a black-subtracted CFA mosaic (Bayer 2x2 period=2 or X-Trans 6x6 period=6).
-    // For 4xCFA (SONY_PIXEL_SHIFT_4), pass the first CFA mosaic.
+    // Construct a zero-copy strided view over a black-subtracted CFA mosaic (Bayer 2x2 period=2 or X-Trans 6x6
+    // period=6). For 4xCFA (SONY_PIXEL_SHIFT_4), pass the first CFA mosaic.
     static RgbView from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor_w, int sensor_h,
                                  unsigned int filters, const uint8_t xtrans_col36[36] = nullptr,
                                  FlatSampleArgs flat = {},
@@ -111,8 +112,8 @@ struct RgbView {
         }
     }
 
-    // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3.
-    // step=1 returns view cell coordinates (width x height); step>=2 returns sensor coordinates (cfa_step*width x cfa_step*height).
+    // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3. step=1 returns view cell coordinates
+    // (width x height); step>=2 returns sensor coordinates (cfa_step*width x cfa_step*height).
     FilmImage to_film_image(float white_level = 65535.0f, int step = 1) const;
 
     // Materialize into a contiguous width * height * 3 uint16_t buffer (only when explicitly requested).

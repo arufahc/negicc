@@ -137,8 +137,8 @@ void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* 
 
 // The pipeline configuration and the matrix (written to m) cfg renders candidate cand with: the gains in the matrix,
 // or, with cfg.gain_curves, in prof's input curves (trc holds the tables the configuration points into).
-negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand, float m[9],
-                                        std::vector<float> trc[3]);
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand,
+                                        float m[9], std::vector<float> trc[3]);
 
 // Batched loss calculation across candidate matrices
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,

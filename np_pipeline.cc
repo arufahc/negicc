@@ -486,7 +486,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     const float base_g = a["g"].get<float>();
     const float base_b = a["b"].get<float>();
     auto positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
-    if (!positive(base_e) || !positive(base_g) || !positive(base_b)) return why = "its Auto result is not positive", false;
+    if (!positive(base_e) || !positive(base_g) || !positive(base_b))
+      return why = "its Auto result is not positive", false;
 
     s.has_cached_sidecar = true;
     s.bundle_search = true;
@@ -831,10 +832,10 @@ int prepare(const Options& o, Setup& s) {
               "scan's camera RGB, through the bundle's crosstalk correction\n");
     return 1;
   }
-  // The density output: the bundle's matrix for the measure, on a TriLED bundle.
+  // The density output: the bundle's matrix for the measure, on either light.
   if (o.density) {
     if (!s.is_bundle) {
-      log_error("-P %s needs a profile bundle (--film_stock and --light_source tri, or -p a bundle): the density "
+      log_error("-P %s needs a profile bundle (--film_stock and --light_source, or -p a bundle): the density "
                 "matrices are the bundle's\n", o.colorspace.c_str());
       return 1;
     }
@@ -929,8 +930,9 @@ int prepare(const Options& o, Setup& s) {
       s.print_file = prints.file;
       s.print_file_sha256 = prints.file_sha256;
       s.print_from_bundle = prints.from_bundle;
-      log_info("Print: %s (%s), the print ICC %s: with a picture output the print's own search runs on the print profile "
-               "(no chart profile) and the conversion renders the print\n", prints.name.c_str(), prints.id.c_str(),
+      log_info("Print: %s (%s), the print ICC %s: with a picture output the print's own search runs on the print "
+               "profile (no chart profile) and the conversion renders the print\n",
+               prints.name.c_str(), prints.id.c_str(),
                prints.from_bundle ? "of the bundle with each bracket's curves" : "computed for the bundle");
     }
   }
@@ -1365,7 +1367,8 @@ static nlohmann::ordered_json film_base_read_with(const Options& o, const Setup&
     j["flat"] = ok ? nlohmann::ordered_json({{"size", size}, {"crc32", crc}}) : nlohmann::ordered_json("unreadable");
   }
   nlohmann::ordered_json xt = nlohmann::ordered_json::array();
-  for (int i = 0; i < 9; ++i) xt.push_back(s.bundle.has_crosstalk ? s.bundle.crosstalk_matrix_d[i] : (i % 4 == 0 ? 1.0 : 0.0));
+  for (int i = 0; i < 9; ++i)
+    xt.push_back(s.bundle.has_crosstalk ? s.bundle.crosstalk_matrix_d[i] : (i % 4 == 0 ? 1.0 : 0.0));
   j["crosstalk"] = xt;
   j["bundle"] = s.bundle.key;
   return j;
@@ -1394,7 +1397,8 @@ static void load_sidecar_film_base_checked(const Options& o, Setup& s, Scan& sca
     why = "it records no positive film base";
   }
   const auto inputs = j.contains("inputs") ? j["inputs"] : nlohmann::ordered_json();
-  const auto files = inputs.is_object() && inputs.contains("raw_files") ? inputs["raw_files"] : nlohmann::ordered_json();
+  const auto files = inputs.is_object() && inputs.contains("raw_files") ? inputs["raw_files"]
+                                                                         : nlohmann::ordered_json();
   const auto stats = inputs.is_object() && inputs.contains("raw_file_stats") ? inputs["raw_file_stats"]
                                                                               : nlohmann::ordered_json();
   if (why.empty() && (!files.is_array() || files.size() != o.files.size() || !stats.is_array() ||
@@ -1510,8 +1514,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     cj["path"] = o.film_base_file;
     cj["roi"] = {cap.roi[0], cap.roi[1], cap.roi[2], cap.roi[3]};
     cj["roi_source"] = cap.roi_source;
-    cj["tiles_kept"] = cap.roi_source == "given" || cap.roi_source == "statistics" ? nlohmann::ordered_json(nullptr)
-                                                                                   : nlohmann::ordered_json(cap.tiles_kept);
+    cj["tiles_kept"] = cap.roi_source == "given" || cap.roi_source == "statistics"
+                           ? nlohmann::ordered_json(nullptr)
+                           : nlohmann::ordered_json(cap.tiles_kept);
     cj["tiles_total"] = cap.roi_source == "given" || cap.roi_source == "statistics"
                             ? nlohmann::ordered_json(nullptr)
                             : nlohmann::ordered_json(cap.tiles_total);
@@ -1532,7 +1537,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.base_capture_json = cj.dump();
     // A base far from the bundle's own, at the scan's exposure, is probably not a capture of this film's base.
     if (s.bundle.has_film_base) {
-      const double base_t = s.bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(s.bundle.film_base_shutter);
+      const double base_t =
+          s.bundle.film_base_shutter.empty() ? 0.125 : shutter_to_seconds_d(s.bundle.film_base_shutter);
       const double ratio = (scan_shutter_s * scan_iso) / (base_t * (double)s.bundle.film_base_iso);
       double worst = 0.0;
       for (int c = 0; c < 3; ++c) {
@@ -1580,9 +1586,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
            : s.manual_target_idx >= 0 ? s.manual_target_idx
                                       : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
   };
-  // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
-  // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
-  // highlight roll-off measured at them.
   // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
   // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
   // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
@@ -1590,6 +1593,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     p.fallback_crop = o.roi_auto ? scan.frame_det.conf < kLowFrameConfidence : scan.has_roi && scan.frame_is_whole;
     p.film_base_is_rebate = scan.film_base.is_rebate();
   };
+  // The bracket's final E, g, b: Auto's (or the curve fit's) or the given values, moved by --brightness, --tint and
+  // --warmth when given (grey-point knobs, solved on the bracket's profile, combined when curves apply); then the
+  // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
     const float base_e = scan.has_auto_res ? scan.params().e
@@ -1625,9 +1631,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.knob_res.limited = pk.limited;
       for (int i = 0; i < 3; ++i) scan.knob_res.grey_lab[i] = pk.grey_lab[i];
       scan.has_knob_res = true;
-      log_info("Knobs on the print: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f (E %.4f held); the grey L* %.3f a* %.3f "
-               "b* %.3f%s\n", scan.knob_base_a, pk.a, base_g, pk.g, base_b, pk.b, base_e, pk.grey_lab[0], pk.grey_lab[1],
-               pk.grey_lab[2], pk.limited ? " (limited)" : "");
+      log_info("Knobs on the print: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f (E %.4f held); the grey L* %.3f "
+               "a* %.3f b* %.3f%s\n", scan.knob_base_a, pk.a, base_g, pk.g, base_b, pk.b, base_e, pk.grey_lab[0],
+               pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");
       return true;
     }
     if (knobs_here && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
@@ -1700,9 +1706,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         g = k2.g;
         b = k2.b;
         scan.has_knob_curves = true;
-        log_info("Input tables re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey L* %.3f "
-                 "a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, %+.4f "
-                 "stop, before them)\n",
+        log_info("Input tables re-anchored at the knobs' E %.4f g %.4f b %.4f (refG %.6g refB %.6g%s); the grey "
+                 "L* %.3f a* %.3f b* %.3f, %+.4f stop from the target after %d more solves (L* %.3f a* %.3f b* %.3f, "
+                 "%+.4f stop, before them)\n",
                  e, g, b, scan.knob_curves.ref[0], scan.knob_curves.ref[1],
                  scale[0] < 1.0f || scale[1] < 1.0f ? ", scaled to keep the shape" : "", k2.grey_lab[0],
                  k2.grey_lab[1], k2.grey_lab[2], knob_grey_miss_stops(o.brightness, k2.grey_lab[0]), passes, lab1[0],
@@ -1825,7 +1831,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         for (size_t i = 0; i < pc.a_mid.size(); ++i)
           if (std::fabs(pc.a_mid[i] - ps.a) < std::fabs(pc.a_mid[nearest] - ps.a)) nearest = (int)i;
         ps.bracket = bundle.targets[nearest].name;
-        log_info("Knobs on %s's CLF: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f; the grey L* %.3f a* %.3f b* %.3f%s\n",
+        log_info("Knobs on %s's CLF: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f; the grey L* %.3f a* %.3f "
+                 "b* %.3f%s\n",
                  prints.id.c_str(), ps.knob_base_a, ps.a, ps.knob_base_g, ps.g, ps.knob_base_b, ps.b, pk.grey_lab[0],
                  pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");
       }
@@ -1839,7 +1846,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   auto bundle_search = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                            const ParamSearchOptions& opts) -> bool {
     if (s.print_profs.empty()) {
-      if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res)) return false;
+      if (!search_conversion_params(bundle, s.engine, frame, scan_shutter_s, scan_iso, opts, scan.auto_res))
+        return false;
       if (s.density && !o.prints.empty() && !scan.auto_res.probed &&
           !density_print_searches(frame, scan_shutter_s, scan_iso, opts)) {
         return false;
@@ -1876,7 +1884,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       const bool estimate = bundle_base || scan.film_base.source == "statistics";
       char raised[160] = "";
       if (scan.print_floor_applied && scan.print_floor_k > 1.0f)
-        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film", scan.print_floor_k);
+        std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film",
+                      scan.print_floor_k);
       if (estimate) {
         // With no --roi the shares are of the search's crop, the whole scan (said above).
         log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the %s is past the "
@@ -1960,7 +1969,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // A print without --roi: its search reads the whole scan (whatever the base, a capture included). Said once.
     if (print && s.is_bundle && !scan.has_roi && !scan.print_floor_applied)
       log_warn("no --roi: the print's search reads the whole scan; give --roi or --roi auto\n");
-    if (!s.is_bundle || !print || scan.has_given_base || scan.print_floor_applied)   // white light too (crosstalk: identity)
+    // white light too (crosstalk: identity)
+    if (!s.is_bundle || !print || scan.has_given_base || scan.print_floor_applied)
       return;
     negicc::RgbView floor_frame = frame;
     scan.print_floor_frame_conf = -1.0f;
@@ -1970,7 +1980,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       if (fell_back) scan.print_floor_frame_conf = scan.frame_det.conf;
     } else {
       scan.print_floor_frame = "whole_scan";
-      const double sx = sensor_w > 0 ? half.width / (double)sensor_w : 0.0, sy = sensor_h > 0 ? half.height / (double)sensor_h : 0.0;
+      const double sx = sensor_w > 0 ? half.width / (double)sensor_w : 0.0,
+                   sy = sensor_h > 0 ? half.height / (double)sensor_h : 0.0;
       const bool aligned = det && sx > 0.0 && sy > 0.0 && std::fabs(sx - sy) <= 0.02 * std::max(sx, sy);
       if (aligned) scan.print_floor_frame_conf = det->conf;
       if (aligned && det->ok && det->conf >= negicc::kBaseMinFrameConf) {
@@ -1985,7 +1996,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     double fb[3], raised_rgb[3];
     const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
     const float k = print_floor_base(s.bundle, floor_frame, ParamSearchOptions{}.crop_ratio,
-                                     scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb, raised_rgb);
+                                     scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb,
+                                     raised_rgb);
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
     scan.print_floor_k = k;
@@ -1998,7 +2010,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       }
       for (int c = 0; c < 3; ++c) scan.film_base.rgb[c] = raised_rgb[c];
       log_info("Film base for the print: %s, raised %.4fx to be no darker than the picture's thinnest film "
-               "(R=%.1f G=%.1f B=%.1f)\n", src.c_str(), k, scan.film_base.rgb[0], scan.film_base.rgb[1], scan.film_base.rgb[2]);
+               "(R=%.1f G=%.1f B=%.1f)\n", src.c_str(), k, scan.film_base.rgb[0], scan.film_base.rgb[1],
+               scan.film_base.rgb[2]);
     }
   };
 
@@ -2504,8 +2517,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h, scan_shutter_s,
-                       scan_iso);
+      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h,
+                       scan_shutter_s, scan_iso);
     }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
@@ -2621,7 +2634,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   }
 
   const int orig_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
-  const int orig_h = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
+  const int orig_h =
+      proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
 
   scan.proc.reset(proc);
   scan.cfa = use_cfa_pipeline;
@@ -2718,8 +2732,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   if (s.is_bundle) {
     double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-    compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(), scan.film_base_rgb() != nullptr,
-                                  station_base, nullptr, row_scale);
+    compute_station_merged_matrix(bundle, scan_shutter_s, scan_iso, scan.film_base_rgb(),
+                                  scan.film_base_rgb() != nullptr, station_base, nullptr, row_scale);
   }
   auto apply_station = [&](float e, float g, float b) {
     c.station_params = std::array<float, 3>{e, g, b};
@@ -2746,7 +2760,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
 
   auto log_knobs = [&]() {
     if (!scan.has_knob_res) return;
-    log_info("Knobs (brightness %+.2f, tint %+.2f, warmth %+.2f%s): grey L*=%.2f a*=%.2f b*=%.2f -> E %.4f g %.4f b %.4f\n",
+    log_info("Knobs (brightness %+.2f, tint %+.2f, warmth %+.2f%s): grey L*=%.2f a*=%.2f b*=%.2f -> E %.4f g %.4f "
+             "b %.4f\n",
              o.brightness, o.tint, o.warmth, scan.knob_res.limited ? ", limited" : "",
              scan.knob_res.grey_lab[0], scan.knob_res.grey_lab[1], scan.knob_res.grey_lab[2],
              scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
@@ -2815,8 +2830,9 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       // -E without --target: the bracket the bundle picks without the search.
       c.bundle_target_idx = s.has_cached_sidecar && s.cached_sidecar.target_idx >= 0
                                 ? s.cached_sidecar.target_idx
-                                : (s.manual_target_idx >= 0 ? s.manual_target_idx
-                                                            : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx));
+                                : (s.manual_target_idx >= 0
+                                       ? s.manual_target_idx
+                                       : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx));
       log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
       const auto& tgt = bundle.targets[c.bundle_target_idx];
       c.bundle_target_name = tgt.name;
@@ -2873,7 +2889,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
         if (c.pin_mask & PIN_B) pins_str += "b";
         if (!pins_str.empty() && pins_str.back() == ' ') pins_str.pop_back();
       }
-      log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, pins %s\n",
+      log_info("\nDINOv3 solver: grid %dx%d (%dx%d), backend %s, E_c %.3f, bounds [%.3f, %.3f], max iters %d, "
+               "pins %s\n",
              c.dino_res.grid_w, c.dino_res.grid_h, c.dino_res.target_w, c.dino_res.target_h,
              s.engine.backend_name(), c.dino_res.e_center, c.dino_res.bounds_lo, c.dino_res.bounds_hi,
              max_iters, pins_str.c_str());
@@ -2893,7 +2910,8 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
         }
       }
       log_info("Status: %s after %d inferences (best it %d, resid %.3f)\n",
-             c.dino_res.status.c_str(), c.dino_res.total_inferences, c.dino_res.best_iteration, c.dino_res.best_residual);
+             c.dino_res.status.c_str(), c.dino_res.total_inferences, c.dino_res.best_iteration,
+             c.dino_res.best_residual);
       log_info("Solved (relative): E %.3f g %.3f b %.3f\n",
              c.dino_res.solved_relative.e, c.dino_res.solved_relative.g, c.dino_res.solved_relative.b);
       if (s.is_bundle) {
@@ -3098,9 +3116,10 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                "are too low wherever the frame has no unexposed film; %s\n", remedy);
     }
     if (scan.print_floor_applied && scan.print_floor_k > 1.0f) {
-      log_warn("with --print, the density file is written against the film base raised %.3fx (the base as found: %s) to be no "
-               "darker than the picture's thinnest film, as the print takes it, so that the CLF prints the picture's print; "
-               "the same frame without --print is written against the base as found (the sidecar's film_base.print_floor)\n",
+      log_warn("with --print, the density file is written against the film base raised %.3fx (the base as found: %s) "
+               "to be no darker than the picture's thinnest film, as the print takes it, so that the CLF prints the "
+               "picture's print; the same frame without --print is written against the base as found (the sidecar's "
+               "film_base.print_floor)\n",
                scan.print_floor_k, scan.print_floor_found_source.c_str());
     }
     {
@@ -3121,8 +3140,8 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                  "scan is underexposed\n", 100.0 * floor, -std::log10(kDensityMinT));
       }
     }
-    log_info("Density (%s, %d bits, code = %d + %d k D, k = %.2f %.2f %.2f): clamped below 0 %.3f%% %.3f%% %.3f%%, above %d %.3f%% %.3f%% "
-             "%.3f%% of the pixels (R G B)\n",
+    log_info("Density (%s, %d bits, code = %d + %d k D, k = %.2f %.2f %.2f): clamped below 0 %.3f%% %.3f%% %.3f%%, "
+             "above %d %.3f%% %.3f%% %.3f%% of the pixels (R G B)\n",
              density_measure_name(o.density_measure), d.encoding.bits, d.encoding.offset, d.encoding.scale,
              d.encoding.k[0], d.encoding.k[1], d.encoding.k[2],
              100.0 * d.clip.low[0] / px, 100.0 * d.clip.low[1] / px, 100.0 * d.clip.low[2] / px, d.encoding.max_code(),
@@ -3163,7 +3182,8 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   const double t_start = omp_get_wtime();
   // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
   // encoding applies it.
-  const negicc::PipelineConfig export_pc = make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
+  const negicc::PipelineConfig export_pc =
+      make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
   // The tone stage (tone_stage.h): this run's plan, or the recorded curve on a replay, applied in the
   // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
   // the recorded curve is applied after them, as recorded: a fixed monotone map on top of the knobbed render (zero
@@ -3379,7 +3399,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       sc.print_steps = s.print_cr.steps;
       sc.print_converged = s.print_cr.converged;
       sc.print_above_knee = s.print_cr.above_knee;
-      for (int c = 0; c < 3; ++c) sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
+      for (int c = 0; c < 3; ++c)
+        sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
       for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
       for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
       sc.print_a0_at_end = s.print_cr.a0_at_range_end;
@@ -3429,7 +3450,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.cached_intent_field_json_str = s.cached_sidecar.intent_field_json_str;
     sc.cached_heads_json_str = s.cached_sidecar.heads_json_str;
     sc.cached_input_curves_json_str = s.cached_sidecar.input_curves_json_str;
-    if (!s.print_profs.empty() && std::isfinite(s.print_a)) sc.cached_print_search_json_str = s.cached_sidecar.print_search_json_str;
+    if (!s.print_profs.empty() && std::isfinite(s.print_a))
+      sc.cached_print_search_json_str = s.cached_sidecar.print_search_json_str;
   }
   if (scan.has_knob_res) {
     sc.has_knobs = true;

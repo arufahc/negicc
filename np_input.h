@@ -170,9 +170,9 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level);
 // of the mosaic (read_half_size), or for kWhiteLight its half-size white-light decode, in the same space as the
 // output.
 //
-// |balance|, when set along with analyse, is called for kWhiteLight with a first half-size decode. When it gives gains other than 1,
-// the mosaic's camera channels are multiplied by them and the half size is decoded again for analyse; the output is
-// decoded from the same balanced mosaic. Other decodes ignore it.
+// |balance|, when set along with analyse, is called for kWhiteLight with a first half-size decode. When it gives gains
+// other than 1, the mosaic's camera channels are multiplied by them and the half size is decoded again for analyse; the
+// output is decoded from the same balanced mosaic. Other decodes ignore it.
 //
 // |find_region|, when set, is called on the unpacked mosaic first and gives the region to decode in place of roi
 // (--roi auto: the detected frame), so that the analysis and the decode see only that region. A finder that leaves
@@ -230,7 +230,8 @@ bool to_linear_rec2020(RgbImage& img, std::string& source, std::string& err);
 enum class InputMode {
   kRaw,        // a CFA RAW or DNG (load_raw)
   kLinearDng,  // a linear (demosaiced) DNG, e.g. a film scanner's: load_raw too, white light (d65) only
-  kRgbFile,    // an RGB TIFF or JPEG (read_tiff, read_jpeg): linear Rec.2020 (d65), or a TIFF of linear camera RGB (tri)
+  kRgbFile,    // an RGB TIFF or JPEG (read_tiff, read_jpeg): linear Rec.2020 (d65), or a TIFF of linear camera RGB
+               // (tri)
   kThreeShot,  // three captures, one under each of the red, green and blue lights: RAWs, DNGs or TIFFs (tri)
 };
 
@@ -239,12 +240,13 @@ bool libraw_opens(const std::string& path);
 // True when the file is a DNG with no CFA (its pixels already demosaiced; the header only).
 bool is_linear_dng(const std::string& path);
 
-// The non-RAW inputs (InputMode): an RGB TIFF or JPEG through its ICC profile to linear Rec.2020 (to_linear_rec2020), or
-// with |camera_rgb| a TIFF's values as the linear camera RGB a tri bundle converts, or three captures, each giving the channel of its light: R of the first, G of the second, B of the third, in camera
-// units (a RAW or DNG decoded to camera RGB as load_raw decodes it, a TIFF's samples as they are; a grey TIFF gives
-// its one channel), each scaled to the first capture's exposure when all three record theirs. Returns a LibRaw holding
-// the image as load_raw returns a decoded RAW, after cropping it to |roi| or, with |frame_det|, to the frame the
-// detector finds on the image (as --roi auto), and running |analyse| on its half-size copy, as load_raw does.
+// The non-RAW inputs (InputMode): an RGB TIFF or JPEG through its ICC profile to linear Rec.2020 (to_linear_rec2020),
+// or with |camera_rgb| a TIFF's values as the linear camera RGB a tri bundle converts, or three captures, each giving
+// the channel of its light: R of the first, G of the second, B of the third, in camera units (a RAW or DNG decoded to
+// camera RGB as load_raw decodes it, a TIFF's samples as they are; a grey TIFF gives its one channel), each scaled to
+// the first capture's exposure when all three record theirs. Returns a LibRaw holding the image as load_raw returns a
+// decoded RAW, after cropping it to |roi| or, with |frame_det|, to the frame the detector finds on the image (as
+// --roi auto), and running |analyse| on its half-size copy, as load_raw does.
 LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bool camera_rgb, int qual,
                               bool crop, const int* roi,
                               const HalfSizeAnalysis& analyse, FrameDetection* frame_det,
