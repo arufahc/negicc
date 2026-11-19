@@ -2902,11 +2902,11 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
     for (int xx = c.x0; xx < c.x0 + c.w; xx += 4) {
       frame.sample(xx, y, px);
       for (int r = 0; r < 3; ++r)
-        v[r].push_back((float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]));
+        if (fb[r] > 0.0) v[r].push_back((float)((x[r * 3] * px[0] + x[r * 3 + 1] * px[1] + x[r * 3 + 2] * px[2]) / fb[r]));
     }
   float k = 1.0f;
   for (int r = 0; r < 3; ++r) {
-    if (v[r].empty() || !(fb[r] > 0.0)) continue;
+    if (v[r].empty()) continue;   // also a channel without a positive base
     const size_t q = std::min(v[r].size() - 1, (size_t)(negicc::kBasePercentile / 100.0 * v[r].size()));
     std::nth_element(v[r].begin(), v[r].begin() + q, v[r].end());
     k = std::max(k, v[r][q]);
@@ -2934,7 +2934,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at || !cp.green_apd ||
+  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at ||
       !(cp.a_hi > cp.a_lo)) {
     std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
     return false;
@@ -3098,6 +3098,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       break;
     }
     prev_err = err;
+    // The last step allowed: its result is scored above, and a further move would be neither rendered nor scored.
+    if (it + 1 >= std::max(1, opts.max_steps)) break;
     // A by a scan of its range then golden section; at each A, g and b by the optimiser (E pinned). Every A tried is
     // aimed at the field minus the correction measured at this step's A above: update_correction keys it by the
     // print's one target, whose curves change with A, and it is not measured again at each A (that would take a
@@ -3110,12 +3112,12 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
     // neighbours are lower, each side is marched and the lower of the two brackets kept.
     auto clampA = [&](double x) { return std::clamp(x, cp.a_lo, cp.a_hi); };
-    struct Bracket { double lo, mid, hi; float f; };
+    struct Bracket { double lo, hi; float f; };
     auto march = [&](double x0, float f0, double dir) {
       double xm = x0, xo = clampA(x0 - dir * kContinuousStep);
       float fm = f0;
       double xn = clampA(xm + dir * kContinuousStep);
-      float fn = loss(xn, gb);
+      float fn = xn == xm ? fm : loss(xn, gb);   // at an end of the range: no step to take
       while (fn < fm && xn != xm) {
         xo = xm;
         xm = xn;
@@ -3124,13 +3126,14 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
         if (xn == xm) break;
         fn = loss(xn, gb);
       }
-      return Bracket{std::min(xo, xn), xm, std::max(xo, xn), fm};
+      return Bracket{std::min(xo, xn), std::max(xo, xn), fm};
     };
     const double x0 = clampA(a);
     const float f0 = loss(x0, gb);
     const double xl0 = clampA(x0 - kContinuousStep), xr0 = clampA(x0 + kContinuousStep);
-    const float fl0 = loss(xl0, gb), fr0 = loss(xr0, gb);
-    Bracket br{xl0, x0, xr0, f0};
+    // At an end of the range a neighbour is x0 itself: its loss is f0, not computed again.
+    const float fl0 = xl0 == x0 ? f0 : loss(xl0, gb), fr0 = xr0 == x0 ? f0 : loss(xr0, gb);
+    Bracket br{xl0, xr0, f0};
     if (fl0 < f0 && fr0 < f0) {
       const Bracket left = march(xl0, fl0, -1.0), right = march(xr0, fr0, 1.0);
       br = left.f <= right.f ? left : right;

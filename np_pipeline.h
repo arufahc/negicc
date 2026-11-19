@@ -310,7 +310,7 @@ struct Scan {
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   std::vector<uint16_t> rolloff_frame;
   int rolloff_frame_w = 0, rolloff_frame_h = 0;
-  double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;
+  double rolloff_shutter_s = kDefaultScanShutterS, rolloff_iso = kDefaultScanIso;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
