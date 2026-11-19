@@ -1008,7 +1008,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
@@ -1073,7 +1073,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;

@@ -625,20 +625,20 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
     // The anchor is the median L* of the unshouldered render: the shoulder never touches the grey axis it meters.
     const negicc::PipelineConfig anchor_pc = make_pipeline_config(*cfg.prof, cfg.knee, 1.0f);
     for (int iter = 0; iter < 16; ++iter) {
-    const double mid = 0.5 * (log2_lo + log2_hi);
-    float m[9];
-    negicc::candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
-    for (int i = 0; i < n_cells; ++i) {
-      const Rgb v = negicc::convert_pixel(anchor_pc, m, grid_rgb16.data() + (size_t)i * 3);
-      l_vals[i] = negicc::srgb_to_lab(v).L;
-    }
-    std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
-    // Negative: more transmittance (larger E) renders a darker positive, so median L* falls with E.
-    if (l_vals[n_cells / 2] < 50.0f) {
-      log2_hi = mid;
-    } else {
-      log2_lo = mid;
-    }
+      const double mid = 0.5 * (log2_lo + log2_hi);
+      float m[9];
+      negicc::candidate_matrix(user_merged, (float)std::pow(2.0, mid), (float)boot_g, (float)boot_b, m);
+      for (int i = 0; i < n_cells; ++i) {
+        const Rgb v = negicc::convert_pixel(anchor_pc, m, grid_rgb16.data() + (size_t)i * 3);
+        l_vals[i] = negicc::srgb_to_lab(v).L;
+      }
+      std::nth_element(l_vals.begin(), l_vals.begin() + n_cells / 2, l_vals.end());
+      // Negative: more transmittance (larger E) renders a darker positive, so median L* falls with E.
+      if (l_vals[n_cells / 2] < 50.0f) {
+        log2_hi = mid;
+      } else {
+        log2_lo = mid;
+      }
     }
     out.anchor_clamped = (log2_lo == lo0 || log2_hi == hi0);
     e_center = std::pow(2.0, 0.5 * (log2_lo + log2_hi));

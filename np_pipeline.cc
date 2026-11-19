@@ -1062,11 +1062,6 @@ int prepare(const Options& o, Setup& s) {
     s.use_dino = s.has_profile && (!gains_given || s.pinned_search);
     s.bundle_search = s.use_dino && s.is_bundle &&
                       (s.pinned_search || (s.manual_target_idx < 0 && !s.exposure_given));
-    // On a bundle the search is always the bundle search: the single-bracket solver is an ICC profile's alone.
-    if (s.is_bundle && s.use_dino && !s.bundle_search) {
-      log_error("Internal error: a bundle's search is not the bundle search\n");
-      return 1;
-    }
   }
   if (!o.probe_intent.empty()) {
     // The probe is written by the bundle search: without it there would be no file and nothing said.
@@ -1114,8 +1109,8 @@ int prepare(const Options& o, Setup& s) {
   s.tone_active = tone_wanted && s.is_bundle && s.bundle_search;
   if (o.input_curves_given) {
     // Recorded curves replay a recorded result (a sidecar's cli_equivalent): its bracket and its E, g and b on the
-    // combined profile. Without -E and the gains the single-bracket DINOv3 search would run on the combined profile,
-    // which the curves were not fitted with, and give other values.
+    // combined profile. Without all four values a search would run on the combined profile, which the curves were not
+    // fitted with, and give other values.
     if (s.manual_target_idx < 0 || !o.exposure_given || !o.gain_g_given || !o.gain_b_given) {
       log_error("--fit_curves with recorded curves needs --target, -E, --gain_g and --gain_b: the curves belong to "
                 "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
@@ -1166,6 +1161,12 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
     s.has_tone = true;
+  }
+  // On a bundle the search is always the bundle search: the single-bracket solver is an ICC profile's alone. With the
+  // recorded curves' and tone curve's refusals above, no command line reaches the opposite.
+  if (s.is_bundle && s.use_dino && !s.bundle_search) {
+    log_error("Internal error: a bundle's search is not the bundle search\n");
+    return 1;
   }
 
   // --brightness, --tint and --warmth on a previous run's output (<output>.json): its Auto or DINOv3 result is the
@@ -1553,12 +1554,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     load_sidecar_film_base(o, s, scan);
   }
 
-  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked without
-  // the search and the exposure of given values read. Measured here, on the
-  // half-size frame every bundle conversion analyses, before anything picks a bracket: before, solve measured it
-  // after decode had already picked one (from the defaults, always the first admissible bracket) and measured the
-  // roll-off and solved the knobs there. The bundle search measures its own; a previous run's sidecar names its
-  // bracket.
+  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked
+  // without the search and the exposure of given values read. Measured here, on the half-size frame every bundle
+  // conversion analyses, before anything picks a bracket: before, solve measured it after decode had already picked
+  // one (from the defaults, always the first admissible bracket) and measured the roll-off and solved the knobs
+  // there. The bundle search measures its own; a previous run's sidecar names its bracket.
   const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
                                 (s.manual_target_idx < 0 || !s.exposure_given);
   auto measure_enclosures = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
