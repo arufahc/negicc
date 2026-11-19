@@ -457,12 +457,12 @@ ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or n
 result afterwards, in stops of the reference grey's luminance and in its `a*` and `b*`.
 
 **Where the passes run.** Every preview and clip pass of the search, the print's search, the curve fit and the tone
-plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): the CPU's by default, or the CUDA
-device's with `--search_renderer gpu` (`GpuRenderer`, `gpu_passes.cu`), which runs the same per-pixel pipeline
-(`color_pipeline.h`) with fused multiply-add off on both sides. The two still round `powf`, `tanhf` and `cbrtf`
-differently in the last place, so a preview can differ by one code. `--search_renderer compare` runs every pass on
-both from the same inputs and fails when a preview's mean change exceeds 0.05 `L*`, a clip share 0.01 % or a median
-`L*` one bin.
+plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
+device the GPU's (`GpuRenderer`, `gpu_passes.cu`), as the network runs there, else the CPU's; `--dino_backend cpu`
+keeps both on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused multiply-add off on
+both sides, but the two round `powf`, `tanhf` and `cbrtf` differently in the last place, so a preview can differ by
+one code and a result in its last digits. `--debug_render` runs every pass on both from the same inputs and fails
+when a preview's mean change exceeds 0.05 `L*`, a clip share 0.01 % or a median `L*` one bin.
 
 **Limits.** The search does not always reach the same answer from different starts. The thresholds of steps 1, 5 and
 6 and the tolerances of 3.3 are stated values, not derived.

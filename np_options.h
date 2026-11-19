@@ -82,7 +82,7 @@ struct Options {
   std::string dino_backend = "auto";
   int dino_iters = 4;
   bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting renderer
-  std::string search_renderer = "cpu";   // --search_renderer: cpu, gpu or compare (the search's passes)
+  bool debug_render = false;     // --debug_render: every pass of the search on the CPU and the GPU, compared
   // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid
   // (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
   // FILE and neg_process stops without converting (the print's search writes it and the conversion goes on).

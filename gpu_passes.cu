@@ -3,7 +3,7 @@
 // color_pipeline.h plus the epilogue of its CPU function in rgb_view.cc (cpu_render, cpu_highlight_clip), built with
 // --fmad=false so the device rounds the stages as the host compiler does (-ffp-contract=off). What still differs is
 // the last place of the transcendentals (powf, tanhf, cbrtf: libdevice against glibc), so a GPU pass is not bit for
-// bit the CPU's; neg_process --search_renderer compare measures the difference (multi_target_optimizer.h).
+// bit the CPU's; neg_process --debug_render measures the difference (multi_target_optimizer.h CompareRenderer).
 //
 // Reductions are deterministic: each block writes its partial sums to its own slot and the host adds the slots in a
 // fixed order; histograms use integer atomics, which are exact.

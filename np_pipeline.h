@@ -84,7 +84,7 @@ struct CachedSidecar {
 
 // What the profile and the options decide before the scan is read.
 struct Setup {
-  // --search_renderer gpu or compare: the renderer the search's passes run through (null: the CPU's).
+  // The renderer the search's passes run through: the GPU's, or --debug_render's comparison (null: the CPU's).
   std::unique_ptr<PreviewRenderer> renderer;
   // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
   // reused by the sidecar writer.

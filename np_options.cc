@@ -378,7 +378,9 @@ int parse_options(int ac, char* av[], Options& o) {
           "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
-    .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
+    .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto. "
+          "cpu also keeps the search's passes over the frame on the CPU, which a USE_CUDA=1 build with a CUDA device "
+          "otherwise runs on the GPU.")
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
@@ -387,14 +389,13 @@ int parse_options(int ac, char* av[], Options& o) {
           "does, or when no pass ran. The output must equal the conversion without it, bit for bit: compare the two "
           "outputs yourself (cmp).")
     .flag();
-  parser.add_argument("--search_renderer")
-    .help("Where the bundle search, the print's search, the curve fit and the tone plan run their passes over the "
-          "frame (the preview renders and the clip passes): cpu (default), gpu (the CUDA device, USE_CUDA=1 builds) "
-          "or compare (a parity check: every pass on both from the same inputs, the search reading the CPU's; prints "
-          "how far the GPU's passes are from the CPU's and exits 1 when a preview's mean change in L* exceeds 0.05, a "
-          "clip share 0.01 % or a median L* one bin). The GPU's passes differ from the CPU's in the last place of "
-          "powf, tanhf and cbrtf, so its result is not guaranteed equal to the CPU's: compare tells.")
-    .default_value(std::string("cpu"));
+  parser.add_argument("--debug_render")
+    .help("Debug aid (USE_CUDA=1 builds with a CUDA device): run every pass of the bundle search, the print's search, "
+          "the curve fit and the tone plan over the frame (the preview renders and the clip passes) on both the CPU "
+          "and the GPU from the same inputs, the search reading the CPU's, so the output is the CPU's; print how far "
+          "the GPU's passes are from the CPU's, and exit 1 when a preview's mean change in L* exceeds 0.05, a clip "
+          "share 0.01 % or a median L* one bin.")
+    .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (for tools that study the search): write what the intent network predicts from chosen "
           "renders of this frame to this JSON file and stop without converting. Renders every metered bracket at its "
@@ -508,14 +509,9 @@ int parse_options(int ac, char* av[], Options& o) {
     }
   }
   o.check_renderer = parser.get<bool>("--check_renderer");
-  o.search_renderer = parser.get<std::string>("--search_renderer");
-  if (o.search_renderer != "cpu" && o.search_renderer != "gpu" && o.search_renderer != "compare") {
-    log_error("--search_renderer must be cpu, gpu or compare, got '%s'\n", o.search_renderer.c_str());
-    return 1;
-  }
-  if (o.check_renderer && o.search_renderer != "cpu") {
-    log_error("--check_renderer counts the passes of the CPU's renderer: not with --search_renderer %s\n",
-              o.search_renderer.c_str());
+  o.debug_render = parser.get<bool>("--debug_render");
+  if (o.check_renderer && o.debug_render) {
+    log_error("--check_renderer counts the passes of the CPU's renderer: not with --debug_render\n");
     return 1;
   }
   {

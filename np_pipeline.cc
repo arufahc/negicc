@@ -236,7 +236,7 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       {"", "--list_profiles", 0, false},  {"", "--dino_backend", 1, false},     {"", "--dino_iters", 1, false},
       {"", "--target", 1, false},         {"", "--bundle_target", 1, false},    {"", "--fit_curves", 1, false},
       {"", "--flat", 1, false},           {"", "--tone_stage", 1, false},       {"", "--film_base", 1, false},
-      {"", "--print", 1, false},           {"", "--check_renderer", 0, true},    {"", "--search_renderer", 1, true},
+      {"", "--print", 1, false},           {"", "--check_renderer", 0, true},    {"", "--debug_render", 0, true},
       {"", "--probe_intent", 1, true},    {"", "--probe_params", 1, true},      {"", "--probe_stops", -16, true},
   };
   auto is_number = [](const std::string& t) {
@@ -706,8 +706,8 @@ static PassThroughRenderer& pass_through_renderer() {
   return r;
 }
 
-// The renderer of the search's passes: --check_renderer's counting one, --search_renderer's GPU or comparison, or
-// null (the CPU's).
+// The renderer of the search's passes: --check_renderer's counting one, --debug_render's comparison, the GPU's (a
+// USE_CUDA=1 build with a CUDA device, unless --dino_backend cpu), or null (the CPU's).
 static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
   if (o.check_renderer) return &pass_through_renderer();
   return s.renderer.get();
@@ -715,14 +715,15 @@ static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
 
 int prepare(const Options& o, Setup& s) {
   if (o.check_renderer) negicc::cpu_pass_hook = audit_cpu_pass;
-  if (o.search_renderer != "cpu") {
+  if (o.debug_render) {
     try {
-      if (o.search_renderer == "gpu") s.renderer = std::make_unique<GpuRenderer>();
-      else s.renderer = std::make_unique<CompareRenderer>();
+      s.renderer = std::make_unique<CompareRenderer>();
     } catch (const std::exception& e) {
-      log_error("--search_renderer %s: %s\n", o.search_renderer.c_str(), e.what());
+      log_error("--debug_render: %s\n", e.what());
       return 1;
     }
+  } else if (!o.check_renderer && o.dino_backend != "cpu" && negicc::gpu_device_available()) {
+    s.renderer = std::make_unique<GpuRenderer>();
   }
   if (!o.flat.empty()) {
     try {
@@ -1337,10 +1338,9 @@ int prepare(const Options& o, Setup& s) {
               "tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n");
     return 1;
   }
-  if (o.search_renderer != "cpu" && (!s.bundle_search || !s.replay_source.empty())) {
-    log_error("--search_renderer %s needs the bundle search to run: not with given values, recorded curves or a "
-              "recorded tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n",
-              o.search_renderer.c_str());
+  if (o.debug_render && (!s.bundle_search || !s.replay_source.empty())) {
+    log_error("--debug_render needs the bundle search to run: not with given values, recorded curves or a recorded "
+              "tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n");
     return 1;
   }
   return 0;
@@ -3343,7 +3343,9 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.shoulder.has_knee = false;
   }
   sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar ? &c.dino_res : nullptr;
-  sc.search_renderer = o.search_renderer;
+  sc.search_renderer = dynamic_cast<const GpuRenderer*>(s.renderer.get())       ? "gpu"
+                       : dynamic_cast<const CompareRenderer*>(s.renderer.get()) ? "cpu, compared with the gpu"
+                                                                                : "cpu";
   sc.dino_model = s.dino_path;
   sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
                                          : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);

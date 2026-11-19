@@ -171,7 +171,8 @@ struct PassThroughRenderer : PreviewRenderer {
   void highlight_clip(const negicc::HighlightClipArgs& a) override;
 };
 
-// The passes on a CUDA device (rgb_view.h gpu_render and gpu_highlight_clip; neg_process --search_renderer gpu). The
+// The passes on a CUDA device (rgb_view.h gpu_render and gpu_highlight_clip; neg_process's on a USE_CUDA=1 build with a
+// device, unless --dino_backend cpu). The
 // constructor throws without a device (a USE_CUDA=0 build has none).
 // - The frame: bind_frame copies the bound frame to the device once, each pixel as the view samples it (a CFA
 //   view's flat field included), unless device_frame gives the address at which the GPU already reads it (a caller
@@ -200,7 +201,7 @@ struct GpuRenderer : PreviewRenderer {
   std::unique_ptr<Impl> impl_;
 };
 
-// The CPU and the GPU passes compared (neg_process --search_renderer compare): every pass runs on both from the same
+// The CPU and the GPU passes compared (neg_process --debug_render): every pass runs on both from the same
 // inputs and the search reads the CPU's, so the search is the CPU's and each GPU pass is measured against it. A
 // preview: how many values differ, the largest difference, and the largest and mean change in L* per pixel of an
 // 8-bit preview (what the network reads). A clip pass: the largest difference of its three exceedance shares, its

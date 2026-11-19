@@ -62,7 +62,7 @@
 int main(int ac, char* av[]) {
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
-  // A failed GPU pass (--search_renderer) throws out of the search; nothing else of the conversion throws by design.
+  // A failed GPU pass throws out of the search (rerun with --dino_backend cpu); nothing else is meant to throw.
   try {
     Setup s;
     if (prepare(o, s)) return 1;
