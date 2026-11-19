@@ -2713,7 +2713,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    // Each bracket's exposure range, which the target selection, set_target_bounds and given_station_e read below,
+    // Each bracket's exposure range, which the target selection and given_station_e read below,
     // was measured in decode on the half-size frame (measure_enclosures), before decode picked a bracket.
     if (!s.has_cached_sidecar && (s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) &&
         !scan.has_enclosures) {
