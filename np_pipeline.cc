@@ -849,6 +849,12 @@ int prepare(const Options& o, Setup& s) {
   // print on its decode, with no curve fit: the fit composes into
   // the chart profiles, which a print does not use.
   if (!o.prints.empty()) {
+    // On a density output the knobs move each print's search, which needs the film's grey balance curve.
+    if (s.density && o.knobs_given && !bundle.grey_balance.present) {
+      log_error("--brightness, --tint and --warmth on a density output move each print's search, which needs the "
+                "profile bundle's grey_balance_curves\n");
+      return 1;
+    }
     if (!s.is_bundle) {
       log_error("--print needs a profile bundle (--film_stock and --light_source, or -p a bundle): the print is "
                 "computed for the bundle's film\n");
@@ -3181,10 +3187,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     // The prints of the file (np_print.h), for the print materials --print names: how the frame prints on each,
     // recorded in the metadata, and the CLFs that go beside it. Without --print there are none.
     const DensityPrints prints = density_prints(rec, o.output, o.prints);
-    if (!prints.error.empty()) {   // a print asked for and not made fails the run, as on a picture output
-      log_error("--print: %s\n", prints.error.c_str());
-      return 1;
-    }
+    // A print asked for and not made fails the run, as on a picture output (and writes nothing, below).
+    if (!prints.error.empty()) log_error("--print: %s\n", prints.error.c_str());
     rec.print_json = prints.metadata_json;
     density_json = density_metadata_json(rec);
     DensityFileInfo info;
@@ -3195,7 +3199,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     const RgbInput img = scan.image();
     // The CLFs first: one that cannot be written stops the run before the density file exists, and a density file
     // that cannot be written takes its CLFs with it. Nothing is left half done.
-    ret = write_print_clfs(rec, prints);
+    ret = prints.error.empty() ? write_print_clfs(rec, prints) : 1;
     if (ret == 0) {
       log_info("Writing %s '%s'\n", o.output_dpx ? "DPX" : "TIFF", o.output.c_str());
       ret = o.output_dpx ? write_density_dpx(o.output, img.pixels, img.width, img.height, img.channels, density_json,
