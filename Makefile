@@ -347,7 +347,7 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
 # models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3_engine.h) of the white-light
 # curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
-# white-light tone stage.
+# tone stage (both lights).
 BACKBONE_FILES = models/dinov3-small/backbone.onnx $(if $(filter 1,$(USE_CUDA)),models/dinov3-small/backbone.engine)
 EMBED_FILES = $(sort $(wildcard profiles/*/bundle.json profiles/*/*.icc 3rd_party/spektrafilm/profiles/*.json models/dinov3-small_*/adapter.onnx \
                                 models/neutral_head/neutral_head.bin models/tone_head/tone_head.bin \
