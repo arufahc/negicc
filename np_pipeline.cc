@@ -984,6 +984,13 @@ int prepare(const Options& o, Setup& s) {
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
   // carry the curves.
   const bool fit_on = o.fit_curves == Options::kFitCurvesOn;
+  // Where no fit can run, an explicit --fit_curves, off included, is refused rather than ignored (as on a density
+  // output from a TriLED bundle, and with --print).
+  if (o.fit_curves == Options::kFitCurvesOff && (!s.is_bundle || !s.white_light || s.has_crosstalk)) {
+    log_error("--fit_curves off does not apply: the curve fit is a white-light bundle's (d65, rec2020_linear), and a "
+              "TriLED bundle or an ICC profile converts through its measured curves, which are not fitted\n");
+    return 1;
+  }
   if (fit_on || o.input_curves_given) {
     const char* opt = fit_on ? "--fit_curves on" : "--fit_curves with recorded curves";
     if (!s.is_bundle || !s.white_light || s.has_crosstalk) {

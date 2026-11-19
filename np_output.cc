@@ -728,8 +728,9 @@ bool write_json_sidecar(const Sidecar& sc) {
       if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
     }
   }
-  // The format the film base's frame detection looked for when the run was not given one (--roi auto's default,
-  // 35mm): an explicit --roi without it looks for every format, which may place the base's patch elsewhere.
+  // The format the film base's frame detection looked for, given or --roi auto's default (35mm): an explicit --roi
+  // without it looks for every format, which may place the base's patch elsewhere. None when the base's detection
+  // looked for every format (the CFA path's, which runs again for the base), as its replay does.
   if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 

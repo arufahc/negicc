@@ -424,7 +424,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
           "needs a white-light bundle and -P srgb or srgb-g10. A given g or b is held by the fit and a given E is "
           "not re-metered; with --target, -E, --gain_g and --gain_b all given only the curves are fitted. off: "
-          "no fit (the tone stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
+          "no fit, on a white-light bundle (refused where no fit can run: TriLED, an ICC profile, --print; the tone "
+          "stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
           "--tone_stage off, when neither ran, so its given values replay as recorded. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
           "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
@@ -812,9 +813,9 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
-  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
-  // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
-  // density output does not take.
+  // --fit_curves off, auto or on is taken here (np_pipeline.cc refuses it on a TriLED bundle and with --print): on
+  // white light without --print the fit gives the file's suggested balance, not its pixels. Recorded curves replay a
+  // bracket, E and gains, which a density output does not take.
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;
