@@ -229,9 +229,7 @@ bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kod
 
 Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
 were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic. They were rendered at commit
-`e7e2fad` (2026-11-16); the Portra 400 intent adapter, the way the search reads its previews and the conversion from
-the profile to sRGB have changed since, so the current build may render them differently.
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
 
