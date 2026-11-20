@@ -29,10 +29,19 @@ frame's grid and every `σ` is positive (`fieldValid`; `infer_checked` in
 `dinov3_auto_solver.cc`, `SearchFrame::predict` in `multi_target_optimizer.cc`); otherwise the
 search fails.
 
-The neutral head (per cell `p`) and the tone heads (from the backbone's pooled features and the
-spread of its tokens) read the same inference; they are networks of stated shape as well
-(`NeutralHead`, `ToneHead` in `dinov3_engine.h`) and their users are the curve fit (4.3) and the
-tone stage (4.4).
+The neutral head and the tone heads read the same inference (`NeutralHead::run`, `ToneHead::run`
+in `dinov3_engine.h`). Their forward passes are stated here over their weights, which are data:
+
+* **neutral head**, per cell, from the cell's backbone token `t` (768 values): standardised
+  `x = (t - mean) / std`, one hidden layer `a = W1 x + b1`, `z = b2 + w2 · GELU(a)`, and
+  `p = 1 / (1 + exp(-z))`, the probability that the cell shows a neutral surface (read by the
+  curve fit, 4.3);
+* **tone heads**, from the 1920 features (the pooled features and the tokens' spread): standardised,
+  two hidden layers with GELU, then per target a mean and a log-variance `o`, the mean
+  `o_mean ys + ym` and the spread `exp(0.5 clamp(o, -6, 4)) ys` (read by the tone stage, 4.4).
+
+GELU is the exact one, `0.5 a (1 + erf(a / √2))`; the error function is a parameter of the
+definitions, as `Scalar` does not carry it.
 -/
 
 namespace Negicc
@@ -61,6 +70,62 @@ has `N` cells it gives one `μ` and one `σ` per cell. The weights of the backbo
 stock's head are data; nothing here depends on them. -/
 structure IntentNet (α : Type) where
   run : NetInput α → IntentField α
+
+/-! ## The heads -/
+
+/-- The exact GELU (Hendrycks and Gimpel, 2016) over an error function `erf`:
+`0.5 a (1 + erf(a / √2))`. -/
+def gelu (erf : α → α) (a : α) : α := 0.5 * a * (1.0 + erf (a * 0.70710678118654752440))
+
+/-- The dot product of two arrays, summed in order from the first entry, from `init`. -/
+def dotFrom (init : α) (w x : Array α) : α :=
+  (List.range (min w.size x.size)).foldl (fun s k => s + w.getD k 0.0 * x.getD k 0.0) init
+
+/-- The neutral head's weights (`neutral_head.bin`): the standardisation (`mean`, `std`, one per
+input), the hidden layer (`w1`, one row of inputs per hidden unit, and `b1`) and the output
+(`w2`, `b2`). -/
+structure NeutralWeights (α : Type) where
+  mean : Array α
+  std : Array α
+  w1 : Array (Array α)
+  b1 : Array α
+  w2 : Array α
+  b2 : α
+
+/-- The neutral head's `p` for one cell's token (`NeutralHead::run`). -/
+def neutralP (erf : α → α) (W : NeutralWeights α) (token : Array α) : α :=
+  let x := (List.range token.size).toArray.map fun k => (token.getD k 0.0 - W.mean.getD k 0.0) / W.std.getD k 1.0
+  let a := (List.range W.b1.size).toArray.map fun j => dotFrom (W.b1.getD j 0.0) (W.w1.getD j #[]) x
+  let z := dotFrom W.b2 W.w2 (a.map (gelu erf))
+  1.0 / (1.0 + exp (-z))
+
+/-- The tone heads' weights (`tone_head.bin`): the input's standardisation (`xm`, `xs`), two hidden
+layers (`w1`, `b1`, `w2`, `b2`), the output layer (`w3`, `b3`: rows `t` for the means and `11 + t`
+for the log-variances) and the targets' scale (`ym`, `ys`). -/
+structure ToneWeights (α : Type) where
+  xm : Array α
+  xs : Array α
+  w1 : Array (Array α)
+  b1 : Array α
+  w2 : Array (Array α)
+  b2 : Array α
+  w3 : Array (Array α)
+  b3 : Array α
+  ym : Array α
+  ys : Array α
+
+/-- The tone heads' mean and spread for each of the 11 targets (L2, L5, L10, L50, L90, L95, L98,
+IQR, R9010, Cmean, C90) from the 1920 features (`ToneHead::run`). -/
+def toneHeads (erf : α → α) (W : ToneWeights α) (features : Array α) : Array (α × α) :=
+  let x := (List.range features.size).toArray.map fun k => (features.getD k 0.0 - W.xm.getD k 0.0) / W.xs.getD k 1.0
+  let layer (w : Array (Array α)) (b : Array α) (v : Array α) : Array α :=
+    (List.range b.size).toArray.map fun j => gelu erf (dotFrom (b.getD j 0.0) (w.getD j #[]) v)
+  let a2 := layer W.w2 W.b2 (layer W.w1 W.b1 x)
+  let out (j : Nat) : α := dotFrom (W.b3.getD j 0.0) (W.w3.getD j #[]) a2
+  (List.range 11).toArray.map fun t =>
+    (out t * W.ys.getD t 0.0 + W.ym.getD t 0.0, exp (0.5 * clamp (out (11 + t)) (-6.0) 4.0) * W.ys.getD t 0.0)
+
+/-! ## The intent network's input -/
 
 /-- ImageNet's per-channel mean, which the backbone's weights expect. -/
 def imagenetMean : Vec3 α := ⟨0.485, 0.456, 0.406⟩

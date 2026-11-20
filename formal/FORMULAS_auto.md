@@ -15,28 +15,30 @@ ranges and every decision of the search.
 "Checked" names the group of `lake exe checkAuto` that compares the definition with the C++;
 "search" means the end-to-end runs of `search_conversion_params` (12 frames, both lights, pins,
 the clip fallback taken and refused, the highlight pullback's re-search), "solver" the runs of
-`solve_dinov3_intent`.
+`solve_dinov3_intent`, "heads" the heads' forward passes on weights of their files' layout drawn at
+random.
 
 | C++ (file: function) | Lean | Proved | Checked |
 |---|---|---|---|
-| `color_pipeline.h`: `compute_inner_crop` | `innerCrop`, `cropMargin` | `innerCrop_centred_w`, `innerCrop_pos` | geometry |
+| `color_pipeline.h`: `compute_inner_crop` | `innerCrop` (of `Negicc.Scene.Bracket`) | `innerCrop_spec` | geometry |
 | `color_pipeline.h`: `compute_aspect_preserved_shape` | `aspectShape`, `gridSide` | `aspectShape_grid` | geometry |
-| `rgb_view.cc`: `resample_view_rgb16` | `resampleU16`, `resampleImage`, `areaTaps`, `areaPixel`, `bilinearPixel`, `weightedMean`, `toU16` | | resample |
+| `rgb_view.cc`: `resample_view_rgb16` | `resampleU16`, `resampleImage`, `areaTaps`, `areaPixel`, `bilinearPixel`, `weightedMean`, `toU16` (of `Negicc.Scene.Decode`) | | resample |
 | `dinov3_preprocess.cc`: `antialiased_bilinear_resize_rgb` | `aaResize`, `aaTaps`, `aaSample`, `clipU8` | | resample |
 | `dinov3_preprocess.cc`: `compute_tone_weights` | `toneWeights`, `toneBins` | `toneBins_sum` | resample |
 | `dinov3_engine.cc`: `DinoV3Engine::infer` (resize, ImageNet normalisation, pool weights, network) | `netInput`, `pixelValues`, `normalizeU8`, `infer`, `IntentNet` | | search, solver |
+| `dinov3_engine.h`: `NeutralHead::run` | `neutralP`, `NeutralWeights`, `gelu`, `dotFrom` | | heads |
+| `dinov3_engine.h`: `ToneHead::run` | `toneHeads`, `ToneWeights`, `gelu`, `dotFrom` | | heads |
 | `dinov3_auto_solver.cc`: `infer_checked`; `multi_target_optimizer.cc`: `SearchFrame::predict` | `fieldValid`, `SearchInput.predictChecked` | | search |
 | `dinov3_auto_solver.cc`: `trained_cells_lab` | `trainedCellsLab` | | stats |
 | `dinov3_auto_solver.cc`: `self_consistency_residual` | `z2`, `zsq`, `residual` | `z2_nonneg`, `z2_self`, `zsq_shift`, `zsq_nonneg`, `zsq_self` | stats |
-| `multi_target_optimizer.cc`: `compute_frame_stats` | `frameStats`, `statsGrid`, `logAverage`, `sceneGreenRange`, `sceneRange`, `greenHistogram` | | stats |
-| `multi_target_optimizer.cc`: `u16_percentile_linear` | `u16Percentile`, `firstAbove` | | stats |
+| `multi_target_optimizer.cc`: `compute_frame_stats` | `frameStats`, `statsGrid`, `logAverage`, `cropGreenRange` (with `greenHistogram`, `sceneGreenRange` of `Negicc.Scene.Bracket`), `sceneRange` | | stats |
+| `multi_target_optimizer.cc`: `u16_percentile_linear` | `u16PercentileLinear` (of `Negicc.Scene.Bracket`) | | stats |
 | `dinov3_auto_solver.cc`: `intent_cells`, `candidate_config` | `intentCells`, `RenderSetup` | | cells |
 | `dinov3_auto_solver.cc`: `intent_loss` | `intentLoss`, `whiteClippedChannels`, `IntentLoss.mean` | | cells |
 | `SearchFrame::update_correction`, `SearchFrame::search` | `correction`, `aimField`, `SearchInput.correctionAt`, `SearchInput.search` | `zsq_aim` | search |
 | `SearchFrame::set_lightness_wish`, the wish in `fixed_point` | `wishOf`, `withWish` | `withWish_L`, `withWish_mu_congr` | search |
 | `mean_field` (in `search_conversion_params`) | `meanField` | | search |
-| `bracket_enclosure` | `bracketEnclosure`, `usableRange` | `usableInverted_iff_not_admissible`, `bracketEnclosure_scale` | brackets |
-| `pull_centre` | `pullCentre` | | search |
+| `bracket_enclosure`, `pull_centre` | `bracketEnclosure`, `pullCentre` (of `Negicc.Scene.Bracket`), `bracketRange`, `BracketRange` | `usableInverted_iff_not_admissible`, `bracketEnclosure_scale` | brackets, search |
 | `filter_admissible_targets` | `filterAdmissible` | | brackets |
 | `frame_scale`, `merged_matrix` | `frameScale` (with `mergedMatrix`, `exposureNorm` of `Negicc.Scene.Input`) | | scale |
 | `rank`, `best_fit` (in `search_conversion_params`) | `fitRank`, `fitBefore`, `minFirst`, `bestFit` | `minFirst_spec` | search |
@@ -57,16 +59,18 @@ the clip fallback taken and refused, the highlight pullback's re-search), "solve
 | `GreyPoint::lab`, `lstar`, `newton`, `reference_grey` | `greyLab`, `greyInput`, `greyLstar`, `newton`, `newtonPoints`, `referenceGrey` | | metering |
 | `exposure_for_lightness` | `exposureForLightness`, `meterGo`, `sceneVector` | `meterGo_mem`, `exposureForLightness_mem` | metering |
 | `solve_grey_knobs`, `GreyPoint::gains`, `GreyPoint::grey`, `lstar_after_stops`, `knob_grey_miss_stops` | `solveGreyKnobs`, `greyGains`, `greyAt`, `largestReachable`, `lstarAfterStops`, `knobGreyMissStops` | | knobs |
-| `solve_dinov3_intent` | `solveIntent`, `anchorExposure`, `upperMedian`, `solverConv` | `fixedPoint_steps` | solver |
+| `solve_dinov3_intent` | `solveIntent`, `anchorExposure`, `upperMedian` (of `Negicc.WhiteLight.Fit`), `solverConv` | `fixedPoint_steps` | solver |
 | `meter_bracket_exposures` | `meterBracketExposures` | | given |
 | `measure_rolloff_x_hi` | `measureRolloffXHi` | | given |
 
 ## Not formalized
 
-- **The networks' weights**: the backbone, the stocks' intent heads, the neutral head and the tone
-  heads are functions of stated shape (`IntentNet`); their weights are data.
+- **The networks' weights**: the backbone and the stocks' intent heads are a function of stated
+  shape (`IntentNet`); the neutral and tone heads' forward passes are stated over their weights,
+  which are data. The error function in GELU is a parameter (`Scalar` has none); the check passes
+  a double precision one.
 - **The tone heads' input features** (`pooled`, `token_sd`, `tone_mass` in `DinoV3Engine::infer`):
-  statistics of the backbone's tokens, read by the tone stage (4.4), not by the search.
+  outputs and statistics of the backbone's tokens, the network's own values.
 - **Reading the bundle and the profcheck report** (`profile_bundle.cc`, `profile_highlight_ceiling`):
   file parsing; their values are the vectors' inputs. The parsed ceilings set only the per-channel
   exceedance shares, which no rule of the search reads.
@@ -74,6 +78,8 @@ the clip fallback taken and refused, the highlight pullback's re-search), "solve
   (`PreviewRenderer`, `PassAudit`), timing and logging.
 - **The gains in the print's curves** (`SolverConfig::gain_curves`): the print's search (5.6).
 - **`resample_grid_rgb16`**: it has no caller; it is the area average of `resample_view_rgb16`.
+- **`compute_bundle_enclosures`** (`profile_bundle.cc`), the ranges kept for given values and for a
+  bracket chosen without the search, is `bundleEnclosure` of `Negicc.Scene.Bracket`.
 
 ## The check
 

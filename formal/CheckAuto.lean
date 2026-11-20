@@ -567,6 +567,46 @@ def checkSearch (bundles : Array BundleIn) (c : Json) : CheckM Unit := do
     nearRel s!"{g}: result (calibrated range)" tolRel r.eRangeLo er[0]!
     nearRel s!"{g}: result (calibrated range)" tolRel r.eRangeHi er[1]!
 
+/-- The error function in double precision for the heads' GELU (C `erf`): for `|x| ≤ 6`,
+`erf x = 2/√π e^(-x²) Σ 2ⁿ x^(2n+1) / (1·3·…·(2n+1))`, a series of positive terms summed until
+they no longer change the sum; `±1` beyond. Its error is a few units in the last place. -/
+def erf (x : Float) : Float := Id.run do
+  if x > 6.0 then return 1.0
+  if x < -6.0 then return -1.0
+  let x2 := x * x
+  let mut term := x
+  let mut sum := x
+  for n in [1:400] do
+    term := term * 2.0 * x2 / (2.0 * n.toFloat + 1.0)
+    sum := sum + term
+    if Float.abs term ≤ 1e-17 * Float.abs sum then break
+  return 2.0 / Float.sqrt 3.14159265358979323846 * Float.exp (-x2) * sum
+
+def checkHeads (j : Json) : CheckM Unit := do
+  let n ← get j "neutral"
+  let d ← natAt n "in_dim"
+  let rows (a : Array Float) (cols : Nat) : Array (Array Float) :=
+    (Array.range (a.size / cols)).map fun r => a.extract (r * cols) (r * cols + cols)
+  let W : NeutralWeights Float := ⟨← numsAt n "mean", ← numsAt n "std", rows (← numsAt n "w1") d, ← numsAt n "b1",
+    ← numsAt n "w2", ← numAt n "b2"⟩
+  let toks ← numsAt n "tokens"
+  let ps ← numsAt n "p"
+  for i in [0:ps.size] do
+    near "heads: neutralP" tolSingle (neutralP erf W (toks.extract (i * d) (i * d + d))) ps[i]!
+  let t ← get j "tone"
+  let dims ← natsAt t "dims"
+  let w ← get t "weights"
+  let TW : ToneWeights Float := ⟨← numsAt w "xm", ← numsAt w "xs", rows (← numsAt w "w1") dims[0]!, ← numsAt w "b1",
+    rows (← numsAt w "w2") dims[1]!, ← numsAt w "b2", rows (← numsAt w "w3") dims[2]!, ← numsAt w "b3",
+    ← numsAt w "ym", ← numsAt w "ys"⟩
+  for c in ← arrAt t "cases" do
+    let out := toneHeads erf TW (← numsAt c "features")
+    let m ← numsAt c "mean"
+    let sd ← numsAt c "sd"
+    for k in [0:out.size] do
+      nearRel "heads: toneHeads (mean, spread)" tolSingle out[k]!.1 m[k]!
+      nearRel "heads: toneHeads (mean, spread)" tolSingle out[k]!.2 sd[k]!
+
 def solverStatus : Option FPStatus → String
   | none => "PINNED"
   | some .converged => "CONVERGED"
@@ -637,6 +677,7 @@ def run (root : System.FilePath) : CheckM Unit := do
   checkKnobs b (← get a "knobs")
   let bw ← readBundle root (← get a "bundle_white")
   checkGiven #[b, bw] (← get a "given")
+  checkHeads (← get a "heads")
   let s ← readJson "testvectors/auto/auto_search.json"
   let bundles ← (← arrAt s "bundles").mapM fun j => (readBundle root j : IO BundleIn)
   for c in ← arrAt s "searches" do checkSearch bundles c

@@ -13,6 +13,7 @@
 // code is unchanged.
 
 #include <algorithm>
+#include <cstring>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -611,6 +612,69 @@ static json search_case(const ProfileBundle& bundle, const char* name, int w, in
   return j;
 }
 
+// The neutral and tone heads' forward passes on weights of the files' layout, drawn at random (the trained weights are
+// data; their formulas are what is checked).
+static std::vector<uint8_t> head_file(const char* magic, const std::vector<uint32_t>& dims, const std::vector<float>& v) {
+  std::vector<uint8_t> b(4 + 4 * dims.size() + 4 * v.size());
+  std::memcpy(b.data(), magic, 4);
+  std::memcpy(b.data() + 4, dims.data(), 4 * dims.size());
+  std::memcpy(b.data() + 4 + 4 * dims.size(), v.data(), 4 * v.size());
+  return b;
+}
+
+static json head_vectors() {
+  json j;
+  std::mt19937 rng(61);
+  std::uniform_real_distribution<float> u(-1.0f, 1.0f), pos(0.5f, 2.0f);
+  auto draw = [&](size_t n, bool positive = false) {
+    std::vector<float> v(n);
+    for (float& x : v) x = positive ? pos(rng) : u(rng);
+    return v;
+  };
+  {
+    const uint32_t d = 6, h = 4;
+    const std::vector<float> mean = draw(d), sd = draw(d, true), w1 = draw(h * d), b1 = draw(h), w2 = draw(h),
+                             b2 = draw(1);
+    std::vector<float> all;
+    for (const std::vector<float>* p : {&mean, &sd, &w1, &b1, &w2, &b2}) all.insert(all.end(), p->begin(), p->end());
+    const std::vector<uint8_t> file = head_file("NPH1", {d, h}, all);
+    NeutralHead head;
+    std::string err;
+    if (!head.load(file.data(), file.size(), err)) throw std::runtime_error(err);
+    const int n = 4;
+    std::vector<float> tokens = draw(n * d);
+    for (float& t : tokens) t *= 3.0f;
+    std::vector<float> p(n);
+    head.run(tokens.data(), n, p.data());
+    j["neutral"] = {{"in_dim", d}, {"hidden", h}, {"mean", mean}, {"std", sd}, {"w1", w1}, {"b1", b1}, {"w2", w2},
+                    {"b2", b2[0]}, {"tokens", tokens}, {"p", p}};
+  }
+  {
+    const uint32_t d = ToneHead::kInDim, h1 = 3, h2 = 2, n = ToneHead::kTargets;
+    const std::vector<float> xm = draw(d), xs = draw(d, true), w1 = draw(h1 * d), b1 = draw(h1), w2 = draw(h2 * h1),
+                             b2 = draw(h2), w3 = draw(2 * n * h2), b3 = draw(2 * n), ym = draw(n), ys = draw(n, true);
+    std::vector<float> w1s = w1;
+    for (float& x : w1s) x *= 0.05f;  // keeps the first layer's sums of 1920 terms of order one
+    std::vector<float> all;
+    for (const std::vector<float>* p : std::initializer_list<const std::vector<float>*>{&xm, &xs, &w1s, &b1, &w2, &b2, &w3, &b3, &ym, &ys}) all.insert(all.end(), p->begin(), p->end());
+    const std::vector<uint8_t> file = head_file("TNH1", {d, h1, h2, n}, all);
+    ToneHead head;
+    std::string err;
+    if (!head.load(file.data(), file.size(), err)) throw std::runtime_error(err);
+    for (int k = 0; k < 2; ++k) {
+      const std::vector<float> f = draw(d);
+      double mean[ToneHead::kTargets], sd[ToneHead::kTargets];
+      head.run(f.data(), mean, sd);
+      j["tone"]["cases"].push_back({{"features", f}, {"mean", std::vector<double>(mean, mean + n)},
+                                    {"sd", std::vector<double>(sd, sd + n)}});
+    }
+    j["tone"]["dims"] = {d, h1, h2, n};
+    j["tone"]["weights"] = {{"xm", xm}, {"xs", xs}, {"w1", w1s}, {"b1", b1}, {"w2", w2}, {"b2", b2}, {"w3", w3},
+                            {"b3", b3}, {"ym", ym}, {"ys", ys}};
+  }
+  return j;
+}
+
 // The single-profile solver with the stand-in network, the brackets' exposures and the roll-off at given values.
 static json given_vectors(const ProfileBundle& tri, const ProfileBundle& white) {
   json j;
@@ -702,6 +766,7 @@ int main(int argc, char** argv) {
   a["clip"] = clip_vectors(tri, 3);
   a["knobs"] = knob_vectors(tri, 2);
   a["given"] = given_vectors(tri, white);
+  a["heads"] = head_vectors();
   a["bundle_white"] = bundle_data(white, white_dir);
   write_json(out_dir + "/auto.json", a);
 
