@@ -46,6 +46,13 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | `Negicc.WhiteLight.Balance` | The film-base balance of the white-light decode |
 | `Negicc.WhiteLight.Curve` | Given green and blue input curves and their composition into the profile |
 | `Negicc.WhiteLight.Defs`, `Negicc.WhiteLight.Props`, `Negicc.WhiteLight` | The white-light modules together (no Mathlib); proved properties; both |
+| `Negicc.Auto.Geometry`, `Negicc.Auto.Resample` | The network's grid; area average, bilinear sample and Pillow's antialiased filter |
+| `Negicc.Auto.Network` | The network's input, the intent field (the network an opaque function of stated shape), the neutral and tone heads' forward passes |
+| `Negicc.Auto.Cells` | The trained cells, the residual, the frame's statistics, the optimiser's loss and correction, the lightness wish, the highlight statistics |
+| `Negicc.Auto.Enclosure`, `Negicc.Auto.Optimizer`, `Negicc.Auto.Loop` | Which brackets are searched and their rankings; the `(E, g, b)` coordinate descent; the fixed-point loop and the winner |
+| `Negicc.Auto.Metering`, `Negicc.Auto.Search` | The grey point and the metered exposure; the whole Auto search and its fallbacks |
+| `Negicc.Auto.Knobs`, `Negicc.Auto.Given` | Brightness, tint and warmth; the single-profile solver and the roll-off at given parameters |
+| `Negicc.Auto.Defs`, `Negicc.Auto.Props`, `Negicc.Auto` | The Auto modules together (no Mathlib); proved properties; both |
 
 ## One formula, two readings
 
@@ -172,6 +179,36 @@ Vectors generated from commit `ccfa333` of `master` on x86-64 Linux with GCC 13.
 (another compiler or C library may change the last digit of a single precision result, which the
 tolerances cover). With Lean `v4.36.0`, `lake build` ends with `Build completed successfully` and no
 warning, and `lake exe check` makes 9884 comparisons, none outside its tolerance.
+
+## The Auto search's check
+
+```sh
+cd formal
+lake exe checkAuto
+```
+
+`checkAuto` (`CheckAuto.lean`) reads `testvectors/auto/auto.json` (the search's parts: geometry,
+resampling, the network's input and heads, the frame's statistics, the cells and losses, the
+optimiser, the brackets' ranges, metering, the highlight statistics, the knobs, the single-profile
+solver) and `testvectors/auto/auto_search.json` (whole searches on both lights), with the bundles'
+ICC profiles under `../profiles/`, and compares the specification over `Float` with the C++. The
+intent network is replaced on both sides by a stand-in of stated formula (`StandInRunner` in
+`gen_auto.cc`, `standIn` in `CheckAuto.lean`), so the search runs as `neg_process` runs it. Its
+tolerances and their reasons are at the top of `CheckAuto.lean`; `FORMULAS_auto.md` lists what is
+specified, proved and checked.
+
+The vectors are written by `testvectors/auto/gen_auto.cc`, which compiles
+`multi_target_optimizer.cc` into itself to reach the search's internal functions. From the
+repository root:
+
+```sh
+make -j lib USE_CUDA=0 ORT_DIR=<onnxruntime>
+ORT_DIR=<onnxruntime> formal/testvectors/auto/build.sh
+OMP_NUM_THREADS=16 bin_out/gen_auto profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors/auto
+```
+
+The committed vectors were generated from `47a187d` on x86-64 Linux with GCC 13.3; `lake exe
+checkAuto` makes 11847 comparisons, none outside its tolerance.
 
 ## Using the package from another repository
 
