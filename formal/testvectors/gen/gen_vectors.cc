@@ -20,6 +20,7 @@
 
 #include "color_pipeline.h"
 #include "dinov3_auto_solver.h"
+#include "film_base_detector.h"
 #include "flat_field.h"
 #include "input_curves.h"
 #include "multi_target_optimizer.h"
@@ -31,8 +32,10 @@
 // gen_internal.cc
 namespace genint {
 void enclosure(float g_min, float g_max, float exposure_s, float g_lo, float g_hi, float out[10]);
-void lab_to_srgb_u8(const float lab[3], float out[3]);
-void highlight_ceiling(const std::string& report, float out[3]);
+void enclosure_of(const BundleTarget& t, float g_lo, float g_hi, float out[10]);
+float pull_centre_of(float g_min, float g_max, float exposure_s, float g_lo, float g_hi);
+void curve_frame_base(const std::vector<uint16_t>& grid, const double* film_base_d, float out[3]);
+float shape_scale(float a, float k, float u_med, float ref, int table_n, float max_dev, float u_hold);
 float percentile_u16_linear(const std::vector<uint64_t>& hist, uint64_t total, float q);
 float e_norm(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso);
 void frame_green_range(const negicc::RgbView& frame, float crop_ratio, float out[2]);
@@ -125,6 +128,7 @@ static json base_vectors() {
     }
   }
   j["auto_knee"] = kKnee;
+  j["pcs_white"] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   for (float v : {0.0f, 0.1f, 0.5f, 0.70196f, 0.99999f, 1.0f}) {
     j["quantize"].push_back({{"x", v}, {"u8", negicc::quantize_u8(v)}, {"u16", negicc::quantize_u16(v)}});
   }
@@ -263,12 +267,18 @@ static json pixel_vectors(const ProfileBundle& bundle, const std::string& bundle
       const Rgb lin = negicc::convert_pixel_linear(cfg, m, px);
       const Rgb disp = negicc::convert_pixel_display(cfg, m, px);
       const Rgb out = negicc::convert_pixel(cfg, m, px);
-      c["out"].push_back({{"corrected", arr3(negicc::convert_pixel_corrected(cfg, m, px))},
+      const Rgb cor = negicc::convert_pixel_corrected(cfg, m, px);
+      c["out"].push_back({{"corrected", arr3(cor)},
+                          {"corrected_u16",
+                           {negicc::quantize_u16(cor.r), negicc::quantize_u16(cor.g), negicc::quantize_u16(cor.b)}},
+                          {"preview_u8",
+                           {negicc::quantize_u8(out.r), negicc::quantize_u8(out.g), negicc::quantize_u8(out.b)}},
                           {"pcs", arr3(negicc::convert_pixel_pcs(cfg, m, px))},
                           {"linear", arr3(lin)},
                           {"display", arr3(disp)},
                           {"encoded", arr3(out)},
-                          {"u16", {negicc::quantize_u16(out.r), negicc::quantize_u16(out.g), negicc::quantize_u16(out.b)}},
+                          {"u16",
+                           {negicc::quantize_u16(out.r), negicc::quantize_u16(out.g), negicc::quantize_u16(out.b)}},
                           {"lab", arr3(negicc::linear_srgb_to_lab(disp))},
                           {"white_clipped", negicc::linear_channel_white_clipped(lin.r) ||
                                                 negicc::linear_channel_white_clipped(lin.g) ||
@@ -363,7 +373,8 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
     const std::vector<float> dark = tone_table(curves[2]);
     const negicc::ToneTable td{dark.data(), kToneTableSize};
     j["dark_curve"] = tone_curve_json(curves[2]);
-    for (const auto& v : std::vector<std::array<float, 3>>{{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.9f, 0.05f, 0.02f}}) {
+    for (const auto& v :
+         std::vector<std::array<float, 3>>{{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.9f, 0.05f, 0.02f}}) {
       j["apply_dark"].push_back({{"x", {v[0], v[1], v[2]}}, {"y", arr3(negicc::apply_tone(td, {v[0], v[1], v[2]}))}});
     }
   }
@@ -532,7 +543,8 @@ static json white_vectors(const ProfileBundle& bundle, const std::string& bundle
   for (int i = 0; i < n; ++i) {
     const int x = i % gw, y = i / gw;
     const double t = std::pow(2.0, -0.1 - 0.075 * i);
-    const double tint[3] = {1.0 + 0.08 * std::sin(i * 1.3), 1.0 + 0.06 * std::cos(i * 0.7), 1.0 + 0.1 * std::sin(i * 0.4)};
+    const double tint[3] = {1.0 + 0.08 * std::sin(i * 1.3), 1.0 + 0.06 * std::cos(i * 0.7),
+                            1.0 + 0.1 * std::sin(i * 0.4)};
     for (int c = 0; c < 3; ++c)
       grid[i * 3 + c] = (uint16_t)std::lround(std::min(65535.0, f.film_base[c] * t * tint[c]));
     p_neutral[i] = (float)(0.5 + 0.45 * std::sin(i * 0.9));
@@ -605,6 +617,53 @@ static json white_vectors(const ProfileBundle& bundle, const std::string& bundle
                                                          {-1.0, 2.0, 15.0}, {-3.0, -1.0, 12.0}, {-3.0, -1.0, 19.0}}) {
     j["guard_cell"].push_back({{"a", c[0]}, {"a_auto", c[1]}, {"L_auto", c[2]},
                                {"y", green_guard_cell_a(c[0], c[1], c[2])}});
+  }
+  // The guard on synthetic Auto renders: the cell count and the evidence mass on both sides of their limits (8 cells,
+  // a mass of 2, none on a limit), and the hinge and the bound at a few means.
+  for (const auto& gc : std::vector<std::array<double, 2>>{{8, 2.5}, {7, 2.5}, {12, 1.5}, {12, 1.9}, {10, 2.9}}) {
+    const int nc = (int)gc[0] + 3;  // three cells out of range
+    std::vector<Lab> la(nc);
+    std::vector<float> pp(nc);
+    for (int i = 0; i < nc; ++i) {
+      la[i] = {i < 3 ? (i == 0 ? 1.0f : 95.0f) : (float)(10.0 + 7.0 * i), (float)(1.5 * std::sin(i)), 0.0f};
+      pp[i] = (float)std::sqrt(gc[1] / gc[0]);
+    }
+    negicc::JointFitGuard g;
+    g.set_cells(nc, [&](int i) { return la[i]; }, pp.data());
+    g.means([&](int i) { return (double)la[i].a; }, g.ref);
+    json gj = {{"labs", json::array()}, {"p", pp}, {"counted", {g.counted[0], g.counted[1]}},
+               {"ref", {g.ref[0], g.ref[1]}}};
+    for (const Lab& l : la) gj["labs"].push_back(arr3(l));
+    for (double dv : {0.0, -0.4, -0.6, -2.0}) {
+      const double v[2] = {g.ref[0] + dv, g.ref[1] + dv};
+      gj["hinges"].push_back({{"v", {v[0], v[1]}}, {"hinge", {g.hinge(0, v), g.hinge(1, v)}},
+                              {"binds", {g.binds(0, v), g.binds(1, v)}}});
+    }
+    j["guard"].push_back(gj);
+  }
+  // The re-anchoring's pieces: the curves anchored at two (E, g, b) and the shape's scale (reanchor_input_curves), the
+  // anchor's film base without a base from the scan (curve_frame_of), and the bounds of the fit's target L*.
+  {
+    InputCurves c = shape;
+    c.a[0] = 0.3f;
+    c.a[1] = -0.3f;
+    const InputCurves a0 = negicc::anchor_curves(c, f, e0, g0, b0);
+    const InputCurves a1 = negicc::anchor_curves(c, f, e0 * 1.4f, g0 * 0.9f, b0 * 1.1f);
+    json r = {{"curves", curve_json(c)}, {"from", {e0, g0, b0}}, {"to", {e0 * 1.4f, g0 * 0.9f, b0 * 1.1f}},
+              {"a0", curve_json(a0)}, {"a1", curve_json(a1)}};
+    for (const auto& sc : std::vector<std::array<float, 4>>{{0.3f, -1.0f, 0.5f, -3.0f},
+                                                            {1.5f, -1.0f, 0.5f, -3.0f},
+                                                            {-0.34f, -1.5f, 0.7f, -INFINITY},
+                                                            {0.9f, -0.5f, 0.3f, -2.0f}}) {
+      r["scales"].push_back({{"a", sc[0]}, {"u_med", sc[1]}, {"ref", sc[2]},
+                             {"hold", std::isfinite(sc[3]) ? json(sc[3]) : json(nullptr)},
+                             {"scale", genint::shape_scale(sc[0], 0.0f, sc[1], sc[2], 4096, 2.2f, sc[3])}});
+    }
+    j["reanchor"] = r;
+    float cfb[3];
+    genint::curve_frame_base(grid, nullptr, cfb);
+    j["curve_frame_base"] = {cfb[0], cfb[1], cfb[2]};
+    j["fit_target_bounds"] = {kIntentMinL, kIntentMaxL};
   }
   const int table_n[2] = {prof.in_trc_size[1], prof.in_trc_size[2]};
   const JointCurveFit out = fit_input_curves_joint(cfg, f, fi, e0, g0, b0, target_L, table_n, CurveFitOptions(),
@@ -760,8 +819,13 @@ static json read_vectors(const ProfileBundle& tri) {
     genint::enclosure(c[0], c[1], c[2], c[3], c[4], r);
     j["enclosure"].push_back({{"in", {c[0], c[1], c[2], c[3], c[4]}}, {"out", std::vector<float>(r, r + 10)}});
   }
-  for (const auto& c : std::vector<std::array<float, 3>>{{60, 40, 0.9f}, {61, 41, 0.9f}, {3, 2, 0.5f}, {100, 1, 0.9f},
-                                                         {64, 48, 1.0f}}) {
+  // The search's inner crop is ParamSearchOptions::crop_ratio, taken from the C++ default (written to the vectors, so
+  // the check holds the specification's constant to it). No size puts the crop's edge on a half pixel, where the
+  // single precision ratio and the decimal one round apart.
+  const float crop_ratio = ParamSearchOptions{}.crop_ratio;
+  j["crop_ratio"] = crop_ratio;
+  for (const auto& c : std::vector<std::array<float, 3>>{{104, 66, crop_ratio}, {61, 41, crop_ratio}, {3, 2, 0.5f},
+                                                         {100, 1, crop_ratio}, {64, 48, 1.0f}, {120, 86, crop_ratio}}) {
     const InnerCrop ic = compute_inner_crop((int)c[0], (int)c[1], c[2]);
     j["inner_crop"].push_back({{"in", {(int)c[0], (int)c[1], c[2]}}, {"out", {ic.x0, ic.y0, ic.w, ic.h}}});
   }
@@ -783,7 +847,8 @@ static json read_vectors(const ProfileBundle& tri) {
     j["u16_percentile"] = c;
   }
   {
-    const int FW = 60, FH = 40;
+    // A size whose inner crop differs between nearby ratios (0.89, 0.90) and lies on no half of a pixel at either.
+    const int FW = 104, FH = 66;
     std::vector<uint16_t> frame(FW * FH * 3);
     for (int y = 0; y < FH; ++y)
       for (int x = 0; x < FW; ++x) {
@@ -797,36 +862,83 @@ static json read_vectors(const ProfileBundle& tri) {
     j["meter"]["h"] = FH;
     j["meter"]["frame"] = frame;
     const RgbView view = RgbView::from_interleaved_rgb(frame.data(), FW, FH);
-    // The scene's green 0.5 % and 99.5 % points over the inner 90 % (compute_frame_stats), which bracket_enclosure
-    // reads.
+    // The scene's green 0.5 % and 99.5 % points over the inner crop (compute_frame_stats), which bracket_enclosure
+    // reads; and each bracket's range from the bundle's own patches and exposure, as the loader derives them.
     float range[2];
-    genint::frame_green_range(view, 0.9f, range);
+    genint::frame_green_range(view, crop_ratio, range);
     j["meter"]["green_range"] = {range[0], range[1]};
+    for (const BundleTarget& t : tri.targets) {
+      float r[10];
+      genint::enclosure_of(t, range[0], range[1], r);
+      j["meter"]["targets"].push_back({{"patches_g", t.patches_g}, {"shutter_s", shutter_to_seconds(t.shutter)},
+                                       {"iso", t.iso}, {"out", std::vector<float>(r, r + 10)}});
+    }
     // The frame's highlight roll-off through bracket 3 (the histogram of the pre-shoulder largest channel over the
     // inner crop, its 99.5 % point, x_hi), at two exposures.
     for (float e : {0.2f, 0.6f}) {
       float q995 = 0.0f;
-      const float x_hi = measure_rolloff_x_hi(tri, 2, view, 0.25, 100.0, e, 1.16f, 1.1f, 0.9f, &q995, nullptr, nullptr);
+      const float x_hi = measure_rolloff_x_hi(tri, 2, view, 0.25, 100.0, e, 1.16f, 1.1f, crop_ratio, &q995, nullptr,
+                                               nullptr);
       j["meter"]["rolloff"].push_back({{"e", e}, {"g", 1.16f}, {"b", 1.1f}, {"q995", q995}, {"x_hi", x_hi}});
     }
   }
-  // The highlight ceiling: the sRGB codes of predicted PCS colours, and the ceiling of a report holding them.
-  const float labs[][3] = {{50.0f, 2.0f, -3.0f}, {85.0f, -1.0f, 4.0f}, {80.0f, 10.0f, 30.0f}, {5.0f, 1.0f, 1.0f},
-                           {70.0f, -40.0f, 20.0f}, {101.0f, 0.0f, 0.0f}};
-  std::string report = "Profile check\n";
-  for (const auto& l : labs) {
-    float out[3];
-    genint::lab_to_srgb_u8(l, out);
-    j["lab_to_srgb"].push_back({{"lab", {l[0], l[1], l[2]}}, {"rgb", {out[0], out[1], out[2]}}});
-    char line[200];
-    std::snprintf(line, sizeof line, "[1.5] A1: 0.1 0.2 0.3 -> %.4f %.4f %.4f should be 50 0 0\n", l[0], l[1], l[2]);
-    report += line;
+  // pull_centre on the direct cases.
+  for (const auto& c : std::vector<std::array<float, 5>>{{2000.0f, 50000.0f, 0.125f, 300.0f, 9000.0f},
+                                                         {8000.0f, 12000.0f, 0.25f, 50.0f, 60000.0f}}) {
+    j["pull_centre"].push_back({{"in", {c[0], c[1], c[2], c[3], c[4]}},
+                                {"y", genint::pull_centre_of(c[0], c[1], c[2], c[3], c[4])}});
   }
-  std::string report5 = report.substr(0, report.rfind("[1.5]"));  // without the last row, which clips
-  for (const std::string& r : {report, report5, std::string("no rows\n")}) {
-    float ceil[3];
-    genint::highlight_ceiling(r, ceil);
-    j["ceiling"].push_back({{"rows", r == report ? 6 : r == report5 ? 5 : 0}, {"ceil", {ceil[0], ceil[1], ceil[2]}}});
+  // The film base's decision on synthetic half-size decodes with a rebate patch beside the picture: a patch the
+  // picture does not outshine, one it outshines by about 1.5 stops (between the 0.5 stop margin and more), a clipped
+  // patch, and an unconfident detection.
+  {
+    const int W = 120, H = 80, SW = 240, SH = 160;
+    const float white = 60000.0f;
+    const double* X = tri.crosstalk_matrix_d;
+    j["film_base"]["crosstalk"] = std::vector<double>(X, X + 9);
+    j["film_base"]["w"] = W;
+    j["film_base"]["h"] = H;
+    j["film_base"]["sensor"] = {SW, SH};
+    j["film_base"]["white"] = white;
+    struct Case { double bright; bool clip; float conf; };
+    for (const Case cs :
+         {Case{0.8, false, 0.9f}, Case{2.8, false, 0.9f}, Case{0.8, true, 0.9f}, Case{0.8, false, 0.3f}}) {
+      std::vector<uint16_t> half(W * H * 3);
+      const double base[3] = {30000.0, 20000.0, 15000.0};
+      for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+          uint16_t* p = &half[(y * W + x) * 3];
+          for (int c = 0; c < 3; ++c) {
+            double v;
+            if (x < 20) {  // the rebate
+              v = base[c] * (1.0 + 0.002 * ((x * 7 + y * 3 + c) % 5));
+              if (cs.clip && (x + y) % 3 == 0) v = 0.99 * white;
+            } else {       // the picture: denser film, with a brighter part
+              const double t = 0.1 + 0.6 * (double)((x * 13 + y * 7) % 50) / 50.0;
+              v = base[c] * t;
+              if (x > 100 && y < 20) v = base[c] * cs.bright;
+            }
+            p[c] = (uint16_t)std::lround(std::min(65535.0, v));
+          }
+        }
+      FrameDetection det;
+      det.ok = true;
+      det.has_base = true;
+      det.conf = cs.conf;
+      det.base_box[0] = 0;
+      det.base_box[1] = 0;
+      det.base_box[2] = 40;
+      det.base_box[3] = SH;
+      const RgbView view = RgbView::from_interleaved_rgb(half.data(), W, H);
+      negicc::FilmBaseDetection out;
+      const bool found = negicc::detect_film_base(view, &det, SW, SH, X, white, out);
+      j["film_base"]["cases"].push_back(
+          {{"half", half}, {"conf", cs.conf}, {"box_sensor", {0, 0, 40, SH}},
+           {"found", found}, {"source", out.source}, {"thinnest", {out.thinnest[0], out.thinnest[1], out.thinnest[2]}},
+           {"rebate_clipped", out.rebate_clipped}, {"has_box", out.has_box},
+           {"box", {out.box[0], out.box[1], out.box[2], out.box[3]}}, {"has_outshone", out.has_outshone},
+           {"outshone", out.thinnest_over_patch_stops}, {"rgb", {out.rgb[0], out.rgb[1], out.rgb[2]}}});
+    }
   }
   return j;
 }

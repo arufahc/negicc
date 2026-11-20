@@ -28,7 +28,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 
@@ -585,56 +584,6 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
 }
 
 // ---- Highlight ceiling and clipping ------------------------------------------------------------------------
-
-// ICC PCS L*a*b* (D50) to 8-bit sRGB code values in [0, 255], through the same PCS -> linear sRGB as the outputs
-// (color_pipeline.h pcs_to_linear_srgb_unclamped: the embedded profile's colorants), so a bracket's ceiling is in the
-// codes its pictures are written in.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (_pcs_lab_to_srgb; there through Bradford and the textbook matrix)
-// The Lab inverse is CIE 1976 L*a*b*'s with CIE 15's exact break and slope (kLabEpsilon, kLabKappa), relative to the
-// PCS white (ICC.1:2022 7.2.16); the encoding is the sRGB curve of IEC 61966-2-1.
-void pcs_lab_to_srgb_u8(const float lab[3], float out[3]) {
-  const float kD50[3] = {(float)negicc::kPcsWhite[0], 1.0f, (float)negicc::kPcsWhite[2]};   // the PCS white
-  const float fy = (lab[0] + 16.0f) / 116.0f;
-  const float f[3] = {fy + lab[1] / 500.0f, fy, fy - lab[2] / 200.0f};
-  float xyz[3];
-  for (int c = 0; c < 3; ++c) {
-    const float f3 = f[c] * f[c] * f[c];
-    xyz[c] = (f3 > (float)negicc::kLabEpsilon ? f3 : (116.0f * f[c] - 16.0f) / (float)negicc::kLabKappa) * kD50[c];
-  }
-  const negicc::Rgb l = negicc::pcs_to_linear_srgb_unclamped({xyz[0], xyz[1], xyz[2]});
-  for (int r = 0; r < 3; ++r) {
-    const float lin = std::clamp(r == 0 ? l.r : r == 1 ? l.g : l.b, 0.0f, 1.0f);
-    const float enc = (lin <= 0.0031308f) ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f;
-    out[r] = std::clamp(enc, 0.0f, 1.0f) * 255.0f;
-  }
-}
-
-// Per-channel 8-bit sRGB ceiling of a bracket: the brightest value any of its calibration patches renders to
-// through its profile, read from the profcheck report the bundle stores; 255 without a report. Highlights above
-// it are outside what the bracket was calibrated on.
-// TODO: read the ceiling from the bundle's metadata JSON (exported by the station) instead of parsing the report.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (profile_highlight_ceiling)
-void profile_highlight_ceiling(const std::string& profcheck_output, float ceil[3]) {
-  static const std::regex kRow(R"(\]\s+(\S+):\s+\S+\s+\S+\s+\S+\s+->\s+(\S+)\s+(\S+)\s+(\S+)\s+should be)");
-  const float inf = std::numeric_limits<float>::infinity();
-  for (int c = 0; c < 3; ++c) ceil[c] = -inf;
-  bool any = false;
-  for (auto it = std::sregex_iterator(profcheck_output.begin(), profcheck_output.end(), kRow);
-       it != std::sregex_iterator(); ++it) {
-    float lab[3], rgb[3];
-    try {
-      for (int c = 0; c < 3; ++c) lab[c] = std::stof((*it)[2 + c].str());
-    } catch (const std::exception&) {
-      continue;
-    }
-    pcs_lab_to_srgb_u8(lab, rgb);
-    for (int c = 0; c < 3; ++c) ceil[c] = std::max(ceil[c], rgb[c]);
-    any = true;
-  }
-  if (!any) {
-    for (int c = 0; c < 3; ++c) ceil[c] = 255.0f;
-  }
-}
 
 // Highlight clipping of one render, in percent of the pixels measured (float, as the station's kernel).
 struct ClipStats {
@@ -2344,25 +2293,16 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
     return bracket_enclosure(bundle.targets[target_idx], target_idx, g_lo_ref, g_hi_ref, r);
   };
-  // Each bracket's ceiling, parsed the first time it is needed.
-  std::vector<float> ceilings(bundle.targets.size() * 3);
-  std::vector<bool> has_ceiling(bundle.targets.size(), false);
-  auto ceiling_of = [&](int target_idx) -> const float* {
-    float* ceil = &ceilings[target_idx * 3];
-    if (!has_ceiling[target_idx]) {
-      profile_highlight_ceiling(bundle.targets[target_idx].profcheck_output, ceil);
-      has_ceiling[target_idx] = true;
-    }
-    return ceil;
-  };
   if (verbose) {
     std::cout << "Auto: winner " << name_of(chosen.target_idx) << " (resid " << fixed(chosen.residual, 4) << ", "
               << to_string(chosen.status) << ")\n";
   }
 
   // Step 5: the clip fallback (ClipFallbackOutcome): move to the next bracket when the chosen one white-clips.
+  // It reads the white-clip share and the median L*, which no ceiling enters (the ceiling counts only exc).
   // py-ref: negicc_station/src/optimizer.py @ 93be1ec (measure_rescue_candidates, select_highlight_rescue)
-  const ClipStats hc0 = fr.highlight_clip(chosen.target_idx, {params}, ceiling_of(chosen.target_idx))[0];
+  static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
+  const ClipStats hc0 = fr.highlight_clip(chosen.target_idx, {params}, kCeil)[0];
   const float clip_0 = hc0.white_clip / 100.0f;
   out.clip_fallback_white_clip = clip_0;
   out.clip_fallback = ClipFallbackOutcome::kNotNeeded;
@@ -2389,7 +2329,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         if (!fr.fixed_point(t_adj, s_adj->result.params, eb, fp_adj)) return false;
       }
       ConversionParams p_adj = fp_adj.params;
-      const ClipStats hc_adj = fr.highlight_clip(t_adj, {p_adj}, ceiling_of(t_adj))[0];
+      const ClipStats hc_adj = fr.highlight_clip(t_adj, {p_adj}, kCeil)[0];
       const float clip_adj = hc_adj.white_clip / 100.0f;
       const float dl = hc_adj.median_L - hc0.median_L;
       if (clip_adj > CLIP_FALLBACK_CLIP_RATIO * clip_0) out.clip_fallback = ClipFallbackOutcome::kClipsTooMuch;

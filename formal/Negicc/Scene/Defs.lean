@@ -16,6 +16,6 @@ public import Negicc.Scene.Bracket
 # The scene conversion's definitions
 
 Reading the scan, the film base, the per-pixel conversion from the camera's RGB to sRGB and
-CIELAB, and a bracket's calibrated range and highlight ceiling. No Mathlib: an executable imports
+CIELAB, and a bracket's calibrated range. No Mathlib: an executable imports
 this module.
 -/

@@ -155,9 +155,11 @@ NEGICC_HD Rgb apply_knee(Rgb v, float knee) {
 }
 
 // ---- Stage: tone curves ------------------------------------------------------------------------------------
-// A 1D curve of size samples over [0, 1], linearly interpolated (and extrapolated from the end segments).
+// A 1D curve of size samples over [0, 1], linearly interpolated (and extrapolated from the end segments). A curve of
+// one sample is that value.
 NEGICC_HD float apply_trc(float val, const float* curve, int size) {
     if (size <= 0 || !curve) return val;
+    if (size == 1) return curve[0];
     const float scaled = val * (size - 1);
     int k = (int)scaled;
     k = k < 0 ? 0 : (k > size - 2 ? size - 2 : k);
@@ -173,13 +175,14 @@ NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int
     const float sr = r * (dim_r - 1);
     const float sg = g * (dim_g - 1);
     const float sb = b * (dim_b - 1);
+    // The lower corner inside the grid, then the upper one from it, so a coordinate outside [0, 1] reads the edge cell.
     int rf = (int)sr, gf = (int)sg, bf = (int)sb;
-    const int rc = (rf + 1 < dim_r - 1) ? rf + 1 : dim_r - 1;
-    const int gc = (gf + 1 < dim_g - 1) ? gf + 1 : dim_g - 1;
-    const int bc = (bf + 1 < dim_b - 1) ? bf + 1 : dim_b - 1;
     rf = rf < 0 ? 0 : (rf > dim_r - 1 ? dim_r - 1 : rf);
     gf = gf < 0 ? 0 : (gf > dim_g - 1 ? dim_g - 1 : gf);
     bf = bf < 0 ? 0 : (bf > dim_b - 1 ? dim_b - 1 : bf);
+    const int rc = (rf + 1 < dim_r - 1) ? rf + 1 : dim_r - 1;
+    const int gc = (gf + 1 < dim_g - 1) ? gf + 1 : dim_g - 1;
+    const int bc = (bf + 1 < dim_b - 1) ? bf + 1 : dim_b - 1;
     const float dr = sr - rf, dg = sg - gf, db = sb - bf;
 
     const int s_r = dim_g * dim_b * 3, s_g = dim_b * 3;
