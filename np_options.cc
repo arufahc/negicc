@@ -301,7 +301,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "a split bundle's directory (a bundle.json with its ICC profiles beside it, as in profiles/), or a single "
           "ICC profile that applies to the corrected RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
-    .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile. "
+    .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile "
+          "(an RGB profile). "
           "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
           "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). apd is written "

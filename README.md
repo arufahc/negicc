@@ -310,7 +310,7 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | :--- | :--- |
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
-| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the tone stage need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
+| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding; an ICC profile must be an RGB one. The highlight roll-off and the tone stage need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
 | `--print <material>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. With a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<material>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
