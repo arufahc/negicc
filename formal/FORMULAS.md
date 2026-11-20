@@ -396,9 +396,10 @@ vectors and checks as they stood against `47a187d` are in this branch's history 
 The refusals of the code that this document leaves out (each is a check on the input before any
 formula here runs):
 
-- a `--roi` outside the image is refused, and one past its right or bottom edge is clamped to it;
-- a RAW's inset crop counts as a crop unless it is absent (LibRaw's `0xffff` corner or a zero size) or
-  is the whole image at the origin;
+- a `--roi` outside the image is refused, and one past its right or bottom edge is clamped to it; so is a
+  RAW's inset crop;
+- a RAW's inset crop, placed in the image after the sensor's margins, counts as a crop unless it is
+  absent (LibRaw's `0xffff` corner or a zero size) or is the whole image at the origin;
 - the analysis needs an image at least 2 pixels wide and high;
 - `-E`, `--gain_g` and `--gain_b`, when given, must be finite and above 0;
 - recorded input curves are refused unless they keep the shape the fit holds them to
