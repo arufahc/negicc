@@ -30,55 +30,6 @@
 static constexpr double TOL_PARAM = 0.02;
 static constexpr double TOL_REL_ERR = 0.015;
 
-void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
-                         uint16_t* dst, int dst_w, int dst_h) {
-  if (!src || !dst || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
-
-  const double scale_x = (double)src_w / (double)dst_w;
-  const double scale_y = (double)src_h / (double)dst_h;
-
-  #pragma omp parallel for schedule(static) if((size_t)dst_w * dst_h > 8192)
-  for (int dy = 0; dy < dst_h; ++dy) {
-    const double y0 = dy * scale_y;
-    const double y1 = (dy + 1) * scale_y;
-    const int sy_start = (int)std::floor(y0);
-    const int sy_end = std::min(src_h, (int)std::ceil(y1));
-
-    for (int dx = 0; dx < dst_w; ++dx) {
-      const double x0 = dx * scale_x;
-      const double x1 = (dx + 1) * scale_x;
-      const int sx_start = (int)std::floor(x0);
-      const int sx_end = std::min(src_w, (int)std::ceil(x1));
-
-      double r_acc = 0.0, g_acc = 0.0, b_acc = 0.0, w_acc = 0.0;
-
-      for (int sy = sy_start; sy < sy_end; ++sy) {
-        const double wy = std::min(y1, (double)(sy + 1)) - std::max(y0, (double)sy);
-        if (wy <= 0.0) continue;
-        const uint16_t* row_ptr = src[(size_t)sy * src_w];
-
-        for (int sx = sx_start; sx < sx_end; ++sx) {
-          const double wx = std::min(x1, (double)(sx + 1)) - std::max(x0, (double)sx);
-          if (wx <= 0.0) continue;
-          const double w = wx * wy;
-
-          const size_t idx = (size_t)sx * 4;
-          r_acc += row_ptr[idx] * w;
-          g_acc += row_ptr[idx + 1] * w;
-          b_acc += row_ptr[idx + 2] * w;
-          w_acc += w;
-        }
-      }
-
-      const double inv_w = (w_acc > 0.0) ? (1.0 / w_acc) : 0.0;
-      const size_t dst_idx = ((size_t)dy * dst_w + dx) * 3;
-      dst[dst_idx]     = (uint16_t)std::clamp(std::round(r_acc * inv_w), 0.0, 65535.0);
-      dst[dst_idx + 1] = (uint16_t)std::clamp(std::round(g_acc * inv_w), 0.0, 65535.0);
-      dst[dst_idx + 2] = (uint16_t)std::clamp(std::round(b_acc * inv_w), 0.0, 65535.0);
-    }
-  }
-}
-
 negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand,
                                         float m[9], std::vector<float> trc[3]) {
   if (!cfg.gain_curves) {

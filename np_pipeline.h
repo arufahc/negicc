@@ -27,8 +27,8 @@
 //             the film base the sidecar records, the pins (-E, --gain_g, --gain_b) and the input matrix to start from
 //   render    the full-resolution image of the frame: the backend debayers or merges a mosaic; an RGB image is one
 //             already
-//   solve     the conversion parameters without the bundle search: the bracket, E, g and b (the single-profile
-//             search, a --target bracket or given values), the knee and the shoulder
+//   solve     the conversion parameters the bundle search did not give: the bracket, E, g and b (an ICC profile's
+//             single-profile search, or a bundle's four given values), the knee and the shoulder
 //   convert   the backend converts the image in place to the output encoding
 //   write     the TIFF and the sidecar
 
@@ -84,6 +84,9 @@ struct CachedSidecar {
 
 // What the profile and the options decide before the scan is read.
 struct Setup {
+  // The renderer the search's passes run through: the GPU's, or --check_renderer's comparison with it (null: the CPU's,
+  // or --check_renderer's pass-through renderer without a device). Made only where a search runs.
+  std::unique_ptr<PreviewRenderer> renderer;
   // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
   // reused by the sidecar writer.
   std::vector<FileFingerprint> input_fingerprints;
@@ -114,7 +117,7 @@ struct Setup {
   std::vector<std::vector<uint8_t>> print_iccs;
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
   ContinuousPrint print_in;           // the search's view of it
-  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's (NaN until then)
   // The lightest node of the print's table: the paper's white.
   double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   ContinuousPrintResult print_res;    // the print's search
@@ -237,8 +240,8 @@ struct Scan {
 
   FrameDetection frame_det;              // --roi auto
   // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
-  // no detection ran); cli_equivalent gives it as --film_format when the run was not given one, so that a replay with
-  // the explicit --roi reads the same base.
+  // no detection ran); cli_equivalent gives it as --film_format whenever the detection used one, given or --roi auto's,
+  // so that a replay with the explicit --roi reads the same base.
   FilmFormat base_det_format = FILM_FORMAT_AUTO;
   int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
   bool has_roi = false;
@@ -274,10 +277,6 @@ struct Scan {
   // The white-light decode's gains on the camera channels (ChannelBalance); 1, 1, 1: the mosaic was left as it was.
   float balance_gains[3] = {1, 1, 1};
 
-  // Each bracket's exposure range (compute_bundle_enclosures) was measured on the half-size frame, in decode.
-  bool has_enclosures = false;
-  // Each bracket's exposure range in the station's E, as the bundle search meters it (meter_bracket_exposures).
-  std::vector<BracketExposure> bracket_exposure;
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
@@ -310,7 +309,7 @@ struct Scan {
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
-  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs and the roll-off.
+  // The bracket analysis on the half-size frame outside Auto's time: the knobs and the roll-off.
   double t_analysis_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
 
@@ -351,6 +350,10 @@ struct Conversion {
 
 int prepare(const Options& o, Setup& s);
 int decode(const Options& o, Setup& s, Scan& scan);
+// After the last pass of the search (after decode, or where --probe_intent stops): logs the GPU's passes and frees its
+// frame copy, and fails when --check_renderer counts a pass outside the renderer or its comparison with the GPU is
+// outside the tolerance, before anything is written.
+int finish_search_passes(const Options& o, Setup& s);
 int begin_conversion(const Options& o, const Setup& s, Conversion& c);
 int render(const Options& o, const Setup& s, Scan& scan, Backend& backend);
 int solve(const Options& o, Setup& s, Scan& scan, Conversion& c);

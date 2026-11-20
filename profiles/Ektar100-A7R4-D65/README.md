@@ -76,7 +76,8 @@ The print materials are spektrafilm's print profiles (Andrea Volpato, CC BY-SA 4
 
 Each is an ICC v2 input profile (RGB to PCS XYZ D50) shaped like the chart profiles beside it: an A2B0 with three
 4096-entry input curves, a 45 x 45 x 45 table and identity output curves. Its own curves are for the middle bracket
-(Target 4). neg_process keeps the table and writes the curves for the A the print's search finds when it converts.
+(Target 4) with gains 1. neg_process keeps the table and writes the curves for the A, g and b the print's search
+finds when it converts.
 
 ### What they compute
 
@@ -84,7 +85,7 @@ For the profile's input x (the scan decoded to linear Rec.2020 through the camer
 n0 = normalization_target / 65535, after neg_process's soft knee at 0.95), in each channel c:
 
 ```
-light density    dL_c  = -log10(unknee(x_c) / n0)
+light density    dL_c  = -log10(unknee(x_c) g_c / n0)
 grey balance     alpha_c = (G_c(dL_c) - A) (1 + t_c)
 print density    pd = 0.70 + Q L (psi alpha),   psi = M^-1 (1, 1, 1)
 the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts (its curve per layer)
@@ -102,6 +103,8 @@ the print        log E_c = aim_c - (pd_c - 0.70)  ->  the material's dye amounts
   (`grey_balance_curves.tangents`), and most of the table past the last step comes from them.
 - **A**, the print's mid grey: a bracket's own `A_mid` (the green APD of its 18 % grey step, gs10, from
   `density_matrices.brackets.targets.<bracket>.grey_light_density`), or the A the print's search finds.
+- **g_c**, the print's colour balance (1, g, b), applied after the knee: 1 in the profile's own curves, the g and b
+  the print's search finds when neg_process writes them.
 - **t_c**, each bracket's tilt relative to the curve
   (`density_matrices.brackets.targets.<bracket>.grey_relative.b`): neg_process takes it linear in A between the two
   brackets whose A_mid enclose A, held beyond the end ones, so at a bracket's own A_mid it is that bracket's tilt.

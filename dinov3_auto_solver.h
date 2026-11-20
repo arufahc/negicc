@@ -108,10 +108,6 @@ struct DinoSolveResult {
   double timing_total_ms = 0.0;
 };
 
-// Resamples from 4-channel image buffer (imgdata.image) to 3-channel u16 grid view straight from the crop
-void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
-                         uint16_t* dst, int dst_w, int dst_h);
-
 // The L*a*b* intent_loss scores for one candidate: each pixel of the camera-RGB grid rendered at cand as the loss
 // renders it (displayed value, after the shoulder), n_px x 3 values into lab_out.
 void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,

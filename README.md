@@ -28,6 +28,11 @@ linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the
 [3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)), unless an ONNX Runtime in the
 same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
 
+A USE_CUDA=1 build also runs the search's passes on the GPU. `CUDA_ARCH` is the GPU's compute capability without the
+dot: 87 (the default) for a Jetson Orin, 86 for an RTX 30 card, 89 for an RTX 40, e.g. `make USE_CUDA=1 CUDA_ARCH=86
+neg_process`. A newer GPU than `CUDA_ARCH` compiles the passes when the program starts. On an older one they do not
+run: `neg_process` warns that the device does not run this build's GPU passes and runs them on the CPU.
+
 ## Use
 
 ```bash
@@ -310,7 +315,7 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | :--- | :--- |
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
-| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the tone stage need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
+| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding; an ICC profile must be an RGB one. The highlight roll-off and the tone stage need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
 | `--print <material>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. With a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<material>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
@@ -329,8 +334,8 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | `-C`, `--no_crop` | Keep the RAW's full area. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
-| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. |
-| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a pass-through renderer; the picture must equal a plain conversion's, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
+| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs (`cpu` also keeps the search's passes on the CPU, DESIGN.md 4.2), and how many search iterations. |
+| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a renderer that runs and counts each pass on the CPU, and on a USE_CUDA=1 build with a device also on the GPU, comparing the two, DESIGN.md 4.2; the picture must equal a conversion whose passes run on the CPU, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with
 
