@@ -5,3 +5,4 @@ module
 
 public import Negicc.Base
 public import Negicc.Scene
+public import Negicc.Auto
