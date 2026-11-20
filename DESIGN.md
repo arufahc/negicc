@@ -290,8 +290,9 @@ frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corre
 ## 3.5 The networks
 
 The search judges a render with a vision network: the frozen DINOv3 ViT-S/16 backbone (`models/dinov3-small`), whose
-input is the preview with its longer side at most 512 pixels, cut into 16-pixel patches; one patch is one cell of
-the grid (32 × 21 cells for a 3:2 frame). Three heads read its tokens (`dinov3_engine.h`).
+input is the preview scaled so that its longer side is 512 pixels (enlarged when it is smaller), each side rounded to
+whole 16-pixel patches; one patch is one cell of the grid (32 × 21 cells for a 3:2 frame). Three heads read its
+tokens (`dinov3_engine.h`).
 
 The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small MLP on the layer 9 and 12 tokens),
 predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
@@ -367,8 +368,9 @@ little. The network's lightness follows the picture it is shown, so the search f
 fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_loss`;
 `intent_cells` gives the same cells for the correction below), not a full preview:
 
-1. `E` over 13 points across its window (plus ±0.03 and ±0.06 around a start), then ±1 and ±2 steps of 1/40 of the
-   window, scored on the `L*` loss plus the penalties;
+1. `E` over 13 points across its window (plus a start and ±0.03 and ±0.06 around it, those inside the window), then
+   ±1 and ±2 steps of `max(0.01, window / 40)` (0.02 for an empty window) around the best, scored on the `L*` loss
+   plus the penalties;
 2. `g` over a grid, scored on the `a*` loss; then `b` over a grid, scored on the `b*` loss;
 3. `g` and `b` refined by ±0.02, on the sum of the `a*` and `b*` losses.
 
