@@ -119,7 +119,7 @@ struct DensityRecord {
     double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
     std::string stopped_by;             // parameters, residual or steps
     double a0 = 0.0, wish_l = 0.0;      // the A its bootstrap started from; the mean L* of the lightness wish it held
-    double above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // at the result, per channel (percent)
+    double above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // at the result, per channel (shares)
     // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
     // search's, the knobs as given (brightness in stops, tint a*, warmth b*), and the print's grey where they put it
     bool knobs = false, knobs_limited = false;
@@ -268,7 +268,7 @@ struct FramePrint {
   double last_move[3] = {0, 0, 0}, above_knee = 0.0;
   double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
   std::string stopped_by;
-  double a0 = 0.0, wish_l = 0.0, above_white_pct[3] = {0, 0, 0}, at_white_pct[3] = {0, 0, 0};   // (PrintSearch)
+  double a0 = 0.0, wish_l = 0.0, above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // (PrintSearch)
   bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
   double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
   double knob_given[3] = {0, 0, 0};            // brightness, tint, warmth as given

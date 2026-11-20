@@ -723,6 +723,14 @@ class SearchFrame {
     crop_ = compute_inner_crop(frame.width, frame.height, crop_ratio);
     compute_frame_stats(frame, crop_ratio, engine_.max_size(), engine_.patch_size(), stats_);
   }
+  // The same with the crop and the statistics already taken of this frame at this engine's grid (several searches of
+  // one frame: the print's materials, search_print_continuous).
+  void set_frame(const negicc::RgbView& frame, const InnerCrop& crop, const FrameStats& stats) {
+    frame_ = frame;
+    if (renderer_) renderer_->bind_frame(frame_);
+    crop_ = crop;
+    stats_ = stats;
+  }
 
   // Sets the merged input matrix of this frame (ParamSearchResult: M_frame) and e_norm; on TriLED the search runs on
   // M_frame / e_norm for bit-exact station parity, while on white-light bundles (no crosstalk) it runs on M_frame
@@ -2926,8 +2934,8 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   return true;
 }
 
-float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio,
-                       const double fb[3]) {
+float print_floor_factor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio,
+                         const double fb[3]) {
   const InnerCrop c = compute_inner_crop(frame.width, frame.height, crop_ratio);
   const double* x = bundle.crosstalk_matrix_d;
   std::vector<float> v[3];
@@ -2949,8 +2957,9 @@ float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame
   return k;
 }
 
-float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
-                       double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]) {
+float raise_base_to_print_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio,
+                                const double* found, double scan_shutter_s, double scan_iso, double base_in[3],
+                                double base_out[3]) {
   if (found) {
     for (int c = 0; c < 3; ++c) base_in[c] = found[c];
   } else {
@@ -2958,27 +2967,32 @@ float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame
     const double ratio = (scan_shutter_s * (scan_iso / 100.0)) / (fb_t * (bundle.film_base_iso / 100.0));
     for (int c = 0; c < 3; ++c) base_in[c] = bundle.film_base_avg_d[c] * ratio;
   }
-  const float k = print_base_floor(bundle, frame, crop_ratio, base_in);
+  const float k = print_floor_factor(bundle, frame, crop_ratio, base_in);
   for (int c = 0; c < 3; ++c) base_out[c] = base_in[c] * k;
   return k;
 }
 
-bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base,
-                             const ContinuousPrint& cp, DinoV3Engine& engine, const negicc::RgbView& frame,
-                             double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                             ParamSearchResult& out, ContinuousPrintResult& cr) {
-  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
-  const Clock::time_point t0 = Clock::now();
+// What the print searches of one frame share across its materials (search_print_continuous), taken once.
+struct PrintFrame {
+  ProfileBundle pb;   // the bundle with one target, which carries the material's print at the current A
+  InnerCrop crop;
+  FrameStats stats;   // over the inner crop, at the engine's grid (SearchFrame::set_frame)
+  FrameScale scale;
+  // The frame's shares at E, measured with the first material: E is held, and the gains are in the print's curves,
+  // after the knee, so the knee sees the matrix at E alone whatever the material and its g and b.
+  bool shares_measured = false;
+  float above_knee = 0.0f, past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
+};
+
+// One material's search on the shared frame pf, its time counted from t0.
+static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, const ParsedFilmProfile& print_base,
+                                  const ContinuousPrint& in, DinoV3Engine& engine, const negicc::RgbView& frame,
+                                  const ParamSearchOptions& opts, Clock::time_point t0, ParamSearchResult& out,
+                                  ContinuousPrintResult& cr) {
   cr = ContinuousPrintResult{};
-  if (bundle.targets.empty() || !print_base.data.has_profile || !cp.trc_at ||
-      !(cp.a_hi > cp.a_lo)) {
-    std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
-    return false;
-  }
   // kStop: log10(2) to five decimals, a stop of exposure in density.
   constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
-  ProfileBundle pb = bundle;   // its one target carries the print at the current A
-  pb.targets.resize(1);
+  ProfileBundle& pb = pf.pb;
   pb.targets[0].film_prof = print_base;
   pb.targets[0].film_prof.rebind_pointers();
   ParsedFilmProfile& prof = pb.targets[0].film_prof;
@@ -2988,21 +3002,21 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   double cur_a = 0.0;
   auto set_curves_at = [&](double a) {
     cur_a = a;
-    cp.trc_at(a, nullptr, prof.in_trc);
+    in.trc_at(a, nullptr, prof.in_trc);
     for (int c = 0; c < 3; ++c) prof.data.in_trc_size[c] = (int)prof.in_trc[c].size();
     prof.rebind_pointers();
   };
   const GainCurves gain_curves = [&](float g, float b, std::vector<float> trc[3]) {
     const double gains[3] = {1.0, g, b};
-    cp.trc_at(cur_a, gains, trc);
+    in.trc_at(cur_a, gains, trc);
   };
   out = ParamSearchResult{};
   SearchFrame fr(pb, engine, opts.verbose, opts.max_steps, out);
   fr.set_renderer(opts.renderer);
   fr.set_gain_curves(&gain_curves);
   fr.set_shoulder(1.0f, false);   // a print keeps no highlight shoulder (the paper rolls off to its white)
-  fr.set_frame(frame, opts.crop_ratio);
-  const FrameScale scale = frame_scale(pb, (float)scan_shutter_s, (float)scan_iso, opts);
+  fr.set_frame(frame, pf.crop, pf.stats);
+  const FrameScale& scale = pf.scale;
   fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
   const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
@@ -3019,21 +3033,38 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   const float E = white_light ? 1.0f : e_norm;
   float m[9];
   negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, m);
-  // The share of the inner crop above the knee at E = 1 (every 4th pixel each way).
-  {
+  // The frame's shares at E (the matrix at E alone, every 4th pixel each way): of the inner crop above the knee in any
+  // channel (at the bootstrap), and per channel past the knee and past the cut (at the result, whose g and b are in the
+  // curves, after the knee).
+  if (!pf.shares_measured) {
+    const float cut = AUTO_KNEE + (1.0f - AUTO_KNEE) * std::atanh((0.9999f - AUTO_KNEE) / (1.0f - AUTO_KNEE));
     const InnerCrop& c = fr.inner_crop();
-    long above = 0, total = 0;
+    long above = 0, knee_n[3] = {0, 0, 0}, cut_n[3] = {0, 0, 0}, total = 0;
     uint16_t px[3];
     for (int y = c.y0; y < c.y0 + c.h; y += 4)
       for (int x = c.x0; x < c.x0 + c.w; x += 4) {
         frame.sample(x, y, px);
-        float u = 0.0f;
-        for (int r = 0; r < 3; ++r)
-          u = std::max(u, (m[r * 3] * px[0] + m[r * 3 + 1] * px[1] + m[r * 3 + 2] * px[2]) / 65535.0f);
-        above += u > AUTO_KNEE;
+        float u_max = 0.0f;
+        for (int r = 0; r < 3; ++r) {
+          const float u = (m[r * 3] * px[0] + m[r * 3 + 1] * px[1] + m[r * 3 + 2] * px[2]) / 65535.0f;
+          u_max = std::max(u_max, u);
+          knee_n[r] += u > AUTO_KNEE;
+          cut_n[r] += u >= cut;
+        }
+        above += u_max > AUTO_KNEE;
         ++total;
       }
-    cr.above_knee = total ? (float)above / total : 0.0f;
+    pf.above_knee = total ? (float)above / total : 0.0f;
+    for (int r = 0; r < 3; ++r) {
+      pf.past_knee[r] = total ? (float)knee_n[r] / total : 0.0f;
+      pf.past_cut[r] = total ? (float)cut_n[r] / total : 0.0f;
+    }
+    pf.shares_measured = true;
+  }
+  cr.above_knee = pf.above_knee;
+  for (int r = 0; r < 3; ++r) {
+    cr.past_knee[r] = pf.past_knee[r];
+    cr.past_cut[r] = pf.past_cut[r];
   }
   // A0, as the scene's search meters a bracket: the A at which the frame's log-average cell prints at L* 50 through
   // the print profile (bisection; L* falls as A rises).
@@ -3052,22 +3083,22 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       const negicc::PipelineConfig pc = make_pipeline_config(prof.data, AUTO_KNEE, 1.0f);
       return negicc::linear_srgb_to_lab(negicc::convert_pixel_display(pc, m, px)).L;
     };
-    double lo = cp.a_lo, hi = cp.a_hi;
+    double lo = in.a_lo, hi = in.a_hi;
     for (int it = 0; it < 60; ++it) {
       const double mid = 0.5 * (lo + hi);
       if (lstar(mid) > 50.0f) lo = mid; else hi = mid;
     }
     a0 = 0.5 * (lo + hi);
-    cr.a0_at_range_end = a0 - cp.a_lo < 1e-6 || cp.a_hi - a0 < 1e-6;
+    cr.a0_at_range_end = a0 - in.a_lo < 1e-6 || in.a_hi - a0 < 1e-6;
   }
   cr.a0 = a0;
   // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1, mu, sg;
   std::vector<double> boot = {a0};
-  if (cp.boot_h > 0.0) boot = {a0 - cp.boot_h, a0, a0 + cp.boot_h};
+  if (in.boot_h > 0.0) boot = {a0 - in.boot_h, a0, a0 + in.boot_h};
   for (size_t k = 0; k < boot.size(); ++k) {
-    set_curves_at(std::clamp(boot[k], cp.a_lo, cp.a_hi));
+    set_curves_at(std::clamp(boot[k], in.a_lo, in.a_hi));
     fr.render_preview(0, {E, 1.0f, 1.0f}, preview);
     // The render at A0 gives the correction the screening at A0 below aims with, as each bracket's bootstrap render
     // gives the scene's screening its correction.
@@ -3088,7 +3119,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     cr.wish_mean_l = (float)(s / n);
   }
   if (opts.verbose) {
-    std::cout << "Print (continuous): A0 " << a0 << " (range " << cp.a_lo << " to " << cp.a_hi
+    std::cout << "Print (continuous): A0 " << a0 << " (range " << in.a_lo << " to " << in.a_hi
               << "), above the knee at E = 1: " << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l
               << " from " << boot.size() << " render(s)"
               << (cr.a0_at_range_end ? " (A0 at an end of the range: bootstrap renders there share an A)" : "") << "\n";
@@ -3151,7 +3182,7 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     };
     // Bracket the minimum: from the current A, steps of kContinuousStep downhill, within the range. When both
     // neighbours are lower, each side is marched and the lower of the two brackets kept.
-    auto clampA = [&](double x) { return std::clamp(x, cp.a_lo, cp.a_hi); };
+    auto clampA = [&](double x) { return std::clamp(x, in.a_lo, in.a_hi); };
     struct Bracket { double lo, hi; float f; };
     auto march = [&](double x0, float f0, double dir) {
       double xm = x0, xo = clampA(x0 - dir * kContinuousStep);
@@ -3214,11 +3245,13 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
     stop_next = move <= TOL_PARAM;   // the moved parameters are rendered and scored once more
   }
   // --probe_intent: what the network predicts from the print at the result's g, b and A moved by each probe stop
-  // (stops of printing exposure, A + stop log10 2); written beside the search, which goes on to convert.
+  // (stops of printing exposure, A + stop log10 2); written beside the search, which goes on to convert. Each record's
+  // e is the search's E, in its units as the scene probe's: e_norm on TriLED (the base at n0), 1 on white light, where
+  // the search runs on M_frame itself (has_crosstalk false); the result's E is 1 on both.
   if (!opts.probe_path.empty()) {
     nlohmann::json recs = nlohmann::json::array();
     for (const float stop : opts.probe_stops) {
-      const double ap = std::clamp(best_a + stop * kStop, cp.a_lo, cp.a_hi);
+      const double ap = std::clamp(best_a + stop * kStop, in.a_lo, in.a_hi);
       const double applied_stop = (ap - best_a) / kStop;
       set_curves_at(ap);
       fr.render_preview(0, best, preview);
@@ -3228,7 +3261,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
                       {"g", best.g}, {"b", best.b}, {"wish", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
                       {"render", probe_mean3(lab)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}});
     }
-    const nlohmann::json doc = {{"search", "print"}, {"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"a", best_a},
+    const nlohmann::json doc = {{"search", "print"}, {"grid_w", st.grid_w}, {"grid_h", st.grid_h},
+                                {"e_norm", e_norm}, {"has_crosstalk", bundle.has_crosstalk}, {"a", best_a},
                                 {"records", recs}};
     if (!write_probe_file(opts.probe_path, doc, recs.size(), opts.verbose)) return false;
   }
@@ -3257,42 +3291,18 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
       for (int c = 0; c < 3; ++c) ha.ceil_lin[c] = ceil;
       ha.out = hc.data();
       if (opts.renderer) opts.renderer->highlight_clip(ha); else negicc::cpu_highlight_clip(ha);
-      for (int c = 0; c < 3; ++c) out3[c] = hc[c];
+      for (int c = 0; c < 3; ++c) out3[c] = hc[c] / 100.0f;   // highlight_clip's percent, as a share
     };
     if (opts.renderer) opts.renderer->bind_frame(frame);
-    share(1.002f, cr.above_white_pct);
-    share(0.999f, cr.at_white_pct);
+    share(1.002f, cr.above_white);
+    share(0.999f, cr.at_white);
   }
   int nearest = 0;
-  for (size_t i = 0; i < cp.a_mid.size(); ++i)
-    if (std::fabs(cp.a_mid[i] - best_a) < std::fabs(cp.a_mid[nearest] - best_a)) nearest = (int)i;
+  for (size_t i = 0; i < in.a_mid.size(); ++i)
+    if (std::fabs(in.a_mid[i] - best_a) < std::fabs(in.a_mid[nearest] - best_a)) nearest = (int)i;
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
   out.params = {white_light ? E : E / e_norm, best.g, best.b, best.shoulder};   // as search_conversion_params
-  {
-    // The shares past the knee and past the cut per channel at the final settings (every 4th pixel each way): the
-    // picture applies the gains in its curves, after the knee, so the knee sees the matrix at E alone.
-    float mf[9];
-    negicc::candidate_matrix(fr.input_matrix(), E, 1.0f, 1.0f, mf);
-    const float cut = AUTO_KNEE + (1.0f - AUTO_KNEE) * std::atanh((0.9999f - AUTO_KNEE) / (1.0f - AUTO_KNEE));
-    const InnerCrop& c = fr.inner_crop();
-    long knee_n[3] = {0, 0, 0}, cut_n[3] = {0, 0, 0}, total = 0;
-    uint16_t px[3];
-    for (int y = c.y0; y < c.y0 + c.h; y += 4)
-      for (int x = c.x0; x < c.x0 + c.w; x += 4) {
-        frame.sample(x, y, px);
-        for (int r = 0; r < 3; ++r) {
-          const float u = (mf[r * 3] * px[0] + mf[r * 3 + 1] * px[1] + mf[r * 3 + 2] * px[2]) / 65535.0f;
-          knee_n[r] += u > AUTO_KNEE;
-          cut_n[r] += u >= cut;
-        }
-        ++total;
-      }
-    for (int r = 0; r < 3; ++r) {
-      cr.past_knee[r] = total ? (float)knee_n[r] / total : 0.0f;
-      cr.past_cut[r] = total ? (float)cut_n[r] / total : 0.0f;
-    }
-  }
   out.residual = best_err;
   out.status = cr.converged ? FixedPointStatus::kConverged : FixedPointStatus::kMaxIters;
   out.intent_mu = best_mu;
@@ -3305,5 +3315,32 @@ bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfil
   cr.a = best_a;
   fr.write_timings();
   out.total_time = Clock::now() - t0;
+  return true;
+}
+
+bool search_print_continuous(const ProfileBundle& bundle, const std::vector<PrintMaterialSearch>& prints,
+                             DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, const ParamSearchOptions& opts) {
+  const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
+  const Clock::time_point t0 = Clock::now();
+  for (const PrintMaterialSearch& p : prints) {
+    if (bundle.targets.empty() || !p.print_base->data.has_profile || !p.in->trc_at || !(p.in->a_hi > p.in->a_lo)) {
+      std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
+      return false;
+    }
+  }
+  PrintFrame pf;
+  pf.pb = bundle;
+  pf.pb.targets.resize(1);
+  pf.crop = compute_inner_crop(frame.width, frame.height, opts.crop_ratio);
+  compute_frame_stats(frame, opts.crop_ratio, engine.max_size(), engine.patch_size(), pf.stats);
+  pf.scale = frame_scale(pf.pb, (float)scan_shutter_s, (float)scan_iso, opts);
+  for (size_t i = 0; i < prints.size(); ++i) {
+    // The first material's time includes what the others share.
+    if (!search_print_material(pf, bundle, *prints[i].print_base, *prints[i].in, engine, frame, opts,
+                               i == 0 ? t0 : Clock::now(), *prints[i].out, *prints[i].res)) {
+      return false;
+    }
+  }
   return true;
 }

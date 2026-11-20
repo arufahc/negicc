@@ -402,13 +402,15 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // kBasePercentile point of (X v)_c / fb_c) (DESIGN.md 5.8), v a pixel of the frame, X the bundle's crosstalk matrix
 // and fb the base (f in DESIGN.md) in the conversion's film base space (fb_c reads n0 at the print's E). The base the
 // print takes is fb β, its colour kept; on a base already raised β is 1. Every 4th pixel each way.
-float print_base_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double fb[3]);
+float print_floor_factor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio,
+                         const double fb[3]);
 // The base a print takes when the film base is not a capture: found (the scan's rebate or statistics), or null for none
 // found, when the bundle's base is taken, scaled once by the exposures (the scan's over its base capture's) as the
 // conversion takes it. Writes the base before the floor (base_in) and after it (base_out, base_in times β) at the
 // scan's exposure, in the conversion's film base space, and returns β.
-float print_floor_base(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio, const double* found,
-                       double scan_shutter_s, double scan_iso, double base_in[3], double base_out[3]);
+float raise_base_to_print_floor(const ProfileBundle& bundle, const negicc::RgbView& frame, float crop_ratio,
+                                const double* found, double scan_shutter_s, double scan_iso, double base_in[3],
+                                double base_out[3]);
 
 struct ContinuousPrint {
   // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
@@ -430,21 +432,29 @@ struct ContinuousPrintResult {
   // detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
   float wish_mean_l = 0.0f;          // the held wish's mean L*
-  float above_white_pct[3] = {0, 0, 0};   // the crop's share (%) with the channel above 1.002 (linear) at the result:
-                                          // cut
-  float at_white_pct[3] = {0, 0, 0};      // the crop's share (%) with the channel at 0.999 or more: the paper's white
-                                          // and above
+  float above_white[3] = {0, 0, 0};   // the share of the inner crop with the channel above 1.002 (linear) at the
+                                      // result: cut
+  float at_white[3] = {0, 0, 0};      // the share with the channel at 0.999 or more: the paper's white and above
   bool a0_at_range_end = false;      // A0's bisection ended at an end of the range
   float last_move[3] = {0, 0, 0};    // the last step's move: |dA| in stops, |dg|, |db|
   const char* stopped_by = "steps";   // "parameters" (the move within TOL_PARAM), "residual" (its change within
                                       // TOL_REL_ERR), "steps"
 };
-// print_base is a print profile of the bundle (its table and output curves; its input curves are rewritten at each A,
-// with g and b in them for every render and optimiser pass, the matrix at E alone, as the conversion renders it).
-bool search_print_continuous(const ProfileBundle& bundle, const ParsedFilmProfile& print_base,
-                             const ContinuousPrint& cp, DinoV3Engine& engine, const negicc::RgbView& frame,
-                             double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
-                             ParamSearchResult& out, ContinuousPrintResult& cr);
+// One print material's search: print_base is a print profile of the bundle (its table and output curves; its input
+// curves are rewritten at each A, with g and b in them for every render and optimiser pass, the matrix at E alone, as
+// the conversion renders it), in its continuum; the search writes out and res. Each outlives the search.
+struct PrintMaterialSearch {
+  const ParsedFilmProfile* print_base = nullptr;
+  const ContinuousPrint* in = nullptr;
+  ParamSearchResult* out = nullptr;
+  ContinuousPrintResult* res = nullptr;
+};
+// The print's search on one frame for each material in prints, in order (a picture print has one, a density output's
+// --print one per material). The materials share the bundle's copy, the frame's crop, statistics and scale, and its
+// shares at E; each has its own search.
+bool search_print_continuous(const ProfileBundle& bundle, const std::vector<PrintMaterialSearch>& prints,
+                             DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s,
+                             double scan_iso, const ParamSearchOptions& opts);
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,

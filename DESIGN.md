@@ -801,7 +801,7 @@ it has not been checked against a data sheet.
 A print's level is relative to the film base (5.6, step 1), so a base darker than the film's thinnest areas would
 push thin film past the knee and cut the shadows. On a scan with `--print` under either light, when the base is not
 a capture (the rebate, the thinnest film or the bundle's), it is held no darker than the picture's thinnest film
-(`multi_target_optimizer.cc`: `print_base_floor`): its level is multiplied by
+(`multi_target_optimizer.cc`: `print_floor_factor`): its level is multiplied by
 
 ```
 β = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
