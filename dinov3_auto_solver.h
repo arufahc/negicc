@@ -17,6 +17,7 @@
 #define DINOV3_AUTO_SOLVER_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,33 +43,23 @@ struct IntentLoss {
   float clip = 0.0f;  // in percent [0, 100]
 };
 
+// The input curves of a profile with the gains g and b in them, after the knee (the print, np_print.h PrintContinuum):
+// three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
+using GainCurves = std::function<void(float g, float b, std::vector<float> trc[3])>;
+
 struct SolverConfig {
   const ProfileData* prof = nullptr;
+  // When set, a candidate's g and b go into prof's input curves, after the knee, and its matrix carries E alone, as
+  // the print's conversion renders it; intent_cells and intent_loss (the search's optimiser) read it.
+  const GainCurves* gain_curves = nullptr;
   float knee = 0.95f;
-  bool verbose = true;  // the solver's diagnostic lines (shoulder), as the multi-target search's verbose
-  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off. With shoulder_auto the solver measures it
-  // from the pre-shoulder render at each iteration's incoming parameters and holds it constant within the iteration.
+  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off.
   float shoulder = 1.0f;
-  bool shoulder_auto = false;
-  bool has_custom_bounds = false;
-  float custom_e_bounds[3] = {0.0f, 0.0f, 0.0f};
-  float custom_e_center = 0.0f;
   float enc_e_min = 0.0f;
   float enc_e_max = 0.0f;
   // The values pinned parameters (pin_mask) take in optimize_target_for_intent when it is given no start; with a
   // start they stay at the start's.
   float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
-};
-
-struct ShoulderResult {
-  bool active = false;       // x_hi > 1 was applied
-  bool measured = false;     // x_hi came from the auto measurement
-  float x_hi = 1.0f;         // the frozen parameter
-  float q995 = 0.0f;         // the measured 99.5% point before clamping (auto only)
-  float knee = 1.0f;         // the linear knee x_k
-  bool guard = false;        // the intent loss with the shoulder is more than 2% worse than without
-  float loss_with = 0.0f;    // mean(L, a, b) intent loss of the final params with x_hi
-  float loss_without = 0.0f; // and with the shoulder off
 };
 
 struct DinoIterationLog {
@@ -97,13 +88,13 @@ struct DinoSolveResult {
   IntentGains solved_absolute;  // E_user * E_c * e_best, g_user * g_best, b_user * b_best
   float e_center = 1.0f;
   bool anchor_clamped = false;  // E_c bisection did not straddle median L* 50
+  // The default e_bounds, as ratios to e_center: 2^-1.5 and 2^1.5, 1.5 stops either way.
   float bounds_lo = 0.35355339f;
   float bounds_hi = 2.82842712f;
   std::vector<DinoIterationLog> iterations;
   std::vector<float> best_mu;
   std::vector<float> best_sigma;
   std::vector<float> tone_mass;
-  ShoulderResult shoulder;
   int grid_w = 0;
   int grid_h = 0;
   int target_w = 0;
@@ -125,6 +116,11 @@ void resample_grid_rgb16(const uint16_t (*src)[4], int src_w, int src_h,
 // renders it (displayed value, after the shoulder), n_px x 3 values into lab_out.
 void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
                   const IntentGains& cand, float* lab_out);
+
+// The pipeline configuration and the matrix (written to m) cfg renders candidate cand with: the gains in the matrix,
+// or, with cfg.gain_curves, in prof's input curves (trc holds the tables the configuration points into).
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand,
+                                        float m[9], std::vector<float> trc[3]);
 
 // Batched loss calculation across candidate matrices
 void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,

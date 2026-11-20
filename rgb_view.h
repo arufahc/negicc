@@ -1,8 +1,9 @@
 // Shared zero-copy CFA downsized view (RgbView) and CPU pipeline kernels used by neg_process and negicc-station.
 //
 // Five-step pipeline architecture:
-//   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for RGB/3xCFA/3xMono),
-//     per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory for 4x pixel shift).
+//   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for
+//     RGB/3xCFA/3xMono), per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory
+//     for 4x pixel shift).
 //   Step 2 (Downsizing): Zero-copy half-size RgbView over the CFA mosaic (r_ptr, g_ptr, g2_ptr, b_ptr, pitch, stride).
 //   Step 3 (Crop, rotate, flip & inline ROI search): detect_film_frame operates inline on the Step 2 view;
 //     crop_and_orient adjusts pointers, pitch, stride, and sensor flat-field coordinates with zero memory copy.
@@ -36,6 +37,8 @@ enum class InputFormat : int {
     TODO_3X_MONO = 5,
 };
 
+// The colour (0 R, 1 G, 2 B, 3 a second green where the pattern marks one) of photosite (r, c) of a Bayer mosaic
+// described by LibRaw's idata.filters: two bits per cell, as LibRaw's (and dcraw's) FC(row, col).
 inline int bayer_color_at(int r, int c, unsigned int filters) {
     return (filters >> (((((unsigned int)r << 1) & 14u) | ((unsigned int)c & 1u)) << 1)) & 3;
 }
@@ -71,8 +74,8 @@ struct RgbView {
                r_ptr != nullptr && g_ptr == r_ptr + 1 && b_ptr == r_ptr + 2;
     }
 
-    // Construct a zero-copy strided view over a black-subtracted CFA mosaic (Bayer 2x2 period=2 or X-Trans 6x6 period=6).
-    // For 4xCFA (SONY_PIXEL_SHIFT_4), pass the first CFA mosaic.
+    // Construct a zero-copy strided view over a black-subtracted CFA mosaic (Bayer 2x2 period=2 or X-Trans 6x6
+    // period=6). For 4xCFA (SONY_PIXEL_SHIFT_4), pass the first CFA mosaic.
     static RgbView from_cfa_half(const uint16_t* cfa, size_t cfa_pitch, int sensor_w, int sensor_h,
                                  unsigned int filters, const uint8_t xtrans_col36[36] = nullptr,
                                  FlatSampleArgs flat = {},
@@ -109,8 +112,8 @@ struct RgbView {
         }
     }
 
-    // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3.
-    // step=1 returns view cell coordinates (width x height); step>=2 returns sensor coordinates (cfa_step*width x cfa_step*height).
+    // Zero-copy conversion to FilmImage for inline detect_film_frame in Step 3. step=1 returns view cell coordinates
+    // (width x height); step>=2 returns sensor coordinates (cfa_step*width x cfa_step*height).
     FilmImage to_film_image(float white_level = 65535.0f, int step = 1) const;
 
     // Materialize into a contiguous width * height * 3 uint16_t buffer (only when explicitly requested).
@@ -164,7 +167,9 @@ void resample_linear_rgb16(
     uint16_t* dst, int dst_w, int dst_h
 );
 
-// Positive image statistics accumulated over an inner crop during render.
+// Positive image statistics accumulated over an inner crop during render: the RGB histogram of the picture written
+// (through cfg.tone when it has one, as convert_pixel), the clip shares and the Lab statistics of the display value
+// before the tone stage.
 struct PositiveStats {
     uint32_t hist_rgb[3][256] = {};
     uint32_t hist_L[kLabBins] = {};
@@ -300,6 +305,10 @@ struct PixelShiftMergeArgs {
     size_t cfa_pitch = 0;  // 0 defaults to src_w
 };
 
+// Called at the start of every cpu_render and cpu_highlight_clip when set (kind 0: render, 1: clip); null by default.
+// A check aid: neg_process --check_renderer counts with it the passes the bundle search runs outside its renderer
+// (multi_target_optimizer.h PassAudit).
+extern void (*cpu_pass_hook)(int kind);
 void cpu_render(const RenderArgs& a);
 void cpu_intent_loss(const IntentLossArgs& a);
 void cpu_highlight_clip(const HighlightClipArgs& a);

@@ -160,12 +160,18 @@ struct DensityMatrix {
 struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
+  // The bracket's own slopes, when the bundle keeps them. They are read only for a bundle without grey_balance_curves;
+  // a bundle with the curve, under either light, takes its slopes from the curve (np_print.h curve_slopes).
+  bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
-  // Every grey step of the bracket as the light's density above the film base, and which of them is the mid grey
-  // (grey_steps_light_density, grey_step_index). A white-light bundle has them: a frame's fitted input curves change
-  // which film renders as each step (np_print.h fitted_grey_scale). Empty in a narrow-band bundle.
-  std::vector<std::array<double, 3>> grey_steps;
-  int grey_step = -1;
+  // The bracket's slope relative to the grey balance curve
+  // (density_matrices.brackets.targets.<bracket>.grey_relative.b), fitted by the profile-building tools over its grey
+  // steps: each step's residual from the curve, r_c = G_green - G_c in the curve's APD, regressed as a_c + t_c
+  // (G_c - A_mid). The print takes the tilt t_c linear in its mid grey A between the two brackets whose A_mid enclose
+  // A, held beyond the end ones (np_print.h print_tilt_at); the offset a_c is not read. Zero without grey_relative: the
+  // curve alone.
+  bool has_tilt = false;
+  double tilt[3] = {0.0, 0.0, 0.0};
 };
 
 // The film stock's spectra (the bundle's film_model), on 380-780 nm at 1 nm: the spectral density of a unit amount
@@ -177,6 +183,27 @@ struct FilmModel {
   std::vector<double> dye[3], base;           // spectral densities, 401 samples
   std::vector<double> log_exposure;           // ascending
   std::vector<double> neutral[3];             // dye amounts along log_exposure
+};
+
+// The film's grey balance curve (density_matrices.grey_balance_curves, under either light): for each light channel c,
+// apd[c][i] is the APD (Academy Printing Density) of the film's grey that has light density start + step i in
+// channel c, rising. From the chart's grey steps of every bracket, computed by the profiling tool.
+struct GreyBalanceCurves {
+  bool present = false;
+  double start = 0.0, step = 0.01;
+  std::vector<double> apd[3];
+};
+
+// One of a bundle's print ICCs (print_profiles): the film printed on a print material, for --print <id>. The ICC's
+// own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h). The ICC itself
+// is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without --print
+// does not keep, and a missing one refuses only the print that needs it. The two SHA-256 (hex; empty when not recorded)
+// are of the spektrafilm profile the ICC was computed from and of the ICC itself; an exported bundle (its ICC a file
+// beside bundle.json) records the ICC's, a station bundle (the ICC inline) does not.
+struct BundlePrint {
+  std::string id, name, reference_bracket, spektrafilm_sha256, icc_sha256;
+  bool icc_in_file = false;
+  std::function<bool(std::vector<uint8_t>& icc, std::string& err)> read_icc;
 };
 
 struct ProfileBundle {
@@ -203,6 +230,8 @@ struct ProfileBundle {
   // the output's metadata. A bundle from before the fields has none.
   DensityMatrix density_matrix[kDensityMeasures];
   std::vector<DensityBracket> density_brackets;   // empty when the bundle has none
+  GreyBalanceCurves grey_balance;                 // not present in a bundle from before it
+  std::vector<BundlePrint> prints;                // the bundle's print ICCs, by print material id
   FilmModel film_model;                           // not present in a bundle from before the field
   std::string light_source_json;      // the "light_source" object, compact; empty when the bundle has none
   std::string density_fit_json;       // "density_matrices" without the matrices (the dye spectra and the fit's record)
@@ -235,9 +264,6 @@ bool is_json_bundle(const std::string& resolved_path);
 
 // Parse AToB0 pipeline tags from an open cmsHPROFILE into ParsedFilmProfile
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof);
-
-// Configure solver bounds and anchor for a specific target bracket
-void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt);
 
 // Reads a file a split bundle names (a target's "icc_profile") into out; false when it cannot.
 using BundleFileReader = std::function<bool(const std::string& name, std::vector<uint8_t>& out)>;

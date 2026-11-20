@@ -10,7 +10,7 @@
 //      convert_pixel_corrected: the corrected RGB in [0, 1]
 //   -> film profile: input TRCs -> matrix + offset, clamp -> tetrahedral cLUT -> output TRCs -> PCS scale
 //      convert_pixel_pcs: ICC PCS XYZ (D50)
-//   -> Bradford D50->D65 -> XYZ->linear sRGB, clamped at 0 only
+//   -> linear sRGB (the inverse of the embedded profile's colorants), clamped at 0 only
 //      convert_pixel_linear: the pre-shoulder value (the clip statistics and the x_hi histogram read it)
 //   -> highlight shoulder (identity when cfg.shoulder_x_hi <= kShoulderOff) -> clamp to [0, 1]
 //      convert_pixel_display: the display value (render and Lab read it)
@@ -107,7 +107,8 @@ constexpr float kShoulderExponent = 2.0f;
 constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 
-// ICC PCS encoding scale applied after the output TRCs (1 + 32767/32768).
+// ICC PCS encoding scale applied after the output TRCs: 1 + 32767/32768, the PCS XYZ value of code FFFFh, the largest
+// u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ.
 constexpr float kPcsScale = 1.99996948f;
 
 NEGICC_HD float clamp01(float v) {
@@ -194,12 +195,12 @@ NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int
     // Four vertices and weights of the tetrahedron containing (dr, dg, db).
     const float *a, *p, *q;
     float w0, w1, w2, w3;
-    if (dr >= dg && dg >= db)      { a = v100; p = v110; q = v111; w0 = 1.0f - dr; w1 = dr - dg; w2 = dg - db; w3 = db; }
-    else if (dr >= db && db > dg)  { a = v100; p = v101; q = v111; w0 = 1.0f - dr; w1 = dr - db; w2 = db - dg; w3 = dg; }
-    else if (db > dr && dr >= dg)  { a = v001; p = v101; q = v111; w0 = 1.0f - db; w1 = db - dr; w2 = dr - dg; w3 = dg; }
-    else if (dg > dr && dr >= db)  { a = v010; p = v110; q = v111; w0 = 1.0f - dg; w1 = dg - dr; w2 = dr - db; w3 = db; }
-    else if (dg >= db && db > dr)  { a = v010; p = v011; q = v111; w0 = 1.0f - dg; w1 = dg - db; w2 = db - dr; w3 = dr; }
-    else                           { a = v001; p = v011; q = v111; w0 = 1.0f - db; w1 = db - dg; w2 = dg - dr; w3 = dr; }
+    if (dr >= dg && dg >= db)     { a = v100; p = v110; q = v111; w0 = 1.0f - dr; w1 = dr - dg; w2 = dg - db; w3 = db; }
+    else if (dr >= db && db > dg) { a = v100; p = v101; q = v111; w0 = 1.0f - dr; w1 = dr - db; w2 = db - dg; w3 = dg; }
+    else if (db > dr && dr >= dg) { a = v001; p = v101; q = v111; w0 = 1.0f - db; w1 = db - dr; w2 = dr - dg; w3 = dg; }
+    else if (dg > dr && dr >= db) { a = v010; p = v110; q = v111; w0 = 1.0f - dg; w1 = dg - dr; w2 = dr - db; w3 = db; }
+    else if (dg >= db && db > dr) { a = v010; p = v011; q = v111; w0 = 1.0f - dg; w1 = dg - db; w2 = db - dr; w3 = dr; }
+    else                          { a = v001; p = v011; q = v111; w0 = 1.0f - db; w1 = db - dg; w2 = dg - dr; w3 = dr; }
     return { v000[0] * w0 + a[0] * w1 + p[0] * w2 + q[0] * w3,
              v000[1] * w0 + a[1] * w1 + p[1] * w2 + q[1] * w3,
              v000[2] * w0 + a[2] * w1 + p[2] * w2 + q[2] * w3 };
@@ -229,14 +230,23 @@ NEGICC_HD Rgb apply_profile(const ProfileData& p, Rgb v) {
 }
 
 // ---- Stage: PCS (XYZ D50) -> linear sRGB -------------------------------------------------------------------
-// Bradford D50 -> D65, then XYZ -> linear sRGB, unclamped. The constants are inline so device code can use them.
+// The PCS white: the ICC's D50 as an ICC profile stores it, in s15.16, (63190, 65536, 54061) / 65536: the PCS
+// illuminant (ICC.1:2022 7.2.16, which gives it to four decimals) as an s15Fixed16Number (4.6). The colorants of
+// the profile the sRGB outputs embed sum to exactly this, so it is the white the outputs write at full scale (a print's
+// paper is scaled to it). The decimal (0.9642, 1, 0.8249) differs from it in the sixth decimal.
+constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
+// PCS -> linear sRGB: the inverse of the colorants (rXYZ, gXYZ, bXYZ, D50-adapted) of the profile neg_process embeds in
+// its sRGB outputs, Elle Stone's sRGB V2 (3rd_party/elle_icc_profiles; the sRGB-TRC and the gamma 1.0 profiles carry
+// the same colorants). So the codes written mean, through the embedded profile, the PCS they were computed from, and
+// kPcsWhite maps to (1, 1, 1): a colour-managed reader gets the PCS back within quantisation from srgb-g10, and from
+// srgb within that and the difference between the profile's 4096-entry TRC table and the analytic sRGB curve the codes
+// are encoded with. It replaces Bradford D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it
+// in the fourth decimal. The print CLF keeps the standard sRGB (np_print.cc print_clf_nodes), as it carries no profile.
+// Unclamped; inline so device code can use it.
 NEGICC_HD Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
-    const float xr = v.r * 0.9555766f + v.g * -0.0230393f + v.b * 0.0631636f;
-    const float xg = v.r * -0.0282895f + v.g * 1.0099416f + v.b * 0.0210077f;
-    const float xb = v.r * 0.0122982f + v.g * -0.0204830f + v.b * 1.3299098f;
-    return { xr * 3.2406255f + xg * -1.5372080f + xb * -0.4986286f,
-             xr * -0.9689307f + xg * 1.8757561f + xb * 0.0415175f,
-             xr * 0.0557101f + xg * -0.2040211f + xb * 1.0569959f };
+    return { v.r * 3.13427485f + v.g * -1.61727573f + v.b * -0.490724277f,
+             v.r * -0.978795611f + v.g * 1.91616171f + v.b * 0.0334533327f,
+             v.r * 0.0719770074f + v.g * -0.228984979f + v.b * 1.40571822f };
 }
 
 // Linear sRGB clamped to [0, 1].
@@ -253,6 +263,7 @@ NEGICC_HD Rgb pcs_to_linear_srgb_pre_shoulder(Rgb v) {
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
+// The sRGB transfer curve of IEC 61966-2-1 (0.41666667 is 1 / 2.4); srgb_decode is its inverse.
 NEGICC_HD float srgb_encode(float l) {
     return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
 }
@@ -311,10 +322,17 @@ NEGICC_HD Rgb convert_pixel_display(const PipelineConfig& cfg, const float* matr
     return to_display(cfg, convert_pixel_linear(cfg, matrix, px));
 }
 
+// CIELAB's break and slope as CIE 15 gives them exactly: f(t) = t^(1/3) above kLabEpsilon = (6/29)^3, else
+// (kLabKappa t + 16) / 116, with kLabKappa = (29/3)^3; L* = kLabKappa Y below the break. The two branches meet there.
+constexpr double kLabEpsilon = 216.0 / 24389.0;
+constexpr double kLabKappa = 24389.0 / 27.0;
+
 // ---- Stage: tone (sRGB export only) ------------------------------------------------------------------
-// The derivative of CIE Lab's f (the cube root above the linear segment).
+// The derivative of CIE Lab's f (the cube root above the linear segment). The constants are CIE 1976 L*a*b*'s exact
+// ones (CIE 15; ICC.1:2022 Annex A, equations A.7 to A.12): the break (6/29)^3 = 216/24389 and the linear segment's
+// slope 841/108 = 24389 / 27 / 116.
 NEGICC_HD float tone_lab_fprime(float t) {
-    return t > 216.0f / 24389.0f ? (1.0f / 3.0f) / cbrtf(t * t) : 24389.0f / 27.0f / 116.0f;
+    return t > (float)kLabEpsilon ? (1.0f / 3.0f) / cbrtf(t * t) : (float)kLabKappa / 116.0f;
 }
 
 // Y' = f(Y) from the table (tt.n >= 1). Y is clamped to [0, 1] for the lookup (a NaN reads as 0), so the index is in
@@ -332,8 +350,10 @@ NEGICC_HD float tone_table_Y(const ToneTable& tt, float Y) {
 // The tone curve on one display linear sRGB pixel v: its luminance Y moves to Y' on the white point's neutral, and its
 // colour difference from that neutral, v - Y (white 1, 1, 1), is added back scaled by f'(Y) / f'(Y') (at most 8), which
 // holds its a* and b* to first order: out = Y' + (v - Y) f'(Y) / f'(Y'). No Lab conversion of the pixel.
+// Y is the luminance of the displayed linear sRGB against its own white, independent of the PCS conversion: the Y row
+// of OpenCV's cvtColor RGB -> XYZ matrix, the row linear_srgb_to_lab and the tone stage's descriptors read.
 NEGICC_HD Rgb apply_tone(const ToneTable& tt, Rgb v) {
-    const float y0 = 0.2126729f * v.r + 0.7151522f * v.g + 0.0721750f * v.b;
+    const float y0 = 0.212671f * v.r + 0.715160f * v.g + 0.072169f * v.b;   // as tone_stage.cc's planner reads Y
     const float y1 = tone_table_Y(tt, y0);
     const float sc = fminf(tone_lab_fprime(fmaxf(y0, 0.0f)) / tone_lab_fprime(fmaxf(y1, 1e-9f)), 8.0f);
     return { y1 + sc * (v.r - y0), y1 + sc * (v.g - y0), y1 + sc * (v.b - y0) };
@@ -353,29 +373,38 @@ NEGICC_HD uint8_t quantize_u8(float v) { return (uint8_t)roundf(v * 255.0f); }
 NEGICC_HD uint16_t quantize_u16(float v) { return (uint16_t)roundf(v * 65535.0f); }
 
 // ---- Scoring: sRGB -> CIELAB (D65) -------------------------------------------------------------------------
+// The matrix and the white (0.950456, 1, 1.088754: the matrix's row sums) are those of OpenCV's cvtColor RGB -> Lab
+// (its imgproc colour conversions documentation). The break and slope are CIE 15's exact kLabEpsilon and kLabKappa,
+// where OpenCV rounds them to 0.008856, 7.787 (kLabKappa / 116) and 903.3.
 struct Lab {
     float L, a, b;
 };
 
 NEGICC_HD float lab_f(float t) {
-    return (t > 0.008856f) ? cbrtf(t) : (7.787f * t + 16.0f / 116.0f);
+    return (t > (float)kLabEpsilon) ? cbrtf(t) : (((float)kLabKappa * t + 16.0f) / 116.0f);
 }
 
 // Direct linear sRGB D65 -> CIELAB D65 (skips 6x powf of srgb_encode + srgb_decode).
+// Independent of the PCS conversion above: it reads a picture's linear sRGB and gives L*a*b* relative to sRGB's own
+// white (the textbook sRGB -> XYZ D65, divided by D65's X and Z, so (1, 1, 1) is L* 100, a* b* 0). It is the colour of
+// what is displayed, the space the intent adapters' training targets were made in by the profile-building tools, and is
+// kept as it is: making it the inverse of the PCS conversion would move every trained cell. Its break and slope are
+// CIE 15's exact ones where the targets' conversion rounds them (0.008856, 903.3): the two differ only below the break,
+// by at most 3.3e-5 in L* and 1.6e-4 in a* or b*, far below the 8-bit step the targets were made from.
 NEGICC_HD Lab linear_srgb_to_lab(Rgb lin) {
     const float r = lin.r, g = lin.g, b = lin.b;
     const float X = (0.412453f * r + 0.357580f * g + 0.180423f * b) / 0.950456f;
     const float Y = 0.212671f * r + 0.715160f * g + 0.072169f * b;
     const float Z = (0.019334f * r + 0.119193f * g + 0.950227f * b) / 1.088754f;
     const float fx = lab_f(X), fy = lab_f(Y), fz = lab_f(Z);
-    const float L = (Y > 0.008856f) ? (116.0f * fy - 16.0f) : (903.3f * Y);
+    const float L = (Y > (float)kLabEpsilon) ? (116.0f * fy - 16.0f) : ((float)kLabKappa * Y);
     return { L, 500.0f * (fx - fy), 200.0f * (fy - fz) };
 }
 
 // Direct linear sRGB D65 -> CIE L* (1 cbrtf, 0 powf).
 NEGICC_HD float linear_srgb_to_L(Rgb lin) {
     const float Y = 0.212671f * lin.r + 0.715160f * lin.g + 0.072169f * lin.b;
-    return (Y > 0.008856f) ? (116.0f * cbrtf(Y) - 16.0f) : (903.3f * Y);
+    return (Y > (float)kLabEpsilon) ? (116.0f * cbrtf(Y) - 16.0f) : ((float)kLabKappa * Y);
 }
 
 NEGICC_HD Lab srgb_to_lab(Rgb c) {
@@ -392,7 +421,7 @@ NEGICC_HD bool channel_black_clipped(float v) { return v * 65535.0f < 200.5f; }
 NEGICC_HD bool linear_channel_white_clipped(float l) { return l >= 0.9953029f; }
 NEGICC_HD bool linear_channel_black_clipped(float l) { return l < 0.00023679829f; }
 
-// L* histograms: kLabBins bins over [0, 100].
+// L* histograms: kLabBins bins over [0, 100], each 0.1 L* wide.
 constexpr int kLabBins = 1000;
 NEGICC_HD int lab_bin(float L) {
     int k = (int)(L * (kLabBins / 100.0f));
@@ -420,7 +449,8 @@ NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
 }
 
 // The DINOv3 input size of a w x h image: its longer side scaled to max_size, both sides rounded to whole
-// patch_size patches (grid_w x grid_h of them).
+// patch_size patches (grid_w x grid_h of them). The defaults are the backbone's image_size and patch_size
+// (models/dinov3-small/backbone.json).
 struct AspectPreservedShape {
     int target_w = 16, target_h = 16;
     int grid_w = 1, grid_h = 1;
@@ -440,7 +470,8 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     return {gw * p, gh * p, gw, gh};
 }
 
-// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi).
+// Histogram of the pre-shoulder max(R, G, B) over [0, kMaxHistRange] (the source of the shoulder's x_hi): bins 1/2048
+// wide, over a range above the pre-shoulder values (up to about 1.33 on the grey axis).
 constexpr int kMaxHistBins = 4096;
 constexpr float kMaxHistRange = 2.0f;
 NEGICC_HD int max_hist_bin(float v) {
@@ -472,6 +503,7 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
     const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
     const double ln2 = std::log(2.0);
+    // srgb_encode and srgb_decode (IEC 61966-2-1) in double precision.
     auto enc = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
     auto dec = [](double s) { return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4); };
     auto slope = [&](double t) { return (1.055 / 2.4) * std::pow(std::exp2(t), 1.0 / 2.4) * ln2; };
@@ -513,7 +545,7 @@ inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
         set_shoulder(c, x_hi, n);
         return srgb_encode(apply_shoulder_channel(c, q));
     };
-    float lo = 1.0002f, hi = kShoulderXHiLimit;
+    float lo = 1.0002f, hi = kShoulderXHiLimit;   // lo: just above kShoulderOff, so set_shoulder turns the shoulder on
     if (code_at_q(hi) > anchor) return hi;
     if (!(code_at_q(lo) > anchor)) return lo;
     for (int i = 0; i < 60; ++i) {

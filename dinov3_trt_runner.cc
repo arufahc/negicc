@@ -113,7 +113,8 @@ public:
         const size_t pv_bytes = (size_t)3 * height * width * sizeof(float);
         const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:202-206 @ 2f7ee4a (input shapes must be set before output shapes)
+        // py-ref: negicc_station/src/tensorrt_intent_model.py:202-206 @ 2f7ee4a (input shapes must be set before output
+        // shapes)
         if (!context_->setInputShape("pixel_values", nvinfer1::Dims4{1, 3, height, width}))
             throw std::runtime_error("TensorRT engine rejects input shape (profile range)");
         context_->setTensorAddress("pixel_values", pv_.reserve(pv_bytes));
@@ -138,17 +139,21 @@ public:
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:252-266 @ 2f7ee4a (D2H output copy on stream)
         if (outputs.tokens && has_tokens_) {
-            check_cuda(cudaMemcpyAsync(outputs.tokens, tok_.ptr, tok_bytes, cudaMemcpyDeviceToHost, stream_), "D2H tokens");
+            check_cuda(cudaMemcpyAsync(outputs.tokens, tok_.ptr, tok_bytes, cudaMemcpyDeviceToHost, stream_),
+                       "D2H tokens");
             ++token_downloads_;
         }
         if (outputs.mu && !has_tokens_)
             check_cuda(cudaMemcpyAsync(outputs.mu, mu_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H mu");
         if (outputs.sigma && !has_tokens_)
-            check_cuda(cudaMemcpyAsync(outputs.sigma, sigma_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H sigma");
+            check_cuda(cudaMemcpyAsync(outputs.sigma, sigma_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_),
+                       "D2H sigma");
         if (outputs.pooled && has_pooled_)
-            check_cuda(cudaMemcpyAsync(outputs.pooled, pooled_.ptr, 1152 * sizeof(float), cudaMemcpyDeviceToHost, stream_), "D2H pooled");
+            check_cuda(cudaMemcpyAsync(outputs.pooled, pooled_.ptr, 1152 * sizeof(float), cudaMemcpyDeviceToHost,
+                                       stream_), "D2H pooled");
         if (outputs.pooled_tone && has_pooled_tone_)
-            check_cuda(cudaMemcpyAsync(outputs.pooled_tone, pooled_tone_.ptr, 3 * 768 * sizeof(float), cudaMemcpyDeviceToHost, stream_), "D2H pooled_tone");
+            check_cuda(cudaMemcpyAsync(outputs.pooled_tone, pooled_tone_.ptr, 3 * 768 * sizeof(float),
+                                       cudaMemcpyDeviceToHost, stream_), "D2H pooled_tone");
 
         // py-ref: negicc_station/src/tensorrt_intent_model.py:246 @ 2f7ee4a (sync stream before host access)
         check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");

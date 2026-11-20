@@ -132,6 +132,7 @@ bool is_json_bundle(const std::string& raw_path) {
   if (n == 0) return false;
 
   size_t i = 0;
+  // A UTF-8 byte order mark (EF BB BF, RFC 3629 section 6) is skipped.
   if (n >= 3 && (uint8_t)buf[0] == 0xEF && (uint8_t)buf[1] == 0xBB && (uint8_t)buf[2] == 0xBF) {
     i = 3;
   }
@@ -144,6 +145,8 @@ bool is_json_bundle(const std::string& raw_path) {
 static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& out) {
   out.clear();
   out.reserve(in.size() * 3 / 4);
+  // The standard base64 alphabet (RFC 4648 section 4, Table 1): A-Z 0-25, a-z 26-51, 0-9 52-61, '+' 62, '/' 63;
+  // '=' (padding) is -2, everything else -1 and skipped.
   static const int8_t T[256] = {
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -257,6 +260,11 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
              : ((uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) | uint32_t(b[3]));
     return true;
   };
+  // A Fujifilm RAF starts with "FUJIFILMCCD-RAW " and has the big-endian offset and length of its embedded JPEG at byte
+  // 84, as LibRaw reads it (identify.cpp); the JPEG's markers (SOI FFD8, APP1 FFE1, SOS FFDA, EOI FFD9) are ITU-T T.81
+  // Table B.1's, and its APP1 holds the Exif TIFF. Any other file is itself the TIFF. The TIFF starts with "II" or "MM"
+  // and 42 (TIFF 6.0, section 2); the Exif tags (CIPA DC-008) are 0x8769 (Exif IFD pointer), 0x829A (ExposureTime, a
+  // RATIONAL) and 0x8827 (PhotographicSensitivity, formerly ISOSpeedRatings, as a SHORT, type 3, or LONG, type 4).
   long tiff_base = 0;
   uint8_t hdr[16];
   if (fread(hdr, 1, 16, fp) == 16 && std::memcmp(hdr, "FUJIFILMCCD-RAW ", 16) == 0) {
@@ -436,7 +444,8 @@ void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, st
 }
 
 static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
-                                 const BundleFileReader& read_file, ProfileBundle& bundle);
+                                 const BundleFileReader& read_file, ProfileBundle& bundle,
+                                 const std::string& json_file = "");
 
 // nlohmann's errors do not name the file, so they are rethrown with it.
 static nlohmann::json parse_bundle_json(const char* begin, const char* end, const std::string& name) {
@@ -478,15 +487,20 @@ void load_profile_bundle(const std::string& raw_path, ProfileBundle& bundle) {
 
   // ICC profiles of a split bundle (profiles/<Key>/bundle.json) sit next to it.
   const fs::path dir = opened.parent_path();
-  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+  // Copied into the bundle's print ICC readers (BundlePrint::read_icc), which outlive this call.
+  const BundleFileReader read_file = [dir](const std::string& name, std::vector<uint8_t>& out) {
     return read_file_bytes(dir / name, out);
   };
   const char* begin = reinterpret_cast<const char*>(json_bytes.data());
-  parse_profile_bundle(parse_bundle_json(begin, begin + json_bytes.size(), raw_path), raw_path, read_file, bundle);
+  parse_profile_bundle(parse_bundle_json(begin, begin + json_bytes.size(), raw_path), raw_path, read_file, bundle,
+                       opened.string());
 }
 
+// json_file: the file the bundle was read from (empty for one read from memory), which a station bundle's print ICCs
+// are read from again when a print asks for one.
 static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw_path,
-                                 const BundleFileReader& read_file, ProfileBundle& bundle) {
+                                 const BundleFileReader& read_file, ProfileBundle& bundle,
+                                 const std::string& json_file) {
   bundle.path = raw_path;
   if (j.contains("export") && j["export"].is_object()) {
     bundle.key = j["export"].value("bundle_key", "");
@@ -524,7 +538,8 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     double light_to_film[9];
     const bool has_light = dm.contains("light_to_film") && dm["light_to_film"].is_object() &&
                            dm["light_to_film"].contains("matrix") &&
-                           parse_3x3_matrix(dm["light_to_film"]["matrix"], unused, light_to_film) && finite(light_to_film);
+                           parse_3x3_matrix(dm["light_to_film"]["matrix"], unused, light_to_film) &&
+                           finite(light_to_film);
     for (int m = 0; m < kDensityMeasures; ++m) {
       const char* key = density_measure_key((DensityMeasure)m);
       if (!dm.contains(key)) continue;
@@ -583,28 +598,116 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (auto it = targets.begin(); it != targets.end(); ++it) {
         DensityBracket bracket;
         bracket.name = it.key();
-        if (it.value().is_object() && it.value().contains("grey_light_density") && it.value().contains("slopes") &&
-            three(it.value()["grey_light_density"], bracket.grey_light) && three(it.value()["slopes"], bracket.slopes) &&
-            bracket.slopes[0] > 0.0 && bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0) {
-          // The bracket's grey steps, when the bundle keeps them: all or none.
-          const nlohmann::json& node = it.value();
-          if (node.contains("grey_steps_light_density") && node["grey_steps_light_density"].is_array() &&
-              node.contains("grey_step_index") && node["grey_step_index"].is_number_integer()) {
-            bool ok = true;
-            for (const nlohmann::json& row : node["grey_steps_light_density"]) {
-              double v[3];
-              ok = ok && three(row, v);
-              if (ok) bracket.grey_steps.push_back({v[0], v[1], v[2]});
-            }
-            bracket.grey_step = node["grey_step_index"].get<int>();
-            if (!ok || bracket.grey_step < 0 || bracket.grey_step >= (int)bracket.grey_steps.size()) {
-              bracket.grey_steps.clear();
-              bracket.grey_step = -1;
-            }
-          }
+        // The slopes are optional: only a bundle without the grey balance curve reads them (frame_print).
+        bracket.has_slopes = it.value().is_object() && it.value().contains("slopes") &&
+                             three(it.value()["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
+                             bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;
+        if (!bracket.has_slopes) bracket.slopes[0] = bracket.slopes[1] = bracket.slopes[2] = 1.0;
+        if (it.value().is_object() && it.value().contains("grey_relative") && it.value()["grey_relative"].is_object() &&
+            it.value()["grey_relative"].contains("b")) {
+          bracket.has_tilt = three(it.value()["grey_relative"]["b"], bracket.tilt);
+          if (!bracket.has_tilt) bracket.tilt[0] = bracket.tilt[1] = bracket.tilt[2] = 0.0;
+        }
+        if (it.value().is_object() && it.value().contains("grey_light_density") &&
+            three(it.value()["grey_light_density"], bracket.grey_light)) {
           bundle.density_brackets.push_back(bracket);
         }
       }
+    }
+  }
+
+  // The film's grey balance curve: three rising columns on one light-density grid. A block that is not whole is left
+  // out, with a warning (a print then says the bundle has no grey balance curve).
+  if (j.contains("density_matrices") && j["density_matrices"].is_object() &&
+      j["density_matrices"].contains("grey_balance_curves") &&
+      j["density_matrices"]["grey_balance_curves"].is_object()) {
+    const nlohmann::json& g = j["density_matrices"]["grey_balance_curves"];
+    GreyBalanceCurves& gb = bundle.grey_balance;
+    bool ok = g.contains("light_density_start") && g["light_density_start"].is_number() &&
+              g.contains("light_density_step") && g["light_density_step"].is_number() && g.contains("apd") &&
+              g["apd"].is_array() && g["apd"].size() == 3;
+    if (ok) {
+      gb.start = g["light_density_start"].get<double>();
+      gb.step = g["light_density_step"].get<double>();
+      ok = gb.step > 0.0;
+    }
+    for (int c = 0; ok && c < 3; ++c) {
+      for (const auto& v : g["apd"][c]) {
+        ok = ok && v.is_number() && std::isfinite(v.get<double>()) &&
+             (gb.apd[c].empty() || v.get<double>() > gb.apd[c].back());
+        if (ok) gb.apd[c].push_back(v.get<double>());
+      }
+      ok = ok && gb.apd[c].size() >= 2 && gb.apd[c].size() == gb.apd[0].size();
+    }
+    gb.present = ok;
+    if (!ok) {
+      gb = GreyBalanceCurves{};
+      log_warn("Profile bundle %s: density_matrices.grey_balance_curves is not whole (a start, a positive step and "
+               "three rising columns of one length): left out\n", raw_path.c_str());
+    }
+  }
+
+  // The bundle's print ICCs, by print material: where each is, read when a print asks for it (BundlePrint).
+  if (j.contains("print_profiles") && j["print_profiles"].is_object()) {
+    auto text = [](const nlohmann::json& e, const char* key, const std::string& fallback) {
+      return e.contains(key) && e[key].is_string() ? e[key].get<std::string>() : fallback;
+    };
+    for (auto it = j["print_profiles"].begin(); it != j["print_profiles"].end(); ++it) {
+      const nlohmann::json& e = it.value();
+      if (!e.is_object()) continue;
+      BundlePrint p;
+      p.id = it.key();
+      p.name = text(e, "name", p.id);
+      p.reference_bracket = text(e, "reference_bracket", "");
+      p.spektrafilm_sha256 = text(e, "spektrafilm_sha256", "");
+      p.icc_sha256 = text(e, "icc_profile_sha256", "");
+      const std::string where = "profile bundle " + raw_path;
+      // An ICC profile is at least its 128-byte header and 4-byte tag count (ICC.1:2022 7.2 and 7.3.2): 132 bytes.
+      if (e.contains("icc_profile") && e["icc_profile"].is_string()) {
+        // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
+        const std::string file = e["icc_profile"].get<std::string>();
+        p.icc_in_file = true;
+        p.read_icc = [read_file, file, where](std::vector<uint8_t>& icc, std::string& err) {
+          if (read_file && read_file(file, icc) && icc.size() >= 132) return true;
+          return err = where + ": cannot read print ICC " + file, false;
+        };
+      } else if (e.contains("icc_profile_base64") && e["icc_profile_base64"].is_string()) {
+        // A station bundle: the base64 in its JSON. Read from the file again when asked (the JSON is not kept); a
+        // bundle read from memory has no file, so its ICC is decoded now and held.
+        const std::string id = p.id;
+        auto decode = [id, where](const nlohmann::json& entry, std::vector<uint8_t>& icc, std::string& err) {
+          if (entry.is_object() && entry.contains("icc_profile_base64") && entry["icc_profile_base64"].is_string() &&
+              base64_decode(entry["icc_profile_base64"].get<std::string>(), icc) && icc.size() >= 132) {
+            return true;
+          }
+          return err = where + ": the print ICC of " + id + " cannot be decoded", false;
+        };
+        if (!json_file.empty()) {
+          p.read_icc = [json_file, id, where, decode](std::vector<uint8_t>& icc, std::string& err) {
+            std::vector<uint8_t> bytes;
+            if (!read_file_bytes(json_file, bytes)) return err = where + ": cannot be read again", false;
+            const nlohmann::json again = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
+            if (again.is_discarded() || !again.contains("print_profiles") || !again["print_profiles"].is_object() ||
+                !again["print_profiles"].contains(id)) {
+              return err = where + ": the print ICC of " + id + " is no longer in it", false;
+            }
+            return decode(again["print_profiles"][id], icc, err);
+          };
+        } else {
+          // One that does not decode refuses its print when asked, as a missing file does, not the whole bundle.
+          std::vector<uint8_t> bytes;
+          std::string err;
+          const bool ok = decode(e, bytes, err);
+          auto held = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
+          p.read_icc = [held, ok, err](std::vector<uint8_t>& icc, std::string& why) {
+            if (!ok) return why = err, false;
+            return icc = *held, true;
+          };
+        }
+      } else {
+        continue;
+      }
+      bundle.prints.push_back(std::move(p));
     }
   }
 
@@ -630,6 +733,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
               numbers(fm["log_exposure"], film.log_exposure) && film.log_exposure.size() >= 2 &&
               fm.contains("wavelength_nm") && fm["wavelength_nm"].is_object() &&
               fm["wavelength_nm"].value("start", 0.0) == 380.0 && fm["wavelength_nm"].value("step", 0.0) == 1.0;
+    // 401 samples from 380 nm in 1 nm steps: the grid of np_print.cc's CIE tables (kCieSamples, kCieFirstNm).
     for (int c = 0; ok && c < 3; ++c) {
       ok = numbers(fm["dye_density"][c], film.dye[c]) && film.dye[c].size() == film.base.size() &&
            numbers(fm["neutral_dye_amounts"][c], film.neutral[c]) &&
@@ -904,7 +1008,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4]
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
@@ -969,7 +1073,7 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
       continue;
     }
     // The reference exposure over the bracket's, on every bundle, as the search's bracket_enclosure: TriLED took 1,
-    // which put its e_center (and the E given values and the single-bracket search used) off by that ratio.
+    // which put its e_center (and the E given values used) off by that ratio.
     const float k_t = tgt.exposure_s > 0.0f ? (0.125f / tgt.exposure_s) : 1.0f;
     tgt.e_min = (tgt.tgt_min_g / g_lo) * k_t;
     tgt.e_max = (tgt.tgt_max_g / g_hi) * k_t;
@@ -980,25 +1084,6 @@ void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& vie
     tgt.fill_ratio = (g_hi / g_lo) / (tgt.tgt_max_g / tgt.tgt_min_g);
     if (tgt.is_feasible) num_feasible++;
   }
-}
-
-void set_target_bounds(SolverConfig& cfg, const BundleTarget& tgt) {
-  cfg.prof = &tgt.film_prof.data;
-  if (tgt.e_center <= 0.0f || tgt.e_min <= 0.0f || tgt.e_max <= 0.0f) {
-    cfg.has_custom_bounds = false;
-    cfg.custom_e_center = 1.0f;
-    cfg.custom_e_bounds[0] = 0.354f;
-    cfg.custom_e_bounds[1] = 2.828f;
-    cfg.custom_e_bounds[2] = 1.0f;
-    return;
-  }
-  cfg.has_custom_bounds = true;
-  cfg.custom_e_center = tgt.e_center;
-  const float lo = std::min(tgt.e_min, tgt.e_max);
-  const float hi = std::max(tgt.e_min, tgt.e_max);
-  cfg.custom_e_bounds[0] = lo / cfg.custom_e_center;
-  cfg.custom_e_bounds[1] = hi / cfg.custom_e_center;
-  cfg.custom_e_bounds[2] = 1.0f;
 }
 
 int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx) {

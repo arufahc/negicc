@@ -272,10 +272,6 @@ static ordered_json dino_json(const DinoSolveResult& d, const Sidecar& sc) {
   return j;
 }
 
-// The intent field the parameter search converted against (designs/plan_intent_field_sidecar.md in
-// negicc-station): per DINOv3 grid cell, row-major over the oriented frame, the Lab colour the intent adapter predicts
-// (mu) and its tolerance (sigma). The same block as the station's sidecar. Null when no search ran. source: "auto" (the
-// bundle search, on the frame's inner crop_ratio crop) or "dino" (the single-bracket search, on the whole frame).
 // The model's short name (the backbone's directory, e.g. dinov3-small), not the path the build embedded it from.
 static std::string model_stem(std::string path) {
   const std::string kBuiltIn = "[built-in] ";
@@ -291,6 +287,12 @@ static std::string model_stem(std::string path) {
   return dot == std::string::npos ? file : file.substr(0, dot);
 }
 
+// The intent field the parameter search converted against: per DINOv3 grid cell, row-major over the oriented frame,
+// the Lab colour (mu) and its tolerance (sigma) of the chosen step. The same block as the station's sidecar. Null when
+// no search ran. source: "auto" (the bundle search or the print's search, on the frame's inner crop_ratio crop): a*
+// and b* as the intent adapter predicted them from the chosen step's render, L* the frame's lightness wish (the
+// bootstrap field's; DESIGN.md 4.2); "dino" (the single-bracket search, on the whole frame): its best step's
+// prediction in all three.
 static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
                                       int grid_h, int target_idx, const char* source, float crop_ratio,
                                       const Sidecar& sc) {
@@ -316,7 +318,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
   return j;
 }
 
-// The fitted G/B input curves of the conversion's bracket (negicc-station designs/plan_fit_curves.md): what rebuilds
+// The fitted G/B input curves of the conversion's bracket (input_curves.h): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
 // (--fit_curves with the recorded numbers, as the cli_equivalent writes them) rebuilds the same tables.
@@ -394,10 +396,14 @@ static ordered_json input_curves_json(const Sidecar& sc) {
                     {"fit_loss_L", n9(f->parts_fit.L)}, {"fit_loss_ab", n9(f->parts_fit.ab)},
                     {"neutral", ordered_json{{"anchors", f->neutral_anchors ? "head" : "none"},
                                              {"m", f->neutral_export.m},
-                                             {"auto_a", n9(f->neutral_auto.a_bar)}, {"auto_b", n9(f->neutral_auto.b_bar)},
-                                             {"export_a", n9(f->neutral_export.a_bar)}, {"export_b", n9(f->neutral_export.b_bar)},
-                                             {"auto_ka", n9(f->neutral_auto.k_a)}, {"auto_kb", n9(f->neutral_auto.k_b)},
-                                             {"export_ka", n9(f->neutral_export.k_a)}, {"export_kb", n9(f->neutral_export.k_b)},
+                                             {"auto_a", n9(f->neutral_auto.a_bar)},
+                                             {"auto_b", n9(f->neutral_auto.b_bar)},
+                                             {"export_a", n9(f->neutral_export.a_bar)},
+                                             {"export_b", n9(f->neutral_export.b_bar)},
+                                             {"auto_ka", n9(f->neutral_auto.k_a)},
+                                             {"auto_kb", n9(f->neutral_auto.k_b)},
+                                             {"export_ka", n9(f->neutral_export.k_a)},
+                                             {"export_kb", n9(f->neutral_export.k_b)},
                                              // The evidence mass (sum of p^2 over the cells in range, as the
                                              // last fit pass saw them at its roll-off; earlier builds wrote it at
                                              // Auto's roll-off, up to 2 % apart), the shrink weight
@@ -540,7 +546,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     det["reason"] = d->reason;
     det["frame_conf"] = num(d->frame_conf, "%.3f");
     det["light_clipped"] = d->light_clipped;
-    det["thinnest_over_patch_stops"] = d->has_outshone ? num(d->thinnest_over_patch_stops, "%.4f") : ordered_json(nullptr);
+    det["thinnest_over_patch_stops"] =
+        d->has_outshone ? num(d->thinnest_over_patch_stops, "%.4f") : ordered_json(nullptr);
     fb["detector"] = det;
   } else {
     fb["detector"] = nullptr;
@@ -548,10 +555,26 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!sc.film_base_capture_json.empty()) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
+  // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's
+  // thinnest film (raise_base_to_print_floor, with print_floor_factor's factor); the base as found and the factor.
+  if (sc.print_floor_applied) {
+    fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is "
+                                    "scaled to it; film_base_rgb is the bundle's at its own exposure when nothing was "
+                                    "raised)"},
+                         {"found_source", sc.print_floor_found_source},
+                         {"found_rgb", {num(sc.print_floor_found_rgb[0], "%.10g"),
+                                        num(sc.print_floor_found_rgb[1], "%.10g"),
+                                        num(sc.print_floor_found_rgb[2], "%.10g")}},
+                         {"factor", num(sc.print_floor_k, "%.6g")},
+                         {"frame", sc.print_floor_frame},
+                         {"frame_conf", sc.print_floor_frame_conf < 0.0f ? ordered_json(nullptr)
+                                                                         : num(sc.print_floor_frame_conf, "%.4g")}};
+  }
   fb["profile_film_base_rgb"] = sc.profile_film_base_rgb;
   // The gains the white-light decode put on the camera channels to balance them on the film base (load_raw);
-  // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain round-trips
-  // through: with six decimals a replay from the sidecar (negicc-station's) balanced the mosaic with other gains.
+  // film_base_rgb and decode_rgb are read after them. Nine significant digits, which a single-precision gain
+  // round-trips through: with six decimals a replay from the sidecar (negicc-station's) balanced the mosaic with other
+  // gains.
   const float* k = sc.balance_gains;
   fb["balance_gains"] =
       k ? ordered_json{num(k[0], "%.9g"), num(k[1], "%.9g"), num(k[2], "%.9g")} : ordered_json(nullptr);
@@ -562,6 +585,55 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else if (sc.is_bundle) {
     j["profile"] = {{"path", sc.profile_path}, {"type", "bundle"}, {"bundle_target", sc.bundle_target_name},
                     {"input_space", to_string(sc.input_space)}};
+    // --print: the brackets were rendered through a print material's print ICC (np_print.h), not the chart's.
+    if (!sc.print_id.empty()) {
+      j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
+                               {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
+                               {"curves", std::isfinite(sc.print_a)
+                                              ? "computed at the print's mid grey A (a) from the bundle's "
+                                                "grey_balance_curves, with the gains g and b after the knee"
+                                              : "computed for the bracket from the bundle's grey_balance_curves"}};
+      // A material given as a file: which file, and its content, so the replay can be checked against it.
+      if (!sc.print_file.empty()) {
+        j["profile"]["print"]["file"] = sc.print_file;
+        j["profile"]["print"]["file_sha256"] = sc.print_file_sha256;
+      }
+      // The print's white, its mid grey A and the bracket's own, and its search (np_pipeline: search_print_continuous).
+      j["profile"]["print"]["white"] = "paper";   // media-relative: the paper's base at the display's white
+      j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"),
+                                                  num(sc.print_paper_xyz[1], "%.6g"),
+                                                  num(sc.print_paper_xyz[2], "%.6g")};
+      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      if (std::isfinite(sc.print_bracket_a_mid))
+        j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
+      // The brackets' tilt (grey_relative.b) at that A, linear in A between brackets.
+      if (std::isfinite(sc.print_tilt[0]))
+        j["profile"]["print"]["tilt"] = {num(sc.print_tilt[0], "%.9g"), num(sc.print_tilt[1], "%.9g"),
+                                         num(sc.print_tilt[2], "%.9g")};
+      if (sc.print_searched) {
+        auto three = [&](const float* v, double scale) {
+          return ordered_json{num(scale * v[0], "%.4g"), num(scale * v[1], "%.4g"), num(scale * v[2], "%.4g")};
+        };
+        j["profile"]["print"]["search"] = {
+            {"a0", num(sc.print_a0, "%.9g")},
+            {"wish_L", num(sc.print_wish_l, "%.6g")},
+            {"steps", sc.print_steps},
+            {"converged", sc.print_converged},
+            {"stopped_by", sc.print_stopped_by},
+            {"above_knee_pct", num(100.0 * sc.print_above_knee, "%.4g")},
+            {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
+            {"past_knee_pct", three(sc.print_past_knee, 100.0)},
+            {"past_cut_pct", three(sc.print_past_cut, 100.0)},
+            {"above_white_pct", three(sc.print_above_white, 100.0)},
+            {"at_white_pct", three(sc.print_at_white, 100.0)},
+            {"a0_at_range_end", sc.print_a0_at_end},
+            {"last_move", three(sc.print_last_move, 1.0)}};
+      } else if (!sc.cached_print_search_json_str.empty()) {
+        // A run that reused <output>.json (the knobs) starts from that run's A (knobs.base.a): its search's record
+        // carries over.
+        j["profile"]["print"]["search"] = ordered_json::parse(sc.cached_print_search_json_str);
+      }
+    }
   } else {
     j["profile"] = {{"path", sc.profile_path}, {"type", "icc"}, {"bundle_target", nullptr}};
   }
@@ -586,7 +658,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
       cli.push_back(std::to_string(v));
   }
-  if (sc.is_bundle && sc.bundle_target_idx >= 0) cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
+  if (sc.is_bundle && sc.bundle_target_idx >= 0)
+    cli.insert(cli.end(), {"--target", std::to_string(sc.bundle_target_idx)});
   if (sc.input_curves && (sc.cli_input_curves ? *sc.cli_input_curves : *sc.input_curves).active()) {
     // Replays the combined profile without fitting (the curves need -P, as when they were fitted), at the E, g and b
     // above: after the knobs, the curves re-anchored there.
@@ -608,17 +681,40 @@ bool write_json_sidecar(const Sidecar& sc) {
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     cli.insert(cli.end(), {"--tone_stage", v});
   }
-  // A white-light bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone
-  // render these pixels, and --fit_curves off with --tone_stage off keeps the curve fit and the tone stage, which
-  // run after given values too, from running on the replay. (A TriLED bundle's given gains turn the search off, and
-  // with it the tone stage.)
-  if (sc.is_bundle && sc.input_space == InputSpace::kRec2020Linear && cli.size() >= 2 &&
-      std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
+  // A bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone render these
+  // pixels, and --tone_stage off (with --fit_curves off on white light, the fit's light) keeps the stages that run
+  // after given values too from running on the replay.
+  if (sc.is_bundle && cli.size() >= 2 && std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
       std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
-    cli.insert(cli.end(), {"--fit_curves", "off", "--tone_stage", "off"});
+    if (sc.input_space == InputSpace::kRec2020Linear) cli.insert(cli.end(), {"--fit_curves", "off"});
+    cli.insert(cli.end(), {"--tone_stage", "off"});
   }
-  // A density output takes no exposure, gains or bracket: its replay is the frame alone, and --fit_curves off when
-  // the run turned the white-light fit off (the print CLF's mid grey and slopes depend on it).
+  // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
+  // if any, and re-running it re-runs the search (deterministic, with --dino and --dino_iters when given), then the
+  // same knobs on its result.
+  if (!sc.print_id.empty() && sc.density_json.empty()) {
+    cli.clear();
+    if (sc.has_roi) {
+      cli.push_back("--roi");
+      for (int v : {sc.roi[0], sc.roi[1], sc.roi[2], sc.roi[3], sc.rot_cw, sc.hflip ? 1 : 0, sc.vflip ? 1 : 0})
+        cli.push_back(std::to_string(v));
+    }
+    if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
+    if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    if (sc.has_knobs) {
+      if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
+      if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
+      if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
+    }
+  }
+  // A print: the replay renders it too, from the same file when the material was given as one (its id may be a
+  // built-in material's, or none).
+  if (!sc.print_id.empty()) cli.insert(cli.end(), {"--print", sc.print_file.empty() ? sc.print_id : sc.print_file});
+  // A density output takes no exposure, gains or bracket: its replay is the frame, --fit_curves off when a white-light
+  // run without --print turned the fit off (for its suggested balance), and the --print materials and any knobs on
+  // their CLFs as given: with --print the base not a capture is raised to the picture's thinnest film
+  // (raise_base_to_print_floor) and the densities are written against it, so the replay needs --print to write the
+  // same file and its CLFs.
   if (!sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -627,7 +723,20 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
+    // The search's model and iterations, as on a print: the recorded balance and each print's search depend on them.
+    if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
+    if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
+    if (!sc.density_prints.empty()) {
+      if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
+      if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
+      if (sc.warmth != 0.0f) cli.insert(cli.end(), {"--warmth", num_str(sc.warmth, "%.9g")});
+    }
   }
+  // The format the film base's frame detection looked for, given or --roi auto's default (35mm): an explicit --roi
+  // without it looks for every format, which may place the base's patch elsewhere. None when the base's detection
+  // looked for every format (the CFA path's, which runs again for the base), as its replay does.
+  if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 
   // auto: the conversion parameter search (multi_target_optimizer.h)
@@ -683,9 +792,11 @@ bool write_json_sidecar(const Sidecar& sc) {
         {"tint", num(sc.tint, "%.6g")},
         {"warmth", num(sc.warmth, "%.6g")},
         {"limited", sc.knob_res.limited},
-        {"base", {{"e", num(sc.knob_base[0], "%.9g")},
-                  {"g", num(sc.knob_base[1], "%.9g")},
-                  {"b", num(sc.knob_base[2], "%.9g")}}},
+        {"base", std::isfinite(sc.knob_base_a)
+                     ? ordered_json{{"e", num(sc.knob_base[0], "%.9g")}, {"g", num(sc.knob_base[1], "%.9g")},
+                                    {"b", num(sc.knob_base[2], "%.9g")}, {"a", num(sc.knob_base_a, "%.17g")}}
+                     : ordered_json{{"e", num(sc.knob_base[0], "%.9g")}, {"g", num(sc.knob_base[1], "%.9g")},
+                                    {"b", num(sc.knob_base[2], "%.9g")}}},
         {"egb", {{"e", num(sc.knob_res.e, "%.9g")},
                  {"g", num(sc.knob_res.g, "%.9g")},
                  {"b", num(sc.knob_res.b, "%.9g")}}},

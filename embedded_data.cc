@@ -125,7 +125,8 @@ const EmbeddedFile* find_embedded_adapter(const std::string& profile_name, std::
       stocks.push_back(path.substr(kPrefix.size(), path.size() - kPrefix.size() - std::strlen("/adapter.onnx")));
     }
   }
-  std::sort(stocks.begin(), stocks.end(), [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+  std::sort(stocks.begin(), stocks.end(),
+            [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
   // The name, then each directory above it (a profile inside a bundle's directory names the stock there).
   std::vector<std::string> names = {profile_name};
   std::string p = profile_name;
@@ -178,7 +179,8 @@ bool load_embedded_bundle(const std::string& key, ProfileBundle& bundle) {
   std::string dir;
   const EmbeddedFile* f = find_embedded_bundle(key, dir);
   if (!f) return false;
-  const BundleFileReader read_file = [&dir](const std::string& name, std::vector<uint8_t>& out) {
+  // Copied into the bundle's print ICC readers (BundlePrint::read_icc), which outlive this call.
+  const BundleFileReader read_file = [dir](const std::string& name, std::vector<uint8_t>& out) {
     const EmbeddedFile* e = find_embedded_file(dir + "/" + name);
     if (!e) return false;
     out.assign(e->data, e->data + e->size);

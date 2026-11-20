@@ -1,767 +1,976 @@
 # Design
 
-`neg_process` was built in three steps, and this document follows them.
+This document describes how `neg_process` turns a camera scan of a colour negative into a picture or a print, in
+the order the data flows. Each section says what goes in, what comes out and how it is computed, and names the code
+(`file`: `function`).
 
-1. **[The narrow-band LED conversion](#the-narrow-band-led-conversion).** The original design. Under a red, green
-   and blue LED light the film's curves are measured on a chart, at several exposure brackets. Converting a frame
-   is then a search: which bracket's profile, at what exposure and gains. The tone stage, added later for both
-   lights, sets the contrast.
-2. **[White light: the curve fit](#white-light-the-curve-fit).** Added on the first: scans under a white light,
-   and with them two more stages, which fit for each frame a correction of the green and blue gains and curves of
-   the profile.
-3. **[Print emulation](#print-emulation).** Added last, for narrow-band scans: the negative as a density file, and a
-   CLF beside it that prints the file on a paper or a print film.
+# 1. Overview
 
-The first two make a picture (`-P srgb`) in four stages, numbered in the order they run:
+`neg_process` reads one scan of a negative (a camera RAW, or a TIFF, JPEG or linear DNG) and writes one of three
+outputs:
 
-| # | Stage | Output | Applied to |
-|---|---|---|---|
-| 1 | Auto search | Which exposure bracket's profile converts the frame, and the exposure and the green and blue gains to use with it. | Only on small preview renders, which it scores. It has no pixel path of its own: its result is a set of parameters for the conversion. |
-| 2 | Curve fit | A correction of the green and blue gains and of the slopes of the green and blue tone curves. It makes surfaces the neutral head picked out come out grey, and sets the overall magenta-green balance. | The green and blue input tables of the profile. |
-| 3 | Profile tables | Nothing new. It writes stage 2's correction into the profile, so the conversion applies it. | The input tables. |
-| 4 | Tone stage | One lightness curve that sets the contrast and the black and white levels. | Linear sRGB inside the conversion, before the output is encoded. |
+- **a picture of the scene** (`-P srgb`, `srgb-g10` or an ICC profile): the negative inverted through a film profile;
+- **a print as a picture** (`--print <material> -P srgb`): the negative as it would look printed on a paper or a
+  print film;
+- **a density file** (`-P statusm`, `rp180` or `apd`): the negative's density above its film base in a standard
+  measure, with, for each `--print <material>`, a CLF beside it that renders the file as that print.
 
-Every pixel goes through the conversion once. No stage converts finished pixels to another colour space and back.
+The scan is made under one of two lights. The **RGB LED light** (`--light_source tri`, "TriLED") has three narrow
+bands, one red, one green and one blue LED; the camera's raw channels are used directly. The **white light**
+(`--light_source d65`) is broad-band; the scan is decoded through the camera's colour matrix to linear Rec.2020.
 
-A narrow-band scan (`--light_source tri`) runs stages 1 and 4. A white-light scan (`--light_source d65`) runs all
-four; `--fit_curves off` leaves out stages 2 and 3, and `--tone_stage off` leaves out stage 4.
+Each film stock has a **profile set** (a bundle: `profiles/<Stock>-<Camera>-<Light>/`) per light. It holds seven
+chart ICC profiles, one per exposure bracket of a chart (section 3), eight print ICC profiles, one per print material
+(5.4), the measurements they were built from, and the matrices and curves the print emulation needs.
 
-# The narrow-band LED conversion
+The stages, and which run for each output:
 
-Stages 1 and 4. The profile's curves are the measured ones and are not fitted.
+| Stage | Section | Picture, TriLED | Picture, white light | Print as a picture | Density file |
+|---|---|---|---|---|---|
+| From the scan to film RGB | 2 | yes | yes | yes | yes |
+| Auto search on the chart profiles | 4.2 | yes | yes | no | yes, recorded only |
+| White-light curve fit | 4.3 | no | yes | no | white light without `--print`: yes, for the suggested balance only |
+| Tone stage | 4.4 | yes (`srgb`) | yes (`srgb`) | no | no |
+| The print's search on the print profile | 5.6 | no | no | yes | with `--print`: once per material |
+| Conversion | 4.1, 5.4 | chart profile | chart profile | print profile | density, then CLF |
 
-## Scoring model
+Every pixel is converted once, by one chain of per-pixel stages (`color_pipeline.h`). The searches decide only the
+numbers that chain uses; they render small previews and never touch the output's pixels.
 
-**The intent field.** The search renders a small preview, and the intent network predicts, for each cell i of a
-grid over it, what a finished scan would show there: a mean mu_i = (mu_L, mu_a, mu_b) and an uncertainty sigma_i per
-channel (small sigma means the network is confident). A render with Lab values (L_i, a_i, b_i) is scored per
-channel:
+## Notation
 
-```
-z_L,i = (L_i - mu_L,i) / sigma_L,i        (likewise z_a, z_b)
-loss_L = mean_i z_L,i^2                  (likewise loss_a, loss_b)
-residual = (loss_L + loss_a + loss_b) / 3 + clip penalty + exposure penalty
-```
-
-Under a Gaussian model per cell this is the negative log-likelihood, so cells the network is unsure of count for
-little. The clip penalty grows once more than 2.5 % of the preview clips white. The exposure penalty grows as the
-exposure moves away from the centre of the bracket's calibrated range. Within one step, exposure is chosen on loss_L
-plus the penalties, the green gain on loss_a and the blue gain on loss_b. The residual ranks steps and brackets.
-
-```
-render at (E, g, b) -> network predicts mu, sigma -> search (E, g, b) against them -> repeat
-stop when |dE| + |dg| + |db| <= 0.02, or once the residual has passed its minimum (the best step is kept)
-```
-
-## Table conventions
-
-Each table lists the **parameters** of a stage: the values that determine the rendering or the weight given to an
-estimate. **Effect** is the number of frames, out of a 140-frame test set, that change visibly (mean ΔE above 1) when
-the parameter is switched off, or halved or doubled where the table says so. It measures a parameter's influence,
-not whether the result is better. Bounds that only act when something goes wrong are listed in one line under each
-table. Iteration counts, step sizes and table sizes are left to the code.
-
-## Stage 1: Auto search
-
-For each candidate bracket, Auto renders the bracket's profile at a metered exposure, asks the intent network what
-the finished picture should look like, and then searches exposure and gains for the closest match. White-light scans
-use the same stage.
-
-| Parameter | Value | Purpose |
-|---|---|---|
-| Admissible brackets | Tonal range at least 0.75 of the widest bracket's | In a set of five or more brackets, a bracket that calibrates a much shorter range than the best ones cannot hold a whole scene, so it is not considered. At least three are always kept. |
-| Bracket ranking | Scene fills 0.85 of the bracket's range; 0.5 per stop of overflow | Ranks the brackets by how well the scene's contrast fits each one's calibrated range: ideally filling 85 % of it. A scene wider than a bracket costs 0.5 per stop it overflows by. |
-| Tournament | Best 2 | The two best brackets from a first, single-render screening each get the full search. The one that ends with the lower residual wins. |
-| Bootstrap field | Mean over every metered bracket | Every bracket that meters is rendered at its metered exposure and the network's predictions are averaged. The screening uses this field, and its L\* is the frame's lightness wish. |
-| Lightness wish | One per frame | Every full search scores and searches L\* against the bootstrap field's L\*; a\* and b\* are asked again on each step's render. See "One lightness wish per frame" below. |
-| Overflow allowed | 1.5 stops of highlight, 1.2 of shadow | The margin by which a scene may exceed a bracket's calibrated range, at either end, before the bracket is ruled out. |
-| Search window | The usable range, for every bracket | Every bracket is searched over its calibrated range widened by the overflow allowance above, whether or not it can hold the whole scene. No bracket wins or loses because its window let it reach a lightness another's did not. |
-| Exposure trust region | ±0.5 stop | The full search may move exposure at most half a stop from the screening's value. It refines the screened exposure instead of relocating it. |
-| Search start | Gains 1.22 (green), 1.15 (blue) | Where each search over exposure and gains begins. The very first render, used only to get the network's first prediction, uses 1.10 and 1.15. |
-| Search penalties | White clipping above 2.5 %; exposure away from the bracket's centre (none for a bracket whose usable range is inverted) | Added to the intent residual, so the search avoids renders that clip or that leave the bracket's calibrated range. A bracket that cannot hold the scene within its tolerances has no centre to prefer; see "The picture the search scores". |
-| Scene range | 0.5 % to 99.5 % | The scene's range is measured between these points, so a few specular highlights or dust specks do not count. |
-| Clip fallback | Over 0.03 % white clip | Tries the next denser bracket. It is taken only if it halves the clipping, shifts the median lightness by no more than −4.5 to +0.5 L\*, and its residual is no more than 10 % worse. |
-| Highlight pullback | Median L\* ≥ 58 with ≥ 2.2 % above sRGB 242, or ≥ 48 with ≥ 7.5 % | A bright frame whose highlights crowd the top was rendered too bright. Auto darkens it by up to 0.15 stop, or, when the scene does not fit the bracket, re-runs the search with penalties on exposure outside the calibrated range (over the same usable range as the first search). Dark or backlit frames are left alone, so the subject is not sunk. |
-| Highlight roll-off | The scene's 99.5 % point mapped to sRGB 242 | Highlights above that point are compressed smoothly toward white instead of clipping. sRGB output only. |
-
-That makes fourteen parameters. None of them has been switched off on the 140-frame test set yet, so the table has no
-Effect column. The search also does not always converge to the same answer: where it ends depends on where it
-starts.
-
-### One lightness wish per frame
-
-The lightness the network asks for follows the picture it is shown: shown a lighter render it accepts a lighter one,
-shown a darker render a darker one. Three things let that turn into jumps of 10 to 14 L\* between brackets.
-
-- **Each finalist answered to itself.** The full search asked the network again on each step's render, L\* included,
-  and measured each finalist's residual against its own predictions. Each finalist's exposure walked its own way, and
-  residuals measured against different predictions could not say which lightness was right. On one frame both
-  finalists started near L\* 47; one ended at 35 and won by a residual of 8.43 against 8.79.
-- **One bracket set the target.** The first prediction came from the render of the bracket that metered deepest, and
-  on 112 of 200 frames the two deepest were within 0.02 stop: a 1 % tighter crop could swap them and move the result.
-- **The windows differed.** A bracket that could hold the scene was searched over its calibrated range only, one that
-  could not over a window around its centre, so one bracket could reach a lightness another could not.
-
-Now the first prediction is the mean over every metered bracket's render, which has no switch between brackets; every
-full search of the frame, the highlight pullback's included, holds L\* to that mean and asks again only for a\* and
-b\*, whose prediction has a usable fixed point; and every bracket is searched over the same kind of range, its usable
-range.
-
-Measured on 55 TriLED and 145 white-LED frames with the shipped adapter, no parameter tuned (master → now):
-
-| | TriLED | White LED |
-|---|---|---|
-| Finalists' L\* gap, mean / frames over 5 | 2.50 / 8 → 0.73 / 0 | 3.49 / 36 → 1.17 / 7 |
-| A 1 % or 2 % tighter crop moves the result over 3 L\* | 5 → 0 of 110 | 35 → 15 of 290 |
-| Swapping the adapter checkpoint moves the result over 5 L\* | 0 → 0 | 13 → 3 |
-| Output lightness | −0.33 L\* | +1.25 L\* |
-| Auto's time (one frame at a time, wp0 CPU) | 5.1 → 7.3 s | 4.2 → 6.5 s |
-
-The time grows with the extra inferences, one per metered bracket. On white LED some frames still move: there the
-brackets render the scene quite differently and the network does not separate them clearly.
-
-### The picture the search scores
-
-To judge a render, something has to turn the picture into one colour per patch of the network's grid (32 by 21 for a
-3:2 frame). Three definitions were in use:
-
-| Who | What it computes for a patch |
+| Symbol | Meaning |
 |---|---|
-| The adapter's training (negicc-station `training/extract.py`, `patch_lab_targets`) | The picture resampled in linear light by area average to the network's input size, CIELAB per pixel, mean over the patch's 16 by 16 pixels |
-| The residual, before | A bilinear resize of the preview straight to the grid: two by two pixels at the patch centre, of a preview 2,400 to 2,900 pixels wide |
-| The (E, g, b) optimiser (`intent_loss`) | The negative's camera RGB averaged over the patch, then rendered |
+| `v` | A pixel's camera RGB after black subtraction and flat field, in 16-bit units (white light: linear Rec.2020). |
+| `X` | The crosstalk correction, a 3×3 (identity on white light). |
+| `f` | The film base: `X v` of unexposed film at the scan's exposure. |
+| `n0` | `normalization_target / 65535` = 55000 / 65535 = 0.839, the level the film base lands on. |
+| `E`, `g`, `b` | The exposure (a gain on all three channels) and the green and blue gains relative to red. |
+| bracket | One capture of the chart at one exposure, and the ICC profile built from it (`Target 1` … `Target 7`). |
+| PCS | The ICC profile connection space: CIE XYZ relative to D50. |
+| `μ`, `σ` | The intent field: per cell of the network's grid, a predicted CIELAB mean and its spread. |
+| `p` | The neutral head's probability that a cell shows a neutral surface. |
+| `D_light` | Density above the film base as the light's three channels see it, `−log10` of transmittance. |
+| `M`, `F`, `L` | The density matrix of a measure, `M = F L`: `L` from light density to the film's dye amounts, `F` from dye amounts to the measure. |
+| APD | Academy Printing Density (SMPTE ST 2065-2), the measure the print emulation works in. |
+| `G_c` | The film's grey balance curve: light density in channel `c` → APD of the film's grey with that light density. |
+| `A` | The print's mid grey as green APD: the printing exposure. `A_mid` is a bracket's own. |
+| `t_c` | A bracket's tilt: the slope of its grey scale relative to `G_c` (`grey_relative.b` in the bundle). |
+| `P`, `Q` | The print matrix (a measure's density → the print material's own density) and its part from dye amounts. |
 
-- **The point samples were mostly film grain.** Per cell they sat 5.7 L\* (TriLED) and 4.8 L\* (white LED) from the trained cells, against a sigma of 3.8 and 4.5. That made the squared L\* residual about three times what the picture earns, and a crop one per cent tighter moved every sample onto other grains.
-- **Rendering an average is not the average of the render.** A negative's bright grains render dark and its dark grains bright, by a curve. So the optimiser's cells read darker than the picture's, 2.1 L\* (TriLED) and 1.7 L\* (white LED) on average and differently per frame (sd 1.2 to 1.3), and about 1 b\* bluer.
+# 2. From the scan to film RGB
 
-Now:
+These steps run for every output and for the profile building alike. They turn raw sensor values into three
+channels that are proportional to the film's transmittance, scaled so that unexposed film reads `n0`.
 
-- **The residual reads the trained cells** (`trained_cells_lab`), the same definition as the training targets. It ranks the finalists and decides when a loop has converged. Its formula is unchanged.
-- **The optimiser keeps its cells but is corrected per bracket.** After each preview of a bracket (the bootstrap renders, every fixed-point step, the pullback's re-search renders), the difference between the trained cells of that preview and the optimiser's cells at the same parameters is kept. The bracket's next optimisation aims at the field minus that difference.
-  - **Why the fixed point is the picture's:** if the loop stops at parameters p, the last correction was measured at p. Matching the optimiser's cells at p to the field minus (picture − optimiser) at p is matching the picture at p to the field.
-  - **The field passed on is uncorrected:** the field kept for the sidecar and the later stages is the network's own.
-- **A bracket whose usable range is inverted gets no centre pull** (`pull_centre`). When the scene overflows a bracket by more than the two tolerances together (1.5 + 1.2 stops), no E keeps both ends within tolerance.
-  - **The window is the set of compromises.** At its light end the shadows sit exactly at their tolerance and the highlights carry all the overflow; at its dark end the reverse.
-  - **The field decides where to stand,** with the white-clip penalty kept and the window's two ends as bounds. The pull toward the bracket's centre had answered "split the overflow equally in log E". On a night scene of 8.1 EV (`8dda4a7e7e`) that meant a picture with a median of L\* 2.
+## 2.1 Reading the scan
 
-On 55 TriLED and 145 white-LED frames, shipped adapter, against the search before:
-- **Lightness self-prediction on the trained cells:** TriLED 4.54 → 3.75 L\*; colour self-prediction lower on both lights.
-- **Crop test** (frames moving over 3 L\* under a 1 % or 2 % tighter crop): white LED 10 → 5, TriLED none.
-- **Finalists more than 5 L\* apart:** 7 → 2.
-- **The pictures:** TriLED 1.3 L\* darker and 1.2 b\* yellower; white LED 0.9 L\* darker.
-- **Against the owner's exports:** lightness gets closer (4.8 → 3.5 L\* lighter than the exports) and b\* about 1 further.
+A RAW is opened with LibRaw and its black level is subtracted per channel (`np_input.cc`: `load_raw`,
+`subtract_cfa_black_in_place`). Two images are made from it:
 
-## Stage 4: Tone stage
+- **The half-size image** is what the searches and the film base read. Under the RGB LED it is read straight from the
+  CFA mosaic, one pixel per 2×2 Bayer quad: `(R, (G1 + G2) / 2, B)`, with no demosaic. It is a view into the mosaic,
+  not a copy (`rgb_view.h`: `RgbView::from_cfa_half`, `cpu_preview_debayer`).
+- **The full-resolution image** is what the output is converted from. Under the RGB LED a single Sony RGGB RAW is
+  demosaiced by a grain-aware debayer (`rgb_view.h`: `cpu_grain_aware_debayer`): green from the two Hamilton-Adams
+  estimates blended by `1 / (4096 + gradient²)`, red and blue as ratios `(R + 16) / (G + 16)`, bilinear where a
+  channel is within 64 of white. Four pixel-shift captures (Sony A7R IV) are merged instead
+  (`cpu_pixel_shift_merge`). Other RAWs go through LibRaw's `dcraw_process` to camera RGB.
 
-The tone head predicts the shadow level, highlight level and tonal range that a lab scan of the frame would have.
-One lightness curve moves the image toward those values while holding the mid-tone where it is. The head needs one
-network inference, on the preview of the final render: the only inference after the search. The curve is applied to
-each pixel's linear sRGB value inside the conversion. The pixel's brightness follows the curve, and its colour is
-carried along unchanged.
+Both RGB-LED images above are those of the default `-q -1`. With `-q 0` or more a single RAW is demosaiced by
+LibRaw's `dcraw_process` at that quality (4 is DCB), and its half-size image is LibRaw's half-size decode, a copy
+(`read_half_size`). A pixel-shift set is always merged.
 
-The stage runs after every bracket search with `-P srgb`, on white light and narrow-band alike. Where no curve fit
-runs (narrow-band, or `--fit_curves off`), it is planned on the search's own result and leaves that result's colour as it is.
-In a blind comparison on 20 narrow-band frames, the stage was preferred on 17 and the conversion without it on 2.
+Under the RGB LED the bands are narrow and the three layers of the film are seen almost separately; the ratio
+debayer exists because film grain is independent in the three layers, so the gradients an edge-directed demosaic
+follows are mostly grain.
 
-| Parameter | Value | Purpose | Effect |
-|---|---|---|---|
-| Shadow move | 1.0 | Moves the shadows all the way to the predicted shadow level. | 60 at half |
-| Highlight move | 0.5 | Moves the highlights half way to the predicted highlight level. | 16 to 30 |
-| Range move | 0.5 | Moves the tonal range half way to the predicted range. | 38 to 61 |
-| Clip allowance | 0.5 % of pixels | If the curve would clip more than this share of pixels to white, the highlight and range moves are scaled back until it does not. | 14 |
-| Curve limits | Black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each of the curve's four parameters. On most frames at least one of them sits on its limit. | — |
+Under the white light the scan goes through LibRaw (`np_input.cc`: `prepare_white_light_mosaic`,
+`decode_white_light`): the camera's daylight white balance and the flat field are applied on the mosaic, the
+camera channels are multiplied by gains that put this scan's film base on the profile's (2.3), and LibRaw demosaics
+to linear Rec.2020 through its camera matrix, with no rescaling: bilinearly, or at the quality `-q` gives. A linear
+DNG takes the white-light path with its own colour data; it needs a white-light profile set.
 
-# White light: the curve fit
+A TIFF or JPEG under white light is converted to linear Rec.2020 (`to_linear_rec2020`): through its embedded ICC
+profile when it has one; without one, 8-bit samples are taken as sRGB, and 16-bit samples are taken as linear
+Rec.2020 already and are not converted. A TIFF with `--light_source tri` is taken as the scanning camera's linear RGB
+(black subtracted, no white balance or colour matrix) and goes through the crosstalk correction (2.4); a TIFF with an
+embedded profile or 8-bit samples is refused there.
 
-Stages 2 and 3, between the search and the tone stage. They exist for white light only. A white-light conversion leaves
-a cast that differs from frame to frame, more than a narrow-band one does: the search has chosen a bracket, an
-exposure and gains, and the fit then corrects the green and blue gains and the slopes of the green and blue curves,
-so that what the frame shows as neutral comes out grey.
+Three files are **three captures**, one under each of the red, green and blue lights, and need an RGB-LED profile set or
+a single ICC profile (`-p`; `np_input.cc`: `load_rgb_input`). Each gives one channel: red from the first, green from the
+second, blue from the third. A RAW or DNG among them is demosaiced by LibRaw to camera RGB (bilinearly, or at the
+quality `-q` gives) and the capture's own channel is kept; a TIFF gives its channel as it is read, and must be 16-bit
+linear camera RGB with no embedded profile (an 8-bit or colour-managed TIFF among three captures is refused, as a single
+TIFF is under an RGB-LED profile set). When all three captures record shutter and ISO, the green and blue channels are
+scaled to the first capture's exposure. The half-size image is each RAW's own half-size decode, or the mean of each 2×2
+block of a TIFF; when `--roi` cuts a frame (a given one, or `--roi auto`'s when its detection is confident), it is the
+mean of each 2×2 block of the assembled image. Each channel comes from the capture under its own light, so `X` is the
+identity unless `-r`, `-g` or `-b` give one.
 
-The errors of the two sets of profiles on the chart they were built from show the difference (CIEDE2000, mean over a stock's seven
-brackets; each bundle's README has the brackets):
+## 2.2 Flat field
 
-| Stock | Fitted patches: narrow band | white light | Held-out patches: narrow band | white light |
-|---|---|---|---|---|
-| Portra 400 | 0.61 | 0.78 | 2.64 | 2.17 |
-| Portra 160 | 0.72 | 0.89 | 2.41 | 2.04 |
-| Ektar 100 | 0.72 | 0.90 | 3.29 | 2.42 |
-
-On the patches a profile was fitted to, white light is the less exact by about a quarter. On patches held out of
-the fit it is the more exact, by 15 to 26 %. So the chart does not show the larger error of a white-light
-conversion. That error is seen on converted frames, and this document has no figure for it.
-
-## Cast estimation
-
-**The neutral prediction.** A second head gives each cell p_i in [0, 1], the probability that it shows a neutral
-surface. The anchors are the cells that Auto's render puts between L\* 2 and L\* 92, and each is weighted by p squared:
-
-```
-m = sum_i p_i^2                 w_i = p_i^2 / m    (plus 10^-3 spread evenly, so m = 0 is defined)
-a_bar = sum_i w_i a_i           b_bar = sum_i w_i b_i
-k_a = 50 cov_w(L, a) / (var_w(L) + 25)          (likewise k_b)
-```
-
-Squaring sets no threshold, but it makes a cell with p = 0.9 count 81 times as much as one with p = 0.1. m is the
-frame's total neutral evidence. A neutral surface has a\* = b\* = 0 at every lightness, so two things are corrected:
-the gains move the weighted means a_bar and b_bar, and the curve slopes remove the trend k (how far a\* or b\* drifts
-per 50 L\*).
-
-**Trust.** The pull toward neutral grows with the evidence:
+The flat field removes the light's and the lens's falloff. It is measured on the empty gate (`--flat`, an `.npz`
+from the profile-building tools) as a coarse grid of per-channel gains in half-size sensor coordinates, normalised to
+1 at the centre. Every decode is divided by the gain bilinearly interpolated at the pixel's sensor position, before
+any crop or rotation (`flat_field.h`: `flat_divide`):
 
 ```
-w = m / (m + 12)
-target a_bar = (1 - w) a_bar_Auto          target b_bar = (1 - w) b_bar_Auto
-target k_a = (1 - w s) k_a_Auto,  s = var_w(L) / (var_w(L) + 36)         (likewise k_b)
+v_c(x, y) = round(v_raw_c(x, y) / gain_c(x, y))
 ```
 
-With no evidence (m near 0) the targets are Auto's own values, so the anchors leave Auto's colour alone. s shrinks
-the slope correction when the anchors cover only a narrow range of lightness, so a trend measured there is not
-extrapolated over the whole curve.
+The half-size view divides as it samples; the full-resolution debayer divides as it writes; the white-light decode
+divides the mosaic. A RAW that LibRaw demosaics under the RGB LED (2.1: `-q 0` or more, or another camera's RAW) has
+its mosaic divided in place before LibRaw reads it (`FlatField::apply_cfa`). A film base capture is divided by the
+same flat.
 
-**Pooling the two estimates of the overall a\*.** The intent field gives a second estimate of the overall
-magenta-green balance, besides the anchors:
+## 2.3 Film base removal
 
-```
-alpha_i = (1 / sigma_a,i^2) / sum_j (1 / sigma_a,j^2)        over every fit cell
-s = sum_i alpha_i (a_i - mu_a,i)
-intent term = (s - (k_a - target k_a) dL - SE) / sqrt(SE^2 + 1)
-anchor term = (a_bar - target a_bar) / sigma_anc,     sigma_anc^2 = (144 + m) / (m + 12)
-```
+The film base is the orange mask of unexposed film. Dividing by it makes each channel a transmittance relative to
+bare film, so a profile and a scan agree whatever the mask's colour or the scan's exposure. The base `f` is taken,
+in this order (`np_film_base.cc`, `film_base_detector.cc`: `detect_film_base`):
 
-s is the precision-weighted mean gap between the render's a\* and what the intent field predicts. SE is the standard
-error of s, computed from sums over 4 x 4 blocks of cells because neighbouring cells are not independent, and
-detrended in L\*. dL is the gap between the intent field's and the anchors' mean lightness, per 50 L\*. It keeps a
-change of slope from being read as a shift of a\*. Subtracting SE leans the intent term's target toward magenta by
-one standard error.
+1. **A capture of unexposed film** (`--film_base <file>[:x,y,w,h]`, TriLED only): decoded as the half-size view,
+   flat-fielded, read over the given region or over a region found by tiles (the brightest group of smooth tiles of
+   the base's colour), taken through `X` and scaled by the scan's exposure over the capture's (shutter × ISO).
+   `--film_base auto` (the default) reuses a capture recorded in the output's sidecar from the same inputs.
+2. **The rebate**: the frame detector's patch of unexposed film beside the frame, the median of its inner part (15 %
+   inset on each side), refused when the thinnest film in the scan outshines it by more than 0.5 stop, and on TriLED
+   when the sensor clipped it (more than 0.1 % of its pixels at 98 % of the white level in a channel, read before the
+   flat field, except on the LibRaw path with `--flat`, where the flat has already divided the mosaic): clipped film
+   reads the clip, not the base. neg_process then warns that the scan clips its film base
+   and suggests a capture (item 1) or a shorter scan. The patch is used on a single RAW or linear DNG, whose
+   detection runs on its raw data with `--roi auto` and with a given `--roi` alike; an RGB file and three captures go
+   to item 3.
+3. **The thinnest film**: the 99.5th percentile per channel of the film pixels of the half-size image reduced to 512
+   pixels on the long side, with bare light and the black holder masked out. On TriLED bare light is what the sensor
+   clipped in all three channels (98 % of the white level, before the flat field), in parts that reach the image
+   border or are the size of a sprocket hole: light is brighter than the base in every channel, film near the clip
+   clips first in its brightest channel, and the base is nearly neutral in the camera's channels, so colour does not
+   tell thin film from light. On white light bare light is a part clipped in a channel (at the plateau of its maxima)
+   whose median blue is above the 99.5th percentile of the film's blue, with the bright unclipped light connected to
+   it, or a neutral part bluer than the orange film: film transmits no more blue than its base, so a flat stretch of
+   film that forms a plateau is not taken for light. On TriLED, when the same percentile read before the flat field
+   is at 98 % of the white level in a channel, the film's thinnest part clipped and the base read from it is the
+   clip: neg_process warns, as for a clipped rebate.
+4. **The bundle's base**, scaled by the scan's exposure over the base capture's.
 
-Each term is divided by its own uncertainty, and both, like the b\* term, by 1.5, so the solve is a
-precision-weighted compromise. With much neutral evidence the two estimates count about equally and a disagreement
-between them is split. With little, the intent field decides. The 1 under the square root, and the value 1 that
-sigma_anc approaches as m grows, are each estimate's systematic error in a\*: however much evidence there is, neither
-is trusted closer than that.
-
-| Component | Basis |
-|---|---|
-| The z-score loss and the inverse-variance weights | Maximum likelihood under a Gaussian model for each cell. |
-| mu, sigma and p | Learned networks, checked on held-out data and in blind comparisons. |
-| The p² weighting | A choice: it is not derived from anything. |
-| The evidence half-mass 12, the systematic error of 1 a\* and the one-standard-error lean | Stated values. None of them is derived or fitted. |
-
-## Stage 2: Curve fit
-
-One least-squares solve over four numbers: the green and blue gains, and the slopes of the green and blue input
-curves. It works on the anchor and intent terms described in "Cast estimation". Exposure is re-solved at
-every step, so the median lightness stays where Auto put it.
-
-| Parameter | Value | Purpose | Effect |
-|---|---|---|---|
-| Evidence half-mass | 12 | The anchors pull toward neutral with strength m / (m + 12): half strength when the neutral evidence m is 12. A correction resting on very little neutral surface is mostly ignored. | — |
-| Head systematic error | 1 a\* | Neither estimate of the overall a\* (the neutral anchors or the intent field) is trusted more precisely than this. So when there is plenty of evidence and they disagree, the difference is split. A stated value, not derived. | — |
-| Magenta lean | 1 standard error | The intent term's target leans toward magenta by its own uncertainty, because slightly magenta looks better than slightly green. A stated value, not derived. | — |
-| Anchor range | L\* 2 to 92 | Only cells between these lightnesses are anchors. Clipped blacks and whites carry no colour, so they say nothing about a cast. | — |
-| Slope span | 6 L\* | A tone slope measured over a narrow range of lightness is shrunk toward Auto's instead of being extrapolated. | 34 |
-| Slope hold | On | Beyond the densest cell in the frame the curve stops bending, so the slope fitted in the measured range is not carried into tones the frame does not contain. | 38 |
-
-Bounds: the curve slope is held within 0.35; the curve may deviate at most 2.2 stops from the profile's own; the
-green gain may move 0.75 stop and the blue gain 1.25 stops from Auto's; the median lightness must stay plausible (L\*
-18 to 85); at least 8 cells must be in range; on an uncropped frame, cells on the film rebate or the holder are left
-out.
-
-### The never-greener guard
-
-The fit may not end greener than Auto's render: slightly magenta is preferred to slightly green. The fit first runs
-freely. Only if its result is greener than Auto's does it run again with the excess green penalised.
-
-| Parameter | Value | Purpose | Effect |
-|---|---|---|---|
-| The guard | On | As above. Without it, mid-tones end up greener on 38 of the 140 frames. | 41 |
-| Tolerance | 0.5 a\* | A result up to this much greener than Auto's still counts as not greener. | 7 |
-| Shadow exemption | Full below L\* 10, fading out by L\* 20 | The guard does not apply in the deep shadows, so a magenta cast there can still be corrected toward green. | 10 |
-
-## Stage 3: Profile tables
-
-Nothing is decided here. The correction of stage 2 is written into the profile's green and blue input tables, so
-the one conversion of the pixels applies it.
-
-## Parameter count
-
-| Stage | Parameters |
-|---|---|
-| 1 Auto search | 11 |
-| 2 Curve fit | 6 |
-| Guard | 3 |
-| 3 Profile tables | 0 |
-| 4 Tone stage | 5 |
-| **White light, stages 2 to 4** | **14** |
-
-Not counted as parameters: the solver's constants. They set how the terms are scaled and solved rather than what the
-solve aims at: the guard's penalty weight 4 and its counting minimums, the 4 x 4 blocks of the standard error, the
-slope weight and the 25 in the slope moment, the residual scale 1/1.5, the slope ridge 1.5 and the lever factor.
-They live in `input_curves.h`, and "Cast estimation" shows where most of them enter.
-
-## Known limitations
-
-- **Evidence half-mass (12).** A stated value, not a derived one. To do: re-check it on the scans that arrive
-  through the web portal.
-- **Slope span (6 L\*)** and **the guard's penalty strength.** Each has a clear purpose, but neither value is
-  derived.
-- **Tone moves (1.0, 0.5, 0.5).** Chosen by blind comparison, not derived.
-- **The intent term's two constants** (head systematic error 1 a\*, magenta lean 1 standard error) are stated, not
-  derived. Folding the overall balance into the fit costs a little where the true colour is known: on the emulated
-  scans the grey a\* error is 8.03, against 7.62 with the separate trim stage it replaced. The guard is a penalty,
-  not an exact bound: results end up to 0.18 a\* past it on 39 of the 140 frames (with the trim stage, up to 0.75 on
-  18).
-- **The intent term's cells.** Its weights run over every fit cell, including those Auto renders above L\* 92. On
-  one upload those cells carry up to 42 % of its precision. That is the form that was checked in blind comparison;
-  restricting it to the anchor range has not been tried.
-- **The guard.** It costs accuracy where the true colour is known, because Auto's render can itself be magenta. It
-  stays because guarded renders were preferred on real frames.
-- **Tone-dependent error.** The fit removes most of a uniform cast but little of a cast that differs between shadows
-  and highlights. What remains comes from the profile and the shape of the curve. Deep shadows have few neutral
-  anchors, so a dark neutral object can end a few a\* off.
-- **The clip check** measures the whole export, film borders included, while the tone curve is planned on the inner
-  crop.
-- **Stage 1 thresholds that need confirming:** the admissible-bracket cut (0.75), the overflow tolerances (1.5 and
-  1.2 stops), the clip fallback's trigger and acceptance limits (0.03 %, half the clipping, −4.5 to +0.5 L\*, 10 %)
-  and the highlight pullback's tiers (L\* 58 with 2.2 %, L\* 48 with 7.5 %).
-
-# Print emulation
-
-`neg_process` writes a scan as density (`-P statusm`, `-P rp180`, `-P apd`) and, with `--print`, a CLF
-beside the file that prints it on a paper or a print film. This part specifies both and lists every parameter
-involved. The density file is the film as measured. The CLF holds everything that turns it into a picture, and
-`neg_process` only looks its numbers up and multiplies them: nothing is fitted when a file is written. A
-white-light scan goes the same way with one more step, described under "White-light scans".
-
-## Pipeline
-
-| # | Stage | Function | Inputs |
-|---|---|---|---|
-| 1 | Density | Camera RGB to the density of the film above its base, in one standard measure. Writes the density file. | The profile set: the crosstalk correction and the density matrix. |
-| 2 | Search | Stage 1 of the picture conversion, unchanged: the exposure bracket, the exposure and the green and blue gains. Nothing is applied to the file. | The frame. |
-| 3 | Frame matrix | Places the frame on the print: its mid grey on the print's mid grey, its balance, and the slopes of its grey scale. One matrix, the first node of the CLF. | The search, the bracket's entry in the profile set, the print material's matrix. |
-| 4 | Print | The print material's response: its curve per layer, then its dyes under a viewing light, as sRGB. The other nodes of the CLF. | The print material's file. |
-
-A profile set holds nothing of a print material, and a print material's file (a spektrafilm print profile) holds nothing
-measured on a film. `-P` picks one measure for a run. The code is `np_print.cc`.
-
-## Derivations
-
-**Density.** `v` is the camera RGB after the flat field, `C` the crosstalk correction and `B` the scale that puts
-the film base on one level:
+The scale (`profile_bundle.cc`: `compute_station_merged_matrix`):
 
 ```
-T        = B C v / base level                 transmittance against bare film, per LED channel
-D_light  = -log10(max(T, 0.0001))
-D        = M D_light                          the measure's density
-code     = offset + scale k D                 10 bits: 95 + 500 k D     16 bits: 1520 + 8000 k D
+s_c = normalization_target / f_c × ρ          ρ = (shutter × ISO of the base capture) / (that of the scan)
 ```
 
-**The density matrix, in two parts.** `M = F L` (for Status M when calibrated on the chart, `M = F L diag(α)` with
-`α` the `light_density_factors` on the LED channels). `L` takes the density the LED sees to the film's three dye amounts
-and depends on the light's spectrum and the film's dyes. `F` takes the dye amounts to the measure and depends on the
-film's dyes and the measure's response curves, not on the light. The two are kept apart in `bundle.json`, so a
-scanner with another light replaces `L` alone. Each is a least-squares 3×3 with no offset, on 3000 sample colours of
-a model of the film: dye amounts along its neutral scale between log exposure −1.5 and 1.0, with a log-normal colour
-variation.
+`ρ` is 1 for a base read on this scan or scaled to it (items 1 to 3); it is used only for the bundle's base (item 4).
+After the scale the film base reads 55000 in 16 bits, `n0` in [0, 1].
 
-**The print matrix.** `P` takes a measure's density as written in the file to the density the print material's own
-layers read: its spectral sensitivity under a printer lamp. It is computed when a file is written, from the print
-material's profile and the bundle's film model, as `P = Q L M⁻¹` — `P = Q F⁻¹` when the measure has no
-`light_density_factors`, and with Status M's chart calibration undone when it has them so `P M = Q L` for every
-measure ("The print matrix").
+On white light the base is also used before the camera matrix: gains `K_c = (C⁻¹ f_profile)_c / (C⁻¹ f)_c`, divided by
+their largest, on the camera channels, with `C` LibRaw's camera-to-Rec.2020 matrix (`white_light_balance.h`:
+`film_base_balance_gains`). A light of another colour than the profile's then gives the base the profile's colour
+before the matrix mixes the channels, so dense areas are not pushed below zero.
 
-**Mid grey.** Each bracket of a profile set is one shot of the chart, and the profile set keeps the chart's 18 %
-grey patch of each bracket as the density the LED sees. The bracket's profile renders that density as mid grey at an
-exposure of 1. The search's exposure `E` multiplies the LED channels, so for this frame the film that renders as mid
-grey is denser by `log10 E` in each:
+## 2.4 Crosstalk correction
 
-```
-grey = M (bracket's mid grey + log10 E)
-```
+Each camera pixel sees all three LEDs: the green pixel takes in nearly half as much of the blue LED as the blue pixel
+does. `X` undoes that. It is measured with three captures of the bare light, one LED each: `M[:, j]` is the mean
+camera RGB over a central disc under LED `j`, each column is divided by its diagonal entry, and `X = M⁻¹`
+(`bundle.json`: `crosstalk_profile.crosstalk_correction_matrix`; `-r`, `-g`, `-b` replace it). White light has no
+separate LEDs to unmix, and `X` is the identity.
 
-**Balance.** The gains `g` and `b` multiply the green and blue LED channels, which in density is an offset:
-
-```
-balance = M [0, -log10 g, -log10 b]
-```
-
-**Slopes.** Over a bracket's 24 grey steps, the red and the blue density do not change as the green does. With
-`r_i` a step's density less the mid grey's, in Academy Printing Density:
-
-```
-k_red = sum_i r_i,red r_i,green / sum_i r_i,green^2          (likewise k_blue)
-S     = (1 / k_red, 1, 1 / k_blue)
-```
-
-Multiplied by `S`, the film's grey scale has equal contrast in the three channels. `S` is computed when the profile
-set is built and kept per bracket; a frame takes that of its bracket.
-
-![The grey steps of a bracket in APD, and its slopes](samples/slopes_grey_steps.png)
-
-**The frame matrix.** On the file's code `x` (the code over the largest code):
-
-```
-D             = (x largest code - offset) / (scale k)
-print density = 0.70 + S P (D + balance - grey)
-```
-
-The film that the picture conversion renders as the chart's mid grey is denser than the chart's by `log10 E`,
-`log10 E g` and `log10 E b` in the LED channels. In this formula it comes out at 0.70 in all three channels, so the
-print and the picture agree on which film is mid grey and neutral.
-
-**The print.** For each layer `c` and wavelength `w`:
-
-```
-logE_c = aim_c - (print density_c - 0.70)       aim: the exposure that prints an 18 % grey
-a_c    = curve_c(logE_c)                        dye amount, held at the ends of the curve
-t(w)   = 10^-(sum_c a_c dye_c(w) + base(w))     the print's transmittance or reflectance
-XYZ    = sum_w t(w) light(w) observer(w) / sum_w light(w) y(w)
-rgb    = X XYZ                                  linear sRGB, then the sRGB curve
-```
-
-## Stage 1: the density file
-
-| Parameter | Value | Purpose |
-|---|---|---|
-| Measures | Status M, RP 180, APD | `rp180` is SMPTE RP 180 printing density, the Cineon convention; `apd` is Academy Printing Density, SMPTE ST 2065-2. |
-| Container | `.dpx`: 10 bits, `95 + 500 k D`. `.tif`: 16 bits, `1520 + 8000 k D` | The output's extension picks it. `rp180` in a DPX is a Cineon file; `apd` is ADX10 or ADX16. A DPX clips at 1.86 above the base. |
-| ADX factors `k` | 1.00, 0.92, 0.95 for `apd`; 1 otherwise | SMPTE ST 2065-3, so an ADX reader gets APD back. With them a DPX clips at 1.86, 2.02 and 1.95. |
-| Zero | The film base | From `--film_base`, a capture of unexposed film, else from the scan's rebate, else estimated from the thinnest film in the frame, with a warning. |
-| Density floor | 4.0 | A transmittance below 0.0001 is held there, and counted. |
-| Flat field | As for a picture | It corrects the scan and the base capture before the density is taken. |
-| Not applied | Exposure, gains, curves, tone stage, look | The file is the film as measured. The search's result is recorded (`suggested_balance`). |
-
-The file carries the matrix, the light's spectrum (and its three LED spectra when they were measured one LED at a
-time), the film base and the encoding as JSON, in a TIFF's
-`ImageDescription` or a DPX's user data, and so does the sidecar.
-
-Accuracy of the 3×3 for each measure on the film model (`fit_rms_density`, `fit_max_density` in the bundle), over
-the three stocks and the densities a scan reaches, about 2.2 above the base:
-
-| Measure | RMS error (density) | Worst case (density) |
-|---|---|---|
-| Status M | up to 0.004 | up to 0.04, in green |
-| RP 180 | up to 0.004 in red and green, 0.010 in blue | up to 0.10, in blue |
-| APD | up to 0.010 in red, 0.002 in green and blue | up to 0.08, in red |
-
-These are errors against the model, not against the film.
-
-- **Film data that does not exist.** The datasheets give no base density below about 400 nm or above about 700 nm,
-  and the nearest measured value is held there. RP 180 blue and APD red have part of their response outside that
-  range (`response_outside_film_data`). Take those two rows as approximate.
-- **Status M is calibrated on the chart**, the printing densities are not. One factor on the green and one on the
-  blue LED density hold the chart's grey scale to the film model's Status M: 1.02 and 1.06 for Portra 400, 0.96 and
-  0.97 for Portra 160. Ektar 100's, 0.83 and 1.08, lie more than 0.10 from 1 and are recorded, not applied.
-- **Each LED band is taken as one channel.** The camera's departure from that is quantified under "The crosstalk correction, measured and computed".
-
-## Stage 3: the frame matrix
-
-| Parameter | Value | Purpose |
-|---|---|---|
-| Mid grey patch | `gs10` | The chart's step nearest 18 % reflectance. |
-| Mid grey lands on | 0.70 | Code 445 of a Cineon file, where Cineon holds the LAD patch. The constant cancels inside the CLF. |
-| Slopes measured in | APD | The standard measure in which equal steps are meant to print neutral. The same slopes serve a file in any measure. |
-| Slopes taken from | The frame's bracket | One pair per bracket, since the film's channels shift with exposure. |
-| Slopes applied | After `P` | They scale two rows of the print matrix. |
-
-The slopes are the film's alone: no print material enters them, so a print material keeps its own grey scale. On
-paper the bracket's grey steps then print near neutral. On Vision 2383, which in the model prints a neutral scale
-from green in the shadows to yellow in the highlights, that look stays.
-
-![The grey steps printed without and with the bracket's slopes](samples/slopes_grey_steps_printed.png)
-
-The brackets are seven exposures of one chart. Portra 400's slopes agree within 0.04. Portra 160's red runs from
-1.08 to 0.89 and Ektar 100's from 0.83 to 1.18, with its blue from 0.83 to 1.35: on those two the film's channels
-change their relation with exposure. The squares are what the same formula gives the film's datasheet model.
-
-![The slopes in the bundle, bracket by bracket](samples/slopes_across_brackets.png)
-
-Two frames of one roll on different brackets are printed with different slopes. One Portra 400 frame, whose bracket
-is Target 3, with the slopes of the two brackets furthest from it: against its own they move the picture by 0.8 and
-1.4 of 255 levels on average. For Ektar 100 the brackets differ ten times as much.
-
-![One frame with the slopes of three brackets](samples/slopes_of_other_brackets.jpg)
-
-The same frame without slopes and with its own, on each print material, beside the picture conversion:
-
-![One frame without and with its bracket's slopes](samples/slopes_on_a_picture.jpg)
-
-## Stage 4: the print
-
-| Parameter | Value | Purpose |
-|---|---|---|
-| Print materials | spektrafilm's print profiles: six papers and two print films built in, or a file | `--print <print>` writes the CLF of one, `<output>.<print>.clf`; repeated, or `all`, of several. `--print` alone lists them. Without it no CLF is written and stages 3 and 4 do not run. |
-| Printer lamp | 3200 K blackbody, no heat filter | With the material's sensitivity it defines the density the material reads. |
-| Viewing light | D50 for paper, D55 for print film | The print's colour is computed under it and adapted to D65 (CAT02) for sRGB. |
-| Curve table | 4096 points | The curve of each layer, as a 1D table. |
-| Colour table | 45 points a side | Dye amounts to linear sRGB, as a 3D table. |
-
-A CLF fits the one file it is named after: its first matrix holds that file's code scale, measure and channel
-factors. To print lighter or darker, add a constant to the three offsets of the first matrix; 0.30 is a stop. The
-balance, the exposure and the slopes are applied there and nowhere else. The CLF's two tables derive from
-spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0); the matrices are computed.
-
-## The spectral data
-
-All of it is on 380 to 780 nm at 1 nm. The film's and the light's are used ahead of time, when a profile set is
-built; the print material's is used when a CLF is written.
-
-| Data | Specific to | Used for | Kept in |
-|---|---|---|---|
-| The scanning light as three LED spectra: each LED measured alone, or one spectrum with all LEDs on cut at 495 and 578 nm | The light | `L` | `bundle.json`, `light_source`: the all-on spectrum and the three (`led_spectra`) |
-| The film's three dye spectra and base, and its neutral scale | The film stock | `L`, `F`, `P` | `bundle.json`, `film_model` |
-| The response curves of Status M, RP 180 and APD | The standards | `F`, `P` | Not shipped |
-| The print material's spectral sensitivity | The print material | `P` | The spektrafilm print profile |
-| The print material's curve per layer, dye spectra and base | The print material | The print | The spektrafilm print profile (`3rd_party/spektrafilm/profiles/`, or a file given to `--print`) |
-| The CIE 1931 2° observer, D50 and D55 | The CIE tables | The print | `cie_tables.h` |
-
-The camera has no spectral data here. The crosstalk correction stands in for its response curves.
-
-## The print matrix
-
-A print material is a print profile of [spektrafilm](https://github.com/andreavolpato/spektrafilm), read as
-published: eight are built in (`3rd_party/spektrafilm/profiles/`), and `--print <file>` takes any other. From the
-profile `neg_process` computes the observer under the viewing light (D50 for a paper, D55 for a print film), the
-exposure that prints an 18 % grey, and the print matrix for the bundle's film.
-
-The response curves of the standard measures are not shipped, so the print matrix is not fitted against them. With
-`F` the measure's part of the density matrix (dye amounts to the measure's density), `L` the light's part, `α` the
-measure's `light_density_factors` (`1` unless Status M was calibrated on the chart), and `Q` the 3×3 from the film's
-dye amounts to the print's own density:
-
-```
-P = Q F⁻¹ + Q L diag(α⁻¹ − 1) L⁻¹ F⁻¹ = Q L M⁻¹
-```
-
-For RP 180, APD, white-light profiles and uncalibrated Status M (`α = 1`) the second term vanishes and `P = Q F⁻¹`.
-For a calibrated Status M file (`M = F L diag(α)`), it undoes `α` on the light's channels so that `P M = Q L` for
-every measure: Status M's chart calibration belongs to the Status M density readout alone, and the bracket's
-uncalibrated APD slopes apply once instead of on top of `α`.
-
-`Q` is a least-squares fit with no offset on fixed sample colours of the bundle's film model: every point of its
-neutral scale between log exposure −1.5 and 1.0, each with 27 colour variations (each dye amount times
-`exp(0.184 z)`, `z` = −1, 0, 1). For Portra Endura and Vision 2383 `Q F⁻¹` lies within 0.01 of a matrix fitted
-against the measure's response curves on 3000 drawn samples, which earlier versions stored.
-
-## The crosstalk correction, measured and computed
-
-Each camera pixel sees all three LEDs: the green pixel takes in nearly half as much of the blue LED as the blue
-pixel does. `C` undoes that. It is measured by capturing each LED alone. It could instead be computed from the
-camera's response curves and the light's spectrum, and this section compares the two.
-
-![The camera's response curves and the light's three LEDs](samples/crosstalk_spectra.png)
-
-The computed one uses the published curves of the same camera model (Sony ILCE-7RM4, `rawtoaces-data` at commit
-`28801d1ad6`) and the three LEDs separated out of the all-on spectrum, each fitted as two skewed Gaussians.
+The measured matrix is used rather than one computed from the camera's published response curves and the LEDs'
+spectra: it is of this camera and this light and needs no spectral data of the camera. The two agree within 8 % on
+four of the six terms; the red pixel's two terms differ more.
 
 ![Crosstalk terms, measured against computed](samples/crosstalk_measured_vs_computed.png)
 
-| Leak | Measured | Computed | Computed / measured |
-|---|---|---|---|
-| Green pixel, red LED | 0.168 | 0.170 | 1.01 |
-| Blue pixel, red LED | 0.017 | 0.016 | 0.95 |
-| Red pixel, green LED | 0.089 | 0.079 | 0.89 |
-| Blue pixel, green LED | 0.280 | 0.269 | 0.96 |
-| Red pixel, blue LED | 0.063 | 0.041 | 0.66 |
-| Green pixel, blue LED | 0.457 | 0.421 | 0.92 |
+## 2.5 The input matrix and the soft knee
 
-Four of the six agree within 8 %. The two of the red pixel do not. The effect on density, on a model of Portra
-400 seen through the published curves, up to a density of 1.5 (red / green / blue):
-
-| | RMS | Largest |
-|---|---|---|
-| Camera with the measured correction, against the LED bands alone | 0.015 / 0.021 / 0.009 | 0.049 / 0.055 / 0.076 |
-| Camera with the computed correction, against the LED bands alone | 0.012 / 0.013 / 0.007 | 0.050 / 0.038 / 0.062 |
-| The computed correction against the measured one | 0.003 / 0.009 / 0.002 | 0.008 / 0.044 / 0.014 |
-
-Most of the first two rows is a scale: against the LED band alone the model's camera reads red and green 2 to 3 %
-flatter and blue 1 % steeper. Above a density of 1.5 the corrected green and blue signals near zero and the
-comparison stops meaning much. The measured matrix is kept: it is of this camera and this light, and needs no
-spectral data of the camera.
-
-## White-light scans
-
-A white-light scan gets a density file and its CLFs as a narrow-band one does (`--light_source d65 -P apd`). This
-section says what differs, and reports the experiments behind it.
-
-**What differs.** A white-light scan is decoded to linear Rec.2020 channels: the camera's channels, balanced on the
-film base, through the camera's colour matrix. There is no crosstalk correction `C`, since there are no separate
-LEDs to unmix. The density above the base is taken per channel as before:
+The steps above, with the exposure and the gains, are one 3×3 per frame (`color_pipeline.h`: `candidate_matrix`,
+`knee_compress`):
 
 ```
-T        = B v / base level
-D_white  = -log10(max(T, 0.0001))
-D        = M D_white                          M = F L, as for a narrow-band scan
+M_frame = diag(s) X                                        the merged matrix
+x       = diag(E, E g, E b) M_frame v / 65535              film RGB; the base reads n0 at E = g = b = 1
+knee(x) = x                                    x ≤ 0.95
+        = min(0.9999, 0.95 + 0.05 tanh((x − 0.95) / 0.05))   x > 0.95;   0 for x ≤ 0
 ```
 
-**`L` for white light.** No spectrum of the light is measured, and none of the camera. Linear Rec.2020 is taken as
-what it is defined to be: the CIE 1931 observer under D65, through the Rec.2020 matrix. `L` is then fitted as for the
-LED, on the same 3000 sample colours of the film model: each sample's spectrum is seen by the observer under D65,
-turned into Rec.2020, and its density per channel taken against the model's own base; `L` is the least-squares 3×3
-from those densities to the dye amounts. `F` does not depend on the light and is the narrow-band profile set's. So a
-white-light profile set carries the same block as a narrow-band one, with another `L`, and needs no narrow-band
-twin, no measured light and no data of the camera.
+`E` multiplies all three channels, which in density is a shift along the film's exposure axis. `g` and `b` shift the
+green and blue channels against red: the colour balance. The knee compresses film thinner than the base, which the
+profile's input range does not cover, instead of clipping it.
 
-For Portra 400:
+The searches work in a reference unit: the frame as if scanned at 1/8 s, ISO 100 on the bundle's base. With
+`e_norm = M_frame[1][1] / M_ref[1][1]`, a TriLED search's exposure is `E × e_norm`, so the same search exposure
+means the same rendering whatever the scan's exposure; a white-light search scales the scene's range by `e_norm`
+instead (`multi_target_optimizer.cc`: `frame_scale`). The result is reported in
+the frame's units (`auto.e`, `-E`).
 
-```
-L        2.267  -0.798  -0.024        F L for APD   2.663  -0.905  -0.007
-        -0.330   1.376  -0.053                     -0.424   1.612  -0.032
-        -0.036  -0.079   1.044                     -0.005  -0.051   1.060
-```
+# 3. The profiles
 
-**How far the assumption holds.** The model's film base comes out at 1 : 0.51 : 0.31 in Rec.2020, and the base of
-the white-light profile set is 1 : 0.56 : 0.30. Each film stock also has both profile sets built from the same seven
-chart negatives, so every patch is read twice, and the APD of a white-light reading can be held against the APD of
-the narrow-band one. Over the 2016 patches (red / green / blue, RMS):
+A profile maps film RGB (2.5, after the knee) to colour in the PCS. It is made from a photograph of a chart on the
+film stock, so it holds the film's response to light as measured, through this camera and this light.
 
-| Stock | `F L` from spectra | A 3×3 fitted to the chart itself |
-|---|---|---|
-| Portra 400 | 0.081 / 0.055 / 0.050 | 0.040 / 0.034 / 0.021 |
-| Portra 160 | 0.041 / 0.067 / 0.031 | 0.040 / 0.037 / 0.024 |
-| Ektar 100 | 0.085 / 0.087 / 0.065 | 0.048 / 0.058 / 0.028 |
+## 3.1 The chart and the brackets
 
-The second column is the best any 3×3 can do on this scanner, fitted to the very patches it is judged on. The
-matrix from spectra is 1.5 to 2 times less exact; part of that is a constant offset per channel (Portra 400's red
-reads 0.07 low on average), which the frame's balance takes out. `M` for the LED fits its film model within 0.010,
-so a white-light density file is several times less exact than a narrow-band one either way. The matrix fitted to
-the chart is not used: it belongs to one camera and one light, and needs the narrow-band twin.
+An IT8 chart (288 patches: 264 colours and a grey scale of 24 steps, `gs0` to `gs23`) is photographed on the film
+at seven exposures, from −3 EV to +3 EV. Each developed frame is captured on the scanner: one **bracket**. A
+negative's tones fall into different parts of the film's curves at different exposures, and one bracket's profile is
+exact only over the range its chart covers, so the conversion picks, per frame, the bracket whose range holds the
+scene (4.2).
 
-**Mid grey and slopes.** A white-light profile set has its own seven brackets, and the search picks among those.
-Its `brackets` entry is computed from its own chart readings by the formulas of "Derivations": the mid grey patch of
-each bracket as `D_white`, and the slopes from the bracket's 24 grey steps in APD through `F L`. For Portra 400,
-against the narrow-band profile set of the same negatives (red, blue):
+## 3.2 Building one profile
 
-| Bracket | White light | Narrow band |
-|---|---|---|
-| 1 | 0.978, 1.072 | 0.916, 0.982 |
-| 3 | 0.975, 1.086 | 0.911, 0.993 |
-| 5 | 0.932, 1.067 | 0.890, 0.999 |
-| 7 | 0.899, 1.029 | 0.871, 0.987 |
+The profile-building tools are not in this repository. Each bracket's profile is made in four steps:
 
-The slopes are measured through the matrix they are used with, so where the two matrices read a channel's contrast
-differently, the slopes differ to match: in both chains the bracket's grey steps end with equal contrast in the
-three channels. What the slopes cannot repair is the matrix's error off the grey axis.
+1. **Patch reading.** The capture is decoded as in 2.1: under the RGB LED the half-size image straight from the CFA,
+   one pixel per 2×2 quad; under white light LibRaw's `dcraw_process` at half size, output linear Rec.2020. The flat
+   field is applied at decode, then the crosstalk correction (camera RGB only), and each patch's mean is taken over
+   its box of the chart. Each channel is then scaled by `normalization_target / f_c × ρ` (2.3), with the base read as
+   the mean over a rectangle of a separate capture of unexposed film, divided by the flat's mean gain there and
+   corrected for crosstalk, and `ρ` the base capture's exposure over the chart capture's. The profile's own matrix is
+   the identity, the correction being applied before it.
+2. **Input curves.** The film's curve per channel (density above base against log exposure, monotone) is fitted
+   jointly over all seven brackets. A profile's input curve (4096 entries) maps a corrected value to a linear scene
+   value: below the chart's white it is a monotone interpolation through the grey steps; above it the film curve
+   extends it and a highlight roll-off compresses it, with the chart's white at 0.75 of the output range, so the table
+   has headroom above white (linear sRGB up to about 1.33 on the grey axis).
+3. **The 3D table.** ArgyllCMS `colprof` fits a 45 × 45 × 45 table (PCS XYZ) to the patches after the input curves.
+   The reference XYZ is the chart maker's data file, adapted to D50 (Bradford) when it is given under another
+   illuminant.
+4. **The file.** The pieces are merged into one ICC v2 input profile, RGB → PCS XYZ D50, an A2B0 `lut16`: three
+   4096-entry input curves, an identity matrix, the 45³ table and identity output curves.
 
-**Balance and exposure.** The search is stage 1 of the white-light conversion and gives a bracket, `E`, `g` and `b`
-as it does under the LED. The gains multiply the channels `D_white` is taken in, so `balance` and `grey` are those
-of "Derivations", and the frame matrix and the print are a narrow-band scan's.
+## 3.3 A bracket's calibrated range
 
-**The curve fit.** A white-light conversion has one stage more: the fit bends the green and blue input curves so
-that what the frame shows as neutral comes out grey. A film of density `D` reaches the profile's input as
+A bracket's range is not stored; it is computed at conversion from the bracket's stored patches
+(`multi_target_optimizer.cc`: `bracket_enclosure`). With `g_min` and `g_max` the smallest and largest green value of
+its patches, `g_lo` and `g_hi` the scene's green 0.5 % and 99.5 % points over the inner 90 % of the frame, and `ρ_b`
+the reference exposure (1/8 s, ISO 100) over the bracket's capture exposure:
 
 ```
-w   = E g_c n0 10^-D                          n0 = 55000 / 65535, where the film base lands at E = g = 1
-v   = knee(w)                                 the soft knee at 0.95, the identity below it
-v'  = ref 2^f(log2(v / ref))                  below ref; red has no curve
-f(u) = u (1 + a + k tanh(u - u_med))          held below the densest cell
+e_min = g_min / g_lo × ρ_b      e_max = g_max / g_hi × ρ_b      e_centre = sqrt(e_min e_max)
+usable range: e_min / 2^1.5 … e_max × 2^1.2
+```
+Every `E` between `e_min` and `e_max` keeps the whole scene inside the calibrated range (the bracket is **feasible**
+when `e_min ≤ e_max`). The usable range lets the highlights exceed it by 1.5 stops and the shadows by 1.2. A bracket is
+**admissible** for the frame when the scene's span `log2(g_hi / g_lo)` is at most the bracket's span over all its
+patches, `log2(g_max / g_min)`, plus 2.7 stops. When the scene exceeds a bracket by more than the two tolerances
+together, the usable range is inverted: no `E` keeps both ends within tolerance, and the range is the set of compromises
+between them.
+
+## 3.4 The profiles' prediction errors
+
+CIEDE2000 between each profile's prediction and the chart's reference, per bracket, mean / maximum. **In-sample**
+is ArgyllCMS `profcheck` on all 288 patches the table was fitted to, as stored in `bundle.json`
+(`targets[i].profcheck_output`, the "Fitted" columns of each profile set's README); it shows how well the table fits
+its own data. **Held out** is the mean error on colour patches left out of the fit (each profile rebuilt twice, each
+time without alternate halves of the 264 colour patches; the grey steps stay in), as each profile set's README gives
+it; it is the better guide to a photograph.
+
+| Profile set | Error | −3 EV | −2 EV | −1 EV | 0 EV | +1 EV | +2 EV | +3 EV |
+|---|---|---|---|---|---|---|---|---|
+| Portra 400, TriLED | in-sample | 0.79 / 5.1 | 0.56 / 5.6 | 0.53 / 3.7 | 0.55 / 3.3 | 0.54 / 4.5 | 0.59 / 4.2 | 0.69 / 3.0 |
+| | held out | 2.70 | 2.04 | 2.38 | 2.62 | 2.75 | 2.92 | 3.08 |
+| Portra 400, white | in-sample | 1.08 / 7.5 | 0.74 / 4.6 | 0.69 / 3.6 | 0.75 / 10.6 | 0.68 / 6.6 | 0.73 / 12.8 | 0.80 / 4.5 |
+| | held out | 2.65 | 1.95 | 2.05 | 2.10 | 1.80 | 2.21 | 2.44 |
+| Portra 160, TriLED | in-sample | 1.09 / 10.7 | 0.82 / 14.0 | 0.59 / 4.4 | 0.56 / 3.7 | 0.62 / 3.6 | 0.67 / 3.4 | 0.70 / 3.4 |
+| | held out | 2.35 | 2.09 | 1.96 | 2.30 | 2.65 | 2.67 | 2.82 |
+| Portra 160, white | in-sample | 1.32 / 18.2 | 1.10 / 19.4 | 0.81 / 4.2 | 0.69 / 5.2 | 0.75 / 5.9 | 0.77 / 5.4 | 0.80 / 3.0 |
+| | held out | 2.45 | 2.10 | 1.91 | 1.84 | 1.77 | 1.96 | 2.25 |
+| Ektar 100, TriLED | in-sample | 1.11 / 14.2 | 0.61 / 9.8 | 0.51 / 2.3 | 0.62 / 8.2 | 0.63 / 2.0 | 0.72 / 3.8 | 0.83 / 4.1 |
+| | held out | 3.05 | 2.68 | 2.79 | 3.25 | 3.52 | 4.01 | 3.72 |
+| Ektar 100, white | in-sample | 1.45 / 14.1 | 0.80 / 6.8 | 0.63 / 2.8 | 0.65 / 3.4 | 0.79 / 3.1 | 0.92 / 4.1 | 1.05 / 4.1 |
+| | held out | 3.18 | 2.13 | 1.78 | 1.84 | 2.18 | 2.76 | 3.05 |
+
+On the patches it was fitted to, a white-light profile is less exact than a TriLED one. On held-out patches it is
+more exact in 18 of the 21 cells, by up to 1.41 (Ektar 100, 0 EV), and less exact by at most 0.13 in the other three
+(−3 EV on Portra 160 and Ektar 100, −2 EV on Portra 160). The chart therefore does not show the larger
+frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corrects.
+
+## 3.5 The networks
+
+The search judges a render with a vision network: the frozen DINOv3 ViT-S/16 backbone (`models/dinov3-small`), whose
+input is the preview with its longer side at most 512 pixels, cut into 16-pixel patches; one patch is one cell of
+the grid (32 × 21 cells for a 3:2 frame). Three heads read its tokens (`dinov3_engine.h`).
+
+The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small MLP on the layer 9 and 12 tokens),
+predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
+the mean CIELAB of photographs on that stock in their finished positive scans (2,908 for Portra 400), resampled in
+linear light to the network's input and averaged over the cell's 16 × 16 pixels. `σ` has no target: it is learned
+with a heteroscedastic Huber loss on the standardised residual `r = |lab − μ| / σ`, `H(r) + log σ` with `H` Gaussian
+(`r² / 2`) within one `σ` and linear beyond, so that a few badly predicted cells do not dominate. After training, `σ`
+is calibrated per channel on the validation photographers: multiplied by 1.24 to 1.45 (each adapter's
+`metadata.json`, `sigma_scale`), the mean unchanged.
+
+The **neutral head** (`models/neutral_head`) predicts per cell `p`, the probability that the cell should render grey,
+whatever cast the render has; the white-light curve fit uses it. The **tone heads** (`models/tone_head`) predict, from
+the pooled features, the shadow level `L2`, the highlight level `L98` and the tonal range `L90 − L10` a lab scan of
+the frame would have; the tone stage uses them. Both were trained on lab scans of eight colour negative stocks, the
+neutral head with colour casts added to its inputs and the tone heads with exposure, contrast and level changes added,
+so that they read the content and not the render's own cast or levels.
+
+# 4. Scene conversion
+
+## 4.1 The per-pixel conversion
+
+With `-P srgb` or `-P srgb-g10`, every output pixel goes through these stages once (`color_pipeline.h`:
+`convert_pixel`):
+
+```
+x     = knee(diag(E, E g, E b) M_frame v / 65535)                        2.5
+y_c   = in_c(x_c)                                                         the bracket's input curves (4096 entries, linear)
+XYZ   = 1.99997 × clut(y)                                                 tetrahedral interpolation of the 45³ table: PCS D50
+rgb   = C⁻¹ XYZ (C: the embedded sRGB profile's colorants), clamped at 0  linear sRGB, up to about 1.33
+rgb'  = shoulder(rgb), clamped to [0, 1]                                  shoulder: -P srgb, not a print; clamp: both
+rgb'' = tone(rgb')                                                        -P srgb, with a tone curve (below)
+out   = sRGB curve (or linear for srgb-g10), quantised to 16 bits
 ```
 
-where `ref` is the curve's pivot as the fit records it: the film base at `E g_c`, through the knee. The bracket's
-profile renders `v' = n0 10^-d_i` as the chart's grey step `i`. So the film this frame renders as step `i` is found
-by running that backwards: `f` by bisection (it is monotonic), the knee in closed form, then
-`D_c,i = -log10(w / (E g_c n0))`. While `E g_c ≤ 1.13` the knee does not reach the film base, `ref = E g_c n0`, and
-this reduces to
+The tone curve is the tone stage's after a search, or a recorded one (`--tone_stage curve:…`, or a previous run's
+on a knob run). With `-P <ICC profile>` a pixel takes the first three stages (`convert_pixel_pcs`) and then goes from
+XYZ to the profile through Little-CMS, perceptual intent: no `C⁻¹`, shoulder or tone. Without `-P` the output is the
+corrected camera RGB, the first stage alone (the matrix and the knee, `convert_pixel_corrected`), with the bracket's
+ICC profile embedded.
+
+**The highlight shoulder** compresses what the profile's headroom holds above the chart's white instead of
+clipping it. Per channel, in stops `t = log2(x)`, it is the identity up to a knee `t_k`, then
 
 ```
-f_c(u) = -(d_c,i + log10(E g_c)) log2 10      D_c,i = -u / log2 10
+s(t) = C − (C − s_k) (1 − (t − t_k) / (t_hi − t_k))^2         in encoded sRGB, s_k = sRGB(2^t_k)
 ```
 
-Above that the knee moves the pivot, and on 55 of the 145 scans of the experiments below it does: leaving it out
-moves their slopes by up to 0.2. The result is the grey scale the fitted curves describe. It goes forward through `F L` to APD, where the frame's mid grey
-is its mid step and the slopes are the regression of "Derivations" over its 24 steps:
+reaching the ceiling `C` = 0.988 (code 252) at `x_hi` and staying there; `t_k` is solved so the join has a continuous
+slope. `x_hi` is chosen per frame so that the 99.5 % point of each pixel's largest channel, `max(R, G, B)`, lands on
+sRGB 242 (`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 the ceiling ramps in from 1.
+
+The tone stage (4.4) changes lightness only. A print (5.4) takes neither the shoulder nor the tone stage.
+
+## 4.2 The Auto search
+
+The search chooses the bracket and `(E, g, b)`. It works on the half-size image of the frame's inner 90 % crop
+(`multi_target_optimizer.cc`: `search_conversion_params`).
+
+**The score.** A render's preview goes to the intent head, which predicts `(μ_i, σ_i)` for each cell `i`. The
+render's own colour per cell is read as the head's targets were made (`dinov3_auto_solver.cc`:
+`trained_cells_lab`): the preview resampled in linear light by area average to the network's input size, CIELAB per
+pixel, averaged over the cell. The residual is the mean squared z-score:
 
 ```
-grey'  = F L D_mid                            balance and exposure are in D_mid already
-S'     = slopes of F L (D_i - D_mid)
-print density = 0.70 + S' P (D - grey')
+z2 = 1 / (3N) Σ_i Σ_{k∈L,a,b} ((lab_ik − μ_ik) / σ_ik)^2
 ```
 
-No pixel goes back to the scan's channels: the fit changes two numbers of the first matrix and its offsets, as `g`
-and `b` do. Without a fit (`a = k = 0`) this is the narrow-band formula exactly. It agrees with the fitted curves
-on the grey axis and, like `S`, is a diagonal scale off it. This is the one place where something is computed when
-a file is written: 24 points through a 3×3 and a closed-form regression.
+Under a Gaussian model per cell this is the negative log-likelihood, so cells the network is unsure of count for
+little. The network's lightness follows the picture it is shown, so the search fixes one lightness target per frame
+(step 2) and lets only `a*` and `b*` be predicted again from each render.
+
+**The (E, g, b) optimiser** (`dinov3_auto_solver.cc`: `optimize_target_for_intent`) is a coordinate descent against a
+fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_loss`;
+`intent_cells` gives the same cells for the correction below), not a full preview:
+
+1. `E` over 13 points across its window (plus ±0.03 and ±0.06 around a start), then ±1 and ±2 steps of 1/40 of the
+   window, scored on the `L*` loss plus the penalties;
+2. `g` over a grid, scored on the `a*` loss; then `b` over a grid, scored on the `b*` loss;
+3. `g` and `b` refined by ±0.02, on the sum of the `a*` and `b*` losses.
+
+The penalties are `15 ((clip − 2.5) / 2)^2` once more than 2.5 % of the cells' channels clip white, and
+`5 log2(E / e_centre)^2` toward the bracket's centre (none for a bracket whose usable range is inverted: there the
+intent field alone places `E` between the two ends). Rendering an average is not the average of the render (a
+negative's bright grains render dark and its dark grains bright), so after each preview of a bracket the difference
+between the preview's cells and the optimiser's cells at the same parameters is kept, and the bracket's next
+optimisation aims at `μ` minus that difference (`SearchFrame::update_correction`). At the fixed point the picture,
+not the optimiser's reading of it, matches the field.
+
+**The steps:**
+
+1. **Brackets and their ranges.** In a set of five or more brackets, those whose grey scale (`gs0` to `gs23`) spans
+   less than 0.75 of the widest one's are left out (at least three are kept: `filter_admissible_targets`; this is a
+   width test of the bracket alone, not the admissibility of 3.3). Each remaining bracket gets its calibrated and
+   usable range (3.3), and whether it is admissible. With `--target` the given bracket alone is kept, admissible or
+   not.
+2. **Metering and the lightness target.** Each admissible bracket (every bracket of step 1 when none is admissible)
+   is metered: the `E` at which the scene's log-average renders at `L*` 50 with gains 1.10 and 1.15, by bisection
+   (`exposure_for_lightness`; a bracket that cannot render a neutral `L*` 50 within 0.25 ΔE is not metered). Every
+   metered bracket is rendered at its metered `E`, clamped to its usable range, and the predicted fields are averaged:
+   the **bootstrap field**. Its `L*` is the frame's lightness target for the rest of the search. When no bracket
+   meters, the bracket whose range the scene fills best (`|fill − 0.85| + 0.5` per stop of overflow, an admissible one
+   when there is one) renders it alone at its `e_centre`. With `-E` one render makes the field, at the given `E`: the
+   deepest metered bracket's (its metered `E` furthest inside its usable range), or the best-fit one's when none
+   meters.
+3. **Screening.** Each metered bracket's `(E, g, b)` is optimised against the bootstrap field over its usable range,
+   from gains 1.22 and 1.15 (every bracket of step 2, from its `e_centre`, when none metered), each aimed at the field
+   minus its own correction (below): the one of its bootstrap render, or, when one render made the field, the one of
+   a render at the `E` it is screened from with the bootstrap's gains. The brackets are ranked by that loss.
+4. **Tournament.** The best two run a fixed-point loop (`SearchFrame::fixed_point`), with `E` held within ±0.5 stop of
+   its screened value. Each step measures the shoulder's `x_hi`, renders the preview, updates the correction,
+   predicts a field, puts the lightness target in its `L*`, measures the residual, and optimises the next `(E, g, b)`.
+   A loop stops when `|ΔE| + |Δg| + |Δb| ≤ 0.02`; on TriLED also when the residual changes by 1.5 % or less; on white
+   light when the residual has passed its minimum. It is diverged when the residual grows by more than 25 % and more
+   than 1.5, and stops after 8 steps (`--dino_iters`). Each loop keeps its lowest-residual step. The lower residual
+   wins; on TriLED among the converged loops when any converged.
+5. **Clip fallback.** When the winner white-clips more than 0.03 % of the crop (a channel at 16-bit code 65400 or
+   above), the next denser bracket, when it was screened and is admissible, runs the loop of step 4 (or keeps its
+   tournament run) and is taken if it at least halves the clipping, moves the median `L*` by no more than −4.5 to
+   +0.5, and has a residual no more than 10 % higher. A bracket given with `--target` stays.
+6. **Highlight pullback.** A bright frame with highlights crowding the top was rendered too bright: median `L*` ≥ 58
+   with ≥ 2.2 % of the crop above sRGB 242 in a channel, or median `L*` ≥ 48 with ≥ 7.5 % above 242 (or, on `Target 4`
+   and denser brackets, ≥ 11 % above 235). On a feasible bracket with `E` below `e_min`, `E` is raised toward `e_min` by
+   at most 0.15 stop. On an infeasible one, steps 2 to 4 run again with the same lightness target: the bootstrap field
+   is made again from the metered brackets' renders (when no bracket metered, the first field is kept), the brackets
+   step 3 screened are screened again, and the best two run the tournament, with penalties
+   `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below
+   `e_min` or above `e_max`; `slack`: stops by which the scene overflows the bracket); the runs are ranked by their
+   residual plus the same penalties, on TriLED among the converged runs when any converged. When the winner puts the
+   median `L*` more than 7.5 below the first choice's (on a frame with median `L*` ≥ 58; 4.5 otherwise), its `E` is
+   lowered, which brightens it, by 0.038 stop per `L*` of the excess, once. The result is taken if the share of the crop
+   above 242 grows by no more than 0.5 percentage point, the median `L*` stays at 48 or within 6 of the first choice's,
+   and it moves to a denser bracket or raises `E` by more than 2 %. Dark and backlit frames are left alone, and the
+   pullback does not run after the clip fallback took the next bracket, with `-E`, or on a one-bracket set.
+7. **Final shoulder.** `x_hi` is measured once more at the final parameters.
+
+The sidecar records the winning step's field as `intent_field` (`μ` and `σ` per cell): its `a*` and `b*` as that step
+predicted them, its `L*` the lightness target of step 2.
+
+The search's parameters, in the order the steps use them:
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| Light assumed | D65, CIE 1931 2° observer, linear Rec.2020 | What the white-light decode aims at. It stands in for the light's and the camera's spectra. |
-| `F` | The narrow-band profile set's | It depends on the film and the measure alone. |
-| Offset in `L` | None | Bare film is zero in both readings. |
-| Film base | The scan's rebate, else the thinnest film in the frame | `--film_base` with a capture reads a narrow-band mosaic and is not available under white light. |
-| Curve fit | Run for a density output on white light; `--fit_curves off` turns it off | Its result goes into the first matrix alone. Off, the frame takes its bracket's mid grey and slopes. |
+| Inner crop | 90 % | The statistics and previews leave out the frame's border. |
+| Scene range | 0.5 % to 99.5 % of green | A few specular highlights or dust specks do not set the scene's range. |
+| Wide brackets | in a set of five or more: grey scale span ≥ 0.75 of the widest, at least 3 | A bracket calibrating a much shorter range cannot hold a whole scene. |
+| Overflow tolerances | 1.5 stops of highlight, 1.2 of shadow | How far a scene may exceed a bracket's calibrated range: the usable range and admissibility. |
+| Metering | `L*` 50 at gains 1.10, 1.15 | The exposure each bracket starts from. |
+| Bootstrap field | mean over every metered bracket | No single bracket sets the frame's lightness target. |
+| Best-fit fallback | fill 0.85; 0.5 per stop of overflow | The bracket that renders the bootstrap when none meters. |
+| Screening start | gains 1.22, 1.15 | Where the screening's optimisation of the gains begins. |
+| Clip penalty | above 2.5 % of channels | The search avoids renders that clip white. |
+| Exposure penalty | `5 log2(E / e_centre)²`; none on an inverted range | Keeps `E` near the centre of the bracket's calibrated range. |
+| Tournament | best 2; trust region ±0.5 stop | The loop refines the screened `E` instead of relocating it. |
+| Convergence | 0.02 in `E + g + b`; 1.5 % (TriLED); past minimum (white); 8 steps | When a loop stops. |
+| Clip fallback | over 0.03 %; halve; −4.5 to +0.5 `L*`; residual within 10 % | Moves a clipping frame to the next denser bracket. |
+| Highlight pullback | `L*` 58 with 2.2 %, `L*` 48 with 7.5 % (11 % above 235); 0.15 stop | Darkens a bright frame whose highlights crowd white. |
+| Highlight roll-off | 99.5 % point to sRGB 242; `x_hi` ≤ 2.5; exponent 2; ceiling 0.988 | Compresses highlights above the chart's white. |
 
-**What carries it.** The profile builder writes `L` and the `brackets` entry into a white-light profile set, with
-every grey step of each bracket (`grey_steps_light_density`), which the fitted grey scale is worked out from.
-`neg_process` runs the curve fit for a white-light density output as for a picture, applies it to no pixel, and
-builds the first matrix from the fitted grey scale (`np_print.cc`: `fitted_grey_scale`, `frame_print`). The metadata
-says where a frame's mid grey and slopes came from (`grey_and_slopes_from`). No print material's file changes.
+**Given values.** On a bundle, under either light, `--target`, `-E`, `--gain_g` and `--gain_b` are held and the rest
+is searched; with all four given the search runs only for the curve fit (white light) and the tone stage. A single
+ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or nothing runs the single-bracket solver
+(`solve_dinov3_intent`) and a given gain turns the search off. `--brightness`, `--tint` and `--warmth` move the
+result afterwards, in stops of the reference grey's luminance and in its `a*` and `b*`.
 
-**The experiments.** Both ran in copies of `neg_process` from before this was built, on white-light scans whose film
-stocks are unknown, each on the Portra 400 profile set as the picture conversion runs them today.
+**Limits.** The search does not always reach the same answer from different starts. The thresholds of steps 1, 5 and
+6 and the tolerances of 3.3 are stated values, not derived.
 
-1. *The matrix fitted to the chart, with slopes fitted for print neutrality* (an earlier form of both): 137 scans
-   from 43 cameras. All gave a density file and both CLFs, and OpenImageIO rendered every one. A blind comparison by
-   the owner on 48, the paper print against the picture conversion: 14 for the print, 15 for the picture, 19 no
-   preference. With the base from the rebate 12 to 8 with 15 no preference; with the base estimated from the frame
-   2 to 7 with 4. On a roll scanned under the LED the same comparison went 8 to 26.
-2. *`L` from spectra, the brackets of this section, and the curve fit folded in*: the 137 and 8 raws uploaded
-   through the web portal. All 145 converted. The first matrix built here from the search alone equals the one the
-   copy writes within 0.0004. The fit applied on every frame, with `k = 0` on all; against the chart's, its slopes
-   differ by −0.15 to +0.17 in red and −0.23 to +0.06 in blue over the middle 80 % of frames. Against the picture
-   conversion the print's median luminance is 0.12 stop darker on the median frame, with extremes of 1.3 stop darker
-   and 1.0 lighter; without the fit the extremes are 2.9 darker and 0.3 lighter. A blind comparison is set up and not
-   yet voted on. The build in this tree gives the same mid grey and slopes as that experiment's.
+## 4.3 The white-light curve fit
 
-**Limits.**
+A white-light conversion leaves a cast that differs from frame to frame more than a TriLED one does: the broad
+channels mix the film's layers, which a 3×3 cannot undo. After the search, the fit corrects the green and blue gains
+and the slopes of the green and blue input curves so that what the frame shows as neutral comes out grey
+(`input_curves.h`; `multi_target_optimizer.cc`: `run_white_light_fit`). It runs on white light with `-P srgb` or
+`srgb-g10` (`--fit_curves`), and for a white-light density file without `--print`, where it gives the suggested
+balance only. A print takes no fit (5.10).
 
-- **The assumption is as good as the camera's colour matrix.** A camera is not the CIE observer, least of all on
-  film dyes, and a scanning light is not D65. On the one scanner where it can be checked the cost is the first
-  column of the table above. On other cameras it is not measured.
-- **Noise.** The rows of `F L` are about twice as long as those of the LED's `M` (2.8 against 1.5 in red), so the
-  scan's noise is about twice as large in the density file.
-- **The film base.** Where the frame shows no rebate, the zero of the density file is an estimate, and those frames
-  did worst in the first comparison.
-- **Dense film.** A broad channel compresses high densities, which a 3×3 cannot undo. The largest errors are on
-  the densest brackets.
-- **Another stock's brackets.** A scan of an unprofiled stock borrows the mid grey and slopes of the profile set it
-  runs on. The curve fit corrects the slopes from the frame itself; whether that is enough is what the second
-  comparison asks.
+**The curve.** On the green and blue input of the bracket's profile, below the pivot `ref` (the film base through
+the input matrix and the knee):
+
+```
+u     = log2(x / ref) ≤ 0
+f(u)  = u (1 + a)                              held at slope 1 below the densest cell (slope hold)
+x'    = ref 2^f(u)
+```
+
+`a` is the channel's bend, the slope term the fit solves. The curve's form in `input_curves.h` also has a bend around
+the median cell's `u`, which the fit holds at 0. The fitted curve is composed into the bracket's input tables (stage
+"profile tables": `apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined
+profile.
+
+**The anchors.** Every cell that Auto's render puts between `L*` 2 and 92 is an anchor, weighted by `p²`:
+
+```
+m = Σ_i p_i²         ω_i = p_i² / m   (plus 10⁻³ spread evenly, so m = 0 is defined)
+ā = Σ_i ω_i a*_i     b̄ = Σ_i ω_i b*_i
+k_a = 50 cov_ω(L*, a*) / (var_ω(L*) + 25)          (likewise k_b)
+```
+
+`m` is the frame's neutral evidence. A neutral surface has `a* = b* = 0` at every lightness, so the gains move `ā` and
+`b̄` and the slopes remove the trends `k_a` and `k_b` (the drift of `a*` or `b*` per 50 `L*`). The targets grow with
+the evidence:
+
+```
+w        = m / (m + 12)
+target ā = (1 − w) ā_Auto          target b̄ = (1 − w) b̄_Auto
+target k_a = (1 − w s) k_a_Auto,   s = var_ω(L*) / (var_ω(L*) + 36)       (likewise k_b)
+```
+
+With no evidence the targets are Auto's own values. `s` shrinks the slope correction when the anchors cover a narrow
+range of lightness.
+
+**The intent term.** The search's intent field gives a second estimate of the overall magenta-green balance:
+
+```
+ν_i  = (1 / σ_a,i²) / Σ_j (1 / σ_a,j²)          over every fit cell
+s_a  = Σ_i ν_i (a*_i − μ_a,i)
+dL   = (Σ_i ν_i L*_i − Σ_i ω_i L*_i) / 50 × (var_ω(L*) + 25) / max(var_ω(L*), 25)
+intent term = (s_a − (k_a − target k_a) dL − SE) / sqrt(SE² + 1)
+anchor term = (ā − target ā) / σ_anc,            σ_anc² = (144 + m) / (m + 12)
+```
+
+`SE` is the standard error of `s_a`, from sums over 4 × 4 blocks of cells (neighbouring cells are not independent),
+detrended in `L*`. `dL` is the gap between the field's and the anchors' mean lightness per 50 `L*`, so a change of
+slope is not read as a shift of `a*`; its factor undoes the damping by `var_ω(L*) + 25` in `k_a`, and stops at 2 when
+the anchors span little lightness, so a slope measured over a narrow span is not amplified. Subtracting `SE` leans
+the target toward magenta by one standard error. The 1 under the root and the 1 that `σ_anc` approaches are each
+estimate's systematic error in `a*`.
+
+**The solve.** One Levenberg-Marquardt solve over four numbers, the green and blue gains and the green and blue slope
+terms (`input_curves.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against its
+target, the two trends `k_a` and `k_b` against theirs (weighted by `0.5 sqrt(var_ω(L*) / (var_ω(L*) + 100))`), the
+intent term and a ridge on the slope terms; the `a*` and `b*` terms are divided by 1.5. `E` is re-solved at every
+step so the median lightness stays where Auto put it.
+
+**The never-greener guard.** The fit may not end greener than Auto's render. It runs freely first; only if its
+result is greener does it run again with the excess green penalised (weight 4).
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Anchor range | `L*` 2 to 92 | Clipped blacks and whites carry no colour. |
+| Evidence half-mass | 12 | The anchors pull at half strength when `m` = 12; a correction resting on little neutral surface is mostly ignored. |
+| Slope span | 6 `L*` | A slope measured over a narrow range of lightness is shrunk toward Auto's. |
+| Slope hold | on | Beyond the densest cell the curve stops bending. |
+| Head systematic error | 1 `a*` | Neither estimate of the overall `a*` is trusted closer than this; with much evidence a disagreement is split. |
+| Magenta lean | 1 standard error | Slightly magenta is preferred to slightly green. |
+| The guard | on; tolerance 0.5 `a*` | A result up to 0.5 `a*` greener than Auto's counts as not greener. |
+| Guard's shadow exemption | full below `L*` 10, fading out by 20 | A magenta cast in deep shadow can still be corrected toward green. |
+
+Bounds: the slope term within 0.35; the curve within 2.2 stops of the profile's own; the green gain within 0.75 stop
+and the blue within 1.25 stops of Auto's; the median `L*` 18 to 85; at least 8 cells in range; on a frame that is the
+whole image (`--roi auto` fell back, or a given `--roi` covers it), holder-dark cells, and cells at the base's level
+when the base is a rebate, are left out.
+
+**Limits.** The half-mass 12, the slope span, the systematic error, the lean and the guard's weight are stated
+values, not derived. The fit removes most of a uniform cast but little of a cast that differs between shadows and
+highlights; deep shadows have few anchors. The guard is a penalty, not an exact bound, and costs accuracy where
+Auto's own render is magenta. The intent term's weights include cells above `L*` 92.
+
+## 4.4 The tone stage
+
+The tone stage sets contrast and the black and white levels: one lightness curve per frame, moving the render toward
+the tone heads' prediction while holding the mid-tone (`tone_stage.cc`). It runs after every search with `-P srgb`,
+on both lights (`--tone_stage`), on one network inference of the final render's preview.
+
+```
+f(L)  = black + (white − black) h(g(L / 100)),   g(x) = x^gamma,   h(x) = x^c / (x^c + (1 − x)^c)
+targets: L2' = L2 + 1.0 (L2_pred − L2),   L98' = L98 + 0.5 (L98_pred − L98),
+         R'  = R + 0.5 (R_pred − R)  (R = L90 − L10),   L50' = L50
+```
+
+The four numbers (black, white, gamma, contrast `c`) are solved so that `f` of the render's percentiles meets the
+targets, with a weak prior toward the identity and a term holding the rise above `L98` to the input's (from three
+starting white points, the lowest cost kept). The curve is applied per pixel to display linear sRGB: luminance `Y`
+goes to `Y'` through `f` on `L*`, and the colour difference is carried along:
+
+```
+out = Y' + (v − Y) f'(Y) / f'(Y')          f' the derivative of CIELAB's cube root; ratio at most 8
+```
+
+which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `apply_tone`).
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Shadow move | 1.0 | All the way to the predicted shadow level. |
+| Highlight move | 0.5 | Half way to the predicted highlight level. |
+| Range move | 0.5 | Half way to the predicted tonal range. |
+| Clip allowance | 0.5 % of pixels | Beyond it, the highlight and range moves are scaled to 0.75, 0.5, 0.25 or 0 until it holds. |
+| Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
+
+**Limits.** The moves were chosen by comparing pictures, not derived. The clip check measures every 8th pixel of the
+whole export, film borders included, while the curve is planned on the inner crop.
+
+# 5. Print emulation
+
+## 5.1 What it models
+
+A print is made by shining a printer lamp through the negative onto a print material (a paper, or a print film for
+cinema), whose three layers each respond to their part of the light by a characteristic curve and form dyes; the
+print is then looked at under a viewing light. The emulation models that chain from the film's measured densities:
+
+1. **The reading of the film.** The scan gives the film's density in the light's three channels, `D_light`. The
+   light's spectrum fixes what those channels see: the three measured LED spectra for TriLED, and for white light the
+   CIE 1931 observer under D65 as linear Rec.2020.
+2. **The film's curves.** The chart's grey steps give the film's grey balance curve `G_c`: for a light density in one
+   channel, the density of the film's grey in APD. Each bracket also gives its mid grey and its tilt `t_c`.
+3. **APD and the printing density.** A standard measure's response curves (APD, RP 180, Status M) give `F`; the print
+   material's spectral sensitivity under a 3200 K lamp gives `Q`. Together they take the film's density to the density
+   the print material's layers read.
+4. **The print material.** A spektrafilm print profile gives each layer's curve (dye amount against log exposure),
+   the dyes' spectra and the base.
+5. **The viewing condition.** The print's spectrum under D50 (paper) or D55 (print film), through the CIE 1931 2°
+   observer, gives XYZ, shown relative to the paper's white.
+
+The print's exposure is one number, `A`, the APD of the film's grey that prints as the print's mid grey. Steps 1 to
+5 are combined into one ICC profile per print material (5.4), and the print's own search (5.6) finds `A` and the
+gains for each frame on that profile. The density file and its CLF (5.9) carry the same chain for other tools.
+
+The code is `np_print.cc`. A profile set holds nothing of a print material, and a print material holds nothing of a
+film.
+
+## 5.2 Density
+
+A pixel's density above the film base in the light's channels, and in a measure (`np_print.cc`:
+`density_encode_in_place`):
+
+```
+T       = M_frame v / 65535 / n0                    transmittance against bare film (E = g = b = 1, no knee)
+D_light = −log10(max(T, 0.0001))
+D       = M D_light                                 the measure's density,  M = F L  (Status M: M = F L diag(φ))
+```
+
+`L` takes the density the light sees to the film's three dye amounts and depends on the light's spectrum and the
+film's dyes. `F` takes the dye amounts to the measure and depends on the film's dyes and the measure's response, not
+on the light. Each is a least-squares 3×3 with no offset, fitted on 3000 sample colours of a model of the film (its
+dye amounts along its neutral scale between log exposure −1.5 and 1.0, with a log-normal colour variation;
+`bundle.json`: `density_matrices.light_to_film` and `density_matrices.<measure>.film_to_measure`). A scanner with
+another light replaces `L` alone. Status M alone is calibrated on the chart: `φ` (`light_density_factors`) holds the
+chart's grey scale to the film model's Status M with one factor on the green and one on the blue LED density,
+applied when within 0.10 of 1.
+
+**The grey balance curve.** `G_c(d)` is the APD of the film's grey that has light density `d` in channel `c`
+(`density_matrices.grey_balance_curves`). It comes from the grey steps of all seven brackets (168 points): the red
+and the blue light density as a cubic in the green (least squares), carried on by its tangent past the end steps,
+then through `M` for APD. 501 points per channel, light density −0.5 to 4.5 in steps of 0.01.
+
+**A bracket's mid grey and tilt.** The chart's 18 % grey step `gs10` of each bracket, through the APD matrix, gives
+its mid grey as green APD, `A_mid` (`bracket_mid_apd`). The bracket's grey steps, against the curve, give its tilt
+`t_c`: the slope of its grey scale relative to the curve
+(`density_matrices.brackets.targets.<bracket>.grey_relative.b`).
+The film's channels change their relation with exposure, more on some stocks than others, which a per-bracket tilt
+follows:
+
+![Each bracket's tilt in the profile set](samples/slopes_across_brackets.png)
+
+## 5.3 The print matrix and the print material
+
+A print material is a spektrafilm print profile, read as published: eight are built in
+(`3rd_party/spektrafilm/profiles/`), and `--print <file>` takes another (`load_spektrafilm_print`). From it are
+computed:
+
+- **the observer**: the CIE 1931 2° observer under D50 for a paper, D55 for a print film, by the profile's `support`
+  (its `viewing_illuminant`, K75P on the two print films, is not read);
+- **aim**: each layer's log exposure that prints an 18 % grey;
+- **`Q`**: the 3×3 from the film's dye amounts to the print's own density (its layers' sensitivity under a 3200 K
+  blackbody lamp, no heat filter, in place of the profile's `reference_illuminant`, TH-KG3), least squares with no
+  offset on the film model's neutral scale between log exposure −1.5 and 1.0, each point with 27 colour variations
+  (each dye amount times `exp(0.184 z)`, `z` = −1, 0, 1);
+- **the print matrix** `P = Q L M⁻¹` for each measure, so `P M = Q L` (for a measure without `φ`, `P = Q F⁻¹`).
+
+The print of a printing density `pd`, per layer `c` and wavelength `λ`:
+
+```
+logE_c = aim_c − (pd_c − 0.70)                        0.70: the printing density that prints as mid grey
+δ_c    = curve_c(logE_c)                              dye amount, held at the curve's ends
+τ(λ)   = 10^−(Σ_c δ_c dye_c(λ) + base(λ))             the print's transmittance or reflectance
+XYZ    = Σ_λ τ(λ) light(λ) observer(λ) / Σ_λ light(λ) ȳ(λ)
+```
+
+## 5.4 The print ICC
+
+The chain is written as an ICC profile shaped as the chart profiles are (ICC v2, RGB → PCS XYZ D50, A2B0 `lut16`:
+three 4096-entry input curves, a 45³ table, identity output curves), so the conversion runs it as it runs them
+(`np_print.cc`: `bracket_print_profiles`, `print_table`, `bracket_print_curves`). For the profile's input `x` (2.5,
+after the knee) in channel `c`:
+
+```
+dL_c    = −log10(unknee(x_c) g_c / n0)                light density; (g_r, g_g, g_b) = (1, g, b), applied after the knee
+alpha_c = (G_c(dL_c) − A) (1 + t_c(A))                APD above the print's mid grey; equal in all channels on a grey
+pd      = 0.70 + Q L (ψ ∘ alpha),   ψ = M⁻¹ (1, 1, 1)   M for APD; ψ ∘ alpha the light density of that grey
+XYZ     = the print of pd (5.3), adapted from D55 to D50 (Bradford) for a print film
+```
+
+**What goes in the curves and what in the table.** A 3D table samples a paper's S-curve badly, so the curve goes in
+the input curves and the table keeps only colour:
+
+```
+in_c(x)          = Paper_c((G_c(dL_c) − A) (1 + t_c(A)))       the profile's input curve (4.1)
+table(a)         = the chain above from alpha_c = Paper_c⁻¹(a_c)
+Paper_c(alpha_i) = 0.75 curve_c(aim_c − η_c alpha_i) / top_c + 0.25 (1 − i / (N − 1)),   η = P (1, 1, 1),  P for APD
+```
+
+`Paper_c` is the dye amount layer `c` takes on a grey `alpha` above the mid grey, scaled to `[0, 1]` per channel on
+`alpha_i = −1.5 + 0.005 i` (`N = 661`, −1.5 to 1.8) with a 0.25 linear ramp across the grid (`top_c`: the channel's
+largest value), held strictly decreasing on `[0, 1]`, so it spans the full table in every channel, keeps a positive
+slope across the toe and shoulder where `Q L` mixes the channels under white light, and inverts the same way for every
+`A`. The table therefore has no bracket and no `A` in it: one table serves every print of the material, and two prints
+differ only in their curves. The table's sampling error on the chart is at most 0.4 ΔE00 on TriLED and 0.8 ΔE00 on
+white light (median under 0.1).
+
+The profile-building tools write one print ICC per material into the bundle (`print_*.icc`, curves for the middle
+bracket). `neg_process` uses the bundle's table when its curves equal the ones computed here to one 16-bit code, and
+otherwise (a material given as a file) computes the table, in about 0.3 s.
+
+## 5.5 The print's exposure and its curves
+
+`A` is the printing exposure, applied after the grey balance curve, so it moves a grey along the grey axis and keeps
+it grey. A bracket's own print is the one at `A = A_mid` of that bracket. `t_c(A)` is linear in `A` between the two
+brackets whose `A_mid` enclose it, and held beyond the end ones, so at a bracket's own `A_mid` it is that bracket's
+tilt (`print_tilt_at`). For a new `A` only the three input curves are computed again and written into the profile
+(`PrintContinuum::set_curves_at`, about 5 ms); the table stays. The gains `g` and `b` are applied in the curves too,
+after the knee, so film at the base's density never passes the knee whatever the gains; the input matrix carries `E`
+alone.
+
+## 5.6 The print's search
+
+A print is searched on its own profile, not on the chart profiles: its lightness once and continuously in `A`, its
+colour in `g` and `b` (`multi_target_optimizer.cc`: `search_print_continuous`). It runs on the material's print
+profile, made relative to the paper's white (5.7), with its curves written for each `A`, `g` and `b` it tries and
+the matrix at `E` alone, as the conversion renders the print (5.5): every preview, every optimiser cell and the shares
+at white below score the picture the conversion writes.
+
+1. **E is held** where the frame's film base reads `n0` (search units `E = e_norm`; the result's `E` is 1), so the
+   print is the negative's own density above its base, as the brackets were measured, whatever the scan's exposure.
+2. **A0 is metered** as the scene's search meters a bracket: the `A` at which the frame's log-average cell (at
+   `g = b = 1`) prints at `L*` 50, by bisection over the curve's green APD range.
+3. **The lightness target** is the mean of the fields predicted from the print at `A0 − h`, `A0` and `A0 + h`,
+   `h = log10(2) / 2` (half a stop of printing exposure). Its `L*` is held for the rest of the search.
+4. **g and b are screened** at `A0` against that field, minus the correction of the render at `A0`, on the
+   optimiser's grids. `g = b = 1` is the film's own neutral (a grey on the curve prints grey), but the frame's light
+   need not be.
+5. **The fixed point over (A, g, b).** Each step renders the print at its `A`, updates the optimiser's correction,
+   predicts `a*` and `b*` from the render (`L*` is the target) and measures the residual. It then solves `A`: from the
+   current `A`, steps of 0.1 APD downhill to bracket the minimum, then golden section to 0.001, with `g` and `b`
+   optimised at each `A` (`E` pinned). It stops when the residual changes by 1.5 % or less, or one step after the
+   parameters move by 0.02 or less (`A` counted in stops, `ΔA / log10 2`), and keeps the lowest-residual step; at
+   most 8 steps.
+
+There is no tournament, clip fallback or highlight pullback: there is no bracket to change, and the print's white is
+the paper's, not a chart's. The conversion then renders the print at the search's `A`, `g` and `b`, with no
+highlight shoulder and no tone stage: the paper's curve gives the tone and rolls the highlights off to its white.
+
+A print is made by its own search: `--target`, `-E`, `--gain_g` and `--gain_b` are refused with `--print`, and
+`--tone_stage` with `--print` is refused. Running the sidecar's `cli_equivalent` again re-runs the search, which is
+deterministic on the same build, machine and backend. `--brightness` moves the print's `A`, and `--tint` and
+`--warmth` its `g` and `b`, with `E` held (`solve_print_knobs`): solved on the print profile so that the film the
+print at the search's values renders as neutral L* 50 renders at the knobs' target, by Newton on (`A`, `ln g`,
+`ln b`); an unreachable target is scaled back as for a picture. The sidecar's `knobs.base.a` records the search's
+`A`, which a run reusing the sidecar starts from. A density output with `--print` moves each material's print search
+the same way before its CLF is built. A picture output with `--print` needs a bundle with grey balance curves, under
+either light (5.10).
+
+The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
+and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
+the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per
+channel the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and
+at white (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the
+last step's move (`last_move`). The shares describe the print at the search's result: the knobs move `a`, `g` and `b`
+and leave them as the search measured them. A density output's `search`, one per material, records the same but
+`base_factor` and `a0_at_range_end`: the base's factor is the conversion's, in the sidecar's `film_base.print_floor`.
+
+## 5.7 The print's white
+
+The table's lightest node is the paper's base under its viewing light, against a perfect white (`Y` = 1). The print
+is shown relative to its paper, as the ICC defines media-relative colorimetry: each of X, Y and Z of every node is
+scaled by the PCS white's over the paper base's, so the base becomes the display's white in the preview the search
+sees and in the output (`np_pipeline.cc`: `to_paper_white`). The PCS white is D50 as an ICC profile stores it,
+(63190, 65536, 54061) / 65536 (`kPcsWhite`), which the sRGB profile's colorants sum to, so the base is written at 65535
+in all three channels. The paper's tint is then not shown, as an eye adapted to the
+paper does not see it. A saturated light colour can still have an sRGB channel above 1, which is cut
+(`profile.print.search.above_white_pct`).
+
+The bundle's print ICC stays absolute; the scaling is made when it is loaded. With no output space the embedded
+profile carries the scaled table and the paper's XYZ in its `wtpt`, a media-relative profile in the ICC's sense.
+With an output space (`-P srgb`) the file embeds that space's profile, and the paper's XYZ is recorded in the sidecar
+(`profile.print.white`, `paper_white_xyz`).
+
+The papers' whites (the Portra 400 TriLED set's print ICCs):
+
+| Material | Light | `Y` of the base | `L*` | `a*` | `b*` |
+|---|---|---|---|---|---|
+| Fujifilm Crystal Archive Type II | D50 | 0.823 | 92.7 | +0.07 | +0.45 |
+| Kodak Ektacolor Edge | D50 | 0.783 | 90.9 | +0.16 | +0.06 |
+| Kodak Professional Endura Premier | D50 | 0.783 | 90.9 | +0.56 | −2.73 |
+| Kodak Professional Portra Endura | D50 | 0.809 | 92.1 | +0.15 | +0.80 |
+| Kodak Professional Supra Endura | D50 | 0.823 | 92.7 | +0.09 | +0.39 |
+| Kodak Professional Ultra Endura | D50 | 0.619 | 82.9 | +0.62 | −4.10 |
+| Kodak Vision 2383 (print film) | D55 | 0.862 | 94.4 | +0.23 | +5.97 |
+| Kodak Vision Premier 2393 (print film) | D55 | 0.865 | 94.5 | −0.12 | +1.84 |
+
+Ultra Endura's base density is as spektrafilm's profile gives it, two to two and a half times the other papers';
+it has not been checked against a data sheet.
+
+![negicc's picture and the eight print materials, each by its own print search](samples/print_materials_triled.jpg)
+
+## 5.8 The film base of a print
+
+A print's level is relative to the film base (5.6, step 1), so a base darker than the film's thinnest areas would
+push thin film past the knee and cut the shadows. On a scan with `--print` under either light, when the base is not
+a capture (the rebate, the thinnest film or the bundle's), it is held no darker than the picture's thinnest film
+(`multi_target_optimizer.cc`: `print_floor_factor`): its level is multiplied by
+
+```
+β = max(1, max_c  P99.5{ (X v)_c / f_c }  over the inner crop)
+```
+
+with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile
+(`kBasePercentile`). The crop is the picture's frame: the given `--roi`, or `--roi auto`'s unless it fell back to the
+whole image; else, with no `--roi`, the frame detector's crop when the detection succeeded (`ok`) with a confidence
+of at least 0.5 and its two scales onto the half-size image agree within 2 %; else the whole scan. A TIFF, a JPEG and
+three captures run no frame detection without `--roi auto`, so there the floor reads the whole scan. The raised base
+serves the whole conversion, the density file included, so its CLF still prints the picture's print. The sidecar
+records the base as found and `β` (`film_base.print_floor.factor`). A captured base is taken as it is.
+
+## 5.9 The density file and its CLF
+
+The density file is the film as measured: no exposure, gains, curves or tone stage are applied, and the search's
+balance is recorded (`suggested_balance`). The code values:
+
+```
+code = offset + scale × κ_c D_c        10 bits (.dpx): 95 + 500 κ D        16 bits (.tif): 1520 + 8000 κ D
+```
+
+`κ` is 1.00, 0.92, 0.95 for APD (ADX, SMPTE ST 2065-3) and 1 otherwise; RP 180 in a DPX is a Cineon file. A
+transmittance below 0.0001 is held there (density 4.0) and counted. The file carries the matrix, the light's
+spectrum, the film base and the encoding as JSON, in a TIFF's `ImageDescription` or a DPX's user data.
+
+**The CLF** (`<output>.<material>.clf`) renders the file as the print. Its first node is a matrix for the frame; the
+other nodes are the print material's (`print_clf_nodes`): density → log exposure, the curve per layer (4096-point
+LUT1D), dye amounts → linear sRGB (45-point LUT3D: XYZ under the viewing light adapted to D65 with CAT02, where the
+print ICC adapts a print film's D55 to the PCS's D50 with Bradford), the sRGB curve. On the file's code `q` (code over
+the largest code):
+
+```
+D             = (q × largest code − offset) / (scale κ)
+print density = 0.70 + S P (D + balance − grey)
+balance       = M (0, −log10 g, −log10 b)
+grey          = M (n + log10 E)                    n: the light density of the curve's grey at green APD A
+S_c           = (γ_green / γ_c) (1 + t_c(A)),   γ_c = Σ_j M_cj dn_j/dA      (S_green = 1)
+```
+
+`dn_j/dA = 1 / G_j'(n_j)`, a central difference of one table step: the slopes are the curve's tangent at `A` times
+`1 + t_c`, the slope of `(G_c − A)(1 + t_c)`, as in the print ICC's curves. Multiplied by `S`, the film's grey scale has
+equal contrast in the three channels. With `--print` the density run searches each material's print (5.6) and its
+CLF carries that `A`, `g` and `b`, so the CLF prints what the picture output prints; its `balance` is then computed
+from that search's gains, and the file's metadata records it (`print.materials.<material>.balance`). The two differ
+on film thinner than its base: the picture takes it through the soft knee (2.5), which the print ICC's curves undo
+only up to `unknee(x)` = 0.95 + 0.05 atanh(0.998) ≈ 1.12 (0.13 below the base's light density at `E = g = b = 1`),
+while the density file keeps it down to its lowest code (density −0.19 in Status M and RP 180; −0.19, −0.21 and −0.20
+in APD, through its channel factors). The print CLF is relative to the paper's white like the print ICC.
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Measures | Status M, RP 180, APD | `-P statusm`, `rp180`, `apd`. |
+| Zero | the film base (2.3, 5.8) | Bare film is density 0. |
+| Density floor | 4.0 | A transmittance below 0.0001 is held there. |
+| Mid grey lands on | 0.70 | Where the print's 18 % grey prints; the constant cancels inside the CLF. |
+| Printer lamp | 3200 K blackbody | With the material's sensitivity it defines the density the material reads. |
+| Viewing light | D50 paper, D55 print film | The print's colour is computed under it. |
+| Curve table, colour table | 4096 points; 45 points a side | The CLF's LUT1D and LUT3D. |
+
+A CLF fits the one file it is named after: its first matrix holds that file's code scale, measure and channel
+factors. To print lighter or darker, add a constant to the three offsets of the first matrix; 0.30 is a stop. The
+CLF's tables derive from spektrafilm's print profiles and carry their licence notice (CC BY-SA 4.0).
+
+## 5.10 White-light scans
+
+A white-light scan takes the print as a picture and the density file with its CLFs as a TriLED scan does: the
+print's own search (5.6) runs on the white-light decode, and each material's CLF takes that print's `A`, `E` and gains
+(5.9). What differs:
+
+- **No crosstalk correction**: `D_white = −log10(max(s ⊙ v / 65535 / n0, 0.0001))` per Rec.2020 channel. The search
+  reads `M_frame` itself, so `E = 1` puts the film base at `n0`.
+- **`L` for white light.** No spectrum of the light or the camera is measured. Linear Rec.2020 is taken as what it is
+  defined to be, the CIE 1931 observer under D65 through the Rec.2020 matrix; `L` is fitted on the same 3000 film
+  samples seen that way. `F` is the narrow-band set's. The grey balance curve, the brackets' `A_mid` and tilts and the
+  print ICCs are built from the white-light reading of the chart, as for TriLED.
+- **No curve fit on a print.** The fit (4.3) composes into the chart profiles, which a print does not use; any
+  `--fit_curves` but `auto` with `--print` is refused. A density file without `--print` still runs the fit, which
+  changes no pixel and gives the file's suggested balance; with `--print` its suggested balance is the scene search's
+  own.
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| Light assumed | D65, CIE 1931 2°, linear Rec.2020 | Stands in for the light's and the camera's spectra. |
+| `F` | the narrow-band set's | It depends on the film and the measure alone. |
+| Film base | the rebate, else the thinnest film, held no darker than the picture's thinnest film (5.8) | `--film_base` with a capture is for TriLED scans. |
+
+**Limits.** The assumption is as good as the camera's colour matrix. Over the 2016 chart patches of each stock read
+under both lights, the APD of a white-light reading is 0.03 to 0.09 RMS from the narrow-band reading, 1.5 to 2 times
+the best a 3×3 fitted to the chart could do. The rows of `F L` are about twice as long as those of the LED's `M`, so
+the scan's noise is about twice as large in the file. A broad channel compresses high densities, which a 3×3 cannot
+undo.
+
+## 5.11 Derivations
+
+**The print matrix.** With `φ` the measure's `light_density_factors` (1 unless Status M was calibrated on the chart):
+
+```
+P = Q F⁻¹ + Q L diag(φ⁻¹ − 1) L⁻¹ F⁻¹ = Q L M⁻¹
+```
+
+For RP 180, APD, white-light sets and uncalibrated Status M the second term vanishes and `P = Q F⁻¹`. For a
+calibrated Status M file it undoes `φ`, so the chart calibration belongs to the Status M readout alone and the APD
+slopes apply once. The standard measures' response curves are not shipped, so `P` is not fitted against them.
+
+**The density matrices' accuracy** on the film model (`fit_rms_density`, `fit_max_density`) for the RGB-LED profile
+sets, over the three stocks and densities up to about 2.2 above the base; errors against the model, not the film:
+
+| Measure | RMS (density) | Worst (density) |
+|---|---|---|
+| Status M | up to 0.004 | up to 0.04, in green |
+| RP 180 | up to 0.004 red and green, 0.010 blue | up to 0.10, in blue |
+| APD | up to 0.010 red, 0.002 green and blue | up to 0.08, in red |
+
+On the white-light profile sets, whose `L` reads the film through the CIE observer and the Rec.2020 matrix (5.10),
+the matrices fit the model less closely: RMS up to 0.012 (Status M), 0.018 (RP 180) and 0.016 (APD), and the worst
+up to 0.15, 0.22 and 0.20, each largest in green.
+
+The datasheets give no base density below about 400 nm or above about 700 nm, and the nearest measured value is held
+there; RP 180 blue and APD red respond partly outside that range (`response_outside_film_data`).
+
+**The spectral data**, all on 380 to 780 nm at 1 nm:
+
+| Data | Used for | Kept in |
+|---|---|---|
+| The light's three LED spectra | `L` | `bundle.json` `light_source` |
+| The film's dye spectra, base and neutral scale | `L`, `F`, `Q` | `bundle.json` `film_model` (spektrafilm's film profile) |
+| Status M, RP 180 and APD response curves | `F` | not shipped |
+| The print material's sensitivity, curves, dyes and base | `Q`, the print | the spektrafilm print profile |
+| The CIE 1931 2° observer, D50, D55 | the print | `np_print.cc` |
+
+The camera has no spectral data here; the crosstalk correction stands in for its response curves.
+
+# 6. Limits and dependencies
+
+## Limits
+
+- **The profiles hold for one chart.** The brackets, mid greys and tilts hold for the film batch, development and
+  scan the profile set was built from; film from another lab may differ.
+- **The densities are a model's.** `L` and `F` come from datasheet spectra and have not been checked against a
+  densitometer.
+- **The print material is a model.** Its curves, dyes and sensitivity are spektrafilm's, the lamp is a blackbody, and
+  no print has been compared with a real one.
+- **A print on an estimated base** keeps the estimate's colour in its shadows; on TriLED a capture of the roll's
+  unexposed film (`--film_base`) is the remedy, and on white light a crop that shows some rebate (`--roi`), as the
+  warning says.
+- **A print without `--roi`** searches the whole scan, bare light included; it says so.
+- **The tilt removes the film's own drift** of its greys from shadows to highlights (`t_c` in the print ICC's curves,
+  with it the slopes `S` in the CLF). Whether a print should keep it has not been judged.
+- **Mid grey at 0.70, printed as an 18 % grey.** A Cineon scan has an 18 % card at 0.75; both are stated values.
+- **Reproducibility.** A re-run reproduces a print to the byte on the same build, machine and backend; another
+  compiler, CPU architecture or inference backend can round differently.
 
 ## Dependencies
 
-The source, basis, storage and invalidation condition of each quantity in the chain:
+| Quantity | From | Stored in | Changes when |
+|---|---|---|---|
+| Flat field | a capture of the empty gate | `--flat` file | the scanner is rearranged |
+| `X`, crosstalk correction | three captures of the bare light | `bundle.json` | the camera or the light changes |
+| `f`, film base | a base capture, the rebate or the thinnest film | the sidecar, the density file | every roll |
+| Chart profiles, patches | the chart on the film, seven brackets | `bundle.json`, `Target_*.icc` | the film is profiled again |
+| `L` | the light's spectrum (or D65 Rec.2020) and the film's dyes | `bundle.json` `light_to_film` | the light or the stock changes |
+| `F` | the film's dyes and the measure's response | `bundle.json` `film_to_measure` | the stock changes |
+| `G_c`, `A_mid`, `t_c` | the chart's grey steps | `bundle.json` `density_matrices` | the film is profiled again |
+| `Q`, `P` | the print material, the lamp, the film model | computed when loaded | a print material is added |
+| Print ICC table | the above and the print material | `print_*.icc`, or computed | either changes |
+| Bracket or `A`, `E`, `g`, `b` | the frame | the sidecar, the CLF's first matrix | every frame |
+| Intent, neutral and tone heads | trained networks | `models/` | they are retrained |
 
-| Quantity | Derived from | Basis | Stored in | Invalidated by |
-|---|---|---|---|---|
-| `C`, crosstalk correction | The camera and the light | Measured: each LED captured alone | `bundle.json` | The camera or the light changes |
-| Flat field | The scanner's optics and light | Measured: a capture with no film | `--flat` file | The scanner is rearranged |
-| `B`, film base scale | The roll | Measured on each run: `--film_base`, the rebate, or the thinnest film | The density file's metadata | Every roll |
-| `L`, LED density to dye amounts | The light's spectrum, the film's dye spectra | Fitted on the film model | `bundle.json`, `light_to_film` | The light or the film stock changes |
-| `F`, dye amounts to a measure | The film's dye spectra, the measure's response curves | Fitted on the film model | `bundle.json`, `film_to_measure` | The film stock changes |
-| `P`, measure to print density | The print material's sensitivity, the printer lamp, the measure; the film's dye spectra weakly (and Status M's `α`, undone when present) | Fitted on the film model | Computed when a file is written, as `Q L M⁻¹` (`Q F⁻¹` when `α = 1`) | A print material is added |
-| Mid grey and slopes of a bracket | The film's chart | Measured: the chart as the profile set was built from it | `bundle.json`, `brackets` | The film is profiled again |
-| `L` for white light | The film's dye spectra; the CIE observer under D65 as linear Rec.2020 | Fitted on the film model | A white-light `bundle.json`, `light_to_film` | The film stock changes |
-| Mid grey and slopes of a white-light frame | The bracket's grey steps and the frame's fitted curves | Computed when the file is written: the fitted grey scale through `F L` | The CLF's first matrix, the file's metadata | Every frame |
-| Bracket, `E`, `g`, `b` | The frame | The picture conversion's search, which uses the ICC profiles | The CLF's first matrix, the file's metadata | Every frame |
-| Print curves and colour table | The print material | spektrafilm's print profiles: a model, not compared with a real print | CLF nodes 2 to 7, computed from the spektrafilm print profile | A print material is added |
-
-`L`, `F` and `P` come from spectra alone: none is fitted to the film's chart, so the
-chart enters the print only through a bracket's mid grey and slopes. A scanner with another light replaces `L` and
-`C` and nothing else. A new print material is one file, and no profile set changes for it.
-
-## Known limitations
-
-- **The densities are a model's.** `L` and `F` come from datasheet spectra and have not been checked against a
-  densitometer.
-- **The print material is a model.** Its curves, dye spectra and sensitivity are spektrafilm's, the lamp is a
-  blackbody, and no result has been compared with a real print.
-- **The slopes belong to one chart.** They hold for the film batch, the development and the scan the profile set
-  was built from. Film from another lab may differ.
-- **The slopes step between brackets.** For Ektar 100 by enough to show between two frames of one roll.
-  Interpolating them at the frame's own mid grey has not been tried.
-- **The slopes remove part of the film's look.** A film's own drift of its greys from shadows to highlights is
-  taken out with them. Whether a print should keep it has not been judged on pictures.
-- **Mid grey at 0.70, printed as an 18 % grey.** A Cineon scan has an 18 % card at 0.75, and a print to the LAD aim
-  is about a third of a stop of exposure darker. Both are stated values.
+`L`, `F` and `Q` come from spectra alone; the chart enters the print only through `G_c`, the mid greys and the
+tilts. A scanner with another light replaces `L` and `X`. A new print material is one file, and no profile set
+changes for it.

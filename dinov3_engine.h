@@ -135,18 +135,10 @@ std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx
 bool cuda_device_available();
 
 // --------------------------------------------------------------------------------------------------------------------
-// ONNX Runtime CPU runners
-// --------------------------------------------------------------------------------------------------------------------
-
-// Creates an ONNX Runtime CPU runner.
-std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads);
-std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads);
-
-// --------------------------------------------------------------------------------------------------------------------
 // Token heads
 // The small heads that read the DINOv3 tokens alongside the intent adapter, each a plain C++ implementation that
 // needs no runtime of its own: the neutral-patch head (NeutralHead), which gives the white-light curve fit its neutral
-// anchors, and the tone heads (ToneHead), which give the white-light tone stage its targets.
+// anchors, and the tone heads (ToneHead), which give the tone stage its targets on both lights.
 // --------------------------------------------------------------------------------------------------------------------
 
 // The neutral-patch head: per DINOv3 patch, the probability that the patch is neutral grey in a good rendering of
@@ -218,6 +210,7 @@ public:
             double z = b2_;
             for (int j = 0; j < h; ++j) {
                 const double a = acc[j];
+                // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
                 z += (double)w2_[j] * (0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)));
             }
             p[i] = (float)(1.0 / (1.0 + std::exp(-z)));
@@ -230,8 +223,9 @@ private:
     float b2_ = 0.0f;
 };
 
-// The white-light tone heads: from the frozen DINOv3 features of a preview, the tone a lab scan of the frame would
-// have, as 11 descriptors of its pixel L* and chroma at network size (mean and standard deviation of each):
+// The tone heads of the tone stage (both lights): from the frozen DINOv3 features of a preview, the tone a lab scan of
+// the frame would have, as 11 descriptors of its pixel L* and chroma at network size (mean and standard deviation of
+// each):
 //   L2 L5 L10 L50 L90 L95 L98 (L* percentiles), IQR (L75 - L25), R9010 (L90 - L10), Cmean (mean C*ab), C90.
 // Input: the 1920 pooled features [CLS of layer 12, mean patch token of layer 9, mean patch token of layer 12 (the
 // backbone's "pooled" output, 1152), the patch tokens' standard deviation (DinoV3InferenceResult::token_sd, 768)],
@@ -249,8 +243,8 @@ public:
         return t >= 0 && t < kTargets ? names[t] : "";
     }
 
-    // Parses tone_head.bin (magic "TNH1", uint32 in_dim, hidden1, hidden2, targets, then float32 xm, xs, w1, b1, w2, b2,
-    // w3, b3, ym, ys). False, with the reason in error, when the data is not such a file.
+    // Parses tone_head.bin (magic "TNH1", uint32 in_dim, hidden1, hidden2, targets, then float32 xm, xs, w1, b1, w2,
+    // b2, w3, b3, ym, ys). False, with the reason in error, when the data is not such a file.
     bool load(const void* data, size_t size, std::string& error) {
         in_dim_ = 0;
         const uint8_t* p = static_cast<const uint8_t*>(data);
@@ -301,6 +295,7 @@ public:
     // mean[kTargets] and sd[kTargets] from the 1920 features. False when the head is not loaded.
     bool run(const float* features, double* mean, double* sd) const {
         if (!loaded()) return false;
+        // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
         auto gelu = [](double a) { return 0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)); };
         std::vector<double> x(in_dim_), a1(h1_), a2(h2_);
         for (int k = 0; k < in_dim_; ++k) x[k] = (double)((features[k] - xm_[k]) / xs_[k]);  // float, as in training
@@ -397,7 +392,7 @@ public:
     void set_neutral_head(const void* data, size_t size);
     bool has_neutral_head() const { return neutral_head_ != nullptr; }
     // With it on, infer() also gives DinoV3InferenceResult::token_sd, the spread of the backbone's tokens over the
-    // patches: with the pooled features, the input of the white-light tone heads (ToneHead). Like the neutral head
+    // patches: with the pooled features, the input of the tone heads (ToneHead). Like the neutral head
     // it needs the tokens on the host (one copy per inference when the backbone and adapter run on the GPU).
     void set_token_spread(bool on) { token_spread_ = on; }
 

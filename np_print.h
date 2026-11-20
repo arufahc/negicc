@@ -20,13 +20,14 @@
 // A pixel, after the film base's merged matrix (crosstalk correction and film base scale; the film base lands on
 // base_level), is a transmittance relative to bare film in each of the scanning light's channels:
 //
-//     T = v / base_level,   D_light = -log10(max(T, kDensityMinT)),   D = M * D_light,   code = round(offset + scale * D)
+//     T = v / base_level,  D_light = -log10(max(T, kDensityMinT)),  D = M * D_light,  code = round(offset + scale * D)
 //
 // M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
 // offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
-// density in a DPX is a Cineon file. Academy Printing Density is written as ADX (SMPTE ST 2065-3): the same offsets
-// and scales with the standard's channel factors on the density, code = offset + scale * k * D with k = 1.00, 0.92,
-// 0.95 for R, G, B. Status M and RP 180 take no factors (k = 1).
+// density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these offsets
+// and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors on the
+// density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
+// Status M and RP 180 take no factors (k = 1).
 //
 // Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the
 // encoding, the film base, the matrix applied and the light's record with its spectrum. A TIFF has it in its
@@ -35,7 +36,9 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -99,18 +102,33 @@ struct DensityRecord {
   bool has_balance = false;
   double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
   std::string balance_target;
-  // The input curves the white-light conversion fitted for this frame (input_curves.h), green then blue: a slope
-  // term a and a bend k on the channel's stops below its pivot ref (the film base in the profile's input, after the
-  // soft knee), the bend's centre u_med, and u_hold below which the curve keeps a slope of 1. They are not applied
-  // to the densities; a print takes its mid grey and slopes from the grey scale they describe (fitted_grey_scale).
-  // has_curves is false for a narrow-band scan and when no fit ran.
-  bool has_curves = false;
-  double curve_a[2] = {0, 0}, curve_k[2] = {0, 0}, curve_u_med[2] = {0, 0}, curve_u_hold[2] = {0, 0};
-  double curve_ref[2] = {1, 1};
   std::string tool_version;
   // The metadata's "print" block, as JSON text: how the frame prints on each print material
   // (DensityPrints::metadata_json). Empty: none.
   std::string print_json;
+  // A density run with --print, on either light: each material's own print search (np_pipeline;
+  // search_print_continuous), by material id: its mid grey A, E (the -E units), g, b and the nearest bracket. Its CLF
+  // prints the frame as the picture conversion would print it on that material. Empty (a material without a print
+  // search): its CLF takes the scene's search.
+  struct PrintSearch {
+    double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
+    std::string bracket;
+    bool converged = false;
+    int steps = 0;
+    double last_move[3] = {0, 0, 0};    // |dA| in stops, |dg|, |db| of the search's last step
+    double above_knee = 0.0;            // the crop's share above the knee at the bootstrap
+    double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
+    std::string stopped_by;             // parameters, residual or steps
+    double a0 = 0.0, wish_l = 0.0;      // the A its bootstrap started from; the mean L* of the lightness wish it held
+    double above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // at the result, per channel (shares)
+    // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
+    // search's, the knobs as given (brightness in stops, tint a*, warmth b*), and the print's grey where they put it
+    bool knobs = false, knobs_limited = false;
+    double knob_base_a = 0.0, knob_base_g = 1.0, knob_base_b = 1.0;
+    double knob_given[3] = {0, 0, 0};
+    double knob_grey_lab[3] = {0, 0, 0};
+  };
+  std::map<std::string, PrintSearch> print_search;
 };
 // The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.
 std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
@@ -153,16 +171,17 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 // bundle in use. A profile holds nothing of a film stock, and a film's bundle holds nothing of a print material.
 //
 // The model, for a log exposure of each layer:
-//     dye amounts   a_c = curve_c(logE_c)                                   (linear interpolation, held at the ends)
-//     transmittance t(w) = 10^-(sum_c a_c dye_c(w) + base(w))
-//     XYZ           = sum_w t(w) observer(w)
-// and a printing density pd is exposed as  logE = aim - (pd - grey_density),  aim the exposure that prints an 18 % grey.
+//     dye amounts   delta_c = curve_c(logE_c)                    (linear interpolation, held at the ends)
+//     transmittance tau(lambda) = 10^-(sum_c delta_c dye_c(lambda) + base(lambda))
+//     XYZ           = sum_lambda tau(lambda) observer(lambda)
+// and a printing density pd is exposed as logE = aim - (pd - grey_density), aim the exposure that prints an 18 % grey.
 //
 // py-ref: negicc_station/src/print_emulation.py (PrintModel, frame_grey, print_clf)
 
 struct PrintMaterial {
   std::string id, name, viewing_illuminant;
-  double grey_density = 0.70;                 // the printing density exposed as the print's mid grey
+  // The printing density exposed as the print's mid grey: a stated value (DESIGN.md), which cancels inside the CLF.
+  double grey_density = 0.70;
   // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
   // Academy Printing Density), for the film model named (the bundle's the material was loaded for).
   struct ToPrint {
@@ -190,8 +209,8 @@ struct PrintMaterial {
 // Computed here:
 //
 //   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
-//   the observer              the CIE 1931 2 degree observer (cie_tables.h) under D50 for a paper, D55 for a print
-//                             film (info.support), adapted to D65 with CAT02 for sRGB
+//   the observer              the CIE 1931 2 degree observer (np_print.cc's CIE tables) under D50 for a paper, D55 for
+//                             a print film (info.support), adapted to D65 with CAT02 for sRGB
 //   aim                       the exposure of each layer that prints an 18 % grey
 //   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
 //                             no light_density_factors: F its film_to_measure (dye amounts to the measure's density),
@@ -224,17 +243,13 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //
 //   grey      the frame's mid grey as the measure's density: the bracket's mid grey, denser by log10(E) in every
 //             light channel for the exposure E the search found. With the balance (the gains g and b, level
-//             included) it prints as the print's mid grey.
-//   slopes    the bracket's: they give the film's grey scale equal contrast in the three channels.
+//             included) it prints as the print's mid grey. A bundle with the film's grey balance curve, under
+//             either light, takes the curve's grey at the bracket's mid grey APD (curve_grey), as its print ICCs do.
+//   slopes    they give the film's grey scale equal contrast in the three channels: from the grey balance curve
+//             (curve_slopes), else the bracket's own (read only for a bundle without the curve).
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
 //
-// A white-light frame has one thing more: the conversion fitted its green and blue input curves, so the film it
-// renders as the chart's grey steps is not the chart's own. Then the mid grey and the slopes come from the grey scale
-// the fitted curves describe (fitted_grey_scale), taken forward through the bundle's matrices: the slopes are the
-// regression the profile builder runs on a bracket's steps, here on the fitted ones, in Academy Printing Density,
-// and the mid grey is the fitted mid step. That is 24 points through a 3x3 and a closed-form regression; no pixel
-// goes back to the scan's channels.
 struct FramePrint {
   std::string id, name;               // the print material
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
@@ -244,23 +259,22 @@ struct FramePrint {
   double exposure = 1.0;
   double grey[3] = {0, 0, 0};
   double slopes[3] = {1, 1, 1};
-  bool fitted = false;                // grey and slopes are of the grey scale the frame's fitted curves describe
+  bool from_curve = false;            // grey and slopes are the film's grey balance curve's (curve_grey, curve_slopes)
+  // The material's own print search (DensityRecord::print_search): the mid grey A the grey and slopes are taken at,
+  // and its gains, which the CLF's balance applies in place of the picture conversion's.
+  bool print_searched = false;
+  double a = NAN, gain_g = 1.0, gain_b = 1.0;
+  bool converged = false;
+  int steps = 0;
+  double last_move[3] = {0, 0, 0}, above_knee = 0.0;
+  double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
+  std::string stopped_by;
+  double a0 = 0.0, wish_l = 0.0, above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // (PrintSearch)
+  bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
+  double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
+  double knob_given[3] = {0, 0, 0};            // brightness, tint, warmth as given
   double grey_density = 0.70;
 };
-// The film a frame's conversion renders as each grey step of its bracket, as density in the bundle's channels above
-// the film base. The conversion takes a film of density D in channel c to the profile's input as
-//
-//     w = E g_c n0 10^-D          n0 = normalization_target / 65535, where the film base lands at E = g = 1
-//     v = knee(w)                 color_pipeline.h knee_compress at kCurveKnee (the identity below it)
-//     v' = ref 2^f(log2(v / ref))  for v < ref; v' = v at and above it (red has no curve)
-//
-// with f(u) = u (1 + a + k tanh(u - u_med)), held below u_hold, and ref the curve's pivot as the fit recorded it
-// (knee(E g_c n0) at the film base). The bracket's profile renders v' = n0 10^-d_i as grey step i. So each step is
-// inverted: f by bisection (it is monotonic, input_curves.h curve_shape_ok), the knee in closed form, then
-// D = -log10(w / (E g_c n0)). Without curves and below the knee this is d_i + log10(E g_c).
-// py-ref: negicc_station/src/print_emulation.py (fitted_grey_scale)
-std::vector<std::array<double, 3>> fitted_grey_scale(const DensityRecord& rec,
-                                                     const std::vector<std::array<double, 3>>& steps);
 // False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.
 bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err);
 
@@ -270,9 +284,6 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
 // place the balance, the exposure and the slopes are applied.
 std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
 
-// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
-// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write, named after the whole output as the sidecar is (<output>.<print>.clf: a CLF fits
-// one file, its code scale, measure and channel factors).
 // The print materials built into neg_process (3rd_party/spektrafilm/profiles/<id>.json), in the order of their ids,
 // with their matrices for the film of bundle; without a bundle, or with one that has no film_model, they have no
 // matrix (enough to list them). One that cannot be read is left out, with a warning.
@@ -290,9 +301,139 @@ struct DensityPrints {
   std::vector<FramePrint> frames;
   std::vector<std::string> paths;
   std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
+  std::string error;                  // a material asked for that has no CLF, and why: the run fails
 };
+// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
+// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write,
+// named after the whole output as the sidecar is (<output>.<material>.clf: a CLF fits one file, its code scale,
+// measure and channel factors).
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids);
 // Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
 void remove_print_clfs(const DensityPrints& prints);
+
+// ---- The print ICC: a frame printed as the picture conversion renders it --------------------------------------------
+//
+// With --print and a picture output on a profile bundle, the print's own search runs on the print profile
+// (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print
+// material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3
+// table, identity output curves), so the conversion and the output run it as they run them. The bundle carries one
+// print ICC per print material (print_profiles, built by the profiling tool when it saved the bundle);
+// its table serves every bracket, and each bracket's three input curves are computed here:
+//
+//     in_c(x) = Paper_c((G_c(-log10(unknee(x) / n0)) - A_mid) (1 + t_c))
+//
+//   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
+//   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
+//   t_c       the bracket's tilt relative to the curve (DensityBracket::tilt; 0 without grey_relative)
+//   Paper_c   0.75 curve_c(aim_c - eta_c alpha_i) / top_c + 0.25 (1 - i / (kPaperAlphaPoints - 1)) on
+//             alpha_i = kPaperAlphaStart + kPaperAlphaStep i (-1.5 .. 1.8), eta = P (1, 1, 1) with P the material's
+//             print matrix for APD, top_c the channel's largest value; held strictly decreasing on [0, 1]
+//             (paper_curve)
+//   unknee    the inverse of the soft knee at kKnee the conversion applies before the profile
+//
+// and the table, at node a: alpha_c = Paper_c^-1(a_c), printing density 0.70 + Q L (psi alpha) with
+// psi = M^-1 (1, 1, 1) and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none
+// for a paper). A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is
+// computed here, gets its table computed here (print_table).
+// The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence,
+// and that and by whom it was modified). The profile-building tools write the same text into the bundle's print ICCs.
+// The print CLF's description (np_print.cc frame_print_clf) gives the same attribution in its own words, with the
+// licence at spektrafilm's main branch rather than at this pinned commit.
+constexpr const char* kPrintIccCopyright =
+    "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
+    "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
+    "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
+    "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
+constexpr int kPrintIccPoints = 4096;
+// The largest XYZ a lut16 (PCS XYZ) holds: code FFFFh as a u1Fixed15Number (ICC.1:2022 4.8 and 6.3.4.2 Table 11).
+constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
+constexpr int kPrintIccCube = 45;
+// Paper_c's grid: -1.5 to 1.8 in steps of 0.005, 661 points.
+constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
+constexpr int kPaperAlphaPoints = 661;
+using PrintCurves = std::array<std::vector<double>, 3>;
+
+// The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
+// curve_grey and curve_slopes at a mid grey A (green APD) in place of a bracket's.
+void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
+void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
+// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: each bracket has its own tilt,
+// and between two brackets' A_mid the tilt is interpolated linearly in A, held beyond the end ones, so at a bracket's
+// own A_mid it is that bracket's tilt; a bundle with one bracket has that bracket's tilt. a_mid and tilt per bracket,
+// in any order; zeros without brackets.
+void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
+                   double t[3]);
+// The same from a bundle's density brackets.
+void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
+// The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
+// curve has it. A print CLF of a bundle with grey_balance_curves, under either light, takes it as the frame's mid grey
+// (frame_print).
+void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
+// The slopes a print CLF takes for the bracket from the curve (DESIGN.md 5.9): with n(A) the light densities of the
+// curve's grey at green APD A, gamma_c = sum_j M_cj dn_j/dA at the mid grey (dn_j/dA = 1 / G_j', G_j' a central
+// difference of one step of the curve's table), slopes = (gamma_green / gamma_red, 1, gamma_green / gamma_blue).
+void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]);
+// Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
+PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
+// A bracket's input curves on x = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp). gains (r, g, b): the
+// print's gains as a density offset after the knee, dL_c = -log10(unknee(x) g_c / n0) (null: none).
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double tilt[3], const double gains[3] = nullptr);
+// The table: kPrintIccCube^3 XYZ D50, red slowest.
+std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
+                                const PrintCurves& paper);
+// An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves),
+// dated date (year, month, day, hour, minute, second), so the same inputs give the same bytes.
+std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
+                                     const std::string& description, const std::string& copyright,
+                                     const std::array<int, 6>& date);
+// The date a bundle's print ICCs carry: its source file's timestamp (profile_<Key>_<YYYYMMDD>_<HHMMSS>), else
+// 2026-01-01 00:00:00.
+std::array<int, 6> bundle_date(const ProfileBundle& bundle);
+// The SHA-256 of bytes, as 64 lowercase hex digits.
+std::string sha256_hex(const std::string& bytes);
+// Multiplies the X, Y and Z of an ICC's A2B0 table (a lut16's) by k[0], k[1] and k[2] in place, each code rounded and
+// held at 65535: the print relative to its paper's white in the profile an output embeds. False when it has none.
+bool scale_print_icc_table(std::vector<uint8_t>& icc, const double k[3]);
+// Writes xyz into an ICC's wtpt tag in place (the media white: the paper's, for a print made relative to its paper).
+// False when it has none.
+bool set_icc_wtpt(std::vector<uint8_t>& icc, const double xyz[3]);
+// The paper's white under the material's viewing light, as the print CLF's XYZ has it: the colour of the print where
+// every layer holds its least dye (each curve's lowest value: the base and the layers' fog), the lightest it gets.
+void print_paper_xyz(const PrintMaterial& m, double xyz[3]);
+// Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
+bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
+
+// The print at a continuous mid grey A (np_pipeline: the print search): the input curves above with A for
+// A_mid and the brackets' tilt at A (print_tilt_at: linear in A between the two neighbouring brackets, held beyond
+// the end ones). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
+// codes an ICC holds, as code / 65535).
+struct PrintContinuum {
+  GreyBalanceCurves g;
+  PrintCurves paper;
+  double n0 = 1.0;
+  std::vector<double> a_mid;                  // per bundle.targets, in its order
+  std::vector<std::array<double, 3>> tilt;    // per bundle.targets
+  void tilt_at(double a, double t[3]) const;  // print_tilt_at over these brackets
+  // gains (r, g, b): the print's gains in its curves, after the knee (null: none).
+  PrintCurves curves_at(double a, const double gains[3] = nullptr) const;
+  void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
+  // The tables set_curves_at writes into prof.in_trc.
+  void trc_at(double a, const double gains[3], std::vector<float> trc[3]) const;
+  double a_lo() const;                        // the range A is searched in: the curve's green APD range
+  double a_hi() const;
+};
+
+// The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
+struct BracketPrints {
+  PrintContinuum continuum;                    // the print at a continuous A
+  std::string id, name;
+  std::string file, file_sha256;               // a material given as a file: its path as given and its SHA-256
+  bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here
+  std::vector<std::vector<uint8_t>> icc;       // per bundle.targets, in its order
+};
+bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
+                            std::string& err);

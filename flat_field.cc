@@ -74,7 +74,8 @@ FlatField::FlatField(std::vector<float> gain, int grid_h, int grid_w, int block,
       m_id(std::move(id)) {
     if (m_gh < 2 || m_gw < 2 || m_block < 1 || m_half_w < 1 || m_half_h < 1)
         throw std::invalid_argument("flat field: grid must be at least 2x2, block and size positive");
-    if (m_gain.size() != (size_t)m_gh * m_gw * 3) throw std::invalid_argument("flat field: gain size != grid_h*grid_w*3");
+    if (m_gain.size() != (size_t)m_gh * m_gw * 3)
+        throw std::invalid_argument("flat field: gain size != grid_h*grid_w*3");
     for (float g : m_gain)
         if (!(g > 0.0f) || !std::isfinite(g)) throw std::invalid_argument("flat field: gains must be finite and > 0");
 }
@@ -185,6 +186,10 @@ uint32_t rd_u32(const uint8_t* p) {
     return (uint32_t)p[0] | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
 
+// The ZIP records are those of PKWARE's APPNOTE.TXT (6.3.10): the end of central directory record (4.3.16, signature
+// 0x06054b50, 22 bytes and a comment of at most 65535, so it starts within the last 65557 bytes), the central directory
+// file header (4.3.12, 0x02014b50, 46 bytes) and the local file header (4.3.7, 0x04034b50, 30 bytes). Method 8 is raw
+// DEFLATE (RFC 1951), which zlib inflates with negative window bits.
 std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs) throw std::runtime_error("cannot open flat field file: " + path);
@@ -267,6 +272,8 @@ struct NpyHeader {
     size_t data_offset = 0;
 };
 
+// The .npy format (NumPy's numpy.lib.format): the magic "\x93NUMPY", a major and a minor version byte, then the header
+// length, 2 bytes in version 1.0 (10 bytes before the header) and 4 bytes in versions 2.0 and 3.0 (12 bytes).
 NpyHeader parse_npy_header(const std::vector<uint8_t>& raw, const std::string& name) {
     if (raw.size() < 10 || std::memcmp(raw.data(), "\x93NUMPY", 6) != 0)
         throw std::runtime_error("invalid .npy magic in " + name);

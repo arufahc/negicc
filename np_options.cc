@@ -17,6 +17,7 @@
 #include <cstdio>
 #include "np_log.h"
 #include "np_options.h"
+#include "np_output.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -166,12 +167,19 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
 
 int parse_options(int ac, char* av[], Options& o) {
   for (int i = 1; i < ac; ++i) {
-    // --print without a name lists the print materials built in, and does nothing else.
-    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+    // --print alone lists the print materials built in, and does nothing else. Given with a conversion's other
+    // arguments and no material (at the end of the command line or before another flag), it is refused here so that
+    // the next flag is not taken as the material's name.
+    if (strcmp(av[i], "--print") == 0 && ac == 2) {
       for (const PrintMaterial& m : builtin_print_materials()) {
         log_info("--print %s  (%s)\n", m.id.c_str(), m.name.c_str());
       }
       return -1;
+    }
+    if (strcmp(av[i], "--print") == 0 && (i + 1 == ac || av[i + 1][0] == '-')) {
+      log_error("--print needs a print material (a built-in id, 'all' or a spektrafilm profile's path); --print alone "
+                "lists them\n");
+      return 1;
     }
     if (strcmp(av[i], "--list_profiles") == 0) {
       for (const std::string& key : list_embedded_bundles()) {
@@ -194,44 +202,47 @@ int parse_options(int ac, char* av[], Options& o) {
       return -1;
     }
   }
-  argparse::ArgumentParser parser("neg_process");
+  argparse::ArgumentParser parser("neg_process", neg_process_version());
   parser.add_argument("-C", "--no_crop")
     .help("No cropping according to aspect ratio in RAW file.")
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("-q", "--quality")
-    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear 0; >=0 passes qual to LibRaw, e.g. 4 for DCB).")
+    .help("De-bayer quality (-1 for auto: grain-aware if Sony CFA, else bilinear 0; >=0 passes qual to LibRaw, e.g. 4 "
+          "for DCB).")
     .scan<'i', int>()
     .default_value(-1);
   parser.add_argument("-r", "--r_coeff")
-    .help("R (corrected) value is dot product of this 'r1 r2 r3' vector and 'R G B' values from linear RAW. "
+    .help("R (corrected) value is dot product of the vector r1 r2 r3, three separate numbers (-r 1 0 0), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{1, 0, 0})
     .scan<'g', float>();
   parser.add_argument("-g", "--g_coeff")
-    .help("G (corrected) value is dot product of this 'g1 g2 g3' vector and 'R G B' values from linear RAW. "
+    .help("G (corrected) value is dot product of the vector g1 g2 g3, three separate numbers (-g 0 1 0), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 1, 0})
     .scan<'g', float>();
   parser.add_argument("-b", "--b_coeff")
-    .help("B (corrected) value is dot product of this 'b1 b2 b3' vector and 'R G B' values from linear RAW. "
+    .help("B (corrected) value is dot product of the vector b1 b2 b3, three separate numbers (-b 0 0 1), and "
+          "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none).")
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
   parser.add_argument("-E", "--exposure_comp")
-    .help("Exposure. With a bundle, E as negicc-station and the parameter search give it (the sidecar's "
+    .help("Exposure. With a bundle, E as the parameter search gives it (the sidecar's "
           "cli_equivalent: auto.e, the search's own; with fitted curves, input_curves.remeter.e, re-metered on the "
           "combined profile; after the knobs, knobs.egb.e): "
           "relative to the bracket, the film base and the scan's exposure; with an ICC profile, a multiplier of the "
-          "corrected RGB. Given with a white-light (d65) bundle, the bundle search holds it and solves the rest (the "
-          "bracket unless --target gives it, the gains unless given), and the curve fit and the tone stage run on "
-          "the result as after an unpinned search, without re-metering E. Given with a TriLED bundle or an ICC "
-          "profile, the single-bracket solver keeps it and solves only the gains, on the bracket --target picks (or "
-          "the bundle's default). Not given with given gains on TriLED: the centre of the bracket's exposure range "
-          "as the bundle search meters it; with an ICC profile, 1. --brightness moves the result, a given E too.")
+          "corrected RGB. Given with a bundle (either light), the bundle search holds it and solves the rest (the "
+          "bracket unless --target gives it, the gains unless given), and the curve fit (white light) and the tone "
+          "stage run on the result as after an unpinned search, without re-metering E. Given with an ICC profile, "
+          "the single-bracket solver keeps it and solves only the gains; not given there, 1. --brightness moves the "
+          "result, a given E too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--no-metadata")
@@ -239,38 +250,40 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--gain_g")
-    .help("Gain of the G channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
-          "neutral). Defaults to 1.0. Given with a white-light (d65) bundle, the bundle search and the curve fit "
-          "hold it and solve the rest; with -E, --target and --gain_b given too there is nothing to search, and the "
-          "search runs only for the curve fit and the tone stage (--fit_curves off --tone_stage off converts with "
-          "the given values alone). Given with a TriLED bundle or an ICC profile, it turns the parameter search off. --tint and "
-          "--warmth move the result, a given gain too.")
+    .help("Gain of the G channel relative to R (with a bundle, 1 renders the film base neutral). Defaults to 1.0. "
+          "Given with a bundle (either light), the bundle search and, on white light, the curve fit hold it and solve "
+          "the rest; with -E, --target and --gain_b given too there is nothing to search, and the search runs only for "
+          "the curve fit (white light) and the tone stage (--tone_stage off, with --fit_curves off on white light, "
+          "converts with the given values alone). Given with an ICC profile, it turns the "
+          "parameter search off. --tint and --warmth move the result, a given gain too.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--gain_b")
-    .help("Gain of the B channel relative to R (with a bundle, as negicc-station gives it: 1 renders the film base "
+    .help("Gain of the B channel relative to R (with a bundle, 1 renders the film base "
           "neutral). Defaults to 1.0. Given, as --gain_g.")
     .scan<'g', float>()
     .default_value(1.0f);
   parser.add_argument("--brightness")
     .help("Brightness offset after the parameter search and the curve fit, in stops of the reference grey's "
-          "luminance (as in negicc-station). It moves the result, whether searched or given (-E sets what it starts "
-          "from, not the final exposure), and the tone curve is applied on top unchanged. Reuses the Auto or DINOv3 "
-          "result in <output>.json when this build wrote it from the same input files (size and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
+          "luminance. It moves the result, whether searched or given (-E sets what it starts "
+          "from, not the final exposure), and the tone curve is applied on top unchanged; on a print (--print) it "
+          "moves the print's mid grey A while E is held (a density output takes it only with --print, for its CLFs). "
+          "Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input files (size "
+          "and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--tint")
     .help("Tint offset after the parameter search, in CIELAB a* units of the reference grey (negative: green, "
-          "positive: magenta, as in negicc-station). Reuses <output>.json when it matches.")
+          "positive: magenta). Reuses <output>.json when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--warmth")
     .help("Warmth offset after the parameter search, in CIELAB b* units of the reference grey (negative: blue, "
-          "positive: yellow, as in negicc-station). Reuses <output>.json when it matches.")
+          "positive: yellow). Reuses <output>.json when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
-  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film), as
-  // negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; np_film_base.h);
+  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film),
+  // as negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; np_film_base.h);
   // --film_base_rgb, which took it as numbers or from the rebate, is gone.
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
@@ -279,14 +292,14 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--light_source")
     .help("Scanning light of the built-in profile bundle: tri (narrowband red, green and blue LED; sensor RGB and its "
           "crosstalk correction) or d65 (white; LibRaw's white-light decode to linear Rec.2020). Required for a RAW; "
-          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes either: "
-          "with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are sRGB and "
-          "16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light (black "
-          "subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
+          "otherwise it follows the input: d65 for a linear DNG or a JPEG, tri for three captures. A TIFF takes "
+          "either: with d65 (the default) it is converted to linear Rec.2020 through its ICC profile (else 8 bits are "
+          "sRGB and 16 bits linear Rec.2020); with tri it is the scanning camera's linear RGB under the TriLED light "
+          "(black subtracted, no white balance or colour matrix), converted with the bundle's crosstalk correction.");
   parser.add_argument("-p", "--film_profile")
-    .help("Profile in place of the built-in bundle: a negicc-station profile bundle JSON or a split bundle's "
-          "directory (e.g. to test parity with negicc-station), or a single ICC profile that applies to the corrected "
-          "RGB values (for research).");
+    .help("Profile in place of the built-in bundle: a profile bundle JSON with its ICC profiles inside (base64), or "
+          "a split bundle's directory (a bundle.json with its ICC profiles beside it, as in profiles/), or a single "
+          "ICC profile that applies to the corrected RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
     .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile. "
           "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
@@ -295,15 +308,20 @@ int parse_options(int ac, char* av[], Options& o) {
           "with the channel factors of SMPTE ST 2065-3. Density takes a "
           "bundle whose density matrices were built in, TriLED or white light, and none of the exposure, gain, "
           "curve, tone or look options; the colour balance the search finds is recorded in the file, not applied. "
-          "On white light the curve fit runs as for a picture (--fit_curves off turns it off) and only the print CLF "
-          "beside the file uses it.");
+          "On white light without --print the curve fit runs (--fit_curves off turns it off); it changes no pixel and "
+          "gives the file's suggested balance. With --print no fit runs.");
   parser.add_argument("--print")
-    .help("With a density output (-P statusm, rp180 or apd): also write, beside the file, a CLF that renders it as a "
-          "print on this print material, as sRGB (<output>.<print>.clf). The print material is one built in, or the "
-          "path of a spektrafilm print profile (a .json file). Give it once per print material, or 'all' for those "
-          "built in. "
-          "Without a name, --print lists the print materials built in. Without --print only the density file is "
-          "written.")
+    .help("Print the frame on a print material: one built in, or the path of a spektrafilm print profile (a .json "
+          "file). With -P srgb (or another picture output) the output is the print: Auto searches "
+          "the print itself (its mid grey A as a continuous printing exposure, E held, then g and b; DESIGN.md, \"The "
+          "print's search\") and the conversion renders it there; a print is made by its own search, so --target, -E, "
+          "--gain_g and --gain_b are refused with it, and re-running reproduces it. It needs the bundle's "
+          "grey_balance_curves. With a density "
+          "output (-P statusm, rp180 or apd) the density file is written, and beside it goes a CLF per "
+          "material that renders it as that print, as sRGB (<output>.<material>.clf); give it once per print material, "
+          "or 'all' for those built in. Each material's print is searched as for a picture output, and its CLF "
+          "carries that print's A, g and b. On a white-light bundle the print takes no curve fit. Without a name, "
+          "--print lists the print materials built in. Without --print the brackets' chart profiles render the scene.")
     .append();
   parser.add_argument("--roi")
     .help("ROI crop in sensor coordinates: x y w h [rot_cw [hflip [vflip]]], or 'auto [h|v]'. 'auto' reads the film "
@@ -313,7 +331,9 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--film_format")
     .help("Film format: 35mm, 645, 6x6, 6x7, 6x9, or auto (the frame detector tries every format). With --roi auto it "
           "is the frame to find (default 35mm); with a given frame, when given, it is the frame the film base is read "
-          "around (the rebate; default: every format, as negicc-station).")
+          "around (the rebate; default: every format). The sidecar's cli_equivalent gives the format the "
+          "film base was read with whenever its detection used one, given or --roi auto's 35mm, as it gives the frame, "
+          "so that its explicit --roi reads the same base.")
     .default_value(std::string("35mm"));
   parser.add_argument("--rot", "--rot_cw")
     .help("Clockwise rotation in degrees (0, 90, 180, 270).")
@@ -339,32 +359,43 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
-  // Kept only to reject it with a reason: the tint trim stage was removed (its balance is part of the curve fit).
-  parser.add_argument("--tint_trim")
-    .help("Removed: the tint trim stage is gone; the overall magenta-green balance is now part of the curve fit. "
-          "Giving this flag is an error.");
   parser.add_argument("--tone_stage")
     .help("auto (default), on, off, or a recorded curve: curve:black,white,gamma,contrast. auto: the tone stage "
-          "runs after every bundle search with -P srgb, on white-light and TriLED bundles alike and whether or not "
-          "the curve fit runs, and nowhere else (another or no -P, given parameters that leave nothing to search, a "
-          "single ICC profile), so it can be passed for every scan. on: the same, and an error where it does not "
+          "runs on every bundle conversion with -P srgb that is not a print, on white-light and TriLED bundles alike, "
+          "whether or not the curve fit runs and with or without given --target, -E and gains (with all four given "
+          "the search runs for it), and nowhere else (another or no -P, a print, a single ICC profile), so it can be "
+          "passed for every scan. on: the same, and an error where it does not "
           "apply. off: no tone stage. The stage: tone heads on DINOv3 features of the final render's preview "
           "predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, and one "
           "monotone L* curve, applied in the conversion itself, moves the image all the way to the predicted shadow "
           "level and half way to the highlight level and range, holding the mid-tones and each colour's a* and b*. "
           "A recorded curve (a sidecar's cli_equivalent) is replayed with --target, -E, --gain_g and --gain_b, "
-          "without searching or predicting.")
+          "without searching or predicting; one outside the stage's limits (black -15 to 15, white 80 to 110, gamma "
+          "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
     .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto.")
     .default_value(std::string("auto"));
+  parser.add_argument("--check_renderer")
+    .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
+          "print's search, the curve fit and the tone plan through a pass-through renderer that forwards each pass to "
+          "the CPU and counts it, count every pass of theirs that runs outside it, and print both; exit 1 when one "
+          "does, or when no pass ran. The output must equal the conversion without it, bit for bit: compare the two "
+          "outputs yourself (cmp).")
+    .flag();
   parser.add_argument("--probe_intent")
-    .help("Measurement aid (negicc-station's goal harness): write what the intent network predicts from chosen renders "
-          "of this frame to this JSON file and stop without converting. Renders every metered bracket at its metered "
-          "exposure, then each --probe_params set at each --probe_stops offset. Needs a bundle search (no pins).")
+    .help("Measurement aid (for tools that study the search): write what the intent network predicts from chosen "
+          "renders of this frame to this JSON file and stop without converting. Renders every metered bracket at its "
+          "metered exposure, then each --probe_params set at each --probe_stops offset. With --print on a picture "
+          "output the print's search writes the file instead (its mid grey A at each --probe_stops offset; "
+          "--probe_params does not apply) and the conversion goes on. Needs the bundle search to run: refused where "
+          "it does not (an ICC profile; a bundle with all of --target, -E and the gains given and neither the curve "
+          "fit nor the tone stage running; recorded values), and a previous run's <output>.json is not reused with "
+          "it.")
     .default_value(std::string(""));
   parser.add_argument("--probe_params")
-    .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target index, E in the search's units).")
+    .help("With --probe_intent: parameter sets \"target,E,g,b;...\" (target: a bracket's index, an integer; E in the "
+          "search's units).")
     .default_value(std::string(""));
   parser.add_argument("--probe_stops")
     .help("With --probe_intent: exposure offsets in stops applied to each --probe_params set, e.g. -0.5 0 0.5.")
@@ -377,12 +408,11 @@ int parse_options(int ac, char* av[], Options& o) {
     .scan<'i', int>()
     .default_value(4);
   parser.add_argument("--target", "--bundle_target")
-    .help("Target index (0-based) or target name in JSON profile bundle. With a white-light (d65) bundle the bundle "
-          "search runs on that bracket alone and everything else is as without --target: E and the gains are solved "
-          "(unless given), and the curve fit and the tone stage run. The clip fallback, which only changes the "
-          "bracket, is left out. With a TriLED bundle the single-bracket solver runs on it.")
+    .help("Target index (0-based) or target name in JSON profile bundle. The bundle search runs on that bracket alone "
+          "and everything else is as without --target: E and the gains are solved (unless given), and the curve fit "
+          "(white light) and the tone stage run. The clip fallback, which only changes the bracket, is left out.")
     .default_value(std::string(""));
-  // Fitted G/B input curves (input_curves.h; negicc-station designs/plan_fit_curves.md).
+  // Fitted G/B input curves (input_curves.h).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
@@ -393,10 +423,11 @@ int parse_options(int ac, char* av[], Options& o) {
           "p^2) render grey, pulled at m / (m + 12) of full strength (m the evidence, sum of p^2), and the overall "
           "magenta-green balance agrees with the search's intent field, on the bracket it chose, each candidate at "
           "the E that keeps Auto's grid median L*, then re-meter E on that bracket's profile with its "
-          "input tables composed with the curves (the combined profile), as negicc-station's Fit curves toggle does; "
+          "input tables composed with the curves (the combined profile); "
           "needs a white-light bundle and -P srgb or srgb-g10. A given g or b is held by the fit and a given E is "
           "not re-metered; with --target, -E, --gain_g and --gain_b all given only the curves are fitted. off: "
-          "no fit (the tone stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
+          "no fit, on a white-light bundle (refused where no fit can run: TriLED, an ICC profile, --print; the tone "
+          "stage has its own flag, --tone_stage); a sidecar's cli_equivalent carries it, with "
           "--tone_stage off, when neither ran, so its given values replay as recorded. Recorded curves: "
           "convert through the --target bracket's combined profile with them at the given -E, --gain_g and --gain_b, "
           "without fitting or searching (a sidecar's input_curves; its cli_equivalent writes them in this form with "
@@ -457,14 +488,30 @@ int parse_options(int ac, char* av[], Options& o) {
   o.dino_iters = parser.get<int>("--dino_iters");
   o.dino_iters_given = parser.is_used("--dino_iters");
   o.probe_intent = parser.get<std::string>("--probe_intent");
+  // The probe's sets and offsets do nothing without the probe file they go into.
+  for (const char* f : {"--probe_params", "--probe_stops"}) {
+    if (parser.is_used(f) && o.probe_intent.empty()) {
+      log_error("%s needs --probe_intent: it sets what the probe file records\n", f);
+      return 1;
+    }
+  }
+  o.check_renderer = parser.get<bool>("--check_renderer");
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;
     while (std::getline(all, item, ';')) {
       std::array<float, 4> p{};
       if (item.empty()) continue;
-      if (std::sscanf(item.c_str(), "%f,%f,%f,%f", &p[0], &p[1], &p[2], &p[3]) != 4) {
-        log_error("--probe_params: \"%s\" is not target,E,g,b\n", item.c_str());
+      int target = -1, used = 0;
+      if (std::sscanf(item.c_str(), "%d,%f,%f,%f%n", &target, &p[1], &p[2], &p[3], &used) != 4 ||
+          used != (int)item.size()) {
+        log_error("--probe_params: \"%s\" is not target,E,g,b (target an integer)\n", item.c_str());
+        return 1;
+      }
+      p[0] = (float)target;
+      if (!(std::isfinite(p[1]) && p[1] > 0.0f && std::isfinite(p[2]) && p[2] > 0.0f && std::isfinite(p[3]) &&
+            p[3] > 0.0f)) {
+        log_error("--probe_params: \"%s\": E, g and b must be positive numbers\n", item.c_str());
         return 1;
       }
       o.probe_params.push_back(p);
@@ -576,6 +623,7 @@ int parse_options(int ac, char* av[], Options& o) {
     // else the whole entry is the intent adapter's path (so "adapter_dir" and drive letters such as "C:\..." keep
     // their meaning). A word of two or more letters before the colon that is not a head is an error.
     const std::string v = parser.get<std::string>("--dino");
+    o.dino_arg = v;
     std::stringstream ss(v);
     std::string entry;
     bool seen[3] = {false, false, false};
@@ -646,12 +694,6 @@ int parse_options(int ac, char* av[], Options& o) {
               name, prefix, count, v.c_str());
     return false;
   };
-  if (parser.is_used("--tint_trim")) {
-    log_error("--tint_trim was removed: the tint trim stage is gone and the overall magenta-green balance is part of "
-              "the curve fit. Drop the flag (an older sidecar's cli_equivalent carries it; its other values still "
-              "apply, but the trim it recorded is not reproduced)\n");
-    return 1;
-  }
   if (!replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay)) return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
@@ -714,8 +756,10 @@ int parse_options(int ac, char* av[], Options& o) {
   }
   if (parser.is_used("--print")) {
     o.prints = parser.get<std::vector<std::string>>("--print");
-    if (!o.density) {
-      log_error("--print takes a density output: give -P statusm, rp180 or apd\n");
+    // A picture output is one print: one material.
+    if (!o.density && (o.prints.size() != 1 || o.prints.front() == "all")) {
+      log_error("--print with a picture output renders one print: give one print material (a density output takes "
+                "several, or 'all', one CLF each)\n");
       return 1;
     }
     const std::vector<PrintMaterial> known = builtin_print_materials();
@@ -726,7 +770,8 @@ int parse_options(int ac, char* av[], Options& o) {
       if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
         std::string text, stem, why;
         PrintMaterial material;
-        if (!read_print_file(id, text, stem, why) || !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
+        if (!read_print_file(id, text, stem, why) ||
+            !load_spektrafilm_print(text, stem, ProfileBundle(), material, why)) {
           log_error("--print %s: %s\n", id.c_str(), why.c_str());
           return 1;
         }
@@ -744,6 +789,13 @@ int parse_options(int ac, char* av[], Options& o) {
       }
     }
   }
+  // A print is made by its own search: no given bracket, exposure or gains with --print, on a picture or a density
+  // output, so that no print differs silently from its Auto; re-running the same command reproduces it.
+  if (!o.prints.empty() && (o.target_given || o.exposure_given || o.gain_g_given || o.gain_b_given)) {
+    log_error("--target, -E, --gain_g and --gain_b do not apply with --print: a print is made by its own search, and "
+              "re-running reproduces it\n");
+    return 1;
+  }
   if (!o.density) {
     if (ext == ".dpx") {
       log_error("A .dpx output holds density: give -P statusm, rp180 or apd\n");
@@ -759,34 +811,40 @@ int parse_options(int ac, char* av[], Options& o) {
     return 1;
   }
   // Density is the negative as measured: no given bracket, exposure or gains, no curves, no tone stage and no look.
-  // --fit_curves off, auto or on is taken (np_pipeline.cc refuses it on a TriLED bundle): on white light the fit
-  // reaches the print CLF beside the file, not its pixels. Recorded curves replay a bracket, E and gains, which a
-  // density output does not take.
+  // --fit_curves off, auto or on is taken here (np_pipeline.cc refuses it on a TriLED bundle and with --print): on
+  // white light without --print the fit gives the file's suggested balance, not its pixels. Recorded curves replay a
+  // bracket, E and gains, which a density output does not take.
   {
     struct Refused { const char* flag; bool used; };
     const bool fit_set = o.input_curves_given;
     const bool tone_set = parser.is_used("--tone_stage") && parser.get<std::string>("--tone_stage") != "auto";
     const Refused refused[] = {
-        {"--target", o.target_given},          {"-E", o.exposure_given},
-        {"--gain_g", o.gain_g_given},          {"--gain_b", o.gain_b_given},
-        {"--brightness", parser.is_used("--brightness")}, {"--tint", parser.is_used("--tint")},
-        {"--warmth", parser.is_used("--warmth")},         {"--dino", parser.is_used("--dino")},
-        {"--dino_backend", parser.is_used("--dino_backend")}, {"--dino_iters", o.dino_iters_given},
-        {"--fit_curves", fit_set},             {"--tone_stage", tone_set},
+        {"--target", o.target_given},
+        {"-E", o.exposure_given},
+        {"--gain_g", o.gain_g_given},
+        {"--gain_b", o.gain_b_given},
+        // The knobs move a print's CLF (each material's own print search): they apply with --print.
+        {"--brightness", parser.is_used("--brightness") && o.prints.empty()},
+        {"--tint", parser.is_used("--tint") && o.prints.empty()},
+        {"--warmth", parser.is_used("--warmth") && o.prints.empty()},
+        {"--fit_curves", fit_set},
+        {"--tone_stage", tone_set},
     };
     for (const Refused& r : refused) {
       if (r.used) {
         log_error("%s does not apply to a density output (-P %s): it writes the negative's density above the film "
-                  "base, with no given bracket, exposure, gains, curves, tone stage or look\n", r.flag, o.colorspace.c_str());
+                  "base, with no given bracket, exposure, gains, curves, tone stage or look (the knobs apply to its "
+                  "print CLFs, with --print)\n", r.flag, o.colorspace.c_str());
         return 1;
       }
     }
   }
   // The conversion takes the film base's merged matrix as it is (np_pipeline.cc convert: exposure and gains of 1).
   // The parameter search still runs, as for a picture: its exposure and gains are not applied, they are recorded in
-  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle the curve fit
-  // runs too (--fit_curves stays auto): its curves are not applied either, the print CLF takes its mid grey and
-  // slopes from them (np_print.h FramePrint). A narrow-band bundle has no curve fit.
+  // the file as a suggested balance (np_print.h DensityRecord::has_balance). On a white-light bundle without --print
+  // the curve fit runs too (--fit_curves stays auto): its curves are not applied, and its E, g and b are the suggested
+  // balance. With --print each material's own print search gives its CLF, with no fit. A narrow-band bundle has no
+  // curve fit.
   o.tone_stage = Options::kToneStageOff;
   return 0;
 }

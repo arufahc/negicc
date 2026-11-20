@@ -5,8 +5,8 @@ stock; it picks exposure, colour balance and contrast and writes a 16-bit TIFF.
 
 ![sample conversion](samples/sample.png)
 
-It ships with profiles for Kodak Portra 400, Portra 160 and Ektar 100, each for a white LED and for a narrow-band
-RGB LED. The profiles were made with a Sony A7R IV. Scans from other cameras and lamps work with the white-LED
+It ships with profiles for Kodak Portra 400, Portra 160 and Ektar 100, each for white light and for a narrow-band
+RGB LED. The profiles were made with a Sony A7R IV. Scans from other cameras and lamps work with the white-light
 profiles; there are examples further down.
 
 You can try it without building anything at [negicc-web](https://negicc-web-dmin4o4cra-uc.a.run.app): upload a RAW,
@@ -16,21 +16,24 @@ DNG, TIFF or JPEG and it runs `neg_process` on it. The longer story of how the m
 ## Build
 
 ```bash
-sudo apt-get install build-essential git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
-pip install torch transformers onnx                             # only needed for `make dinov3_model`
+sudo apt-get install build-essential curl git python3 python3-pip   # plus libjpeg-dev for LIBRAW_JPEG=1
+pip install torch transformers onnx                                 # only needed for `make dinov3_model`
 git clone --recursive https://github.com/arufahc/negicc.git && cd negicc
-make dinov3_model && make -j$(nproc) neg_process                # add USE_CUDA=1 for an NVIDIA GPU
+make dinov3_model && make -j$(nproc) neg_process                    # add USE_CUDA=1 for an NVIDIA GPU
 ```
 
 LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodules in `3rd_party/`
-([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT.
+([3rd_party/README.md](3rd_party/README.md)). The vision model runs through ONNX Runtime or TensorRT. ONNX Runtime is
+linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the first time (needs `curl` and `python3`;
+[3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)), unless an ONNX Runtime in the
+same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
 
 ## Use
 
 ```bash
 bin_out/neg_process --list_profiles
 
-# White LED, 35mm. The frame is found automatically.
+# White light, 35mm. The frame is found automatically.
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --film_format 35mm -P srgb -o out.tif scan.ARW
 
 # Narrow-band RGB LED.
@@ -40,21 +43,21 @@ bin_out/neg_process --film_stock portra400 --light_source tri -P srgb -o out.tif
 bin_out/neg_process --film_stock ektar100 --light_source tri -P srgb -o out.tif ps1.ARW ps2.ARW ps3.ARW ps4.ARW
 
 # Three separate frames under red, green and blue light.
-bin_out/neg_process --film_stock portra160 --light_source tri -r "1 0 0" -g "0 1 0" -b "0 0 1" -P srgb -o out.tif r.ARW g.ARW b.ARW
+bin_out/neg_process --film_stock portra160 --light_source tri -r 1 0 0 -g 0 1 0 -b 0 0 1 -P srgb -o out.tif r.ARW g.ARW b.ARW
 
-# 6x7 on a white LED, with LibRaw's DCB demosaic.
+# 6x7 under white light, with LibRaw's DCB demosaic.
 bin_out/neg_process --film_stock portra400 --light_source d65 -q 4 --roi auto --film_format 6x7 -P srgb -o out.tif scan.ARW
 
-# Set the bracket, exposure and gains yourself. On RGB-LED scans, giving a gain turns the automatic search off.
-bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 -P srgb -o out.tif scan.ARW
+# Set the bracket, exposure and gains yourself; --tone_stage off converts with them and nothing else.
+bin_out/neg_process --film_stock portra400 --light_source tri --target 4 -E 1.15 --gain_g 0.98 --gain_b 1.04 --tone_stage off -P srgb -o out.tif scan.ARW
 
-# White LED: fix only the bracket. Everything else is found as usual, on that bracket.
+# White light: fix only the bracket. Everything else is found as usual, on that bracket.
 bin_out/neg_process --film_stock portra400 --light_source d65 --target 4 -P srgb -o out.tif scan.ARW
 ```
 
-On white-LED scans, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
-search, the curve fit and the contrast step still run, holding what you gave. Add `--fit_curves off --tone_stage off`
-to convert with the given values and nothing else.
+On either light, `--target`, `-E`, `--gain_g` and `--gain_b` each fix one thing and leave the rest automatic: the
+search, the tone stage and (on white light) the curve fit still run, holding what you gave. Add `--tone_stage off`
+(and `--fit_curves off` on white light) to convert with the given values and nothing else.
 
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
@@ -86,26 +89,29 @@ given picture should look like is decided per frame by a vision model.
 
 ### The light
 
-`neg_process` reads camera RAWs, DNGs and 16-bit linear TIFFs.
+`neg_process` reads camera RAWs, linear DNGs, TIFFs and JPEGs. A TIFF or JPEG with an embedded ICC profile is
+converted through it; without one an 8-bit file is taken as sRGB and a 16-bit TIFF as linear Rec.2020. With
+`--light_source tri` a 16-bit TIFF without a profile is taken as the scanning camera's linear RGB.
 
-With a white LED (`--light_source d65`) any camera works. The lamp's colour is taken out using the film base found
-in the scan itself, so your lamp does not have to match the one the profiles were made with.
+With white light (`--light_source d65`), such as a white LED, any camera works. The lamp's colour is taken out using
+the film base found in the scan itself, so your lamp does not have to match the one the profiles were made with.
 
 With a narrow-band RGB LED (`--light_source tri`) each colour of light falls on one dye, which separates the layers
 better. One RAW is enough. Pixel-shift sets and three separate R, G and B frames also work.
 
 Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
 turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than
-bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by LibRaw; `-q` chooses the method.
+bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by LibRaw. `-q` chooses LibRaw's method,
+and on a Sony single shot `-q 0` or higher replaces negicc's demosaic with it; pixel-shift sets are always merged.
 
 ![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
 
-Single-shot TriLED scans on a Sony RGGB sensor, against a 4-shot pixel-shift capture of the same frame.
+Single-shot RGB-LED scans on a Sony RGGB sensor, against a 4-shot pixel-shift capture of the same frame.
 
 | Algorithm | Raw MAE ↓ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | R−G zipper ↓ |
 | :--- | :---: | :---: | :---: | :---: |
 | 4-shot pixel shift (ground truth) | 0.00 | ∞ | 0.00 / 0.00 | 142.4 |
-| **Grain-aware colour-ratio** (TriLED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
+| **Grain-aware colour-ratio** (RGB-LED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
 | LibRaw DCB (`-q 4`) | 79.60 | 39.85 | 1.76 / 7.21 | 71.7 |
 | LibRaw VNG (`-q 1`) | 80.19 | 39.96 | 1.75 / 7.12 | 58.6 |
 | PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 40.03 | 1.73 / 6.97 | 55.3 (grain maze) |
@@ -115,14 +121,23 @@ Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positi
 
 ### The profiles
 
-For each stock an IT8 chart was photographed onto the film at seven exposures, from three stops under to three stops
-over, and each frame was scanned under both lights.
+Each profile set (`profiles/<Stock>-A7R4-<Light>/`) carries two sets of ICC profiles built from the same film
+measurements:
+
+- **Scene measured colour** (`Target_1.icc` … `Target_7.icc`): seven exposure brackets that match the negative to the
+  measured colours of an IT8 chart in the scene.
+- **Print material emulation** (`print_<material>.icc`, used with `--print <material>`): eight print profiles that
+  model the negative printed onto darkroom papers and motion-picture print films
+  ([spektrafilm](https://github.com/andreavolpato/spektrafilm)).
+
+For the scene profiles, an IT8 chart was photographed onto each stock at seven exposures, from three stops under to
+three stops over, and each frame was scanned under both lights.
 
 ![IT8 used for profiling](samples/it8.png)
 
 Each exposure became an ICC profile: tone curves that straighten the film's response, then a 3D table for the
-colour. Together the seven cover 12 to 13 stops of scene brightness. A frame is converted with the profile nearest
-its own exposure.
+colour. Each covers the range of scene brightness its chart frame recorded. For each frame the search (below) picks
+the profile that renders it best among those whose range can hold the scene.
 
 ![TRC Curves](samples/trc_curves.png)
 ![ICC profile](samples/icc.png)
@@ -130,8 +145,10 @@ its own exposure.
 
 ![Profile accuracy per bracket](samples/profile_accuracy.png)
 
-Under the RGB LED the profiles reproduce the chart to well below 1 ΔE₀₀ (ArgyllCMS `profcheck`); each bundle's README
-has its numbers, for example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md).
+Under the RGB LED the scene profiles reproduce the chart to a mean of 0.5 to 1.1 ΔE₀₀ on the patches they were fitted
+to (ArgyllCMS `profcheck`), and 2 to 4 on patches held out of the fit; each profile set's README has its numbers, for
+example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md). The print emulation profiles use the same shape (input
+TRC curves followed by a 45³ colour table) and are described under [Print emulation](#print-emulation) below.
 
 ### Choosing exposure and colour
 
@@ -146,6 +163,8 @@ lab scans:
 | Tone ([models/tone_head](models/tone_head/README.md)) | how dark the shadows, how bright the highlights and how wide the range should be | contrast |
 
 ![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
+
+*As committed in `e7fa5a1` (2026-10-31), with an earlier intent adapter than the one shipped now.*
 
 A conversion goes through these steps:
 
@@ -168,7 +187,9 @@ the uniform colour cast that comes from the LED lights being set to different po
 
 ![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
 
-#### Curve fitting (D65 light only)
+*As committed in `9f9c790` (2026-10-31), with an earlier intent adapter than the one shipped now.*
+
+#### Curve fitting (white light only)
 
 Under a white light the crosstalk matrix and the light's spectrum are unknown, and a broadband light brings in a
 lot of noise between the response curves of the film's dye layers. This step is needed to neutralise the colours
@@ -181,7 +202,7 @@ trend out.
 
 ![Neutral head and the curve fit](samples/neutral_field.png)
 
-#### Toning
+#### The tone stage
 
 The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
 lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
@@ -189,13 +210,26 @@ was.
 
 ![Tone head and the lightness curve](samples/tone_prediction.png)
 
-[DESIGN.md](DESIGN.md) has the formulas, every number these steps depend on, and a list of what is known not to
-work well yet.
+[DESIGN.md](DESIGN.md) has the formulas, every number these steps depend on, and the limits of each step.
 
 ## Scans from other cameras
 
-Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the
-profiles were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
+Scans from any camera under white light (`--light_source d65`) can be converted for scene colour matching or for print
+emulation:
+
+```sh
+# Scene colour matching
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
+
+# Print emulation directly to a picture (print material ICC)
+bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
+
+# Print emulation through an ADX16 (or Cineon DPX) density file and a CLF
+bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
+```
+
+Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
+were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
 `--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
 
 ![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
@@ -212,39 +246,61 @@ DanielE, 2026-07-11.
 
 *Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
 
-The RAW files and the pictures belong to the photographers who posted them. No copyright is claimed on them here.
+The right-hand pictures were rendered with negicc `02876a0`. The RAW files and the pictures belong to the
+photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
-## Density files and print emulation
+## Print emulation
 
-`-P statusm`, `-P rp180` or `-P apd` writes the negative's density above the film base in
-place of a picture: a 10-bit DPX or a 16-bit TIFF, by the output's extension. `rp180` in a DPX is a Cineon file and
-`apd` in a TIFF is ADX16.
+Print emulation models shining a printer lamp through the negative onto darkroom paper or motion-picture print film.
+Eight materials from [spektrafilm](https://github.com/andreavolpato/spektrafilm) are built in — six papers (such as
+Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print` alone lists them.
 
-```sh
-bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
-    --film_base base.ARW --roi auto -o scan.tif scan.ARW
-oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
-```
+![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision
+2383](samples/print_emulation.jpg)
 
-With `--print <print>`, `neg_process` also writes a CLF transform beside the density file, and any tool that reads
-CLF renders the file through it as a print on that material. The print materials are the print profiles of
-[spektrafilm](https://github.com/andreavolpato/spektrafilm): eight are built in (six papers, among them Kodak
-Portra Endura, and the print films Kodak Vision 2383 and 2393; `--print` alone lists them), and `<print>` may also
-be the path of another spektrafilm print profile. Without `--print` only the density file is written.
-The print is a model and has not been compared with a real print. `DESIGN.md` has the encodings, the matrices and
-how the print is computed.
+*Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film, each as
+its search left it. Rendered with negicc `c69816b`.*
 
-A white-LED scan takes the same options (`--light_source d65`). Its density is less exact than an RGB-LED scan's:
-no spectrum of the light is measured, so the scan's channels are taken to be linear Rec.2020. The film base comes
-from the scan itself, since `--film_base` with a capture is for RGB-LED scans. The curve fit runs as it does for a
-picture and changes no pixel of the density file; the CLF takes the frame's mid grey and slopes from it. With
-`--fit_curves off` the CLF takes the mid grey and slopes of the frame's bracket in the profile set, as for an
-RGB-LED scan.
+There are two ways to run it, and both give the same print, apart from the two differences given below:
 
-![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision 2383](samples/print_emulation.jpg)
+1. **Print material ICC (`--print <material> -P srgb`)** — writes the print directly as a 16-bit sRGB TIFF through
+   the material's print ICC profile (`print_<material>.icc`):
 
-*Left to right: negicc's picture, the print on Portra Endura paper, the print on Vision 2383 film.*
+   ```sh
+   bin_out/neg_process --film_stock portra400 --light_source tri --print kodak_portra_endura -P srgb \
+       --film_base base.ARW --roi auto -o print.tif scan.ARW
+   ```
+
+2. **Cineon / ADX16 density file and CLF (`-P rp180|apd|statusm --print <material>`)** — writes the negative's
+   density above the film base to a 10-bit Cineon DPX (`-P rp180 -o scan.dpx`) or a 16-bit ADX16 TIFF
+   (`-P apd -o scan.tif`), with a CLF transform (`<output>.<material>.clf`) beside it:
+
+   ```sh
+   bin_out/neg_process --film_stock portra400 --light_source tri -P apd --print kodak_portra_endura \
+       --film_base base.ARW --roi auto -o scan.tif scan.ARW
+   oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
+   ```
+
+Both paths use the same 3D colour table (cLUT) for the print material's dyes. The only difference is how the scan
+reaches that table: in the density file and CLF, the pixels are already in log density, so a 3×3 matrix in log space
+applies the printing exposure and colour balance before the paper's tone curve; in the print ICC, the input TRC curves
+do the same job directly on the linear scan values. The two differ on film thinner than its base and in how they
+adapt the viewing light's white ([DESIGN.md](DESIGN.md) 5.9).
+
+![Print TRC Curves and 3D cLUT Gamut](samples/print_trc_and_clut.png)
+
+On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's own tone curve.
+Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the spectral print model to 0.6 to 1.5
+ΔE₀₀ on average; under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
+printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
+
+![The same negative as negicc's picture and as a print on each of the eight print
+materials](samples/print_materials_triled.jpg)
+
+*Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
+scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
+`c69816b`.*
 
 ## Options
 
@@ -254,40 +310,43 @@ RGB-LED scan.
 | :--- | :--- |
 | `--film_stock`, `--light_source tri\|d65` | A built-in profile set (`--list_profiles` lists them). |
 | `-p`, `--film_profile` | A profile set's JSON or directory, or a single ICC profile. |
-| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the contrast step need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
+| `-P`, `--colorspace srgb\|srgb-g10\|<icc>` | Output encoding. The highlight roll-off and the tone stage need `srgb`; the curve fit needs `srgb` or `srgb-g10`. |
 | `-P statusm\|rp180\|apd` | Density above the film base in place of a picture: Status M, SMPTE RP 180 printing density, or Academy Printing Density. |
-| `--print <print>` | With a density output: also write a CLF beside the file (`<output>.<print>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB. `<print>` is a built-in print material or the path of a spektrafilm print profile. Repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
+| `--print <material>` | Print on a material: a built-in print material or the path of a spektrafilm print profile. With a picture output (`-P srgb`) the output is the print, made by the print's own search. With a density output: also write a CLF beside the file (`<output>.<material>.clf`, e.g. `scan.tif.kodak_2383.clf`) that renders it as a print on that material, sRGB; repeat it for more prints, or give `all` for the built-in ones. `--print` alone lists them. |
 | `-o`, `--output` | The TIFF. `<output>.json` is written next to it unless `--no-metadata` is given. A density goes to a `.dpx` (10 bits) or a `.tif` / `.tiff` (16 bits). |
 | `--film_base auto\|scan\|<file>[:x,y,w,h]` | The film base. `scan`: read from the scan. A file: read from a capture of unexposed film, over a region in sensor pixels when given. `auto` (default): the base an earlier run to this output read from a capture, when there is one that still applies; otherwise from the scan. |
-| `--target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
+| `--target N`, `--bundle_target N` | The exposure bracket, by index (from 0) or name. The search runs on that bracket only. |
 | `-E`, `--exposure_comp` | Exposure gain. The search keeps it and finds the rest. |
-| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). White LED: the search and the curve fit keep them and find the rest. RGB LED: giving either turns the search off. |
-| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. |
-| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `on` is an error where it does not apply (it never applies to the RGB LED). Eight or ten numbers replay the curves recorded in a sidecar. |
-| `--tone_stage auto\|off\|on\|curve:<numbers>` | The contrast step. `auto` (default) runs it after every automatic search with `-P srgb`, on both lights. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast). A sidecar's replay command carries `--fit_curves off --tone_stage off` when neither step ran. |
+| `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). The search (and the curve fit on white light) keeps them and finds the rest. With an ICC profile (`-p file.icc`), giving either turns the search off. |
+| `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
+| `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `off` and `on` are errors where it does not apply (it never applies to the RGB LED, an ICC profile or a print). Eight or ten numbers replay the curves recorded in a sidecar. |
+| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it on every bundle conversion with `-P srgb` that is not a print, on both lights, with given values too. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast); numbers outside the stage's limits are refused. A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. A TriLED replay command from an older build that gives the values without any `--tone_stage` now runs the tone stage; add `--tone_stage off` to reproduce its file. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
-| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). |
-| `--rot`, `--hflip`, `--vflip` | Orientation of the output. |
+| `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
+| `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |
 | `-q`, `--quality` | Demosaic: −1 automatic, or a LibRaw quality (4 is DCB). |
 | `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's). |
 | `-C`, `--no_crop` | Keep the RAW's full area. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
 | `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. |
+| `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a pass-through renderer; the picture must equal a plain conversion's, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with
 
 Sony A7R IV (`ILCE-7RM4`); a [Shoebox Photos BCS](https://www.shoeboxphotosbcs.com) RGB LED light for the RGB-LED
-profiles and a white D65 LED panel for the white-LED ones; the coloraid.de `R190808` IT8.7/2 target.
+profiles and a white D65 LED panel for the white-light ones; the coloraid.de `R190808` IT8.7/2 target.
 
 ## Licences
 
 negicc is GPL-3.0 (`COPYING`). The DINOv3 backbone in `models/dinov3-small/backbone.onnx` is packed into the
 `neg_process` binary. It is Meta's, under the DINOv3 License (`models/dinov3-small/LICENSE.md`): distribute it, or a
-binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other
-people's photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
+binary built with it, only under that licence and with a copy of it. The scans in `samples/web_*.jpg` are other people's
+photographs, credited above. The print profiles in `3rd_party/spektrafilm/` are
 [spektrafilm](https://github.com/andreavolpato/spektrafilm)'s, unmodified, under CC BY-SA 4.0
-(`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two
-tables, and the pictures made through one are free. The `film_model` block of the RGB-LED profile sets' `bundle.json` holds
-spektrafilm's film spectra, under the same licence; it covers that block only, not the rest of a bundle or its ICC
-profiles.
+(`3rd_party/spektrafilm/README.md`); a CLF that `neg_process` writes with one carries that notice for its two tables,
+and the pictures made through one are free. The `film_model` block of every profile set's `bundle.json` holds
+spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each profile set
+(`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
+The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
+the pictures made with a print ICC.

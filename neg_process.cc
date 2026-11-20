@@ -25,10 +25,10 @@
 // - A single RAW captured under the narrowband RGB LED (tri) or white (d65) light, e.g.
 //     neg_process --film_stock portra400 --light_source tri --roi 1700 0 6686 6376 -o out.tif scan.ARW
 //   A tri bundle (input_space camera_raw_rgb) converts the sensor RGB with its crosstalk correction; -r, -g and -b
-//   override it with one measured for this capture. A d65 bundle (rec2020_linear) converts LibRaw's white-light
-//   decode (the camera's daylight white balance and colour matrix, to linear Rec.2020) with no crosstalk
-//   correction, as negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station bundle JSON
-//   (e.g. to test parity with negicc-station) or a single ICC profile (for research).
+//   override it with one measured for this capture. A d65 bundle (rec2020_linear) converts LibRaw's white-light decode
+//   (the camera's daylight white balance and colour matrix, to linear Rec.2020) with no crosstalk correction, as
+//   negicc-station does, so it takes no -r, -g or -b, and no pixel shift. -p overrides the bundle with a negicc-station
+//   bundle JSON (e.g. to test parity with negicc-station) or a single ICC profile (for research).
 // - Four RAW files of a Sony A7R IV 4-shot pixel shift capture, merged into one image, the same way.
 // - A linear (demosaiced) DNG, e.g. a film scanner's, decoded by LibRaw as a RAW is: camera RGB and the bundle's
 //   crosstalk correction for a tri bundle, the DNG's colour data to linear Rec.2020 for a d65 bundle. A fourth
@@ -46,11 +46,11 @@
 // thinnest film on the scan; the bundle's when neither gives one. The sidecar's film_base records which.
 //
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
-// whenever a profile is given. With a white-light (d65) bundle, --target, -E, --gain_g and --gain_b pin what they give
-// and the same search solves the rest, with the curve fit and the tone stage after it (--fit_curves off leaves those
-// out; with all four given and --fit_curves off the conversion takes the values as given). With a TriLED bundle or an
-// ICC profile, --gain_g or --gain_b turns the search off, and -E keeps the exposure as given and solves only the
-// gains, on the bracket --target picks (or the bundle's default).
+// whenever a profile is given. With a bundle, on either light, --target, -E, --gain_g and --gain_b pin what they give
+// and the same search solves the rest, with the tone stage (and on white light the curve fit) after it (--tone_stage
+// off and --fit_curves off leave them out; with all four given and both off the conversion takes the values as
+// given). With an ICC profile, --gain_g or --gain_b turns the search off, and -E keeps the exposure as given and
+// solves only the gains (the single-bracket solver).
 // The search sees the frame --roi gives or --roi auto finds, on the half-size image.
 //
 // --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in

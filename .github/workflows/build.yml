@@ -23,34 +23,41 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Initialize ONNX Runtime submodule
+      - name: Build neg_process
+        # ONNX Runtime is the shared library of Microsoft's PyPI wheel, fetched and checked by
+        # 3rd_party/onnxruntime_prebuilt/fetch.sh (make runs it); the static build needs the onnxruntime source.
         run: |
-          git submodule update --init --checkout --depth 1 3rd_party/onnxruntime
-          echo "ORT_COMMIT=$(git -C 3rd_party/onnxruntime rev-parse HEAD)" >> "$GITHUB_ENV"
-
-      - name: Cache static ONNX Runtime build
-        uses: actions/cache@v4
-        with:
-          path: |
-            bin_out/onnxruntime
-            bin_out/libonnxruntime.a
-          key: ort-static-linux-x64-${{ env.ORT_COMMIT }}
-
-      - name: Build static neg_process
-        run: |
-          make neg_process USE_CUDA=0 STATIC=1 GIT_VERSION="${GITHUB_SHA::7}" -j"$(nproc)"
+          make neg_process USE_CUDA=0 GIT_VERSION="${GITHUB_SHA::7}" -j"$(nproc)"
           strip bin_out/neg_process
-          ! readelf -d bin_out/neg_process | grep -q libonnxruntime
+          readelf -d bin_out/neg_process | grep -q 'NEEDED.*libonnxruntime.so.1'
           ./bin_out/neg_process --version
           ./bin_out/neg_process --list_profiles
 
       - name: Package release archive
+        # The library goes beside the binary as libonnxruntime.so.1 (its SONAME): the binary's run path has $ORIGIN.
         run: |
           mkdir -p dist/neg_process-linux-x86_64
           cp bin_out/neg_process dist/neg_process-linux-x86_64/neg_process
+          cp -L 3rd_party/onnxruntime_prebuilt/lib/x86_64/libonnxruntime.so.1 dist/neg_process-linux-x86_64/libonnxruntime.so.1
           cp COPYING dist/neg_process-linux-x86_64/COPYING
           cp models/dinov3-small/LICENSE.md dist/neg_process-linux-x86_64/LICENSE.dinov3.md
-          cp 3rd_party/onnxruntime/LICENSE dist/neg_process-linux-x86_64/LICENSE.onnxruntime
+          cp 3rd_party/onnxruntime_prebuilt/LICENSE dist/neg_process-linux-x86_64/LICENSE.onnxruntime
+          cp 3rd_party/onnxruntime_prebuilt/ThirdPartyNotices.txt dist/neg_process-linux-x86_64/ThirdPartyNotices.onnxruntime.txt
+          cp 3rd_party/spektrafilm/SPEKTRAFILM_LICENSE.txt dist/neg_process-linux-x86_64/LICENSE.spektrafilm
+          # The libraries linked in statically and the profiles embedded.
+          d=dist/neg_process-linux-x86_64
+          cp 3rd_party/libraw/COPYRIGHT $d/COPYRIGHT.libraw
+          cp 3rd_party/libraw/LICENSE.LGPL $d/LICENSE.libraw.LGPL
+          cp 3rd_party/libraw/LICENSE.CDDL $d/LICENSE.libraw.CDDL
+          cp 3rd_party/lcms2/COPYING $d/LICENSE.lcms2
+          cp 3rd_party/libtiff/LICENSE.md $d/LICENSE.libtiff.md
+          cp 3rd_party/libjpeg-turbo/LICENSE.md $d/LICENSE.libjpeg-turbo.md
+          cp 3rd_party/libjpeg-turbo/README.ijg $d/README.ijg
+          cp 3rd_party/zlib/LICENSE $d/LICENSE.zlib
+          cp 3rd_party/json/LICENSE.MIT $d/LICENSE.nlohmann-json
+          cp 3rd_party/argparse/LICENSE $d/LICENSE.argparse
+          cp 3rd_party/elle_icc_profiles/LICENSE $d/LICENSE.elle-icc-profiles
+          dist/neg_process-linux-x86_64/neg_process --list_profiles > /dev/null
           tar -C dist -czf dist/neg_process-linux-x86_64.tar.gz neg_process-linux-x86_64
           (cd dist && sha256sum neg_process-linux-x86_64.tar.gz > neg_process-linux-x86_64.tar.gz.sha256)
 
@@ -59,7 +66,6 @@ jobs:
         with:
           name: neg_process-linux-x86_64
           path: |
-            bin_out/neg_process
             dist/neg_process-linux-x86_64.tar.gz
             dist/neg_process-linux-x86_64.tar.gz.sha256
 
@@ -71,7 +77,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF_NAME}"
             TITLE="neg_process ${TAG}"
-            NOTES="Standalone Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, ONNX Runtime, profile bundles, and DINOv3 models statically linked in."
+            NOTES="Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             if gh release view "${TAG}" >/dev/null 2>&1; then
               gh release upload "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 --clobber
             else
@@ -81,7 +87,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
             TAG="latest"
             TITLE="neg_process (${GITHUB_SHA::7})"
-            NOTES="Standalone Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, ONNX Runtime, profile bundles, and DINOv3 models statically linked in."
+            NOTES="Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             git tag -f "${TAG}" "${GITHUB_SHA}"
             git push -f origin "refs/tags/${TAG}"
             if gh release view "${TAG}" >/dev/null 2>&1; then

@@ -251,26 +251,26 @@ class PatchedHeaderStream : public LibRaw_bigfile_datastream {
 int open_raw_file(LibRaw* proc, const std::string& fn) {
   int ret = proc->open_file(fn.c_str());
   if (ret == LIBRAW_FILE_UNSUPPORTED) {
-    PatchedHeaderStream stream(fn.c_str());
-    if (stream.valid() && stream.is_patched()) {
-      ret = proc->open_datastream(&stream);
-      if (ret == LIBRAW_SUCCESS) return ret;
+    // LibRaw keeps reading the stream after it opens (unpack, unpack_thumb), so the stream lives on the heap and proc
+    // owns it, as LibRaw::open_file owns its own: input_internal makes LibRaw delete it on recycle() and in its
+    // destructor.
+    PatchedHeaderStream* stream = new PatchedHeaderStream(fn.c_str());
+    if (stream->valid() && stream->is_patched()) {
+      internal_data_t& id = proc->get_internal_data_pointer()->internal_data;
+      id.input_internal = 0;
+      ret = proc->open_datastream(stream);
+      if (ret == LIBRAW_SUCCESS) {
+        id.input_internal = 1;
+        return ret;
+      }
     }
+    delete stream;
   }
   return ret;
 }
 
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
-  int ret = proc->open_file(fn.c_str());
-  if (ret == LIBRAW_FILE_UNSUPPORTED) {
-    PatchedHeaderStream stream(fn.c_str());
-    if (stream.valid() && stream.is_patched()) {
-      ret = proc->open_datastream(&stream);
-      if (ret != LIBRAW_SUCCESS) return ret;
-      log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
-      return proc->unpack();
-    }
-  }
+  const int ret = open_raw_file(proc, fn);
   if (ret != LIBRAW_SUCCESS) return ret;
   log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   return proc->unpack();
@@ -433,8 +433,10 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // mosaic after black subtraction and white balance. load_raw then multiplies the mosaic by the gains that balance the
 // camera channels on the film base (ChannelBalance, scale_white_light_mosaic), so that a light of another colour
 // than the profile's is corrected before the camera matrix mixes the channels, not after.
-// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch libraw-from-negicc)
-// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from libraw-from-negicc)
+// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch
+// libraw-from-negicc)
+// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from
+// libraw-from-negicc)
 //
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.
@@ -779,10 +781,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       free_half();
     }
   } else {
+    float flat_white = 0.0f;   // the white level less the black subtract_cfa_black_in_place took off
     if (flat) {
-      float dummy_white = 0.0f;
       if (!proc->imgdata.idata.filters || proc->imgdata.idata.colors != 3 ||
-          !subtract_cfa_black_in_place(proc, dummy_white)) {
+          !subtract_cfa_black_in_place(proc, flat_white)) {
         log_error("--flat requires a 3-colour CFA RAW file with valid sensor margins\n");
         delete proc;
         return NULL;
@@ -807,7 +809,17 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       proc->imgdata.params.user_black = 0;
       for (int i = 0; i < 4; ++i) proc->imgdata.params.user_cblack[i] = 0;
     }
-    if (analyse && !read_half_size(proc, analyse)) {
+    // The black was subtracted above, before the flat: the half-size image's clip is the white level less it, which
+    // LibRaw's maximum (restored as recorded, with no black left to take off) does not say. Given to the analysis
+    // (the film base's clip test) for its duration only, so the decode is as before.
+    const HalfSizeAnalysis analyse_flat = [&](const LibRaw& r) {   // r is *proc (read_half_size)
+      const unsigned recorded = proc->imgdata.color.maximum;
+      proc->imgdata.color.maximum = (unsigned)flat_white;
+      const bool ok = analyse(r);
+      proc->imgdata.color.maximum = recorded;
+      return ok;
+    };
+    if (analyse && !read_half_size(proc, flat ? analyse_flat : analyse)) {
       delete proc;
       return NULL;
     }
@@ -847,8 +859,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
 
     const int a = (proc->imgdata.idata.filters == 9) ? 6 : 2;
     const int pad = a * 2;
-    const int sensor_w = proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
-    const int sensor_h = proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
+    const int sensor_w =
+        proc->imgdata.rawdata.sizes.width ? proc->imgdata.rawdata.sizes.width : proc->imgdata.sizes.width;
+    const int sensor_h =
+        proc->imgdata.rawdata.sizes.height ? proc->imgdata.rawdata.sizes.height : proc->imgdata.sizes.height;
 
     int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
     if (roi) {
@@ -915,6 +929,7 @@ bool is_jpeg_file(const std::string& path) {
   if (!f) return false;
   const size_t n = fread(sig, 1, 3, f);
   fclose(f);
+  // SOI (FFD8) and the next marker's FF (ITU-T T.81 Table B.1).
   return n == 3 && sig[0] == 0xFF && sig[1] == 0xD8 && sig[2] == 0xFF;
 }
 
@@ -932,11 +947,12 @@ void tiff_handler(const char* module, const char* fmt, va_list ap) {
 void tiff_warning(const char*, const char*, va_list) {}
 
 // Copies sample `src_sample` of `n` pixels (stride `src_stride` samples) to channel `dst_ch` of out, scaling 8-bit
-// samples to 16 bits.
+// samples to 16 bits: v * 257 = (v << 8) | v, 0 -> 0 and 255 -> 65535 (ICC.1:2022 A.4: (2^16 - 1) / (2^8 - 1)).
 void put_samples(const uint8_t* src, int bits, int src_stride, int src_sample, int n, uint16_t* dst, int dst_stride,
                  int dst_ch) {
   if (bits == 8) {
-    for (int i = 0; i < n; ++i) dst[(size_t)i * dst_stride + dst_ch] = (uint16_t)(src[(size_t)i * src_stride + src_sample] * 257);
+    for (int i = 0; i < n; ++i)
+      dst[(size_t)i * dst_stride + dst_ch] = (uint16_t)(src[(size_t)i * src_stride + src_sample] * 257);
   } else {
     const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
     for (int i = 0; i < n; ++i) dst[(size_t)i * dst_stride + dst_ch] = s[(size_t)i * src_stride + src_sample];
@@ -964,7 +980,8 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_PLANARCONFIG, &planar);
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_SAMPLEFORMAT, &fmt);
   TIFFGetFieldDefaulted(tif.get(), TIFFTAG_COMPRESSION, &compression);
-  if (!TIFFGetField(tif.get(), TIFFTAG_PHOTOMETRIC, &photo)) photo = spp >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK;
+  if (!TIFFGetField(tif.get(), TIFFTAG_PHOTOMETRIC, &photo))
+    photo = spp >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK;
   if (photo == PHOTOMETRIC_YCBCR && compression == COMPRESSION_JPEG) {
     TIFFSetField(tif.get(), TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB);  // libjpeg converts to RGB
     photo = PHOTOMETRIC_RGB;
@@ -1075,7 +1092,8 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
   }
   jpeg_create_decompress(&cinfo);
   jpeg_stdio_src(&cinfo, f);
-  jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);  // the ICC profile's chunks
+  // The ICC profile's chunks: APP2 segments beginning "ICC_PROFILE" (ICC.1:2001-04 Annex B.4)
+  jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);
   jpeg_read_header(&cinfo, TRUE);
   out = RgbImage();
   JOCTET* icc = nullptr;
@@ -1097,7 +1115,7 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
     const JDIMENSION y = cinfo.output_scanline;
     jpeg_read_scanlines(&cinfo, rows, 1);
     uint16_t* dst = out.pixels.data() + (size_t)y * out.width * 3;
-    for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);
+    for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);   // 8 to 16 bits, as put_samples
   }
   jpeg_finish_decompress(&cinfo);
   jpeg_destroy_decompress(&cinfo);
@@ -1130,7 +1148,7 @@ bool to_linear_rec2020(RgbImage& img, std::string& source, std::string& err) {
     source = "linear";
     return true;
   }
-  // Linear Rec.2020: ITU-R BT.2020 primaries, D65 white, a gamma of 1.
+  // Linear Rec.2020: ITU-R BT.2020 primaries, D65 white, a gamma of 1 (the chromaticities of ITU-R BT.2020-2 Table 3).
   const cmsCIExyY d65 = {0.3127, 0.3290, 1.0};
   const cmsCIExyYTRIPLE primaries = {{0.708, 0.292, 1.0}, {0.170, 0.797, 1.0}, {0.131, 0.046, 1.0}};
   cmsToneCurve* linear = cmsBuildGamma(nullptr, 1.0);
@@ -1300,6 +1318,14 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
                   err.empty() ? "three captures must be RAWs, DNGs or TIFFs" : err.c_str());
           return delete proc, nullptr;
         }
+        // A capture is one channel of linear camera RGB, as a RAW capture is read: a TIFF with an ICC profile or
+        // 8-bit samples is colour-managed, which the single TIFF converts (a d65 bundle) and three captures cannot.
+        if (!img.icc.empty() || img.bits != 16) {
+          log_error("%s is colour-managed (%s), not the linear camera RGB three captures are read as: give 16-bit "
+                    "linear TIFFs without an ICC profile, or the RAWs\n", files[k].c_str(),
+                    !img.icc.empty() ? "it has an ICC profile" : "8 bits");
+          return delete proc, nullptr;
+        }
         cw = img.width;
         ch = img.height;
         const int src = img.channels == 3 ? k : 0;
@@ -1363,6 +1389,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     if (!half) return delete proc, nullptr;
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
+    half->imgdata.color.maximum = (unsigned)white;   // the image's clip, as a RAW's half-size image carries it
     // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
     half->imgdata.rawdata.sizes.width = (ushort)w;
     half->imgdata.rawdata.sizes.height = (ushort)h;

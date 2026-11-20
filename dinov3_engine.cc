@@ -96,7 +96,8 @@ void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const st
         a = make_trt_adapter(engine_data, engine_size);
     } else {
         if (!onnx_data || onnx_size == 0) {
-            throw std::runtime_error("DinoV3Engine: intent adapter " + name + " has no adapter.onnx for the CPU backbone");
+            throw std::runtime_error("DinoV3Engine: intent adapter " + name +
+                                     " has no adapter.onnx for the CPU backbone");
         }
         a = make_ort_adapter(onnx_data, onnx_size, num_threads);
     }
@@ -126,6 +127,13 @@ void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
     std::vector<uint8_t> onnx, engine;
     if (file_exists(onnx_p.string())) onnx = read_file(onnx_p.string());
     if (file_exists(engine_p.string())) engine = read_file(engine_p.string());
+    // An engine older than its .onnx holds the earlier weights: the .onnx is taken (make dinov3_engine rebuilds it).
+    if (!onnx.empty() && !engine.empty() &&
+        std::filesystem::last_write_time(engine_p) < std::filesystem::last_write_time(onnx_p)) {
+        std::cerr << "Warning: " << engine_p.string() << " is older than " << onnx_p.string()
+                  << ": the adapter runs from the .onnx (make dinov3_engine rebuilds the engine)" << std::endl;
+        engine.clear();
+    }
     if (onnx.empty() && engine.empty()) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
     // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session;
     // TensorRT copies the engine while deserialising it.
@@ -163,7 +171,8 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
     if (dir_exists(model_spec)) {
         // The backbone alone (adapters supplied separately) wins over a fused model in the same directory.
         const std::string stem =
-            (file_exists(join_path(model_spec, "backbone.onnx")) || file_exists(join_path(model_spec, "backbone.engine")))
+            (file_exists(join_path(model_spec, "backbone.onnx")) ||
+             file_exists(join_path(model_spec, "backbone.engine")))
                 ? "backbone" : "model";
         if (file_exists(join_path(model_spec, stem + ".onnx"))) onnx_path = join_path(model_spec, stem + ".onnx");
         if (file_exists(join_path(model_spec, stem + ".engine"))) engine_path = join_path(model_spec, stem + ".engine");
@@ -267,6 +276,7 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     // py-ref: negicc_station/src/dino_geometry.py:17-18 @ 2f7ee4a (DINO_MEAN, DINO_STD)
     // py-ref: negicc_station/src/tensorrt_intent_model.py:190-192 @ 2f7ee4a (ImageNet normalization)
     std::vector<float> pixel_values((size_t)3 * res.target_h * res.target_w);
+    // The ImageNet statistics DINOv3's LVD-1689M weights take (facebookresearch/dinov3 README).
     const float mean[3] = {0.485f, 0.456f, 0.406f};
     const float stdev[3] = {0.229f, 0.224f, 0.225f};
     const size_t plane = (size_t)res.target_h * res.target_w;
@@ -332,7 +342,8 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
         const auto tn0 = std::chrono::high_resolution_clock::now();
         res.neutral_p.resize((size_t)res.num_patches);
         neutral_head_->run(tokens.data(), res.num_patches, res.neutral_p.data());
-        res.neutral_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
+        res.neutral_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tn0).count();
     }
 
     if (token_spread_ && !tokens.empty() && res.num_patches > 1) {
@@ -402,7 +413,7 @@ public:
 
     void set_options(int num_threads) {
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
-        opts_.SetIntraOpNumThreads(std::min(num_threads, hw));
+        opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     }

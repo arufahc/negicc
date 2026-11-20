@@ -33,7 +33,8 @@
 // difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
 // not re-balanced, and no pixel is converted to Lab.
 //
-//   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,  h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
+//   f(L) = black + (white - black) * h(g(L / 100)),  g(x) = x^gamma,
+//   h(x) = x^contrast / (x^contrast + (1 - x)^contrast)
 //
 // The four curve numbers are solved so the render's own descriptors move toward the heads' predictions: since f is
 // monotone, the toned render's percentiles are f of the render's, so L2' = f(L2), L50' = f(L50), L98' = f(L98) and
@@ -97,6 +98,10 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
 // The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
 constexpr int kToneTableSize = 8192;
 std::vector<float> tone_table(const ToneCurve& q);
+// A curve the tone stage can produce: its four numbers finite and within kToneLo..kToneHi (every curve it applies is
+// solved there). A recorded curve outside them (typed by hand, or edited) is refused rather than rendered: a gamma or
+// contrast at or below 0, or white below black, inverts the table, and a contrast far past 1.5 makes it NaN.
+bool tone_curve_ok(const ToneCurve& q);
 
 // Which of kToneClipShares the plan keeps, as an index: 0 (the designed moves) when the designed curve clips no more
 // than kToneClipAllowance beyond white_before (the conversion's own white clipping); else the largest share that does

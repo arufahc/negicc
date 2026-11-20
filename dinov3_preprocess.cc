@@ -109,7 +109,8 @@ void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, i
                                      uint8_t* dst, int dst_w, int dst_h) {
     const bool need_h = dst_w != src_w, need_v = dst_h != src_h;
     if (!need_h && !need_v) {
-        for (int y = 0; y < src_h; ++y) std::copy_n(src + (size_t)y * src_stride, (size_t)src_w * 3, dst + (size_t)y * dst_w * 3);
+        for (int y = 0; y < src_h; ++y)
+            std::copy_n(src + (size_t)y * src_stride, (size_t)src_w * 3, dst + (size_t)y * dst_w * 3);
         return;
     }
 
@@ -194,6 +195,7 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
     const int target_w = grid_w * patch_size;
     const double inv_pixels = 1.0 / (double)(patch_size * patch_size);
 
+    // The sRGB curve's inverse (IEC 61966-2-1).
     auto srgb_lin = [](double c) {
         return (c <= 0.04045) ? (c / 12.92) : std::pow((c + 0.055) / 1.055, 2.4);
     };
@@ -215,9 +217,11 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
             const double cg = srgb_lin(g_sum * inv_pixels / 255.0);
             const double cb = srgb_lin(b_sum * inv_pixels / 255.0);
 
+            // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of
+            // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and CIE 15's exact break and slope (kLabEpsilon,
+            // kLabKappa).
             const double Y = 0.212671 * cr + 0.715160 * cg + 0.072169 * cb;
-            const double fy = (Y > 0.008856) ? std::cbrt(Y) : (7.787 * Y + 16.0 / 116.0);
-            const double L = (Y > 0.008856) ? (116.0 * fy - 16.0) : (903.3 * Y);
+            const double L = (Y > negicc::kLabEpsilon) ? (116.0 * std::cbrt(Y) - 16.0) : (negicc::kLabKappa * Y);
 
             const double w_sh = std::clamp((kShadowL + kRamp / 2 - L) / kRamp, 0.0, 1.0);
             const double w_hi = std::clamp((L - (kHighlightL - kRamp / 2)) / kRamp, 0.0, 1.0);

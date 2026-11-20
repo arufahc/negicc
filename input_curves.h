@@ -1,7 +1,7 @@
 #ifndef NEGICC_INPUT_CURVES_H
 #define NEGICC_INPUT_CURVES_H
 
-// Fitted G and B input curves (negicc-station designs/plan_fit_curves.md): per channel, on the value v entering the
+// Fitted G and B input curves: per channel, on the value v entering the
 // profile's input TRC (after the input matrix and the knee),
 //
 //   u = log2(v / ref)  for v < ref,   s = 1 + a + k tanh((u - u_med) / 1 stop),   v' = ref 2^(u s);   v >= ref: v
@@ -153,7 +153,9 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
   if (!(ref > 0.0f) || table_n < 2) return true;
-  float prev = INFINITY;  // f at the entry above; the table is walked from ref down
+  // f at the entry above; the table is walked from ref down, from f = 0 there (the identity at and above ref), so the
+  // curve stays below ref as it leaves it.
+  float prev = 0.0f;
   for (int i = table_n - 1; i >= 1; --i) {
     const float v = static_cast<float>(i) / static_cast<float>(table_n - 1);
     if (!(v < ref)) continue;
@@ -162,7 +164,9 @@ inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n
     if (!(f < prev) || std::fabs(f - u) > max_dev) return false;
     prev = f;
   }
-  return true;
+  // Entry 0 (v = 0, which input_curve reads at 1e-12): monotonic too. The departure bound is not applied there: tens of
+  // stops below the table's first step every curve with a != k departs that far, and the entry reads 0 either way.
+  return !(ref > 1e-12f) || curve_stops(std::log2(1e-12f / ref), u_med, a, k, u_hold) < prev;
 }
 
 // The smallest sigma the losses divide by. The intent field's sigma is checked positive and finite where it is
@@ -622,7 +626,7 @@ class JointCurveModel {
 // magenta keeps its credit, and mid-tones and highlights count as they are.
 constexpr float kGreenGuardTolAb = 0.5f;
 // The shadow exemption's weight w_s = 1 - smoothstep((L*_Auto - kGreenGuardShadowL0) / kGreenGuardShadowWidth + 0.5):
-// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20.
+// 1 in the deep shadows, 0.5 at L* 15, 0 above L* 20. smoothstep(x) = 3x^2 - 2x^3 on [0, 1], the cubic Hermite step.
 constexpr double kGreenGuardShadowL0 = 15.0;
 constexpr double kGreenGuardShadowWidth = 10.0;
 // A cell's a* as the guard's means count it: a_Auto + d, d = a - a_Auto, with a negative d (the cell greener than at
@@ -1056,7 +1060,7 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     // undamping stops at 2 so a slope measured over a narrow span is not amplified).
     dL50 = (La - M0.L) / 50.0 * (M0.vL + 25.0) / std::max(M0.vL, 25.0);
   }
-  constexpr double c_res = 1.0 / 1.5;
+  constexpr double c_res = 1.0 / 1.5;   // the factor 1/1.5 of r0, r1 and r4 (the joint fit's notes above)
   const double r4_scale = c_res / std::sqrt(se * se + kHeadSystematicSd * kHeadSystematicSd);
   bool guard_path = false;
   std::vector<Lab> labs;
@@ -1178,7 +1182,8 @@ inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const
     lo = e_lo;
     hi = e_hi;
     const float L_lo = median_at(lo), L_hi = median_at(hi);
-    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E (0.05 L* LUT tolerance)
+    const bool dark_at_lo = L_lo + 0.05f < target_L;  // darker than the target even at the lowest E
+                                                      // (0.05 L* LUT tolerance)
     if (dark_at_lo || L_hi - 0.05f > target_L) {      // or lighter even at the highest
       if (clipped) *clipped = true;
       return L_lo < target_L ? lo : hi;

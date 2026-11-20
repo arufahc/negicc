@@ -37,6 +37,7 @@
 #include <lcms2.h>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,6 +62,8 @@ struct CachedSidecar {
   int target_idx = -1;
   std::string target_name;
   float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
+  double print_a = NAN;                  // a print's mid grey A (profile.print.a); NaN: none
+  std::string print_search_json_str;     // the print's search that found it (profile.print.search); empty: none
   std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
   std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
   std::string dino_backend;
@@ -92,7 +95,7 @@ struct Setup {
   bool exposure_given = false;           // -E: the exposure is not searched
   bool use_dino = false;                 // a parameter search runs
   bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
-  // The bundle's search with --target, -E, --gain_g or --gain_b held (white light): Auto with those pinned.
+  // The bundle's search with --target, -E, --gain_g or --gain_b held (either light): Auto with those pinned.
   bool pinned_search = false;
   bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
   bool tone_active = false;              // the tone stage runs (--tone_stage auto or on, where it applies)
@@ -100,6 +103,23 @@ struct Setup {
   CachedSidecar cached_sidecar;
   bool white_light = false;              // a rec2020_linear (d65) bundle
   bool density = false;                  // -P statusm, rp180 or apd: the output is density (np_print.h)
+  // --print with a picture output on a profile bundle: the print material, and each bracket's print profile
+  // (np_print.h bracket_print_profiles, in bundle.targets' order). Auto searches the print itself
+  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a: the search's, or the
+  // reused run's). Empty without.
+  std::string print_id, print_name;
+  std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
+  bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
+  std::vector<ParsedFilmProfile> print_profs;
+  std::vector<std::vector<uint8_t>> print_iccs;
+  PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
+  ContinuousPrint print_in;           // the search's view of it
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
+  // The lightest node of the print's table: the paper's white.
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
+  ContinuousPrintResult print_res;    // the print's search
+  std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a density run's --print, per material
+  bool print_searched = false;
   bool has_crosstalk = false;
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
@@ -216,6 +236,10 @@ struct Scan {
   std::string input_source = "raw";      // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
 
   FrameDetection frame_det;              // --roi auto
+  // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
+  // no detection ran); cli_equivalent gives it as --film_format when the run was not given one, so that a replay with
+  // the explicit --roi reads the same base.
+  FilmFormat base_det_format = FILM_FORMAT_AUTO;
   int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
   bool has_roi = false;
   int rot_cw = 0;
@@ -231,6 +255,19 @@ struct Scan {
   // film_base holds it and the scan's is not read.
   bool has_given_base = false;
   negicc::FilmBaseDetection given_base;
+  // A print on a base that is not a capture (print_floor_factor): the base as found, its source ("rebate",
+  // "statistics" or "bundle") and the factor it was raised by (film_base holds the raised base; 1: not raised).
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
+  // frame detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection, or a
+  // --roi auto that fell back to the whole image). The detection's confidence only where the detection decided the
+  // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
+  std::string print_floor_frame;
+  float print_floor_frame_conf = -1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (recorded as knobs.base.a)
   bool has_base_capture = false;
   FilmBaseCapture base_capture;
   std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)
@@ -244,6 +281,7 @@ struct Scan {
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
+  bool frame_is_whole = false;           // that frame is the whole half-size image
   // Where the fit runs: the curve fit's re-metered E and fitted g and b on the combined profile, which the
   // conversion takes in place of the search's (auto_res keeps the search's own).
   bool has_curve_params = false;
@@ -260,8 +298,7 @@ struct Scan {
 
   // The highlight roll-off of every bundle conversion, measured on the half-size frame as the bracket search measures
   // it: Auto's result and given values in decode, while that frame exists (render frees the mosaic; LibRaw's
-  // half-size decode is analysed and gone); the single-bracket search in solve, at its final E, g, b, on
-  // rolloff_frame (a copy of the frame, interleaved RGB, with the scan's exposure).
+  // half-size decode is analysed and gone).
   bool has_rolloff = false;
   float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
   // The tone stage as convert applied it to the final image (Setup::tone_stage has the plan).
@@ -270,14 +307,10 @@ struct Scan {
   ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)
   ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
-  std::vector<uint16_t> rolloff_frame;
-  int rolloff_frame_w = 0, rolloff_frame_h = 0;
-  double rolloff_shutter_s = 0.125, rolloff_iso = 100.0;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
-  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs, the roll-off and the
-  // frame's copy for the single-bracket search (decode), and that search's roll-off and knobs (solve).
+  // The bracket analysis on the half-size frame outside Auto's time: the enclosures, the knobs and the roll-off.
   double t_analysis_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
 

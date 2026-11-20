@@ -50,7 +50,7 @@ struct Options {
   bool row_given[3] = {false, false, false};
   float exposure_comp = 1.0f;                  // -E
   bool exposure_given = false;                 // -E (the search keeps it)
-  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search)
+  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search on TriLED; held on white light)
   bool gain_g_given = false, gain_b_given = false;
   float brightness = 0.0f;                     // --brightness (stops of the grey's luminance)
   float tint = 0.0f;                           // --tint (a* of the grey)
@@ -68,8 +68,8 @@ struct Options {
 
   // Parameter search
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
-  // the built-in ones; empty: the built-in one.
-  std::string dino_adapter, neutral_head_file, tone_head_file;
+  // the built-in ones; empty: the built-in one. dino_arg is --dino's value as given, which the replay line repeats.
+  std::string dino_arg, dino_adapter, neutral_head_file, tone_head_file;
   // The tone stage (tone_stage.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
   // white light and TriLED alike, whether or not the curve fit runs; on does the same and is an error where it does
   // not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded curve (a sidecar's
@@ -80,9 +80,10 @@ struct Options {
   double tone_replay[4] = {};
   std::string dino_backend = "auto";
   int dino_iters = 4;
-  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops "s,...": a measurement aid for negicc-station's
-  // goal harness (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
-  // FILE and neg_process stops without converting.
+  bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting renderer
+  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid
+  // (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
+  // FILE and neg_process stops without converting (the print's search writes it and the conversion goes on).
   std::string probe_intent;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
@@ -114,7 +115,9 @@ struct Options {
   bool density = false;
   DensityMeasure density_measure = kDensityStatusM;
   bool output_dpx = false;
-  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile) to write a CLF for beside a density file.
+  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile): with a
+  // picture output the first is the print the conversion renders; with a density output a CLF is written beside the
+  // file for each.
   std::vector<std::string> prints;
   bool no_metadata = false;
 };

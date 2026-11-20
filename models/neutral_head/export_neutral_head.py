@@ -64,6 +64,7 @@ def main():
         B1, W2, B2 = v[o:o + d_h], v[o + d_h:o + 2 * d_h], v[o + 2 * d_h]
         from math import erf, sqrt
         h = ((x - m_) / s_).astype(np.float64) @ W1.T.astype(np.float64) + B1
+        # Exact GELU (Hendrycks and Gimpel, 2016), torch.nn.GELU's default.
         h = 0.5 * h * (1.0 + np.vectorize(lambda t: erf(t / sqrt(2.0)))(h))
         p_n = 1.0 / (1.0 + np.exp(-(h @ W2 + B2)))
         print("max |p_torch - p_bin| on random tokens:", float(np.abs(p_t.numpy() - p_n).max()))

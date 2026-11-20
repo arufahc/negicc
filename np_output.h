@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@ struct Sidecar {
   const int* roi = nullptr;              // x, y, w, h when has_roi
   std::string roi_source;
   const FrameDetection* frame_det = nullptr;  // --roi auto's detection
+  std::string film_format;               // the format the base's detection looked for, not given to the run; or empty
   int rot_cw = 0;
   bool hflip = false, vflip = false;
   int out_w = 0, out_h = 0;
@@ -70,6 +72,18 @@ struct Sidecar {
   std::vector<double> film_base_rgb;
   std::vector<int> profile_film_base_rgb;
   std::string film_base_source;
+  // A print on a base that is not a capture (Scan::print_floor_*): the base as found, its source and the factor.
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (knobs.base.a)
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
+  // frame detector's crop, at or above kBaseMinFrameConf) or "whole_scan" (no --roi and no confident detection, or a
+  // --roi auto that fell back to the whole image). The detection's confidence only where the detection decided the
+  // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
+  std::string print_floor_frame;
+  float print_floor_frame_conf = -1.0f;
   const negicc::FilmBaseDetection* film_base_detection = nullptr;
   // The white-light decode's gains on the camera channels before the camera matrix; null: not a white-light decode.
   const float* balance_gains = nullptr;
@@ -85,13 +99,16 @@ struct Sidecar {
   float knee = 0.95f;
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
-  std::string dino_model, dino_backend;
+  std::string dino_model, dino_backend, dino_arg;
+  bool dino_iters_given = false;
+  int dino_iters = 4;
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
   const int* auto_frame_half = nullptr;
   std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar
   std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
   std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
   std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar
+  std::string cached_print_search_json_str;  // preserved "profile.print.search" JSON when reusing a sidecar
   double cached_dino_views_ms = 0.0, cached_dino_render_ms = 0.0;
   double cached_dino_infer_ms = 0.0, cached_dino_search_ms = 0.0;
   bool has_knobs = false;
@@ -134,7 +151,30 @@ struct Sidecar {
   std::string film_base_capture_json;
   // The density output's record (np_print.h, schema negicc.density/1) as JSON, also in the file. Empty: none.
   std::string density_json;
-  bool density_fit_off = false;      // a white-light density run with --fit_curves off: its replay keeps it
+  bool density_fit_off = false;      // a white-light density run without --print, with --fit_curves off: its replay
+                                     // keeps it
+  // A density run's --print materials as given (built-in ids, 'all', or files): its replay gives them again, so the
+  // base's floor (raised only with --print) and the CLFs are made again. Empty: no --print.
+  std::vector<std::string> density_prints;
+  std::string print_id, print_name;  // --print with a picture output: the print ICC that replaced the chart profiles
+  std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
+  bool print_from_bundle = false;
+  // The print's mid grey A (NaN without a print), the chosen bracket's A_mid, and the search's A0 (the A at which
+  // the frame's log-average cell prints at L* 50).
+  double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
+  double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
+  // The paper's white the print is relative to (PCS D50).
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
+  bool print_searched = false, print_converged = false;
+  int print_steps = 0;
+  float print_wish_l = 0.0f, print_above_knee = 0.0f;
+  // ContinuousPrintResult's shares: past_knee and past_cut at E (the matrix at E alone), above_white and at_white at
+  // the result.
+  float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};
+  float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
+  bool print_a0_at_end = false;
+  float print_last_move[3] = {0, 0, 0};
+  std::string print_stopped_by;
 };
 
 // Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).

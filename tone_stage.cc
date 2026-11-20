@@ -30,14 +30,16 @@
 //
 // The preview's L* (sRGB D65, in double precision, Y from the luminance row of linear sRGB D65 -> XYZ): the descriptors
 // the curve is solved from. Only the small preview is measured this way; no output pixel goes through Lab.
+// tone_srgb_decode is the sRGB curve of IEC 61966-2-1; tone_lab_f and tone_lab_finv are CIE 1976 L*a*b*'s f and its
+// inverse with the exact constants (CIE 15; ICC.1:2022 Annex A): break (6/29)^3 = 216/24389, slope 24389/27 / 116.
 static inline double tone_srgb_decode(double c) {
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
 }
 static inline double tone_lab_f(double t) {
-    return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0;
+    return t > negicc::kLabEpsilon ? std::cbrt(t) : (negicc::kLabKappa * t + 16.0) / 116.0;
 }
 static inline double tone_lab_finv(double t) {
-    return t * t * t > 216.0 / 24389.0 ? t * t * t : (116.0 * t - 16.0) / (24389.0 / 27.0);
+    return t * t * t > negicc::kLabEpsilon ? t * t * t : (116.0 * t - 16.0) / negicc::kLabKappa;
 }
 
 // f(L) without the final clamp to 0..100.
@@ -47,6 +49,13 @@ static inline double tone_curve_L(double L, const ToneCurve& q) {
     x = std::pow(x, q.gamma);
     const double xc = std::pow(x, q.contrast), yc = std::pow(1 - x, q.contrast);
     return q.black + (q.white - q.black) * xc / (xc + yc);
+}
+
+bool tone_curve_ok(const ToneCurve& q) {
+    const double v[4] = {q.black, q.white, q.gamma, q.contrast};
+    for (int i = 0; i < 4; ++i)
+        if (!std::isfinite(v[i]) || v[i] < kToneLo[i] || v[i] > kToneHi[i]) return false;
+    return true;
 }
 
 // The kernel's table: Y' = Y(f(L*(Y))), f clamped to 0..100, at Y = (i / kToneTableSize)^2.
@@ -69,6 +78,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     double decode[256];
     for (int v = 0; v < 256; ++v) decode[v] = tone_srgb_decode(v / 255.0);
     for (size_t i = 0; i < n; ++i) {
+        // Y: the luminance row of color_pipeline.h linear_srgb_to_lab (OpenCV's cvtColor RGB -> Lab matrix).
         const double Y = 0.212671 * decode[rgb[3 * i]] + 0.715160 * decode[rgb[3 * i + 1]] +
                          0.072169 * decode[rgb[3 * i + 2]];
         L[i] = 116.0 * tone_lab_f(Y) - 16.0;
@@ -85,6 +95,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
             from = k + 1;
         }
     }
+    // Linear between ranks (Hyndman and Fan's 1996 definition 7, numpy's default).
     auto pct = [&](double p) {
         const double r = p / 100.0 * (double)(n - 1);
         const size_t i = (size_t)r;
@@ -138,6 +149,7 @@ static inline ToneCurve tone_solve(const ToneDescriptors& cur, const ToneTargets
             r[8] = kToneTopSlope * (tone_curve_L(100.0, c) - std::min(100.0, f98 + (100.0 - cur.L98)));
         }
     };
+    // kR: the residuals r[0] to r[8]; kP: the curve's four numbers (black, white, gamma, contrast).
     constexpr int kR = 9, kP = 4;
     auto cost_of = [&](const double* q) {
         double r[kR];
