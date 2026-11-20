@@ -16,3 +16,8 @@ name = "Negicc"
 [[lean_exe]]
 name = "check"
 root = "Check"
+
+# The numeric check of the print emulation against the C++ (see README.md). Without Mathlib, as `check`.
+[[lean_exe]]
+name = "checkPrint"
+root = "CheckPrint"
