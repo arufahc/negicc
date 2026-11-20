@@ -137,6 +137,33 @@ def meteredEnclosure (whiteLight : Bool) (eNorm gMin gMax exposure gLo gHi : α)
   { r with eMin := r.eMin * toS, eMax := r.eMax * toS, eCentre := r.eCentre * toS,
            searchLo := r.searchLo * toS, searchHi := r.searchHi * toS }
 
+/-- The scene's green `0.5 %` and `99.5 %` points by nearest rank over the whole frame, `g_lo ≥ 1`,
+`g_hi ≥ g_lo + 1` (`compute_bundle_enclosures` in `profile_bundle.cc`): the first value whose cumulative
+count reaches `0.005 n`, and the first that reaches `0.995 n`. -/
+def bundleGreenRange (hist : Array Nat) (total : Nat) : α × α :=
+  let p005 : α := 0.005 * (total : α)
+  let p995 : α := 0.995 * (total : α)
+  let r := (List.range 65536).foldl (fun (acc : Nat × Option Nat × Option Nat) v =>
+    match acc.2.2 with
+    | some _ => acc
+    | none =>
+      let cum := acc.1 + hist.getD v 0
+      let lo := match acc.2.1 with
+        | some l => some l
+        | none => if p005 ≤ (cum : α) then some v else none
+      (cum, lo, if p995 ≤ (cum : α) then some v else none)) (0, none, none)
+  let gLo := max 1.0 ((r.2.1.getD 1 : Nat) : α)
+  (gLo, max (gLo + 1.0) ((r.2.2.getD 65535 : Nat) : α))
+
+/-- A bracket's range as `compute_bundle_enclosures` keeps it for given values and for the bracket
+picked without the search: the reference exposure 1/8 s over the bracket's, `e_min`, `e_max`,
+feasibility and `e_centre`, from the whole frame's nearest-rank points. -/
+def bundleEnclosure (gMin gMax exposure gLo gHi : α) : Bool × α × α × α :=
+  let kT : α := if 0.0 < exposure then 0.125 / exposure else 1.0
+  let eMin := gMin / gLo * kT
+  let eMax := gMax / gHi * kT
+  (decide (eMin ≤ eMax), eMin, eMax, sqrt (eMin * eMax))
+
 /-! ## The highlight ceiling -/
 
 /-- ICC PCS `L*a*b*` (D50) to 8-bit sRGB code values in `[0, 255]` (`pcs_lab_to_srgb_u8`): CIELAB's

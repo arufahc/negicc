@@ -171,7 +171,7 @@ difference is then either a change of the specification to follow or a defect.
 Vectors generated from commit `65bbec3` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
 (another compiler or C library may change the last digit of a single precision result, which the
 tolerances cover). With Lean `v4.36.0`, `lake build` ends with `Build completed successfully` and no
-warning, and `lake exe check` makes 7254 comparisons, none outside its tolerance.
+warning, and `lake exe check` makes 7284 comparisons, none outside its tolerance.
 
 ## Using the package from another repository
 

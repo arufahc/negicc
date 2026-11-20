@@ -678,6 +678,18 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
       let want ← numsAt t "range"
       let got := #[r.eMin, r.eMax, r.eCentre, r.searchLo, r.searchHi]
       for k in [0:5] do near "bracket: meteredEnclosure" tolSingle ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
+  let be ← get mt "bundle_enclosures"
+  let mut ghAll : Array Nat := Array.replicate 65536 0
+  for px in frame do ghAll := ghAll.modify px.y (· + 1)
+  let (bLo, bHi) : Float × Float := bundleGreenRange ghAll frame.size
+  near "bracket: bundleGreenRange" tolDouble bLo (← numAt be "g_lo")
+  near "bracket: bundleGreenRange" tolDouble bHi (← numAt be "g_hi")
+  for t in ← arrAt be "targets" do
+    let (feas, eMin, eMax, eC) := bundleEnclosure (← numAt t "g_min") (← numAt t "g_max") (← numAt t "exposure") bLo bHi
+    same "bracket: bundleEnclosure (feasible)" (if feas then 1 else 0) (if (← boolAt t "feasible") then 1 else 0)
+    let want ← numsAt t "range"
+    for (got, w) in [(eMin, want.getD 0 1.0), (eMax, want.getD 1 1.0), (eC, want.getD 2 1.0)] do
+      near "bracket: bundleEnclosure" tolSingle (got / w) 1.0
   -- The frame's highlight roll-off through bracket 3 of the TriLED bundle, scanned at 1/4 s, ISO 100.
   let fbExposure := captureExposure (← numAt pixel "film_base_shutter") (← numAt pixel "film_base_iso")
   let X := mat3 (← numsAt pixel "crosstalk")
@@ -800,7 +812,10 @@ def expectedCounts : List (String × Nat) := [
   ("bracket: pcsLabToSrgbU8", 18),
   ("bracket: profileHighlightCeiling", 9),
   ("shoulder: maxHistOf, the 99.5 % point", 2),
-  ("shoulder: maxHistOf, x_hi", 2)]
+  ("shoulder: maxHistOf, x_hi", 2),
+  ("bracket: bundleGreenRange", 2),
+  ("bracket: bundleEnclosure (feasible)", 7),
+  ("bracket: bundleEnclosure", 21)]
 
 end Check
 

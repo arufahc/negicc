@@ -800,6 +800,19 @@ static json read_vectors(const ProfileBundle& tri, const ProfileBundle& wl) {
       }
       j["meter"]["bundles"].push_back(bj);
     }
+    // The ranges kept in the bundle for given values (compute_bundle_enclosures: nearest rank over the whole frame).
+    {
+      ProfileBundle b = tri;
+      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
+      int num_feasible = 0;
+      compute_bundle_enclosures(b, view, g_lo, g_hi, scene_ev, num_feasible);
+      json bj = {{"g_lo", g_lo}, {"g_hi", g_hi}};
+      for (const BundleTarget& t : b.targets) {
+        bj["targets"].push_back({{"g_min", t.tgt_min_g}, {"g_max", t.tgt_max_g}, {"exposure", t.exposure_s},
+                                 {"feasible", t.is_feasible}, {"range", {t.e_min, t.e_max, t.e_center}}});
+      }
+      j["meter"]["bundle_enclosures"] = bj;
+    }
     // The frame's highlight roll-off through bracket 3 (the histogram of the pre-shoulder largest channel over the
     // inner crop, its 99.5 % point, x_hi), at two exposures.
     for (float e : {0.2f, 0.6f}) {
