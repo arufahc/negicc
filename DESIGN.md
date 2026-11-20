@@ -372,7 +372,8 @@ fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered
    ±1 and ±2 steps of `max(0.01, window / 40)` (0.02 for an empty window) around the best, scored on the `L*` loss
    plus the penalties;
 2. `g` over a grid, scored on the `a*` loss; then `b` over a grid, scored on the `b*` loss;
-3. `g` and `b` refined by ±0.02, on the sum of the `a*` and `b*` losses.
+3. `g` and `b` refined by ±0.02, on the sum of the `a*` and `b*` losses, starting from that sum at the `g` and `b`
+   of step 2.
 
 The penalties are `15 ((clip − 2.5) / 2)^2` once more than 2.5 % of the cells' channels clip white, and
 `5 log2(E / e_centre)^2` toward the bracket's centre (none for a bracket whose usable range is inverted: there the
