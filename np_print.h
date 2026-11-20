@@ -36,6 +36,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -170,9 +171,9 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 // bundle in use. A profile holds nothing of a film stock, and a film's bundle holds nothing of a print material.
 //
 // The model, for a log exposure of each layer:
-//     dye amounts   a_c = curve_c(logE_c)                                   (linear interpolation, held at the ends)
-//     transmittance t(w) = 10^-(sum_c a_c dye_c(w) + base(w))
-//     XYZ           = sum_w t(w) observer(w)
+//     dye amounts   delta_c = curve_c(logE_c)                    (linear interpolation, held at the ends)
+//     transmittance tau(lambda) = 10^-(sum_c delta_c dye_c(lambda) + base(lambda))
+//     XYZ           = sum_lambda tau(lambda) observer(lambda)
 // and a printing density pd is exposed as logE = aim - (pd - grey_density), aim the exposure that prints an 18 % grey.
 //
 // py-ref: negicc_station/src/print_emulation.py (PrintModel, frame_grey, print_clf)

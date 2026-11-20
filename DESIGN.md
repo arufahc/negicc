@@ -506,9 +506,9 @@ range of lightness.
 **The intent term.** The search's intent field gives a second estimate of the overall magenta-green balance:
 
 ```
-α_i  = (1 / σ_a,i²) / Σ_j (1 / σ_a,j²)          over every fit cell
-s_a  = Σ_i α_i (a*_i − μ_a,i)
-dL   = (Σ_i α_i L*_i − Σ_i ω_i L*_i) / 50 × (var_ω(L*) + 25) / max(var_ω(L*), 25)
+ν_i  = (1 / σ_a,i²) / Σ_j (1 / σ_a,j²)          over every fit cell
+s_a  = Σ_i ν_i (a*_i − μ_a,i)
+dL   = (Σ_i ν_i L*_i − Σ_i ω_i L*_i) / 50 × (var_ω(L*) + 25) / max(var_ω(L*), 25)
 intent term = (s_a − (k_a − target k_a) dL − SE) / sqrt(SE² + 1)
 anchor term = (ā − target ā) / σ_anc,            σ_anc² = (144 + m) / (m + 12)
 ```
@@ -665,8 +665,8 @@ The print of a printing density `pd`, per layer `c` and wavelength `λ`:
 
 ```
 logE_c = aim_c − (pd_c − 0.70)                        0.70: the printing density that prints as mid grey
-a_c    = curve_c(logE_c)                              dye amount, held at the curve's ends
-τ(λ)   = 10^−(Σ_c a_c dye_c(λ) + base(λ))             the print's transmittance or reflectance
+δ_c    = curve_c(logE_c)                              dye amount, held at the curve's ends
+τ(λ)   = 10^−(Σ_c δ_c dye_c(λ) + base(λ))             the print's transmittance or reflectance
 XYZ    = Σ_λ τ(λ) light(λ) observer(λ) / Σ_λ light(λ) ȳ(λ)
 ```
 

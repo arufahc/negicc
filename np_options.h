@@ -19,7 +19,6 @@
 #pragma once
 
 #include <array>
-#include <cmath>
 #include <string>
 #include <vector>
 
