@@ -440,7 +440,7 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
   return j;
 }
 
-// ---- The white-light fit --------------------------------------------------------------------------------
+// ---- White light: given input curves and the film-base balance ---------------------------------------------
 static json white_vectors(const ProfileBundle& bundle, const std::string& bundle_dir, int target_idx) {
   using negicc::compose_input_table;
   using negicc::curve_stops;

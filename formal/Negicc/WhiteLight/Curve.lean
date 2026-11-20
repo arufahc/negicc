@@ -1,5 +1,5 @@
 /-
-The white-light fit's input curves.
+Given input curves composed into a white-light profile.
 -/
 module
 

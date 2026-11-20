@@ -60,17 +60,22 @@ neighbours. Each channel is held to `[0, 65535]` and rounded.
 that colour, `G = ⌊(G1 + G2) / 2⌋`; each channel held at `white`, green also when either green site
 reached it.
 
-**Three captures** (`np_input.cc`: `load_rgb_input`; Lean `captureScale`, `tiffHalf`). With `e_k` the
-shutter × ISO of capture `k`:
+**Three captures** (`np_input.cc`: `load_rgb_input`; Lean `captureScale`, `tiffHalf`). When all three
+captures record their shutter and ISO, with `e_k` the shutter × ISO of capture `k`, the green and
+blue captures and their half-size images are scaled to the first's exposure; otherwise (three TIFF
+captures, for instance) nothing is scaled:
 
 ```
 v_k' = min(65535, round(v_k e_0 / e_k))       (k = 1, 2; unchanged when e_0 = e_k)
-half = ⌊(a + b + c + d + 2) / 4⌋              (a TIFF's 2×2 block, and the assembled image's)
+half = ⌊(a + b + c + d + 2) / 4⌋              (a TIFF's 2×2 block, before its scaling; and the
+                                               assembled image's)
 ```
 
 The analysis reads the three captures' own half-size images when all three have the image's half
-size, whatever the frame, which is cut after it (Lean `capturePlanesUsed`); otherwise, and for an RGB
-file, the half-size image of the assembled image.
+size, whatever the frame (Lean `capturePlanesUsed`); otherwise, and for an RGB file, the half-size
+image of the assembled image. The frame is cut from the full image after the analysis; the analysis
+itself is told where the frame lies (`--roi`, `--roi auto`'s detection, or the first RAW capture's
+inset crop, which it searches as it searches `--roi`).
 
 **White-light film-base balance** (`white_light_balance.h`: `film_base_balance_gains`; Lean
 `filmBaseBalanceGains`, `rec2020Rgb`, `Mat3.adjugate`, `Mat3.det`). With `C = rec2020_rgb · rgb_cam`:
@@ -169,7 +174,9 @@ The conversion does not use them: the bundle keeps each bracket's `profcheck` re
 table(v) = lerp(T[k], T[k+1], s − k),   s = v (n − 1),   k = clamp(⌊s⌋, 0, n − 2)   (n ≥ 2;
            a table of one sample is that sample, an empty one the identity)
 the parser takes only input curves, a cLUT, an identity matrix at most, output curves
-           (profileLayoutAccepted), and sets M = I, o = 0 (Profile.matrixAccepted)
+           (profileLayoutAccepted), and sets M = I, o = 0 (Profile.matrixAccepted); it also requires
+           an RGB to XYZ profile and every stage three channels to three, conditions the definition
+           does not carry
 t = clamp01(M in(x) + o)
 clut: the value passes through without a table; else
       s = t (dim − 1), (i, j, k) the lower corner held inside the grid, the upper one from it,
@@ -294,7 +301,7 @@ code by reading only.
 | `linear_srgb_to_lab`, `linear_srgb_to_L`, `srgb_to_lab` | `linearSrgbToLab`, `linearSrgbToL`, `srgbToLab` | grey, white, `linearSrgbToLab_L`, `lstarOfY_mono` | yes |
 | `apply_trc` | `tableEval`, `tableAt` | `tableEval_mem`, `tableAt_natCast` | yes |
 | `parse_film_profile_pipeline` (the layout taken, the identity matrix set) | `profileLayoutAccepted`, `Profile.matrixAccepted` | | `matrixAccepted` on the bundles' profiles; the layout read |
-| `apply_matrix`, `candidate_matrix` | `Mat3.mulVec`, `candidateMatrix` | `candidateMatrix_mulVec`, `_one`, `_mul_exposure`, `_divScalar` | yes |
+| `apply_matrix`, `candidate_matrix` | `Mat3.mulVec`, `candidateMatrix` | `candidateMatrix_mulVec`, `_one`, `_mul_exposure` | yes |
 | `subtract_cfa_black_in_place` | `subtractBlack`, `whiteAfterBlack` | | read |
 | `cpu_preview_debayer` | `halfSizePixel` | | yes |
 | `reconstruct_green_soft_cpu`, `cpu_grain_aware_debayer` | `greenSoft`, `grainAwarePixel`, `grainAwarePixelU16` | | yes |
@@ -337,7 +344,9 @@ code by reading only.
   and `baseFromCapture` (`np_film_base.cc`): those files are not in the library the generator links,
   and the functions work on LibRaw's state or on files.
 - `profileLayoutAccepted`: the parser reads Little-CMS's pipeline of an ICC file; the check's own
-  reader takes only the bundles' layout, and every bundle profile is taken.
+  reader takes only the bundles' layout, and every bundle profile is taken. The parser's two other
+  conditions, an RGB to XYZ profile and every stage three channels to three, are not in the
+  definition.
 - `density`, `transmission`, `sq`, `mean`, the componentwise `add` and `sub`: helpers of the base for
   the other parts (the print emulation's density); the scene conversion does not use them.
 
@@ -365,7 +374,7 @@ code by reading only.
   bundle's JSON, the flat field's `.npz`, the sidecar.
 - **NaN, infinities and finiteness tests**, which the C++ uses to skip cells or values, and the
   guards for absent data (no profile, a scan exposure of zero, a missing base shutter): the definitions assume finite values and present data.
-- **The network heads** that give the tone stage its predictions, the fit its `p`, `μ` and `σ`: an
+- **The network heads** that give the tone stage its predictions: an
   opaque function whose outputs are inputs here (specified with the Auto search in #211).
 
 ## Not in this specification
@@ -383,3 +392,15 @@ vectors and checks as they stood against `47a187d` are in this branch's history 
   solve, the moments, the never-greener guard, the Levenberg-Marquardt solve, the re-meter;
   `multi_target_optimizer.cc`: the fit's target clamp, `fallback_picture_cells`, `curve_frame_of`,
   `reanchor_input_curves`, `shape_scale_of`).
+
+The refusals of the code that this document leaves out (each is a check on the input before any
+formula here runs):
+
+- a `--roi` outside the image is refused, and one past its right or bottom edge is clamped to it;
+- a RAW's inset crop counts as a crop unless it is absent (LibRaw's `0xffff` corner or a zero size) or
+  is the whole image at the origin;
+- the analysis needs an image at least 2 pixels wide and high;
+- `-E`, `--gain_g` and `--gain_b`, when given, must be finite and above 0;
+- recorded input curves are refused unless they keep the shape the fit holds them to
+  (`curve_shape_ok`: a hold point at most 0, monotone, within 2.2 stops of the bracket's curve), a
+  test cut with the fit.

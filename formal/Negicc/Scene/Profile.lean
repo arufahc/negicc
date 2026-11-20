@@ -87,8 +87,9 @@ inductive ProfileStage where
 
 /-- The layouts the parser takes (`parse_film_profile_pipeline` in `profile_bundle.cc`): input curves,
 a colour table, an identity matrix at most once right after the table, output curves, nothing else
-(every stage three channels to three, which is not modelled). State `0` is before the input curves,
-`1` before the table, `2` after it, `3` after the output curves. -/
+(the parser also requires an RGB to XYZ profile and every stage three channels to three, which the
+definition does not carry). State `0` is before the input curves, `1` before the table, `2` after
+it, `3` after the output curves. -/
 def profileLayoutAccepted (stages : List ProfileStage) : Bool :=
   let step : Option (Nat × Bool) → ProfileStage → Option (Nat × Bool) := fun st s =>
     match st, s with

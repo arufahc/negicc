@@ -14,7 +14,7 @@ public section
 Proved over `ℝ`.
 
 * The curve is the identity at and above its pivot and for a zero bend (`inputCurve_of_ge`,
-  `inputCurve_zero`), and meets the identity at the pivot (`inputCurve_at_ref`).
+  `inputCurve_zero`), and meets the identity at the pivot (`curveStops_zero`).
 * Below `u_lo` the held curve has slope 1 in stops (`curveStops_hold`).
 -/
 
