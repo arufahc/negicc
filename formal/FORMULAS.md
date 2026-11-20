@@ -256,7 +256,7 @@ L* = 116 f(Y) − 16,   a* = 500 (f(X/0.950456) − f(Y)),   b* = 200 (f(Y) − 
 
 **The curve** (`input_curves.h`: `curve_stops`, `input_curve`, `compose_input_table`,
 `CombinedProfile::build`, `input_curve_reference`, `curve_shape_ok`; Lean `curveStops`, `inputCurve`,
-`composeInputTable`, `combinedProfile`, `inputCurveReference`, `median`, `minimum`, `curveShapeOk`):
+`composeInputTable`, `combinedProfile`, `inputCurveReference`, `cellMedian`, `cellMinimum`, `curveShapeOk`):
 
 ```
 u = min(log2(max(v, 1e-12) / ref), 0)

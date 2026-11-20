@@ -33,7 +33,7 @@ theorem inputCurve_of_ge (c : ChannelCurve ℝ) {v : ℝ} (h : c.ref ≤ v) : in
 
 /-- With a zero bend and a zero `k` the curve is the identity. -/
 theorem inputCurve_zero (c : ChannelCurve ℝ) (ha : c.a = 0) (hk : c.k = 0) (v : ℝ) : inputCurve c v = v := by
-  have hz : isZero (0 : ℝ) = true := by unfold isZero; norm_num
+  have hz : decZero (0 : ℝ) = true := by unfold decZero; norm_num
   unfold inputCurve
   rw [ha, hk, hz]
   simp

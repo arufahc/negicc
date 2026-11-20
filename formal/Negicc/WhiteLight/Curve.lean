@@ -54,11 +54,11 @@ def ChannelCurve.zero : ChannelCurve α := ⟨0.0, 0.0, 1.0, 0.0, 0.0, false⟩
 def InputCurves.zero : InputCurves α := ⟨ChannelCurve.zero, ChannelCurve.zero⟩
 
 /-- A value is zero, decided through `≤` both ways (the C++'s `== 0.0f`). -/
-def isZero (x : α) : Bool := decide (x ≤ 0.0) && decide (0.0 ≤ x)
+def decZero (x : α) : Bool := decide (x ≤ 0.0) && decide (0.0 ≤ x)
 
 /-- A curve does something (`InputCurves::active`): a bend or a `k` on either channel. -/
 def InputCurves.active (c : InputCurves α) : Bool :=
-  !(isZero c.g.a && isZero c.g.k && isZero c.b.a && isZero c.b.k)
+  !(decZero c.g.a && decZero c.g.k && decZero c.b.a && decZero c.b.k)
 
 /-- `f(u)`, the curve in stops (`curve_stops`): `u (1 + a + k tanh(u - u_med))`, and below the hold
 point `uHold` (when there is one) `f(uHold) + (u - uHold)`. -/
@@ -73,7 +73,7 @@ def ChannelCurve.uHold (c : ChannelCurve α) : Option α := if c.hold then some 
 /-- The curve on one value (`input_curve`): the identity at and above `ref` and for the identity
 curve; below it `ref 2^f(u)`, `u = min(log2(max(v, 1e-12) / ref), 0)`. -/
 def inputCurve (c : ChannelCurve α) (v : α) : α :=
-  if !(decide (v < c.ref)) || (isZero c.a && isZero c.k) then v
+  if !(decide (v < c.ref)) || (decZero c.a && decZero c.k) then v
   else
     let vv := max v 1e-12
     let u := min (log2 (vv / c.ref)) 0.0
@@ -98,7 +98,7 @@ def combinedProfile (p : Profile α) (c : InputCurves α) : Profile α :=
 
 /-- The median of a list (`median` in `input_curves.h`): the middle value, the mean of the two middle
 ones for an even count, `0` for none. -/
-def median (xs : Array α) : α :=
+def cellMedian (xs : Array α) : α :=
   if xs.size = 0 then 0.0
   else
     let s := xs.qsort (fun a b => decide (a < b))
@@ -106,7 +106,7 @@ def median (xs : Array α) : α :=
     if xs.size % 2 = 1 then s.getD h 0.0 else 0.5 * (s.getD (h - 1) 0.0 + s.getD h 0.0)
 
 /-- The smallest entry, `0` for none. -/
-def minimum (xs : Array α) : α :=
+def cellMinimum (xs : Array α) : α :=
   if xs.size = 0 then 0.0 else xs.foldl min (xs.getD 0 0.0)
 
 /-- One channel's `u` of a corrected value against its pivot: `min(log2(max(v, 1e-12) /
@@ -125,8 +125,8 @@ def inputCurveReference (shape : InputCurves α) (merged : Mat3 α) (e g b knee 
   let cells := grid.map fun px => m.mulVec (loadU16 px)
   let ug := cells.map fun v => stopsBelowRef refG (kneeCompress knee v.y)
   let ub := cells.map fun v => stopsBelowRef refB (kneeCompress knee v.z)
-  ⟨{ shape.g with ref := refG, uMed := median ug, uLo := minimum ug },
-   { shape.b with ref := refB, uMed := median ub, uLo := minimum ub }⟩
+  ⟨{ shape.g with ref := refG, uMed := cellMedian ug, uLo := cellMinimum ug },
+   { shape.b with ref := refB, uMed := cellMedian ub, uLo := cellMinimum ub }⟩
 
 /-- One channel's curve stays monotone and within `maxDev` stops of the base table over the whole
 table it is composed into (`curve_shape_ok`): walked from `ref` down over the entries `i / (n - 1)`
@@ -134,7 +134,7 @@ below `ref`, each `f(u)` below the one above it (from `f = 0` at `ref`) and `|f(
 and entry 0, read at `1e-12`, below the last. The identity curve, a pivot that is not positive and a
 table of fewer than two entries pass. -/
 def curveShapeOk (c : ChannelCurve α) (tableN : Nat) (maxDev : α) : Bool := Id.run do
-  if isZero c.a && isZero c.k then return true
+  if decZero c.a && decZero c.k then return true
   if !(decide (0.0 < c.ref)) || tableN < 2 then return true
   let mut prev : α := 0.0
   for j in [0:tableN - 1] do

@@ -75,8 +75,8 @@ def anchored (f : CurveFrame α) (shape : InputCurves α) (e g b : α) : InputCu
   let refB := kneeCompress f.knee (e * b * f.fb.z)
   let ug := f.rows.map fun r => stopsBelowRef refG (kneeCompress f.knee (e * g * r.y))
   let ub := f.rows.map fun r => stopsBelowRef refB (kneeCompress f.knee (e * b * r.z))
-  ⟨{ shape.g with ref := refG, uMed := median ug, uLo := minimum ug },
-   { shape.b with ref := refB, uMed := median ub, uLo := minimum ub }⟩
+  ⟨{ shape.g with ref := refG, uMed := cellMedian ug, uLo := cellMinimum ug },
+   { shape.b with ref := refB, uMed := cellMedian ub, uLo := cellMinimum ub }⟩
 
 /-- One cell through the conversion with the curves `c` (anchored) applied to its green and blue
 (`JointCurveModel::cell_lab`). `row` is the cell's rows of the merged matrix. -/
