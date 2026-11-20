@@ -516,26 +516,31 @@ void components(const std::vector<uint8_t>& mask, const std::vector<uint8_t>& in
 }  // namespace
 
 void negicc::dilate(std::vector<uint8_t>& m, int W, int H, int r) {
+  // Nothing to dilate: no radius, no image, or a mask smaller than the image it is said to cover.
+  if (r <= 0 || W <= 0 || H <= 0 || m.size() < (size_t)W * H) return;
+  // A radius past the image's larger side reaches every pixel as that side does; the clamp keeps the sentinels below,
+  // a pixel just beyond the radius before the first column or row and after the last, inside an int.
+  r = std::min(r, std::max(W, H));
   std::vector<uint8_t> t(m.size(), 0), o(m.size(), 0);
   for (int y = 0; y < H; ++y) {
-    int last = -1000000;
+    int last = -r - 1;
     for (int x = 0; x < W; ++x) {
       if (m[(size_t)y * W + x]) last = x;
       if (x - last <= r) t[(size_t)y * W + x] = 1;
     }
-    last = 1000000;
+    last = W + r;
     for (int x = W - 1; x >= 0; --x) {
       if (m[(size_t)y * W + x]) last = x;
       if (last - x <= r) t[(size_t)y * W + x] = 1;
     }
   }
   for (int x = 0; x < W; ++x) {
-    int last = -1000000;
+    int last = -r - 1;
     for (int y = 0; y < H; ++y) {
       if (t[(size_t)y * W + x]) last = y;
       if (y - last <= r) o[(size_t)y * W + x] = 1;
     }
-    last = 1000000;
+    last = H + r;
     for (int y = H - 1; y >= 0; --y) {
       if (t[(size_t)y * W + x]) last = y;
       if (last - y <= r) o[(size_t)y * W + x] = 1;

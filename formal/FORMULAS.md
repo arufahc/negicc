@@ -85,7 +85,9 @@ K_c = (adj(C) f_profile)_c / (adj(C) f)_c,   then K_c ← K_c / max(K)
 ```
 
 refused (gains unchanged) when `(adj(C) f)_c / det C` or `(adj(C) f_profile)_c / det C` is not
-positive for some `c`.
+positive for some `c`. The program also refuses a `K_c`, before or after the division by the largest,
+that is not a finite positive number, which only floating point's overflow and underflow can give (over
+`ℝ` the conditions above imply it).
 
 ## 2.2 Flat field
 

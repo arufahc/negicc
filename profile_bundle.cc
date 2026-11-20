@@ -1095,20 +1095,30 @@ bool load_bundle_arg(const std::string& arg, ProfileBundle& bundle) {
 }
 
 int read_profile(const std::string& prof_name, unsigned **prof_out, unsigned *size) {
+  // The profile's size is the first field of its header (ICC.1 7.2.2): it must be the file's size, checked before
+  // anything is allocated, and the bytes must open as a profile (Little CMS checks the header and the tag table).
   std::string resolved = resolve_profile_path(prof_name);
-  FILE *fp = fopen(resolved.c_str(), "rb");
+  std::error_code ec;
+  const bool regular = std::filesystem::is_regular_file(resolved, ec);
+  const uintmax_t file_size = regular ? std::filesystem::file_size(resolved, ec) : 0;
+  FILE *fp = regular && !ec ? fopen(resolved.c_str(), "rb") : nullptr;
   if (fp) {
-    if (fread(size, 4, 1, fp) != 1) {
-      fclose(fp);
-      return -1;
+    uint32_t declared = 0;
+    if (fread(&declared, 4, 1, fp) == 1 && (declared = ntohl(declared)) == file_size) {
+      fseek(fp, 0, SEEK_SET);
+      *size = declared;
+      *prof_out = (unsigned *)malloc(*size);
+      if (*prof_out && fread(*prof_out, 1, *size, fp) == *size) {
+        cmsHPROFILE prof = cmsOpenProfileFromMem(*prof_out, *size);
+        if (prof) {
+          cmsCloseProfile(prof);
+          fclose(fp);
+          return 0;
+        }
+      }
+      if (*prof_out) free(*prof_out);
+      *prof_out = nullptr;
     }
-    fseek(fp, 0, SEEK_SET);
-    *prof_out = (unsigned *)malloc(*size = ntohl(*size));
-    if (*prof_out && fread(*prof_out, 1, *size, fp) == *size) {
-      fclose(fp);
-      return 0;
-    }
-    if (*prof_out) free(*prof_out);
     fclose(fp);
   }
   log_error("Cannot read ICC profile: %s\n", prof_name.c_str());

@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -444,17 +445,29 @@ bool density_balance_offset(const DensityRecord& rec, double offset[3], double* 
 
 namespace {
 
-// The capture's time as the TIFF and DPX date fields write it; empty when the input records none, so that the file is
-// the same on every run (its replay included) and claims no time it does not know.
+// The capture's time as the TIFF and DPX date fields write it, "YYYY:MM:DD HH:MM:SS"; empty when the input records
+// none, so that the file is the same on every run (its replay included) and claims no time it does not know, and when
+// the time cannot be converted or its year takes more than the field's four digits.
 std::string date_time(long long timestamp, char sep) {
   if (timestamp <= 0) return "";
   time_t t = (time_t)timestamp;
   struct tm tm_buf;
-  localtime_r(&t, &tm_buf);
+  if (!localtime_r(&t, &tm_buf)) return "";
   char buf[80];
-  snprintf(buf, sizeof buf, "%04d:%02d:%02d%c%02d:%02d:%02d", tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-           sep, tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+  const int n = snprintf(buf, sizeof buf, "%04d:%02d:%02d%c%02d:%02d:%02d", tm_buf.tm_year + 1900, tm_buf.tm_mon + 1,
+                         tm_buf.tm_mday, sep, tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+  if (n != (int)sizeof "YYYY:MM:DD HH:MM:SS" - 1) return "";
   return buf;
+}
+
+// Ends a write: on a failed one (a full disk, say) the file is removed, unless the output is a device or a pipe, so
+// that nothing is left half written.
+int finish_write(const std::string& path, bool ok) {
+  if (ok) return 0;
+  log_error("Failed to write %s\n", path.c_str());
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(path, ec)) remove(path.c_str());
+  return -1;
 }
 
 // ---- TIFF (little-endian, one strip) --------------------------------------------------------------------------------
@@ -496,10 +509,6 @@ void put_str(uint8_t* p, size_t field, const std::string& s) {
 int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
                        const std::string& description, const DensityFileInfo& info) {
   const uint64_t strip_bytes = (uint64_t)width * (uint64_t)height * 6;
-  if (strip_bytes > 0xffffff00ull) {
-    log_error("The image is too large for a TIFF file (%dx%d)\n", width, height);
-    return -1;
-  }
   // The values that do not fit an entry, laid out after the IFD.
   const std::string date = date_time(info.timestamp, ' ');
   std::vector<TiffEntry> entries;
@@ -562,6 +571,13 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
     log_error("Internal error: the TIFF directory has %d entries, expected %d\n", (int)entries.size(), n_entries);
     return -1;
   }
+  // A classic TIFF addresses its data with 32-bit offsets: the strip, after the header and the values laid out after
+  // the IFD (the description among them), must end within them.
+  if ((uint64_t)extra_offset + extra.size() + strip_bytes > 0xffffff00ull) {
+    log_error("The image is too large for a TIFF file (%dx%d, %zu bytes of metadata)\n", width, height,
+              description.size());
+    return -1;
+  }
   const uint32_t data_offset = extra_offset + (uint32_t)extra.size();
   entries[strip_entry].value = data_offset;
 
@@ -605,8 +621,7 @@ int write_density_tiff(const std::string& path, const uint16_t* pixels, int widt
     ok = fwrite(row.data(), 1, row.size(), fp) == row.size();
   }
   ok = (fclose(fp) == 0) && ok;
-  if (!ok) log_error("Failed to write %s\n", path.c_str());
-  return ok ? 0 : -1;
+  return finish_write(path, ok);
 }
 
 int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
@@ -720,8 +735,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
     ok = fwrite(row.data(), 4, (size_t)width, fp) == (size_t)width;
   }
   ok = (fclose(fp) == 0) && ok;
-  if (!ok) log_error("Failed to write %s\n", path.c_str());
-  return ok ? 0 : -1;
+  return finish_write(path, ok);
 }
 
 
