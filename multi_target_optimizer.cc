@@ -249,8 +249,8 @@ void lstsq3(const float J[3][3], const float r[3], float rcond, float x[3]) {
 // py-ref: negicc_station/src/grey_point.py @ 93be1ec (GreyPoint)
 class GreyPoint {
  public:
-  // steady: newton()'s step control (below), for the knobs' solves. The bootstrap's check of each bracket goes
-  // without it, so the brackets Auto meters do not depend on it.
+  // steady: for the knobs' solves, a reference grey that the solve misses is sought again (reference_grey). The
+  // bootstrap's check of each bracket goes without it, so the brackets Auto meters do not depend on it.
   explicit GreyPoint(const ProfileData& prof, bool steady = false) : prof_(prof), steady_(steady) {}
 
   // Lab of inputs t (n x 3), the scale going through E so the 16-bit inputs sit near 0.9.
@@ -291,11 +291,12 @@ class GreyPoint {
   // colour like the orange mask, only a starting direction), for k = 2^-10 .. 2^3 in half stops; the k whose L* is
   // nearest 50 wins. newton() then moves all three channels freely from there to hit (50, 0, 0) exactly.
   //
-  // With steady_ (the knobs), a solve from that start that misses starts again from the grid of the same inputs taken
-  // per channel (each channel at any of the 27 levels k * dir[c]), from the point nearest (50, 0, 0) in dE76. The
-  // start on the line can render with an sRGB channel clipped (a bracket whose profile carries fitted input curves
-  // has its neutral off the Portra direction), and there the render does not move with that channel: no step
-  // computed from it finds the way out.
+  // With steady_ (the knobs), a solve that misses runs again from the same start with newton()'s step control, and
+  // if that misses too, from the grid of the same inputs taken per channel (each channel at any of the 27 levels
+  // k * dir[c]), from the point nearest (50, 0, 0) in dE76, with the step control. The start on the line can render
+  // with an sRGB channel clipped (a bracket whose profile carries fitted input curves has its neutral off the Portra
+  // direction), and there the render does not move with that channel: no step computed from it finds the way out.
+  // A solve that reaches the grey the first time is the one the bootstrap and every earlier build ran.
   bool reference_grey(float log_t0[3] = nullptr, float* miss = nullptr) const {
     const float dir[3] = {1.4f, 1.0f, 0.88f};
     constexpr int kLevels = 27;
@@ -315,6 +316,10 @@ class GreyPoint {
     const float target[3] = {50.0f, 0.0f, 0.0f};
     float err = newton(target, log_t, 20);
     if (steady_ && !(err <= 0.25f)) {
+      for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
+      err = newton(target, log_t, 20, true);
+    }
+    if (steady_ && !(err <= 0.25f)) {
       float best_e = std::numeric_limits<float>::infinity();
       float lab_t[1][3], lab_out[1][3];
       for (int i = 0; i < kLevels; ++i)
@@ -331,7 +336,7 @@ class GreyPoint {
               for (int c = 0; c < 3; ++c) log_t[c] = std::log(lab_t[0][c]);
             }
           }
-      err = newton(target, log_t, 20);
+      err = newton(target, log_t, 20, true);
     }
     const bool ok = err <= 0.25f;
     if (miss) *miss = err;
@@ -382,15 +387,15 @@ class GreyPoint {
   // Clamping each channel by itself changes the step's direction. Where the render is clipped (an sRGB channel at 0
   // does not move with its input) the Jacobian is nearly singular and the step is thousands of stops long in every
   // channel: clamped channel by channel, it becomes an equal move of all three channels, an exposure change, which
-  // the next such step can undo, so the solve alternates between two points without end. With steady_, the first
-  // step that lands no closer to target than the point it left is taken back, and from that point on each step is
-  // shortened as a whole, so that no channel moves by more than MAX_LOG_STEP, and keeps the Newton direction. A solve
-  // whose every step comes closer is the same with or without it.
-  float newton(const float target[3], float log_t[3], int iters) const {
+  // the next such step can undo, so the solve alternates between two points without end. With control (the knobs'
+  // second try, reference_grey), the first step that lands no closer to target than the point it left is taken back,
+  // and from that point on each step is shortened as a whole, so that no channel moves by more than MAX_LOG_STEP,
+  // and keeps the Newton direction.
+  float newton(const float target[3], float log_t[3], int iters, bool control = false) const {
     constexpr float FD_STEP = 0.05f, MAX_LOG_STEP = 0.25f, TOLERANCE = 0.02f;
     float prev[3] = {log_t[0], log_t[1], log_t[2]};
     float prev_miss = std::numeric_limits<float>::infinity();
-    bool whole = false;  // steady_: steps shortened as a whole from here on
+    bool whole = false;  // control: steps shortened as a whole from here on
     for (int it = 0; it < iters; ++it) {
       float pts[7][3];
       for (int c = 0; c < 3; ++c) pts[0][c] = std::exp(log_t[c]);
@@ -405,7 +410,7 @@ class GreyPoint {
       const float r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
       const float miss = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
       if (std::max({std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2])}) < TOLERANCE) return miss;
-      if (steady_ && !whole && !(miss < prev_miss)) {
+      if (control && !whole && !(miss < prev_miss)) {
         whole = true;
         for (int c = 0; c < 3; ++c) log_t[c] = prev[c];
         continue;
