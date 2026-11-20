@@ -409,7 +409,7 @@ not the optimiser's reading of it, matches the field.
    A loop stops when `|ΔE| + |Δg| + |Δb| ≤ 0.02`; on TriLED also when the residual changes by 1.5 % or less; on white
    light when the residual has passed its minimum. It is diverged when the residual grows by more than 25 % and more
    than 1.5, and stops after 8 steps (`--dino_iters`). Each loop keeps its lowest-residual step. The lower residual
-   wins; on TriLED among the converged loops when any converged.
+   wins, whichever way each loop ended.
 5. **Clip fallback.** When the winner white-clips more than 0.03 % of the crop (a channel at 16-bit code 65400 or
    above), the next denser bracket, when it was screened and is admissible, runs the loop of step 4 (or keeps its
    tournament run) and is taken if it at least halves the clipping, moves the median `L*` by no more than −4.5 to
@@ -422,7 +422,7 @@ not the optimiser's reading of it, matches the field.
    step 3 screened are screened again, and the best two run the tournament, with penalties
    `4.5 d_hi² + 1.2 d_sh² + 0.8 slack²` in place of the pull toward the centre (`d_hi`, `d_sh`: stops of `E` below
    `e_min` or above `e_max`; `slack`: stops by which the scene overflows the bracket); the runs are ranked by their
-   residual plus the same penalties, on TriLED among the converged runs when any converged. When the winner puts the
+   residual plus the same penalties, whichever way each loop ended. When the winner puts the
    median `L*` more than 7.5 below the first choice's (on a frame with median `L*` ≥ 58; 4.5 otherwise), its `E` is
    lowered, which brightens it, by 0.038 stop per `L*` of the excess, once. The result is taken if the share of the crop
    above 242 grows by no more than 0.5 percentage point, the median `L*` stays at 48 or within 6 of the first choice's,

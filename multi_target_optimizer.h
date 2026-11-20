@@ -48,8 +48,8 @@ struct RgbImage {
 //      Its L* is the frame's one lightness wish.
 //   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against the
 //      bootstrap field.
-//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual (on TriLED
-//      among the converged ones, when any converged). The loops hold L* to the frame's lightness wish.
+//   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual, whichever
+//      way each loop ended. The loops hold L* to the frame's lightness wish.
 //   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
