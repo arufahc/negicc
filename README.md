@@ -246,7 +246,8 @@ DanielE, 2026-07-11.
 
 *Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
 
-The RAW files and the pictures belong to the photographers who posted them. No copyright is claimed on them here.
+The right-hand pictures were rendered with negicc `02876a0`. The RAW files and the pictures belong to the
+photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
 ## Print emulation
@@ -258,7 +259,8 @@ Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print`
 ![A negative as negicc's picture, as a print on Portra Endura and as a print on Vision
 2383](samples/print_emulation.jpg)
 
-*Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film.*
+*Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film, each as
+its search left it. Rendered with negicc `c69816b`.*
 
 There are two ways to run it, and both give the same print, apart from the two differences given below:
 
@@ -297,7 +299,8 @@ printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on av
 materials](samples/print_materials_triled.jpg)
 
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
-scene conversion's lightness with `--brightness` (the offset in stops is in each cell's title).*
+scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
+`c69816b`.*
 
 ## Options
 
