@@ -146,9 +146,8 @@ ISO 100. `candidateMatrix(M / k, E, g, b) = candidateMatrix(M, E / k, g, b)`
 ## 3.3 A bracket's calibrated range
 
 (`multi_target_optimizer.cc`: `compute_inner_crop`, `u16_percentile_linear`, `compute_frame_stats`,
-`bracket_enclosure`, `pull_centre`, `meter_bracket_exposures`; Lean `innerCrop`,
-`u16PercentileLinear`, `greenHistogram`, `sceneGreenRange`, `bracketEnclosure`, `pullCentre`,
-`meteredEnclosure`.)
+`bracket_enclosure`, `pull_centre`; Lean `innerCrop`, `u16PercentileLinear`, `greenHistogram`,
+`sceneGreenRange`, `bracketEnclosure`, `pullCentre`.)
 
 ```
 inner crop: x0 = min(round(W (1 − 0.9) / 2), ⌊(W − 1)/2⌋), width W − 2 x0 (likewise y)
@@ -163,13 +162,8 @@ slack = log2(e_max / e_min),   fill = (g_hi / g_lo) / (g_max / g_min)
 pull centre = 0 when inverted, else e_centre
 ```
 
-On a white-light bundle `g_lo`, `g_hi` are multiplied by `e_norm`; on TriLED the range is divided by
-`e_norm`.
-
-**The bundle's own ranges** (`profile_bundle.cc`: `compute_bundle_enclosures`; Lean
-`bundleGreenRange`, `bundleEnclosure`), kept for given values and the bracket picked without the
-search: the same `e_min`, `e_max`, `e_centre` and feasibility from nearest-rank points over the whole
-frame (the first values whose cumulative count reaches `0.005 n` and `0.995 n`).
+On a white-light bundle the search multiplies `g_lo`, `g_hi` by `e_norm` before computing the range;
+on TriLED it works in the reference unit.
 
 ## 3.4 What the conversion uses of the prediction errors
 
@@ -393,9 +387,8 @@ code by reading only.
 | `frame_scale` (`e_norm`) | `exposureNorm`, `Mat3.divScalar` | `candidateMatrix_divScalar` | yes |
 | `compute_inner_crop` | `innerCrop` | | yes |
 | `u16_percentile_linear`, `compute_frame_stats` (`g_lo`, `g_hi`) | `u16PercentileLinear`, `greenHistogram`, `sceneGreenRange` | | yes |
-| `bracket_enclosure`, `meter_bracket_exposures` | `bracketEnclosure`, `meteredEnclosure` | | yes |
+| `bracket_enclosure` | `bracketEnclosure` | | yes |
 | `pull_centre` | `pullCentre` | | read |
-| `compute_bundle_enclosures` | `bundleGreenRange`, `bundleEnclosure` | | yes |
 | `pcs_lab_to_srgb_u8`, `profile_highlight_ceiling` | `pcsLabToSrgbU8`, `profileHighlightCeiling` | | yes |
 | `interpolate_clut` | `clutEval`, `tetraBlend` | `clutEval_const`, `clutEval_mem` | yes |
 | `apply_profile` | `applyProfile`, `Profile.hasClut` | | yes |
