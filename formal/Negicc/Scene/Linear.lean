@@ -11,11 +11,16 @@ public import Negicc.Scene.Profile
 /-!
 # To linear sRGB
 
-The film profile gives XYZ under D50. Two fixed matrices take it to linear sRGB (D65): the
-Bradford adaptation from D50 to D65, then XYZ to linear sRGB
-(`pcs_to_linear_srgb_unclamped` in `color_pipeline.h`). The result is held at zero from below
-only: values above 1, brighter than the chart's white, are kept for the highlight shoulder
-(`pcs_to_linear_srgb_pre_shoulder`).
+The film profile gives XYZ under D50. One fixed matrix takes it to linear sRGB: the inverse of the
+D50-adapted colorants of the sRGB profile the outputs embed (Elle Stone's sRGB V2), so that the codes
+written mean, through the embedded profile, the PCS they were computed from, and the PCS white
+`pcsWhite` maps to `(1, 1, 1)` (`pcs_to_linear_srgb_unclamped` in `color_pipeline.h`). The result is
+held at zero from below only: values above 1, brighter than the chart's white, are kept for the
+highlight shoulder (`pcs_to_linear_srgb_pre_shoulder`).
+
+The textbook pair, the Bradford adaptation from D50 to D65 followed by XYZ to linear sRGB, differs
+from that matrix in the fourth decimal. It is kept here because the print's CLF, which carries no
+profile, uses it (`print_clf_nodes` in `np_print.cc`).
 
 `convertPixelLinear` is the conversion of one pixel up to this point, the *pre-shoulder* value.
 The clipping statistics and the measurement of the shoulder read it.
@@ -27,23 +32,35 @@ open Scalar
 
 variable {α : Type} [Scalar α]
 
-/-- The Bradford chromatic adaptation from D50 to D65, on XYZ. -/
+/-- The PCS white: D50 as an ICC profile stores it, `(63190, 65536, 54061) / 65536`, the PCS
+illuminant as an `s15Fixed16Number` (`kPcsWhite`). -/
+def pcsWhite : Vec3 α := ⟨63190.0 / 65536.0, 1.0, 54061.0 / 65536.0⟩
+
+/-- PCS XYZ (D50) to linear sRGB: the inverse of the D50-adapted colorants `rXYZ`, `gXYZ`, `bXYZ`
+of the embedded sRGB profile, as written in `pcs_to_linear_srgb_unclamped`. -/
+def pcsToLinearSrgbMatrix : Mat3 α :=
+  ⟨⟨3.13427485, -1.61727573, -0.490724277⟩,
+   ⟨-0.978795611, 1.91616171, 0.0334533327⟩,
+   ⟨0.0719770074, -0.228984979, 1.40571822⟩⟩
+
+/-- The Bradford chromatic adaptation from D50 to D65, on XYZ (the print CLF's,
+`print_clf_nodes`). -/
 def bradfordD50ToD65 : Mat3 α :=
   ⟨⟨0.9555766, -0.0230393, 0.0631636⟩,
    ⟨-0.0282895, 1.0099416, 0.0210077⟩,
    ⟨0.0122982, -0.0204830, 1.3299098⟩⟩
 
-/-- XYZ (D65) to linear sRGB. -/
+/-- XYZ (D65) to linear sRGB (the print CLF's, `print_clf_nodes`). -/
 def xyzToLinearSrgb : Mat3 α :=
   ⟨⟨3.2406255, -1.5372080, -0.4986286⟩,
    ⟨-0.9689307, 1.8757561, 0.0415175⟩,
    ⟨0.0557101, -0.2040211, 1.0569959⟩⟩
 
-/-- PCS XYZ (D50) to linear sRGB (D65), not clamped (`pcs_to_linear_srgb_unclamped`). -/
+/-- PCS XYZ (D50) to linear sRGB, not clamped (`pcs_to_linear_srgb_unclamped`). -/
 def pcsToLinearSrgbUnclamped (v : Vec3 α) : Vec3 α :=
-  xyzToLinearSrgb.mulVec (bradfordD50ToD65.mulVec v)
+  pcsToLinearSrgbMatrix.mulVec v
 
-/-- PCS XYZ (D50) to linear sRGB (D65), held at zero from below
+/-- PCS XYZ (D50) to linear sRGB, held at zero from below
 (`pcs_to_linear_srgb_pre_shoulder`). -/
 def pcsToLinearSrgbPreShoulder (v : Vec3 α) : Vec3 α :=
   (pcsToLinearSrgbUnclamped v).map (max 0.0)

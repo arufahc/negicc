@@ -29,7 +29,8 @@ def lerp (a b t : α) : α := a * (1.0 - t) + b * t
 /-- The table read at the fractional index `s` by linear interpolation between the two samples
 around it. The segment is the one that contains `s`, held to the first and the last segment: below
 index `0` and above index `size - 1` the end segment's line is continued (extrapolation). The
-table needs at least two samples; a missing sample reads as `0`. -/
+table needs at least two samples, as `apply_trc` does; a missing sample reads as `0`. Inside the
+table, for `0 ≤ s ≤ size - 1`, the value lies between the samples (`tableEval_mem`). -/
 def tableAt (tab : Array α) (s : α) : α :=
   let k := min (natFloor s) (tab.size - 2)
   lerp (tab.getD k 0.0) (tab.getD (k + 1) 0.0) (s - (k : α))

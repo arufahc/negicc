@@ -89,6 +89,28 @@ theorem mergedMatrix_mulVec_base (X : Mat3 ℝ) (base f : Vec3 ℝ) (n ratio : �
     rw [ite_eq_left hz']
     field_simp
 
+/-- **Bare film in the scan lands on the code `n`.** A scan pixel of bare film reads, through the
+crosstalk correction, the film base `f` divided by `ratio` (the base was measured at `ratio` times
+the scan's exposure); the merged matrix puts it on `n` in every channel. After the load that is
+`n / 65535` (`0.839` for `n = 55000`), the level that enters the knee at `E = g = b = 1`. -/
+theorem mergedMatrix_mulVec_scan_base (X : Mat3 ℝ) (base f : Vec3 ℝ) (n ratio : ℝ) (hr : ratio ≠ 0)
+    (hf : X.mulVec base = f.map (· / ratio)) (hx : 0 < f.x) (hy : 0 < f.y) (hz : 0 < f.z) :
+    (mergedMatrix X f n ratio).mulVec base = ⟨n, n, n⟩ := by
+  have hx' : (0.0 : ℝ) < f.x := by norm_num; exact hx
+  have hy' : (0.0 : ℝ) < f.y := by norm_num; exact hy
+  have hz' : (0.0 : ℝ) < f.z := by norm_num; exact hz
+  rw [mergedMatrix, Mat3.mulVec_scaleRows, hf]
+  ext
+  · simp only [Vec3.mul, Vec3.map]
+    rw [ite_eq_left hx']
+    field_simp
+  · simp only [Vec3.mul, Vec3.map]
+    rw [ite_eq_left hy']
+    field_simp
+  · simp only [Vec3.mul, Vec3.map]
+    rw [ite_eq_left hz']
+    field_simp
+
 /-! ## The knee -/
 
 /-- The knee sends a non-positive value to zero. -/
@@ -118,6 +140,71 @@ theorem kneeCompress_le_one (knee v : ℝ) : kneeCompress knee v ≤ 1 := by
   · exact le_trans (min_le_left _ _) (by norm_num)
   · exact le_trans (min_le_left _ _) (by norm_num)
 
+/-- The hyperbolic tangent is monotone. -/
+theorem tanh_mono' {x y : ℝ} (h : x ≤ y) : Real.tanh x ≤ Real.tanh y := by
+  have hx := Real.neg_one_lt_tanh x
+  have hy := Real.tanh_lt_one y
+  have hx1 := Real.tanh_lt_one x
+  have hy1 := Real.neg_one_lt_tanh y
+  rw [← Real.artanh_le_artanh_iff ⟨hx, hx1⟩ ⟨hy1, hy⟩, Real.artanh_tanh, Real.artanh_tanh]
+  exact h
+
+/-- **The knee is monotone** for a knee in `(0, 0.9999]` (the conversion's is `0.95`): a thinner film
+never gives a smaller corrected value. For a knee in `(0.9999, 1)` it is not: the curve steps down at
+the knee, from `knee` to at most `0.9999` (`kneeCompress_step`). -/
+theorem kneeCompress_mono {knee v w : ℝ} (hk0 : 0 < knee) (hk : knee ≤ 0.9999) (hvw : v ≤ w) :
+    kneeCompress knee v ≤ kneeCompress knee w := by
+  have hk1 : ¬ (1.0 : ℝ) ≤ knee := by norm_num at hk ⊢; linarith
+  have hd : (0 : ℝ) < 1.0 - knee := by norm_num at hk ⊢; linarith
+  have hk9 : knee ≤ (0.9999 : ℝ) := hk
+  -- The roll-off branch is at least the knee.
+  have roll : ∀ z : ℝ, knee < z → knee ≤ min 0.9999 (knee + (1.0 - knee) * Real.tanh ((z - knee) / (1.0 - knee))) := by
+    intro z hz
+    have ht := tanh_mono' (le_of_lt (div_pos (by linarith : (0 : ℝ) < z - knee) hd))
+    rw [Real.tanh_zero] at ht
+    exact le_min hk9 (by nlinarith)
+  have one : ∀ z : ℝ, z ≤ knee → min 1.0 z = z := fun z hz => min_eq_right (by norm_num at hk ⊢; linarith)
+  unfold kneeCompress
+  simp only [tanh_real]
+  rw [ite_eq_right hk1, ite_eq_right hk1]
+  by_cases hw0 : w ≤ 0.0
+  · have hv0 : v ≤ (0.0 : ℝ) := le_trans hvw hw0
+    rw [ite_eq_left hv0, ite_eq_left hw0]
+  rw [ite_eq_right hw0]
+  have hw0' : (0 : ℝ) < w := by norm_num at hw0; exact hw0
+  by_cases hwk : w ≤ knee
+  · rw [ite_eq_left hwk, one w hwk]
+    by_cases hv0 : v ≤ 0.0
+    · rw [ite_eq_left hv0]; exact le_trans (le_of_eq (by norm_num)) (le_of_lt hw0')
+    · rw [ite_eq_right hv0, ite_eq_left (le_trans hvw hwk), one v (le_trans hvw hwk)]; exact hvw
+  rw [ite_eq_right hwk]
+  have hwk' : knee < w := lt_of_not_ge hwk
+  by_cases hv0 : v ≤ 0.0
+  · rw [ite_eq_left hv0]; exact le_trans (le_of_eq (by norm_num)) (le_trans (le_of_lt hk0) (roll w hwk'))
+  rw [ite_eq_right hv0]
+  by_cases hvk : v ≤ knee
+  · rw [ite_eq_left hvk, one v hvk]; exact le_trans hvk (roll w hwk')
+  rw [ite_eq_right hvk]
+  have hq : (v - knee) / (1.0 - knee) ≤ (w - knee) / (1.0 - knee) :=
+    div_le_div_of_nonneg_right (by linarith) hd.le
+  have := tanh_mono' hq
+  exact min_le_min_left _ (by nlinarith)
+
+/-- With a knee in `(0.9999, 1)` the knee steps down: the value at the knee is the knee, and every
+larger value gives at most `0.9999`. -/
+theorem kneeCompress_step {knee w : ℝ} (hk : 0.9999 < knee) (hk1 : knee < 1) (hw : knee < w) :
+    kneeCompress knee knee = knee ∧ kneeCompress knee w ≤ 0.9999 := by
+  have h1 : ¬ (1.0 : ℝ) ≤ knee := by norm_num; exact hk1
+  have h0 : ¬ knee ≤ (0.0 : ℝ) := by norm_num; linarith
+  have hw0 : ¬ w ≤ (0.0 : ℝ) := by norm_num; linarith
+  constructor
+  · unfold kneeCompress
+    rw [ite_eq_right h0, ite_eq_right h1, ite_eq_left (le_refl knee)]
+    exact min_eq_right (by norm_num; linarith)
+  · unfold kneeCompress
+    rw [ite_eq_right hw0, ite_eq_right h1, ite_eq_right (not_le.mpr hw)]
+    exact min_le_left _ _
+
 /-! ## The colour table -/
 
 /-- A blend of four equal nodes with weights that add up to one is that node. -/
@@ -138,6 +225,115 @@ theorem clutEval_const (p : Profile ℝ) (c : Vec3 ℝ) (h : ∀ i j k, p.node i
   unfold clutEval
   simp only [h]
   split_ifs <;> exact tetraBlend_const c _ _ _ _ (by norm_num)
+
+/-- Four values in `[lo, hi]` blended with non-negative weights that add up to one stay in
+`[lo, hi]`. -/
+theorem blend4_mem {a b c d w0 w1 w2 w3 lo hi : ℝ} (ha : lo ≤ a ∧ a ≤ hi) (hb : lo ≤ b ∧ b ≤ hi)
+    (hc : lo ≤ c ∧ c ≤ hi) (hd : lo ≤ d ∧ d ≤ hi) (h0 : 0 ≤ w0) (h1 : 0 ≤ w1) (h2 : 0 ≤ w2)
+    (h3 : 0 ≤ w3) (hs : w0 + w1 + w2 + w3 = 1) :
+    lo ≤ a * w0 + b * w1 + c * w2 + d * w3 ∧ a * w0 + b * w1 + c * w2 + d * w3 ≤ hi := by
+  have el : lo * w0 + lo * w1 + lo * w2 + lo * w3 = lo := by
+    rw [← mul_add, ← mul_add, ← mul_add, hs, mul_one]
+  have eh : hi * w0 + hi * w1 + hi * w2 + hi * w3 = hi := by
+    rw [← mul_add, ← mul_add, ← mul_add, hs, mul_one]
+  constructor
+  · linarith [mul_le_mul_of_nonneg_right ha.1 h0, mul_le_mul_of_nonneg_right hb.1 h1,
+      mul_le_mul_of_nonneg_right hc.1 h2, mul_le_mul_of_nonneg_right hd.1 h3]
+  · linarith [mul_le_mul_of_nonneg_right ha.2 h0, mul_le_mul_of_nonneg_right hb.2 h1,
+      mul_le_mul_of_nonneg_right hc.2 h2, mul_le_mul_of_nonneg_right hd.2 h3]
+
+/-- The position inside a grid cell: for a coordinate in `[0, 1]` on a grid of `dim ≥ 1` nodes, the
+share `s - i` of the way from the cell's lower node lies in `[0, 1]`, and both nodes are on the
+grid. -/
+theorem clut_cell_mem {x : ℝ} {dim : ℕ} (hd : 1 ≤ dim) (hx0 : 0 ≤ x) (hx1 : x ≤ 1) :
+    let s := x * ((dim - 1 : ℕ) : ℝ)
+    let i := min (natFloor s) (dim - 1)
+    0 ≤ s - (i : ℝ) ∧ s - (i : ℝ) ≤ 1 ∧ i < dim ∧ min (i + 1) (dim - 1) < dim := by
+  intro s i
+  have hn1 : ((dim - 1 : ℕ) : ℝ) = (dim : ℝ) - 1 := by rw [Nat.cast_sub hd]; simp
+  have hs0 : 0 ≤ s := by
+    simp only [s, hn1]; have : (1 : ℝ) ≤ dim := by exact_mod_cast hd
+    nlinarith
+  have hs1 : s ≤ (dim : ℝ) - 1 := by
+    simp only [s, hn1]; have : (1 : ℝ) ≤ dim := by exact_mod_cast hd
+    nlinarith
+  have hfl : (natFloor s : ℝ) ≤ s := by rw [natFloor_real]; exact Nat.floor_le hs0
+  refine ⟨?_, ?_, by omega, by omega⟩
+  · have : (i : ℝ) ≤ (natFloor s : ℝ) := by exact_mod_cast min_le_left _ _
+    linarith
+  · by_cases hc : natFloor s ≤ dim - 1
+    · have : i = natFloor s := min_eq_left hc
+      rw [this, natFloor_real]; linarith [Nat.lt_floor_add_one s]
+    · have : i = dim - 1 := min_eq_right (by omega)
+      rw [this, Nat.cast_sub hd]; push_cast; linarith
+
+/-- In the sixth case of `clutEval` (none of the first five orderings holds), the positions are
+ordered `dr ≤ dg ≤ db`. -/
+theorem clut_last_case {dr dg db : ℝ} (h1 : ¬ (dg ≤ dr ∧ db ≤ dg)) (h2 : ¬ (db ≤ dr ∧ dg < db))
+    (h3 : ¬ (dr < db ∧ dg ≤ dr)) (h4 : ¬ (dr < dg ∧ db ≤ dr)) (h5 : ¬ (db ≤ dg ∧ dr < db)) :
+    dr ≤ dg ∧ dg ≤ db := by
+  have a : dr ≤ dg := by
+    by_contra h
+    push Not at h
+    by_cases hb : db ≤ dg
+    · exact h1 ⟨le_of_lt h, hb⟩
+    · push Not at hb
+      by_cases hr : db ≤ dr
+      · exact h2 ⟨hr, hb⟩
+      · push Not at hr
+        exact h3 ⟨hr, le_of_lt h⟩
+  refine ⟨a, ?_⟩
+  by_contra h
+  push Not at h
+  by_cases hr : db ≤ dr
+  · rcases lt_or_eq_of_le a with ha | ha
+    · exact h4 ⟨ha, hr⟩
+    · exact h1 ⟨le_of_eq ha.symm, le_of_lt h⟩
+  · push Not at hr
+    exact h5 ⟨le_of_lt h, hr⟩
+
+/-- **The colour table never leaves the range of its nodes.** If one component (`π`: the first,
+second or third value of a node) of every node of the grid lies in `[lo, hi]`, that component of
+`clutEval` at a point of `[0, 1]³` lies in `[lo, hi]`: in each of the six tetrahedra the four
+weights are non-negative and add up to one. `applyProfile` clamps its coordinates to `[0, 1]`, so
+this holds for every pixel. -/
+theorem clutEval_mem (π : Vec3 ℝ → ℝ)
+    (hπ : ∀ v0 va vp vq w0 w1 w2 w3,
+      π (tetraBlend v0 va vp vq w0 w1 w2 w3) = π v0 * w0 + π va * w1 + π vp * w2 + π vq * w3)
+    (p : Profile ℝ) (hd : 1 ≤ p.dim.x ∧ 1 ≤ p.dim.y ∧ 1 ≤ p.dim.z) {lo hi : ℝ}
+    (hn : ∀ i j k, i < p.dim.x → j < p.dim.y → k < p.dim.z → lo ≤ π (p.node i j k) ∧ π (p.node i j k) ≤ hi)
+    {t : Vec3 ℝ} (hx : 0 ≤ t.x ∧ t.x ≤ 1) (hy : 0 ≤ t.y ∧ t.y ≤ 1) (hz : 0 ≤ t.z ∧ t.z ≤ 1) :
+    lo ≤ π (clutEval p t) ∧ π (clutEval p t) ≤ hi := by
+  obtain ⟨r0, r1, ri, ri1⟩ := clut_cell_mem hd.1 hx.1 hx.2
+  obtain ⟨g0, g1, gi, gi1⟩ := clut_cell_mem hd.2.1 hy.1 hy.2
+  obtain ⟨b0, b1, bi, bi1⟩ := clut_cell_mem hd.2.2 hz.1 hz.2
+  unfold clutEval
+  simp only at r0 r1 g0 g1 b0 b1 ri ri1 gi gi1 bi bi1 ⊢
+  split_ifs with c1 c2 c3 c4 c5
+  · obtain ⟨h1, h2⟩ := c1
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
+  · obtain ⟨h1, h2⟩ := c2
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
+  · obtain ⟨h1, h2⟩ := c3
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
+  · obtain ⟨h1, h2⟩ := c4
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
+  · obtain ⟨h1, h2⟩ := c5
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
+  · obtain ⟨h1, h2⟩ := clut_last_case c1 c2 c3 c4 c5
+    rw [hπ]
+    exact blend4_mem (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption)) (hn _ _ _ (by assumption) (by assumption) (by assumption))
+      (by linarith) (by linarith) (by linarith) (by linarith) (by norm_num)
 
 /-! ## The shoulder -/
 
@@ -202,16 +398,47 @@ theorem toDisplay_mem (s : Shoulder ℝ) (v : Vec3 ℝ) :
 
 /-- Without a tone curve the output is the encoded display value. -/
 theorem convertPixel_of_no_tone (c : PipelineConfig ℝ) (h : c.tone = none) (m : Mat3 ℝ) (v : Vec3 ℝ) :
-    convertPixel c m v = encodeOutput (convertPixelDisplay c m v) := by
-  unfold convertPixel
+    convertPixel c m v = encodeOutputWith c.encoding (convertPixelDisplay c m v) := by
+  unfold convertPixel PipelineConfig.activeTone
   rw [h]
+
+/-- A tone table of fewer than two entries is no tone stage, as `convert_pixel`'s test
+`cfg.tone.n > 0` makes it. -/
+theorem convertPixel_of_short_tone (c : PipelineConfig ℝ) (lut : Array ℝ) (h : c.tone = some lut)
+    (hs : lut.size < 2) (m : Mat3 ℝ) (v : Vec3 ℝ) :
+    convertPixel c m v = encodeOutputWith c.encoding (convertPixelDisplay c m v) := by
+  have : c.activeTone = none := by
+    unfold PipelineConfig.activeTone
+    rw [h]
+    exact ite_eq_right (fun hc => absurd hc.2 (by omega))
+  unfold convertPixel
+  rw [this]
 
 /-- With the shoulder off the display value is the pre-shoulder value held to `[0, 1]`. -/
 theorem convertPixelDisplay_of_off (c : PipelineConfig ℝ) (h : c.shoulder = Shoulder.off) (m : Mat3 ℝ)
     (v : Vec3 ℝ) :
     convertPixelDisplay c m v = (convertPixelLinear c.profile c.knee m v).map clamp01 := by
+  have : c.activeShoulder = Shoulder.off := by
+    unfold PipelineConfig.activeShoulder
+    split_ifs <;> simp [h]
   unfold convertPixelDisplay
-  rw [h, toDisplay_off]
+  rw [this, toDisplay_off]
+
+/-- **The linear output** (`-P srgb-g10`) is the pre-shoulder linear sRGB held to `[0, 1]`: no
+shoulder, no tone curve, no sRGB curve. -/
+theorem convertPixel_linear (c : PipelineConfig ℝ) (h : c.encoding = .linear) (m : Mat3 ℝ) (v : Vec3 ℝ) :
+    convertPixel c m v = (convertPixelLinear c.profile c.knee m v).map clamp01 := by
+  have hs : c.activeShoulder = Shoulder.off := by
+    unfold PipelineConfig.activeShoulder; rw [h]; rfl
+  have ht : c.activeTone = none := by
+    unfold PipelineConfig.activeTone
+    split <;> simp [h]
+  have hd : convertPixelDisplay c m v = (convertPixelLinear c.profile c.knee m v).map clamp01 := by
+    unfold convertPixelDisplay; rw [hs, toDisplay_off]
+  unfold convertPixel
+  rw [ht, h, hd]
+  simp only [encodeOutputWith, Vec3.map]
+  ext <;> simp only <;> exact Scalar.clamp01_of_mem (clamp01_mem _).1 (clamp01_mem _).2
 
 /-- Every channel of the encoded output is in `[0, 1]`. -/
 theorem encodeOutput_mem (v : Vec3 ℝ) :
@@ -219,5 +446,16 @@ theorem encodeOutput_mem (v : Vec3 ℝ) :
     (0 ≤ (encodeOutput v).y ∧ (encodeOutput v).y ≤ 1) ∧
     (0 ≤ (encodeOutput v).z ∧ (encodeOutput v).z ≤ 1) :=
   ⟨clamp01_mem _, clamp01_mem _, clamp01_mem _⟩
+
+/-! ## Linear sRGB -/
+
+/-- **The PCS white maps to `(1, 1, 1)`**, to within `1e-8` per channel: the matrix is the inverse of
+the embedded profile's colorants, whose sum is the PCS white, rounded to nine significant digits. -/
+theorem pcsToLinearSrgb_white :
+    |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).x - 1| ≤ 1e-8 ∧
+    |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).y - 1| ≤ 1e-8 ∧
+    |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).z - 1| ≤ 1e-8 := by
+  simp only [pcsToLinearSrgbUnclamped, pcsToLinearSrgbMatrix, pcsWhite, Mat3.mulVec, Vec3.dot]
+  refine ⟨?_, ?_, ?_⟩ <;> rw [abs_le] <;> constructor <;> norm_num
 
 end Negicc
