@@ -935,7 +935,12 @@ class SearchFrame {
     infer_time_ += Clock::now() - t0;
     out_.inferences++;
     const size_t n = stats_.grid.size();
-    if (r.grid_w != stats_.grid_w || r.grid_h != stats_.grid_h || r.mu.size() != n || r.sigma.size() != n) return false;
+    if (r.grid_w != stats_.grid_w || r.grid_h != stats_.grid_h || r.mu.size() != n || r.sigma.size() != n) {
+      std::cerr << "ERROR! DINOv3's intent field is on a " << r.grid_w << " x " << r.grid_h << " grid ("
+                << r.mu.size() << " cells), the frame's statistics on " << stats_.grid_w << " x " << stats_.grid_h
+                << std::endl;
+      return false;
+    }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     tone_features.clear();

@@ -362,6 +362,21 @@ static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c)
   if (base.is_object() && base.contains("a") && base["a"].is_number()) c.print_a = base["a"].get<double>();
 }
 
+// Recorded G and B input curves (--fit_curves ref:..., or a previous run's sidecar) on the bracket profile pd they are
+// composed into: the shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the
+// whole input table, curve_shape_ok). Numbers typed by hand, or edited, could fold the table over or move it
+// arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant digits, which round-trip a
+// float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
+static int recorded_curve_off_shape(const negicc::InputCurves& c, const ProfileData& pd) {
+  const float dev = negicc::CurveFitOptions().max_dev_stops;
+  for (int i = 0; i < 2; ++i) {
+    if (!negicc::curve_shape_ok(c.a[i], c.k[i], c.u_med[i], c.ref[i], pd.in_trc_size[i + 1], dev, c.u_hold(i))) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 // The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
 // serve this conversion.
 static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
@@ -543,6 +558,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
         ok = std::isfinite(c.a[i]) && std::isfinite(c.k[i]) && std::isfinite(c.u_med[i]) && std::isfinite(c.u_lo[i]);
       }
       if (!ok || !positive(c.ref[0]) || !positive(c.ref[1])) return why = "its input curves are not valid", false;
+      if (recorded_curve_off_shape(c, s.bundle.targets[tgt_idx].film_prof.data) >= 0) {
+        return why = "its input curves are not monotonic, or depart too far from the bracket's input TRC", false;
+      }
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;
       s.cached_sidecar.curves_source = ic.value("source", "fit");
@@ -1116,22 +1134,13 @@ int prepare(const Options& o, Setup& s) {
                 "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
-    // The shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the whole input
-    // table, curve_shape_ok): numbers typed by hand, or edited, could fold the table over or move it arbitrarily far
-    // from the bracket's TRC, and were composed unchecked. A fit's own numbers (written to 9 significant digits, which
-    // round-trip a float) pass.
-    {
-      const negicc::InputCurves& c = o.input_curves;
-      const ProfileData& pd = bundle.targets[s.manual_target_idx].film_prof.data;
-      const float dev = negicc::CurveFitOptions().max_dev_stops;
-      const char* names[2] = {"G", "B"};
-      for (int i = 0; i < 2; ++i) {
-        if (!negicc::curve_shape_ok(c.a[i], c.k[i], c.u_med[i], c.ref[i], pd.in_trc_size[i + 1], dev, c.u_hold(i))) {
-          log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
-                    "bracket's input TRC, over its input table\n", names[i], dev);
-          return 1;
-        }
-      }
+    // The shape the fit holds every curve to (recorded_curve_off_shape).
+    const int off = recorded_curve_off_shape(o.input_curves, bundle.targets[s.manual_target_idx].film_prof.data);
+    if (off >= 0) {
+      log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
+                "bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
+                negicc::CurveFitOptions().max_dev_stops);
+      return 1;
     }
     // The --target bracket's profile becomes the combined profile before anything renders through it (its un-curved
     // tables kept for the knobs).
@@ -1345,6 +1354,15 @@ static float given_station_e(const Options& o, const Scan& scan, int target_idx)
     return o.exposure_comp;
   }
   return scan.bracket_exposure[target_idx].e_center;
+}
+
+// What the warnings about an estimated or clipped film base offer on TriLED: a capture of this roll's unexposed film
+// (--film_base), which parse_options takes with a single CFA RAW or a pixel shift capture alone (prepare refuses it on
+// white light).
+static const char* triled_base_remedy(const Options& o) {
+  return o.input_mode == InputMode::kRaw ? "give --film_base <capture of this roll's unexposed film>"
+                                         : "a capture of this roll's unexposed film (--film_base) needs the frame as "
+                                           "a single CFA RAW or a pixel shift capture";
 }
 
 // What a film base capture was read with, which a later run must share to take its base from the sidecar: the flat
@@ -1890,8 +1908,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         }
       }
       const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
-      const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
-                                         : "give --film_base <capture of this roll's unexposed film>";
+      const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)" : triled_base_remedy(o);
       const bool bundle_base = !scan.film_base.found || scan.film_base.source == "bundle";
       const bool estimate = bundle_base || scan.film_base.source == "statistics";
       char raised[160] = "";
@@ -1909,9 +1926,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  100.0 * s.print_res.past_cut[c], name, remedy);
       } else {
         // The base was read (a rebate, or a capture on TriLED), so a crop does not help: the cause these two name is a
-        // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture.
+        // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture
+        // (triled_base_remedy).
         const char* read_remedy = s.white_light ? "scan with a shorter exposure, so that unexposed film does not clip"
-                                                : "give --film_base <capture of this roll's unexposed film>";
+                                                : triled_base_remedy(o);
         if (raised[0]) {   // a rebate read and raised: a rebate on clipped film reads darker than the film
           log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not "
                    "the base (a long scan clips unexposed film); %s\n",
@@ -2031,14 +2049,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // A base at the sensor's clip: the rebate's patch refused for it, or the thinnest film the base is then read
     // from at the clip itself.
     const bool from_thinnest = found && fb.source == negicc::kFilmBaseSourceStatistics;
+    // A capture of unexposed film is the other remedy where it is taken (triled_base_remedy).
+    const char* clip_remedy = !s.white_light && o.input_mode == InputMode::kRaw
+                                  ? "give --film_base <capture of unexposed film> or scan at a shorter exposure"
+                                  : "scan at a shorter exposure";
     if (from_thinnest && fb.thinnest_clipped) {
       log_warn("the scan clips its film base (%s at the sensor's clip): the base read from it is the clip, below the "
-               "true base; give --film_base <capture of unexposed film> or scan at a shorter exposure\n",
-               fb.rebate_clipped ? "the rebate and the thinnest film are" : "the thinnest film is");
+               "true base; %s\n",
+               fb.rebate_clipped ? "the rebate and the thinnest film are" : "the thinnest film is", clip_remedy);
     } else if (fb.rebate_clipped) {
       log_warn("the scan clips its film base (the rebate is at the sensor's clip): the base is read from %s instead, "
-               "below the true base; give --film_base <capture of unexposed film> or scan at a shorter exposure\n",
-               found ? "the thinnest film" : "the profile bundle");
+               "below the true base; %s\n",
+               found ? "the thinnest film" : "the profile bundle", clip_remedy);
     }
     if (found) {
       log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", fb.source.c_str(), fb.rgb[0], fb.rgb[1], fb.rgb[2]);
@@ -2744,6 +2766,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   } else if (!s.is_bundle) {
     if (!s.film_prof_arg.empty() && !load_film_profile(s.film_prof_arg, c.film_prof)) {
       log_error("Cannot load film profile %s\n", s.film_prof_arg.c_str());
+      return 1;
     }
   }
 
@@ -3017,10 +3040,9 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // The film base is the zero of a density file. Read from a capture or the scan's rebate it is measured; taken from
     // the thinnest film of a frame with no unexposed film in view, or from the bundle's roll, it is an estimate, and
     // every density is off by its error, differently per channel and per frame.
-    // The remedy: a capture of unexposed film (--film_base) on TriLED; on white light, which takes no capture, a
-    // crop that shows the rebate.
-    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
-                                       : "give --film_base <capture of this roll's unexposed film>";
+    // The remedy: a capture of unexposed film (--film_base) on TriLED, where the input takes one (triled_base_remedy);
+    // on white light, which takes no capture, a crop that shows the rebate.
+    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)" : triled_base_remedy(o);
     if (!scan.film_base.found || scan.film_base.source == "bundle") {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
                "roll's base; %s\n", remedy);
@@ -3083,6 +3105,18 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
         return 1;
       }
       out.xyz = cmsCreateXYZProfile();
+      // The output is RGB: the conversion writes three samples a pixel through a transform from PCS XYZ into this
+      // profile (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
+      // transform from the PCS.
+      cmsHTRANSFORM probe = cmsGetColorSpace(out.custom) == cmsSigRgbData
+                                ? cmsCreateTransform(out.xyz, TYPE_XYZ_FLT, out.custom, TYPE_RGB_16, INTENT_PERCEPTUAL, 0)
+                                : nullptr;
+      if (!probe) {
+        log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n",
+                  colorspace_str.c_str());
+        return 1;
+      }
+      cmsDeleteTransform(probe);
       out.encoding = ENCODE_CUSTOM;
       out.attach_profile = resolved_custom;
       log_info("Reading output ICC profile: %s\n", resolved_custom.c_str());
