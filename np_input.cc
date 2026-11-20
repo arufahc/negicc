@@ -683,6 +683,21 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
   return true;
 }
 
+// The RAW's inset crop (left, top, width, height in the visible image), when it gives one that is not the whole image.
+// LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff with a
+// zero size; dcraw_process would refuse that as a bad crop box. A crop at the origin that is narrower or shorter than
+// the image is a crop too.
+static bool inset_crop(const LibRaw& r, int box[4]) {
+  const auto& c = r.imgdata.sizes.raw_inset_crops[0];
+  if (c.cwidth == 0 || c.cheight == 0 || c.cleft == 0xffff || c.ctop == 0xffff) return false;
+  if (!c.cleft && !c.ctop && c.cwidth >= r.imgdata.sizes.width && c.cheight >= r.imgdata.sizes.height) return false;
+  box[0] = c.cleft;
+  box[1] = c.ctop;
+  box[2] = c.cwidth;
+  box[3] = c.cheight;
+  return true;
+}
+
 LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  RawDecode decode, const int* roi,
                  const HalfSizeAnalysis& analyse, const ChannelBalance& balance,
@@ -885,20 +900,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       sub_w = roi[2];
       sub_h = roi[3];
     } else {
-      auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-      // LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff
-      // with a zero size; dcraw_process would refuse that as a bad crop box. A crop at the origin that is narrower or
-      // shorter than the image is a crop too.
-      const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 && crop_ref.cleft != 0xffff &&
-                                  crop_ref.ctop != 0xffff;
-      if (crop && has_inset_crop &&
-          (crop_ref.cleft || crop_ref.ctop || crop_ref.cwidth < proc->imgdata.sizes.width ||
-           crop_ref.cheight < proc->imgdata.sizes.height)) {
-        proc->imgdata.params.cropbox[0] = crop_ref.cleft;
-        proc->imgdata.params.cropbox[1] = crop_ref.ctop;
-        proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
-        proc->imgdata.params.cropbox[3] = crop_ref.cheight;
-      }
+      int inset[4];
+      if (crop && inset_crop(*proc, inset)) std::copy(inset, inset + 4, proc->imgdata.params.cropbox);
     }
     if (white_light) {
       if (!decode_white_light(proc, false, effective_qual)) {
@@ -1254,6 +1257,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
   float white = 65535.0f;     // the image's clipping level, for the frame detector
   std::vector<uint16_t> half_planes[3];  // three captures: each channel's half-size image, for the analysis
   int half_w[3] = {0, 0, 0}, half_h[3] = {0, 0, 0};
+  int inset[4] = {0, 0, 0, 0};           // three RAW captures: the first one's inset crop, when cropped
   LibRaw* proc = nullptr;
   std::string err;
   if (mode == InputMode::kRgbFile) {
@@ -1301,7 +1305,8 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
       int cw = 0, ch = 0;
       if (libraw_opens(files[k])) {
         // The analysis reads a RAW's own half-size readout, as it does for one RAW (load_raw), so the RAW given three
-        // times is analysed (the search, the film base) as the RAW given once.
+        // times is analysed (the search, the film base) as the RAW given once. The RAW is read whole, as its
+        // half-size readout is; its inset crop, like --roi, is cut after the analysis.
         HalfSizeAnalysis take_half;
         if (analyse) {
           take_half = [&half_planes, &half_w, &half_h, k](const LibRaw& r) {
@@ -1312,8 +1317,9 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
             return true;
           };
         }
-        LibRaw* raw = load_raw(files[k], true, qual, crop, RawDecode::kCameraRgb, nullptr, take_half);
+        LibRaw* raw = load_raw(files[k], true, qual, false, RawDecode::kCameraRgb, nullptr, take_half);
         if (!raw) return delete proc, nullptr;
+        if (k == 0 && crop) inset_crop(*raw, inset);
         cw = raw->imgdata.sizes.iwidth;
         ch = raw->imgdata.sizes.iheight;
         channel.resize((size_t)cw * ch);
@@ -1410,17 +1416,19 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     FrameDetectionParams params = det_params;
     detect_frame_or_fallback(fi, params, *frame_det);
     if (frame_det->conf >= kLowFrameConfidence) std::copy(frame_det->crop, frame_det->crop + 4, region);
-  } else if (roi) {
-    // As load_raw: an ROI outside the image fails here, before the analysis runs the search, and one past its right
-    // or bottom edge is clamped to it.
-    if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
-      log_error("ROI [%d, %d, %d, %d] is outside the image (%dx%d)\n", roi[0], roi[1], roi[2], roi[3], w, h);
+  } else if (roi || inset[2] > 0) {
+    // As load_raw: an ROI (or inset crop) outside the image fails here, before the analysis runs the search, and one
+    // past its right or bottom edge is clamped to it.
+    const int* r = roi ? roi : inset;
+    if (r[0] < 0 || r[1] < 0 || r[0] >= w || r[1] >= h || r[2] <= 0 || r[3] <= 0) {
+      log_error("%s [%d, %d, %d, %d] is outside the image (%dx%d)\n", roi ? "ROI" : "The inset crop", r[0], r[1], r[2],
+                r[3], w, h);
       return delete proc, nullptr;
     }
-    region[0] = roi[0];
-    region[1] = roi[1];
-    region[2] = std::min(roi[2], w - roi[0]);
-    region[3] = std::min(roi[3], h - roi[1]);
+    region[0] = r[0];
+    region[1] = r[1];
+    region[2] = std::min(r[2], w - r[0]);
+    region[3] = std::min(r[3], h - r[1]);
   }
   // As load_raw: the analysis sees the whole image at half size (the film base's statistics read the rebate and the
   // gaps around the frame, not only the picture), and places the frame in it (--roi halved, or --roi auto's detected
@@ -1435,8 +1443,9 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
     half->imgdata.rawdata.sizes.width = (ushort)w;
     half->imgdata.rawdata.sizes.height = (ushort)h;
-    // Three captures of the whole image: each channel's own half-size image (above), when all three have the size.
-    bool planes = mode == InputMode::kThreeShot && region[0] == 0 && region[1] == 0 && region[2] == w && region[3] == h;
+    // Three captures: each channel's own half-size image (above), when all three have the image's half size. They are
+    // the whole image whatever the frame (--roi, --roi auto's or the inset crop), which is cut after the analysis.
+    bool planes = mode == InputMode::kThreeShot;
     for (int k = 0; k < 3 && planes; ++k) planes = half_w[k] == hw && half_h[k] == hh && !half_planes[k].empty();
     if (planes) {
       for (size_t i = 0; i < (size_t)hw * hh; ++i)
@@ -1455,7 +1464,7 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     }
     if (!analyse(*half)) return delete proc, nullptr;
   }
-  if ((frame_det || roi) && (region[0] || region[1] || region[2] != w || region[3] != h)) {
+  if (region[0] || region[1] || region[2] != w || region[3] != h) {
     if (!extract_roi_and_transform(proc, region[0], region[1], region[2], region[3], 0, false, false)) {
       proc->free_image();
       delete proc;

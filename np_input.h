@@ -245,8 +245,9 @@ bool is_linear_dng(const std::string& path);
 // the channel of its light: R of the first, G of the second, B of the third, in camera units (a RAW or DNG decoded to
 // camera RGB as load_raw decodes it, a TIFF's samples as they are; a grey TIFF gives its one channel), each scaled to
 // the first capture's exposure when all three record theirs. Returns a LibRaw holding the image as load_raw returns a
-// decoded RAW, after cropping it to |roi| or, with |frame_det|, to the frame the detector finds on the image (as
-// --roi auto), and running |analyse| on its half-size copy, as load_raw does.
+// decoded RAW: |analyse| runs on the whole image at half size (three RAW captures: their own half-size readouts), as
+// load_raw does, and the image is then cropped to |roi|, with |frame_det| to the frame the detector finds on the
+// image (as --roi auto), or with |crop| to the first RAW capture's inset crop.
 LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bool camera_rgb, int qual,
                               bool crop, const int* roi,
                               const HalfSizeAnalysis& analyse, FrameDetection* frame_det,
