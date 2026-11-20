@@ -2,7 +2,9 @@
 
 This directory holds the mathematics of `neg_process` written as Lean 4 definitions, so that
 each formula can be read against the C++ that implements it, properties of the formulas can be
-proved, and the formulas can be run and compared with the program's output.
+proved, and the formulas can be run and compared with the program's output. `FORMULAS.md` lists
+every formula in ordinary notation with the code function and the Lean name, what is proved and
+checked, and what is not formalized.
 
 It is a specification of code that exists: nothing here changes what `neg_process` computes.
 
@@ -20,22 +22,31 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 
 | Module | Contents |
 |---|---|
-| `Negicc.Base.Scalar` | The class `Scalar` of numbers a formula is written over, the functions derived from it (`log2`, `log10`, `exp2`, `fabs`, `sq`, `clamp`, `clamp01`, `roundNat`), and its `Float` instance |
+| `Negicc.Base.Scalar` | The class `Scalar` of numbers a formula is written over, the functions derived from it (`log2`, `log10`, `exp2`, `fabs`, `sq`, `clamp`, `clamp01`, `roundNat`, `roundEvenNat`), and its `Float` instance |
 | `Negicc.Base.Vec` | 3-vectors `Vec3` and 3x3 matrices `Mat3` |
 | `Negicc.Base.Table` | `lerp`, a sampled table read by linear interpolation (`tableAt`, `tableEval`), `sum` and `mean` |
-| `Negicc.Base.Colour` | The sRGB curve (`srgbEncode`, `srgbDecode`), linear sRGB to XYZ and CIELAB (`linearSrgbToLab` and its parts), `density` and `transmission` |
+| `Negicc.Base.Colour` | The sRGB curve (`srgbEncode`, `srgbDecode`), linear sRGB to XYZ and CIELAB (`linearSrgbToLab` and its parts, `labF` and its inverse `labFInv`), `density` and `transmission` |
 | `Negicc.Base.Defs` | The four modules above together. No Mathlib |
 | `Negicc.Base.Real` | The real numbers as scalars (`Scalar ℝ`), and the operations restated in Mathlib's terms |
 | `Negicc.Base.Props` | Proved properties of the base definitions over the real numbers |
 | `Negicc.Base` | All of the above |
+| `Negicc.Scene.Decode` | Black level, the half-size image, the grain-aware debayer, pixel shift, three captures |
 | `Negicc.Scene.Input` | Flat field, load, the input matrix (crosstalk correction, film base normalisation, `E`, `g`, `b`), the soft knee |
+| `Negicc.Scene.FilmBase` | Where the film base is read from, and the statistics that read it |
 | `Negicc.Scene.Profile` | A bracket's film profile: input curves, the colour table with tetrahedral interpolation, output curves |
 | `Negicc.Scene.Linear` | The profile connection space to linear sRGB, the pre-shoulder value, the clipping rules |
 | `Negicc.Scene.Shoulder` | The highlight roll-off: the curve, its knee, and `x_hi` from a frame's 99.5 % point |
-| `Negicc.Scene.Convert` | The whole pixel: display value, encoded sRGB, CIELAB |
-| `Negicc.Scene.Defs` | The five modules above together. No Mathlib |
-| `Negicc.Scene.Props` | Proved properties of the conversion |
+| `Negicc.Scene.Convert` | The whole pixel: display value, the sRGB and linear encodings, CIELAB, the 16-bit outputs |
+| `Negicc.Scene.Bracket` | A bracket's calibrated range on a frame, and its highlight ceiling |
+| `Negicc.Scene.Defs`, `Negicc.Scene.Props`, `Negicc.Scene` | The scene modules together (no Mathlib); proved properties; both |
 | `Negicc.Tone.Apply` | The tone curve on a pixel (`apply_tone`) |
+| `Negicc.Tone.Curve` | The tone curve, its table, the render's descriptors, the targets, the solve, the clip share |
+| `Negicc.Tone.Clip` | The clip check on a sample of the export |
+| `Negicc.Tone.Defs`, `Negicc.Tone.Props`, `Negicc.Tone` | The tone modules together (no Mathlib); proved properties; both |
+| `Negicc.WhiteLight.Balance` | The film-base balance of the white-light decode |
+| `Negicc.WhiteLight.Curve` | The fitted green and blue input curves and their composition into the profile |
+| `Negicc.WhiteLight.Fit` | The white-light curve fit: per-cell model, anchors, residuals, guard, solve, re-meter |
+| `Negicc.WhiteLight.Defs`, `Negicc.WhiteLight.Props`, `Negicc.WhiteLight` | The white-light modules together (no Mathlib); proved properties; both |
 
 ## One formula, two readings
 
@@ -66,6 +77,9 @@ Conventions:
 - Literals carry a decimal point (`1.0`, `116.0`), as in the C++. They are exact decimal
   numbers. The rounding of constants and of arithmetic to single or double precision is not
   modelled, which is why a numeric check has a tolerance.
+- `Scalar` carries no laws, so a theorem is proved over `ℝ` and says what the formula computes
+  with exact arithmetic. It does not transfer to the `Float` reading or to the program; the numeric
+  check is what ties those to the formulas.
 - Where an operation leaves its domain (the logarithm of a non-positive number, a power of a
   negative base, a division by zero) the real-number functions return Mathlib's conventional
   values and the program returns an infinity or a NaN. No statement relies on either. NaN and
@@ -97,13 +111,17 @@ cd formal
 lake exe check
 ```
 
-`check` (`Check.lean`) reads the test vectors in `testvectors/` and the bracket profile they name
-(`profiles/Portra400-A7R4-TriLED/Target_3.icc` of this repository, parsed by the check itself),
-evaluates the Lean definitions over `Float` on the vectors' inputs, and compares the results with
-the values the C++ functions computed for the same inputs. It prints one line per group of
-comparisons, with the number of comparisons, the largest difference and the tolerance, and exits
-with a non-zero code if a comparison is outside its tolerance. Run it from `formal/`; a different
-repository root can be given as its argument (the default is `..`).
+`check` (`Check.lean`) reads the test vectors in `testvectors/` (`scene.json`: the base, the flat
+field, the pixel and the shoulder; `scene_tone.json`: the tone stage; `scene_white.json`: the
+white-light fit; `scene_read.json`: reading the scan, the film base, a bracket's range and ceiling)
+and the bracket profiles they name (`Target_3.icc` of `profiles/Portra400-A7R4-TriLED` and
+`Target_4.icc` of `profiles/Portra400-A7R4-D65`, parsed by the check itself), evaluates the Lean
+definitions over `Float` on the vectors' inputs, and compares the results with the values the C++
+functions computed for the same inputs. It prints one line per group of comparisons, with the
+number of comparisons, the largest difference and the tolerance. It exits with a non-zero code if a
+comparison is outside its tolerance or a group has another number of comparisons than
+`expectedCounts` says, so a short vectors file fails. Run it from `formal/`; a different repository
+root can be given as its argument (the default is `..`).
 
 The tolerances and their reasons are at the top of `Check.lean`:
 
@@ -114,6 +132,9 @@ The tolerances and their reasons are at the top of `Check.lean`:
 | `tolLabPixel` | 1e-3 | CIELAB at the end of the whole conversion |
 | `tolRoot` | 2e-5 | The roll-off `x_hi` found by bisection on a curve evaluated in single precision |
 | `tolDouble` | 1e-9 | Values the C++ computes in double precision |
+| `tolSolve` | 1e-7 | The tone curve solved by Levenberg-Marquardt, both sides in double precision |
+| `tolSolveE`, `tolFitSetup`, `tolFitLoss`, `tolFit`, `tolFitResultLoss` | 1e-6 to 4e-3 | The white-light fit, which the C++ runs in single precision for its parameters |
+| `tolPercentile32`, `tolPercentileU16`, `tolCode8` | 5e-4, 1e-3, 3e-4 | Percentiles and 8-bit codes the C++ interpolates in single precision |
 
 The C++ computes a pixel in single precision and the check evaluates the specification in double
 precision, so a difference of a few parts in a million is rounding, not disagreement. Two kinds
@@ -131,18 +152,26 @@ more than the last digits:
 ### Regenerating the test vectors
 
 The vectors are written by `testvectors/gen/gen_vectors.cc`, a C++ program that calls the
-library's own functions and re-implements nothing. From the repository root, with the submodules
-checked out and `ORT_DIR` the ONNX Runtime directory the Makefile uses:
+library's own functions and re-implements nothing (`gen_internal.cc` compiles two of the library's
+source files into it, for their functions of internal linkage). From the repository root, with the
+submodules checked out and `ORT_DIR` the ONNX Runtime directory the Makefile uses:
 
 ```sh
 make -j lib USE_CUDA=0 ORT_DIR=<onnxruntime>             # the library, once
 ORT_DIR=<onnxruntime> formal/testvectors/gen/build.sh   # builds bin_out/gen_vectors
-bin_out/gen_vectors profiles/Portra400-A7R4-TriLED formal/testvectors
+bin_out/gen_vectors profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors
 ```
 
-The committed vectors were generated from the `master` this specification describes
-(`24ab7c8`), on x86-64 Linux with GCC 13.3 and glibc 2.39. Another compiler or C library may
-change the last digit of a single precision result, which the tolerances cover.
+The check compares the specification with the committed vectors, not with the program. Whenever the
+C++ that the generator calls changes, the vectors are generated again and the check is run; a
+difference is then either a change of the specification to follow or a defect.
+
+### The last recorded run
+
+Vectors generated from commit `65bbec3` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
+(another compiler or C library may change the last digit of a single precision result, which the
+tolerances cover). With Lean `v4.36.0`, `lake build` ends with `Build completed successfully` and no
+warning, and `lake exe check` makes 7250 comparisons, none outside its tolerance.
 
 ## Using the package from another repository
 

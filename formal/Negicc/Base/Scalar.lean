@@ -31,6 +31,10 @@ defined from these, once, in the namespace `Negicc.Scalar`.
   number, a power of a negative base or a division by zero, Mathlib's total functions return
   conventional values and the floating point program returns an infinity or a NaN. No statement in
   this library relies on either. NaN and infinities are not modelled at all.
+* **The class carries no laws.** Nothing says that `+` is associative or that `sqrt` squares back,
+  so every theorem is stated and proved over `ℝ` only. A theorem says what the formula computes
+  with exact arithmetic; it does not transfer to the `Float` reading, which the numeric checks
+  compare with the C++ instead.
 * The instances the class provides for `+`, `≤`, literals and so on have low priority. They are
   meant for the generic definitions only: an expression written directly over `ℝ` or `Float`
   keeps using that type's own instances.
@@ -58,7 +62,9 @@ class Scalar (α : Type) extends
   /-- The hyperbolic tangent (C `tanh`). -/
   tanh : α → α
   /-- The largest natural number not above `x`, and `0` for a negative `x`. For `x ≥ 0` this is
-  what the C++ casts `(int)x` and `(size_t)x` compute. -/
+  what the C++ casts `(int)x` and `(size_t)x` compute. The `Float` reading saturates at `2^64 - 1`
+  and reads a NaN as `0`, where the C++ cast of a NaN or of a value outside the range of `int` is
+  undefined; no formula of the library reaches either. -/
   natFloor : α → Nat
 
 attribute [instance low] Scalar.toAdd Scalar.toSub Scalar.toMul Scalar.toDiv Scalar.toNeg
@@ -97,12 +103,15 @@ def clamp (x lo hi : α) : α := min (max x lo) hi
 /-- `x` held between `0` and `1` (`clamp01` in `color_pipeline.h`). -/
 def clamp01 (x : α) : α := min 1.0 (max 0.0 x)
 
-/-- `x ≥ 0` rounded to the nearest natural number, halves upward (C `round` and `lround` for
-non-negative arguments). -/
+/-- `x ≥ 0` rounded to the nearest natural number, halves upward: over the real numbers this is C
+`round` and `lround` for non-negative arguments. The `Float` reading computes `floor (x + 0.5)` in
+double precision, which differs from C `round` at the largest double below `0.5` (it gives `1`) and
+above `2^52`; the conversion rounds values of at most `65535`, where neither occurs except at that
+one double. -/
 def roundNat (x : α) : Nat := natFloor (x + 0.5)
 
-/-- `x ≥ 0` rounded to the nearest natural number, a half to the even neighbour (C `nearbyint` and
-`rint` in the default rounding mode, for non-negative arguments). -/
+/-- `x ≥ 0` rounded to the nearest natural number, a half to the even neighbour: over the real
+numbers this is C `nearbyint` and `rint` in the default rounding mode, for non-negative arguments. -/
 def roundEvenNat (x : α) : Nat :=
   let f := natFloor x
   let r := x - (f : α)
