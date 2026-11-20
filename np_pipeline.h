@@ -27,8 +27,8 @@
 //             the film base the sidecar records, the pins (-E, --gain_g, --gain_b) and the input matrix to start from
 //   render    the full-resolution image of the frame: the backend debayers or merges a mosaic; an RGB image is one
 //             already
-//   solve     the conversion parameters without the bundle search: the bracket, E, g and b (the single-profile
-//             search, a --target bracket or given values), the knee and the shoulder
+//   solve     the conversion parameters the bundle search did not give: the bracket, E, g and b (an ICC profile's
+//             single-profile search, or a bundle's four given values), the knee and the shoulder
 //   convert   the backend converts the image in place to the output encoding
 //   write     the TIFF and the sidecar
 
@@ -114,7 +114,7 @@ struct Setup {
   std::vector<std::vector<uint8_t>> print_iccs;
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
   ContinuousPrint print_in;           // the search's view of it
-  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's (NaN until then)
   // The lightest node of the print's table: the paper's white.
   double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   ContinuousPrintResult print_res;    // the print's search
@@ -237,8 +237,8 @@ struct Scan {
 
   FrameDetection frame_det;              // --roi auto
   // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
-  // no detection ran); cli_equivalent gives it as --film_format when the run was not given one, so that a replay with
-  // the explicit --roi reads the same base.
+  // no detection ran); cli_equivalent gives it as --film_format whenever the detection used one, given or --roi auto's,
+  // so that a replay with the explicit --roi reads the same base.
   FilmFormat base_det_format = FILM_FORMAT_AUTO;
   int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
   bool has_roi = false;

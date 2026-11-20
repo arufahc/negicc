@@ -142,7 +142,7 @@ bool density_balance_offset(const DensityRecord& rec, double offset[3], double* 
 struct DensityFileInfo {
   std::string make, model;            // the camera
   std::string software;               // "neg_process <version>"
-  long long timestamp = 0;            // the capture's time (seconds since the epoch), 0 for now
+  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
 };
 
 // Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
