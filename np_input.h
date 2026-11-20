@@ -161,7 +161,8 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level);
 // forces LibRaw's built-in demosaic algorithms (0 is bilinear).
 //
 // When |crop| is false, the entire RAW file is used, disregarding aspect ratio
-// and cropbox specified in the RAW metadata.
+// and cropbox specified in the RAW metadata. When it is true and there is no roi, a debayered decode cuts the RAW's
+// inset crop (inset_crop) as it cuts an roi.
 //
 // |decode| picks the colour path of a debayered decode (RawDecode); kWhiteLight decodes with LibRaw's bilinear
 // demosaic (or qual when it is >= 0), never grain-aware.

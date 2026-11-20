@@ -79,7 +79,9 @@ A RAW is opened with LibRaw and its black level is subtracted per channel (`np_i
 
 Both RGB-LED images above are those of the default `-q -1`. With `-q 0` or more a single RAW is demosaiced by
 LibRaw's `dcraw_process` at that quality (4 is DCB), and its half-size image is LibRaw's half-size decode, a copy
-(`read_half_size`). A pixel-shift set is always merged.
+(`read_half_size`). A pixel-shift set is always merged. Wherever LibRaw demosaics a single RAW, the frame it cuts (a
+`--roi`, or the RAW's inset crop) is demosaiced with two CFA periods of the image around it and cut after, so that its
+edge pixels are interpolated from their neighbours (`load_raw`).
 
 Under the RGB LED the bands are narrow and the three layers of the film are seen almost separately; the ratio
 debayer exists because film grain is independent in the three layers, so the gradients an edge-directed demosaic
