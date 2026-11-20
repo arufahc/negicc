@@ -2590,30 +2590,23 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     cfa_ry = 0;
     cfa_rw = src_w;
     cfa_rh = src_h;
-    if (scan.has_roi) {
-      if (scan.roi[0] < 0 || scan.roi[1] < 0 || scan.roi[0] >= src_w || scan.roi[1] >= src_h ||
-          scan.roi[2] <= 0 || scan.roi[3] <= 0) {
-        log_error("ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
-                scan.roi[0], scan.roi[1], scan.roi[2], scan.roi[3], src_w, src_h);
+    // --roi, or a single RAW's inset crop unless --no_crop: refused when it lies outside the image, clamped to its
+    // right and bottom edges.
+    int inset[4];
+    const int* frame = scan.has_roi ? scan.roi
+                       : (!o.no_crop && o.files.size() == 1 && inset_crop(*proc, inset)) ? inset
+                                                                                       : nullptr;
+    if (frame) {
+      if (frame[0] < 0 || frame[1] < 0 || frame[0] >= src_w || frame[1] >= src_h || frame[2] <= 0 || frame[3] <= 0) {
+        log_error("%s [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n", scan.has_roi ? "ROI" : "The inset crop",
+                  frame[0], frame[1], frame[2], frame[3], src_w, src_h);
         delete proc;
         return 1;
       }
-      cfa_rx = scan.roi[0];
-      cfa_ry = scan.roi[1];
-      cfa_rw = std::min(scan.roi[2], src_w - cfa_rx);
-      cfa_rh = std::min(scan.roi[3], src_h - cfa_ry);
-    } else if (!o.no_crop && o.files.size() == 1) {
-      const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop. A crop at the origin that is narrower
-      // or shorter than the image is a crop too.
-      const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
-                                  crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
-      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop || crop_ref.cwidth < src_w || crop_ref.cheight < src_h)) {
-        cfa_rx = std::max(0, std::min((int)crop_ref.cleft, src_w - 1));
-        cfa_ry = std::max(0, std::min((int)crop_ref.ctop, src_h - 1));
-        cfa_rw = std::max(1, std::min((int)crop_ref.cwidth, src_w - cfa_rx));
-        cfa_rh = std::max(1, std::min((int)crop_ref.cheight, src_h - cfa_ry));
-      }
+      cfa_rx = frame[0];
+      cfa_ry = frame[1];
+      cfa_rw = std::min(frame[2], src_w - cfa_rx);
+      cfa_rh = std::min(frame[3], src_h - cfa_ry);
     }
 
     int out_half[4] = {
