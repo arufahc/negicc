@@ -724,6 +724,29 @@ static PassThroughRenderer& pass_through_renderer() {
   return r;
 }
 
+// A custom -P profile is written through: the conversion writes three samples a pixel through a transform from PCS
+// XYZ into it (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
+// transform from the PCS. False, with the error logged, for one it cannot.
+static bool output_profile_ok(const std::string& arg) {
+  cmsHPROFILE prof = cmsOpenProfileFromFile(resolve_profile_path(arg).c_str(), "r");
+  if (!prof) {
+    log_error("Cannot read output ICC profile: %s\n", arg.c_str());
+    return false;
+  }
+  cmsHPROFILE xyz = cmsCreateXYZProfile();
+  cmsHTRANSFORM probe = nullptr;
+  if (cmsGetColorSpace(prof) == cmsSigRgbData) {
+    probe = cmsCreateTransform(xyz, TYPE_XYZ_FLT, prof, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+  }
+  if (probe) cmsDeleteTransform(probe);
+  cmsCloseProfile(xyz);
+  cmsCloseProfile(prof);
+  if (!probe) {
+    log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n", arg.c_str());
+  }
+  return probe != nullptr;
+}
+
 int prepare(const Options& o, Setup& s) {
   if (o.check_renderer) negicc::cpu_pass_hook = audit_cpu_pass;
   if (!o.flat.empty()) {
@@ -1046,6 +1069,11 @@ int prepare(const Options& o, Setup& s) {
   // pixels' (with --print no fit runs: fit_curves_active).
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear" ||
                                (s.density && s.white_light);
+  // A custom -P profile is checked here, before anything is decoded or searched (output_profile_ok).
+  if (!o.colorspace.empty() && !o.density && o.colorspace != "srgb" && o.colorspace != "srgb-g10" &&
+      o.colorspace != "srgb-linear" && !output_profile_ok(o.colorspace)) {
+    return 1;
+  }
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
   // A print (--print on a profile bundle) has its tone from the print material's own curve: no tone stage.
@@ -2048,7 +2076,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
   int det_sensor_w = 0, det_sensor_h = 0;
   // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
-  // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
+  // since every one reads the film base from it (the CFA path does that inline).
   // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
   auto take_detected_frame = [&](int full_w, int full_h) {
     if (scan.frame_det.conf < kLowFrameConfidence) {
@@ -3066,20 +3094,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
         log_error("Cannot read output ICC profile: %s\n", colorspace_str.c_str());
         return 1;
       }
-      out.xyz = cmsCreateXYZProfile();
-      // The output is RGB: the conversion writes three samples a pixel through a transform from PCS XYZ into this
-      // profile (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
-      // transform from the PCS.
-      cmsHTRANSFORM probe = nullptr;
-      if (cmsGetColorSpace(out.custom) == cmsSigRgbData) {
-        probe = cmsCreateTransform(out.xyz, TYPE_XYZ_FLT, out.custom, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
-      }
-      if (!probe) {
-        log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n",
-                  colorspace_str.c_str());
-        return 1;
-      }
-      cmsDeleteTransform(probe);
+      out.xyz = cmsCreateXYZProfile();   // an RGB profile with a transform from PCS XYZ (prepare checked it)
       out.encoding = ENCODE_CUSTOM;
       out.attach_profile = resolved_custom;
       log_info("Reading output ICC profile: %s\n", resolved_custom.c_str());
