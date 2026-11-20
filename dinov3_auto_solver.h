@@ -127,7 +127,8 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
 // gets the point.
 float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr);
 
-// Coordinate descent parameter search against a frozen intent field (mu, sigma)
+// Coordinate descent parameter search against a frozen intent field (mu, sigma). Without e_bounds, E moves within
+// [0.40, 1.80] from no start, or within [0.20, 3.0] around a start (one outside that range is moved to its nearer end).
 float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
                                  int gw, int gh, const float* mu, const float* sigma,
                                  const IntentGains* initial, const float* e_bounds /* lo, hi, center or null */,

@@ -738,10 +738,11 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 
 // The paper's white is the display's white: a print profile made media-relative, as the ICC defines it (ICC.1:2022
 // 6.3.2.2: each of X, Y and Z scaled by the PCS white's over the medium's), as an eye adapted to the paper sees it.
-// The lightest node of the print's table (PCS XYZ D50 as a lut16 holds it, its code scaled by kPcsMax) is the paper's
-// base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the display's white
-// and none of X, Y and Z passes D50's (its tint is not shown); a saturated light colour can still have an sRGB channel
-// above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the
+// The node of largest Y in the print's table (PCS XYZ D50 as a lut16 holds it, its code scaled by kPcsMax) is the
+// paper's base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the
+// display's white (its tint is not shown) and no node's Y passes D50's. Another node's X or Z can pass D50's, by a few
+// parts in a thousand on the shipped prints, and nothing clamps them; a saturated light colour can also have an sRGB
+// channel above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the
 // base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale

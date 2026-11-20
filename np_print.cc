@@ -1647,7 +1647,8 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
   if (a_mid.empty() || a_mid.size() != tilt.size()) return;
   std::vector<size_t> o(a_mid.size());
   for (size_t i = 0; i < o.size(); ++i) o[i] = i;
-  std::sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
+  // Stable, so brackets at the same A_mid keep the bundle's order.
+  std::stable_sort(o.begin(), o.end(), [&](size_t x, size_t y) { return a_mid[x] < a_mid[y]; });
   if (o.size() == 1) {   // one bracket: its tilt
     for (int c = 0; c < 3; ++c) t[c] = tilt[o[0]][c];
     return;
@@ -1655,7 +1656,7 @@ void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::arra
   size_t k = 0;   // the segment o[k], o[k + 1]
   while (k + 2 < o.size() && a > a_mid[o[k + 1]]) ++k;
   const size_t i = o[k], j = o[k + 1];
-  // Two brackets at the same A_mid: the first one's tilt (no division by zero).
+  // Two brackets at the same A_mid: the tilt of the one first in the bundle (no division by zero).
   const double f = a_mid[j] > a_mid[i] ? std::clamp((a - a_mid[i]) / (a_mid[j] - a_mid[i]), 0.0, 1.0) : 0.0;
   for (int c = 0; c < 3; ++c) t[c] = tilt[i][c] + f * (tilt[j][c] - tilt[i][c]);
 }
