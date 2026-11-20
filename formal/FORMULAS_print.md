@@ -35,7 +35,7 @@ the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negic
 | `np_print.cc`: `write_print_icc` (table and curve codes) | `printTableCodes`, `iccCode16` | | against the bundles' files |
 | `np_pipeline.cc`: `to_paper_white` | `toPaperWhite`, `paperBase`, `lightestNode` | `toPaperWhite_y_le`, `toPaperWhite_base` | yes |
 | `np_print.cc`: `scale_print_icc_table` | `scaleIccCodes` | | yes |
-| `color_pipeline.h`: `convert_pixel_pcs` through a print profile | `Negicc.Scene` `convertPixelPcs` with `trcAt` and `toPaperWhite` | | yes (a print's pixel, four `(A, g, b)`, two `E`) |
+| `color_pipeline.h`: `convert_pixel_pcs`, `convert_pixel_display`, `linear_srgb_to_lab` through a print profile | `Negicc.Scene` `convertPixelPcs`, `convertPixelDisplay`, `pixelLab` with `trcAt` and `toPaperWhite` | | yes (a print's pixel, four `(A, g, b)`, two `E`; no shoulder, no tone stage) |
 | `np_print.h`: `density_encoding` | `densityEncoding` | | yes |
 | `np_print.cc`: `density_encode_in_place` | `densityEncodePixel`, `densityTransmittance`, `lightDensity`, `densityCode` | `lightDensity_one`, `lightDensity_le_four`, `lightDensity_anti`, `densityCode_zero` | codes and counts exactly, 3 measures × 2 encodings |
 | `np_print.cc`: `density_balance_offset` | `densityBalanceOffset` | `densityBalanceOffset_sum` | yes |

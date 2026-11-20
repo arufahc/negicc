@@ -198,7 +198,7 @@ names (`3rd_party/spektrafilm/profiles/`, read and resampled by the specificatio
 bundles' print ICCs (`profiles/<bundle>/print_<material>.icc`), and compares the specification over
 `Float` with the C++: the material as loaded, `Q` and the print matrix, `Paper_c`, the input curves
 and their 16-bit tables, the table (every node of a bundle's print ICC to one 16-bit code), the
-print's white, a pixel through the print profile, the density codes, the CLF's numbers and the
+print's white, a pixel through the print profile (PCS, display value and CIELAB), the density codes, the CLF's numbers and the
 floor, for the Portra 400 TriLED bundle (a paper and a print film) and its white-light bundle. Its
 tolerances and their reasons are at the top of `CheckPrint.lean`; values the C++ computes in double
 precision agree to `1e-9`, a CLF's printed numbers to their printed digits.
@@ -213,7 +213,7 @@ ORT_DIR=<onnxruntime> formal/testvectors/gen/build_print.sh
 bin_out/gen_print profiles/Portra400-A7R4-TriLED formal/testvectors profiles/Portra400-A7R4-D65
 ```
 
-The committed `print.json` was generated from `13369ac` on x86-64 Linux with GCC 13.3.
+The committed `print.json` was generated from the code of `master` at `91b2fcb` on x86-64 Linux with GCC 13.3.
 
 ## Using the package from another repository
 

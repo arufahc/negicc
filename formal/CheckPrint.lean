@@ -38,6 +38,10 @@ the knee the inverse's `1 − knee` differs by 2.4e-7 of itself, which moves a c
 1.3e-8 (observed). -/
 def tolKnee : Float := 5e-8
 
+/-- CIELAB at the end of a pixel's conversion (as `Check.lean`'s `tolLabPixel`): a relative
+difference of 2e-6 in the linear value becomes up to 3e-4 in `a*`. -/
+def tolLabPixel : Float := 1e-3
+
 /-- A number printed with `%.6g` in the CLF: half a unit in the sixth significant digit, relative. -/
 def relG6 : Float := 5e-6
 
@@ -409,9 +413,21 @@ def checkMaterial (root : System.FilePath) (b : Bundle) (j : Json) (tag : String
                                  dim := ⟨45, 45, 45⟩, clut := rel, outCurves := ⟨outCurve 0, outCurve 1, outCurve 2⟩ }
       let mat := candidateMatrix merged (← numAt c "e") 1.0 1.0
       let outs ← arrAt c "pcs"
+      let disp ← arrAt c "display"
+      let labs ← arrAt c "lab"
+      -- The print as the conversion shows and scores it: no shoulder, no tone stage.
+      let cfg : PipelineConfig Float := { profile := p, knee := autoKnee, shoulder := Shoulder.off, tone := none }
       for i in [0:pins.size] do
+        let v := loadU16 (pins.getD i ⟨0, 0, 0⟩)
         near3 s!"{tag}pixel: convertPixelPcs through the print profile" tolSingle
-          (convertPixelPcs p autoKnee mat (loadU16 (pins.getD i ⟨0, 0, 0⟩))) (← nums (outs.getD i Json.null))
+          (convertPixelPcs p autoKnee mat v) (← nums (outs.getD i Json.null))
+        near3 s!"{tag}pixel: convertPixelDisplay through the print profile" tolSingle
+          (convertPixelDisplay cfg mat v) (← nums (disp.getD i Json.null))
+        let lab := pixelLab cfg mat v
+        let want ← nums (labs.getD i Json.null)
+        near s!"{tag}pixel: pixelLab through the print profile" tolLabPixel lab.L (want.getD 0 0.0)
+        near s!"{tag}pixel: pixelLab through the print profile" tolLabPixel lab.a (want.getD 1 0.0)
+        near s!"{tag}pixel: pixelLab through the print profile" tolLabPixel lab.b (want.getD 2 0.0)
 
 def checkDensity (b : Bundle) (j : Json) : CheckM Unit := do
   let merged ← matAt j "merged"

@@ -340,13 +340,18 @@ static json material_vectors(const ProfileBundle& bundle, const std::string& bun
       for (float e : {1.0f, 0.8f}) {
         float mat[9];
         negicc::candidate_matrix(merged, e, 1.0f, 1.0f, mat);
-        json outs = json::array();
+        json outs = json::array(), disp = json::array(), lab = json::array();
         for (const auto& p : px) {
           const negicc::Rgb v = negicc::convert_pixel_pcs(cfg, mat, p.data());
           outs.push_back({v.r, v.g, v.b});
+          // The print as the conversion shows and scores it: no shoulder (x_hi 1), no tone stage.
+          const negicc::Rgb d = negicc::convert_pixel_display(cfg, mat, p.data());
+          disp.push_back({d.r, d.g, d.b});
+          const negicc::Lab l = negicc::linear_srgb_to_lab(d);
+          lab.push_back({l.L, l.a, l.b});
         }
         j["pixels"]["cases"].push_back({{"a", c.a}, {"gains", c.gains ? json::array({1.0, c.g, c.b}) : json(nullptr)},
-                                         {"e", e}, {"pcs", outs}});
+                                         {"e", e}, {"pcs", outs}, {"display", disp}, {"lab", lab}});
       }
     }
   }
