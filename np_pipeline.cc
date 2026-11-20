@@ -2056,8 +2056,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film, which
   // can raise the factor by up to 2.5 times.
   // Light inside the frame is not masked; the record's factor and frame show what was read. The print's search itself
-  // reads the search frame (without --roi, the RAW's inset crop or the whole scan). A caller that gains a print (negicc-station) chooses the
-  // frame here, as this does.
+  // reads the search frame (without --roi, the RAW's inset crop or the whole scan). A caller that gains a print
+  // (negicc-station) chooses the frame here, as this does.
   // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), mapped onto |half| by
   // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned
   // against the sensor does not map). A --roi auto that fell back to the whole image is the whole scan. frame_conf is
