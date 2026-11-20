@@ -3070,9 +3070,10 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
       // The output is RGB: the conversion writes three samples a pixel through a transform from PCS XYZ into this
       // profile (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
       // transform from the PCS.
-      cmsHTRANSFORM probe = cmsGetColorSpace(out.custom) == cmsSigRgbData
-                                ? cmsCreateTransform(out.xyz, TYPE_XYZ_FLT, out.custom, TYPE_RGB_16, INTENT_PERCEPTUAL, 0)
-                                : nullptr;
+      cmsHTRANSFORM probe = nullptr;
+      if (cmsGetColorSpace(out.custom) == cmsSigRgbData) {
+        probe = cmsCreateTransform(out.xyz, TYPE_XYZ_FLT, out.custom, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+      }
       if (!probe) {
         log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n",
                   colorspace_str.c_str());
