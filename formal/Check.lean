@@ -79,6 +79,11 @@ def tolPercentile32 : Float := 5e-4
 difference on the vectors). -/
 def tolPercentileU16 : Float := 1e-3
 
+/-- The 99.5 % point of a histogram of 4096 bins over `[0, 2]`, filled from single precision values:
+a pixel near a bin's edge may fall in the neighbouring bin, which moves the point by at most a
+bin's width, `2 / 4096`. Observed: 3e-8 (the two histograms were equal). -/
+def tolHistBin : Float := 2.0 / 4096.0
+
 /-- An 8-bit code computed in single precision (`pcs_lab_to_srgb_u8`, codes up to 255). -/
 def tolCode8 : Float := 3e-4
 
@@ -599,7 +604,7 @@ def checkWhite (root : System.FilePath) (j : Json) : CheckM Unit := do
     | some k => near3 "white: filmBaseBalanceGains" tolSingle k want
     | none => same "white: filmBaseBalanceGains (refused)" 1 (if want.getD 0 0.0 < 0.0 then 1 else 0)
 
-def checkRead (j : Json) : CheckM Unit := do
+def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit := do
   let mo ← get j "mosaic"
   let W ← natAt mo "w"
   let H ← natAt mo "h"
@@ -673,6 +678,22 @@ def checkRead (j : Json) : CheckM Unit := do
       let want ← numsAt t "range"
       let got := #[r.eMin, r.eMax, r.eCentre, r.searchLo, r.searchHi]
       for k in [0:5] do near "bracket: meteredEnclosure" tolSingle ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
+  -- The frame's highlight roll-off through bracket 3 of the TriLED bundle, scanned at 1/4 s, ISO 100.
+  let fbExposure := captureExposure (← numAt pixel "film_base_shutter") (← numAt pixel "film_base_iso")
+  let X := mat3 (← numsAt pixel "crosstalk")
+  let fbv := vec3 (← numsAt pixel "film_base")
+  let nT ← numAt pixel "normalization_target"
+  let frameM := mergedMatrix X fbv nT (fbExposure / captureExposure 0.25 100.0)
+  let eNormT := exposureNorm frameM (mergedMatrix X fbv nT (fbExposure / referenceExposure))
+  let prof ← readProfile (root / (← strAt pixel "bundle_dir") / (← strAt pixel "icc"))
+  let (cx, cy, cw, ch) := innerCrop FW FH (0.9 : Float)
+  for c in ← arrAt mt "rolloff" do
+    let m := candidateMatrix (frameM.divScalar eNormT) ((← numAt c "e") * eNormT) (← numAt c "g") (← numAt c "b")
+    let lins := (Array.range (cw * ch)).map fun k =>
+      convertPixelLinear prof (autoKnee : Float) m (loadU16 (frame.getD ((cy + k / cw) * FW + cx + k % cw) ⟨0, 0, 0⟩))
+    let mh := maxHistOf lins
+    near "shoulder: maxHistOf, the 99.5 % point" tolHistBin (maxHistQuantile mh 0.995) (← numAt c "q995")
+    near "shoulder: maxHistOf, x_hi" tolRoot (shoulderXHiFromHist mh) (← numAt c "x_hi")
   for c in ← arrAt j "lab_to_srgb" do
     near3 "bracket: pcsLabToSrgbU8" tolCode8 (pcsLabToSrgbU8 (labOf (← numsAt c "lab"))) (← numsAt c "rgb")
   let labs ← (← arrAt j "lab_to_srgb").mapM fun c => (do pure (labOf (← numsAt c "lab")) : IO (Lab Float))
@@ -688,7 +709,7 @@ def run (root : System.FilePath) : CheckM Unit := do
   checkShoulder (← get scene "shoulder")
   checkTone root (← get scene "pixel") (← readJson "testvectors/scene_tone.json")
   checkWhite root (← readJson "testvectors/scene_white.json")
-  checkRead (← readJson "testvectors/scene_read.json")
+  checkRead root (← get scene "pixel") (← readJson "testvectors/scene_read.json")
 
 /-- The number of comparisons each group makes on the committed vectors. A group with another count,
 or one missing or unknown, is a failure, so that a short or truncated vectors file cannot pass. When the
@@ -777,7 +798,9 @@ def expectedCounts : List (String × Nat) := [
   ("bracket: meteredEnclosure (feasible)", 14),
   ("bracket: meteredEnclosure", 70),
   ("bracket: pcsLabToSrgbU8", 18),
-  ("bracket: profileHighlightCeiling", 9)]
+  ("bracket: profileHighlightCeiling", 9),
+  ("shoulder: maxHistOf, the 99.5 % point", 2),
+  ("shoulder: maxHistOf, x_hi", 2)]
 
 end Check
 

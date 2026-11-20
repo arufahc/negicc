@@ -800,6 +800,13 @@ static json read_vectors(const ProfileBundle& tri, const ProfileBundle& wl) {
       }
       j["meter"]["bundles"].push_back(bj);
     }
+    // The frame's highlight roll-off through bracket 3 (the histogram of the pre-shoulder largest channel over the
+    // inner crop, its 99.5 % point, x_hi), at two exposures.
+    for (float e : {0.2f, 0.6f}) {
+      float q995 = 0.0f;
+      const float x_hi = measure_rolloff_x_hi(tri, 2, view, 0.25, 100.0, e, 1.16f, 1.1f, 0.9f, &q995, nullptr, nullptr);
+      j["meter"]["rolloff"].push_back({{"e", e}, {"g", 1.16f}, {"b", 1.1f}, {"q995", q995}, {"x_hi", x_hi}});
+    }
   }
   // The highlight ceiling: the sRGB codes of predicted PCS colours, and the ceiling of a report holding them.
   const float labs[][3] = {{50.0f, 2.0f, -3.0f}, {85.0f, -1.0f, 4.0f}, {80.0f, 10.0f, 30.0f}, {5.0f, 1.0f, 1.0f},

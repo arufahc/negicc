@@ -140,6 +140,71 @@ theorem kneeCompress_le_one (knee v : ℝ) : kneeCompress knee v ≤ 1 := by
   · exact le_trans (min_le_left _ _) (by norm_num)
   · exact le_trans (min_le_left _ _) (by norm_num)
 
+/-- The hyperbolic tangent is monotone. -/
+theorem tanh_mono' {x y : ℝ} (h : x ≤ y) : Real.tanh x ≤ Real.tanh y := by
+  have hx := Real.neg_one_lt_tanh x
+  have hy := Real.tanh_lt_one y
+  have hx1 := Real.tanh_lt_one x
+  have hy1 := Real.neg_one_lt_tanh y
+  rw [← Real.artanh_le_artanh_iff ⟨hx, hx1⟩ ⟨hy1, hy⟩, Real.artanh_tanh, Real.artanh_tanh]
+  exact h
+
+/-- **The knee is monotone** for a knee in `(0, 0.9999]` (the conversion's is `0.95`): a thinner film
+never gives a smaller corrected value. For a knee in `(0.9999, 1)` it is not: the curve steps down at
+the knee, from `knee` to at most `0.9999` (`kneeCompress_step`). -/
+theorem kneeCompress_mono {knee v w : ℝ} (hk0 : 0 < knee) (hk : knee ≤ 0.9999) (hvw : v ≤ w) :
+    kneeCompress knee v ≤ kneeCompress knee w := by
+  have hk1 : ¬ (1.0 : ℝ) ≤ knee := by norm_num at hk ⊢; linarith
+  have hd : (0 : ℝ) < 1.0 - knee := by norm_num at hk ⊢; linarith
+  have hk9 : knee ≤ (0.9999 : ℝ) := hk
+  -- The roll-off branch is at least the knee.
+  have roll : ∀ z : ℝ, knee < z → knee ≤ min 0.9999 (knee + (1.0 - knee) * Real.tanh ((z - knee) / (1.0 - knee))) := by
+    intro z hz
+    have ht := tanh_mono' (le_of_lt (div_pos (by linarith : (0 : ℝ) < z - knee) hd))
+    rw [Real.tanh_zero] at ht
+    exact le_min hk9 (by nlinarith)
+  have one : ∀ z : ℝ, z ≤ knee → min 1.0 z = z := fun z hz => min_eq_right (by norm_num at hk ⊢; linarith)
+  unfold kneeCompress
+  simp only [tanh_real]
+  rw [ite_eq_right hk1, ite_eq_right hk1]
+  by_cases hw0 : w ≤ 0.0
+  · have hv0 : v ≤ (0.0 : ℝ) := le_trans hvw hw0
+    rw [ite_eq_left hv0, ite_eq_left hw0]
+  rw [ite_eq_right hw0]
+  have hw0' : (0 : ℝ) < w := by norm_num at hw0; exact hw0
+  by_cases hwk : w ≤ knee
+  · rw [ite_eq_left hwk, one w hwk]
+    by_cases hv0 : v ≤ 0.0
+    · rw [ite_eq_left hv0]; exact le_trans (le_of_eq (by norm_num)) (le_of_lt hw0')
+    · rw [ite_eq_right hv0, ite_eq_left (le_trans hvw hwk), one v (le_trans hvw hwk)]; exact hvw
+  rw [ite_eq_right hwk]
+  have hwk' : knee < w := lt_of_not_ge hwk
+  by_cases hv0 : v ≤ 0.0
+  · rw [ite_eq_left hv0]; exact le_trans (le_of_eq (by norm_num)) (le_trans (le_of_lt hk0) (roll w hwk'))
+  rw [ite_eq_right hv0]
+  by_cases hvk : v ≤ knee
+  · rw [ite_eq_left hvk, one v hvk]; exact le_trans hvk (roll w hwk')
+  rw [ite_eq_right hvk]
+  have hq : (v - knee) / (1.0 - knee) ≤ (w - knee) / (1.0 - knee) :=
+    div_le_div_of_nonneg_right (by linarith) hd.le
+  have := tanh_mono' hq
+  exact min_le_min_left _ (by nlinarith)
+
+/-- With a knee in `(0.9999, 1)` the knee steps down: the value at the knee is the knee, and every
+larger value gives at most `0.9999`. -/
+theorem kneeCompress_step {knee w : ℝ} (hk : 0.9999 < knee) (hk1 : knee < 1) (hw : knee < w) :
+    kneeCompress knee knee = knee ∧ kneeCompress knee w ≤ 0.9999 := by
+  have h1 : ¬ (1.0 : ℝ) ≤ knee := by norm_num; exact hk1
+  have h0 : ¬ knee ≤ (0.0 : ℝ) := by norm_num; linarith
+  have hw0 : ¬ w ≤ (0.0 : ℝ) := by norm_num; linarith
+  constructor
+  · unfold kneeCompress
+    rw [ite_eq_right h0, ite_eq_right h1, ite_eq_left (le_refl knee)]
+    exact min_eq_right (by norm_num; linarith)
+  · unfold kneeCompress
+    rw [ite_eq_right hw0, ite_eq_right h1, ite_eq_right (not_le.mpr hw)]
+    exact min_le_left _ _
+
 /-! ## The colour table -/
 
 /-- A blend of four equal nodes with weights that add up to one is that node. -/
