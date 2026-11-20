@@ -746,13 +746,18 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     // empty: the given roi, or the whole image, stays.
     if (found_roi[2] > 0 && found_roi[3] > 0) roi = found_roi;
   }
+  // A debayered decode's inset crop (with |crop| and no ROI) is decoded as an ROI is, so that its edge pixels are
+  // interpolated from their neighbours outside it.
+  int inset[4];
+  const bool is_inset = !roi && debayer && crop && inset_crop(*proc, inset);
+  if (is_inset) roi = inset;
   // The ROI is checked and clamped to the sensor before the analysis read, which runs the whole bracket search, so
   // that an ROI outside the sensor fails before the DINOv3 inferences.
   int roi_box[4];
   if (roi) {
     const int w = proc->imgdata.sizes.width, h = proc->imgdata.sizes.height;
     if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
-      log_error("ROI [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n",
+      log_error("%s [%d, %d, %d, %d] is outside sensor boundaries (%dx%d)\n", is_inset ? "The inset crop" : "ROI",
               roi[0], roi[1], roi[2], roi[3], w, h);
       delete proc;
       return NULL;
@@ -888,8 +893,8 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
     if (roi) {
       // Align LibRaw's cropbox origin down to the CFA period (6x6 for X-Trans, 2x2 for Bayer) so LibRaw's
-      // raw2image does not shift the mosaic phase, and include a 2-tile halo on every ROI (--roi auto and
-      // explicit --roi alike) so LibRaw's demosaic stencil has identical boundary neighbors.
+      // raw2image does not shift the mosaic phase, and include a 2-tile halo on every ROI (--roi auto, explicit --roi
+      // and the inset crop alike) so LibRaw's demosaic stencil has identical boundary neighbors.
       const int box_x = std::max(0, ((roi[0] - pad) / a) * a);
       const int box_y = std::max(0, ((roi[1] - pad) / a) * a);
       const int box_x1 = std::min(sensor_w, ((roi[0] + roi[2] + pad + a - 1) / a) * a);
@@ -904,9 +909,6 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       sub_y = roi[1] - box_y;
       sub_w = roi[2];
       sub_h = roi[3];
-    } else {
-      int inset[4];
-      if (crop && inset_crop(*proc, inset)) std::copy(inset, inset + 4, proc->imgdata.params.cropbox);
     }
     if (white_light) {
       if (!decode_white_light(proc, false, effective_qual)) {
