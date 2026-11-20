@@ -503,34 +503,29 @@ void compute_raw_stats(const RgbView& view, float crop_ratio, int max_size, int 
             }
         }
     } else {
+        // An axis that enlarges (scale < 1): per axis, an area average where it shrinks and a clamped bilinear pair
+        // where it enlarges (resample_taps).
+        const auto ty = resample_taps<double>(crop.h, dino_h, scale_y);
+        const auto tx = resample_taps<double>(crop.w, dino_w, scale_x);
         #pragma omp parallel for schedule(static) if ((size_t)dino_w * dino_h > 4096)
         for (int dy = 0; dy < dino_h; ++dy) {
-            const double sy = ((double)dy + 0.5) * scale_y - 0.5;
-            const int y0 = std::clamp((int)std::floor(sy), 0, crop.h - 1);
-            const int y1 = std::clamp(y0 + 1, 0, crop.h - 1);
-            const double wy1 = sy - (double)y0;
-            const double wy0 = 1.0 - wy1;
-
             for (int dx = 0; dx < dino_w; ++dx) {
-                const double sx = ((double)dx + 0.5) * scale_x - 0.5;
-                const int x0 = std::clamp((int)std::floor(sx), 0, crop.w - 1);
-                const int x1 = std::clamp(x0 + 1, 0, crop.w - 1);
-                const double wx1 = sx - (double)x0;
-                const double wx0 = 1.0 - wx1;
-                uint16_t p00[3], p01[3], p10[3], p11[3];
-                view.sample(crop.x0 + x0, crop.y0 + y0, p00);
-                view.sample(crop.x0 + x1, crop.y0 + y0, p01);
-                view.sample(crop.x0 + x0, crop.y0 + y1, p10);
-                view.sample(crop.x0 + x1, crop.y0 + y1, p11);
+                double acc[3] = {0.0, 0.0, 0.0}, wsum = 0.0;
+                for (const auto& [sy, wy] : ty[(size_t)dy]) {
+                    for (const auto& [sx, wx] : tx[(size_t)dx]) {
+                        uint16_t px[3];
+                        view.sample(crop.x0 + sx, crop.y0 + sy, px);
+                        const double w = wx * wy;
+                        for (int c = 0; c < 3; ++c) acc[c] += px[c] * w;
+                        wsum += w;
+                    }
+                }
+                const double inv = wsum > 0.0 ? 1.0 / wsum : 0.0;
                 const size_t didx = ((size_t)dy * dino_w + dx) * 3;
                 for (int c = 0; c < 3; ++c) {
-                    const double top = p00[c] * wx0 + p01[c] * wx1;
-                    const double bot = p10[c] * wx0 + p11[c] * wx1;
-                    const double val = top * wy0 + bot * wy1;
+                    const double val = acc[c] * inv;
                     dino_f64[didx + c] = val;
-                    if (dino_dst) {
-                        dino_dst[didx + c] = (uint16_t)std::clamp(std::round(val), 0.0, 65535.0);
-                    }
+                    if (dino_dst) dino_dst[didx + c] = (uint16_t)std::clamp(std::round(val), 0.0, 65535.0);
                 }
             }
         }

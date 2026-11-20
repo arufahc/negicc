@@ -597,27 +597,27 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
       }
     }
   } else {
+    // An axis that enlarges (scale < 1): per axis, an area average where it shrinks and a clamped bilinear pair where
+    // it enlarges (rgb_view.h resample_taps).
+    const auto ty = negicc::resample_taps<float>(crop.h, dino_h, sy);
+    const auto tx = negicc::resample_taps<float>(crop.w, dino_w, sx);
 #pragma omp parallel for schedule(static)
     for (int dy = 0; dy < dino_h; ++dy) {
-      const float fy = (dy + 0.5f) * sy - 0.5f;
-      const int y0 = std::clamp<int>(std::floor(fy), 0, crop.h - 1);
-      const int y1 = std::clamp(y0 + 1, 0, crop.h - 1);
-      const float wy1 = fy - y0, wy0 = 1.0f - wy1;
       for (int dx = 0; dx < dino_w; ++dx) {
-        const float fx = (dx + 0.5f) * sx - 0.5f;
-        const int x0 = std::clamp<int>(std::floor(fx), 0, crop.w - 1);
-        const int x1 = std::clamp(x0 + 1, 0, crop.w - 1);
-        const float wx1 = fx - x0, wx0 = 1.0f - wx1;
-        uint16_t p00[3], p01[3], p10[3], p11[3];
-        frame.sample(crop.x0 + x0, crop.y0 + y0, p00);
-        frame.sample(crop.x0 + x1, crop.y0 + y0, p01);
-        frame.sample(crop.x0 + x0, crop.y0 + y1, p10);
-        frame.sample(crop.x0 + x1, crop.y0 + y1, p11);
-        for (int c = 0; c < 3; ++c) {
-          const float top = p00[c] * wx0 + p01[c] * wx1;
-          const float bot = p10[c] * wx0 + p11[c] * wx1;
-          dino[(dy * dino_w + dx) * 3 + c] = top * wy0 + bot * wy1;
+        float acc[3] = {0, 0, 0}, wsum = 0.0f;
+        for (const auto& [yy, wy] : ty[(size_t)dy]) {
+          for (const auto& [xx, wx] : tx[(size_t)dx]) {
+            uint16_t px[3];
+            frame.sample(crop.x0 + xx, crop.y0 + yy, px);
+            const float w = wx * wy;
+            acc[0] += px[0] * w;
+            acc[1] += px[1] * w;
+            acc[2] += px[2] * w;
+            wsum += w;
+          }
         }
+        const float inv = (wsum > 0.0f) ? (1.0f / wsum) : 0.0f;
+        for (int c = 0; c < 3; ++c) dino[(dy * dino_w + dx) * 3 + c] = acc[c] * inv;
       }
     }
   }

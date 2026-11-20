@@ -14,10 +14,13 @@
 #ifndef NEGICC_RGB_VIEW_H
 #define NEGICC_RGB_VIEW_H
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "color_pipeline.h"
@@ -133,6 +136,33 @@ private:
                sensor_dxx == d && sensor_dxy == 0 && sensor_dyx == 0 && sensor_dyy == d;
     }
 };
+
+// The taps of a resample of one axis from n source samples to m (s = n / m): for output d, an area average over the
+// source interval [d s, (d + 1) s) where the axis shrinks (s >= 1), else a bilinear pair at the position
+// (d + 0.5) s - 0.5 held inside [0, n - 1], so the border repeats the edge sample and no weight is negative.
+// The resample of a crop to the network's size takes each axis's taps (compute_raw_stats, compute_frame_stats).
+template <typename T>
+inline std::vector<std::vector<std::pair<int, T>>> resample_taps(int n, int m, T s) {
+    std::vector<std::vector<std::pair<int, T>>> taps((size_t)m);
+    for (int d = 0; d < m; ++d) {
+        auto& t = taps[(size_t)d];
+        if (s >= T(1)) {
+            const T a = d * s, b = (d + 1) * s;
+            const int i0 = (int)std::floor(a), i1 = std::min(n, (int)std::ceil(b));
+            for (int i = i0; i < i1; ++i) {
+                const T w = std::min(b, (T)(i + 1)) - std::max(a, (T)i);
+                if (w > T(0)) t.emplace_back(i, w);
+            }
+        } else {
+            const T f = std::clamp((d + T(0.5)) * s - T(0.5), T(0), (T)(n - 1));
+            const int i0 = (int)std::floor(f), i1 = std::min(i0 + 1, n - 1);
+            const T w1 = f - (T)i0;
+            t.emplace_back(i0, T(1) - w1);
+            if (w1 > T(0)) t.emplace_back(i1, w1);
+        }
+    }
+    return taps;
+}
 
 // Summary produced by compute_raw_stats (shared by FrameView::raw_stats and multi_target_optimizer).
 struct RawStatsSummary {
