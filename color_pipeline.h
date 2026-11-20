@@ -170,8 +170,9 @@ NEGICC_HD float apply_trc(float val, const float* curve, int size) {
 // ---- Stage: tetrahedral cLUT -------------------------------------------------------------------------------
 // Tetrahedral interpolation of a [dim_r][dim_g][dim_b][3] grid at (r, g, b) in [0, 1]: the unit cell is split into
 // six tetrahedra by the order of the fractional parts, and the value is the weighted sum of the four corners of
-// the one that contains the point.
+// the one that contains the point. Without a table (null, or a dimension below 1) the value passes through.
 NEGICC_HD Rgb interpolate_clut(float r, float g, float b, const float* clut, int dim_r, int dim_g, int dim_b) {
+    if (!clut || dim_r <= 0 || dim_g <= 0 || dim_b <= 0) return { r, g, b };
     const float sr = r * (dim_r - 1);
     const float sg = g * (dim_g - 1);
     const float sb = b * (dim_b - 1);

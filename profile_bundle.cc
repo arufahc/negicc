@@ -66,43 +66,74 @@ static void read_curve_set_local(_cmsStageToneCurvesData* data,
 }
 
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
+  // Every return leaves prof as it was made here: empty unless every stage was taken (has_profile).
+  prof = ParsedFilmProfile{};
   if (!hprof) return false;
+  if (cmsGetColorSpace(hprof) != cmsSigRgbData || cmsGetPCS(hprof) != cmsSigXYZData) {
+    log_error("The profile is not RGB to XYZ, as a film profile is\n");
+    return false;
+  }
   cmsPipeline* pipeline = (cmsPipeline*)cmsReadTag(hprof, cmsSigAToB0Tag);
   if (!pipeline) {
     log_error("The profile has no AToB0 tag\n");
     return false;
   }
+  // The one layout apply_profile applies: input curves, a cLUT, output curves, three channels throughout (a lut8Type or
+  // lut16Type with the identity matrix, or a lutAtoBType with A curves, a cLUT and B curves). A lutAtoBType's matrix
+  // after the cLUT is taken when it is the identity with no offset and no M curves come before it. Anything else is
+  // refused with the stages it has: a lut8Type's or lut16Type's matrix (Little CMS keeps it, before the input curves,
+  // only when it is not the identity), M curves, a missing cLUT or set of curves, or another stage.
+  auto stage_name = [](cmsStageSignature t) -> const char* {
+    switch (t) {
+      case cmsSigCurveSetElemType: return "curves";
+      case cmsSigCLutElemType: return "cLUT";
+      case cmsSigMatrixElemType: return "matrix";
+      default: return "another stage";
+    }
+  };
+  std::string layout;
+  for (cmsStage* st = cmsPipelineGetPtrToFirstStage(pipeline); st; st = cmsStageNext(st))
+    layout += std::string(layout.empty() ? "" : ", ") + stage_name(cmsStageType(st));
+  auto refuse = [&](const char* why) {
+    prof = ParsedFilmProfile{};
+    log_error("The profile's AToB0 (%s) is not input curves, a cLUT and output curves: %s\n", layout.c_str(), why);
+    return false;
+  };
+  if (cmsPipelineInputChannels(pipeline) != 3 || cmsPipelineOutputChannels(pipeline) != 3)
+    return refuse("it does not take three channels to three");
 
-  prof.data.has_profile = 1;
-  const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-  memcpy(prof.data.matrix, ident, sizeof(ident));
-  prof.data.offset[0] = prof.data.offset[1] = prof.data.offset[2] = 0.0f;
-
-  int curve_sets = 0;
+  // The position in the layout: 0 before the input curves, 1 before the cLUT, 2 after it (an identity matrix may
+  // follow), 3 after the output curves.
+  int at = 0;
+  bool matrix_seen = false;
   for (cmsStage* st = cmsPipelineGetPtrToFirstStage(pipeline); st; st = cmsStageNext(st)) {
+    if (cmsStageInputChannels(st) != 3 || cmsStageOutputChannels(st) != 3)
+      return refuse("a stage does not take three channels to three");
     const cmsStageSignature type = cmsStageType(st);
     if (type == cmsSigCurveSetElemType) {
       auto* cd = (_cmsStageToneCurvesData*)cmsStageData(st);
-      if (curve_sets == 0) {
+      if (at == 0) {
         read_curve_set_local(cd, prof.in_trc, prof.data.in_trc_size, prof.data.in_trc);
-      } else {
+        at = 1;
+      } else if (at == 2) {
         read_curve_set_local(cd, prof.out_trc, prof.data.out_trc_size, prof.data.out_trc);
+        at = 3;
+      } else if (at == 1) {
+        return refuse("a second set of curves before any cLUT (input curves without a cLUT, or a lutAtoBType's M or B "
+                      "curves taken for input curves)");
+      } else {
+        return refuse("a set of curves after the output curves (a lutAtoBType's M curves)");
       }
-      curve_sets++;
     } else if (type == cmsSigMatrixElemType) {
-      // apply_profile applies a matrix between the input curves and the cLUT, where neither ICC form has it: a
-      // lut16Type's comes before the input curves (Little CMS keeps it as a stage only when it is not the identity),
-      // a lutAtoBType's after the cLUT and the M curves. So only the identity, with no offset, is taken.
+      if (at != 2 || matrix_seen) return refuse("a matrix where apply_profile does not apply one");
       auto* md = (_cmsStageMatrixData*)cmsStageData(st);
       bool identity = true;
       for (int i = 0; i < 9; ++i) identity = identity && md->Double[i] == ((i % 4 == 0) ? 1.0 : 0.0);
       for (int i = 0; i < 3 && md->Offset; ++i) identity = identity && md->Offset[i] == 0.0;
-      if (!identity) {
-        log_error("The profile's AToB0 has a matrix other than the identity, which this pipeline does not apply "
-                  "where the ICC does\n");
-        return false;
-      }
+      if (!identity) return refuse("a matrix other than the identity after the cLUT");
+      matrix_seen = true;
     } else if (type == cmsSigCLutElemType) {
+      if (at != 1) return refuse(at == 0 ? "a cLUT without input curves before it" : "a second cLUT");
       auto* cl = (_cmsStageCLutData*)cmsStageData(st);
       for (int i = 0; i < 3; ++i) prof.data.clut_dim[i] = cl->Params->nSamples[i];
       const size_t n = (size_t)prof.data.clut_dim[0] * prof.data.clut_dim[1] * prof.data.clut_dim[2] * 3;
@@ -113,8 +144,16 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
         for (size_t i = 0; i < n; ++i) prof.clut[i] = cl->Tab.T[i] / 65535.0f;
       }
       prof.data.clut = prof.clut.data();
+      at = 2;
+    } else {
+      return refuse("a stage this parser does not know");
     }
   }
+  if (at != 3) return refuse(at == 2 ? "no output curves after the cLUT" : "no cLUT");
+  const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  memcpy(prof.data.matrix, ident, sizeof(ident));
+  prof.data.offset[0] = prof.data.offset[1] = prof.data.offset[2] = 0.0f;
+  prof.data.has_profile = 1;
   return true;
 }
 
@@ -880,9 +919,16 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       tgt.profcheck_output = tj["profcheck_output"].get<std::string>();
     }
 
+    // A bracket whose ICC is given (inline, or as a file) but cannot be read as a film profile refuses the bundle, as
+    // an ICC file that cannot be read does: a bundle short of a bracket would search the others. Base64 that does not
+    // decode, an empty profile and a refused layout are refused alike. A target given no ICC is skipped below.
     bool have_icc = false;
     if (tj.contains("icc_profile_base64") && tj["icc_profile_base64"].is_string()) {
-      have_icc = base64_decode(tj["icc_profile_base64"].get<std::string>(), tgt.icc_bytes);
+      have_icc = true;
+      if (!base64_decode(tj["icc_profile_base64"].get<std::string>(), tgt.icc_bytes)) {
+        throw std::runtime_error("profile bundle " + raw_path + ": the inline ICC profile of target " + tgt.name +
+                                 " is not valid base64");
+      }
     } else if (tj.contains("icc_profile") && tj["icc_profile"].is_string()) {
       const std::string icc_name = tj["icc_profile"].get<std::string>();
       if (!read_file || !read_file(icc_name, tgt.icc_bytes)) {
@@ -891,16 +937,17 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       }
       have_icc = true;
     }
-    {
-      if (have_icc && !tgt.icc_bytes.empty()) {
-        cmsHPROFILE hprof = cmsOpenProfileFromMem(tgt.icc_bytes.data(), tgt.icc_bytes.size());
-        if (hprof) {
-          if (parse_film_profile_pipeline(hprof, tgt.film_prof)) {
-            tgt.film_prof.rebind_pointers();
-          }
-          cmsCloseProfile(hprof);
-        }
+    if (have_icc) {
+      cmsHPROFILE hprof = tgt.icc_bytes.empty()
+                              ? nullptr
+                              : cmsOpenProfileFromMem(tgt.icc_bytes.data(), (cmsUInt32Number)tgt.icc_bytes.size());
+      const bool parsed = hprof && parse_film_profile_pipeline(hprof, tgt.film_prof);
+      if (hprof) cmsCloseProfile(hprof);
+      if (!parsed) {
+        throw std::runtime_error("profile bundle " + raw_path + ": the ICC profile of target " + tgt.name +
+                                 (tgt.icc_bytes.empty() ? " is empty" : " cannot be read as a film profile"));
       }
+      tgt.film_prof.rebind_pointers();
     }
 
     if (tgt.film_prof.data.has_profile == 0) {

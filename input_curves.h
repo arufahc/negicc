@@ -148,10 +148,13 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
 // v = i / (n - 1) below ref, u = log2(v / ref), the curve is monotonic (denser film never renders lighter in this
 // channel) and within max_dev stops of the base TRC (|u s(u) - u|). The whole table is checked, not only the frame's
 // density range [u_lo, 0] (the densest grid cell): pixels denser than any grid cell land below it, where the curve
-// could otherwise fold over or move arbitrarily far from the TRC. The identity (a = k = 0) always passes.
+// could otherwise fold over or move arbitrarily far from the TRC. A hold point above 0 (above ref, where the curve does
+// not act) is refused: every entry below ref is then held, and the curve meets the identity at ref with a step of
+// f(u_hold) - u_hold stops. The identity (a = k = 0) always passes.
 inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev,
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
+  if (!(u_hold <= 0.0f)) return false;
   if (!(ref > 0.0f) || table_n < 2) return true;
   // f at the entry above; the table is walked from ref down, from f = 0 there (the identity at and above ref), so the
   // curve stays below ref as it leaves it.

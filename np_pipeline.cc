@@ -386,10 +386,10 @@ static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c)
 }
 
 // Recorded G and B input curves (--fit_curves ref:..., or a previous run's sidecar) on the bracket profile pd they are
-// composed into: the shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the
-// whole input table, curve_shape_ok). Numbers typed by hand, or edited, could fold the table over or move it
-// arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant digits, which round-trip a
-// float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
+// composed into: the shape the fit holds every curve to (held at or below ref, monotonic and within max_dev_stops of
+// the base TRC over the whole input table, curve_shape_ok). Numbers typed by hand, or edited, could step the table at
+// ref, fold it over or move it arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant
+// digits, which round-trip a float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
 static int recorded_curve_off_shape(const negicc::InputCurves& c, const ProfileData& pd) {
   const float dev = negicc::CurveFitOptions().max_dev_stops;
   for (int i = 0; i < 2; ++i) {
@@ -599,7 +599,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       }
       if (!ok || !positive(c.ref[0]) || !positive(c.ref[1])) return why = "its input curves are not valid", false;
       if (recorded_curve_off_shape(c, s.bundle.targets[tgt_idx].film_prof.data) >= 0) {
-        return why = "its input curves are not monotonic, or depart too far from the bracket's input TRC", false;
+        return why = "its input curves are held above ref, are not monotonic, or depart too far from the bracket's "
+                     "input TRC", false;
       }
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;
@@ -1190,8 +1191,8 @@ int prepare(const Options& o, Setup& s) {
     // The shape the fit holds every curve to (recorded_curve_off_shape).
     const int off = recorded_curve_off_shape(o.input_curves, bundle.targets[s.manual_target_idx].film_prof.data);
     if (off >= 0) {
-      log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
-                "bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
+      log_error("--fit_curves: the recorded %s curve is held above ref (u_lo above 0), is not monotonic, or departs "
+                "more than %g stops from the bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
                 negicc::CurveFitOptions().max_dev_stops);
       return 1;
     }
@@ -1681,6 +1682,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
+    // Why solve_grey_knobs failed on bracket target_idx's profile (combined: with the fitted input curves).
+    auto knob_failure = [&](const KnobSolveResult& r, bool combined) {
+      const char* name = bundle.targets[target_idx].name.c_str();
+      if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) {
+        log_error("--brightness, --tint and --warmth move E, g and b from the bracket's, and %s's are not all positive "
+                  "(E %g g %g b %g)\n", name, base_e, base_g, base_b);
+        return;
+      }
+      log_error("--brightness, --tint and --warmth move the grey that %s renders as neutral L* 50, and none was found "
+                "on its profile%s: the grey-point solve ended %.2f dE76 from L* 50 a* 0 b* 0. Convert without the "
+                "knobs%s\n", name, combined ? " combined with the fitted input curves" : "", r.grey_miss,
+                combined ? ", or with --fit_curves off" : "");
+    };
     // On a print the knobs act on the print's own A, g and b, solved on its profile; E held.
     // A density output's knobs move its print CLFs (density_print_searches), not its suggested balance.
     const bool knobs_here = o.knobs_given && !s.density;
@@ -1720,7 +1734,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.knob_base[2] = base_b;
       if (!solve_grey_knobs(bundle.targets[target_idx].film_prof.data, base_e, base_g, base_b, o.brightness, o.tint,
                             o.warmth, scan.knob_res)) {
-        log_error("Failed to solve grey-point knobs for target %s\n", bundle.targets[target_idx].name.c_str());
+        // The bracket the curves apply to renders through its combined profile here.
+        knob_failure(scan.knob_res, target_idx == s.curves_base_idx && s.input_curves.active());
         return false;
       }
       scan.has_knob_res = true;
@@ -1768,7 +1783,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           const float prev[3] = {k2.e, k2.g, k2.b};
           if (!solve_grey_knobs(prof.data, base_e, base_g, base_b, o.brightness, o.tint, o.warmth, k2,
                                 &grey_prof.data)) {
-            log_error("Failed to solve grey-point knobs on the re-anchored curves\n");
+            knob_failure(k2, true);
             return false;
           }
           const float to2[3] = {k2.e, k2.g, k2.b};
@@ -2328,6 +2343,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   }
 
 
+  // An analysis that fails has logged why; the decode then returns nothing, which is not the file failing to open.
+  bool analysis_failed = false;
+  if (analyse) {
+    analyse = [&analysis_failed, run = std::move(analyse)](const LibRaw& raw) {
+      if (run(raw)) return true;
+      analysis_failed = true;
+      return false;
+    };
+  }
+
   FrameDetectionParams det_params;
   det_params.format = o.film_format;
   det_params.axis_hint = o.roi_axis_hint;
@@ -2575,10 +2600,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       cfa_rh = std::min(scan.roi[3], src_h - cfa_ry);
     } else if (!o.no_crop && o.files.size() == 1) {
       const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop.
+      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop. A crop at the origin that is narrower
+      // or shorter than the image is a crop too.
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
                                   crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
-      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
+      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop || crop_ref.cwidth < src_w || crop_ref.cheight < src_h)) {
         cfa_rx = std::max(0, std::min((int)crop_ref.cleft, src_w - 1));
         cfa_ry = std::max(0, std::min((int)crop_ref.ctop, src_h - 1));
         cfa_rw = std::max(1, std::min((int)crop_ref.cwidth, src_w - cfa_rx));
@@ -2686,7 +2712,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     unpacked_probe = nullptr;
     if (!proc) {
-      log_error("Cannot open %s\n", o.files[0].c_str());
+      if (!analysis_failed) log_error("Cannot open %s\n", o.files[0].c_str());
       return 1;
     }
     if (o.roi_auto) {

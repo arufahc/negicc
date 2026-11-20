@@ -68,9 +68,10 @@ float median_f32(std::vector<float>& a) {
   return (float)((double)s / 2.0);
 }
 
-// numpy's median of uint16 values (float64).
+// numpy's median of uint16 values (float64); NaN for none, as numpy's.
 double median_u16(std::vector<uint16_t>& a) {
   const size_t n = a.size();
+  if (n == 0) return std::nan("");
   const size_t h = n / 2;
   std::nth_element(a.begin(), a.begin() + h, a.end());
   const double upper = (double)a[h];
@@ -501,8 +502,8 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
   }
 }
 
-void thinnest_film_base(const RgbView& half, float white, float out[3]) {
-  thinnest_film_base_impl(half, false, white, out);
+void thinnest_film_base(const RgbView& half, float white, float out[3], bool* at_clip) {
+  thinnest_film_base_impl(half, false, white, out, at_clip);
 }
 
 // Appends a reason to a comma-separated list (no comma before the first).
@@ -540,7 +541,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         b[1] = std::max(0, b[1]);
         b[2] = std::min(W, b[2]);
         b[3] = std::min(H, b[3]);
-        if ((long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
+        // A patch past the decode's edge on both axes has two negative spans, whose product is positive.
+        if (b[2] <= b[0] || b[3] <= b[1] || (long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
           add_reason(out.reason, "patch_too_small");
         } else {
           has_box = true;

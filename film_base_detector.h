@@ -89,8 +89,10 @@ struct FilmBaseDetection {
 };
 
 // The thinnest film on the half-size decode |half| of a TriLED scan or capture (step 2. above), in its units. |white|
-// is the clipping level of its samples before the flat field (black subtracted, in their units).
-void thinnest_film_base(const RgbView& half, float white, float out[3]);
+// is the clipping level of its samples before the flat field (black subtracted, in their units). |at_clip| (when
+// given): whether that film, read on the same pixels before the flat field, is at the sensor's clip in a channel
+// (FilmBaseDetection::thinnest_clipped).
+void thinnest_film_base(const RgbView& half, float white, float out[3], bool* at_clip = nullptr);
 
 // The film base of the scan whose half-size decode (flat field applied) is |half|. |det| is the frame detector's
 // result on the RAW's mosaic of sensor_w x sensor_h photosites (the CFA path's, or the white-light decode's run before
