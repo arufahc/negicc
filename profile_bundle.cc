@@ -73,7 +73,8 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
     return false;
   }
 
-  prof.data.has_profile = 1;
+  // has_profile is set only when every stage was taken: a refused profile leaves prof without one.
+  prof.data.has_profile = 0;
   const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   memcpy(prof.data.matrix, ident, sizeof(ident));
   prof.data.offset[0] = prof.data.offset[1] = prof.data.offset[2] = 0.0f;
@@ -82,6 +83,13 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
   for (cmsStage* st = cmsPipelineGetPtrToFirstStage(pipeline); st; st = cmsStageNext(st)) {
     const cmsStageSignature type = cmsStageType(st);
     if (type == cmsSigCurveSetElemType) {
+      // Two curve sets, the input and the output ones. A lutAtoBType's M curves (a third set, between the cLUT and
+      // the B curves) have no place in apply_profile and would be taken as the output curves.
+      if (curve_sets == 2) {
+        log_error("The profile's AToB0 has a third set of curves (lutAtoBType M curves), which this pipeline does not "
+                  "apply\n");
+        return false;
+      }
       auto* cd = (_cmsStageToneCurvesData*)cmsStageData(st);
       if (curve_sets == 0) {
         read_curve_set_local(cd, prof.in_trc, prof.data.in_trc_size, prof.data.in_trc);
@@ -115,6 +123,7 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
       prof.data.clut = prof.clut.data();
     }
   }
+  prof.data.has_profile = 1;
   return true;
 }
 
@@ -893,13 +902,16 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     }
     {
       if (have_icc && !tgt.icc_bytes.empty()) {
+        // A bracket whose ICC is given but cannot be read as a film profile refuses the bundle, as an ICC file that
+        // cannot be read does: a bundle short of a bracket would search the others.
         cmsHPROFILE hprof = cmsOpenProfileFromMem(tgt.icc_bytes.data(), tgt.icc_bytes.size());
-        if (hprof) {
-          if (parse_film_profile_pipeline(hprof, tgt.film_prof)) {
-            tgt.film_prof.rebind_pointers();
-          }
-          cmsCloseProfile(hprof);
+        const bool parsed = hprof && parse_film_profile_pipeline(hprof, tgt.film_prof);
+        if (hprof) cmsCloseProfile(hprof);
+        if (!parsed) {
+          throw std::runtime_error("profile bundle " + raw_path + ": the ICC profile of target " + tgt.name +
+                                   " cannot be read as a film profile");
         }
+        tgt.film_prof.rebind_pointers();
       }
     }
 
