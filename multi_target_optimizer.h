@@ -210,7 +210,8 @@ struct GpuRenderer : PreviewRenderer {
 // every pass runs on both from the same inputs and the search reads the CPU's, so the search is the CPU's and each GPU
 // pass is measured against it. The CPU's side is PassThroughRenderer's, so the passes are counted as without a device.
 // - A render: how many values differ and the largest difference; the largest and the mean change in L* per pixel,
-//   each pixel read as sRGB (an 8-bit preview, what the network reads, a 16-bit or a float render alike); and with
+//   each pixel read in the render's encoding (sRGB or linear sRGB; an 8-bit preview, what the network reads, a 16-bit
+//   or a float render alike); and with
 //   statistics, the largest difference of the white and black clip shares and of each histogram bin (as a share of
 //   the crop's pixels), and of the six zone means of a* and b*.
 // - A clip pass: the largest difference of its three exceedance shares and its white-clip share, its median L*, and

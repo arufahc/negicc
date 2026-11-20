@@ -1845,11 +1845,13 @@ void CompareRenderer::render(const negicc::RenderArgs& a) {
     if (elem == 2) return static_cast<const uint16_t*>(buf)[i];
     return static_cast<const float*>(buf)[i];
   };
-  // Each pixel read as sRGB at the output's full scale (255, 65535, or 1 for a float render).
+  // Each pixel at the output's full scale (255, 65535, or 1 for a float render), read in the render's encoding.
   const double full = elem == 1 ? 255.0 : elem == 2 ? 65535.0 : 1.0;
+  const bool linear = a.cfg.encoding == negicc::ENCODE_SRGB_LINEAR;
   auto lstar = [&](const void* buf, size_t i) {
-    return (double)negicc::srgb_to_lab({(float)(value(buf, i) / full), (float)(value(buf, i + 1) / full),
-                                        (float)(value(buf, i + 2) / full)}).L;
+    const negicc::Rgb v = {(float)(value(buf, i) / full), (float)(value(buf, i + 1) / full),
+                           (float)(value(buf, i + 2) / full)};
+    return (double)(linear ? negicc::linear_srgb_to_lab(v) : negicc::srgb_to_lab(v)).L;
   };
   double sum_dl = 0.0;
   for (size_t i = 0; i + 2 < n; i += 3) {
@@ -1860,8 +1862,11 @@ void CompareRenderer::render(const negicc::RenderArgs& a) {
       same = same && p.differing == before;
     }
     if (same) continue;
-    const double dl = compared(p, lstar(a.out, i), lstar(other.data(), i));
-    --p.differing;   // the pixel's values were counted
+    const double dl = std::fabs(lstar(a.out, i) - lstar(other.data(), i));   // the pixel's values were counted above
+    if (!std::isfinite(dl)) {
+      ++p.nonfinite;
+      continue;
+    }
     sum_dl += dl;
     p.max_dl = std::max(p.max_dl, dl);
   }
