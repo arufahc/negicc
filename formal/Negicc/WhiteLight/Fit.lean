@@ -649,6 +649,39 @@ def solveEForMedianL (cfg : PipelineConfig α) (f : CurveFrame α) (shape : Inpu
     if medianAt mid < targetL then hi := mid else lo := mid
   pure (sqrt (lo * hi))
 
+/-! ## The fit's target and the re-anchoring after the knobs -/
+
+/-- The bounds of the fit's target median `L*` (`kIntentMinL`, `kIntentMaxL`). -/
+def intentMinL : α := 18.0
+@[inherit_doc intentMinL] def intentMaxL : α := 85.0
+
+/-- The median `L*` the fit keeps (`fit_target_L_` in `WhiteLightFitCore`): Auto's grid median held to
+`[18, 85]`, or Auto's own when `E` was given. -/
+def fitTargetL (pinE : Bool) (targetL : α) : α :=
+  if pinE then targetL else clamp targetL intentMinL intentMaxL
+
+/-- The largest share `t` in `[0, 1]` of a curve's bend that keeps the shape `ok` (`shape_scale_of`): 1
+when the whole bend passes, else 24 bisections of `[0, 1]`, the lower end. -/
+def shapeScaleOf (ok : α → Bool) : α :=
+  if ok 1.0 then 1.0 else (bisect ok true 24 0.0 1.0).1
+
+/-- One channel re-anchored after the knobs moved `E`, `g`, `b` (`reanchor_input_curves`): `ref` scaled
+and `u_med`, `u_lo` shifted by what the two anchors `a0` (at the curves' own parameters) and `a1` (at
+the knobbed ones) differ by, then the bend scaled down to keep the shape over a table of `tableN`
+entries. Returns the channel and the scale. -/
+def reanchorChannel (c a0 a1 : ChannelCurve α) (tableN : Nat) (maxDev : α) : ChannelCurve α × α :=
+  let ref := if decide (0.0 < a0.ref) && decide (0.0 < a1.ref) then c.ref * (a1.ref / a0.ref) else c.ref
+  let c1 := { c with ref := ref, uMed := c.uMed + (a1.uMed - a0.uMed), uLo := c.uLo + (a1.uLo - a0.uLo) }
+  let s := shapeScaleOf fun t => curveShapeOk { c1 with a := t * c1.a, k := t * c1.k } tableN maxDev
+  ({ c1 with a := c1.a * s, k := c1.k * s }, s)
+
+/-- The curves re-anchored after the knobs (`reanchor_input_curves`), with the anchors `a0` and `a1`
+from `inputCurveReference` at the two parameter sets on the frame's grid (its picture cells on a
+fallback crop); unchanged when the curves do nothing. -/
+def reanchorCurves (c a0 a1 : InputCurves α) (tableN : Nat × Nat) (maxDev : α) : InputCurves α :=
+  if !c.active then c
+  else ⟨(reanchorChannel c.g a0.g a1.g tableN.1 maxDev).1, (reanchorChannel c.b a0.b a1.b tableN.2 maxDev).1⟩
+
 /-! ## The frame's cells and film base -/
 
 /-- On a fallback crop (the whole image), the cells that are picture (`fallback_picture_cells`):

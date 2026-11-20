@@ -1,9 +1,8 @@
 /-
-A bracket's calibrated range on a frame, and its highlight ceiling.
+A bracket's calibrated range on a frame.
 -/
 module
 
-public import Negicc.Scene.Linear
 public import Negicc.Scene.Convert
 
 @[expose] public section
@@ -24,15 +23,6 @@ The bracket is feasible when `e_min ≤ e_max` and admissible when the scene's s
 
 On a white-light bundle the search scales the scene's points by the frame's `e_norm` before it calls
 `bracket_enclosure`; on TriLED it works in the reference unit and leaves them as they are.
-
-# A bracket's highlight ceiling
-
-What the conversion uses of a bracket's prediction errors is the per-channel 8-bit sRGB ceiling of
-its calibration patches: the brightest code any patch's predicted colour renders to
-(`profile_highlight_ceiling`), each predicted PCS `L*a*b*` (D50) taken through CIELAB's inverse, the
-PCS white, the PCS to linear sRGB matrix and the sRGB curve (`pcs_lab_to_srgb_u8`). The report's
-text is parsed by a regular expression, which is not part of this specification: the predicted
-colours are its input. Without a report the ceiling is 255.
 -/
 
 namespace Negicc
@@ -115,6 +105,14 @@ structure Enclosure (α : Type) where
 def usableHiEv : α := 1.5
 @[inherit_doc usableHiEv] def usableShEv : α := 1.2
 
+/-- A bracket's green range from its patches' green values, as the bundle loader derives it
+(`tgt_min_g`, `tgt_max_g` in `load_profile_bundle`): the smallest and the largest. -/
+def patchGreenRange (g : Array α) : α × α :=
+  (g.foldl min (g.getD 0 0.0), g.foldl max (g.getD 0 0.0))
+
+/-- A bracket's exposure as the loader derives it: `max(1e-6, shutter · ISO / 100)` (`exposure_s`). -/
+def bracketExposure (shutter iso : α) : α := max 1e-6 (shutter * iso / 100.0)
+
 /-- The range of `E` that keeps the scene's green `g_lo .. g_hi` inside a bracket whose patches span
 green `gMin .. gMax` in its own capture of exposure `exposure` (`bracket_enclosure`). -/
 def bracketEnclosure (gMin gMax exposure gLo gHi : α) : Enclosure α :=
@@ -130,25 +128,5 @@ def bracketEnclosure (gMin gMax exposure gLo gHi : α) : Enclosure α :=
 /-- The centre the search's exposure penalty pulls toward, `0` (no pull) for an inverted usable
 range (`pull_centre`). -/
 def pullCentre (c : Enclosure α) : α := if c.usableInverted then 0.0 else c.eCentre
-
-/-! ## The highlight ceiling -/
-
-/-- ICC PCS `L*a*b*` (D50) to 8-bit sRGB code values in `[0, 255]` (`pcs_lab_to_srgb_u8`): CIELAB's
-inverse relative to the PCS white, the PCS to linear sRGB matrix, clamped to `[0, 1]`, the sRGB
-curve, times 255. -/
-def pcsLabToSrgbU8 (lab : Lab α) : Vec3 α :=
-  let fy := (lab.L + 16.0) / 116.0
-  let f : Vec3 α := ⟨fy + lab.a / 500.0, fy, fy - lab.b / 200.0⟩
-  let xyz := Vec3.zipWith (fun fc w => labFInv fc * w) f pcsWhite
-  let l := pcsToLinearSrgbUnclamped xyz
-  l.map fun c => clamp01 (srgbEncode (clamp01 c)) * 255.0
-
-/-- A bracket's per-channel 8-bit sRGB ceiling from the predicted colours of its calibration patches
-(`profile_highlight_ceiling`): the largest code of each channel; 255 without any. -/
-def profileHighlightCeiling (predicted : List (Lab α)) : Vec3 α :=
-  match predicted with
-  | [] => Vec3.fill 255.0
-  | p :: ps => (ps.map pcsLabToSrgbU8).foldl (fun acc v => ⟨max acc.x v.x, max acc.y v.y, max acc.z v.z⟩)
-      (pcsLabToSrgbU8 p)
 
 end Negicc

@@ -51,9 +51,9 @@ theorem candidateMatrix_mul_exposure (M : Mat3 ℝ) (k e g b : ℝ) (v : Vec3 �
   rw [candidateMatrix_mulVec, candidateMatrix_mulVec]
   ext <;> simp only [Vec3.smul] <;> ring
 
-/-- The search's units. On a narrow-band scan the search works on the merged matrix divided by
-`e_norm` and its exposure is in reference units; the conversion works on the merged matrix with
-the exposure divided by `e_norm`. Both are the same matrix, so both render the same picture. -/
+/-- The merged matrix divided by `k` at the exposure `E` is the merged matrix at `E / k`. On a
+narrow-band scan the search works on the merged matrix divided by `e_norm`; this identity is what
+makes its exposure the conversion's divided by `e_norm` (the search itself is specified in #211). -/
 theorem candidateMatrix_divScalar (M : Mat3 ℝ) (k e g b : ℝ) :
     candidateMatrix (M.divScalar k) e g b = candidateMatrix M (e / k) g b := by
   ext <;> simp only [candidateMatrix, Mat3.scaleRows, Mat3.divScalar, Vec3.smul, Vec3.map] <;> ring

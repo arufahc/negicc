@@ -17,7 +17,8 @@ built is not part of this specification: its tables are given data. What the con
 them is, and is defined here as `applyProfile` (`apply_profile` in `color_pipeline.h`):
 
 1. each channel through its **input curve**, a sampled table over `[0, 1]`;
-2. a **matrix and offset**, clamped to `[0, 1]` (the identity in the bundles' profiles);
+2. a **matrix and offset**, clamped to `[0, 1]`: the identity, since the parser refuses a profile
+   whose `AToB0` has another (`Profile.matrixAccepted`, `parse_film_profile_pipeline`);
 3. the **colour table**, a three-dimensional grid of XYZ values read by tetrahedral
    interpolation (`clutEval`, `interpolate_clut`);
 4. each channel through its **output curve**, then the PCS scale `1.99996948`.
@@ -74,6 +75,16 @@ def tetraBlend (v0 va vp vq : Vec3 α) (w0 w1 w2 w3 : α) : Vec3 α :=
    v0.y * w0 + va.y * w1 + vp.y * w2 + vq.y * w3,
    v0.z * w0 + va.z * w1 + vp.z * w2 + vq.z * w3⟩
 
+/-- The parser takes a profile only when its `AToB0` matrix is the identity with no offset
+(`parse_film_profile_pipeline` in `profile_bundle.cc`): `apply_profile` applies a matrix between the
+input curves and the table, where neither ICC form has it. -/
+def Profile.matrixAccepted (p : Profile α) : Bool :=
+  let eq := fun (x y : α) => decide (x ≤ y) && decide (y ≤ x)
+  eq p.matrix.row0.x 1.0 && eq p.matrix.row0.y 0.0 && eq p.matrix.row0.z 0.0 &&
+  eq p.matrix.row1.x 0.0 && eq p.matrix.row1.y 1.0 && eq p.matrix.row1.z 0.0 &&
+  eq p.matrix.row2.x 0.0 && eq p.matrix.row2.y 0.0 && eq p.matrix.row2.z 1.0 &&
+  eq p.offset.x 0.0 && eq p.offset.y 0.0 && eq p.offset.z 0.0
+
 /-- The profile has a colour table to interpolate: a non-empty table and a grid of at least one
 node along each axis (`apply_profile`'s test before `interpolate_clut`). -/
 def Profile.hasClut (p : Profile α) : Bool :=
@@ -81,11 +92,10 @@ def Profile.hasClut (p : Profile α) : Bool :=
 
 /-- Tetrahedral interpolation of the colour table at `t` in `[0, 1]³` (`interpolate_clut`).
 
-Precondition: `t` in `[0, 1]³` and every grid size at least 1, which `applyProfile` guarantees (it
-clamps the coordinates and tests `hasClut`). On that domain the definition is the C++'s. Outside
-it the two differ: here the lower corner's index is held at `0`, while `interpolate_clut` computes
-the upper corner's index before it clamps the lower one, so a coordinate at or below
-`-1 / (dim - 1)` makes it read before the table.
+Every grid size must be at least 1, which `applyProfile` guarantees (it tests `hasClut`). The
+lower corner is held inside the grid first and the upper corner taken from it, as in
+`interpolate_clut`, so a coordinate outside `[0, 1]` reads the edge cell; `applyProfile` clamps its
+coordinates to `[0, 1]` in any case.
 
 Each coordinate is scaled to the grid; `(i, j, k)` is the cell's lower corner and `(dr, dg, db)`
 the position inside the cell. The cell is cut into six tetrahedra by the order of `dr`, `dg`,

@@ -37,7 +37,7 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | `Negicc.Scene.Linear` | The profile connection space to linear sRGB, the pre-shoulder value, the clipping rules |
 | `Negicc.Scene.Shoulder` | The highlight roll-off: the curve, its knee, and `x_hi` from a frame's 99.5 % point |
 | `Negicc.Scene.Convert` | The whole pixel: display value, the sRGB and linear encodings, CIELAB, the 16-bit outputs |
-| `Negicc.Scene.Bracket` | A bracket's calibrated range on a frame, and its highlight ceiling |
+| `Negicc.Scene.Bracket` | A bracket's calibrated range on a frame |
 | `Negicc.Scene.Defs`, `Negicc.Scene.Props`, `Negicc.Scene` | The scene modules together (no Mathlib); proved properties; both |
 | `Negicc.Tone.Apply` | The tone curve on a pixel (`apply_tone`) |
 | `Negicc.Tone.Curve` | The tone curve, its table, the render's descriptors, the targets, the solve, the clip share |
@@ -113,7 +113,7 @@ lake exe check
 
 `check` (`Check.lean`) reads the test vectors in `testvectors/` (`scene.json`: the base, the flat
 field, the pixel and the shoulder; `scene_tone.json`: the tone stage; `scene_white.json`: the
-white-light fit; `scene_read.json`: reading the scan, the film base, a bracket's range and ceiling)
+white-light fit; `scene_read.json`: reading the scan, the film base, a bracket's range)
 and the bracket profiles they name (`Target_3.icc` of `profiles/Portra400-A7R4-TriLED` and
 `Target_4.icc` of `profiles/Portra400-A7R4-D65`, parsed by the check itself), evaluates the Lean
 definitions over `Float` on the vectors' inputs, and compares the results with the values the C++
@@ -134,7 +134,8 @@ The tolerances and their reasons are at the top of `Check.lean`:
 | `tolDouble` | 1e-9 | Values the C++ computes in double precision |
 | `tolSolve` | 1e-7 | The tone curve solved by Levenberg-Marquardt, both sides in double precision |
 | `tolSolveE`, `tolFitSetup`, `tolFitLoss`, `tolFit`, `tolFitResultLoss` | 1e-6 to 4e-3 | The white-light fit, which the C++ runs in single precision for its parameters |
-| `tolPercentile32`, `tolPercentileU16`, `tolGreenPoint`, `tolCode8` | 5e-4, 1e-3, 4e-3, 3e-4 | Percentiles and 8-bit codes the C++ interpolates in single precision |
+| `tolPercentile32`, `tolPercentileU16`, `tolGreenPoint`, `tolGreenRel` | 5e-4, 1e-3, 4e-3, 2e-5 | Percentiles the C++ interpolates in single precision, and the ranges read from them |
+| codes | exact | 8- and 16-bit codes are compared exactly, except where the two values lie on the two sides of a half (one code, counted apart) |
 
 The C++ computes a pixel in single precision and the check evaluates the specification in double
 precision, so a difference of a few parts in a million is rounding, not disagreement. Two kinds
@@ -168,10 +169,10 @@ difference is then either a change of the specification to follow or a defect.
 
 ### The last recorded run
 
-Vectors generated from commit `91b2fcb` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
+Vectors generated from commit `47a187d` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
 (another compiler or C library may change the last digit of a single precision result, which the
 tolerances cover). With Lean `v4.36.0`, `lake build` ends with `Build completed successfully` and no
-warning, and `lake exe check` makes 7181 comparisons, none outside its tolerance.
+warning, and `lake exe check` makes 10380 comparisons, none outside its tolerance.
 
 ## Using the package from another repository
 

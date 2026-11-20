@@ -71,7 +71,8 @@ theorem tableEval_mem {tab : Array ℝ} (h2 : 2 ≤ tab.size) {lo hi : ℝ}
     (hs : ∀ (i : ℕ) (h : i < tab.size), lo ≤ tab[i] ∧ tab[i] ≤ hi) {v : ℝ} (hv0 : 0 ≤ v)
     (hv1 : v ≤ 1) : lo ≤ tableEval tab v ∧ tableEval tab v ≤ hi := by
   have hne : tab.size ≠ 0 := by omega
-  simp only [tableEval, hne, ite_false, tableAt, natFloor_real]
+  have hn1 : tab.size ≠ 1 := by omega
+  simp only [tableEval, hne, hn1, ite_false, tableAt, natFloor_real]
   set n := tab.size with hn
   have hn1 : ((n - 1 : ℕ) : ℝ) = (n : ℝ) - 1 := by rw [Nat.cast_sub (by omega)]; simp
   set s := v * ((n - 1 : ℕ) : ℝ) with hsdef

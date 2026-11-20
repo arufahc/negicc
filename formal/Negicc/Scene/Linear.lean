@@ -18,10 +18,6 @@ written mean, through the embedded profile, the PCS they were computed from, and
 held at zero from below only: values above 1, brighter than the chart's white, are kept for the
 highlight shoulder (`pcs_to_linear_srgb_pre_shoulder`).
 
-The textbook pair, the Bradford adaptation from D50 to D65 followed by XYZ to linear sRGB, differs
-from that matrix in the fourth decimal. It is kept here because the print's CLF, which carries no
-profile, uses it (`print_clf_nodes` in `np_print.cc`).
-
 `convertPixelLinear` is the conversion of one pixel up to this point, the *pre-shoulder* value.
 The clipping statistics and the measurement of the shoulder read it.
 -/
@@ -42,19 +38,6 @@ def pcsToLinearSrgbMatrix : Mat3 α :=
   ⟨⟨3.13427485, -1.61727573, -0.490724277⟩,
    ⟨-0.978795611, 1.91616171, 0.0334533327⟩,
    ⟨0.0719770074, -0.228984979, 1.40571822⟩⟩
-
-/-- The Bradford chromatic adaptation from D50 to D65, on XYZ (the print CLF's,
-`print_clf_nodes`). -/
-def bradfordD50ToD65 : Mat3 α :=
-  ⟨⟨0.9555766, -0.0230393, 0.0631636⟩,
-   ⟨-0.0282895, 1.0099416, 0.0210077⟩,
-   ⟨0.0122982, -0.0204830, 1.3299098⟩⟩
-
-/-- XYZ (D65) to linear sRGB (the print CLF's, `print_clf_nodes`). -/
-def xyzToLinearSrgb : Mat3 α :=
-  ⟨⟨3.2406255, -1.5372080, -0.4986286⟩,
-   ⟨-0.9689307, 1.8757561, 0.0415175⟩,
-   ⟨0.0557101, -0.2040211, 1.0569959⟩⟩
 
 /-- PCS XYZ (D50) to linear sRGB, not clamped (`pcs_to_linear_srgb_unclamped`). -/
 def pcsToLinearSrgbUnclamped (v : Vec3 α) : Vec3 α :=

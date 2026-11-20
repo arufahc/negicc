@@ -88,8 +88,21 @@ a pixel near a bin's edge may fall in the neighbouring bin, which moves the poin
 bin's width, `2 / 4096`. Observed: 3e-8 (the two histograms were equal). -/
 def tolHistBin : Float := 2.0 / 4096.0
 
-/-- An 8-bit code computed in single precision (`pcs_lab_to_srgb_u8`, codes up to 255). -/
-def tolCode8 : Float := 3e-4
+/-- A bracket's range from the frame's green points, which `compute_frame_stats` gives in single
+precision (`tolGreenPoint` on values near 200 and 15000): relative `4e-3 / 200`. -/
+def tolGreenRel : Float := 2e-5
+
+/-- The film base through the crosstalk correction, in double precision on both sides, over 65535. -/
+def tolDoubleRel : Float := 1e-9
+
+/-- A quantised code (`quantize_u8`, `quantize_u16`: `roundf` of a single precision value) is compared
+exactly. The one exception is a value that the specification and the C++ put on the two sides of a
+half (each value is compared within `tolSingle` on its own): there the codes differ by one, and such
+codes are counted apart with a tolerance of one code. The quantisation itself is compared exactly on
+the C++'s own values, except where the C++'s single precision product `v · 65535` (or `v · 255`) and
+the exact one lie on the two sides of a half. -/
+def straddlesHalf (lean cpp scale : Float) : Bool :=
+  (lean * scale + 0.5).floor != (cpp * scale + 0.5).floor
 
 /-! ## Bookkeeping -/
 
@@ -132,6 +145,22 @@ def near3 (name : String) (tol : Float) (got : Vec3 Float) (want : Array Float) 
 def same (name : String) (got want : Nat) : CheckM Unit := do
   unless got == want do IO.println s!"  different in [{name}]: Lean {got}, C++ {want}"
   record name 0.0 (if got == want then 0.0 else 1.0)
+
+/-- `v · scale` as the C++ forms it, in single precision. -/
+def f32Product (v scale : Float) : Float := (v.toFloat32 * scale.toFloat32).toFloat
+
+/-- Compares the quantisation of the C++'s own value with the C++'s code: exactly, or within one code
+where the single precision product and the exact one lie on the two sides of a half. -/
+def sameQuantize (name : String) (cpp scale : Float) (got want : Nat) : CheckM Unit := do
+  if (cpp * scale + 0.5).floor != (f32Product cpp scale + 0.5).floor then
+    record (name ++ ", across a half") 1.0 (Float.abs (got.toFloat - want.toFloat))
+  else same name got want
+
+/-- Compares a quantised code with the C++'s: exactly, or within one code where the two values lie on
+the two sides of a half (`straddlesHalf`). -/
+def sameCode (name : String) (lean cpp scale : Float) (got want : Nat) : CheckM Unit := do
+  if straddlesHalf lean cpp scale then record (name ++ ", across a half") 1.0 (Float.abs (got.toFloat - want.toFloat))
+  else same name got want
 
 /-! ## Reading JSON -/
 
@@ -258,6 +287,7 @@ def checkBase (j : Json) : CheckM Unit := do
   for c in ← arrAt j "knee" do
     near "scene: kneeCompress" tolSingle (kneeCompress (← numAt c "knee") (← numAt c "x")) (← numAt c "y")
   near "scene: autoKnee" tolSingle autoKnee (← numAt j "auto_knee")
+  near3 "scene: pcsWhite" tolDouble pcsWhite (← numsAt j "pcs_white")
   for c in ← arrAt j "quantize" do
     same "scene: quantizeU8, quantizeU16" (quantizeU8 (← numAt c "x")) (← natAt c "u8")
     same "scene: quantizeU8, quantizeU16" (quantizeU16 (← numAt c "x")) (← natAt c "u16")
@@ -308,6 +338,7 @@ def checkPixel (root : System.FilePath) (j : Json) : CheckM Unit := do
   let prof ← readProfile (root / (← strAt j "bundle_dir") / (← strAt j "icc"))
   -- The profile as read here against the tables the C++ parsed.
   let pc ← get j "profile_check"
+  same "profile: matrixAccepted" (if prof.matrixAccepted then 1 else 0) 1
   same "profile: table sizes" prof.inCurves.x.size (← natAt pc "in_size")
   same "profile: table sizes" prof.outCurves.x.size (← natAt pc "out_size")
   same "profile: table sizes" prof.dim.x (← natAt pc "clut_dim")
@@ -362,10 +393,29 @@ def checkPixel (root : System.FilePath) (j : Json) : CheckM Unit := do
         (if (← boolAt o "white_clipped") then 1 else 0)
       same "pixel: pixelBlackClipped" (if pixelBlackClipped lin then 1 else 0)
         (if (← boolAt o "black_clipped") then 1 else 0)
-      let u16 := (convertPixel cfg m v).map quantizeU16
+      let px := pixels.getD i ⟨0, 0, 0⟩
+      let enc := convertPixel cfg m v
+      let cor := correctedRgb knee m v
+      let outP := outputPixel cfg m px
+      let corP := correctedPixel cfg m px
+      let prvP := previewPixel cfg m px
       let wantU16 ← natsAt o "u16"
-      for (got, want) in [(u16.x, wantU16.getD 0 0), (u16.y, wantU16.getD 1 0), (u16.z, wantU16.getD 2 0)] do
-        record "pixel: outputPixel (16-bit code)" 1.0 (Float.abs (got.toFloat - want.toFloat))
+      let wantC ← natsAt o "corrected_u16"
+      let wantP ← natsAt o "preview_u8"
+      let encC ← numsAt o "encoded"
+      let corC ← numsAt o "corrected"
+      for (val, cv, got, want) in [(enc.x, encC.getD 0 0.0, outP.x, wantU16.getD 0 0),
+          (enc.y, encC.getD 1 0.0, outP.y, wantU16.getD 1 0), (enc.z, encC.getD 2 0.0, outP.z, wantU16.getD 2 0)] do
+        sameCode "pixel: outputPixel" val cv 65535.0 got want
+        sameQuantize "pixel: quantizeU16 of the C++ value" cv 65535.0 (quantizeU16 cv) want
+      for (val, cv, got, want) in [(cor.x, corC.getD 0 0.0, corP.x, wantC.getD 0 0),
+          (cor.y, corC.getD 1 0.0, corP.y, wantC.getD 1 0), (cor.z, corC.getD 2 0.0, corP.z, wantC.getD 2 0)] do
+        sameCode "pixel: correctedPixel" val cv 65535.0 got want
+        sameQuantize "pixel: quantizeU16 of the C++ value" cv 65535.0 (quantizeU16 cv) want
+      for (val, cv, got, want) in [(enc.x, encC.getD 0 0.0, prvP.x, wantP.getD 0 0),
+          (enc.y, encC.getD 1 0.0, prvP.y, wantP.getD 1 0), (enc.z, encC.getD 2 0.0, prvP.z, wantP.getD 2 0)] do
+        sameCode "pixel: previewPixel" val cv 255.0 got want
+        sameQuantize "pixel: quantizeU8 of the C++ value" cv 255.0 (quantizeU8 cv) want
   -- The exposure normalisation: the frame's merged matrix over the reference's (the bundle's base at 1/8 s, ISO 100).
   let fbExposure := captureExposure (← numAt j "film_base_shutter") (← numAt j "film_base_iso")
   let reference := mergedMatrix (mat3 (← numsAt j "crosstalk")) (vec3 (← numsAt j "film_base"))
@@ -560,7 +610,8 @@ def checkWhite (root : System.FilePath) (j : Json) : CheckM Unit := do
       (← numAt c "y")
   -- The joint fit.
   let ft ← get j "fit"
-  let P : FitProblem Float := ⟨cfg, frame, some field, e0, g0, b0, targetL, (prof.inCurves.y.size, prof.inCurves.z.size),
+  let P : FitProblem Float := ⟨cfg, frame, some field, e0, g0, b0, targetL,
+    (prof.inCurves.y.size, prof.inCurves.z.size),
     CurveFitOptions.default, e0 * 0.25, e0 * 4.0⟩
   let (okA, eA) := P.solvePoint #[g0, b0, 0.0, 0.0] e0 true
   same "white: fit runs" (if okA then 1 else 0) (if (← boolAt ft "ok") then 1 else 0)
@@ -592,7 +643,8 @@ def checkWhite (root : System.FilePath) (j : Json) : CheckM Unit := do
   let cb ← get j "combined"
   let anchoredC := anchored frame (P.shapeOf pC) eC (pC.getD 0 0.0) (pC.getD 1 0.0)
   let cc : PipelineConfig Float := { cfg with profile := combinedProfile prof wantCurves }
-  near "white: gridMedianL (combined profile)" tolLabPixel (gridMedianL cc merged eC (pC.getD 0 0.0) (pC.getD 1 0.0) grid)
+  near "white: gridMedianL (combined profile)" tolLabPixel
+    (gridMedianL cc merged eC (pC.getD 0 0.0) (pC.getD 1 0.0) grid)
     (← numAt cb "median_L")
   near "white: anchored at the result" tolSingle anchoredC.g.ref wantCurves.g.ref
   near "white: solveEForMedianL" tolSolveE
@@ -603,6 +655,48 @@ def checkWhite (root : System.FilePath) (j : Json) : CheckM Unit := do
     let want ← natsAt c "kept"
     same "white: fallbackPictureCells" got.size want.size
     for k in [0:want.size] do same "white: fallbackPictureCells" (got.getD k 0) (want.getD k 0)
+  -- The guard on synthetic Auto renders.
+  for c in ← arrAt j "guard" do
+    let labs ← (← arrAt c "labs").mapM fun l => (do pure (labOf (← (← arr l).mapM num)) : IO (Lab Float))
+    let gd := guardOf labs (some (← numsAt c "p"))
+    let wc ← arrAt c "counted"
+    same "white: guardOf (counted)" (if gd.counted.1 then 1 else 0)
+      (if (wc.getD 0 Json.null) == Json.bool true then 1 else 0)
+    same "white: guardOf (counted)" (if gd.counted.2 then 1 else 0)
+      (if (wc.getD 1 Json.null) == Json.bool true then 1 else 0)
+    let wr ← numsAt c "ref"
+    near "white: guardOf, guardMeans" tolDouble gd.ref.1 (wr.getD 0 0.0)
+    near "white: guardOf, guardMeans" tolDouble gd.ref.2 (wr.getD 1 0.0)
+    for hcase in ← arrAt c "hinges" do
+      let v ← numsAt hcase "v"
+      let hw ← numsAt hcase "hinge"
+      let bw ← arrAt hcase "binds"
+      near "white: guardHinge" tolDouble (guardHinge gd.counted.1 gd.ref.1 (v.getD 0 0.0)) (hw.getD 0 0.0)
+      near "white: guardHinge" tolDouble (guardHinge gd.counted.2 gd.ref.2 (v.getD 1 0.0)) (hw.getD 1 0.0)
+      same "white: guardBinds" (if guardBinds gd.counted.1 gd.ref.1 (v.getD 0 0.0) then 1 else 0)
+        (if (bw.getD 0 Json.null) == Json.bool true then 1 else 0)
+      same "white: guardBinds" (if guardBinds gd.counted.2 gd.ref.2 (v.getD 1 0.0) then 1 else 0)
+        (if (bw.getD 1 Json.null) == Json.bool true then 1 else 0)
+  -- The re-anchoring's pieces: the two anchors, and the shape's scale.
+  let ra ← get j "reanchor"
+  let rc ← curvesOf (← get ra "curves")
+  let fromP ← numsAt ra "from"
+  let toP ← numsAt ra "to"
+  let a0 := inputCurveReference rc merged (fromP.getD 0 0.0) (fromP.getD 1 0.0) (fromP.getD 2 0.0) autoKnee fb grid
+  let a1 := inputCurveReference rc merged (toP.getD 0 0.0) (toP.getD 1 0.0) (toP.getD 2 0.0) autoKnee fb grid
+  for (got, key) in [(a0, "a0"), (a1, "a1")] do
+    let want ← curvesOf (← get ra key)
+    nearChannel "white: the re-anchoring's anchors" tolSingle got.g want.g
+    nearChannel "white: the re-anchoring's anchors" tolSingle got.b want.b
+  for c in ← arrAt ra "scales" do
+    let hold ← holdOf c
+    let ch : ChannelCurve Float := ⟨← numAt c "a", 0.0, ← numAt c "ref", ← numAt c "u_med", hold.getD 0.0, hold.isSome⟩
+    near "white: shapeScaleOf" tolSingle (shapeScaleOf fun t => curveShapeOk { ch with a := t * ch.a } 4096 2.2)
+      (← numAt c "scale")
+  near3 "white: curveFrameBase" tolDouble (curveFrameBase none grid) (← numsAt j "curve_frame_base")
+  let fbnd ← numsAt j "fit_target_bounds"
+  near "white: fitTargetL (bounds)" tolDouble (fitTargetL false (0.0 : Float)) (fbnd.getD 0 0.0)
+  near "white: fitTargetL (bounds)" tolDouble (fitTargetL false (100.0 : Float)) (fbnd.getD 1 0.0)
   for c in ← arrAt j "balance" do
     let got := filmBaseBalanceGains (mat3 (← numsAt c "rgb_cam")) (vec3 (← numsAt c "base"))
       (vec3 (← numsAt c "profile_base"))
@@ -656,6 +750,12 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
     for k in [0:5] do near "bracket: bracketEnclosure" tolSingle ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
     near "bracket: bracketEnclosure" tolSingle r.slackEv (o.getD 8 0.0)
     near "bracket: bracketEnclosure" tolSingle r.fillRatio (o.getD 9 0.0)
+  let cropC ← numAt j "crop_ratio"
+  same "bracket: searchCropRatio" (if Float.abs ((searchCropRatio : Float) - cropC) ≤ tolSingle then 1 else 0) 1
+  for c in ← arrAt j "pull_centre" do
+    let i ← numsAt c "in"
+    let r : Enclosure Float := bracketEnclosure (i.getD 0 0.0) (i.getD 1 0.0) (i.getD 2 0.0) (i.getD 3 0.0) (i.getD 4 0.0)
+    near "bracket: pullCentre" tolSingle (pullCentre r) (← numAt c "y")
   for c in ← arrAt j "inner_crop" do
     let i ← arrAt c "in"
     let (x0, y0, w, h) := innerCrop (← nat (i.getD 0 Json.null)) (← nat (i.getD 1 Json.null)) (← num (i.getD 2 Json.null))
@@ -679,6 +779,20 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
   let wantG ← numsAt mt "green_range"
   near "bracket: sceneGreenRange" tolGreenPoint gLo (wantG.getD 0 0.0)
   near "bracket: sceneGreenRange" tolGreenPoint gHi (wantG.getD 1 0.0)
+  -- Each bracket's range from the bundle's patches and exposure, at the frame's green points.
+  for t in ← arrAt mt "targets" do
+    let (gMin, gMax) : Float × Float := patchGreenRange (← numsAt t "patches_g")
+    let r := bracketEnclosure gMin gMax (bracketExposure (← numAt t "shutter_s") (← numAt t "iso")) gLo gHi
+    let o ← numsAt t "out"
+    same "bracket: enclosure from the bundle (flags)" (if r.feasible then 1 else 0)
+      (if o.getD 0 0.0 > 0.5 then 1 else 0)
+    same "bracket: enclosure from the bundle (flags)" (if r.admissible then 1 else 0)
+      (if o.getD 1 0.0 > 0.5 then 1 else 0)
+    same "bracket: enclosure from the bundle (flags)" (if r.usableInverted then 1 else 0)
+      (if o.getD 7 0.0 > 0.5 then 1 else 0)
+    let got := #[r.eMin, r.eMax, r.searchLo, r.searchHi, r.eCentre]
+    let want := #[o.getD 2 0.0, o.getD 3 0.0, o.getD 4 0.0, o.getD 5 0.0, o.getD 6 0.0]
+    for k in [0:5] do near "bracket: enclosure from the bundle" tolGreenRel ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
   -- The frame's highlight roll-off through bracket 3 of the TriLED bundle, scanned at 1/4 s, ISO 100.
   let fbExposure := captureExposure (← numAt pixel "film_base_shutter") (← numAt pixel "film_base_iso")
   let X := mat3 (← numsAt pixel "crosstalk")
@@ -695,12 +809,51 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
     let mh := maxHistOf lins
     near "shoulder: maxHistOf, the 99.5 % point" tolHistBin (maxHistQuantile mh 0.995) (← numAt c "q995")
     near "shoulder: maxHistOf, x_hi" tolRoot (shoulderXHiFromHist mh) (← numAt c "x_hi")
-  for c in ← arrAt j "lab_to_srgb" do
-    near3 "bracket: pcsLabToSrgbU8" tolCode8 (pcsLabToSrgbU8 (labOf (← numsAt c "lab"))) (← numsAt c "rgb")
-  let labs ← (← arrAt j "lab_to_srgb").mapM fun c => (do pure (labOf (← numsAt c "lab")) : IO (Lab Float))
-  for c in ← arrAt j "ceiling" do
-    let rows ← natAt c "rows"
-    near3 "bracket: profileHighlightCeiling" tolCode8 (profileHighlightCeiling (labs.toList.take rows)) (← numsAt c "ceil")
+/-- The film base's decision on synthetic half-size decodes (`detect_film_base`): where the rebate
+patch is placed, its box, the clip test, its median, how far the thinnest film outshines it, and the
+source taken. The thinnest film itself comes from the segmentation, which is not specified; the
+C++'s value is the input. -/
+def checkFilmBase (j : Json) : CheckM Unit := do
+  let X := mat3 (← numsAt j "crosstalk")
+  let W ← natAt j "w"
+  let H ← natAt j "h"
+  let sensor ← numsAt j "sensor"
+  let white ← numAt j "white"
+  let sx := W.toFloat / sensor.getD 0 1.0
+  let sy := H.toFloat / sensor.getD 1 1.0
+  for c in ← arrAt j "cases" do
+    let half := pixelsOf (← natsAt c "half")
+    let thinnest := vec3 (← numsAt c "thinnest")
+    let bs ← numsAt c "box_sensor"
+    let placed := rebatePlaced (← numAt c "conf") sx sy
+    let box := if placed then rebateBox (bs.getD 0 0.0) (bs.getD 1 0.0) (bs.getD 2 0.0) (bs.getD 3 0.0) sx sy W H
+      else none
+    let samples : Array (Vec3 Nat) := match box with
+      | some (x0, y0, w, h) => (Array.range (w * h)).map fun k => half.getD ((y0 + k / w) * W + x0 + k % w) ⟨0, 0, 0⟩
+      | none => #[]
+    let clipped := box.isSome && patchClipped samples white
+    same "film base: patchClipped" (if clipped then 1 else 0) (if (← boolAt c "rebate_clipped") then 1 else 0)
+    let tested := box.isSome && !clipped
+    same "film base: rebatePlaced, rebateBox" (if tested then 1 else 0) (if (← boolAt c "has_outshone") then 1 else 0)
+    let dec : Vec3 Float :=
+      ⟨medianU16 (samples.map (·.x)), medianU16 (samples.map (·.y)), medianU16 (samples.map (·.z))⟩
+    let rebateOk : Option Bool := if tested then some (rebateAccepted X thinnest dec) else none
+    if tested then near "film base: outshoneStops" tolSingle (outshoneStops thinnest dec) (← numAt c "outshone")
+    let src := filmBaseSource false rebateOk (thinnestAccepted X thinnest)
+    let wantSrc ← strAt c "source"
+    same "film base: source (rebate, thinnest)"
+      (if src = .rebate then 0 else if src = .thinnest then 1 else 2)
+      (if wantSrc == "rebate" then 0 else if wantSrc == "statistics" then 1 else 2)
+    let rgb := X.mulVec (if src = .rebate then dec else thinnest)
+    near3 "film base: base through X" tolDoubleRel
+      (rgb.map (· / 65535.0)) ((← numsAt c "rgb").map (· / 65535.0))
+    if src = .rebate then
+      match box with
+      | some (x0, y0, w, h) =>
+        let wb ← natsAt c "box"
+        for (got, want) in [(x0, wb.getD 0 0), (y0, wb.getD 1 0), (w, wb.getD 2 0), (h, wb.getD 3 0)] do
+          same "film base: rebatePlaced, rebateBox" got want
+      | none => pure ()
 
 def run (root : System.FilePath) : CheckM Unit := do
   let scene ← readJson "testvectors/scene.json"
@@ -710,7 +863,9 @@ def run (root : System.FilePath) : CheckM Unit := do
   checkShoulder (← get scene "shoulder")
   checkTone root (← get scene "pixel") (← readJson "testvectors/scene_tone.json")
   checkWhite root (← readJson "testvectors/scene_white.json")
-  checkRead root (← get scene "pixel") (← readJson "testvectors/scene_read.json")
+  let rd ← readJson "testvectors/scene_read.json"
+  checkRead root (← get scene "pixel") rd
+  checkFilmBase (← get rd "film_base")
 
 /-- The number of comparisons each group makes on the committed vectors. A group with another count,
 or one missing or unknown, is a failure, so that a short or truncated vectors file cannot pass. When the
@@ -725,11 +880,13 @@ def expectedCounts : List (String × Nat) := [
   ("base: tableEval", 10),
   ("scene: kneeCompress", 16),
   ("scene: autoKnee", 1),
+  ("scene: pcsWhite", 3),
   ("scene: quantizeU8, quantizeU16", 12),
   ("scene: clipping rules", 14),
   ("tone: toneLabFprime", 7),
   ("scene: flatDivide", 52),
   ("scene: flatDivide, quotient near a half", 2),
+  ("profile: matrixAccepted", 1),
   ("profile: table sizes", 3),
   ("profile: table entries", 6),
   ("scene: mergedMatrix", 9),
@@ -743,7 +900,13 @@ def expectedCounts : List (String × Nat) := [
   ("pixel: pixelLab", 600),
   ("pixel: pixelWhiteClipped", 200),
   ("pixel: pixelBlackClipped", 200),
-  ("pixel: outputPixel (16-bit code)", 600),
+  ("pixel: outputPixel", 598),
+  ("pixel: quantizeU16 of the C++ value", 1199),
+  ("pixel: correctedPixel", 600),
+  ("pixel: previewPixel", 600),
+  ("pixel: quantizeU8 of the C++ value", 600),
+  ("pixel: outputPixel, across a half", 2),
+  ("pixel: quantizeU16 of the C++ value, across a half", 1),
   ("scene: exposureNorm", 3),
   ("shoulder: setShoulder", 77),
   ("shoulder: applyShoulderChannel", 110),
@@ -786,6 +949,14 @@ def expectedCounts : List (String × Nat) := [
   ("white: anchored at the result", 1),
   ("white: solveEForMedianL", 1),
   ("white: fallbackPictureCells", 86),
+  ("white: guardOf (counted)", 10),
+  ("white: guardOf, guardMeans", 10),
+  ("white: guardHinge", 40),
+  ("white: guardBinds", 40),
+  ("white: the re-anchoring's anchors", 20),
+  ("white: shapeScaleOf", 4),
+  ("white: curveFrameBase", 3),
+  ("white: fitTargetL (bounds)", 2),
   ("white: filmBaseBalanceGains", 12),
   ("read: halfSizePixel", 144),
   ("read: grainAwarePixel", 576),
@@ -794,13 +965,20 @@ def expectedCounts : List (String × Nat) := [
   ("film base: percentileF32", 20),
   ("bracket: bracketEnclosure (flags)", 15),
   ("bracket: bracketEnclosure", 35),
-  ("bracket: innerCrop", 20),
+  ("bracket: searchCropRatio", 1),
+  ("bracket: pullCentre", 2),
+  ("bracket: innerCrop", 24),
   ("bracket: u16PercentileLinear", 5),
-  ("bracket: pcsLabToSrgbU8", 18),
-  ("bracket: profileHighlightCeiling", 9),
+  ("bracket: sceneGreenRange", 2),
+  ("bracket: enclosure from the bundle (flags)", 21),
+  ("bracket: enclosure from the bundle", 35),
   ("shoulder: maxHistOf, the 99.5 % point", 2),
   ("shoulder: maxHistOf, x_hi", 2),
-  ("bracket: sceneGreenRange", 2)]
+  ("film base: patchClipped", 4),
+  ("film base: rebatePlaced, rebateBox", 8),
+  ("film base: outshoneStops", 2),
+  ("film base: source (rebate, thinnest)", 4),
+  ("film base: base through X", 12)]
 
 end Check
 
@@ -820,11 +998,11 @@ def main (args : List String) : IO UInt32 := do
   let mut failures := 0
   let mut total := 0
   let pad (s : String) (n : Nat) := s ++ String.ofList (List.replicate (n - s.length) ' ')
-  IO.println s!"{pad "group" 44}{pad "checks" 8}{pad "failed" 8}{pad "largest difference" 20}tolerance"
+  IO.println s!"{pad "group" 60}{pad "checks" 8}{pad "failed" 8}{pad "largest difference" 20}tolerance"
   for g in groups do
     total := total + g.count
     failures := failures + g.failures
-    IO.println s!"{pad g.name 44}{pad (toString g.count) 8}{pad (toString g.failures) 8}{pad (sci g.maxDiff) 20}{sci g.tol}"
+    IO.println s!"{pad g.name 60}{pad (toString g.count) 8}{pad (toString g.failures) 8}{pad (sci g.maxDiff) 20}{sci g.tol}"
   IO.println s!"{total} comparisons, {failures} outside tolerance"
   let mut countErrors := 0
   for (name, n) in Check.expectedCounts do

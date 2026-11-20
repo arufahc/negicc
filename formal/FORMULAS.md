@@ -2,10 +2,11 @@
 
 Every formula of the scene conversion that the Lean specification covers, in ordinary notation, with
 the C++ function it mirrors and its Lean name. The sections follow `DESIGN.md`: reading the scan and
-the film base (2), a bracket's range and its ceiling (3.3, 3.4), the per-pixel conversion and the
-outputs (4.1), the white-light curve fit (4.3) and the tone stage (4.4). The coverage table at the
-end says for each function whether properties are proved and whether it is checked against the
-program; the list after it names what is not formalized and why.
+the film base (2), a bracket's range (3.3), the per-pixel conversion and the outputs (4.1), the
+white-light curve fit (4.3) and the tone stage (4.4). The Auto search (4.2) and the networks (3.5)
+are specified in #211, stacked on this pull request. The coverage table at the end says for each
+function whether properties are proved and whether it is checked against the program; the lists
+after it name the definitions the check does not evaluate and what is not formalized, with reasons.
 
 Notation: `clamp(x, lo, hi) = min(max(x, lo), hi)`, `clamp01(x) = clamp(x, 0, 1)`, `log2`, `exp2`,
 `round` (halves away from zero), `rint` (halves to even). A 16-bit code `v` loads as `v / 65535`.
@@ -104,7 +105,8 @@ after the load (`mergedMatrix_mulVec_scan_base`).
 exposure(capture)`.
 
 **Rebate** (`film_base_detector.cc`: `detect_film_base`; Lean `rebatePlaced`, `rebateBox`,
-`patchClipped`, `outshoneStops`, `rebateAccepted`, `medianU16`). Placed from a detection of confidence
+`patchClipped`, `outshoneStops`, `rebateAccepted`, `medianU16`; checked through `detect_film_base` on
+synthetic decodes, with the thinnest film, which the segmentation gives, as input). Placed from a detection of confidence
 ≥ 0.5 on a decode with `|sx − sy| ≤ 0.02 max(sx, sy)`; the box inset by 15 % on each side, scaled and
 rounded inward, at least 32 samples; refused when more than 0.1 % of its samples reach `0.98 white`
 in a channel before the flat field. With `dec` its per-channel median:
@@ -146,11 +148,14 @@ ISO 100. `candidateMatrix(M / k, E, g, b) = candidateMatrix(M, E / k, g, b)`
 ## 3.3 A bracket's calibrated range
 
 (`multi_target_optimizer.cc`: `compute_inner_crop`, `u16_percentile_linear`, `compute_frame_stats`,
-`bracket_enclosure`, `pull_centre`; Lean `innerCrop`, `u16PercentileLinear`, `greenHistogram`,
-`sceneGreenRange`, `bracketEnclosure`, `pullCentre`.)
+`bracket_enclosure`, `pull_centre`; `profile_bundle.cc`: `load_profile_bundle`; Lean `searchCropRatio`,
+`innerCrop`, `u16PercentileLinear`, `greenHistogram`, `sceneGreenRange`, `patchGreenRange`,
+`bracketExposure`, `bracketEnclosure`, `pullCentre`.)
 
 ```
-inner crop: x0 = min(round(W (1 − 0.9) / 2), ⌊(W − 1)/2⌋), width W − 2 x0 (likewise y)
+inner crop: x0 = min(round(W (1 − r) / 2), ⌊(W − 1)/2⌋), width W − 2 x0 (likewise y);  r = 0.90
+g_min, g_max = smallest, largest green value of the bracket's patches
+exposure(bracket) = max(10⁻⁶, shutter · ISO / 100)
 pos = q (n − 1);  v_lo, v_hi = first values whose cumulative count exceeds ⌊pos⌋, ⌈pos⌉
 percentile = (1 − (pos − ⌊pos⌋)) v_lo + (pos − ⌊pos⌋) v_hi
 g_lo = max(1, P(0.005)),  g_hi = max(g_lo + 1, P(0.995))        (green, inner crop)
@@ -165,18 +170,10 @@ pull centre = 0 when inverted, else e_centre
 On a white-light bundle the search multiplies `g_lo`, `g_hi` by `e_norm` before computing the range;
 on TriLED it works in the reference unit.
 
-## 3.4 What the conversion uses of the prediction errors
+## 3.4 The profiles' prediction errors
 
-(`multi_target_optimizer.cc`: `pcs_lab_to_srgb_u8`, `profile_highlight_ceiling`; Lean
-`pcsLabToSrgbU8`, `profileHighlightCeiling`.) A bracket's per-channel ceiling is the largest 8-bit
-code its patches' predicted PCS `L*a*b*` (D50) render to, 255 without a report:
-
-```
-f_y = (L + 16)/116,  f = (f_y + a/500, f_y, f_y − b/200)
-XYZ_c = finv(f_c) · w_c,   w = (63190, 65536, 54061) / 65536
-code_c = 255 · clamp01(sRGB(clamp01((P XYZ)_c)))
-finv(f) = f³ if f³ > 216/24389, else (116 f − 16) / (24389/27)
-```
+The conversion does not use them: the bundle keeps each bracket's `profcheck` report
+(`profcheck_output`), and nothing reads it.
 
 ## 4.1 The per-pixel conversion
 
@@ -184,9 +181,12 @@ finv(f) = f³ if f³ > 216/24389, else (116 f − 16) / (24389/27)
 `clutEval`, `tetraBlend`, `applyProfile`, `Profile.hasClut`, `pcsScale`).
 
 ```
-table(v) = lerp(T[k], T[k+1], s − k),   s = v (n − 1),   k = min(⌊s⌋, n − 2)
+table(v) = lerp(T[k], T[k+1], s − k),   s = v (n − 1),   k = clamp(⌊s⌋, 0, n − 2)   (n ≥ 2;
+           a table of one sample is that sample, an empty one the identity)
+M = I, o = 0: the parser refuses a profile whose AToB0 has another matrix (Profile.matrixAccepted)
 t = clamp01(M in(x) + o)
-clut: s = t (dim − 1), (i, j, k) the lower corner, (dr, dg, db) the position in the cell;
+clut: s = t (dim − 1), (i, j, k) the lower corner held inside the grid, the upper one from it,
+      (dr, dg, db) the position in the cell;
       with d1 ≥ d2 ≥ d3 the sorted positions:
       value = (1 − d1) v000 + (d1 − d2) v_a + (d2 − d3) v_b + d3 v111
 XYZ = 1.99996948 · out(clut(t))       (out(in(x)) when there is no colour table)
@@ -231,6 +231,7 @@ Lean `Encoding`, `PipelineConfig.activeShoulder`, `PipelineConfig.activeTone`, `
 -P srgb:      code = round(65535 · clamp01(sRGB(tone(display))))
 -P srgb-g10:  code = round(65535 · clamp01(rgb))                (no shoulder, tone or curve)
 no -P:        code = round(65535 · x)                            (corrected RGB, profile embedded)
+preview:      code = round(255 · clamp01(sRGB(display)))         (what the network is shown)
 white-clipped channel: rgb ≥ 0.9953029;  black-clipped: rgb < 0.00023679829 (all three)
 ```
 
@@ -318,6 +319,19 @@ bisections); accepted when the cost falls (`λ/3`, at least `10⁻⁹`), else `4
 settled when the step is below `10⁻⁵` or the gain below `10⁻⁶ max(1, cost)`. The free run first; the
 guarded run from the start when the free result binds.
 
+**The fit's target** (`WhiteLightFitCore`: `fit_target_L_`, `kIntentMinL`, `kIntentMaxL`; Lean
+`fitTargetL`, `intentMinL`, `intentMaxL`): Auto's grid median `L*` held to `[18, 85]`, or Auto's own
+when `E` was given.
+
+**Re-anchoring after the knobs** (`reanchor_input_curves`, `shape_scale_of`; Lean `reanchorCurves`,
+`reanchorChannel`, `shapeScaleOf`). With `a0`, `a1` the anchors (`inputCurveReference`) at the curves'
+own `(E, g, b)` and at the knobbed ones, on the frame's grid (its picture cells on a fallback crop):
+
+```
+ref' = ref · a1.ref / a0.ref (both positive),  u_med' = u_med + (a1.u_med − a0.u_med),  u_lo' likewise
+s = 1 if the whole bend keeps the shape, else 24 bisections of [0, 1];   a' = s a,  k' = s k
+```
+
 **Re-meter and cells** (`grid_median_L`, `solve_e_for_median_L`, `fallback_picture_cells`,
 `curve_frame_of`; Lean `gridMedianL`, `solveEForMedianL`, `fallbackPictureCells`, `curveFrameBase`):
 40 bisections of `log E` on the combined profile over `[E_c/2, 2E_c]` within the bounds when the
@@ -367,9 +381,10 @@ code by reading only.
 | `srgb_encode` | `srgbEncode` | round trip, `srgbEncode_not_monotone`, `srgbEncode_le_of_le` | yes |
 | `srgb_decode` | `srgbDecode` | `srgbDecode_mono`, round trips | yes |
 | `lab_f`, `kLabEpsilon`, `kLabKappa` | `labF`, `labEpsilon`, `labKappa` | `labF_mono`, `labF_line_at_break`, `cbrt_labEpsilon` | yes |
-| `tone_lab_finv` | `labFInv` | `labFInv_labF` | yes (in `toneTable`, `pcsLabToSrgbU8`) |
+| `tone_lab_finv` | `labFInv` | `labFInv_labF` | yes (in `toneTable`) |
 | `linear_srgb_to_lab`, `linear_srgb_to_L`, `srgb_to_lab` | `linearSrgbToLab`, `linearSrgbToL`, `srgbToLab` | grey, white, `linearSrgbToLab_L`, `lstarOfY_mono` | yes |
 | `apply_trc` | `tableEval`, `tableAt` | `tableEval_mem`, `tableAt_natCast` | yes |
+| `parse_film_profile_pipeline` (the matrix refused) | `Profile.matrixAccepted` | | yes (on the bundles' profiles) |
 | `apply_matrix`, `candidate_matrix` | `Mat3.mulVec`, `candidateMatrix` | `candidateMatrix_mulVec`, `_one`, `_mul_exposure`, `_divScalar` | yes |
 | `subtract_cfa_black_in_place` | `subtractBlack`, `whiteAfterBlack` | | read |
 | `cpu_preview_debayer` | `halfSizePixel` | | yes |
@@ -379,7 +394,7 @@ code by reading only.
 | `film_base_balance_gains` | `filmBaseBalanceGains` | | yes |
 | `axis_table`, `flat_divide` | `flatAxis`, `flatGain`, `flatDivide` | | yes |
 | `compute_station_merged_matrix` | `mergedMatrix`, `captureExposure` | `mergedMatrix_mulVec_base`, `_scan_base` | yes |
-| `detect_film_base` (rules) | `rebatePlaced`, `rebateBox`, `patchClipped`, `outshoneStops`, `rebateAccepted`, `thinnestAccepted`, `filmBaseSource` | | read |
+| `detect_film_base` (rules) | `rebatePlaced`, `rebateBox`, `patchClipped`, `outshoneStops`, `rebateAccepted`, `thinnestAccepted`, `filmBaseSource` | | yes |
 | `percentile_f32`, `median_u16` | `percentileF32`, `medianU16` | | yes |
 | film base capture scaling | `baseFromCapture` | | read |
 | `knee_compress` | `kneeCompress`, `autoKnee` | `kneeCompress_mono`, `_step`, `_of_le`, `_of_nonpos`, `_le_one` | yes |
@@ -387,19 +402,20 @@ code by reading only.
 | `frame_scale` (`e_norm`) | `exposureNorm`, `Mat3.divScalar` | `candidateMatrix_divScalar` | yes |
 | `compute_inner_crop` | `innerCrop` | | yes |
 | `u16_percentile_linear`, `compute_frame_stats` (`g_lo`, `g_hi`) | `u16PercentileLinear`, `greenHistogram`, `sceneGreenRange` | | yes |
+| `load_profile_bundle` (a bracket's green range and exposure) | `patchGreenRange`, `bracketExposure` | | yes |
+| `ParamSearchOptions::crop_ratio` | `searchCropRatio` | | yes |
 | `bracket_enclosure` | `bracketEnclosure` | | yes |
-| `pull_centre` | `pullCentre` | | read |
-| `pcs_lab_to_srgb_u8`, `profile_highlight_ceiling` | `pcsLabToSrgbU8`, `profileHighlightCeiling` | | yes |
+| `pull_centre` | `pullCentre` | | yes |
 | `interpolate_clut` | `clutEval`, `tetraBlend` | `clutEval_const`, `clutEval_mem` | yes |
 | `apply_profile` | `applyProfile`, `Profile.hasClut` | | yes |
-| `pcs_to_linear_srgb_unclamped`, `_pre_shoulder` | `pcsToLinearSrgbUnclamped`, `pcsToLinearSrgbPreShoulder` | `pcsToLinearSrgb_white` | yes |
+| `kPcsWhite`, `pcs_to_linear_srgb_unclamped`, `_pre_shoulder` | `pcsWhite`, `pcsToLinearSrgbUnclamped`, `pcsToLinearSrgbPreShoulder` | `pcsToLinearSrgb_white` | yes |
 | `convert_pixel_pcs`, `convert_pixel_linear`, `convert_pixel_display` | `convertPixelPcs`, `convertPixelLinear`, `convertPixelDisplay` | `convertPixelDisplay_of_off` | yes |
 | `set_shoulder` | `setShoulder`, `shoulderCeiling`, `shoulderKneeGap`, `bisect` | `setShoulder_of_le` | yes |
 | `apply_shoulder_channel`, `apply_shoulder`, `to_display` | `applyShoulderChannel`, `applyShoulder`, `toDisplay` | identity below the knee, ceiling, parabola, `toDisplay_mem` | yes |
 | `shoulder_x_hi_anchored` | `shoulderXHiAnchored` | | yes |
 | `max_hist_bin`, `max_hist_quantile`, the histogram's fill, `shoulder_x_hi_from_hist`, `measure_rolloff_x_hi` | `maxHistBin`, `maxHistQuantile`, `maxHistOf`, `shoulderXHiFromHist` | | yes |
 | `encode_output`, `convert_pixel` | `encodeOutputWith`, `encodeOutput`, `convertPixel` | `convertPixel_of_no_tone`, `_of_short_tone`, `convertPixel_linear`, `encodeOutput_mem` | yes |
-| `quantize_u8`, `quantize_u16` | `quantizeU8`, `quantizeU16`, `outputPixel` | | yes |
+| `quantize_u8`, `quantize_u16` and the outputs' codes | `quantizeU8`, `quantizeU16`, `outputPixel`, `correctedPixel`, `previewPixel` | | yes (exact) |
 | `linear_channel_white_clipped`, `_black_clipped` | `linearChannelWhiteClipped`, `linearChannelBlackClipped`, `pixelWhiteClipped`, `pixelBlackClipped` | | yes |
 | `curve_stops`, `input_curve` | `curveStops`, `inputCurve` | `inputCurve_of_ge`, `inputCurve_zero`, `curveStops_zero`, `curveStops_hold` | yes |
 | `compose_input_table`, `CombinedProfile::build` | `composeInputTable`, `combinedProfile` | | yes |
@@ -412,7 +428,10 @@ code by reading only.
 | `fit_input_curves_joint` (setup, residuals, loss), `JointLM` | `FitProblem.setup`, `.r4`, `.residuals`, `.loss`, `.run`, `.cutBack`, `.fit` | | yes |
 | `grid_median_L`, `solve_e_for_median_L` | `gridMedianL`, `solveEForMedianL` | | yes |
 | `fallback_picture_cells` | `fallbackPictureCells` | | yes |
-| `curve_frame_of` (base) | `curveFrameBase` | | read |
+| `curve_frame_of` (base) | `curveFrameBase` | | yes |
+| `fit_target_L_` (the clamp) | `fitTargetL`, `intentMinL`, `intentMaxL` | | the bounds |
+| `shape_scale_of`, `anchor_curves` | `shapeScaleOf`, `inputCurveReference` | | yes |
+| `reanchor_input_curves` | `reanchorCurves`, `reanchorChannel` | | read (its parts checked) |
 | `tone_curve_L` | `toneCurveL` | `toneCurveL_mono`, `toneCurveL_identity` | yes (in table and plan) |
 | `tone_table`, `tone_curve_ok` | `toneTable`, `toneCurveOk` | | yes |
 | `tone_descriptors` | `toneDescriptors`, `percentileSorted`, `toneLstarOfU8` | | yes |
@@ -421,7 +440,25 @@ code by reading only.
 | `tone_pick_clip_share`, `tone_clip_sample`, `tone_plan_for_image` | `tonePickClipShare`, `toneClipSample`, `tonePlanForImage` | | yes |
 | `tone_lab_fprime`, `tone_table_Y`, `apply_tone` | `toneLabFprime`, `toneTableY`, `applyTone` | `applyTone_grey` | yes |
 
+## Defined but not evaluated by the check
+
+- `subtractBlack`, `whiteAfterBlack`, `captureScale`, `tiffHalf` (`np_input.cc`) and `baseFromCapture`
+  (`np_film_base.cc`): those files are not in the library the generator links, and the functions
+  work on LibRaw's state or on files.
+- `reanchorCurves`, `reanchorChannel`: `reanchor_input_curves` needs the network engine; its parts
+  (the anchors, the shape test, the shape's scale) are checked.
+- `fitTargetL`: the clamp sits inside the fit's class; its bounds are checked.
+- `density`, `transmission`, `sq`, `mean`, the componentwise `add` and `sub`: helpers of the base for
+  the other parts (the print emulation's density); the scene conversion does not use them.
+
 ## Not formalized
+
+- **The Auto search** (4.2) and the networks (3.5): specified in #211, stacked on this pull request.
+- **Where the passes run.** On a CUDA build with a device the search's previews and clip passes run
+  on the GPU (`gpu_passes.cu`), through the same per-pixel functions of `color_pipeline.h`; the
+  specification is over the real numbers and covers both, but the vectors are computed on the CPU
+  (the generator runs without a device), so the GPU's last-place rounding of `powf`, `tanhf` and
+  `cbrtf` is not checked.
 
 - **LibRaw and Little-CMS.** LibRaw's decoding (its demosaic for other cameras, for `-q 0` and more
   and for the white-light decode, its white balance and camera matrix to linear Rec.2020) and the
@@ -435,9 +472,9 @@ code by reading only.
   (`map_inverse_geometry_cpu`, `crop_and_orient`) are index bookkeeping; the specification uses the
   identity mapping.
 - **Parsing and records**: ICC profiles (the check reads the bundles' `lut16Type` itself), the
-  bundle's JSON, the profcheck report's rows, the flat field's `.npz`, the sidecar.
+  bundle's JSON, the flat field's `.npz`, the sidecar.
 - **NaN, infinities and finiteness tests**, which the C++ uses to skip cells or values, and the
   guards for absent data (no profile, a zero reference entry in `frame_scale`, a scan exposure of
   zero, a missing base shutter): the definitions assume finite values and present data.
 - **The network heads** that give the tone stage its predictions, the fit its `p`, `μ` and `σ`: an
-  opaque function whose outputs are inputs here (specified with the Auto search).
+  opaque function whose outputs are inputs here (specified with the Auto search in #211).
