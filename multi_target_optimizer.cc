@@ -2601,7 +2601,9 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
   for (int ch = 0; ch < 2; ++ch) {
     if (a0.ref[ch] > 0.0f && a1.ref[ch] > 0.0f) out.ref[ch] = curves.ref[ch] * (a1.ref[ch] / a0.ref[ch]);
     out.u_med[ch] = curves.u_med[ch] + (a1.u_med[ch] - a0.u_med[ch]);
-    out.u_lo[ch] = curves.u_lo[ch] + (a1.u_lo[ch] - a0.u_lo[ch]);
+    // At most 0, as input_curve_reference holds the cells it is read from: a hold point above ref would step the
+    // curve there (curve_shape_ok). At 0 the held curve is the identity below ref.
+    out.u_lo[ch] = std::min(curves.u_lo[ch] + (a1.u_lo[ch] - a0.u_lo[ch]), 0.0f);
     const int table_n = pd.in_trc_size[ch + 1];
     scale[ch] = shape_scale_of([&](float t) {
       return negicc::curve_shape_ok(t * out.a[ch], t * out.k[ch], out.u_med[ch], out.ref[ch], table_n, max_dev_stops,

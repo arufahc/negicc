@@ -293,7 +293,15 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
             std::to_string(src_w) + "x" + std::to_string(src_h) + ")";
       return false;
     }
+    // The half-size pixels (2x2 photosites) the region touches. An odd sensor's last column or row is in none.
     const int hx = roi[0] / 2, hy = roi[1] / 2;
+    if (hx >= half_w || hy >= half_h) {
+      err = "the film base region " + std::to_string(roi[0]) + "," + std::to_string(roi[1]) + "," +
+            std::to_string(roi[2]) + "," + std::to_string(roi[3]) + " lies on the capture's last column or row (" +
+            std::to_string(src_w) + "x" + std::to_string(src_h) + "), which the half-size decode (2x2 photosites "
+            "to a pixel) does not hold";
+      return false;
+    }
     const int hw = std::max(1, std::min(half_w - hx, (roi[0] + roi[2] + 1) / 2 - hx));
     const int hh = std::max(1, std::min(half_h - hy, (roi[1] + roi[3] + 1) / 2 - hy));
     const RegionStats st = region_stats(view, raw_view, hx, hy, hw, hh, clip);
@@ -317,15 +325,15 @@ bool read_film_base_capture(const std::string& path, const int* roi, const negic
     out.roi_source = "tiles";
   } else {
     // The thinnest film on the capture, as a TriLED scan's base is read when it shows no rebate; on the mosaic as
-    // recorded it must not be clipped.
-    float thin[3] = {0.0f, 0.0f, 0.0f}, thin_raw[3] = {0.0f, 0.0f, 0.0f};
-    negicc::thinnest_film_base(view, white_level, thin);
-    negicc::thinnest_film_base(raw_view, white_level, thin_raw);
+    // recorded (the same pixels before the flat field) it must not be clipped.
+    float thin[3] = {0.0f, 0.0f, 0.0f};
+    bool thin_clipped = false;
+    negicc::thinnest_film_base(view, white_level, thin, &thin_clipped);
     if (!(thin[0] > 1.0f) || !(thin[1] > 1.0f) || !(thin[2] > 1.0f)) {
       err = "no usable film base on " + path + " (no smooth film)";
       return false;
     }
-    if (thin_raw[0] >= clip || thin_raw[1] >= clip || thin_raw[2] >= clip) {
+    if (thin_clipped) {
       err = "the film base capture " + path + " is clipped: capture the film base at a shorter exposure";
       return false;
     }
