@@ -165,7 +165,8 @@ bool film_sample_patch(const FilmImage& image, const FilmRect& patch, float rgb[
 
 namespace negicc {
 
-// Square dilation by r pixels (separable distance scans).
+// Square dilation by r pixels (separable distance scans). m is left as it is when r <= 0, W or H <= 0, or m holds
+// fewer than W x H pixels.
 void dilate(std::vector<uint8_t>& m, int W, int H, int r);
 
 }  // namespace negicc

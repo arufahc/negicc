@@ -38,6 +38,7 @@
   only by `STATIC=1` (`make neg_process STATIC=1`): the Makefile fetches the submodule if needed, builds its static
   archives with CMake into `bin_out/libonnxruntime.a`, and links ONNX Runtime statically into `bin_out/neg_process`.
   That needs the submodule's source to be fetchable from its URL.
-- `tiff_head.h`: LibRaw's TIFF header writer (`src/write/file_write.cpp`), which is not public API, copied here.
+- `tiff_head.h`: negicc's fork of LibRaw's TIFF header writer (`src/write/file_write.cpp`, not public API), changed
+  here and not synced with LibRaw: it writes the header of `write_tiff`'s output (`np_output.cc`).
 - `tiff.h`: TIFF tag definitions used by `tiff_head.h`.
 - `elle_icc_profiles/`: see the directory.

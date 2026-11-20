@@ -32,7 +32,8 @@ namespace negicc {
 // The gains for the camera channels that put the film base |base| (linear Rec.2020, as the white-light decode of proc
 // gives it) on the profile's film base |profile_base|: K = (M^-1 profile_base) / (M^-1 base) per channel, M the camera
 // matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised and nothing new
-// clips. k is left as it is when either base has a camera channel that is not positive.
+// clips. k is left as it is when either base has a camera channel that is not positive, or when a gain is not a finite
+// positive number (a base so extreme that the arithmetic overflows or underflows).
 //
 // Why before the matrix: a light of another colour than the profile's gives the base another colour in the camera's
 // own channels. Corrected after the matrix has mixed them, the matrix's negative terms drive dense areas below zero
@@ -64,34 +65,49 @@ inline void film_base_balance_gains(const LibRaw& proc, const double base[3], co
     }
     if (!(cam / det > 0 && cam_profile / det > 0)) return;
     gain[c] = cam_profile / cam;
+    if (!(std::isfinite(gain[c]) && gain[c] > 0)) return;
   }
   const double largest = std::max({gain[0], gain[1], gain[2]});
-  for (int c = 0; c < 3; ++c) k[c] = (float)(gain[c] / largest);
+  float out[3];
+  for (int c = 0; c < 3; ++c) {
+    out[c] = (float)(gain[c] / largest);
+    if (!(out[c] > 0)) return;
+  }
+  for (int c = 0; c < 3; ++c) k[c] = out[c];
 }
 
 // Multiplies the white-light mosaic (black-subtracted and white-balanced in place, as np_input.cc's
 // prepare_white_light_mosaic leaves it) by k, per camera channel. A CFA mosaic holds one sample a
 // photosite, of the photosite's colour; a linear DNG holds three or four a pixel, R, G and B first.
+// Each product is rounded and held in the samples' range, 0 to 65535 (0 for one that is not a number), so a gain
+// above 1, negative or not finite cannot overflow a sample. The mosaic is left as it is when proc holds none, or when
+// a photosite of the CFA has no colour of the camera's channels (a sensor without a colour filter array).
 inline void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
   const auto& S = proc->imgdata.sizes;
   const auto& R = proc->imgdata.rawdata;
   const int samples = R.raw_image ? 1 : R.color4_image ? 4 : 3;
   uint16_t* raw = R.raw_image ? R.raw_image : samples == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
+  if (!raw) return;
   const size_t pitch = S.raw_pitch / 2 / samples;  // pixels per row of the raw buffer
   float tile[36];  // the gain of each photosite of a 6x6 CFA tile (Bayer repeats every 2, X-Trans every 6)
-  for (int r = 0; r < 6; ++r)
+  for (int r = 0; samples == 1 && r < 6; ++r)
     for (int c = 0; c < 6; ++c) {
       const int colour = proc->COLOR(r, c);
+      if (colour < 0 || colour > 3) return;
       tile[r * 6 + c] = k[colour == 3 ? 1 : colour];  // 3 is the second green
     }
+  auto scaled = [](uint16_t v, float gain) {
+    const float s = std::nearbyint(v * gain);
+    return s > 0.0f ? (uint16_t)std::min(s, (float)UINT16_MAX) : (uint16_t)0;
+  };
   #pragma omp parallel for schedule(static)
   for (int y = 0; y < S.height; ++y) {
     uint16_t* p = raw + ((size_t)(y + S.top_margin) * pitch + S.left_margin) * samples;
     for (int x = 0; x < S.width; ++x, p += samples) {
       if (samples == 1) {
-        p[0] = (uint16_t)std::nearbyint(p[0] * tile[(y % 6) * 6 + x % 6]);
+        p[0] = scaled(p[0], tile[(y % 6) * 6 + x % 6]);
       } else {
-        for (int c = 0; c < 3; ++c) p[c] = (uint16_t)std::nearbyint(p[c] * k[c]);
+        for (int c = 0; c < 3; ++c) p[c] = scaled(p[c], k[c]);
       }
     }
   }

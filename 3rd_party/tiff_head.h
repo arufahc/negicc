@@ -20,13 +20,20 @@ it under the terms of the one of two licenses as you choose:
 // tiff_head is not public API and is copied here.
 
 #include <tiff.h>
+#include <time.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <limits>
 
 #include "libraw/libraw.h"
 
 #define FORC(cnt) for (c = 0; c < cnt; c++)
 
+// count and val are unsigned 32-bit, as the TIFF fields they fill: a strip of more than 2 GB keeps its byte count.
 void tiff_set(struct tiff_hdr *th, ushort *ntag, ushort tag,
-                      ushort type, int count, int val)
+                      ushort type, uint32_t count, uint32_t val)
 {
   struct libraw_tiff_tag *tt;
   int c;
@@ -54,16 +61,19 @@ void tiff_set(struct tiff_hdr *th, ushort *ntag, ushort tag,
 // Use their values instead of width and height from |proc|.
 // This is useful when outputting an image that is different size
 // than that of the processed raw.
+// The image is three 16-bit samples a pixel, RGB, in one strip, as write_tiff (np_output.cc) writes it whatever the
+// RAW's colours; the caller checks that the header, the profile and the strip fit a classic TIFF's 32-bit offsets.
+// A field the RAW does not record usably (no capture time; an exposure time, f-number or focal length that is negative,
+// not finite or too large for its numerator; an ISO speed a SHORT cannot hold) is left out rather than written wrong.
 void tiff_head(const LibRaw* proc, struct tiff_hdr *th,
                size_t profile_size, size_t width_override = 0, size_t height_override = 0) {
   int c;
-  struct tm *t;
 
   // Commonly used POD.
-  auto colors = proc->imgdata.idata.colors;
+  const unsigned colors = 3;
   auto width = width_override ? width_override : proc->imgdata.sizes.iwidth;
   auto height = height_override ? height_override : proc->imgdata.sizes.iheight;
-  auto output_bps = proc->imgdata.params.output_bps;
+  const unsigned output_bps = 16;
 
   memset(th, 0, sizeof *th);
   th->t_order = htonl(0x4d4d4949) >> 16;
@@ -72,16 +82,31 @@ void tiff_head(const LibRaw* proc, struct tiff_hdr *th,
   th->rat[0] = th->rat[2] = 300;
   th->rat[1] = th->rat[3] = 1;
   FORC(6) th->rat[4 + c] = 1000000;
-  th->rat[4] *= proc->imgdata.other.shutter;
-  th->rat[6] *= proc->imgdata.other.aperture;
-  th->rat[8] *= proc->imgdata.other.focal_len;
+  // A value in millionths, the rational's numerator over the 1000000 above (the product in float, as LibRaw's
+  // th->rat[4] *= shutter computes it); false when it is negative, not finite or more than th->rat's int holds.
+  auto micro = [](float v, int& num) {
+    const float n = 1000000.0f * v;
+    if (!(n >= 0.0f && n < (float)std::numeric_limits<int>::max())) return false;
+    num = (int)n;
+    return true;
+  };
+  const bool has_shutter = micro(proc->imgdata.other.shutter, th->rat[4]);
+  const bool has_aperture = micro(proc->imgdata.other.aperture, th->rat[6]);
+  const bool has_focal_len = micro(proc->imgdata.other.focal_len, th->rat[8]);
   strncpy(th->t_desc, proc->imgdata.other.desc, 512);
   strncpy(th->t_make, proc->imgdata.idata.make, 64);
   strncpy(th->t_model, proc->imgdata.idata.model, 64);
   strcpy(th->soft, "NegProcess");
-  t = localtime(&proc->imgdata.other.timestamp);
-  sprintf(th->date, "%04d:%02d:%02d %02d:%02d:%02d", t->tm_year + 1900,
-          t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec);
+  // The capture's time, "YYYY:MM:DD HH:MM:SS" (TIFF 6.0 DateTime, which fills th->date); none when the RAW records no
+  // time (0), when the time cannot be converted, or when its year takes more than four digits.
+  bool has_date = false;
+  struct tm tm_buf;
+  if (proc->imgdata.other.timestamp > 0 && localtime_r(&proc->imgdata.other.timestamp, &tm_buf)) {
+    const int n = snprintf(th->date, sizeof th->date, "%04d:%02d:%02d %02d:%02d:%02d", tm_buf.tm_year + 1900,
+                           tm_buf.tm_mon + 1, tm_buf.tm_mday, tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    has_date = n == (int)sizeof th->date - 1;
+    if (!has_date) memset(th->date, 0, sizeof th->date);
+  }
   strncpy(th->t_artist, proc->imgdata.other.artist, 64);
   tiff_set(th, &th->ntag, TIFFTAG_SUBFILETYPE, 4, 1, 0);
   tiff_set(th, &th->ntag, TIFFTAG_IMAGEWIDTH, 4, 1, width);
@@ -106,15 +131,22 @@ void tiff_head(const LibRaw* proc, struct tiff_hdr *th,
   tiff_set(th, &th->ntag, TIFFTAG_PLANARCONFIG, 3, 1, 1);
   tiff_set(th, &th->ntag, TIFFTAG_RESOLUTIONUNIT, 3, 1, 2);
   tiff_set(th, &th->ntag, TIFFTAG_SOFTWARE, 2, 32, TOFF(th->soft));
-  tiff_set(th, &th->ntag, TIFFTAG_DATETIME, 2, 20, TOFF(th->date));
+  if (has_date)
+    tiff_set(th, &th->ntag, TIFFTAG_DATETIME, 2, 20, TOFF(th->date));
   tiff_set(th, &th->ntag, TIFFTAG_ARTIST, 2, 64, TOFF(th->t_artist));
   tiff_set(th, &th->ntag, TIFFTAG_EXIFIFD, 4, 1, TOFF(th->nexif));
   if (profile_size)
     tiff_set(th, &th->ntag, TIFFTAG_ICCPROFILE, 7, profile_size, sizeof *th);
-  tiff_set(th, &th->nexif, EXIFTAG_EXPOSURETIME, 5, 1, TOFF(th->rat[4]));
-  tiff_set(th, &th->nexif, EXIFTAG_FNUMBER, 5, 1, TOFF(th->rat[6]));
-  tiff_set(th, &th->nexif, EXIFTAG_ISOSPEEDRATINGS, 3, 1, proc->imgdata.other.iso_speed);
-  tiff_set(th, &th->nexif, EXIFTAG_FOCALLENGTH, 5, 1, TOFF(th->rat[8]));
+  if (has_shutter)
+    tiff_set(th, &th->nexif, EXIFTAG_EXPOSURETIME, 5, 1, TOFF(th->rat[4]));
+  if (has_aperture)
+    tiff_set(th, &th->nexif, EXIFTAG_FNUMBER, 5, 1, TOFF(th->rat[6]));
+  // ISOSpeedRatings is a SHORT: a speed it cannot hold (negative, not finite, or above 65535) is left out.
+  const float iso = proc->imgdata.other.iso_speed;
+  if (iso >= 0.0f && iso <= (float)std::numeric_limits<ushort>::max())
+    tiff_set(th, &th->nexif, EXIFTAG_ISOSPEEDRATINGS, 3, 1, (uint32_t)iso);
+  if (has_focal_len)
+    tiff_set(th, &th->nexif, EXIFTAG_FOCALLENGTH, 5, 1, TOFF(th->rat[8]));
 
   const unsigned* gpsdata = proc->imgdata.other.gpsdata;
   if (gpsdata[1])

@@ -1043,7 +1043,14 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
     uint32_t tw = 0, th = 0;
     TIFFGetField(tif.get(), TIFFTAG_TILEWIDTH, &tw);
     TIFFGetField(tif.get(), TIFFTAG_TILELENGTH, &th);
-    // A tile holds tw x th pixels of stride samples, which put_samples reads row by row.
+    // A tile holds tw x th pixels of stride samples, which put_samples reads row by row. A tile may be larger than
+    // the image (libtiff pads it), but not larger on a side than an image may be (max_side, above): the buffer is
+    // sized from the tile, before libtiff reads a byte of it.
+    if (tw > max_side || th > max_side) {
+      err = path + ": a " + std::to_string(tw) + "x" + std::to_string(th) + " tile is larger than " +
+            std::to_string(max_side) + " pixels on a side";
+      return false;
+    }
     const tmsize_t tile_size = TIFFTileSize(tif.get());
     if (tw == 0 || th == 0 || tile_size <= 0 || (uint64_t)tile_size < (uint64_t)tw * th * stride * (bps / 8)) {
       err = path + ": a " + std::to_string(tw) + "x" + std::to_string(th) + " tile of " + std::to_string(tile_size) +

@@ -68,6 +68,13 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 
   const unsigned height = proc->imgdata.sizes.iheight;
   const unsigned width = proc->imgdata.sizes.iwidth;
+  // A classic TIFF addresses its data with 32-bit offsets: the header, the profile and the strip of three 16-bit
+  // samples a pixel must end within them (as write_density_tiff checks, np_print.cc).
+  if (sizeof(tiff_hdr) + (uint64_t)profile_size + (uint64_t)width * height * 6 > 0xffffff00ull) {
+    log_error("The image is too large for a TIFF file (%ux%u)\n", width, height);
+    if (dynamically_allocated && output_profile) free(output_profile);
+    return -1;
+  }
   struct tiff_hdr header;
   tiff_head(proc, &header, profile_size);
   auto* fp = fopen(output.c_str(), "wb+");
@@ -76,28 +83,35 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
     if (dynamically_allocated && output_profile) free(output_profile);
     return -1;
   }
-  fwrite(&header, sizeof(header), 1, fp);
-  if (profile_size) {
-    fwrite(output_profile, profile_size, 1, fp);
+  bool ok = fwrite(&header, sizeof(header), 1, fp) == 1;
+  if (ok && profile_size) {
+    ok = fwrite(output_profile, profile_size, 1, fp) == 1;
   }
   if (dynamically_allocated && output_profile) {
     free(output_profile);
   }
 
-  if (rgb3) {
-    fwrite(rgb3, 3 * sizeof(uint16_t), (size_t)width * height, fp);
-  } else {
+  if (ok && rgb3) {
+    ok = fwrite(rgb3, 3 * sizeof(uint16_t), (size_t)width * height, fp) == (size_t)width * height;
+  } else if (ok) {
     std::vector<ushort> row_buf(width * 3);
-    for (unsigned row = 0; row < height; ++row) {
+    for (unsigned row = 0; ok && row < height; ++row) {
       for (unsigned col = 0; col < width; ++col) {
         row_buf[col * 3]     = proc->imgdata.image[row * width + col][0];
         row_buf[col * 3 + 1] = proc->imgdata.image[row * width + col][1];
         row_buf[col * 3 + 2] = proc->imgdata.image[row * width + col][2];
       }
-      fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp);
+      ok = fwrite(row_buf.data(), 3 * sizeof(ushort), width, fp) == width;
     }
   }
-  fclose(fp);
+  ok = (fclose(fp) == 0) && ok;
+  if (!ok) {
+    // A full disk or another write error: the truncated file is removed (not a device or pipe given as the output).
+    log_error("Failed to write %s\n", output.c_str());
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(output, ec)) unlink(output.c_str());
+    return -1;
+  }
   return 0;
 }
 
