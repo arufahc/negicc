@@ -250,7 +250,8 @@ void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, st
 // Check by content if file is a JSON profile bundle (first non-space character is '{')
 bool is_json_bundle(const std::string& resolved_path);
 
-// Parse AToB0 pipeline tags from an open cmsHPROFILE into ParsedFilmProfile
+// Parse AToB0 pipeline tags from an open cmsHPROFILE into ParsedFilmProfile. False, with the reason logged, when the
+// profile has no AToB0 tag or one with a matrix other than the identity.
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof);
 
 // Reads a file a split bundle names (a target's "icc_profile") into out; false when it cannot.

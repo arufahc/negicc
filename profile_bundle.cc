@@ -68,7 +68,10 @@ static void read_curve_set_local(_cmsStageToneCurvesData* data,
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
   if (!hprof) return false;
   cmsPipeline* pipeline = (cmsPipeline*)cmsReadTag(hprof, cmsSigAToB0Tag);
-  if (!pipeline) return false;
+  if (!pipeline) {
+    log_error("The profile has no AToB0 tag\n");
+    return false;
+  }
 
   prof.data.has_profile = 1;
   const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
@@ -1027,7 +1030,7 @@ bool load_film_profile(const std::string& raw_path, ParsedFilmProfile& prof) {
     return false;
   }
   if (!parse_film_profile_pipeline(hprof, prof)) {
-    log_error("Film ICC profile %s has no AToB0 tag\n", resolved_path.c_str());
+    log_error("Film ICC profile %s cannot be read as a film profile\n", resolved_path.c_str());
     cmsCloseProfile(hprof);
     return false;
   }
