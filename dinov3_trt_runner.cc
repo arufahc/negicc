@@ -13,6 +13,7 @@
 #ifdef NEGICC_USE_CUDA
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -58,11 +59,17 @@ struct DeviceBuffer {
 class TrtRunner : public DinoV3Runner {
 public:
     explicit TrtRunner(const std::string& engine_path) {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(engine_path, ec))
+            throw std::runtime_error("TensorRT engine " + engine_path + " is not a file");
         std::ifstream f(engine_path, std::ios::binary | std::ios::ate);
         if (!f) throw std::runtime_error("cannot open TensorRT engine " + engine_path);
-        std::vector<char> blob((size_t)f.tellg());
+        const std::streamoff size = f.tellg();
+        if (size <= 0) throw std::runtime_error("TensorRT engine " + engine_path + " is empty");
+        std::vector<char> blob((size_t)size);
         f.seekg(0);
-        f.read(blob.data(), (std::streamsize)blob.size());
+        if (!f.read(blob.data(), (std::streamsize)blob.size()))
+            throw std::runtime_error("cannot read all of TensorRT engine " + engine_path);
         init(blob.data(), blob.size(), engine_path);
     }
 
@@ -120,7 +127,9 @@ public:
         context_->setTensorAddress("pixel_values", pv_.reserve(pv_bytes));
         check_cuda(cudaMemcpyAsync(pv_.ptr, pixel_values, pv_bytes, cudaMemcpyHostToDevice, stream_), "H2D");
         if (has_pool_weights_) {
-            context_->setInputShape("pool_weights", nvinfer1::Dims3{1, patches, 3});
+            if (!pool_weights) throw std::runtime_error("TensorRT engine takes pool_weights, and none were given");
+            if (!context_->setInputShape("pool_weights", nvinfer1::Dims3{1, patches, 3}))
+                throw std::runtime_error("TensorRT engine rejects the pool_weights shape (profile range)");
             context_->setTensorAddress("pool_weights", pw_.reserve(field_bytes));
             check_cuda(cudaMemcpyAsync(pw_.ptr, pool_weights, field_bytes, cudaMemcpyHostToDevice, stream_), "H2D");
         }

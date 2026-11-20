@@ -80,6 +80,7 @@ void DinoV3AdapterRunner::run_device(const void*, int, float*, float*) {
 
 void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads,
                                const void* engine_data, size_t engine_size) {
+    adapter_path_.clear();
     if (runner_ && !runner_->has_tokens()) {  // a fused model carries its own adapter
         adapter_.reset();
         adapter_name_ = name;
@@ -107,12 +108,20 @@ void DinoV3Engine::set_adapter(const void* onnx_data, size_t onnx_size, const st
 
 namespace {
 
-std::vector<uint8_t> read_file(const std::string& path) {
+// A model file read whole: a regular, non-empty file, every byte of it (a directory, an empty file or a short read
+// throws, naming what).
+std::vector<uint8_t> read_file(const std::string& path, const char* what) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+        throw std::runtime_error(std::string("DinoV3Engine: ") + what + " " + path + " is not a file");
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
-    std::vector<uint8_t> bytes((size_t)f.tellg());
+    if (!f) throw std::runtime_error(std::string("DinoV3Engine: cannot open ") + what + " " + path);
+    const std::streamoff size = f.tellg();
+    if (size <= 0) throw std::runtime_error(std::string("DinoV3Engine: ") + what + " " + path + " is empty");
+    std::vector<uint8_t> bytes((size_t)size);
     f.seekg(0);
-    f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size());
+    if (!f.read(reinterpret_cast<char*>(bytes.data()), (std::streamsize)bytes.size()))
+        throw std::runtime_error(std::string("DinoV3Engine: cannot read all of ") + what + " " + path);
     return bytes;
 }
 
@@ -124,22 +133,39 @@ void DinoV3Engine::load_adapter_file(const std::string& path, int num_threads) {
     std::filesystem::path onnx_p = p, engine_p = p;
     if (p.extension() == ".engine") onnx_p.replace_extension(".onnx");
     else engine_p.replace_extension(".engine");
-    std::vector<uint8_t> onnx, engine;
-    if (file_exists(onnx_p.string())) onnx = read_file(onnx_p.string());
-    if (file_exists(engine_p.string())) engine = read_file(engine_p.string());
-    // An engine older than its .onnx holds the earlier weights: the .onnx is taken (make dinov3_engine rebuilds it).
-    if (!onnx.empty() && !engine.empty() &&
-        std::filesystem::last_write_time(engine_p) < std::filesystem::last_write_time(onnx_p)) {
-        std::cerr << "Warning: " << engine_p.string() << " is older than " << onnx_p.string()
-                  << ": the adapter runs from the .onnx (make dinov3_engine rebuilds the engine)" << std::endl;
-        engine.clear();
+    adapter_path_.clear();
+    adapter_file_.clear();
+    // A fused model carries its own adapter: no file is read.
+    if (runner_ && !runner_->has_tokens()) {
+        set_adapter(nullptr, 0, path, num_threads);
+        return;
     }
-    if (onnx.empty() && engine.empty()) throw std::runtime_error("DinoV3Engine: cannot open adapter " + path);
-    // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session;
-    // TensorRT copies the engine while deserialising it.
-    adapter_file_ = std::move(onnx);
-    set_adapter(adapter_file_.empty() ? nullptr : adapter_file_.data(), adapter_file_.size(), path, num_threads,
-                engine.empty() ? nullptr : engine.data(), engine.size());
+    // Only the file the backbone's runtime takes is read: the engine behind a TensorRT backbone, the .onnx behind ONNX
+    // Runtime (set_adapter).
+    const bool gpu = runner_ && std::strncmp(runner_->name(), "gpu", 3) == 0;
+    if (gpu) {
+        if (!file_exists(engine_p.string())) {
+            set_adapter(nullptr, 0, path, num_threads);   // throws: the engine the GPU backbone needs is missing
+            return;
+        }
+        // An engine older than its .onnx holds the earlier weights.
+        if (file_exists(onnx_p.string()) &&
+            std::filesystem::last_write_time(engine_p) < std::filesystem::last_write_time(onnx_p)) {
+            throw std::runtime_error("DinoV3Engine: intent adapter engine " + engine_p.string() + " is older than " +
+                                     onnx_p.string() + ", so it holds earlier weights (run `make dinov3_engine` on "
+                                     "this device to rebuild it)");
+        }
+        const std::vector<uint8_t> engine = read_file(engine_p.string(), "intent adapter engine");
+        set_adapter(nullptr, 0, path, num_threads, engine.data(), engine.size());
+        adapter_path_ = engine_p.string();
+    } else {
+        if (!file_exists(onnx_p.string()))
+            throw std::runtime_error("DinoV3Engine: intent adapter " + path + " has no adapter.onnx for the CPU backbone");
+        // ONNX Runtime copies what it needs while building the session, but keep the bytes alive with the session.
+        adapter_file_ = read_file(onnx_p.string(), "intent adapter");
+        set_adapter(adapter_file_.data(), adapter_file_.size(), path, num_threads);
+        adapter_path_ = onnx_p.string();
+    }
 }
 
 const char* DinoV3Engine::backend_name() const { return runner_ ? runner_->name() : "none"; }
@@ -177,6 +203,7 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
         if (file_exists(join_path(model_spec, stem + ".onnx"))) onnx_path = join_path(model_spec, stem + ".onnx");
         if (file_exists(join_path(model_spec, stem + ".engine"))) engine_path = join_path(model_spec, stem + ".engine");
     } else if (ends_with(model_spec, ".engine")) {
+        if (!file_exists(model_spec)) throw std::runtime_error("DinoV3Engine: TensorRT engine " + model_spec + " is not a file");
         engine_path = model_spec;
     } else {
         onnx_path = model_spec;

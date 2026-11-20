@@ -1285,17 +1285,20 @@ int prepare(const Options& o, Setup& s) {
         s.dino_path = std::string("[built-in] ") + onnx->name;
       }
       // A model's file named by --dino, read whole (an error names the head).
+      // A model's file named by --dino, read whole (an error names the head): a regular file read to its end.
       auto read_file = [](const std::string& path, const char* head) {
+        if (!is_regular_file(path)) throw std::runtime_error(std::string("--dino ") + head + ": " + path + " is not a file");
         std::ifstream in(path, std::ios::binary);
         if (!in) throw std::runtime_error(std::string("--dino ") + head + ": cannot read " + path);
-        return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (in.bad()) throw std::runtime_error(std::string("--dino ") + head + ": cannot read all of " + path);
+        return bytes;
       };
       if (!o.dino_adapter.empty()) {
-        std::string adapter = o.dino_adapter;
-        if (is_directory(adapter)) adapter = (std::filesystem::path(adapter) / "adapter.onnx").string();
-        s.engine.load_adapter_file(adapter);
-        s.head_path[0] = adapter;
-        s.head_fp[0].ok = file_fingerprint(adapter, s.head_fp[0].size, s.head_fp[0].crc);
+        // The record names the file that ran: adapter.engine behind a TensorRT backbone, adapter.onnx otherwise.
+        s.engine.load_adapter_file(o.dino_adapter);
+        s.head_path[0] = s.engine.adapter_path();
+        s.head_fp[0].ok = file_fingerprint(s.head_path[0], s.head_fp[0].size, s.head_fp[0].crc);
       } else {
         std::string adapter_dir;
         const std::string profile_name = !o.film_stock.empty() ? o.film_stock
@@ -1313,8 +1316,10 @@ int prepare(const Options& o, Setup& s) {
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
         s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
-        s.head_path[0] = std::string("[built-in] ") + a->name;
-        s.head_fp[0] = memory_fingerprint(a->data, a->size);
+        // The record names what ran: the engine on the GPU, the .onnx on the CPU.
+        const EmbeddedFile* ran = s.engine.adapter_on_device() ? ae : a;
+        s.head_path[0] = std::string("[built-in] ") + ran->name;
+        s.head_fp[0] = memory_fingerprint(ran->data, ran->size);
       }
       // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
       // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
