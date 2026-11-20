@@ -249,7 +249,9 @@ void lstsq3(const float J[3][3], const float r[3], float rcond, float x[3]) {
 // py-ref: negicc_station/src/grey_point.py @ 93be1ec (GreyPoint)
 class GreyPoint {
  public:
-  explicit GreyPoint(const ProfileData& prof) : prof_(prof) {}
+  // steady: for the knobs' solves, a reference grey that the solve misses is sought again (reference_grey). The
+  // bootstrap's check of each bracket goes without it, so the brackets Auto meters do not depend on it.
+  explicit GreyPoint(const ProfileData& prof, bool steady = false) : prof_(prof), steady_(steady) {}
 
   // Lab of inputs t (n x 3), the scale going through E so the 16-bit inputs sit near 0.9.
   void lab(const float (*t)[3], int n, float (*out)[3]) const {
@@ -288,11 +290,20 @@ class GreyPoint {
   // The start point: inputs k * (1.4, 1.0, 0.88), the green-normalised neutral input of the Portra brackets (a
   // colour like the orange mask, only a starting direction), for k = 2^-10 .. 2^3 in half stops; the k whose L* is
   // nearest 50 wins. newton() then moves all three channels freely from there to hit (50, 0, 0) exactly.
-  bool reference_grey(float log_t0[3] = nullptr) const {
+  //
+  // With steady_ (the knobs), a solve that misses runs again from the same start with newton()'s step control, and
+  // if that misses too, from the grid of the same inputs taken per channel (each channel at any of the 27 levels
+  // k * dir[c]), from the point nearest (50, 0, 0) in dE76, with the step control. The start on the line can render
+  // with an sRGB channel clipped (a bracket whose profile carries fitted input curves has its neutral off the Portra
+  // direction), and there the render does not move with that channel: no step computed from it finds the way out.
+  // A solve that reaches the grey the first time is the one the bootstrap and every earlier build ran.
+  bool reference_grey(float log_t0[3] = nullptr, float* miss = nullptr) const {
     const float dir[3] = {1.4f, 1.0f, 0.88f};
+    constexpr int kLevels = 27;
+    auto level = [](int i) { return std::pow(2.0f, -10.0f + 0.5f * i); };
     float best_k = 0.0f, best_d = std::numeric_limits<float>::infinity();
-    for (int i = 0; i < 27; ++i) {
-      const float k = std::pow(2.0f, -10.0f + 0.5f * i);
+    for (int i = 0; i < kLevels; ++i) {
+      const float k = level(i);
       const float t[3] = {k * dir[0], k * dir[1], k * dir[2]};
       const float d = std::fabs(lstar(t) - 50.0f);
       if (d < best_d) {
@@ -303,7 +314,32 @@ class GreyPoint {
     float log_t[3];
     for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
     const float target[3] = {50.0f, 0.0f, 0.0f};
-    const bool ok = newton(target, log_t, 20) <= 0.25f;
+    float err = newton(target, log_t, 20);
+    if (steady_ && !(err <= 0.25f)) {
+      for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
+      err = newton(target, log_t, 20, true);
+    }
+    if (steady_ && !(err <= 0.25f)) {
+      float best_e = std::numeric_limits<float>::infinity();
+      float lab_t[1][3], lab_out[1][3];
+      for (int i = 0; i < kLevels; ++i)
+        for (int j = 0; j < kLevels; ++j)
+          for (int k = 0; k < kLevels; ++k) {
+            lab_t[0][0] = level(i) * dir[0];
+            lab_t[0][1] = level(j) * dir[1];
+            lab_t[0][2] = level(k) * dir[2];
+            lab(lab_t, 1, lab_out);
+            const float dL = lab_out[0][0] - target[0], da = lab_out[0][1], db = lab_out[0][2];
+            const float e = std::sqrt(dL * dL + da * da + db * db);
+            if (e < best_e) {
+              best_e = e;
+              for (int c = 0; c < 3; ++c) log_t[c] = std::log(lab_t[0][c]);
+            }
+          }
+      err = newton(target, log_t, 20, true);
+    }
+    const bool ok = err <= 0.25f;
+    if (miss) *miss = err;
     if (log_t0) {
       for (int c = 0; c < 3; ++c) log_t0[c] = log_t[c];
     }
@@ -347,8 +383,19 @@ class GreyPoint {
   // of target. Otherwise it takes the least-squares Newton step J * step = target - Lab(t) (lstsq3 drops
   // directions the render barely responds to), clamps each channel's step to +-MAX_LOG_STEP (a factor of about
   // 1.28) so the knee and the profile's curves cannot throw it far, and repeats, at most iters times.
-  float newton(const float target[3], float log_t[3], int iters) const {
+  //
+  // Clamping each channel by itself changes the step's direction. Where the render is clipped (an sRGB channel at 0
+  // does not move with its input) the Jacobian is nearly singular and the step is thousands of stops long in every
+  // channel: clamped channel by channel, it becomes an equal move of all three channels, an exposure change, which
+  // the next such step can undo, so the solve alternates between two points without end. With control (the knobs'
+  // second try, reference_grey), the first step that lands no closer to target than the point it left is taken back,
+  // and from that point on each step is shortened as a whole, so that no channel moves by more than MAX_LOG_STEP,
+  // and keeps the Newton direction.
+  float newton(const float target[3], float log_t[3], int iters, bool control = false) const {
     constexpr float FD_STEP = 0.05f, MAX_LOG_STEP = 0.25f, TOLERANCE = 0.02f;
+    float prev[3] = {log_t[0], log_t[1], log_t[2]};
+    float prev_miss = std::numeric_limits<float>::infinity();
+    bool whole = false;  // control: steps shortened as a whole from here on
     for (int it = 0; it < iters; ++it) {
       float pts[7][3];
       for (int c = 0; c < 3; ++c) pts[0][c] = std::exp(log_t[c]);
@@ -361,15 +408,27 @@ class GreyPoint {
       float l[7][3];
       lab(pts, 7, l);
       const float r[3] = {target[0] - l[0][0], target[1] - l[0][1], target[2] - l[0][2]};
-      if (std::max({std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2])}) < TOLERANCE) {
-        return std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+      const float miss = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+      if (std::max({std::fabs(r[0]), std::fabs(r[1]), std::fabs(r[2])}) < TOLERANCE) return miss;
+      if (control && !whole && !(miss < prev_miss)) {
+        whole = true;
+        for (int c = 0; c < 3; ++c) log_t[c] = prev[c];
+        continue;
       }
       float J[3][3];
       for (int c = 0; c < 3; ++c)
         for (int row = 0; row < 3; ++row) J[row][c] = (l[1 + 2 * c][row] - l[2 + 2 * c][row]) / (2.0f * FD_STEP);
       float step[3];
       lstsq3(J, r, 1e-6f, step);
-      for (int c = 0; c < 3; ++c) log_t[c] += std::clamp(step[c], -MAX_LOG_STEP, MAX_LOG_STEP);
+      for (int c = 0; c < 3; ++c) prev[c] = log_t[c];
+      prev_miss = miss;
+      if (whole) {
+        const float longest = std::max({std::fabs(step[0]), std::fabs(step[1]), std::fabs(step[2])});
+        const float shorten = longest > MAX_LOG_STEP ? MAX_LOG_STEP / longest : 1.0f;
+        for (int c = 0; c < 3; ++c) log_t[c] += step[c] * shorten;
+      } else {
+        for (int c = 0; c < 3; ++c) log_t[c] += std::clamp(step[c], -MAX_LOG_STEP, MAX_LOG_STEP);
+      }
     }
     float t[1][3], l[1][3];
     for (int c = 0; c < 3; ++c) t[0][c] = std::exp(log_t[c]);
@@ -379,6 +438,7 @@ class GreyPoint {
   }
 
   const ProfileData& prof_;
+  const bool steady_;
 };
 
 // The E (see ConversionParams) at which the scene vector p, with gains g and b, renders at L* 50 through the
@@ -1275,12 +1335,16 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   out.grey_lab[0] = 50.0f;
   out.grey_lab[1] = 0.0f;
   out.grey_lab[2] = 0.0f;
+  out.grey_miss = 0.0f;
   if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
 
-  const GreyPoint gp(prof);
+  const GreyPoint gp(prof, true);
   // The grey: the input grey_prof (else prof) renders as neutral L* 50.
-  float log_t0[3];
-  if (!GreyPoint(grey_prof ? *grey_prof : prof).reference_grey(log_t0)) return false;
+  float log_t0[3], miss = 0.0f;
+  if (!GreyPoint(grey_prof ? *grey_prof : prof, true).reference_grey(log_t0, &miss)) {
+    out.grey_miss = miss;
+    return false;
+  }
   const float base[3] = {base_e, base_g, base_b};
 
   if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {
@@ -1379,7 +1443,7 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
   ParsedFilmProfile prof;
   print_at(a0, g0, b0, prof);
   float log_t0[3];
-  if (!GreyPoint(prof.data).reference_grey(log_t0)) return false;
+  if (!GreyPoint(prof.data, true).reference_grey(log_t0)) return false;
   const float one[3] = {1.0f, 1.0f, 1.0f};
   auto render = [&](double a, double lg, double lb, float lab[3]) {
     ParsedFilmProfile p;
@@ -1468,7 +1532,7 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]) {
   float log_t0[3];
-  if (!GreyPoint(grey_prof).reference_grey(log_t0)) return false;
+  if (!GreyPoint(grey_prof, true).reference_grey(log_t0)) return false;
   GreyPoint(prof).grey(log_t0, base, egb, lab_out);
   return true;
 }

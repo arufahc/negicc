@@ -402,12 +402,16 @@ struct KnobSolveResult {
   float e = 1.0f, g = 1.0f, b = 1.0f;
   bool limited = false;                     // the asked Lab was out of reach: e, g, b reach as far toward it as can be
   float grey_lab[3] = {50.0f, 0.0f, 0.0f};  // the Lab the grey renders at with e, g, b
+  // When solve_grey_knobs returns false because no grey was found (GreyPoint's solve for a neutral L* 50 on the grey's
+  // profile did not come within 0.25 of it): the dE76 that solve ended at. 0 otherwise.
+  float grey_miss = 0.0f;
 };
 
 // Solves the conversion gains (E, g, b) that move the grey that base=(base_e, base_g, base_b) renders as neutral L* 50
 // through prof by brightness_stops (in stops of luminance), tint_a (CIELAB a*), and warmth_b (CIELAB b*), matching
 // negicc-station's GreyPoint and ConversionSession._solve_knobs. grey_prof, when given, is the profile whose neutral
-// L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof.
+// L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof. False
+// when base is not positive, or when no grey is found (out.grey_miss).
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
                       float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof = nullptr);
 struct PrintKnobResult {

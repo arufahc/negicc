@@ -1682,6 +1682,19 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
+    // Why solve_grey_knobs failed on bracket target_idx's profile (combined: with the fitted input curves).
+    auto knob_failure = [&](const KnobSolveResult& r, bool combined) {
+      const char* name = bundle.targets[target_idx].name.c_str();
+      if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) {
+        log_error("--brightness, --tint and --warmth move E, g and b from the bracket's, and %s's are not all positive "
+                  "(E %g g %g b %g)\n", name, base_e, base_g, base_b);
+        return;
+      }
+      log_error("--brightness, --tint and --warmth move the grey that %s renders as neutral L* 50, and none was found "
+                "on its profile%s: the grey-point solve ended %.2f dE76 from L* 50 a* 0 b* 0. Convert without the "
+                "knobs%s\n", name, combined ? " combined with the fitted input curves" : "", r.grey_miss,
+                combined ? ", or with --fit_curves off" : "");
+    };
     // On a print the knobs act on the print's own A, g and b, solved on its profile; E held.
     // A density output's knobs move its print CLFs (density_print_searches), not its suggested balance.
     const bool knobs_here = o.knobs_given && !s.density;
@@ -1721,7 +1734,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.knob_base[2] = base_b;
       if (!solve_grey_knobs(bundle.targets[target_idx].film_prof.data, base_e, base_g, base_b, o.brightness, o.tint,
                             o.warmth, scan.knob_res)) {
-        log_error("Failed to solve grey-point knobs for target %s\n", bundle.targets[target_idx].name.c_str());
+        // The bracket the curves apply to renders through its combined profile here.
+        knob_failure(scan.knob_res, target_idx == s.curves_base_idx && s.input_curves.active());
         return false;
       }
       scan.has_knob_res = true;
@@ -1769,7 +1783,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           const float prev[3] = {k2.e, k2.g, k2.b};
           if (!solve_grey_knobs(prof.data, base_e, base_g, base_b, o.brightness, o.tint, o.warmth, k2,
                                 &grey_prof.data)) {
-            log_error("Failed to solve grey-point knobs on the re-anchored curves\n");
+            knob_failure(k2, true);
             return false;
           }
           const float to2[3] = {k2.e, k2.g, k2.b};
@@ -2329,6 +2343,16 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   }
 
 
+  // An analysis that fails has logged why; the decode then returns nothing, which is not the file failing to open.
+  bool analysis_failed = false;
+  if (analyse) {
+    analyse = [&analysis_failed, run = std::move(analyse)](const LibRaw& raw) {
+      if (run(raw)) return true;
+      analysis_failed = true;
+      return false;
+    };
+  }
+
   FrameDetectionParams det_params;
   det_params.format = o.film_format;
   det_params.axis_hint = o.roi_axis_hint;
@@ -2688,7 +2712,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     unpacked_probe = nullptr;
     if (!proc) {
-      log_error("Cannot open %s\n", o.files[0].c_str());
+      if (!analysis_failed) log_error("Cannot open %s\n", o.files[0].c_str());
       return 1;
     }
     if (o.roi_auto) {
