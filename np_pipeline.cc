@@ -362,6 +362,12 @@ static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c)
   if (base.is_object() && base.contains("a") && base["a"].is_number()) c.print_a = base["a"].get<double>();
 }
 
+// Whether the search's passes run on the GPU: a USE_CUDA=1 build with a device that runs its kernels, unless
+// --dino_backend cpu or --check_renderer (the CPU's, counted, and compared with the GPU's where it can run them).
+static bool search_runs_on_gpu(const Options& o) {
+  return !o.check_renderer && o.dino_backend != "cpu" && negicc::gpu_device_available();
+}
+
 // The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
 // serve this conversion.
 static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& o, Setup& s, std::string& why) {
@@ -373,6 +379,17 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
            false;
   }
   if (!argv_matches_except_knobs(j.value("argv", nlohmann::ordered_json()), o, why)) return false;
+  // --check_renderer checks the search's passes, so it runs them. A search's result depends on where its passes ran
+  // (the GPU's and the CPU's differ in their last digits): the sidecar's must have run where this run's would.
+  if (o.check_renderer) return why = "--check_renderer runs the search", false;
+  if (j.contains("auto") && j["auto"].is_object()) {
+    const std::string ran = j["auto"].value("renderer", std::string("cpu"));
+    const bool ran_on_gpu = ran == "gpu";   // "cpu, compared with the gpu": the search read the CPU's passes
+    if (ran_on_gpu != search_runs_on_gpu(o)) {
+      return why = std::string("its search's passes ran on the ") + (ran_on_gpu ? "GPU" : "CPU") +
+                   " and this run's run on the " + (ran_on_gpu ? "CPU" : "GPU"), false;
+    }
+  }
 
   if (!j.contains("inputs") || !j["inputs"].is_object() || !j["inputs"].contains("raw_files") ||
       !j["inputs"]["raw_files"].is_array()) {
@@ -704,6 +721,13 @@ static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
 static PassThroughRenderer& pass_through_renderer() {
   static PassThroughRenderer r;
   return r;
+}
+
+// The renderer of the search's passes: --check_renderer's (counting, and comparing with the GPU's where a device runs
+// its kernels), the GPU's (search_runs_on_gpu), or null (the CPU's).
+static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
+  if (o.check_renderer && !s.renderer) return &pass_through_renderer();
+  return s.renderer.get();
 }
 
 int prepare(const Options& o, Setup& s) {
@@ -1318,8 +1342,54 @@ int prepare(const Options& o, Setup& s) {
   // plan after it): refused before anything is written where none runs.
   if (o.check_renderer && (!s.bundle_search || !s.replay_source.empty())) {
     log_error("--check_renderer needs the bundle search to run: not with given values, recorded curves or a recorded "
-              "tone curve, a previous run's <output>.json reused by the knobs, or a single ICC profile\n");
+              "tone curve, or a single ICC profile\n");
     return 1;
+  }
+  // The search's renderer, made only where a search runs (search_renderer): with --check_renderer the comparison where
+  // a device runs this build's kernels (else the pass-through renderer alone), else the GPU's.
+  if (s.bundle_search && s.replay_source.empty()) {
+    if (o.check_renderer) {
+      if (negicc::gpu_device_available()) s.renderer = std::make_unique<CompareRenderer>();
+    } else if (search_runs_on_gpu(o)) {
+      s.renderer = std::make_unique<GpuRenderer>();
+    }
+  }
+  return 0;
+}
+
+int finish_search_passes(const Options& o, Setup& s) {
+  if (auto* g = dynamic_cast<GpuRenderer*>(s.renderer.get())) {
+    if (g->binds + g->renders + g->clips > 0) {
+      log_info("GPU renderer: %ld binds, %ld renders and %ld clip passes on the device\n", g->binds, g->renders,
+               g->clips);
+    }
+    g->release_frame();
+  }
+  if (auto* cmp = dynamic_cast<CompareRenderer*>(s.renderer.get())) {
+    log_info("Renderer comparison, GPU against CPU: %s\n", cmp->summary().c_str());
+    cmp->gpu.release_frame();
+    if (!cmp->within_tolerance()) {
+      log_error("Renderer comparison: a GPU pass is outside the tolerance (a render's mean change in L* or a zone "
+                "mean %g, a share or a histogram bin %g %%, a median %g L*), a value is not finite, or no pass ran; "
+                "nothing is written\n", CompareRenderer::kCompareMeanDL, CompareRenderer::kCompareShare,
+                CompareRenderer::kCompareMedianL);
+      return 1;
+    }
+  }
+  if (o.check_renderer) {
+    const PassAudit& pa = pass_audit();
+    log_info("Renderer check: %ld binds, %ld previews and %ld clip passes through the renderer; %ld passes of the "
+             "search outside it\n", pa.binds, pa.renders, pa.clips, pa.outside);
+    if (pa.outside > 0) {
+      log_error("Renderer check: %ld passes of the search ran outside the renderer\n", pa.outside);
+      return 1;
+    }
+    if (pa.binds + pa.renders + pa.clips == 0) {
+      log_error("Renderer check: no pass of the search ran, so nothing was checked\n");
+      return 1;
+    }
+    if (!dynamic_cast<CompareRenderer*>(s.renderer.get()))
+      log_info("Renderer check: no CUDA device that runs this build's GPU passes, so none was compared with the GPU\n");
   }
   return 0;
 }
@@ -1657,7 +1727,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ParsedFilmProfile grey_prof = prof;  // at the base's anchor: its neutral L* 50 is the grey
         grey_prof.rebind_pointers();
         ParamSearchOptions ro;
-        if (o.check_renderer) ro.renderer = &pass_through_renderer();
         ro.film_base_rgb_d = scan.film_base_rgb();
         ro.film_base_from_scan = ro.film_base_rgb_d != nullptr;
         set_fit_frame(ro);
@@ -1716,7 +1785,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     } else {
       scan.rolloff_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, e, g, b,
                                                ParamSearchOptions{}.crop_ratio, &scan.rolloff_q995,
-                                               scan.film_base_rgb());
+                                               scan.film_base_rgb(), search_renderer(o, s));
     }
     scan.has_rolloff = true;
     return true;
@@ -2207,7 +2276,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         // Auto's time (the sidecar's auto.time_ms): the search and the curve fit, as on the CFA path.
         const double t_auto_0 = omp_get_wtime();
         ParamSearchOptions opts;
-        if (o.check_renderer) opts.renderer = &pass_through_renderer();
+        opts.renderer = search_renderer(o, s);
         if (o.dino_iters_given) opts.max_steps = o.dino_iters;
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2220,9 +2289,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           return false;
         }
         if (scan.auto_res.probed) {  // --probe_intent: the probe file is written and closed; nothing is converted
+          const int r = finish_search_passes(o, s);
           std::fflush(stdout);
           std::fflush(stderr);
-          std::_Exit(0);  // without static teardown: the inference engine's threads are still alive here
+          std::_Exit(r);  // without static teardown: the inference engine's threads are still alive here
         }
         scan.has_auto_res = true;
         if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
@@ -2524,7 +2594,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       ParamSearchOptions opts;
-      if (o.check_renderer) opts.renderer = &pass_through_renderer();
+      opts.renderer = search_renderer(o, s);
       if (o.dino_iters_given) opts.max_steps = o.dino_iters;
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
@@ -2538,9 +2608,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         return 1;
       }
       if (scan.auto_res.probed) {  // --probe_intent: the probe file is written and closed; nothing is converted
+        const int r = finish_search_passes(o, s);
         std::fflush(stdout);
         std::fflush(stderr);
-        std::_Exit(0);  // without static teardown: the inference engine's threads are still alive here
+        std::_Exit(r);  // without static teardown: the inference engine's threads are still alive here
       }
       scan.has_auto_res = true;
       if (!stages_after_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
@@ -3342,11 +3413,15 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.shoulder.has_knee = false;
   }
   sc.dino = s.use_dino && !scan.has_auto_res && !s.has_cached_sidecar ? &c.dino_res : nullptr;
+  sc.search_renderer = dynamic_cast<const GpuRenderer*>(s.renderer.get())       ? "gpu"
+                       : dynamic_cast<const CompareRenderer*>(s.renderer.get()) ? "cpu, compared with the gpu"
+                                                                                : "cpu";
   sc.dino_model = s.dino_path;
   sc.dino_backend = s.has_cached_sidecar ? s.cached_sidecar.dino_backend
                                          : (s.use_dino ? std::string(s.engine.backend_used()) : o.dino_backend);
   sc.dino_arg = o.dino_arg;
   sc.dino_iters_given = o.dino_iters_given;
+  if (o.dino_backend != "auto") sc.dino_backend_arg = o.dino_backend;
   sc.dino_iters = o.dino_iters;
   sc.auto_res = scan.has_auto_res && !s.has_cached_sidecar ? &scan.auto_res : nullptr;
   if (s.has_cached_sidecar) {
@@ -3408,19 +3483,5 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.tone_plan = &s.tone_plan;
   }
   write_json_sidecar(sc);
-  if (o.check_renderer) {
-    const PassAudit& pa = pass_audit();
-    log_info("Renderer check: %ld binds, %ld previews and %ld clip passes through the renderer; %ld passes of the "
-             "search outside it\n", pa.binds, pa.renders, pa.clips, pa.outside);
-    if (pa.outside > 0) {
-      log_error("Renderer check: %ld passes of the search ran outside the renderer\n", pa.outside);
-      return 1;
-    }
-    if (pa.binds + pa.renders + pa.clips == 0) {
-      log_error("Renderer check: no pass of the search ran, so nothing was checked (given values, or a previous "
-                "run's <output>.json reused)\n");
-      return 1;
-    }
-  }
   return 0;
 }

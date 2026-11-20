@@ -691,6 +691,18 @@ void resample_linear_rgb16(
 
 void (*cpu_pass_hook)(int kind) = nullptr;
 
+#ifndef NEGICC_USE_CUDA
+// A build without CUDA: no device, and the GPU passes refuse (gpu_passes.cu has them with USE_CUDA=1).
+bool gpu_device_available() { return false; }
+[[noreturn]] static void no_cuda() { throw GpuError("this neg_process was built without CUDA (USE_CUDA=0)"); }
+void* gpu_malloc(size_t) { no_cuda(); }
+void gpu_free(void*) {}
+void gpu_upload(void*, const void*, size_t) { no_cuda(); }
+void gpu_download(void*, const void*, size_t) { no_cuda(); }
+void gpu_render(const RenderArgs&) { no_cuda(); }
+void gpu_highlight_clip(const HighlightClipArgs&) { no_cuda(); }
+#endif
+
 void cpu_render(const RenderArgs& a) {
     if (cpu_pass_hook) cpu_pass_hook(0);
     const long long n = (long long)a.width * a.height;
