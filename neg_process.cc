@@ -62,12 +62,13 @@
 int main(int ac, char* av[]) {
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
-  // A failed GPU pass throws out of the search (rerun with --dino_backend cpu); nothing else is meant to throw.
+  // A failed GPU pass throws out of the search (negicc::GpuError); nothing else is meant to throw.
   try {
     Setup s;
     if (prepare(o, s)) return 1;
     Scan scan;
     if (decode(o, s, scan)) return 1;
+    if (finish_search_passes(o, s)) return 1;
     Conversion c;
     if (begin_conversion(o, s, c)) return 1;
     CpuBackend backend;
@@ -75,6 +76,9 @@ int main(int ac, char* av[]) {
     if (solve(o, s, scan, c)) return 1;
     if (convert(o, s, scan, c, backend)) return 1;
     return write(o, s, scan, c);
+  } catch (const negicc::GpuError& e) {
+    log_error("%s (a GPU pass of the search failed: --dino_backend cpu keeps the passes on the CPU)\n", e.what());
+    return 1;
   } catch (const std::exception& e) {
     log_error("%s\n", e.what());
     return 1;

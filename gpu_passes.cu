@@ -3,7 +3,7 @@
 // color_pipeline.h plus the epilogue of its CPU function in rgb_view.cc (cpu_render, cpu_highlight_clip), built with
 // --fmad=false so the device rounds the stages as the host compiler does (-ffp-contract=off). What still differs is
 // the last place of the transcendentals (powf, tanhf, cbrtf: libdevice against glibc), so a GPU pass is not bit for
-// bit the CPU's; neg_process --debug_render measures the difference (multi_target_optimizer.h CompareRenderer).
+// bit the CPU's; neg_process --check_renderer measures the difference (multi_target_optimizer.h CompareRenderer).
 //
 // Reductions are deterministic: each block writes its partial sums to its own slot and the host adds the slots in a
 // fixed order; histograms use integer atomics, which are exact.
@@ -13,6 +13,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -27,7 +28,7 @@ namespace negicc {
     do {                                                                                                          \
         cudaError_t _e = (expr);                                                                                  \
         if (_e != cudaSuccess)                                                                                    \
-            throw std::runtime_error(std::string("CUDA error in ") + #expr + ": " + cudaGetErrorString(_e));      \
+            throw negicc::GpuError(std::string("CUDA error in ") + #expr + ": " + cudaGetErrorString(_e));       \
     } while (0)
 
 namespace {
@@ -71,10 +72,14 @@ __device__ __forceinline__ const uint16_t* in_at(const InPix& p, long long x, lo
     return p.base + y * p.stride + x * p.pitch;
 }
 
+// As the CPU passes read theirs: in_view when it is a valid view, else in (contiguous).
 InPix pass_input(const uint16_t* in, const RgbView* view, int width) {
-    if (!view) return InPix{in, 3, 3LL * width};
+    if (!view || !view->valid()) {
+        if (!in) throw GpuError("a GPU pass without an input");
+        return InPix{in, 3, 3LL * width};
+    }
     if (view->g2_ptr || view->flat.gain || view->g_ptr != view->r_ptr + 1 || view->b_ptr != view->r_ptr + 2)
-        throw std::invalid_argument("the GPU passes read an interleaved RGB view without a flat field");
+        throw GpuError("the GPU passes read an interleaved RGB view without a flat field");
     return InPix{view->r_ptr, (long long)view->pitch, (long long)view->stride};
 }
 
@@ -212,13 +217,10 @@ __global__ void highlight_clip_kernel(InPix in, InnerCrop crop, const float* __r
     }
 }
 
-// Blocks per candidate for the reductions: enough to fill the GPU, capped so the partials stay small.
-int reduction_chunks(long long npx, int candidates) {
+// Blocks per candidate for the reductions: one per 16 pixels a thread, at most 256.
+int reduction_chunks(long long npx) {
     const long long by_size = (npx + kThreads * 16 - 1) / (kThreads * 16);
-    const int target = std::max(1, 64 / std::max(1, candidates));
-    long long chunks = std::min<long long>(by_size, 256);
-    chunks = std::max<long long>(chunks, std::min<long long>(by_size, target));
-    return (int)std::max<long long>(1, chunks);
+    return (int)std::clamp<long long>(by_size, 1, 256);
 }
 
 // The median L* of a clip pass's histogram, as cpu_highlight_clip reads its own (the bin's centre).
@@ -236,11 +238,36 @@ double median_from_hist_L(const unsigned int* hist, double tot) {
 
 }  // namespace
 
+// A device is usable when this build's kernels run on it: a kernel built for another architecture (CUDA_ARCH) fails
+// to launch, and the passes then stay on the CPU, which is said once.
+__global__ void probe_kernel(int* out) { *out = 1; }
+
 bool gpu_device_available() {
     static const bool available = [] {
         int count = 0;
         if (cudaGetDeviceCount(&count) != cudaSuccess || count <= 0) {
             cudaGetLastError();  // clear the sticky "no device" error
+            return false;
+        }
+        int* d = nullptr;
+        if (cudaMalloc(&d, sizeof(int)) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        probe_kernel<<<1, 1>>>(d);
+        cudaError_t e = cudaGetLastError();
+        if (e == cudaSuccess) e = cudaDeviceSynchronize();
+        cudaFree(d);
+        if (e != cudaSuccess) {
+            cudaGetLastError();
+            cudaDeviceProp prop{};
+            cudaGetDeviceProperties(&prop, 0);
+            std::fprintf(stderr,
+                         "WARNING: the CUDA device %s (compute capability %d.%d) does not run this build's GPU passes, "
+                         "built for CUDA_ARCH=%d (%s): the passes run on the CPU; build with CUDA_ARCH=%d%d to run "
+                         "them on it\n",
+                         prop.name, prop.major, prop.minor, NEGICC_CUDA_ARCH, cudaGetErrorString(e), prop.major,
+                         prop.minor);
             return false;
         }
         return true;
@@ -284,7 +311,7 @@ void gpu_render(const RenderArgs& a) {
     }
     const InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0) ? a.stats_crop
                                                                       : InnerCrop{0, 0, a.width, a.height};
-    const int chunks = reduction_chunks(npx, 1);
+    const int chunks = reduction_chunks(npx);
     unsigned int* d_hist = static_cast<unsigned int*>(g_hist.get(kRenderHistBins * sizeof(unsigned int)));
     NEGICC_CUDA_CHECK(cudaMemset(d_hist, 0, kRenderHistBins * sizeof(unsigned int)));
     const size_t part_count = (size_t)chunks * kStatFields;
@@ -345,7 +372,7 @@ void gpu_highlight_clip(const HighlightClipArgs& a) {
         d_max = static_cast<unsigned int*>(g_max_hist.get(max_count * sizeof(unsigned int)));
         NEGICC_CUDA_CHECK(cudaMemset(d_max, 0, max_count * sizeof(unsigned int)));
     }
-    const int chunks = reduction_chunks(npx, a.n);
+    const int chunks = reduction_chunks(npx);
     const size_t dyn_smem = a.max_hist ? kMaxHistBins * sizeof(unsigned int) : 0;
     highlight_clip_kernel<<<dim3(chunks, a.n), kThreads, dyn_smem>>>(pass_input(a.in, a.in_view, a.width), crop,
                                                                       d_mats, a.cfg, a.ceil_lin[0], a.ceil_lin[1],

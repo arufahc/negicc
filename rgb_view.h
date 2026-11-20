@@ -1,4 +1,4 @@
-// Shared zero-copy CFA downsized view (RgbView) and CPU pipeline kernels used by neg_process and negicc-station.
+// Shared zero-copy CFA downsized view (RgbView), its CPU passes, and the same passes on a CUDA device.
 //
 // Five-step pipeline architecture:
 //   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for
@@ -11,13 +11,13 @@
 //     cpu_highlight_clip) with zero large intermediate copies.
 //   Step 5 (Full export): The only step that allocates a cropped full-size RGB buffer, fusing grain-aware debayer
 //     (or 4x pixel-shift merge), crop/rotate/flip, and flat_divide.
-//   TODO: Upstream the matching CUDA kernels (kernels_cuda.cu) from negicc-station into negicc.
 #ifndef NEGICC_RGB_VIEW_H
 #define NEGICC_RGB_VIEW_H
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "color_pipeline.h"
@@ -314,11 +314,15 @@ void cpu_intent_loss(const IntentLossArgs& a);
 void cpu_highlight_clip(const HighlightClipArgs& a);
 void cpu_lab_stats(const LabStatsArgs& a);
 
-// The same two passes on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; without CUDA gpu_device_available() is
-// false and the others throw). Every pointer the pass reads per pixel is device memory: in, or in_view's channel
+// The same two passes on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds). gpu_device_available() is true when a device
+// is present and runs the kernels this build has (CUDA_ARCH); without CUDA it is false and the others throw. A failed
+// pass or copy throws GpuError. Every pointer the pass reads per pixel is device memory: in, or in_view's channel
 // pointers (an interleaved RGB view without a flat field), cfg's tables, and a render's out. A render's stats, and a
 // clip pass's matrices, out and max_hist, are host memory. The GPU renderer (multi_target_optimizer.h GpuRenderer)
 // makes those copies; gpu_malloc, gpu_free, gpu_upload and gpu_download are the device memory it uses.
+struct GpuError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 bool gpu_device_available();
 void* gpu_malloc(size_t bytes);
 void gpu_free(void* p);

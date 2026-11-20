@@ -101,6 +101,7 @@ struct Sidecar {
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
   std::string dino_model, dino_backend, dino_arg;
+  std::string dino_backend_arg;   // --dino_backend when given other than auto (where the search's passes run)
   bool dino_iters_given = false;
   int dino_iters = 4;
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran

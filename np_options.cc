@@ -378,23 +378,20 @@ int parse_options(int ac, char* av[], Options& o) {
           "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
-    .help("DINOv3 inference backend: auto, cpu (USE_CUDA=0 builds) or gpu (USE_CUDA=1 builds); defaults to auto. "
-          "cpu also keeps the search's passes over the frame on the CPU, which a USE_CUDA=1 build with a CUDA device "
-          "otherwise runs on the GPU.")
+    .help("DINOv3 inference backend: auto (the default), cpu, or gpu (USE_CUDA=1 builds). cpu also keeps the "
+          "search's passes over the frame on the CPU, which a USE_CUDA=1 build otherwise runs on a CUDA device that "
+          "runs its kernels (see CUDA_ARCH in the README's build section).")
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
-          "print's search, the curve fit and the tone plan through a pass-through renderer that forwards each pass to "
-          "the CPU and counts it, count every pass of theirs that runs outside it, and print both; exit 1 when one "
-          "does, or when no pass ran. The output must equal the conversion without it, bit for bit: compare the two "
-          "outputs yourself (cmp).")
-    .flag();
-  parser.add_argument("--debug_render")
-    .help("Debug aid (USE_CUDA=1 builds with a CUDA device): run every pass of the bundle search, the print's search, "
-          "the curve fit and the tone plan over the frame (the preview renders and the clip passes) on both the CPU "
-          "and the GPU from the same inputs, the search reading the CPU's, so the output is the CPU's; print how far "
-          "the GPU's passes are from the CPU's, and exit 1 when a preview's mean change in L* exceeds 0.05, a clip "
-          "share 0.01 % or a median L* one bin.")
+          "print's search, the curve fit and the tone plan through a renderer that runs each pass on the CPU and "
+          "counts it, count every pass of theirs that runs outside it, and print both; exit 1 when one does, or when "
+          "no pass ran. On a USE_CUDA=1 build with a CUDA device that runs its kernels, each pass also runs on the GPU "
+          "from the same inputs (the search reading the CPU's) and the two are compared: exit 1 when a render's mean "
+          "change in L* per pixel or a zone mean exceeds 0.05, a clip share or a histogram bin 0.01 % of the crop, or "
+          "a median L* one bin, or a value is not finite. Either failure stops before anything is written. The output "
+          "is the CPU's and must equal a conversion whose passes run on the CPU, bit for bit: compare the two outputs "
+          "yourself (cmp).")
     .flag();
   parser.add_argument("--probe_intent")
     .help("Measurement aid (for tools that study the search): write what the intent network predicts from chosen "
@@ -509,11 +506,6 @@ int parse_options(int ac, char* av[], Options& o) {
     }
   }
   o.check_renderer = parser.get<bool>("--check_renderer");
-  o.debug_render = parser.get<bool>("--debug_render");
-  if (o.check_renderer && o.debug_render) {
-    log_error("--check_renderer counts the passes of the CPU's renderer: not with --debug_render\n");
-    return 1;
-  }
   {
     std::stringstream all(parser.get<std::string>("--probe_params"));
     std::string item;

@@ -1632,6 +1632,11 @@ struct DeviceBuffer {
     }
     return ptr;
   }
+  void release() {
+    negicc::gpu_free(ptr);
+    ptr = nullptr;
+    size = 0;
+  }
   ~DeviceBuffer() { negicc::gpu_free(ptr); }
 };
 
@@ -1671,40 +1676,49 @@ struct GpuRenderer::Impl {
   // Per profile, keyed by its cLUT and first output table, which the search keeps for its whole run.
   std::map<std::pair<const float*, const float*>, std::unique_ptr<DeviceProfile>> profiles;
 
-  // The pass's view on the device: the bound frame or an upright crop of it, at its offset.
+  // The pass's view on the device: the bound frame or an upright crop inside it with the same layout, at its offset.
+  // The crop's origin is found from byte addresses, so a view of another buffer is refused without comparing pointers
+  // into different allocations.
   negicc::RgbView device_view(const negicc::RgbView* v) const {
-    if (!bound) throw std::runtime_error("GPU renderer: a pass before bind_frame");
-    if (!v) throw std::runtime_error("GPU renderer: a pass without a view of the bound frame");
-    if (v->pitch != frame.pitch || v->stride != frame.stride)
-      throw std::runtime_error("GPU renderer: a view that is not an upright crop of the bound frame");
+    if (!bound) throw negicc::GpuError("GPU renderer: a pass before bind_frame");
+    if (!v || !v->valid()) throw negicc::GpuError("GPU renderer: a pass without a view of the bound frame");
+    if (v->pitch != frame.pitch || v->stride != frame.stride || (v->g2_ptr != nullptr) != (frame.g2_ptr != nullptr) ||
+        v->flat.gain != frame.flat.gain)
+      throw negicc::GpuError("GPU renderer: a view that is not an upright crop of the bound frame");
+    auto addr = [](const uint16_t* p) { return (long long)reinterpret_cast<uintptr_t>(p); };
+    const long long off = addr(v->r_ptr) - addr(frame.r_ptr), es = (long long)sizeof(uint16_t);
+    const bool same_layout = off % es == 0 && addr(v->g_ptr) - addr(frame.g_ptr) == off &&
+                             addr(v->b_ptr) - addr(frame.b_ptr) == off &&
+                             (!v->g2_ptr || addr(v->g2_ptr) - addr(frame.g2_ptr) == off);
+    // The origin (x, y) with off / es = y * stride + x * pitch, the crop inside the frame.
+    long long ox = -1, oy = -1;
+    if (same_layout && frame.pitch != 0) {
+      const long long e = off / es;
+      for (long long y = 0; y + v->height <= frame.height; ++y) {
+        const long long rem = e - y * (long long)frame.stride;
+        if (rem % frame.pitch != 0) continue;
+        const long long x = rem / frame.pitch;
+        if (x < 0 || x + v->width > frame.width) continue;
+        ox = x;
+        oy = y;
+        break;
+      }
+    }
+    if (ox < 0) throw negicc::GpuError("GPU renderer: a view that is not inside the bound frame");
     negicc::RgbView d = *v;
     d.g2_ptr = nullptr;
     d.flat = negicc::FlatSampleArgs{};
     d.flat_tables.reset();
-    if (!copied) {
-      const ptrdiff_t off = v->r_ptr - frame.r_ptr;
-      d.r_ptr = dev_frame + off;
-      d.g_ptr = d.r_ptr + 1;
-      d.b_ptr = d.r_ptr + 2;
-      return d;
-    }
-    // The copy is the frame in its own coordinates: find the crop's origin (x, y), with
-    // v->r_ptr = frame.r_ptr + y * stride + x * pitch.
-    const ptrdiff_t off = v->r_ptr - frame.r_ptr;
-    for (int y = 0; y + v->height <= frame.height; ++y) {
-      const ptrdiff_t rem = off - (ptrdiff_t)y * frame.stride;
-      if (frame.pitch == 0 || rem % frame.pitch != 0) continue;
-      const ptrdiff_t x = rem / frame.pitch;
-      if (x < 0 || x + v->width > frame.width) continue;
-      if (v->g_ptr - frame.g_ptr != off || v->b_ptr - frame.b_ptr != off) break;
-      d.r_ptr = dev_frame + ((size_t)y * frame.width + (size_t)x) * 3;
-      d.g_ptr = d.r_ptr + 1;
-      d.b_ptr = d.r_ptr + 2;
+    if (!copied) {   // the caller's frame on the device, in its own layout
+      d.r_ptr = dev_frame + (oy * frame.stride + ox * frame.pitch);
+    } else {         // the copy: contiguous, frame.width x frame.height
+      d.r_ptr = dev_frame + ((size_t)oy * frame.width + (size_t)ox) * 3;
       d.pitch = 3;
       d.stride = 3 * (ptrdiff_t)frame.width;
-      return d;
     }
-    throw std::runtime_error("GPU renderer: a view that is not inside the bound frame");
+    d.g_ptr = d.r_ptr + 1;
+    d.b_ptr = d.r_ptr + 2;
+    return d;
   }
 
   negicc::PipelineConfig device_config(const negicc::PipelineConfig& c) {
@@ -1725,7 +1739,7 @@ struct GpuRenderer::Impl {
 };
 
 GpuRenderer::GpuRenderer() : impl_(std::make_unique<Impl>()) {
-  if (!negicc::gpu_device_available()) throw std::runtime_error("no CUDA device for the GPU renderer");
+  if (!negicc::gpu_device_available()) throw negicc::GpuError("no CUDA device that runs this build's GPU passes");
 }
 GpuRenderer::~GpuRenderer() = default;
 
@@ -1738,7 +1752,7 @@ void GpuRenderer::bind_frame(const negicc::RgbView& frame) {
   const uint16_t* given = device_frame ? device_frame(frame) : nullptr;
   if (given) {
     if (frame.g2_ptr || frame.flat.gain || frame.g_ptr != frame.r_ptr + 1 || frame.b_ptr != frame.r_ptr + 2)
-      throw std::runtime_error("GPU renderer: a frame read in place must be interleaved RGB without a flat field");
+      throw negicc::GpuError("GPU renderer: a frame read in place must be interleaved RGB without a flat field");
     m.dev_frame = given;
     m.copied = false;
   } else {
@@ -1765,9 +1779,19 @@ void GpuRenderer::render(const negicc::RenderArgs& a) {
   d.cfg = m.device_config(a.cfg);
   const size_t elem = a.out_type == 1 ? 1 : a.out_type == 0 ? 2 : 4;
   const size_t bytes = (size_t)a.width * a.height * 3 * elem;
-  d.out = m.out.get(std::max<size_t>(bytes, 1));
+  if (bytes == 0) return;
+  d.out = m.out.get(bytes);
   negicc::gpu_render(d);
   negicc::gpu_download(a.out, d.out, bytes);
+}
+
+void GpuRenderer::release_frame() {
+  Impl& m = *impl_;
+  m.bound = false;
+  m.dev_frame = nullptr;
+  m.copied = false;
+  m.frame_copy.release();
+  m.out.release();
 }
 
 void GpuRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
@@ -1783,10 +1807,28 @@ void GpuRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
 
 // ---- The comparison (multi_target_optimizer.h CompareRenderer) ------------------------------------------------------
 
-void CompareRenderer::bind_frame(const negicc::RgbView& frame) { gpu.bind_frame(frame); }
+void CompareRenderer::bind_frame(const negicc::RgbView& frame) {
+  PassThroughRenderer::bind_frame(frame);
+  gpu.bind_frame(frame);
+}
+
+namespace {
+// One compared quantity of a pass: the difference, counted as differing when above 0 and as not finite when either
+// side is not (NaN or infinite), which within_tolerance refuses.
+double compared(CompareRenderer::Pass& p, double cpu, double gpu) {
+  const double diff = std::fabs(cpu - gpu);
+  if (!std::isfinite(diff)) {
+    ++p.nonfinite;
+    ++p.differing;
+    return 0.0;
+  }
+  if (diff > 0.0) ++p.differing;
+  return diff;
+}
+}  // namespace
 
 void CompareRenderer::render(const negicc::RenderArgs& a) {
-  negicc::cpu_render(a);
+  PassThroughRenderer::render(a);
   const size_t elem = a.out_type == 1 ? 1 : a.out_type == 0 ? 2 : 4;
   const size_t n = (size_t)a.width * a.height * 3;
   std::vector<uint8_t> other(n * elem);
@@ -1803,29 +1845,51 @@ void CompareRenderer::render(const negicc::RenderArgs& a) {
     if (elem == 2) return static_cast<const uint16_t*>(buf)[i];
     return static_cast<const float*>(buf)[i];
   };
-  for (size_t i = 0; i < n; ++i) {
-    const double diff = std::fabs(value(a.out, i) - value(other.data(), i));
-    if (diff > 0.0) ++p.differing;
-    p.max_abs = std::max(p.max_abs, diff);
-  }
-  if (elem == 1 && n) {   // an 8-bit preview: L* per pixel where the two differ
-    const uint8_t* c = static_cast<const uint8_t*>(a.out);
-    auto lstar = [](const uint8_t* v) { return negicc::srgb_to_lab({v[0] / 255.0f, v[1] / 255.0f, v[2] / 255.0f}).L; };
-    double sum = 0.0;
-    for (size_t i = 0; i < n; i += 3) {
-      if (c[i] == other[i] && c[i + 1] == other[i + 1] && c[i + 2] == other[i + 2]) continue;
-      const double dl = std::fabs((double)lstar(c + i) - (double)lstar(other.data() + i));
-      sum += dl;
-      p.max_dl = std::max(p.max_dl, dl);
+  // Each pixel read as sRGB at the output's full scale (255, 65535, or 1 for a float render).
+  const double full = elem == 1 ? 255.0 : elem == 2 ? 65535.0 : 1.0;
+  auto lstar = [&](const void* buf, size_t i) {
+    return (double)negicc::srgb_to_lab({(float)(value(buf, i) / full), (float)(value(buf, i + 1) / full),
+                                        (float)(value(buf, i + 2) / full)}).L;
+  };
+  double sum_dl = 0.0;
+  for (size_t i = 0; i + 2 < n; i += 3) {
+    bool same = true;
+    for (size_t k = i; k < i + 3; ++k) {
+      const long long before = p.differing;
+      p.max_abs = std::max(p.max_abs, compared(p, value(a.out, k), value(other.data(), k)));
+      same = same && p.differing == before;
     }
-    p.mean_dl = sum / (double)(n / 3);
+    if (same) continue;
+    const double dl = compared(p, lstar(a.out, i), lstar(other.data(), i));
+    --p.differing;   // the pixel's values were counted
+    sum_dl += dl;
+    p.max_dl = std::max(p.max_dl, dl);
   }
-  if (a.stats) p.max_share = std::fabs((double)a.stats->white_clip - (double)other_stats.white_clip);
+  if (n) p.mean_dl = sum_dl / (double)(n / 3);
+  if (a.stats) {
+    p.stats = true;
+    const negicc::PositiveStats& c = *a.stats;
+    const negicc::PositiveStats& q = other_stats;
+    const negicc::InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0)
+                                       ? a.stats_crop
+                                       : negicc::InnerCrop{0, 0, a.width, a.height};
+    const double pct = 100.0 / std::max(1.0, (double)crop.w * crop.h);   // a count as a share of the crop's pixels
+    p.max_share = std::max(compared(p, c.white_clip, q.white_clip), compared(p, c.black_clip, q.black_clip));
+    for (int ch = 0; ch < 3; ++ch)
+      for (int k = 0; k < 256; ++k)
+        p.max_hist = std::max(p.max_hist, compared(p, c.hist_rgb[ch][k], q.hist_rgb[ch][k]) * pct);
+    for (int k = 0; k < negicc::kLabBins; ++k)
+      p.max_hist = std::max(p.max_hist, compared(p, c.hist_L[k], q.hist_L[k]) * pct);
+    const float zc[6] = {c.mid_a, c.mid_b, c.hi_a, c.hi_b, c.sh_a, c.sh_b};
+    const float zq[6] = {q.mid_a, q.mid_b, q.hi_a, q.hi_b, q.sh_a, q.sh_b};
+    for (int k = 0; k < 6; ++k) p.max_zone = std::max(p.max_zone, compared(p, zc[k], zq[k]));
+    p.values += 2 + 3 * 256 + negicc::kLabBins + 6;
+  }
   passes.push_back(p);
 }
 
 void CompareRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
-  negicc::cpu_highlight_clip(a);
+  PassThroughRenderer::highlight_clip(a);
   std::vector<float> out((size_t)a.n * 5);
   std::vector<uint64_t> hist(a.max_hist ? (size_t)a.n * negicc::kMaxHistBins : 0);
   negicc::HighlightClipArgs g = a;
@@ -1833,51 +1897,66 @@ void CompareRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   g.max_hist = a.max_hist ? hist.data() : nullptr;
   gpu.highlight_clip(g);
   Pass p;
-  p.values = (long long)a.n * 5;
+  p.values = (long long)a.n * 5 + (long long)hist.size();
   for (int c = 0; c < a.n; ++c)
     for (int k = 0; k < 5; ++k) {
-      const double diff = std::fabs((double)a.out[c * 5 + k] - (double)out[c * 5 + k]);
-      if (diff > 0.0) ++p.differing;
+      const double diff = compared(p, a.out[c * 5 + k], out[c * 5 + k]);
       p.max_abs = std::max(p.max_abs, diff);
       if (k < 4) p.max_share = std::max(p.max_share, diff);
       else p.max_median_l = std::max(p.max_median_l, diff);
     }
+  const negicc::InnerCrop crop = (a.crop.w > 0 && a.crop.h > 0) ? a.crop : negicc::InnerCrop{0, 0, a.width, a.height};
+  const double pct = 100.0 / std::max(1.0, (double)crop.w * crop.h);
   for (size_t i = 0; i < hist.size(); ++i)
-    p.max_hist = std::max(p.max_hist, std::fabs((double)a.max_hist[i] - (double)hist[i]));
+    p.max_hist = std::max(p.max_hist, compared(p, (double)a.max_hist[i], (double)hist[i]) * pct);
   passes.push_back(p);
 }
 
 bool CompareRenderer::within_tolerance() const {
   for (const Pass& p : passes) {
+    if (p.nonfinite) return false;
     if (p.render && p.mean_dl > kCompareMeanDL) return false;
-    if (p.max_share > kCompareShare || p.max_median_l > kCompareMedianL + 1e-9) return false;
+    if (p.max_zone > kCompareMeanDL) return false;
+    if (p.max_share > kCompareShare || p.max_hist > kCompareShare) return false;
+    if (p.max_median_l > kCompareMedianL + 1e-9) return false;
   }
   return !passes.empty();
 }
 
 std::string CompareRenderer::summary() const {
-  long renders = 0, renders_diff = 0, clips = 0, clips_diff = 0;
-  double mean_dl = 0.0, max_dl = 0.0, max_code = 0.0, share = 0.0, median = 0.0, hist = 0.0;
+  long renders = 0, renders_diff = 0, with_stats = 0, clips = 0, clips_diff = 0;
+  long long nonfinite = 0;
+  double mean_dl = 0.0, max_dl = 0.0, max_code = 0.0, r_share = 0.0, r_hist = 0.0, zone = 0.0, share = 0.0,
+         median = 0.0, hist = 0.0;
   for (const Pass& p : passes) {
+    nonfinite += p.nonfinite;
     if (p.render) {
       ++renders;
       renders_diff += p.differing > 0;
+      with_stats += p.stats;
       mean_dl = std::max(mean_dl, p.mean_dl);
       max_dl = std::max(max_dl, p.max_dl);
       max_code = std::max(max_code, p.max_abs);
+      r_share = std::max(r_share, p.max_share);
+      r_hist = std::max(r_hist, p.max_hist);
+      zone = std::max(zone, p.max_zone);
     } else {
       ++clips;
       clips_diff += p.differing > 0;
+      share = std::max(share, p.max_share);
       median = std::max(median, p.max_median_l);
       hist = std::max(hist, p.max_hist);
     }
-    share = std::max(share, p.max_share);
   }
   std::ostringstream s;
-  s << renders << " previews (" << renders_diff << " differ; largest mean change " << std::setprecision(3) << mean_dl
-    << " L*, largest pixel change " << max_dl << " L*, largest value difference " << max_code << "), " << clips
-    << " clip passes (" << clips_diff << " differ; shares " << share << " %, median " << median
-    << " L*, max-channel histogram " << hist << ")";
+  s << std::setprecision(3) << renders << " renders (" << renders_diff << " differ; largest mean change " << mean_dl
+    << " L*, largest pixel change " << max_dl << " L*, largest value difference " << max_code;
+  if (with_stats)
+    s << "; " << with_stats << " with statistics: clip shares " << r_share << " %, histogram bins " << r_hist
+      << " %, zone means " << zone;
+  s << "), " << clips << " clip passes (" << clips_diff << " differ; shares " << share << " %, median " << median
+    << " L*, max-channel histogram bins " << hist << " %)";
+  if (nonfinite) s << "; " << nonfinite << " values not finite";
   return s.str();
 }
 
