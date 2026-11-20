@@ -1999,13 +1999,15 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         std::snprintf(raised, sizeof raised, ", raised %.3fx to be no darker than the picture's thinnest film",
                       scan.print_floor_k);
       if (estimate) {
-        // With no --roi the shares are of the search's crop, the whole scan (said above).
+        // With no --roi the shares are of the search's crop, the RAW's inset crop or the whole scan (said above).
         log_warn("the print's level is relative to the film base, and this one is %s%s: %.2f %% of the %s is past the "
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; %s\n",
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
                  raised, 100.0 * s.print_res.past_knee[c],
-                 !scan.has_roi ? "search's crop (the whole scan)" : "crop",
+                 scan.has_roi           ? "crop"
+                 : scan.frame_is_whole ? "search's crop (the whole scan)"
+                                       : "search's crop (the RAW's inset crop)",
                  100.0 * s.print_res.past_cut[c], name, remedy);
       } else {
         // The base was read (a rebate, or a capture on TriLED), so a crop does not help: the cause these two name is a
@@ -2049,11 +2051,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   //
   // The floor reads the picture's frame: the search's frame when a --roi is given (or --roi auto's), else the frame
   // detector's crop of the half-size image |half| when the detection ran and is at or above kBaseMinFrameConf (the
-  // level the film base takes the detector's patch at), else the whole scan. Without a frame the scan's bare light
+  // level the film base takes the detector's patch at), else the search's frame: the RAW's inset crop, or the whole
+  // scan. Without a frame the scan's bare light
   // (perforations, the holder's gaps, the strip's edges) lies in the floor's crop and reads as the thinnest film, which
   // can raise the factor by up to 2.5 times.
   // Light inside the frame is not masked; the record's factor and frame show what was read. The print's search itself
-  // reads the search frame (without --roi, the whole scan). A caller that gains a print (negicc-station) chooses the
+  // reads the search frame (without --roi, the RAW's inset crop or the whole scan). A caller that gains a print (negicc-station) chooses the
   // frame here, as this does.
   // |det| the detection the base read (its boxes in the pixels of a sensor_w x sensor_h mosaic), mapped onto |half| by
   // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned
@@ -2062,9 +2065,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   auto apply_print_floor = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
                                int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
-    // A print without --roi: its search reads the whole scan (whatever the base, a capture included). Said once.
+    // A print without --roi: its search reads the RAW's inset crop, or the whole scan (whatever the base, a capture
+    // included). Said once.
     if (print && s.is_bundle && !scan.has_roi && !scan.print_floor_applied)
-      log_warn("no --roi: the print's search reads the whole scan; give --roi or --roi auto\n");
+      log_warn("no --roi: the print's search reads %s; give --roi or --roi auto\n",
+               scan.frame_is_whole ? "the whole scan" : "the RAW's inset crop");
     // white light too (crosstalk: identity)
     if (!s.is_bundle || !print || scan.has_given_base || scan.print_floor_applied)
       return;
@@ -2075,7 +2080,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.print_floor_frame = fell_back ? "whole_scan" : "roi";
       if (fell_back) scan.print_floor_frame_conf = scan.frame_det.conf;
     } else {
-      scan.print_floor_frame = "whole_scan";
+      scan.print_floor_frame = scan.frame_is_whole ? "whole_scan" : "inset_crop";
       const double sx = sensor_w > 0 ? half.width / (double)sensor_w : 0.0,
                    sy = sensor_h > 0 ? half.height / (double)sensor_h : 0.0;
       const bool aligned = det && sx > 0.0 && sy > 0.0 && std::fabs(sx - sy) <= 0.02 * std::max(sx, sy);
@@ -2283,8 +2288,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot)) {
         take_detected_frame(raw.imgdata.rawdata.sizes.width, raw.imgdata.rawdata.sizes.height);
       }
-      // --roi halved; three captures' inset crop halved (load_rgb_input gives it in raw's rawdata sizes, as the CFA
-      // path searches one RAW's); or the whole image.
+      // The frame the output writes, halved, as the CFA path searches it: --roi (or --roi auto's); else, unless
+      // --no_crop, one RAW's inset crop (inset_crop) or three captures' (load_rgb_input gives it in raw's rawdata
+      // sizes); else the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
       int* bbox = scan.auto_frame_half;
       bbox[0] = 0;
@@ -2293,8 +2299,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       bbox[3] = half_h;
       const auto& inset = raw.imgdata.rawdata.sizes.raw_inset_crops[0];
       int full_frame[4] = {inset.cleft, inset.ctop, inset.cwidth, inset.cheight};
-      if (scan.has_roi) std::copy(scan.roi, scan.roi + 4, full_frame);
-      if (scan.has_roi || (o.input_mode == InputMode::kThreeShot && full_frame[2] > 0 && full_frame[3] > 0)) {
+      bool cropped = o.input_mode == InputMode::kThreeShot && full_frame[2] > 0 && full_frame[3] > 0;
+      if (scan.has_roi)
+        std::copy(scan.roi, scan.roi + 4, full_frame);
+      else if (!o.roi_auto && !o.no_crop && (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng))
+        cropped = inset_crop(raw, full_frame);
+      if (scan.has_roi || cropped) {
         bbox[0] = full_frame[0] / 2;
         bbox[1] = full_frame[1] / 2;
         bbox[2] = std::max(1, (full_frame[0] + full_frame[2]) / 2 - bbox[0]);

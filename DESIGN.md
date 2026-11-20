@@ -349,7 +349,10 @@ The tone stage (4.4) changes lightness only. A print (5.4) takes neither the sho
 ## 4.2 The Auto search
 
 The search chooses the bracket and `(E, g, b)`. It works on the half-size image of the frame's inner 90 % crop
-(`multi_target_optimizer.cc`: `search_conversion_params`).
+(`multi_target_optimizer.cc`: `search_conversion_params`). The frame is the one the output writes, on every decode
+path: the given `--roi`, or `--roi auto`'s; else, unless `--no_crop`, the RAW's inset crop (the crop the camera
+records, e.g. an aspect ratio set in it; for three captures, the first capture's), placed in the image after the
+sensor's margins (`np_input.cc`: `inset_crop`); else the whole image.
 
 **The score.** A render's preview goes to the intent head, which predicts `(μ_i, σ_i)` for each cell `i`. The
 render's own colour per cell is read as the head's targets were made (`dinov3_auto_solver.cc`:
@@ -825,8 +828,9 @@ a capture (the rebate, the thinnest film or the bundle's), it is held no darker 
 with the colour kept (`X` is the identity on white light). 99.5 % is the base detector's own percentile
 (`kBasePercentile`). The crop is the picture's frame: the given `--roi`, or `--roi auto`'s unless it fell back to the
 whole image; else, with no `--roi`, the frame detector's crop when the detection succeeded (`ok`) with a confidence
-of at least 0.5 and its two scales onto the half-size image agree within 2 %; else the whole scan. A TIFF, a JPEG and
-three captures run no frame detection without `--roi auto`, so there the floor reads the whole scan. The raised base
+of at least 0.5 and its two scales onto the half-size image agree within 2 %; else the search's frame (4.2): the RAW's
+inset crop, or the whole scan. A TIFF, a JPEG and three captures run no frame detection without `--roi auto`, so there
+the floor reads the search's frame. The raised base
 serves the whole conversion, the density file included, so its CLF still prints the picture's print. The sidecar
 records the base as found and `β` (`film_base.print_floor.factor`). A captured base is taken as it is.
 
@@ -963,7 +967,8 @@ The camera has no spectral data here; the crosstalk correction stands in for its
 - **A print on an estimated base** keeps the estimate's colour in its shadows; on TriLED a capture of the roll's
   unexposed film (`--film_base`) is the remedy, and on white light a crop that shows some rebate (`--roi`), as the
   warning says.
-- **A print without `--roi`** searches the whole scan, bare light included; it says so.
+- **A print without `--roi`** searches the RAW's inset crop, or the whole scan when there is none, with whatever bare
+  light lies in it; it says so.
 - **The tilt removes the film's own drift** of its greys from shadows to highlights (`t_c` in the print ICC's curves,
   with it the slopes `S` in the CLF). Whether a print should keep it has not been judged.
 - **Mid grey at 0.70, printed as an 18 % grey.** A Cineon scan has an 18 % card at 0.75; both are stated values.
