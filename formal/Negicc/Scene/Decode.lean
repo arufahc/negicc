@@ -24,8 +24,10 @@ The arithmetic of how a RAW's mosaic becomes RGB (`np_input.cc`, `rgb_view.cc`):
 * **Pixel shift** (`cpu_pixel_shift_merge`): four captures shifted by one photosite; each pixel
   takes its R and B from the capture that saw them and the mean of its two greens, held at white.
 * **Three captures** (`load_rgb_input`): the green and blue captures scaled to the first's exposure
-  (shutter times ISO), rounded and held at 65535; a TIFF's half-size image is the rounded mean of
-  each 2x2 block.
+  (shutter times ISO), rounded and held at 65535. The half-size image the analysis reads is each
+  capture's own half-size image when all three have the image's half size (a TIFF's is the rounded
+  mean of each 2x2 block), whatever the frame; otherwise, and for an RGB file, the rounded mean of
+  each 2x2 block of the assembled image.
 
 A photosite outside the mosaic reads its mirror image about the edge photosite (`get_px_refl_cpu`).
 The geometry (crop, rotation, flips) of the output relative to the mosaic is index bookkeeping and
@@ -180,7 +182,14 @@ def captureScale (v : Nat) (e0 ek : α) : Nat :=
   let s := e0 / ek
   if decide (s ≤ 1.0) && decide (1.0 ≤ s) then v else min 65535 (roundNat ((v : α) * s))
 
-/-- The half-size value of a 2x2 block of a TIFF capture: `(a + b + c + d + 2) / 4` in integers. -/
+/-- The half-size value of a 2x2 block: `(a + b + c + d + 2) / 4` in integers (a TIFF capture's
+half-size image, and the assembled image's). -/
 def tiffHalf (a b c d : Nat) : Nat := (a + b + c + d + 2) / 4
+
+/-- Whether the analysis reads the three captures' own half-size images (`planes` in
+`load_rgb_input`): three captures, each with a half-size image of the image's half size. The frame
+(`--roi`, `--roi auto`, the inset crop) does not enter: it is cut after the analysis. -/
+def capturePlanesUsed (threeShot : Bool) (halfSizes : List (Nat × Nat)) (hw hh : Nat) : Bool :=
+  threeShot && halfSizes.length = 3 && halfSizes.all fun (w, h) => w = hw && h = hh
 
 end Negicc

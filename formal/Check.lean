@@ -51,46 +51,14 @@ precision; the descriptors it starts from differ in the last bits (the sRGB deco
 against `c / 12.92`), which the solve carries to the curve. -/
 def tolSolve : Float := 1e-7
 
-/-- `E` solved for a median lightness: the C++ solves in single precision to within `2e-5 L*`, which
-moves `E` by up to about `1e-5` of itself. -/
-def tolSolveE : Float := 1e-6
-
-/-- The fit's fixed part at Auto's `E`: the weights and moments of cells whose `L*` agree to
-`tolLabPixel`, at an `E` that agrees to `tolSolveE`. -/
-def tolFitSetup : Float := 1e-5
-
-/-- The fit's data loss at a given point, a sum of squared residuals of order 10 to 100 built from
-those values. -/
-def tolFitLoss : Float := 3e-4
-
-/-- The fit's result: the C++ runs the solve in single precision for its parameters and `E` (double
-for the residuals); the two runs take the same steps and stop within the solve's own tolerance
-(a gain below `1e-6` of the cost, a step below `1e-5`). The loss at the end point is compared with
-`tolFitResultLoss`. -/
-def tolFit : Float := 4e-3
-
-@[inherit_doc tolFit] def tolFitResultLoss : Float := 3e-3
-
 /-- numpy's percentile in single precision (`percentile_f32` interpolates in float32) of values near
 3000. -/
 def tolPercentile32 : Float := 5e-4
-
-/-- `u16_percentile_linear` interpolates in single precision between 16-bit values (observed: no
-difference on the vectors). -/
-def tolPercentileU16 : Float := 1e-3
-
-/-- The scene's green points as `compute_frame_stats` gives them: a single precision value up to
-65535, whose steps are at most `2^-8 = 0.0039`. Observed: 9.4e-4. -/
-def tolGreenPoint : Float := 4e-3
 
 /-- The 99.5 % point of a histogram of 4096 bins over `[0, 2]`, filled from single precision values:
 a pixel near a bin's edge may fall in the neighbouring bin, which moves the point by at most a
 bin's width, `2 / 4096`. Observed: 3e-8 (the two histograms were equal). -/
 def tolHistBin : Float := 2.0 / 4096.0
-
-/-- A bracket's range from the frame's green points, which `compute_frame_stats` gives in single
-precision (`tolGreenPoint` on values near 200 and 15000): relative `4e-3 / 200`. -/
-def tolGreenRel : Float := 2e-5
 
 /-- The film base through the crosstalk correction, in double precision on both sides, over 65535. -/
 def tolDoubleRel : Float := 1e-9
@@ -416,14 +384,6 @@ def checkPixel (root : System.FilePath) (j : Json) : CheckM Unit := do
           (enc.y, encC.getD 1 0.0, prvP.y, wantP.getD 1 0), (enc.z, encC.getD 2 0.0, prvP.z, wantP.getD 2 0)] do
         sameCode "pixel: previewPixel" val cv 255.0 got want
         sameQuantize "pixel: quantizeU8 of the C++ value" cv 255.0 (quantizeU8 cv) want
-  -- The exposure normalisation: the frame's merged matrix over the reference's (the bundle's base at 1/8 s, ISO 100).
-  let fbExposure := captureExposure (← numAt j "film_base_shutter") (← numAt j "film_base_iso")
-  let reference := mergedMatrix (mat3 (← numsAt j "crosstalk")) (vec3 (← numsAt j "film_base"))
-    (← numAt j "normalization_target") (fbExposure / referenceExposure)
-  for c in ← arrAt j "e_norm" do
-    let frame := mergedMatrix (mat3 (← numsAt j "crosstalk")) (vec3 (← numsAt j "film_base"))
-      (← numAt j "normalization_target") (fbExposure / captureExposure (← numAt c "shutter") (← numAt c "iso"))
-    near "scene: exposureNorm" tolSingle (exposureNorm frame reference) (← numAt c "e_norm")
 
 def checkShoulder (j : Json) : CheckM Unit := do
   for s in ← arrAt j "set" do
@@ -552,151 +512,20 @@ def checkWhite (root : System.FilePath) (j : Json) : CheckM Unit := do
   same "white: composeInputTable (size)" composed.size (← natAt cp "n")
   for e in ← arrAt cp "entries" do
     near "white: composeInputTable" tolSingle (composed.getD (← natAt e "i") 0.0) (← numAt e "y")
-  for c in ← arrAt j "shape" do
-    let hold ← holdOf c
-    let ch : ChannelCurve Float := ⟨← numAt c "a", ← numAt c "k", ← numAt c "ref", ← numAt c "u_med",
-      hold.getD 0.0, hold.isSome⟩
-    same "white: curveShapeOk" (if curveShapeOk ch (← natAt c "n") 2.2 then 1 else 0)
-      (if (← boolAt c "ok") then 1 else 0)
-  -- The frame.
-  let merged := mat3 (← numsAt j "merged_f32")
-  let fb := vec3 (← numsAt j "film_base")
-  let fr ← get j "frame"
-  let grid := pixelsOf (← natsAt fr "grid")
-  let neutralP ← numsAt fr "neutral_p"
-  let mu ← numsAt fr "mu"
-  let sigma ← numsAt fr "sigma"
-  let labsOf3 := fun (a : Array Float) => (Array.range (a.size / 3)).map fun i =>
-    (⟨a.getD (3 * i) 0.0, a.getD (3 * i + 1) 0.0, a.getD (3 * i + 2) 0.0⟩ : Lab Float)
-  let field : JointFitField Float := ⟨labsOf3 mu, labsOf3 sigma, ← natsAt fr "bx", ← natsAt fr "by", ← natAt fr "nbx"⟩
-  let frame : CurveFrame Float := ⟨merged, autoKnee, fb, grid, some neutralP⟩
-  let cfg : PipelineConfig Float := { profile := prof, knee := autoKnee, shoulder := setShoulder (← numAt j "x_hi"),
-                                      tone := none }
-  let au ← numsAt j "auto"
-  let (e0, g0, b0) := (au.getD 0 0.0, au.getD 1 0.0, au.getD 2 0.0)
-  let rf ← get j "reference"
-  let shape ← curvesOf (← get rf "shape")
-  let ref := inputCurveReference shape merged e0 g0 b0 autoKnee fb grid
-  let wantRef ← curvesOf (← get rf "curves")
-  nearChannel "white: inputCurveReference" tolSingle ref.g wantRef.g
-  nearChannel "white: inputCurveReference" tolSingle ref.b wantRef.b
-  let md ← get j "model"
-  let anc := anchored frame shape e0 g0 b0
-  let wantAnc ← curvesOf (← get md "curves")
-  nearChannel "white: anchored" tolSingle anc.g wantAnc.g
-  nearChannel "white: anchored" tolSingle anc.b wantAnc.b
-  let labs := cellLabs cfg frame shape e0 g0 b0
-  let wantLabs ← arrAt md "labs"
-  for i in [0:labs.size] do
-    let wl ← ((← arr (wantLabs.getD i Json.null)).mapM num : IO (Array Float))
-    let l := labs.getD i ⟨0.0, 0.0, 0.0⟩
-    near "white: cellLab" tolLabPixel l.L (wl.getD 0 0.0)
-    near "white: cellLab" tolLabPixel l.a (wl.getD 1 0.0)
-    near "white: cellLab" tolLabPixel l.b (wl.getD 2 0.0)
-  near "white: medianL" tolLabPixel (medianL cfg frame shape e0 g0 b0) (← numAt md "median_L")
-  let targetL ← numAt j "target_L"
-  let se ← get j "solve_e"
-  let (okE, eE) := solveE (fun t => medianL cfg frame InputCurves.zero (exp t) g0 b0 - targetL) 2e-5 e0 (e0 * 0.25)
-    (e0 * 4.0)
-  same "white: solveE (reached)" (if okE then 1 else 0) (if (← boolAt se "ok") then 1 else 0)
-  near "white: solveE" tolSolveE eE (← numAt se "e")
-  let mo ← get j "moments"
-  let mm := jointMoments labs (← natsAt mo "idx") (← numsAt mo "w")
-  let wantM ← numsAt mo "m"
-  let gotM := #[mm.L, mm.a, mm.b, mm.vL, mm.ka, mm.kb]
-  for k in [0:6] do near "white: jointMoments" tolLabPixel (gotM.getD k 0.0) (wantM.getD k 0.0)
-  for c in ← arrAt j "guard_cell" do
-    near "white: greenGuardCellA" tolDouble (greenGuardCellA (← numAt c "a") (← numAt c "a_auto") (← numAt c "L_auto"))
-      (← numAt c "y")
-  -- The joint fit.
-  let ft ← get j "fit"
-  let P : FitProblem Float := ⟨cfg, frame, some field, e0, g0, b0, targetL,
-    (prof.inCurves.y.size, prof.inCurves.z.size),
-    CurveFitOptions.default, e0 * 0.25, e0 * 4.0⟩
-  let (okA, eA) := P.solvePoint #[g0, b0, 0.0, 0.0] e0 true
-  same "white: fit runs" (if okA then 1 else 0) (if (← boolAt ft "ok") then 1 else 0)
-  let S := P.setup eA
-  near "white: setup (anchors)" tolSingle S.m (← numAt ft "evidence")
-  near "white: setup (anchors)" tolSingle S.w (← numAt ft "shrink")
-  near "white: setup (anchors)" tolFitSetup S.slopeShare
-    (← numAt ft "slope_share")
-  near "white: setup (anchors)" tolFitSetup (Float.sqrt S.M0.vL)
-    (← numAt ft "span_L")
-  near "white: setup (anchors)" tolSingle S.sigAnc (← numAt ft "anchor_sd")
-  near "white: setup (intent field)" tolFitSetup S.se (← numAt ft "intent_se")
-  near "white: setup (intent field)" tolFitSetup
-    (P.r4 S S.lab0 S.M0 / S.r4Scale) (← numAt ft "intent_auto")
-  near "white: loss at Auto" tolFitLoss (P.loss S #[g0, b0, 0.0, 0.0] eA) (← numAt ft "loss_before")
-  let wantCurves ← curvesOf (← get ft "curves")
-  let pC : Array Float := #[← numAt ft "g", ← numAt ft "b", wantCurves.g.a, wantCurves.b.a]
-  let eC ← numAt ft "e"
-  near "white: loss at the C++ result" tolFitLoss (P.loss S pC eC) (← numAt ft "loss_after")
-  let res := P.fit
-  same "white: fit (guarded pass)" (if res.refit then 1 else 0) (if (← boolAt ft "refit") then 1 else 0)
-  near "white: fit (E, g, b, bends)" tolFit res.e eC
-  near "white: fit (E, g, b, bends)" tolFit res.g (pC.getD 0 0.0)
-  near "white: fit (E, g, b, bends)" tolFit res.b (pC.getD 1 0.0)
-  near "white: fit (E, g, b, bends)" tolFit res.curves.g.a (pC.getD 2 0.0)
-  near "white: fit (E, g, b, bends)" tolFit res.curves.b.a (pC.getD 3 0.0)
-  near "white: fit (loss after)" tolFitResultLoss res.lossAfter (← numAt ft "loss_after")
-  -- The combined profile and the re-meter, from the C++ result's curves.
-  let cb ← get j "combined"
-  let anchoredC := anchored frame (P.shapeOf pC) eC (pC.getD 0 0.0) (pC.getD 1 0.0)
-  let cc : PipelineConfig Float := { cfg with profile := combinedProfile prof wantCurves }
-  near "white: gridMedianL (combined profile)" tolLabPixel
-    (gridMedianL cc merged eC (pC.getD 0 0.0) (pC.getD 1 0.0) grid)
-    (← numAt cb "median_L")
-  near "white: anchored at the result" tolSingle anchoredC.g.ref wantCurves.g.ref
-  near "white: solveEForMedianL" tolSolveE
-    (solveEForMedianL cfg frame wantCurves eC (e0 * 0.25) (e0 * 4.0) (pC.getD 0 0.0) (pC.getD 1 0.0) targetL)
-    (← numAt cb "remeter")
-  for c in ← arrAt j "picture_cells" do
-    let got := fallbackPictureCells (pixelsOf (← natsAt c "grid")) fb (← boolAt c "rebate")
-    let want ← natsAt c "kept"
-    same "white: fallbackPictureCells" got.size want.size
-    for k in [0:want.size] do same "white: fallbackPictureCells" (got.getD k 0) (want.getD k 0)
-  -- The guard on synthetic Auto renders.
-  for c in ← arrAt j "guard" do
-    let labs ← (← arrAt c "labs").mapM fun l => (do pure (labOf (← (← arr l).mapM num)) : IO (Lab Float))
-    let gd := guardOf labs (some (← numsAt c "p"))
-    let wc ← arrAt c "counted"
-    same "white: guardOf (counted)" (if gd.counted.1 then 1 else 0)
-      (if (wc.getD 0 Json.null) == Json.bool true then 1 else 0)
-    same "white: guardOf (counted)" (if gd.counted.2 then 1 else 0)
-      (if (wc.getD 1 Json.null) == Json.bool true then 1 else 0)
-    let wr ← numsAt c "ref"
-    near "white: guardOf, guardMeans" tolDouble gd.ref.1 (wr.getD 0 0.0)
-    near "white: guardOf, guardMeans" tolDouble gd.ref.2 (wr.getD 1 0.0)
-    for hcase in ← arrAt c "hinges" do
-      let v ← numsAt hcase "v"
-      let hw ← numsAt hcase "hinge"
-      let bw ← arrAt hcase "binds"
-      near "white: guardHinge" tolDouble (guardHinge gd.counted.1 gd.ref.1 (v.getD 0 0.0)) (hw.getD 0 0.0)
-      near "white: guardHinge" tolDouble (guardHinge gd.counted.2 gd.ref.2 (v.getD 1 0.0)) (hw.getD 1 0.0)
-      same "white: guardBinds" (if guardBinds gd.counted.1 gd.ref.1 (v.getD 0 0.0) then 1 else 0)
-        (if (bw.getD 0 Json.null) == Json.bool true then 1 else 0)
-      same "white: guardBinds" (if guardBinds gd.counted.2 gd.ref.2 (v.getD 1 0.0) then 1 else 0)
-        (if (bw.getD 1 Json.null) == Json.bool true then 1 else 0)
-  -- The re-anchoring's pieces: the two anchors, and the shape's scale.
-  let ra ← get j "reanchor"
-  let rc ← curvesOf (← get ra "curves")
-  let fromP ← numsAt ra "from"
-  let toP ← numsAt ra "to"
-  let a0 := inputCurveReference rc merged (fromP.getD 0 0.0) (fromP.getD 1 0.0) (fromP.getD 2 0.0) autoKnee fb grid
-  let a1 := inputCurveReference rc merged (toP.getD 0 0.0) (toP.getD 1 0.0) (toP.getD 2 0.0) autoKnee fb grid
-  for (got, key) in [(a0, "a0"), (a1, "a1")] do
-    let want ← curvesOf (← get ra key)
-    nearChannel "white: the re-anchoring's anchors" tolSingle got.g want.g
-    nearChannel "white: the re-anchoring's anchors" tolSingle got.b want.b
-  for c in ← arrAt ra "scales" do
-    let hold ← holdOf c
-    let ch : ChannelCurve Float := ⟨← numAt c "a", 0.0, ← numAt c "ref", ← numAt c "u_med", hold.getD 0.0, hold.isSome⟩
-    near "white: shapeScaleOf" tolSingle (shapeScaleOf fun t => curveShapeOk { ch with a := t * ch.a } 4096 2.2)
-      (← numAt c "scale")
-  near3 "white: curveFrameBase" tolDouble (curveFrameBase none grid) (← numsAt j "curve_frame_base")
-  let fbnd ← numsAt j "fit_target_bounds"
-  near "white: fitTargetL (bounds)" tolDouble (fitTargetL false (0.0 : Float)) (fbnd.getD 0 0.0)
-  near "white: fitTargetL (bounds)" tolDouble (fitTargetL false (100.0 : Float)) (fbnd.getD 1 0.0)
+  for c in ← arrAt j "combined" do
+    let av ← numsAt c "a"
+    let rv ← numsAt c "ref"
+    let mv ← numsAt c "u_med"
+    let lv ← numsAt c "u_lo"
+    let hold ← boolAt c "hold"
+    let ic : InputCurves Float := ⟨⟨av.getD 0 0.0, 0.0, rv.getD 0 0.0, mv.getD 0 0.0, lv.getD 0 0.0, hold⟩,
+      ⟨av.getD 1 0.0, 0.0, rv.getD 1 0.0, mv.getD 1 0.0, lv.getD 1 0.0, hold⟩⟩
+    let cp := combinedProfile prof ic
+    for e in ← arrAt c "entries" do
+      let i ← natAt e "i"
+      near "white: combinedProfile" tolSingle (cp.inCurves.x.getD i 0.0) (← numAt e "r")
+      near "white: combinedProfile" tolSingle (cp.inCurves.y.getD i 0.0) (← numAt e "g")
+      near "white: combinedProfile" tolSingle (cp.inCurves.z.getD i 0.0) (← numAt e "b")
   for c in ← arrAt j "balance" do
     let got := filmBaseBalanceGains (mat3 (← numsAt c "rgb_cam")) (vec3 (← numsAt c "base"))
       (vec3 (← numsAt c "profile_base"))
@@ -738,72 +567,27 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
     near "film base: medianU16" tolDouble (medianU16 (← natsAt c "u16")) (← numAt c "median_u16")
     for p in ← arrAt c "pct" do
       near "film base: percentileF32" tolPercentile32 (percentileF32 v (← numAt p "q")) (← numAt p "y")
-  for c in ← arrAt j "enclosure" do
-    let i ← numsAt c "in"
-    let o ← numsAt c "out"
-    let r : Enclosure Float := bracketEnclosure (i.getD 0 0.0) (i.getD 1 0.0) (i.getD 2 0.0) (i.getD 3 0.0) (i.getD 4 0.0)
-    same "bracket: bracketEnclosure (flags)" (if r.feasible then 1 else 0) (if o.getD 0 0.0 > 0.5 then 1 else 0)
-    same "bracket: bracketEnclosure (flags)" (if r.admissible then 1 else 0) (if o.getD 1 0.0 > 0.5 then 1 else 0)
-    same "bracket: bracketEnclosure (flags)" (if r.usableInverted then 1 else 0) (if o.getD 7 0.0 > 0.5 then 1 else 0)
-    let got := #[r.eMin, r.eMax, r.searchLo, r.searchHi, r.eCentre]
-    let want := #[o.getD 2 0.0, o.getD 3 0.0, o.getD 4 0.0, o.getD 5 0.0, o.getD 6 0.0]
-    for k in [0:5] do near "bracket: bracketEnclosure" tolSingle ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
-    near "bracket: bracketEnclosure" tolSingle r.slackEv (o.getD 8 0.0)
-    near "bracket: bracketEnclosure" tolSingle r.fillRatio (o.getD 9 0.0)
   let cropC ← numAt j "crop_ratio"
-  same "bracket: searchCropRatio" (if Float.abs ((searchCropRatio : Float) - cropC) ≤ tolSingle then 1 else 0) 1
-  for c in ← arrAt j "pull_centre" do
-    let i ← numsAt c "in"
-    let r : Enclosure Float := bracketEnclosure (i.getD 0 0.0) (i.getD 1 0.0) (i.getD 2 0.0) (i.getD 3 0.0) (i.getD 4 0.0)
-    near "bracket: pullCentre" tolSingle (pullCentre r) (← numAt c "y")
+  same "crop: searchCropRatio" (if Float.abs ((searchCropRatio : Float) - cropC) ≤ tolSingle then 1 else 0) 1
   for c in ← arrAt j "inner_crop" do
     let i ← arrAt c "in"
     let (x0, y0, w, h) := innerCrop (← nat (i.getD 0 Json.null)) (← nat (i.getD 1 Json.null)) (← num (i.getD 2 Json.null))
     let o ← natsAt c "out"
     for (got, want) in [(x0, o.getD 0 0), (y0, o.getD 1 0), (w, o.getD 2 0), (h, o.getD 3 0)] do
-      same "bracket: innerCrop" got want
-  let up ← get j "u16_percentile"
-  let total ← natAt up "total"
-  let mut hist : Array Nat := Array.replicate 65536 0
-  for e in ← arrAt up "hist" do
-    let a ← ((← arr e).mapM nat : IO (Array Nat))
-    hist := hist.set! (a.getD 0 0) (a.getD 1 0)
-  for p in ← arrAt up "pct" do
-    near "bracket: u16PercentileLinear" tolPercentileU16 (u16PercentileLinear hist total (← numAt p "q")) (← numAt p "y")
-  let mt ← get j "meter"
-  let FW ← natAt mt "w"
-  let FH ← natAt mt "h"
-  let frame := pixelsOf (← natsAt mt "frame")
-  let (gh, gt) := greenHistogram frame FW FH (searchCropRatio : Float)
-  let (gLo, gHi) : Float × Float := sceneGreenRange gh gt
-  let wantG ← numsAt mt "green_range"
-  near "bracket: sceneGreenRange" tolGreenPoint gLo (wantG.getD 0 0.0)
-  near "bracket: sceneGreenRange" tolGreenPoint gHi (wantG.getD 1 0.0)
-  -- Each bracket's range from the bundle's patches and exposure, at the frame's green points.
-  for t in ← arrAt mt "targets" do
-    let (gMin, gMax) : Float × Float := patchGreenRange (← numsAt t "patches_g")
-    let r := bracketEnclosure gMin gMax (bracketExposure (← numAt t "shutter_s") (← numAt t "iso")) gLo gHi
-    let o ← numsAt t "out"
-    same "bracket: enclosure from the bundle (flags)" (if r.feasible then 1 else 0)
-      (if o.getD 0 0.0 > 0.5 then 1 else 0)
-    same "bracket: enclosure from the bundle (flags)" (if r.admissible then 1 else 0)
-      (if o.getD 1 0.0 > 0.5 then 1 else 0)
-    same "bracket: enclosure from the bundle (flags)" (if r.usableInverted then 1 else 0)
-      (if o.getD 7 0.0 > 0.5 then 1 else 0)
-    let got := #[r.eMin, r.eMax, r.searchLo, r.searchHi, r.eCentre]
-    let want := #[o.getD 2 0.0, o.getD 3 0.0, o.getD 4 0.0, o.getD 5 0.0, o.getD 6 0.0]
-    for k in [0:5] do near "bracket: enclosure from the bundle" tolGreenRel ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
-  -- The frame's highlight roll-off through bracket 3 of the TriLED bundle, scanned at 1/4 s, ISO 100.
+      same "crop: innerCrop" got want
+  let fr ← get j "frame"
+  let FW ← natAt fr "w"
+  let FH ← natAt fr "h"
+  let frame := pixelsOf (← natsAt fr "frame")
+  -- The frame's highlight roll-off through bracket 3 of the TriLED bundle at the reference exposure's merged
+  -- matrix: the histogram over the inner crop, its 99.5 % point and x_hi.
   let fbExposure := captureExposure (← numAt pixel "film_base_shutter") (← numAt pixel "film_base_iso")
-  let X := mat3 (← numsAt pixel "crosstalk")
-  let fbv := vec3 (← numsAt pixel "film_base")
-  let nT ← numAt pixel "normalization_target"
-  let frameM := mergedMatrix X fbv nT (fbExposure / captureExposure 0.25 100.0)
-  let eNormT := exposureNorm frameM (mergedMatrix X fbv nT (fbExposure / referenceExposure))
+  let merged := mergedMatrix (mat3 (← numsAt pixel "crosstalk")) (vec3 (← numsAt pixel "film_base"))
+    (← numAt pixel "normalization_target") (fbExposure / captureExposure 0.125 100.0)
   let prof ← readProfile (root / (← strAt pixel "bundle_dir") / (← strAt pixel "icc"))
   let (cx, cy, cw, ch) := innerCrop FW FH (searchCropRatio : Float)
-  for c in ← arrAt mt "rolloff" do
-    let m := candidateMatrix (frameM.divScalar eNormT) ((← numAt c "e") * eNormT) (← numAt c "g") (← numAt c "b")
+  for c in ← arrAt fr "rolloff" do
+    let m := candidateMatrix merged (← numAt c "e") (← numAt c "g") (← numAt c "b")
     let lins := (Array.range (cw * ch)).map fun k =>
       convertPixelLinear prof (autoKnee : Float) m (loadU16 (frame.getD ((cy + k / cw) * FW + cx + k % cw) ⟨0, 0, 0⟩))
     let mh := maxHistOf lins
@@ -907,7 +691,6 @@ def expectedCounts : List (String × Nat) := [
   ("pixel: quantizeU8 of the C++ value", 600),
   ("pixel: outputPixel, across a half", 2),
   ("pixel: quantizeU16 of the C++ value, across a half", 1),
-  ("scene: exposureNorm", 3),
   ("shoulder: setShoulder", 77),
   ("shoulder: applyShoulderChannel", 110),
   ("shoulder: shoulderXHiAnchored", 11),
@@ -928,50 +711,15 @@ def expectedCounts : List (String × Nat) := [
   ("white: inputCurve", 24),
   ("white: composeInputTable (size)", 1),
   ("white: composeInputTable", 9),
-  ("white: curveShapeOk", 6),
-  ("white: inputCurveReference", 10),
-  ("white: anchored", 10),
-  ("white: cellLab", 144),
-  ("white: medianL", 1),
-  ("white: solveE (reached)", 1),
-  ("white: solveE", 1),
-  ("white: jointMoments", 6),
-  ("white: greenGuardCellA", 6),
-  ("white: fit runs", 1),
-  ("white: setup (anchors)", 5),
-  ("white: setup (intent field)", 2),
-  ("white: loss at Auto", 1),
-  ("white: loss at the C++ result", 1),
-  ("white: fit (guarded pass)", 1),
-  ("white: fit (E, g, b, bends)", 5),
-  ("white: fit (loss after)", 1),
-  ("white: gridMedianL (combined profile)", 1),
-  ("white: anchored at the result", 1),
-  ("white: solveEForMedianL", 1),
-  ("white: fallbackPictureCells", 86),
-  ("white: guardOf (counted)", 10),
-  ("white: guardOf, guardMeans", 10),
-  ("white: guardHinge", 40),
-  ("white: guardBinds", 40),
-  ("white: the re-anchoring's anchors", 20),
-  ("white: shapeScaleOf", 4),
-  ("white: curveFrameBase", 3),
-  ("white: fitTargetL (bounds)", 2),
+  ("white: combinedProfile", 42),
   ("white: filmBaseBalanceGains", 12),
   ("read: halfSizePixel", 144),
   ("read: grainAwarePixel", 576),
   ("read: pixelShiftPixel", 576),
   ("film base: medianU16", 5),
   ("film base: percentileF32", 20),
-  ("bracket: bracketEnclosure (flags)", 15),
-  ("bracket: bracketEnclosure", 35),
-  ("bracket: searchCropRatio", 1),
-  ("bracket: pullCentre", 2),
-  ("bracket: innerCrop", 24),
-  ("bracket: u16PercentileLinear", 5),
-  ("bracket: sceneGreenRange", 2),
-  ("bracket: enclosure from the bundle (flags)", 21),
-  ("bracket: enclosure from the bundle", 35),
+  ("crop: searchCropRatio", 1),
+  ("crop: innerCrop", 24),
   ("shoulder: maxHistOf, the 99.5 % point", 2),
   ("shoulder: maxHistOf, x_hi", 2),
   ("film base: patchClipped", 4),

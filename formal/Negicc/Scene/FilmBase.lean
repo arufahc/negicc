@@ -14,7 +14,7 @@ The film base `f` is taken, in this order (`np_film_base.cc`, `detect_film_base`
 `film_base_detector.cc`):
 
 1. a capture of unexposed film (`--film_base`), scaled by the scan's exposure over the capture's
-   (`baseFromCapture`);
+   (`baseFromCapture`); refused when the film it reads is at the sensor's clip before the flat field;
 2. the rebate: the median per channel of the detector's patch beside the frame, inset by 15 % on
    each side (`rebateBox`, `medianU16`), refused when it holds too few samples, when more than 0.1 %
    of its samples reached 98 % of the white level before the flat field, or when the thinnest film
@@ -56,7 +56,7 @@ def percentileF32 (xs : Array α) (q : α) : α :=
   if xs.size = 0 then 0.0 else percentileF32Sorted (xs.qsort fun a b => decide (a < b)) q
 
 /-- numpy's median of 16-bit values (`median_u16`): the middle value, or the mean of the two middle
-ones. -/
+ones; `0` for none (the C++ gives a NaN, which is not modelled). -/
 def medianU16 (xs : Array Nat) : α :=
   let s := xs.qsort (· < ·)
   let h := xs.size / 2
@@ -74,7 +74,8 @@ def basePatchInset : α := 0.15
 
 /-- The rebate patch's inner box on the half-size image (`detect_film_base`): the detector's box
 `(x, y, w, h)` in sensor pixels inset by 15 % on each side and scaled by `sx`, `sy`, rounded inward
-and held to the image; `none` when it holds fewer than 32 samples. Returns `(x0, y0, w, h)`. -/
+and held to the image; `none` when it holds fewer than 32 samples or is empty along either axis.
+Returns `(x0, y0, w, h)`. -/
 def rebateBox (x y w h : α) (sx sy : α) (W H : Nat) : Option (Nat × Nat × Nat × Nat) :=
   let x0 := x + basePatchInset * w
   let x1 := x + (1.0 - basePatchInset) * w

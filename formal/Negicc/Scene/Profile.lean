@@ -17,8 +17,8 @@ built is not part of this specification: its tables are given data. What the con
 them is, and is defined here as `applyProfile` (`apply_profile` in `color_pipeline.h`):
 
 1. each channel through its **input curve**, a sampled table over `[0, 1]`;
-2. a **matrix and offset**, clamped to `[0, 1]`: the identity, since the parser refuses a profile
-   whose `AToB0` has another (`Profile.matrixAccepted`, `parse_film_profile_pipeline`);
+2. a **matrix and offset**, clamped to `[0, 1]`: the identity, which the parser sets on every
+   profile it takes (`parse_film_profile_pipeline`, `profileLayoutAccepted`);
 3. the **colour table**, a three-dimensional grid of XYZ values read by tetrahedral
    interpolation (`clutEval`, `interpolate_clut`);
 4. each channel through its **output curve**, then the PCS scale `1.99996948`.
@@ -30,7 +30,8 @@ range of its nodes (`clutEval_mem`).
 
 A profile without a colour table (an empty `clut` or a zero grid size, the C++'s null pointer or
 zero `clut_dim`) skips step 3: the output curves then read the input curves' values, and the matrix
-result is not used, as in `apply_profile`. The bundles' profiles all have a table.
+result is not used, as in `apply_profile`. The parser refuses such a profile, so no conversion
+reaches that case.
 -/
 
 namespace Negicc
@@ -75,9 +76,33 @@ def tetraBlend (v0 va vp vq : Vec3 α) (w0 w1 w2 w3 : α) : Vec3 α :=
    v0.y * w0 + va.y * w1 + vp.y * w2 + vq.y * w3,
    v0.z * w0 + va.z * w1 + vp.z * w2 + vq.z * w3⟩
 
-/-- The parser takes a profile only when its `AToB0` matrix is the identity with no offset
-(`parse_film_profile_pipeline` in `profile_bundle.cc`): `apply_profile` applies a matrix between the
-input curves and the table, where neither ICC form has it. -/
+/-- A stage of a profile's `AToB0` pipeline as Little-CMS reads it: a set of curves, a colour table,
+a matrix (whether it is the identity with no offset), or another stage. -/
+inductive ProfileStage where
+  | curves
+  | clut
+  | matrix (identity : Bool)
+  | other
+  deriving DecidableEq, Repr
+
+/-- The layouts the parser takes (`parse_film_profile_pipeline` in `profile_bundle.cc`): input curves,
+a colour table, an identity matrix at most once right after the table, output curves, nothing else
+(every stage three channels to three, which is not modelled). State `0` is before the input curves,
+`1` before the table, `2` after it, `3` after the output curves. -/
+def profileLayoutAccepted (stages : List ProfileStage) : Bool :=
+  let step : Option (Nat × Bool) → ProfileStage → Option (Nat × Bool) := fun st s =>
+    match st, s with
+    | some (0, m), .curves => some (1, m)
+    | some (2, m), .curves => some (3, m)
+    | some (1, m), .clut => some (2, m)
+    | some (2, false), .matrix true => some (2, true)
+    | _, _ => none
+  match stages.foldl step (some (0, false)) with
+  | some (3, _) => true
+  | _ => false
+
+/-- The profile's matrix is the identity with no offset, as the parser sets it on every profile it
+takes (`parse_film_profile_pipeline`). -/
 def Profile.matrixAccepted (p : Profile α) : Bool :=
   let eq := fun (x y : α) => decide (x ≤ y) && decide (y ≤ x)
   eq p.matrix.row0.x 1.0 && eq p.matrix.row0.y 0.0 && eq p.matrix.row0.z 0.0 &&
@@ -92,10 +117,10 @@ def Profile.hasClut (p : Profile α) : Bool :=
 
 /-- Tetrahedral interpolation of the colour table at `t` in `[0, 1]³` (`interpolate_clut`).
 
-Every grid size must be at least 1, which `applyProfile` guarantees (it tests `hasClut`). The
-lower corner is held inside the grid first and the upper corner taken from it, as in
-`interpolate_clut`, so a coordinate outside `[0, 1]` reads the edge cell; `applyProfile` clamps its
-coordinates to `[0, 1]` in any case.
+Without a table (an empty one, or a grid size below 1) the value passes through, as in
+`interpolate_clut`. The lower corner is held inside the grid first and the upper corner taken from
+it, so a coordinate outside `[0, 1]` reads the edge cell; `applyProfile` clamps its coordinates to
+`[0, 1]` in any case.
 
 Each coordinate is scaled to the grid; `(i, j, k)` is the cell's lower corner and `(dr, dg, db)`
 the position inside the cell. The cell is cut into six tetrahedra by the order of `dr`, `dg`,
@@ -105,6 +130,7 @@ corners of the tetrahedron that holds the point: with the three positions sorted
 corner one step along the axis of `d1`, then the corner one more step along the axis of `d2`, then
 `v111`. -/
 def clutEval (p : Profile α) (t : Vec3 α) : Vec3 α :=
+  if !p.hasClut then t else
   let sr := t.x * ((p.dim.x - 1 : Nat) : α)
   let sg := t.y * ((p.dim.y - 1 : Nat) : α)
   let sb := t.z * ((p.dim.z - 1 : Nat) : α)

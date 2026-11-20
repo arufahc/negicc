@@ -11,10 +11,8 @@ public import Negicc.WhiteLight.Props
 
 * `Negicc.WhiteLight.Balance`: gains on the camera channels that put the scan's film base on the
   profile's before the camera matrix.
-* `Negicc.WhiteLight.Curve`: the fitted green and blue input curves and their composition into the
+* `Negicc.WhiteLight.Curve`: given green and blue input curves and their composition into the
   profile's tables.
-* `Negicc.WhiteLight.Fit`: the per-cell model, the anchors, the residuals, the never-greener guard,
-  the Levenberg-Marquardt solve, the re-meter.
-* `Negicc.WhiteLight.Defs`: the three above together (no Mathlib).
+* `Negicc.WhiteLight.Defs`: the two above together (no Mathlib).
 * `Negicc.WhiteLight.Props`: proved properties over the real numbers.
 -/

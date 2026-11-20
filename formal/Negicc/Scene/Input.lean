@@ -97,16 +97,6 @@ green and blue relative to red. `candidate_matrix` in `color_pipeline.h`. -/
 def candidateMatrix (merged : Mat3 α) (e g b : α) : Mat3 α :=
   Mat3.scaleRows ⟨e, e * g, e * b⟩ merged
 
-/-- A matrix with every entry divided by `k`. The search works on the merged matrix divided by
-the frame's exposure normalisation `e_norm` (`SearchFrame::set_frame_matrix`). -/
-def Mat3.divScalar (m : Mat3 α) (k : α) : Mat3 α :=
-  ⟨m.row0.map (· / k), m.row1.map (· / k), m.row2.map (· / k)⟩
-
-/-- The exposure normalisation of a frame: the green-green entry of its merged matrix over that
-of the reference merged matrix (the same bundle scanned at 1/8 s, ISO 100 with the bundle's own
-film base). `frame_scale` in `multi_target_optimizer.cc`. -/
-def exposureNorm (frame reference : Mat3 α) : α := frame.row1.y / reference.row1.y
-
 /-! ## The soft knee -/
 
 /-- The soft knee on one channel: `0` for a non-positive value, the identity up to `knee`, then

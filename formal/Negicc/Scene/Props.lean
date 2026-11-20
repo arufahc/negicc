@@ -14,9 +14,8 @@ public section
 Proved over `ℝ`.
 
 * How `E`, `g` and `b` enter: they scale the channels of the corrected RGB, and nothing else
-  (`candidateMatrix_mulVec`). The exposure is a common factor (`candidateMatrix_mul_exposure`), an
-  offset in density (`density_exposure`), and the search's reference units are the frame's units
-  divided by `e_norm` (`candidateMatrix_divScalar`).
+  (`candidateMatrix_mulVec`). The exposure is a common factor (`candidateMatrix_mul_exposure`) and an
+  offset in density (`density_exposure`).
 * The film base normalisation puts bare film on one level (`mergedMatrix_mulVec_base`).
 * The knee and the shoulder are the identity below their knees, and a conversion with the shoulder
   off or without a tone curve reduces to the simpler formula.
@@ -50,13 +49,6 @@ theorem candidateMatrix_mul_exposure (M : Mat3 ℝ) (k e g b : ℝ) (v : Vec3 �
     (candidateMatrix M (k * e) g b).mulVec v = ((candidateMatrix M e g b).mulVec v).smul k := by
   rw [candidateMatrix_mulVec, candidateMatrix_mulVec]
   ext <;> simp only [Vec3.smul] <;> ring
-
-/-- The merged matrix divided by `k` at the exposure `E` is the merged matrix at `E / k`. On a
-narrow-band scan the search works on the merged matrix divided by `e_norm`; this identity is what
-makes its exposure the conversion's divided by `e_norm` (the search itself is specified in #211). -/
-theorem candidateMatrix_divScalar (M : Mat3 ℝ) (k e g b : ℝ) :
-    candidateMatrix (M.divScalar k) e g b = candidateMatrix M (e / k) g b := by
-  ext <;> simp only [candidateMatrix, Mat3.scaleRows, Mat3.divScalar, Vec3.smul, Vec3.map] <;> ring
 
 /-- In density the exposure is an offset: film seen at `E` times the exposure reads `log10 E`
 less dense. (So the film that renders as a given grey is denser by `log10 E`, the statement the
@@ -218,12 +210,12 @@ theorem tetraBlend_const (c : Vec3 ℝ) (w0 w1 w2 w3 : ℝ) (h : w0 + w1 + w2 + 
   · calc c.z * w0 + c.z * w1 + c.z * w2 + c.z * w3 = c.z * (w0 + w1 + w2 + w3) := by ring
       _ = c.z := by rw [h, mul_one]
 
-/-- A colour table whose nodes all hold the same value gives that value everywhere: in each of
+/-- A colour table (`hasClut`) whose nodes all hold the same value gives that value everywhere: in each of
 the six tetrahedra the four weights add up to one. -/
-theorem clutEval_const (p : Profile ℝ) (c : Vec3 ℝ) (h : ∀ i j k, p.node i j k = c) (t : Vec3 ℝ) :
-    clutEval p t = c := by
+theorem clutEval_const (p : Profile ℝ) (hc : p.hasClut = true) (c : Vec3 ℝ) (h : ∀ i j k, p.node i j k = c)
+    (t : Vec3 ℝ) : clutEval p t = c := by
   unfold clutEval
-  simp only [h]
+  simp only [hc, Bool.not_true, Bool.false_eq_true, ite_false, h]
   split_ifs <;> exact tetraBlend_const c _ _ _ _ (by norm_num)
 
 /-- Four values in `[lo, hi]` blended with non-negative weights that add up to one stay in
@@ -300,7 +292,7 @@ this holds for every pixel. -/
 theorem clutEval_mem (π : Vec3 ℝ → ℝ)
     (hπ : ∀ v0 va vp vq w0 w1 w2 w3,
       π (tetraBlend v0 va vp vq w0 w1 w2 w3) = π v0 * w0 + π va * w1 + π vp * w2 + π vq * w3)
-    (p : Profile ℝ) (hd : 1 ≤ p.dim.x ∧ 1 ≤ p.dim.y ∧ 1 ≤ p.dim.z) {lo hi : ℝ}
+    (p : Profile ℝ) (hc : p.hasClut = true) (hd : 1 ≤ p.dim.x ∧ 1 ≤ p.dim.y ∧ 1 ≤ p.dim.z) {lo hi : ℝ}
     (hn : ∀ i j k, i < p.dim.x → j < p.dim.y → k < p.dim.z → lo ≤ π (p.node i j k) ∧ π (p.node i j k) ≤ hi)
     {t : Vec3 ℝ} (hx : 0 ≤ t.x ∧ t.x ≤ 1) (hy : 0 ≤ t.y ∧ t.y ≤ 1) (hz : 0 ≤ t.z ∧ t.z ≤ 1) :
     lo ≤ π (clutEval p t) ∧ π (clutEval p t) ≤ hi := by
@@ -308,7 +300,7 @@ theorem clutEval_mem (π : Vec3 ℝ → ℝ)
   obtain ⟨g0, g1, gi, gi1⟩ := clut_cell_mem hd.2.1 hy.1 hy.2
   obtain ⟨b0, b1, bi, bi1⟩ := clut_cell_mem hd.2.2 hz.1 hz.2
   unfold clutEval
-  simp only at r0 r1 g0 g1 b0 b1 ri ri1 gi gi1 bi bi1 ⊢
+  simp only [hc, Bool.not_true, Bool.false_eq_true, ite_false] at r0 r1 g0 g1 b0 b1 ri ri1 gi gi1 bi bi1 ⊢
   split_ifs with c1 c2 c3 c4 c5
   · obtain ⟨h1, h2⟩ := c1
     rw [hπ]

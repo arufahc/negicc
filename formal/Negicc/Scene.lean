@@ -16,7 +16,7 @@ public import Negicc.Scene.Props
 * `Negicc.Scene.Linear`: the profile connection space to linear sRGB; the clipping rules.
 * `Negicc.Scene.Shoulder`: the highlight roll-off and how a frame's `x_hi` is found.
 * `Negicc.Scene.Convert`: the whole pixel, to encoded sRGB or linear and to CIELAB; the outputs.
-* `Negicc.Scene.Bracket`: a bracket's calibrated range on a frame.
+* `Negicc.Scene.Crop`: the inner crop the statistics read.
 * `Negicc.Scene.Defs`: the modules above together (no Mathlib).
 * `Negicc.Scene.Props`: proved properties over the real numbers.
 -/

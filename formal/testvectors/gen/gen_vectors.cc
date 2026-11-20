@@ -3,9 +3,10 @@
 // inputs and compares. See formal/README.md for how to build and run this program.
 //
 // Every value is computed by the library's functions (color_pipeline.h, flat_field.h, profile_bundle.h, rgb_view.h,
-// dinov3_auto_solver.h, multi_target_optimizer.h, tone_stage.h, input_curves.h, white_light_balance.h, and through
-// gen_internal.cc the functions of internal linkage of multi_target_optimizer.cc and film_base_detector.cc); nothing is
-// re-implemented here. The inputs are synthetic (fixed formulas or a seeded generator) or the bundles' own data.
+// dinov3_auto_solver.h, tone_stage.h, input_curves.h, white_light_balance.h, film_base_detector.h, and through
+// gen_internal.cc the functions of internal linkage of film_base_detector.cc; multi_target_optimizer.h for
+// ParamSearchOptions' crop ratio only); nothing is re-implemented here. The inputs are synthetic (fixed formulas or a
+// seeded generator) or the bundles' own data.
 
 #include <cmath>
 #include <cstdint>
@@ -31,15 +32,6 @@
 
 // gen_internal.cc
 namespace genint {
-void enclosure(float g_min, float g_max, float exposure_s, float g_lo, float g_hi, float out[10]);
-void enclosure_of(const BundleTarget& t, float g_lo, float g_hi, float out[10]);
-float pull_centre_of(float g_min, float g_max, float exposure_s, float g_lo, float g_hi);
-void curve_frame_base(const std::vector<uint16_t>& grid, const double* film_base_d, float out[3]);
-float shape_scale(float a, float k, float u_med, float ref, int table_n, float max_dev, float u_hold);
-float percentile_u16_linear(const std::vector<uint64_t>& hist, uint64_t total, float q);
-float e_norm(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso);
-void frame_green_range(const negicc::RgbView& frame, float crop_ratio, float out[2]);
-std::vector<size_t> picture_cells(const std::vector<uint16_t>& grid, const float film_base[3], bool rebate);
 float percentile32(std::vector<float> a, double q);
 double median16(std::vector<uint16_t> a);
 }  // namespace genint
@@ -289,10 +281,6 @@ static json pixel_vectors(const ProfileBundle& bundle, const std::string& bundle
     }
     j["cases"].push_back(c);
   }
-  // The exposure normalisation of scans at other exposures than the reference (frame_scale's e_norm).
-  for (const auto& sc : std::vector<std::array<float, 2>>{{0.25f, 100.0f}, {0.125f, 200.0f}, {1.0f / 15.0f, 100.0f}}) {
-    j["e_norm"].push_back({{"shutter", sc[0]}, {"iso", sc[1]}, {"e_norm", genint::e_norm(bundle, sc[0], sc[1])}});
-  }
   return j;
 }
 
@@ -453,37 +441,10 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
 }
 
 // ---- The white-light fit --------------------------------------------------------------------------------
-static json curve_json(const negicc::InputCurves& c) {
-  json j;
-  for (int i = 0; i < 2; ++i) {
-    j[i ? "b" : "g"] = {{"a", c.a[i]}, {"k", c.k[i]}, {"ref", c.ref[i]}, {"u_med", c.u_med[i]}, {"u_lo", c.u_lo[i]}};
-  }
-  j["hold"] = c.hold;
-  return j;
-}
-
 static json white_vectors(const ProfileBundle& bundle, const std::string& bundle_dir, int target_idx) {
-  using negicc::candidate_matrix;
-  using negicc::CombinedProfile;
   using negicc::compose_input_table;
-  using negicc::curve_shape_ok;
   using negicc::curve_stops;
-  using negicc::CurveFitOptions;
-  using negicc::CurveFrame;
-  using negicc::fit_input_curves_joint;
-  using negicc::green_guard_cell_a;
-  using negicc::grid_median_L;
   using negicc::input_curve;
-  using negicc::input_curve_reference;
-  using negicc::InputCurves;
-  using negicc::joint_moments;
-  using negicc::JointCurveFit;
-  using negicc::JointCurveModel;
-  using negicc::JointFitField;
-  using negicc::JointMoments;
-  using negicc::Lab;
-  using negicc::PipelineConfig;
-  using negicc::solve_e_for_median_L;
   json j;
   const ProfileData& prof = bundle.targets[target_idx].film_prof.data;
   j["bundle_dir"] = bundle_dir;
@@ -514,194 +475,27 @@ static json white_vectors(const ProfileBundle& bundle, const std::string& bundle
     for (int i : {0, 1, 50, 1000, 2000, 2866, 2867, 3500, 4095}) c["entries"].push_back({{"i", i}, {"y", out[i]}});
     j["compose"] = c;
   }
-  for (const auto& p : std::vector<std::array<float, 6>>{{0.2f, 0.0f, -1.5f, 0.7f, 4096, -INFINITY},
-                                                         {0.35f, 0.0f, -1.5f, 0.7f, 4096, -3.0f},
-                                                         {-1.2f, 0.0f, -1.5f, 0.7f, 4096, -INFINITY},
-                                                         {0.9f, 0.0f, -1.0f, 0.5f, 4096, -INFINITY},
-                                                         {0.2f, 0.4f, -1.0f, 0.6f, 64, -2.0f},
-                                                         {0.0f, 0.0f, -1.0f, 0.6f, 4096, -INFINITY}}) {
-    j["shape"].push_back({{"a", p[0]}, {"k", p[1]}, {"u_med", p[2]}, {"ref", p[3]}, {"n", (int)p[4]},
-                          {"hold", std::isfinite(p[5]) ? json(p[5]) : json(nullptr)},
-                          {"ok", curve_shape_ok(p[0], p[1], p[2], p[3], (int)p[4], 2.2f, p[5])}});
-  }
-  // A frame: the bundle's merged matrix, its film base, a grid of cells (film base times a transmission per channel),
-  // the neutral head's p, an intent field.
-  float merged[9];
-  double merged_d[9], row_scale[3];
-  compute_station_merged_matrix(bundle, 0.125, 100.0, nullptr, false, merged, merged_d, row_scale);
-  j["merged_f32"] = std::vector<float>(merged, merged + 9);
-  CurveFrame f;
-  f.merged = merged;
-  f.knee = kKnee;
-  for (int c = 0; c < 3; ++c) f.film_base[c] = bundle.film_base_avg[c];
-  j["film_base"] = {f.film_base[0], f.film_base[1], f.film_base[2]};
-  const int gw = 8, gh = 6, n = gw * gh;
-  std::vector<uint16_t> grid(n * 3);
-  std::vector<float> p_neutral(n), mu(n * 3), sigma(n * 3);
-  JointFitField fi;
-  fi.nbx = 2;
-  for (int i = 0; i < n; ++i) {
-    const int x = i % gw, y = i / gw;
-    const double t = std::pow(2.0, -0.1 - 0.075 * i);
-    const double tint[3] = {1.0 + 0.08 * std::sin(i * 1.3), 1.0 + 0.06 * std::cos(i * 0.7),
-                            1.0 + 0.1 * std::sin(i * 0.4)};
-    for (int c = 0; c < 3; ++c)
-      grid[i * 3 + c] = (uint16_t)std::lround(std::min(65535.0, f.film_base[c] * t * tint[c]));
-    p_neutral[i] = (float)(0.5 + 0.45 * std::sin(i * 0.9));
-    mu[i * 3] = 50.0f;
-    mu[i * 3 + 1] = (float)(1.0 + 1.5 * std::sin(i * 0.5));
-    mu[i * 3 + 2] = (float)(2.0 * std::cos(i * 0.3));
-    sigma[i * 3] = 8.0f;
-    sigma[i * 3 + 1] = (float)(2.0 + 0.5 * std::cos(i * 1.1));
-    sigma[i * 3 + 2] = 3.0f;
-    fi.bx.push_back(x / 4);
-    fi.by.push_back(y / 4);
-  }
-  f.grid = grid.data();
-  f.n = n;
-  f.neutral_p = p_neutral.data();
-  fi.mu = mu.data();
-  fi.sigma = sigma.data();
-  json fr;
-  fr["grid"] = grid;
-  fr["neutral_p"] = p_neutral;
-  fr["mu"] = mu;
-  fr["sigma"] = sigma;
-  fr["bx"] = fi.bx;
-  fr["by"] = fi.by;
-  fr["nbx"] = fi.nbx;
-  j["frame"] = fr;
-  const PipelineConfig cfg = make_pipeline_config(prof, kKnee, 1.2f, ENCODE_SRGB);
-  j["x_hi"] = 1.2f;
-  const float e0 = 0.9f, g0 = 1.12f, b0 = 1.2f;
-  j["auto"] = {e0, g0, b0};
-  InputCurves shape;
-  shape.hold = true;
-  shape.a[0] = 0.12f;
-  shape.a[1] = -0.08f;
-  {
-    InputCurves c = shape;
-    input_curve_reference(merged, e0, g0, b0, kKnee, f.film_base, grid.data(), n, c);
-    j["reference"] = {{"shape", curve_json(shape)}, {"curves", curve_json(c)}};
-  }
-  JointCurveModel model(cfg, f);
-  {
-    const InputCurves c = model.anchored(shape, e0, g0, b0);
-    json a = {{"curves", curve_json(c)}};
-    for (int i = 0; i < n; ++i) a["labs"].push_back(arr3(model.cell_lab(i, e0, g0, b0, c)));
-    a["median_L"] = model.median_L(e0, g0, b0, shape);
-    j["model"] = a;
-  }
-  const float target_L = model.median_L(e0, g0, b0, InputCurves{}) + 2.0f;
-  j["target_L"] = target_L;
-  {
-    int renders = 0;
-    float e = 0.0f;
-    const bool ok = model.solve_e(g0, b0, InputCurves{}, target_L, e0, e0 * 0.25f, e0 * 4.0f, 2e-5f, renders, e);
-    j["solve_e"] = {{"ok", ok}, {"e", e}};
-  }
-  {
-    std::vector<Lab> labs(n);
-    const InputCurves c = model.anchored(shape, e0, g0, b0);
-    for (int i = 0; i < n; ++i) labs[i] = model.cell_lab(i, e0, g0, b0, c);
-    std::vector<int> idx;
-    std::vector<double> w;
-    for (int i = 0; i < n; i += 3) {
-      idx.push_back(i);
-      w.push_back(0.1 + 0.05 * (i % 7));
+  // Given curves composed into the bracket's profile (CombinedProfile::build): an active pair and the identity.
+  for (const bool active : {true, false}) {
+    negicc::InputCurves c;
+    c.hold = true;
+    c.a[0] = active ? 0.2f : 0.0f;
+    c.a[1] = active ? -0.15f : 0.0f;
+    c.ref[0] = 0.7f;
+    c.ref[1] = 0.6f;
+    c.u_med[0] = -1.5f;
+    c.u_med[1] = -1.2f;
+    c.u_lo[0] = -4.0f;
+    c.u_lo[1] = -3.5f;
+    negicc::CombinedProfile comb;
+    comb.build(prof, c);
+    json cj = {{"a", {c.a[0], c.a[1]}}, {"ref", {c.ref[0], c.ref[1]}}, {"u_med", {c.u_med[0], c.u_med[1]}},
+               {"u_lo", {c.u_lo[0], c.u_lo[1]}}, {"hold", c.hold}};
+    for (int i : {0, 7, 1000, 2400, 2500, 3000, 4095}) {
+      cj["entries"].push_back({{"i", i}, {"r", comb.data.in_trc[0][i]}, {"g", comb.data.in_trc[1][i]},
+                               {"b", comb.data.in_trc[2][i]}});
     }
-    const JointMoments mo = joint_moments(labs, idx, w);
-    j["moments"] = {{"idx", idx}, {"w", w}, {"m", {mo.L, mo.a, mo.b, mo.vL, mo.ka, mo.kb}}};
-  }
-  for (const auto& c : std::vector<std::array<double, 3>>{{1.0, 2.0, 30.0}, {-1.0, 2.0, 30.0}, {-1.0, 2.0, 5.0},
-                                                         {-1.0, 2.0, 15.0}, {-3.0, -1.0, 12.0}, {-3.0, -1.0, 19.0}}) {
-    j["guard_cell"].push_back({{"a", c[0]}, {"a_auto", c[1]}, {"L_auto", c[2]},
-                               {"y", green_guard_cell_a(c[0], c[1], c[2])}});
-  }
-  // The guard on synthetic Auto renders: the cell count and the evidence mass on both sides of their limits (8 cells,
-  // a mass of 2, none on a limit), and the hinge and the bound at a few means.
-  for (const auto& gc : std::vector<std::array<double, 2>>{{8, 2.5}, {7, 2.5}, {12, 1.5}, {12, 1.9}, {10, 2.9}}) {
-    const int nc = (int)gc[0] + 3;  // three cells out of range
-    std::vector<Lab> la(nc);
-    std::vector<float> pp(nc);
-    for (int i = 0; i < nc; ++i) {
-      la[i] = {i < 3 ? (i == 0 ? 1.0f : 95.0f) : (float)(10.0 + 7.0 * i), (float)(1.5 * std::sin(i)), 0.0f};
-      pp[i] = (float)std::sqrt(gc[1] / gc[0]);
-    }
-    negicc::JointFitGuard g;
-    g.set_cells(nc, [&](int i) { return la[i]; }, pp.data());
-    g.means([&](int i) { return (double)la[i].a; }, g.ref);
-    json gj = {{"labs", json::array()}, {"p", pp}, {"counted", {g.counted[0], g.counted[1]}},
-               {"ref", {g.ref[0], g.ref[1]}}};
-    for (const Lab& l : la) gj["labs"].push_back(arr3(l));
-    for (double dv : {0.0, -0.4, -0.6, -2.0}) {
-      const double v[2] = {g.ref[0] + dv, g.ref[1] + dv};
-      gj["hinges"].push_back({{"v", {v[0], v[1]}}, {"hinge", {g.hinge(0, v), g.hinge(1, v)}},
-                              {"binds", {g.binds(0, v), g.binds(1, v)}}});
-    }
-    j["guard"].push_back(gj);
-  }
-  // The re-anchoring's pieces: the curves anchored at two (E, g, b) and the shape's scale (reanchor_input_curves), the
-  // anchor's film base without a base from the scan (curve_frame_of), and the bounds of the fit's target L*.
-  {
-    InputCurves c = shape;
-    c.a[0] = 0.3f;
-    c.a[1] = -0.3f;
-    const InputCurves a0 = negicc::anchor_curves(c, f, e0, g0, b0);
-    const InputCurves a1 = negicc::anchor_curves(c, f, e0 * 1.4f, g0 * 0.9f, b0 * 1.1f);
-    json r = {{"curves", curve_json(c)}, {"from", {e0, g0, b0}}, {"to", {e0 * 1.4f, g0 * 0.9f, b0 * 1.1f}},
-              {"a0", curve_json(a0)}, {"a1", curve_json(a1)}};
-    for (const auto& sc : std::vector<std::array<float, 4>>{{0.3f, -1.0f, 0.5f, -3.0f},
-                                                            {1.5f, -1.0f, 0.5f, -3.0f},
-                                                            {-0.34f, -1.5f, 0.7f, -INFINITY},
-                                                            {0.9f, -0.5f, 0.3f, -2.0f}}) {
-      r["scales"].push_back({{"a", sc[0]}, {"u_med", sc[1]}, {"ref", sc[2]},
-                             {"hold", std::isfinite(sc[3]) ? json(sc[3]) : json(nullptr)},
-                             {"scale", genint::shape_scale(sc[0], 0.0f, sc[1], sc[2], 4096, 2.2f, sc[3])}});
-    }
-    j["reanchor"] = r;
-    float cfb[3];
-    genint::curve_frame_base(grid, nullptr, cfb);
-    j["curve_frame_base"] = {cfb[0], cfb[1], cfb[2]};
-    j["fit_target_bounds"] = {kIntentMinL, kIntentMaxL};
-  }
-  const int table_n[2] = {prof.in_trc_size[1], prof.in_trc_size[2]};
-  const JointCurveFit out = fit_input_curves_joint(cfg, f, fi, e0, g0, b0, target_L, table_n, CurveFitOptions(),
-                                                   e0 * 0.25f, e0 * 4.0f);
-  j["fit"] = {{"ok", out.ok},
-              {"e", out.e},
-              {"g", out.g},
-              {"b", out.b},
-              {"curves", curve_json(out.curves)},
-              {"loss_before", out.loss_before},
-              {"loss_after", out.loss_after},
-              {"evidence", out.evidence},
-              {"shrink", out.shrink},
-              {"slope_share", out.slope_share},
-              {"span_L", out.span_L},
-              {"anchor_sd", out.anchor_sd},
-              {"intent_se", out.intent_se},
-              {"intent_auto", out.intent_auto},
-              {"refit", out.guard.refit}};
-  {
-    float m[9];
-    candidate_matrix(merged, out.e, out.g, out.b, m);
-    CombinedProfile comb;
-    comb.build(prof, out.curves);
-    PipelineConfig cc = cfg;
-    cc.profile = comb.data;
-    j["combined"] = {{"median_L", grid_median_L(cc, merged, out.e, out.g, out.b, grid.data(), n)},
-                     {"remeter", solve_e_for_median_L(cfg, f, out.curves, out.e, e0 * 0.25f, e0 * 4.0f, out.g, out.b,
-                                                      target_L)}};
-  }
-  for (bool rebate : {true, false}) {
-    std::vector<uint16_t> g2 = grid;
-    for (int i = 0; i < 6; ++i)
-      for (int c = 0; c < 3; ++c) g2[i * 3 + c] = (uint16_t)std::lround(f.film_base[c] * 0.95);
-    for (int i = 6; i < 9; ++i)
-      for (int c = 0; c < 3; ++c) g2[i * 3 + c] = 3;
-    j["picture_cells"].push_back({{"grid", g2}, {"rebate", rebate}, {"kept", genint::picture_cells(g2, f.film_base,
-                                                                                                    rebate)}});
+    j["combined"].push_back(cj);
   }
   // The film-base balance of the decode, for a camera matrix and two bases.
   {
@@ -724,7 +518,7 @@ static json white_vectors(const ProfileBundle& bundle, const std::string& bundle
   return j;
 }
 
-// ---- Reading the scan, the film base, a bracket's range and ceiling ----------------------------------------
+// ---- Reading the scan, the film base, the inner crop -------------------------------------------------------
 static json read_vectors(const ProfileBundle& tri) {
   using negicc::compute_inner_crop;
   using negicc::GrainAwareDebayerArgs;
@@ -809,16 +603,7 @@ static json read_vectors(const ProfileBundle& tri) {
     for (double q : {0.0, 50.0, 99.5, 100.0}) c["pct"].push_back({{"q", q}, {"y", genint::percentile32(v, q)}});
     j["stats"].push_back(c);
   }
-  // A bracket's range: direct cases, the inner crop, the percentile, and the scene's green points on a frame.
-  for (const auto& c : std::vector<std::array<float, 5>>{{2000.0f, 50000.0f, 0.125f, 300.0f, 9000.0f},
-                                                         {2000.0f, 50000.0f, 0.5f, 300.0f, 9000.0f},
-                                                         {8000.0f, 30000.0f, 0.125f, 100.0f, 30000.0f},
-                                                         {8000.0f, 12000.0f, 0.25f, 50.0f, 60000.0f},
-                                                         {1000.0f, 60000.0f, 0.03125f, 2000.0f, 3000.0f}}) {
-    float r[10];
-    genint::enclosure(c[0], c[1], c[2], c[3], c[4], r);
-    j["enclosure"].push_back({{"in", {c[0], c[1], c[2], c[3], c[4]}}, {"out", std::vector<float>(r, r + 10)}});
-  }
+  // The inner crop.
   // The search's inner crop is ParamSearchOptions::crop_ratio, taken from the C++ default (written to the vectors, so
   // the check holds the specification's constant to it). No size puts the crop's edge on a half pixel, where the
   // single precision ratio and the decimal one round apart.
@@ -828,23 +613,6 @@ static json read_vectors(const ProfileBundle& tri) {
                                                          {100, 1, crop_ratio}, {64, 48, 1.0f}, {120, 86, crop_ratio}}) {
     const InnerCrop ic = compute_inner_crop((int)c[0], (int)c[1], c[2]);
     j["inner_crop"].push_back({{"in", {(int)c[0], (int)c[1], c[2]}}, {"out", {ic.x0, ic.y0, ic.w, ic.h}}});
-  }
-  {
-    std::vector<uint64_t> hist(65536, 0);
-    uint64_t total = 0;
-    for (int v = 100; v < 40000; v += 97) {
-      hist[v] = 1 + (v % 5);
-      total += hist[v];
-    }
-    json c = {{"total", total}};
-    json nz;
-    for (int v = 0; v < 65536; ++v)
-      if (hist[v]) nz.push_back({v, hist[v]});
-    c["hist"] = nz;
-    for (float q : {0.0f, 0.005f, 0.5f, 0.995f, 1.0f}) {
-      c["pct"].push_back({{"q", q}, {"y", genint::percentile_u16_linear(hist, total, q)}});
-    }
-    j["u16_percentile"] = c;
   }
   {
     // A size whose inner crop differs between nearby ratios (0.89, 0.90) and lies on no half of a pixel at either.
@@ -858,35 +626,35 @@ static json read_vectors(const ProfileBundle& tri) {
         p[1] = (uint16_t)std::lround(20000.0 * t);
         p[2] = (uint16_t)std::lround(25000.0 * t * (1.0 + 0.1 * std::cos(y)));
       }
-    j["meter"]["w"] = FW;
-    j["meter"]["h"] = FH;
-    j["meter"]["frame"] = frame;
-    const RgbView view = RgbView::from_interleaved_rgb(frame.data(), FW, FH);
-    // The scene's green 0.5 % and 99.5 % points over the inner crop (compute_frame_stats), which bracket_enclosure
-    // reads; and each bracket's range from the bundle's own patches and exposure, as the loader derives them.
-    float range[2];
-    genint::frame_green_range(view, crop_ratio, range);
-    j["meter"]["green_range"] = {range[0], range[1]};
-    for (const BundleTarget& t : tri.targets) {
-      float r[10];
-      genint::enclosure_of(t, range[0], range[1], r);
-      j["meter"]["targets"].push_back({{"patches_g", t.patches_g}, {"shutter_s", shutter_to_seconds(t.shutter)},
-                                       {"iso", t.iso}, {"out", std::vector<float>(r, r + 10)}});
-    }
-    // The frame's highlight roll-off through bracket 3 (the histogram of the pre-shoulder largest channel over the
-    // inner crop, its 99.5 % point, x_hi), at two exposures.
+    j["frame"]["w"] = FW;
+    j["frame"]["h"] = FH;
+    j["frame"]["frame"] = frame;
+    // The frame's highlight roll-off through bracket 3 at the scan's merged matrix (the reference exposure): the
+    // histogram of the pre-shoulder largest channel over the inner crop (cpu_highlight_clip), its 99.5 % point, x_hi.
+    float merged[9];
+    double merged_d[9], row_scale[3];
+    compute_station_merged_matrix(tri, 0.125, 100.0, nullptr, false, merged, merged_d, row_scale);
+    const negicc::PipelineConfig cfg = make_pipeline_config(tri.targets[2].film_prof.data, kKnee, 1.0f, ENCODE_SRGB);
     for (float e : {0.2f, 0.6f}) {
+      float m[9];
+      negicc::candidate_matrix(merged, e, 1.16f, 1.1f, m);
+      std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
+      float out[5];
+      negicc::HighlightClipArgs a;
+      a.in = frame.data();
+      a.width = FW;
+      a.height = FH;
+      a.crop = compute_inner_crop(FW, FH, crop_ratio);
+      a.matrices = m;
+      a.n = 1;
+      a.cfg = cfg;
+      a.out = out;
+      a.max_hist = hist.data();
+      negicc::cpu_highlight_clip(a);
       float q995 = 0.0f;
-      const float x_hi = measure_rolloff_x_hi(tri, 2, view, 0.25, 100.0, e, 1.16f, 1.1f, crop_ratio, &q995, nullptr,
-                                               nullptr);
-      j["meter"]["rolloff"].push_back({{"e", e}, {"g", 1.16f}, {"b", 1.1f}, {"q995", q995}, {"x_hi", x_hi}});
+      const float x_hi = shoulder_x_hi_from_hist(hist.data(), &q995);
+      j["frame"]["rolloff"].push_back({{"e", e}, {"g", 1.16f}, {"b", 1.1f}, {"q995", q995}, {"x_hi", x_hi}});
     }
-  }
-  // pull_centre on the direct cases.
-  for (const auto& c : std::vector<std::array<float, 5>>{{2000.0f, 50000.0f, 0.125f, 300.0f, 9000.0f},
-                                                         {8000.0f, 12000.0f, 0.25f, 50.0f, 60000.0f}}) {
-    j["pull_centre"].push_back({{"in", {c[0], c[1], c[2], c[3], c[4]}},
-                                {"y", genint::pull_centre_of(c[0], c[1], c[2], c[3], c[4])}});
   }
   // The film base's decision on synthetic half-size decodes with a rebate patch beside the picture: a patch the
   // picture does not outshine, one it outshines by about 1.5 stops (between the 0.5 stop margin and more), a clipped
