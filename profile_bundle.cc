@@ -87,9 +87,18 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
       }
       curve_sets++;
     } else if (type == cmsSigMatrixElemType) {
+      // apply_profile applies a matrix between the input curves and the cLUT, where neither ICC form has it: a
+      // lut16Type's comes before the input curves (Little CMS keeps it as a stage only when it is not the identity),
+      // a lutAtoBType's after the cLUT and the M curves. So only the identity, with no offset, is taken.
       auto* md = (_cmsStageMatrixData*)cmsStageData(st);
-      for (int i = 0; i < 9; ++i) prof.data.matrix[i] = (float)md->Double[i];
-      for (int i = 0; i < 3; ++i) prof.data.offset[i] = md->Offset ? (float)md->Offset[i] : 0.0f;
+      bool identity = true;
+      for (int i = 0; i < 9; ++i) identity = identity && md->Double[i] == ((i % 4 == 0) ? 1.0 : 0.0);
+      for (int i = 0; i < 3 && md->Offset; ++i) identity = identity && md->Offset[i] == 0.0;
+      if (!identity) {
+        log_error("The profile's AToB0 has a matrix other than the identity, which this pipeline does not apply "
+                  "where the ICC does\n");
+        return false;
+      }
     } else if (type == cmsSigCLutElemType) {
       auto* cl = (_cmsStageCLutData*)cmsStageData(st);
       for (int i = 0; i < 3; ++i) prof.data.clut_dim[i] = cl->Params->nSamples[i];
