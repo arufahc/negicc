@@ -120,9 +120,6 @@ enum class InputSpace {
 // "camera_raw_rgb" or "rec2020_linear", as the bundles write it.
 const char* to_string(InputSpace space);
 
-// TODO: Hold each bracket's highlight ceiling here (now parsed from the profcheck report by
-// profile_highlight_ceiling in multi_target_optimizer.cc) once the profile bundle files are backfilled with it and
-// the profiling code writes it.
 // A density measure a scan's densities are written in (-P): Status M, SMPTE RP 180 printing density (the Cineon
 // convention) or Academy Printing Density (SMPTE ST 2065-2, which ADX encodes).
 enum DensityMeasure { kDensityStatusM = 0, kDensityRp180 = 1, kDensityApd = 2, kDensityMeasures = 3 };

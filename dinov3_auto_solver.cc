@@ -167,11 +167,14 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     std::sort(e_cands_d.begin(), e_cands_d.end());
     e_cands_d.erase(std::unique(e_cands_d.begin(), e_cands_d.end()), e_cands_d.end());
   } else if (initial) {
+    // E stays within [0.20, 3.0] as in the refinement: a start outside it is moved to its nearer end, so the offset 0
+    // is always a candidate.
     e_min = 0.20;
     e_max = 3.0;
-    e_center = initial->e;
+    e_center = std::clamp(initial->e, e_min, e_max);
     for (double d : {-0.15, -0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10, 0.15}) {
-      if (initial->e + d >= 0.20) e_cands_d.push_back(initial->e + d);
+      const double c = e_center + d;
+      if (c >= e_min && c <= e_max) e_cands_d.push_back(c);
     }
   } else {
     e_min = 0.40;
