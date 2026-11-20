@@ -386,10 +386,10 @@ static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c)
 }
 
 // Recorded G and B input curves (--fit_curves ref:..., or a previous run's sidecar) on the bracket profile pd they are
-// composed into: the shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the
-// whole input table, curve_shape_ok). Numbers typed by hand, or edited, could fold the table over or move it
-// arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant digits, which round-trip a
-// float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
+// composed into: the shape the fit holds every curve to (held at or below ref, monotonic and within max_dev_stops of
+// the base TRC over the whole input table, curve_shape_ok). Numbers typed by hand, or edited, could step the table at
+// ref, fold it over or move it arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant
+// digits, which round-trip a float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
 static int recorded_curve_off_shape(const negicc::InputCurves& c, const ProfileData& pd) {
   const float dev = negicc::CurveFitOptions().max_dev_stops;
   for (int i = 0; i < 2; ++i) {
@@ -599,7 +599,8 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
       }
       if (!ok || !positive(c.ref[0]) || !positive(c.ref[1])) return why = "its input curves are not valid", false;
       if (recorded_curve_off_shape(c, s.bundle.targets[tgt_idx].film_prof.data) >= 0) {
-        return why = "its input curves are not monotonic, or depart too far from the bracket's input TRC", false;
+        return why = "its input curves are held above ref, are not monotonic, or depart too far from the bracket's "
+                     "input TRC", false;
       }
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;
@@ -1190,8 +1191,8 @@ int prepare(const Options& o, Setup& s) {
     // The shape the fit holds every curve to (recorded_curve_off_shape).
     const int off = recorded_curve_off_shape(o.input_curves, bundle.targets[s.manual_target_idx].film_prof.data);
     if (off >= 0) {
-      log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
-                "bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
+      log_error("--fit_curves: the recorded %s curve is held above ref (u_lo above 0), is not monotonic, or departs "
+                "more than %g stops from the bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
                 negicc::CurveFitOptions().max_dev_stops);
       return 1;
     }
