@@ -309,8 +309,7 @@ void gpu_render(const RenderArgs& a) {
         NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
         return;
     }
-    const InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0) ? a.stats_crop
-                                                                      : InnerCrop{0, 0, a.width, a.height};
+    const InnerCrop crop = pass_crop(a.stats_crop, a.width, a.height);
     const int chunks = reduction_chunks(npx);
     unsigned int* d_hist = static_cast<unsigned int*>(g_hist.get(kRenderHistBins * sizeof(unsigned int)));
     NEGICC_CUDA_CHECK(cudaMemset(d_hist, 0, kRenderHistBins * sizeof(unsigned int)));
@@ -355,7 +354,7 @@ void gpu_render(const RenderArgs& a) {
 void gpu_highlight_clip(const HighlightClipArgs& a) {
     if (a.n <= 0) return;
     std::lock_guard<std::mutex> lock(g_op_mutex);
-    const InnerCrop crop = (a.crop.w > 0 && a.crop.h > 0) ? a.crop : InnerCrop{0, 0, a.width, a.height};
+    const InnerCrop crop = pass_crop(a.crop, a.width, a.height);
     const long long npx = (long long)crop.w * crop.h;
     if (npx <= 0) {
         std::memset(a.out, 0, (size_t)a.n * 5 * sizeof(float));

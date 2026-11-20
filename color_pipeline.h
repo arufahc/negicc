@@ -438,6 +438,16 @@ struct InnerCrop {
     int x0 = 0, y0 = 0, w = 0, h = 0;
 };
 
+// A pass's crop: the given one (the whole W x H image when it is empty) cut to the image, so a crop past an edge reads
+// and counts only the image's pixels (it may come out empty).
+NEGICC_HD InnerCrop pass_crop(InnerCrop c, int W, int H) {
+    if (c.w <= 0 || c.h <= 0) return {0, 0, W > 0 ? W : 0, H > 0 ? H : 0};
+    const int x0 = c.x0 < 0 ? 0 : c.x0, y0 = c.y0 < 0 ? 0 : c.y0;
+    const long long x1 = (long long)c.x0 + c.w, y1 = (long long)c.y0 + c.h;
+    const int xe = x1 > W ? W : (int)x1, ye = y1 > H ? H : (int)y1;
+    return {x0, y0, xe > x0 ? xe - x0 : 0, ye > y0 ? ye - y0 : 0};
+}
+
 NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
     if (W <= 0 || H <= 0) return {0, 0, 0, 0};
     if (crop_ratio >= 1.0f) return {0, 0, W, H};

@@ -744,9 +744,7 @@ void cpu_render(const RenderArgs& a) {
 
     if (a.stats) *a.stats = PositiveStats{};
     const bool tone = a.cfg.encoding == ENCODE_SRGB && a.cfg.tone.lut && a.cfg.tone.n > 0;
-    const InnerCrop crop = (a.stats_crop.w > 0 && a.stats_crop.h > 0)
-                               ? a.stats_crop
-                               : InnerCrop{0, 0, a.width, a.height};
+    const InnerCrop crop = pass_crop(a.stats_crop, a.width, a.height);
     const int x0 = crop.x0, x1 = crop.x0 + crop.w;
     const int y0 = crop.y0, y1 = crop.y0 + crop.h;
 
@@ -896,9 +894,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
     if (cpu_pass_hook) cpu_pass_hook(1);
     if (a.n <= 0) return;
     const bool use_view = (a.in_view != nullptr && a.in_view->valid());
-    const InnerCrop crop = (a.crop.w > 0 && a.crop.h > 0)
-                               ? a.crop
-                               : InnerCrop{0, 0, a.width, a.height};
+    const InnerCrop crop = pass_crop(a.crop, a.width, a.height);
     const long long npx = (long long)crop.w * crop.h;
     if (npx <= 0) {
         std::memset(a.out, 0, (size_t)a.n * 5 * sizeof(float));
