@@ -30,7 +30,8 @@ on and the derivations of DESIGN.md 5.11:
 * **The knee's inverse** (`kneeCompress_unknee`): the print's curves undo the soft knee up to its
   cap, 0.9999; the film base at `E = g = b = 1` has light density 0 (`inputLightDensity_base`).
 * **The tilt** (`tiltSegment_left`, `tiltSegment_right`, …): at a bracket's `A_mid` it is that
-  bracket's tilt, held beyond the ends.
+  bracket's tilt, held beyond the ends; of two brackets at the same `A_mid` the first in the bundle
+  gives it (`bracketOrder_stable`, `tiltSegment_tie`).
 * **The print's white** (`toPaperWhite_y_le`, `toPaperWhite_base`): after the scaling no node's
   `Y` passes the PCS white's and the paper's base is the PCS white.
 * **Density** (`lightDensity_one`, `lightDensity_le_four`, `densityBalanceOffset_sum`, …): bare
@@ -562,6 +563,31 @@ theorem tiltSegment_above {ai aj a : ℝ} (h : ai < aj) (ha : aj ≤ a) (ti tj :
   simp only [tiltSegment, h, ↓reduceIte, clamp_real]
   rw [max_eq_left (by norm_num; linarith), min_eq_right (by norm_num; linarith)]
   ext <;> norm_num
+
+/-- **Two brackets at the same `A_mid` take the first one's tilt**: the segment's share is 0. -/
+theorem tiltSegment_tie {ai aj a : ℝ} (h : ¬ ai < aj) (ti tj : Vec3 ℝ) : tiltSegment ai aj ti tj a = ti := by
+  simp only [tiltSegment, h, ↓reduceIte]
+  ext <;> norm_num
+
+/-- **The bracket order is stable**: of two brackets at the same `A_mid`, the one first in the
+bundle comes first. -/
+theorem bracketOrder_stable (aMid : Array ℝ) {i j : ℕ} (hij : i < j) (hj : j < aMid.size)
+    (heq : aMid.getD i 0.0 = aMid.getD j 0.0) : [i, j].Sublist (bracketOrder aMid) := by
+  unfold bracketOrder
+  apply List.pair_sublist_mergeSort
+  · intro a b c hab hbc
+    simp only [decide_eq_true_eq] at hab hbc ⊢
+    exact hab.trans hbc
+  · intro a b
+    simp only [Bool.or_eq_true, decide_eq_true_eq]
+    exact le_total _ _
+  · simp [heq]
+  · have hr : List.range aMid.size = List.range j ++ (List.range (aMid.size - j)).map (j + ·) := by
+      rw [← List.range_add]; congr 1; omega
+    rw [hr, show [i, j] = [i] ++ [j] from rfl]
+    apply List.Sublist.append
+    · exact List.singleton_sublist.mpr (List.mem_range.mpr hij)
+    · exact List.singleton_sublist.mpr (List.mem_map.mpr ⟨0, List.mem_range.mpr (by omega), by simp⟩)
 
 /-! ## The print's white -/
 

@@ -85,16 +85,21 @@ def tiltSegmentIndex (aMid : Array α) (o : Array Nat) (a : α) : Nat → Nat �
     if k + 2 < o.size ∧ aMid.getD (o.getD (k + 1) 0) 0.0 < a then tiltSegmentIndex aMid o a fuel (k + 1)
     else k
 
-/-- The brackets' tilt at a mid grey `a` (`print_tilt_at`): the brackets sorted by `A_mid`, the
-tilt linear in `a` between the two whose `A_mid` enclose it and held beyond the end ones; one
-bracket gives its own tilt and none gives zero. `aMid` and `tilt` are per bracket, in any order.
+/-- The brackets sorted by `A_mid`, brackets at the same `A_mid` in the bundle's order: a stable
+merge sort of the indices (`std::stable_sort` in `print_tilt_at`; `bracketOrder_stable` in
+`Negicc.Print.Props`). -/
+def bracketOrder (aMid : Array α) : List Nat :=
+  (List.range aMid.size).mergeSort fun i j => decide (aMid.getD i 0.0 ≤ aMid.getD j 0.0)
 
-The C++ sorts with `std::sort`, which does not keep the order of brackets with equal `A_mid`; this
-specification sorts with `Array.qsort`. The two can differ only on brackets with equal `A_mid`. -/
+/-- The brackets' tilt at a mid grey `a` (`print_tilt_at`): the brackets sorted by `A_mid`
+(`bracketOrder`), the tilt linear in `a` between the two whose `A_mid` enclose it and held beyond
+the end ones; one bracket gives its own tilt and none gives zero. `aMid` and `tilt` are per
+bracket, in the bundle's order. Of two brackets at the same `A_mid` the one first in the bundle
+comes first, and its tilt is taken (`tiltSegment_tie`). -/
 def printTiltAt (aMid : Array α) (tilt : Array (Vec3 α)) (a : α) : Vec3 α :=
   if aMid.size = 0 ∨ aMid.size ≠ tilt.size then ⟨0.0, 0.0, 0.0⟩
   else
-    let o := (Array.range aMid.size).qsort fun i j => decide (aMid.getD i 0.0 < aMid.getD j 0.0)
+    let o := (bracketOrder aMid).toArray
     if o.size = 1 then tilt.getD (o.getD 0 0) ⟨0.0, 0.0, 0.0⟩
     else
       let k := tiltSegmentIndex aMid o a o.size 0

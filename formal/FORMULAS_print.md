@@ -26,7 +26,7 @@ the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negic
 | `np_print.cc`: `bracket_mid_apd` | `bracketMidApd` | | yes |
 | `np_print.cc`: `curve_grey_at`, `curve_grey` | `curveGreyAt` | | yes |
 | `np_print.cc`: `curve_slopes_at`, `curve_slopes` | `curveSlopesAt`, `curveGamma` | `curveSlopesAt_equal_contrast` | yes |
-| `np_print.cc`: `print_tilt_at` (both) | `printTiltAt`, `tiltSegment` | `tiltSegment_left`, `_right`, `_below`, `_above` | yes |
+| `np_print.cc`: `print_tilt_at` (both) | `printTiltAt`, `bracketOrder`, `tiltSegment` | `tiltSegment_left`, `_right`, `_below`, `_above`, `_tie`, `bracketOrder_stable` | yes |
 | `np_print.cc`: `paper_curve` | `paperCurve`, `paperChannel`, `runningMin` | `paperChannel_strictAnti`, `paperChannel_mem`, `paperChannel_first` | yes |
 | `np_print.cc`: `bracket_print_curves` | `bracketPrintCurves`, `unknee`, `inputLightDensity`, `rampedRunMax` | `bracketPrintCurves_strictMono`, `kneeCompress_unknee`, `inputLightDensity_base` | yes (both lights) |
 | `PrintContinuum::curves_at`, `tilt_at`, `a_lo`, `a_hi` | `PrintContinuum.curvesAt`, `.aLo`, `.aHi` | | yes |

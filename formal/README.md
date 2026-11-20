@@ -213,7 +213,7 @@ ORT_DIR=<onnxruntime> formal/testvectors/gen/build_print.sh
 bin_out/gen_print profiles/Portra400-A7R4-TriLED formal/testvectors profiles/Portra400-A7R4-D65
 ```
 
-The committed `print.json` was generated from the code of `master` at `91b2fcb` on x86-64 Linux with GCC 13.3.
+The committed `print.json` was generated from the code of `master` at `b4a9991` on x86-64 Linux with GCC 13.3.
 
 ## Using the package from another repository
 
