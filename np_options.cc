@@ -23,12 +23,15 @@
 #include <stdlib.h>
 
 #include <cctype>
+#include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <type_traits>
 
 #include "argparse/argparse.hpp"
@@ -120,6 +123,16 @@ static bool parse_number(const std::string& item, T& x) {
   return !item.empty() && end && *end == '\0' && std::isfinite(x);
 }
 
+// One integer item: the whole token a decimal integer in int's range.
+static bool parse_int(const std::string& item, int& x) {
+  char* end = nullptr;
+  errno = 0;
+  const long v = std::strtol(item.c_str(), &end, 10);
+  if (item.empty() || !end || *end != '\0' || errno == ERANGE || v < INT_MIN || v > INT_MAX) return false;
+  x = (int)v;
+  return true;
+}
+
 static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
   if (roi_tokens.empty()) {
     log_error("--roi requires arguments\n");
@@ -147,16 +160,23 @@ static bool parse_roi(const std::vector<std::string>& roi_tokens, Options& o) {
     log_error("--roi requires at least 4 arguments: x y w h [rot_cw [hflip [vflip]]]\n");
     return false;
   }
-  try {
-    for (int i = 0; i < 4; ++i) o.roi[i] = std::stoi(roi_tokens[i]);
-    if (roi_tokens.size() >= 5) o.rot_cw = std::stoi(roi_tokens[4]);
-    if (roi_tokens.size() >= 6) o.hflip = (std::stoi(roi_tokens[5]) != 0);
-    if (roi_tokens.size() >= 7) o.vflip = (std::stoi(roi_tokens[6]) != 0);
-    o.has_roi = true;
-  } catch (const std::exception& e) {
-    log_error("Invalid integer argument for --roi\n");
-    return false;
+  // Each value a whole integer ("100.5" and "100px" are refused), and the flips 0 or 1.
+  int v[7] = {0, 0, 0, 0, 0, 0, 0};
+  for (size_t i = 0; i < roi_tokens.size() && i < 7; ++i) {
+    if (!parse_int(roi_tokens[i], v[i])) {
+      log_error("Invalid --roi value '%s': each must be an integer\n", roi_tokens[i].c_str());
+      return false;
+    }
+    if (i >= 5 && v[i] != 0 && v[i] != 1) {
+      log_error("Invalid --roi %s '%s': it must be 0 or 1\n", i == 5 ? "hflip" : "vflip", roi_tokens[i].c_str());
+      return false;
+    }
   }
+  for (int i = 0; i < 4; ++i) o.roi[i] = v[i];
+  if (roi_tokens.size() >= 5) o.rot_cw = v[4];
+  if (roi_tokens.size() >= 6) o.hflip = v[5] != 0;
+  if (roi_tokens.size() >= 7) o.vflip = v[6] != 0;
+  o.has_roi = true;
   if (o.roi[0] < 0 || o.roi[1] < 0 || o.roi[2] <= 0 || o.roi[3] <= 0) {
     log_error("Invalid --roi [%d, %d, %d, %d]: x and y must be >= 0 and w and h must be > 0\n",
             o.roi[0], o.roi[1], o.roi[2], o.roi[3]);
@@ -525,6 +545,12 @@ int parse_options(int ac, char* av[], Options& o) {
     }
     o.probe_stops = parser.get<std::vector<float>>("--probe_stops");
     if (o.probe_stops.empty()) o.probe_stops.push_back(0.0f);
+    for (const float s : o.probe_stops) {
+      if (!std::isfinite(s)) {
+        log_error("--probe_stops must be finite numbers\n");
+        return 1;
+      }
+    }
   }
   if (o.dino_iters <= 0) {
     log_error("--dino_iters must be positive (got %d)\n", o.dino_iters);
@@ -549,6 +575,25 @@ int parse_options(int ac, char* av[], Options& o) {
   if (!std::isfinite(o.brightness) || !std::isfinite(o.tint) || !std::isfinite(o.warmth)) {
     log_error("--brightness, --tint and --warmth must be finite numbers\n");
     return 1;
+  }
+  // E and the gains scale the input matrix: given, each must be a finite positive number.
+  for (const auto& [name, given, value] : {std::make_tuple("-E", o.exposure_given, o.exposure_comp),
+                                           std::make_tuple("--gain_g", o.gain_g_given, o.gain_g),
+                                           std::make_tuple("--gain_b", o.gain_b_given, o.gain_b)}) {
+    if (given && !(std::isfinite(value) && value > 0.0f)) {
+      log_error("%s must be a finite number above 0 (got %g)\n", name, (double)value);
+      return 1;
+    }
+  }
+  // The rows of the input matrix: finite numbers.
+  for (const auto& [name, row] : {std::make_pair("--r_coeff", &o.r_coeff), std::make_pair("--g_coeff", &o.g_coeff),
+                                  std::make_pair("--b_coeff", &o.b_coeff)}) {
+    for (const float c : *row) {
+      if (!std::isfinite(c)) {
+        log_error("%s must be finite numbers\n", name);
+        return 1;
+      }
+    }
   }
 
   if (parser.is_used("--roi") && !parse_roi(parser.get<std::vector<std::string>>("--roi"), o)) return 1;
