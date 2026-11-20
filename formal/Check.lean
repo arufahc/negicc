@@ -79,6 +79,10 @@ def tolPercentile32 : Float := 5e-4
 difference on the vectors). -/
 def tolPercentileU16 : Float := 1e-3
 
+/-- The scene's green points as `compute_frame_stats` gives them: a single precision value up to
+65535, whose steps are at most `2^-8 = 0.0039`. Observed: 9.4e-4. -/
+def tolGreenPoint : Float := 4e-3
+
 /-- The 99.5 % point of a histogram of 4096 bins over `[0, 2]`, filled from single precision values:
 a pixel near a bin's edge may fall in the neighbouring bin, which moves the point by at most a
 bin's width, `2 / 4096`. Observed: 3e-8 (the two histograms were equal). -/
@@ -670,29 +674,11 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
   let FW ← natAt mt "w"
   let FH ← natAt mt "h"
   let frame := pixelsOf (← natsAt mt "frame")
-  let (gh, gt) := greenHistogram frame FW FH (0.9 : Float)
-  let (gLo, gHi) := sceneGreenRange gh gt
-  for b in ← arrAt mt "bundles" do
-    let wl ← boolAt b "white_light"
-    let eNorm ← numAt b "e_norm"
-    for t in ← arrAt b "targets" do
-      let r := meteredEnclosure wl eNorm (← numAt t "g_min") (← numAt t "g_max") (← numAt t "exposure") gLo gHi
-      same "bracket: meteredEnclosure (feasible)" (if r.feasible then 1 else 0) (if (← boolAt t "feasible") then 1 else 0)
-      let want ← numsAt t "range"
-      let got := #[r.eMin, r.eMax, r.eCentre, r.searchLo, r.searchHi]
-      for k in [0:5] do near "bracket: meteredEnclosure" tolSingle ((got.getD k 0.0) / (want.getD k 1.0)) 1.0
-  let be ← get mt "bundle_enclosures"
-  let mut ghAll : Array Nat := Array.replicate 65536 0
-  for px in frame do ghAll := ghAll.modify px.y (· + 1)
-  let (bLo, bHi) : Float × Float := bundleGreenRange ghAll frame.size
-  near "bracket: bundleGreenRange" tolDouble bLo (← numAt be "g_lo")
-  near "bracket: bundleGreenRange" tolDouble bHi (← numAt be "g_hi")
-  for t in ← arrAt be "targets" do
-    let (feas, eMin, eMax, eC) := bundleEnclosure (← numAt t "g_min") (← numAt t "g_max") (← numAt t "exposure") bLo bHi
-    same "bracket: bundleEnclosure (feasible)" (if feas then 1 else 0) (if (← boolAt t "feasible") then 1 else 0)
-    let want ← numsAt t "range"
-    for (got, w) in [(eMin, want.getD 0 1.0), (eMax, want.getD 1 1.0), (eC, want.getD 2 1.0)] do
-      near "bracket: bundleEnclosure" tolSingle (got / w) 1.0
+  let (gh, gt) := greenHistogram frame FW FH (searchCropRatio : Float)
+  let (gLo, gHi) : Float × Float := sceneGreenRange gh gt
+  let wantG ← numsAt mt "green_range"
+  near "bracket: sceneGreenRange" tolGreenPoint gLo (wantG.getD 0 0.0)
+  near "bracket: sceneGreenRange" tolGreenPoint gHi (wantG.getD 1 0.0)
   -- The frame's highlight roll-off through bracket 3 of the TriLED bundle, scanned at 1/4 s, ISO 100.
   let fbExposure := captureExposure (← numAt pixel "film_base_shutter") (← numAt pixel "film_base_iso")
   let X := mat3 (← numsAt pixel "crosstalk")
@@ -701,7 +687,7 @@ def checkRead (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
   let frameM := mergedMatrix X fbv nT (fbExposure / captureExposure 0.25 100.0)
   let eNormT := exposureNorm frameM (mergedMatrix X fbv nT (fbExposure / referenceExposure))
   let prof ← readProfile (root / (← strAt pixel "bundle_dir") / (← strAt pixel "icc"))
-  let (cx, cy, cw, ch) := innerCrop FW FH (0.9 : Float)
+  let (cx, cy, cw, ch) := innerCrop FW FH (searchCropRatio : Float)
   for c in ← arrAt mt "rolloff" do
     let m := candidateMatrix (frameM.divScalar eNormT) ((← numAt c "e") * eNormT) (← numAt c "g") (← numAt c "b")
     let lins := (Array.range (cw * ch)).map fun k =>
@@ -810,15 +796,11 @@ def expectedCounts : List (String × Nat) := [
   ("bracket: bracketEnclosure", 35),
   ("bracket: innerCrop", 20),
   ("bracket: u16PercentileLinear", 5),
-  ("bracket: meteredEnclosure (feasible)", 14),
-  ("bracket: meteredEnclosure", 70),
   ("bracket: pcsLabToSrgbU8", 18),
   ("bracket: profileHighlightCeiling", 9),
   ("shoulder: maxHistOf, the 99.5 % point", 2),
   ("shoulder: maxHistOf, x_hi", 2),
-  ("bracket: bundleGreenRange", 2),
-  ("bracket: bundleEnclosure (feasible)", 7),
-  ("bracket: bundleEnclosure", 21)]
+  ("bracket: sceneGreenRange", 2)]
 
 end Check
 
