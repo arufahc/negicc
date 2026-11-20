@@ -2576,10 +2576,11 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       cfa_rh = std::min(scan.roi[3], src_h - cfa_ry);
     } else if (!o.no_crop && o.files.size() == 1) {
       const auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
-      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop.
+      // LibRaw leaves cleft and ctop at 0xffff when the raw has no inset crop. A crop at the origin that is narrower
+      // or shorter than the image is a crop too.
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 &&
                                   crop_ref.cleft != 0xffff && crop_ref.ctop != 0xffff;
-      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
+      if (has_inset_crop && (crop_ref.cleft || crop_ref.ctop || crop_ref.cwidth < src_w || crop_ref.cheight < src_h)) {
         cfa_rx = std::max(0, std::min((int)crop_ref.cleft, src_w - 1));
         cfa_ry = std::max(0, std::min((int)crop_ref.ctop, src_h - 1));
         cfa_rw = std::max(1, std::min((int)crop_ref.cwidth, src_w - cfa_rx));
