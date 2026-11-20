@@ -35,6 +35,7 @@ void lab_to_srgb_u8(const float lab[3], float out[3]);
 void highlight_ceiling(const std::string& report, float out[3]);
 float percentile_u16_linear(const std::vector<uint64_t>& hist, uint64_t total, float q);
 float e_norm(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso);
+void frame_green_range(const negicc::RgbView& frame, float crop_ratio, float out[2]);
 std::vector<size_t> picture_cells(const std::vector<uint16_t>& grid, const float film_base[3], bool rebate);
 float percentile32(std::vector<float> a, double q);
 double median16(std::vector<uint16_t> a);
@@ -665,7 +666,7 @@ static json white_vectors(const ProfileBundle& bundle, const std::string& bundle
 }
 
 // ---- Reading the scan, the film base, a bracket's range and ceiling ----------------------------------------
-static json read_vectors(const ProfileBundle& tri, const ProfileBundle& wl) {
+static json read_vectors(const ProfileBundle& tri) {
   using negicc::compute_inner_crop;
   using negicc::GrainAwareDebayerArgs;
   using negicc::InnerCrop;
@@ -749,7 +750,7 @@ static json read_vectors(const ProfileBundle& tri, const ProfileBundle& wl) {
     for (double q : {0.0, 50.0, 99.5, 100.0}) c["pct"].push_back({{"q", q}, {"y", genint::percentile32(v, q)}});
     j["stats"].push_back(c);
   }
-  // A bracket's range: direct cases, the inner crop, the percentile, and the ranges neg_process meters on a frame.
+  // A bracket's range: direct cases, the inner crop, the percentile, and the scene's green points on a frame.
   for (const auto& c : std::vector<std::array<float, 5>>{{2000.0f, 50000.0f, 0.125f, 300.0f, 9000.0f},
                                                          {2000.0f, 50000.0f, 0.5f, 300.0f, 9000.0f},
                                                          {8000.0f, 30000.0f, 0.125f, 100.0f, 30000.0f},
@@ -796,32 +797,11 @@ static json read_vectors(const ProfileBundle& tri, const ProfileBundle& wl) {
     j["meter"]["h"] = FH;
     j["meter"]["frame"] = frame;
     const RgbView view = RgbView::from_interleaved_rgb(frame.data(), FW, FH);
-    for (const ProfileBundle* b : {&tri, &wl}) {
-      std::vector<BracketExposure> out;
-      meter_bracket_exposures(*b, view, 0.25, 100.0, 0.9f, nullptr, out);
-      json bj = {{"white_light", !b->has_crosstalk}, {"e_norm", genint::e_norm(*b, 0.25f, 100.0f)}};
-      for (size_t i = 0; i < out.size(); ++i) {
-        const BundleTarget& t = b->targets[i];
-        bj["targets"].push_back({{"g_min", t.tgt_min_g}, {"g_max", t.tgt_max_g}, {"exposure", t.exposure_s},
-                                 {"valid", out[i].valid}, {"feasible", out[i].feasible},
-                                 {"range", {out[i].e_min, out[i].e_max, out[i].e_center, out[i].search_lo,
-                                            out[i].search_hi}}});
-      }
-      j["meter"]["bundles"].push_back(bj);
-    }
-    // The ranges kept in the bundle for given values (compute_bundle_enclosures: nearest rank over the whole frame).
-    {
-      ProfileBundle b = tri;
-      float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-      int num_feasible = 0;
-      compute_bundle_enclosures(b, view, g_lo, g_hi, scene_ev, num_feasible);
-      json bj = {{"g_lo", g_lo}, {"g_hi", g_hi}};
-      for (const BundleTarget& t : b.targets) {
-        bj["targets"].push_back({{"g_min", t.tgt_min_g}, {"g_max", t.tgt_max_g}, {"exposure", t.exposure_s},
-                                 {"feasible", t.is_feasible}, {"range", {t.e_min, t.e_max, t.e_center}}});
-      }
-      j["meter"]["bundle_enclosures"] = bj;
-    }
+    // The scene's green 0.5 % and 99.5 % points over the inner 90 % (compute_frame_stats), which bracket_enclosure
+    // reads.
+    float range[2];
+    genint::frame_green_range(view, 0.9f, range);
+    j["meter"]["green_range"] = {range[0], range[1]};
     // The frame's highlight roll-off through bracket 3 (the histogram of the pre-shoulder largest channel over the
     // inner crop, its 99.5 % point, x_hi), at two exposures.
     for (float e : {0.2f, 0.6f}) {
@@ -870,6 +850,6 @@ int main(int argc, char** argv) {
   write_json(out_dir + "/scene.json", scene);
   write_json(out_dir + "/scene_tone.json", tone_vectors(bundle, 2));
   write_json(out_dir + "/scene_white.json", white_vectors(wl, wl_dir, 3));
-  write_json(out_dir + "/scene_read.json", read_vectors(bundle, wl));
+  write_json(out_dir + "/scene_read.json", read_vectors(bundle));
   return 0;
 }

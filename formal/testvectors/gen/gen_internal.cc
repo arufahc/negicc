@@ -1,6 +1,6 @@
 // The functions of multi_target_optimizer.cc and film_base_detector.cc that have internal linkage (bracket_enclosure,
-// pcs_lab_to_srgb_u8, profile_highlight_ceiling, u16_percentile_linear, frame_scale, fallback_picture_cells,
-// percentile_f32, median_u16), made callable for gen_vectors.cc. The two source files are compiled into this
+// pcs_lab_to_srgb_u8, profile_highlight_ceiling, u16_percentile_linear, compute_frame_stats, frame_scale,
+// fallback_picture_cells, percentile_f32, median_u16), made callable for gen_vectors.cc. The two source files are compiled into this
 // translation unit as they are, so the generator calls the library's own code; the library's objects of the same files
 // are then not linked. Nothing here computes a value itself.
 
@@ -29,6 +29,13 @@ void highlight_ceiling(const std::string& report, float out[3]) { profile_highli
 
 float percentile_u16_linear(const std::vector<uint64_t>& hist, uint64_t total, float q) {
   return u16_percentile_linear(hist, total, q);
+}
+
+void frame_green_range(const negicc::RgbView& frame, float crop_ratio, float out[2]) {
+  FrameStats st;
+  compute_frame_stats(frame, crop_ratio, 224, 16, st);
+  out[0] = st.g_lo;
+  out[1] = st.g_hi;
 }
 
 float e_norm(const ProfileBundle& bundle, float scan_shutter_s, float scan_iso) {

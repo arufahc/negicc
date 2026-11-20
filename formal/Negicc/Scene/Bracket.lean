@@ -22,8 +22,8 @@ of the frame, and `ρ_b` the reference exposure (1/8 s, ISO 100) over the bracke
 The bracket is feasible when `e_min ≤ e_max` and admissible when the scene's span
 `log2(g_hi / g_lo)` is at most the bracket's `log2(g_max / g_min)` plus 2.7 stops.
 
-On a white-light bundle the scene's points are scaled by the frame's `e_norm`; on TriLED the range
-is reported in the frame's units, divided by `e_norm` (`meter_bracket_exposures`).
+On a white-light bundle the search scales the scene's points by the frame's `e_norm` before it calls
+`bracket_enclosure`; on TriLED it works in the reference unit and leaves them as they are.
 
 # A bracket's highlight ceiling
 
@@ -48,6 +48,10 @@ def referenceExposure : α := captureExposure 0.125 100.0
 
 /-- The scene's tail on each side (`SCENE_TAIL`). -/
 def sceneTail : α := 0.005
+
+/-- The share of the frame the search's statistics and previews read, its centred inner crop
+(`ParamSearchOptions::crop_ratio`, `0.90`). -/
+def searchCropRatio : α := 0.90
 
 /-- The centred `ratio` share of a `W x H` frame, at least one pixel: its left, top, width and height
 (`compute_inner_crop`). -/
@@ -126,43 +130,6 @@ def bracketEnclosure (gMin gMax exposure gLo gHi : α) : Enclosure α :=
 /-- The centre the search's exposure penalty pulls toward, `0` (no pull) for an inverted usable
 range (`pull_centre`). -/
 def pullCentre (c : Enclosure α) : α := if c.usableInverted then 0.0 else c.eCentre
-
-/-- A bracket's range as `meter_bracket_exposures` reports it: on a white-light bundle the scene's
-points scaled by `e_norm` and the range in the search's units; on TriLED the scene's points as they
-are and the range divided by `e_norm` (the frame's units). -/
-def meteredEnclosure (whiteLight : Bool) (eNorm gMin gMax exposure gLo gHi : α) : Enclosure α :=
-  let s : α := if whiteLight then eNorm else 1.0
-  let r := bracketEnclosure gMin gMax exposure (gLo * s) (gHi * s)
-  let toS : α := if whiteLight then 1.0 else 1.0 / eNorm
-  { r with eMin := r.eMin * toS, eMax := r.eMax * toS, eCentre := r.eCentre * toS,
-           searchLo := r.searchLo * toS, searchHi := r.searchHi * toS }
-
-/-- The scene's green `0.5 %` and `99.5 %` points by nearest rank over the whole frame, `g_lo ≥ 1`,
-`g_hi ≥ g_lo + 1` (`compute_bundle_enclosures` in `profile_bundle.cc`): the first value whose cumulative
-count reaches `0.005 n`, and the first that reaches `0.995 n`. -/
-def bundleGreenRange (hist : Array Nat) (total : Nat) : α × α :=
-  let p005 : α := 0.005 * (total : α)
-  let p995 : α := 0.995 * (total : α)
-  let r := (List.range 65536).foldl (fun (acc : Nat × Option Nat × Option Nat) v =>
-    match acc.2.2 with
-    | some _ => acc
-    | none =>
-      let cum := acc.1 + hist.getD v 0
-      let lo := match acc.2.1 with
-        | some l => some l
-        | none => if p005 ≤ (cum : α) then some v else none
-      (cum, lo, if p995 ≤ (cum : α) then some v else none)) (0, none, none)
-  let gLo := max 1.0 ((r.2.1.getD 1 : Nat) : α)
-  (gLo, max (gLo + 1.0) ((r.2.2.getD 65535 : Nat) : α))
-
-/-- A bracket's range as `compute_bundle_enclosures` keeps it for given values and for the bracket
-picked without the search: the reference exposure 1/8 s over the bracket's, `e_min`, `e_max`,
-feasibility and `e_centre`, from the whole frame's nearest-rank points. -/
-def bundleEnclosure (gMin gMax exposure gLo gHi : α) : Bool × α × α × α :=
-  let kT : α := if 0.0 < exposure then 0.125 / exposure else 1.0
-  let eMin := gMin / gLo * kT
-  let eMax := gMax / gHi * kT
-  (decide (eMin ≤ eMax), eMin, eMax, sqrt (eMin * eMax))
 
 /-! ## The highlight ceiling -/
 

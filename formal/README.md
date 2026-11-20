@@ -147,7 +147,7 @@ The tolerances and their reasons are at the top of `Check.lean`:
 | `tolDouble` | 1e-9 | Values the C++ computes in double precision |
 | `tolSolve` | 1e-7 | The tone curve solved by Levenberg-Marquardt, both sides in double precision |
 | `tolSolveE`, `tolFitSetup`, `tolFitLoss`, `tolFit`, `tolFitResultLoss` | 1e-6 to 4e-3 | The white-light fit, which the C++ runs in single precision for its parameters |
-| `tolPercentile32`, `tolPercentileU16`, `tolCode8` | 5e-4, 1e-3, 3e-4 | Percentiles and 8-bit codes the C++ interpolates in single precision |
+| `tolPercentile32`, `tolPercentileU16`, `tolGreenPoint`, `tolCode8` | 5e-4, 1e-3, 4e-3, 3e-4 | Percentiles and 8-bit codes the C++ interpolates in single precision |
 
 The C++ computes a pixel in single precision and the check evaluates the specification in double
 precision, so a difference of a few parts in a million is rounding, not disagreement. Two kinds
@@ -181,10 +181,10 @@ difference is then either a change of the specification to follow or a defect.
 
 ### The last recorded run
 
-Vectors generated from commit `65bbec3` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
+Vectors generated from commit `91b2fcb` of `master` on x86-64 Linux with GCC 13.3 and glibc 2.39
 (another compiler or C library may change the last digit of a single precision result, which the
 tolerances cover). With Lean `v4.36.0`, `lake build` ends with `Build completed successfully` and no
-warning, and `lake exe check` makes 7293 comparisons, none outside its tolerance.
+warning, and `lake exe check` makes 7181 comparisons, none outside its tolerance.
 
 ## The print emulation's check
 
