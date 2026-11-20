@@ -186,6 +186,18 @@ public:
         w2_.assign(f, f + h);
         f += h;
         b2_ = *f;
+        for (const float x : v) {
+            if (!std::isfinite(x)) {
+                error = "neutral head file has a weight that is not finite";
+                return false;
+            }
+        }
+        for (const float s : std_) {
+            if (!(s > 0.0f)) {
+                error = "neutral head file has a standard deviation that is not positive";
+                return false;
+            }
+        }
         in_dim_ = (int)d;
         hidden_ = (int)h;
         return true;
@@ -284,6 +296,18 @@ public:
         take(b3_, 2 * (size_t)n);
         take(ym_, n);
         take(ys_, n);
+        for (const float x : v) {
+            if (!std::isfinite(x)) {
+                error = "tone head file has a weight that is not finite";
+                return false;
+            }
+        }
+        for (const float s : xs_) {
+            if (!(s > 0.0f)) {
+                error = "tone head file has a feature scale that is not positive";
+                return false;
+            }
+        }
         in_dim_ = (int)d;
         h1_ = (int)h1;
         h2_ = (int)h2;
@@ -375,8 +399,13 @@ public:
     // own adapter. Throws std::runtime_error when the adapter the backbone needs is missing or cannot be loaded.
     void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1,
                      const void* engine_data = nullptr, size_t engine_size = 0);
-    // path: adapter.onnx or adapter.engine (or a directory holding them); the other file is taken from beside it.
+    // path: adapter.onnx or adapter.engine (or a directory holding them); the other file is taken from beside it. Only
+    // the file the backbone's runtime takes is read: adapter.engine behind a TensorRT backbone (refused when it is
+    // older than the adapter.onnx beside it, whose earlier weights it holds), adapter.onnx behind ONNX Runtime, neither
+    // for a fused model. adapter_path() names the file read.
     void load_adapter_file(const std::string& path, int num_threads = 1);
+    // The adapter file load_adapter_file read (empty after set_adapter, or for a fused model).
+    const std::string& adapter_path() const { return adapter_path_; }
     // The adapter runs on the GPU (TensorRT).
     bool adapter_on_device() const { return adapter_ && adapter_->on_device(); }
     // Device-to-host copies of the backbone's tokens so far (0 when the backbone and adapter both run on the GPU).
@@ -418,6 +447,7 @@ private:
     bool token_spread_ = false;
     std::vector<uint8_t> adapter_file_;
     std::string adapter_name_;
+    std::string adapter_path_;
     int max_size_ = 512;
     int patch_size_ = 16;
 };
