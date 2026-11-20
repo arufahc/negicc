@@ -23,8 +23,11 @@ On the file's code `q` (code over the largest code) the first matrix computes
 D             = (q × largest code − offset) / (scale κ)
 print density = 0.70 + S P (D + balance − grey)
 grey          = M (n + log10 E)              n: the light density of the curve's grey at green APD A
-S_c           = (γ_green / γ_c) (1 + t_c(A))
+S_c           = (γ_green / γ_c) (1 + t_c(A)),   γ = M_APD (dn/dA)
 ```
+
+`M` is the file's measure's matrix; `γ` is taken through the APD matrix whatever the measure
+(`curveGamma`).
 
 (`clfPrintingDensity_slope_form` in `Negicc.Print.Props`). `framePrint` computes `grey` and `S`.
 -/

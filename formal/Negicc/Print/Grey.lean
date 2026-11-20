@@ -53,9 +53,10 @@ def curveGreyAt (g : GreyBalance α) (a : α) : Vec3 α :=
 APD matrix's green row (`bracket_mid_apd`). -/
 def bracketMidApd (mApd : Mat3 α) (greyLight : Vec3 α) : α := mApd.row1.dot greyLight
 
-/-- `γ = M (dn/dA)` at green APD `a`: with `n` the curve's grey at `a` and
+/-- `γ = M_APD (dn/dA)` at green APD `a`: with `n` the curve's grey at `a` and
 `dn_j/dA = 1 / G_j'(n_j)` (a central difference of one table step), the contrast of the curve's
-grey scale in each channel of the measure `M` (`curve_slopes_at`). -/
+grey scale in each channel of APD, whatever the density file's measure (`curve_slopes_at` takes
+the bundle's APD matrix). -/
 def curveGamma (g : GreyBalance α) (mApd : Mat3 α) (a : α) : Vec3 α :=
   let n := curveGreyAt g a
   let inv (apd : Array α) (nc : α) : α :=
