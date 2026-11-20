@@ -2311,14 +2311,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     return true;
   };
-  // The winner of a tournament: the lowest score, with prefer_converged among the converged runs when any converged.
-  auto winner = [](const std::vector<FixedPointResult>& runs, bool prefer_converged,
-                   auto score) -> const FixedPointResult* {
-    bool any_converged = false;
-    for (const auto& a : runs) any_converged |= prefer_converged && a.status == FixedPointStatus::kConverged;
+  // The winner of a tournament: the lowest score, whichever way each loop ended.
+  auto winner = [](const std::vector<FixedPointResult>& runs, auto score) -> const FixedPointResult* {
     const FixedPointResult* win = nullptr;
     for (const auto& a : runs) {
-      if (any_converged && a.status != FixedPointStatus::kConverged) continue;
       if (!win || score(a) < score(*win)) win = &a;
     }
     return win;
@@ -2326,11 +2322,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   std::vector<FixedPointResult> adaptive;
   if (!tournament(screening, false, adaptive)) return false;
   out.tournament = adaptive;
-  // The winner is the lowest plain residual; on TriLED among the converged brackets when any converged. On white light
-  // the status does not count: each loop's best step is a render with a measured residual, and whether a loop ended as
-  // converged, diverged or out of steps flipped with a 0.1% change of the input.
-  FixedPointResult chosen =
-      *winner(adaptive, bundle.has_crosstalk, [](const FixedPointResult& a) { return a.residual; });
+  // The winner is the lowest plain residual, on both lights. How a loop ended does not count: each loop's best step is a
+  // render with a measured residual, and whether a loop ended as converged, diverged or out of steps flipped with a
+  // 0.1% change of the input on white light, and with small changes of the search on TriLED.
+  FixedPointResult chosen = *winner(adaptive, [](const FixedPointResult& a) { return a.residual; });
   ConversionParams params = chosen.params;
 
   // The enclosure-regularised residual that ranks the pullback's tournament (Step 6): the residual plus quadratic
@@ -2429,8 +2424,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // re-solve: the loop's intent stays close). When it is not, the screening and the tournament run again on the
   // bootstrap field (the first one, which is also the field when no bracket metered) and the same windows with the
   // enclosure penalties in place of the pull toward the centre (pullback_search), and the runs are ranked by the
-  // enclosure-regularised residual (tourney_score); on TriLED among the converged runs when any converged, on white
-  // light regardless of convergence. The result is taken only if it clips at most 0.5 percentage point more, does not
+  // enclosure-regularised residual (tourney_score), whichever way each loop ended. The result is taken only if it clips at most 0.5 percentage point more, does not
   // darken the midtones past what the scene allows, and moves to a later bracket or raises E by more than 2%.
   // The thresholds are stated values, not derived (DESIGN.md 4.2, "Limits").
   // The pullback is skipped after the clip fallback took the next bracket, on a one-bracket bundle, and with a pinned
@@ -2468,7 +2462,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       }
       std::vector<FixedPointResult> res_adaptive;
       if (!tournament(screen_all(depths, mu1, sig1, true), true, res_adaptive)) return false;
-      if (const FixedPointResult* win_res = winner(res_adaptive, bundle.has_crosstalk, tourney_score)) {
+      if (const FixedPointResult* win_res = winner(res_adaptive, tourney_score)) {
         FixedPointResult fp_res = *win_res;
         ConversionParams p_res = fp_res.params;
         ClipStats hc_res_242 = fr.highlight_clip(fp_res.target_idx, {p_res}, ceil_242)[0];

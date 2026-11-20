@@ -265,7 +265,7 @@ Kodak Portra Endura) and two print films (Kodak Vision 2383 and 2393); `--print`
 2383](samples/print_emulation.jpg)
 
 *Left to right: scene colour matching, the print on Portra Endura paper, the print on Vision 2383 print film, each as
-its search left it. Rendered with negicc `c69816b`.*
+its search left it. Rendered with negicc `1d154d7`.*
 
 There are two ways to run it, and both give the same print, apart from the two differences given below:
 
@@ -305,7 +305,7 @@ materials](samples/print_materials_triled.jpg)
 
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
 scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
-`c69816b`.*
+`1d154d7`.*
 
 ## Options
 

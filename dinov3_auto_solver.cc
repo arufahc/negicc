@@ -250,7 +250,6 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     if (losses[i].a < losses[k].a) k = i;
   }
   double best_g = g_cands_d[k];
-  const float best_loss_a = losses[k].a;
 
   cands.resize(b_cands_d.size());
   losses.resize(b_cands_d.size());
@@ -261,10 +260,10 @@ static double optimize_impl(const SolverConfig& cfg, const float* merged, const 
     if (losses[i].b < losses[k].b) k = i;
   }
   double best_b = b_cands_d[k];
-  const float best_loss_b = losses[k].b;
 
-  // 3. g/b fine-tune (sequential, chained)
-  double best_gb = (double)best_loss_a + (double)best_loss_b;
+  // 3. g/b fine-tune (sequential, chained), starting from the sum at (best_e, best_g, best_b): the b sweep's own
+  // record there, the number eval_one returns at that point.
+  double best_gb = (double)losses[k].a + (double)losses[k].b;
   const double chain[4][2] = {{-0.02, 0.0}, {0.02, 0.0}, {0.0, -0.02}, {0.0, 0.02}};
   for (const auto& d : chain) {
     if ((pin_mask & PIN_G) && d[0] != 0.0) continue;
