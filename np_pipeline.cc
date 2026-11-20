@@ -1346,15 +1346,6 @@ static void set_search_pins(const Options& o, const Setup& s, ParamSearchOptions
   opts.pin_b = o.gain_b;
 }
 
-// The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
-// meters it (Scan::bracket_exposure, meter_bracket_exposures).
-static float given_station_e(const Options& o, const Scan& scan, int target_idx) {
-  if (o.exposure_given || target_idx < 0 || target_idx >= (int)scan.bracket_exposure.size() ||
-      !scan.bracket_exposure[target_idx].valid) {
-    return o.exposure_comp;
-  }
-  return scan.bracket_exposure[target_idx].e_center;
-}
 
 // What the warnings about an estimated or clipped film base offer on TriLED: a capture of this roll's unexposed film
 // (--film_base), which parse_options takes with a single CFA RAW or a pixel shift capture alone (prepare refuses it on
@@ -1572,29 +1563,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     load_sidecar_film_base(o, s, scan);
   }
 
-  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked
-  // without the search and the exposure of given values read. Measured here, on the half-size frame every bundle
-  // conversion analyses, before anything picks a bracket: before, solve measured it after decode had already picked
-  // one (from the defaults, always the first admissible bracket) and measured the roll-off and solved the knobs
-  // there. The bundle search measures its own; a previous run's sidecar names its bracket.
-  const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
-                                (s.manual_target_idx < 0 || !s.exposure_given);
-  auto measure_enclosures = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
-    if (!needs_enclosures) return;
-    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-    int num_feasible = 0;
-    compute_bundle_enclosures(bundle, frame, g_lo, g_hi, scene_ev, num_feasible);
-    // And each bracket's range in the station's E, as the bundle search meters it: the E given values default to.
-    meter_bracket_exposures(bundle, frame, scan_shutter_s, scan_iso, ParamSearchOptions{}.crop_ratio,
-                            scan.film_base_rgb(), scan.bracket_exposure);
-    scan.has_enclosures = true;
-  };
-  // The bracket of given values (the search's is its own), once the enclosures are measured.
-  auto given_target_idx = [&]() {
-    return !s.is_bundle ? -1
-           : s.manual_target_idx >= 0 ? s.manual_target_idx
-                                      : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-  };
+  // The bracket of given values (the search's is its own): on a bundle without the search, --target, with -E and
+  // both gains (prepare).
+  auto given_target_idx = [&]() { return s.is_bundle ? s.manual_target_idx : -1; };
   // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
   // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
   // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
@@ -1607,8 +1578,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
-    const float base_e = scan.has_auto_res ? scan.params().e
-                                           : given_station_e(o, scan, target_idx);
+    const float base_e = scan.has_auto_res ? scan.params().e : o.exposure_comp;
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
@@ -2250,9 +2220,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       }
-      // The bracket analysis (timings_ms.analysis, not raw_decode): the enclosures, the knobs and the roll-off.
+      // The bracket analysis (timings_ms.analysis, not raw_decode): the knobs and the roll-off.
       const double t_analysis_0 = omp_get_wtime();
-      if (!s.bundle_search) measure_enclosures(frame, scan_shutter_s, scan_iso);
       if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
       scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
       return true;
@@ -2575,7 +2544,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       const double t_analysis_0 = omp_get_wtime();  // timings_ms.analysis, as on the LibRaw path
-      if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
       if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
         delete proc;
         return 1;
@@ -2756,11 +2724,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    // Each bracket's exposure range, which the target selection and given_station_e read below,
-    // was measured in decode on the half-size frame (measure_enclosures), before decode picked a bracket.
-    if (!s.has_cached_sidecar && (s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) &&
-        !scan.has_enclosures) {
-      log_error("Internal error: the brackets' exposure ranges were not measured on the scan\n");
+    // Without the search a bundle converts with the given values: prepare runs the search unless --target, -E and
+    // both gains are all given.
+    if (s.manual_target_idx < 0 || !s.exposure_given) {
+      log_error("Internal error: a bundle conversion without the search lacks --target or -E\n");
       return 1;
     }
   } else if (!s.is_bundle) {
@@ -2927,24 +2894,19 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b,
                              c.profile_film_base_rgb, unit_fb, c.merged_matrix);
   } else if (s.is_bundle) {
-    if (s.manual_target_idx >= 0) {
-      c.bundle_target_idx = s.manual_target_idx;
-    } else {
-      c.bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-    }
+    c.bundle_target_idx = s.manual_target_idx;
     log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
     c.bundle_target_name = bundle.targets[c.bundle_target_idx].name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
+    // The given values are the station's.
     double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
     if (scan.has_knob_res) {
       apply_station(scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
       log_knobs();
     } else {
-      apply_station(given_station_e(o, scan, c.bundle_target_idx),
-                    c.gain_g, c.gain_b);
+      apply_station(o.exposure_comp, c.gain_g, c.gain_b);
     }
   } else if (o.knobs_given) {
     // A single ICC profile with given gains: the knobs move the given (absolute) E, g and b through that profile, as
@@ -3335,10 +3297,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
     if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
       sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
-    {
-      const double a_used = std::isfinite(s.print_a) ? s.print_a : sc.print_bracket_a_mid;
-      if (std::isfinite(a_used)) print_tilt_at(s.bundle, a_used, sc.print_tilt);
-    }
+    print_tilt_at(s.bundle, s.print_a, sc.print_tilt);   // a picture print always has its search's A (solve)
     if (s.print_searched) {
       sc.print_searched = true;
       sc.print_a0 = s.print_res.a0;

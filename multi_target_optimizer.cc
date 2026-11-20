@@ -1278,55 +1278,6 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
   return s;
 }
 
-void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
-                             double scan_iso, float crop_ratio, const double* film_base_rgb,
-                             std::vector<BracketExposure>& out) {
-  out.assign(bundle.targets.size(), BracketExposure{});
-  ParamSearchOptions opts;
-  opts.film_base_rgb_d = film_base_rgb;
-  opts.film_base_from_scan = film_base_rgb != nullptr;
-  const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
-  // The statistics the search reads (SearchFrame::set_frame); the grid's size does not change g_lo and g_hi.
-  FrameStats stats;
-  compute_frame_stats(frame, crop_ratio, 224, 16, stats);
-  // As search_conversion_params' Step 1.
-  const bool white_light = !bundle.has_crosstalk;
-  const float g_lo = std::max(1.0f, stats.g_lo);
-  const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
-  const float g_scale = white_light ? scale.e_norm : 1.0f;
-  // The scene vector Step 2 meters: the search's input matrix (SearchFrame::set_frame_matrix: M_frame on white light,
-  // M_frame / e_norm on TriLED) applied to the log-average RGB.
-  const float mat_div = white_light ? 1.0f : scale.e_norm;
-  float p_scene[3];
-  for (int r = 0; r < 3; ++r) {
-    p_scene[r] = 0.0f;
-    for (int c = 0; c < 3; ++c) p_scene[r] += scale.frame_matrix[r * 3 + c] / mat_div * stats.log_avg_rgb[c];
-  }
-  for (size_t i = 0; i < bundle.targets.size(); ++i) {
-    if (!(bundle.targets[i].exposure_s > 0.0f)) continue;
-    Enclosure r;
-    if (!bracket_enclosure(bundle.targets[i], (int)i, g_lo * g_scale, g_hi * g_scale, r)) continue;
-    // The search's E is the station's on white light; on TriLED it runs on M_frame / e_norm, and its result is
-    // params.e / e_norm (search_conversion_params' out.params).
-    const float to_station = white_light ? 1.0f : 1.0f / scale.e_norm;
-    BracketExposure& b = out[i];
-    b.feasible = r.feasible;
-    b.e_min = r.e_min * to_station;
-    b.e_max = r.e_max * to_station;
-    b.e_center = r.e_center * to_station;
-    b.search_lo = r.search_lo * to_station;
-    b.search_hi = r.search_hi * to_station;
-    b.valid = b.e_min > 0.0f && b.e_max > 0.0f && std::isfinite(b.e_center) && b.e_center > 0.0f;
-    b.e_metered = b.e_center;
-    const GreyPoint gp(bundle.targets[i].film_prof.data);
-    float e_met = 0.0f;
-    if (gp.reference_grey() && exposure_for_lightness(gp, p_scene, BOOTSTRAP_G, BOOTSTRAP_B, e_met) && e_met > 0.0f) {
-      b.has_metered = true;
-      b.e_metered = std::clamp(e_met, r.search_lo, r.search_hi) * to_station;
-    }
-  }
-}
-
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb, PreviewRenderer* renderer) {

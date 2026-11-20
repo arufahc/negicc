@@ -274,10 +274,6 @@ struct Scan {
   // The white-light decode's gains on the camera channels (ChannelBalance); 1, 1, 1: the mosaic was left as it was.
   float balance_gains[3] = {1, 1, 1};
 
-  // Each bracket's exposure range (compute_bundle_enclosures) was measured on the half-size frame, in decode.
-  bool has_enclosures = false;
-  // Each bracket's exposure range in the station's E, as the bundle search meters it (meter_bracket_exposures).
-  std::vector<BracketExposure> bracket_exposure;
   bool has_auto_res = false;             // the bundle search ran
   ParamSearchResult auto_res;
   int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
