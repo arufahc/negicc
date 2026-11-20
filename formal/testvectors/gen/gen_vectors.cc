@@ -357,6 +357,15 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
   for (const auto& v : px) {
     j["apply"].push_back({{"x", {v[0], v[1], v[2]}}, {"y", arr3(negicc::apply_tone(tt, {v[0], v[1], v[2]}))}});
   }
+  // A darkening curve on saturated pixels: a channel's y' + sc (v - y) falls below 0 before the encoding clamps it.
+  {
+    const std::vector<float> dark = tone_table(curves[2]);
+    const negicc::ToneTable td{dark.data(), kToneTableSize};
+    j["dark_curve"] = tone_curve_json(curves[2]);
+    for (const auto& v : std::vector<std::array<float, 3>>{{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.9f, 0.05f, 0.02f}}) {
+      j["apply_dark"].push_back({{"x", {v[0], v[1], v[2]}}, {"y", arr3(negicc::apply_tone(td, {v[0], v[1], v[2]}))}});
+    }
+  }
   // The descriptors of a synthetic 8-bit image, and the plans for predictions around them.
   const int W8 = 37, H8 = 23;
   std::vector<uint8_t> img8(W8 * H8 * 3);

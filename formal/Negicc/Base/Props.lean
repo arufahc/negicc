@@ -128,7 +128,9 @@ segment starts at `0.0404499...`, both a little below the encoded threshold `0.0
 value just above `0.0031308` is therefore encoded by the power segment to a code just below
 `0.04045`, which the decoder takes for a code of the line. On that sliver, of width `7e-9`, the
 decoder does not return the value exactly (the error is below `3e-9`). Everywhere else it does,
-and the statements below say exactly where. -/
+and the statements below say exactly where. No 8-bit and no 16-bit code lies in the matching gap
+of codes, `(0.040449936, 0.04045]`, so decoding a stored code and encoding it again never meets
+it. -/
 
 /-- For non-negative reals, `a ^ q < b ^ p` gives `a < b ^ (p / q)`. -/
 private theorem lt_rpow_div_of_pow_lt_pow {a b : ℝ} (ha : 0 ≤ a) (hb : 0 ≤ b) (p q : ℕ) (hq : q ≠ 0)

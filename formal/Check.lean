@@ -417,6 +417,9 @@ def checkTone (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
     near "tone: toneTableY" tolSingle (toneTableY lut (← numAt c "x")) (← numAt c "y")
   for c in ← arrAt j "apply" do
     near3 "tone: applyTone" tolSingle (applyTone lut (vec3 (← numsAt c "x"))) (← numsAt c "y")
+  let dark := toneTable (← toneCurveOf (← get j "dark_curve"))
+  for c in ← arrAt j "apply_dark" do
+    near3 "tone: applyTone" tolSingle (applyTone dark (vec3 (← numsAt c "x"))) (← numsAt c "y")
   let img ← get j "image8"
   let rgb := pixelsOf (← natsAt img "rgb")
   let d : ToneDescriptors Float := toneDescriptors rgb
@@ -765,7 +768,7 @@ def expectedCounts : List (String × Nat) := [
   ("tone: toneTable", 45),
   ("tone: toneCurveOk", 5),
   ("tone: toneTableY", 9),
-  ("tone: applyTone", 21),
+  ("tone: applyTone", 30),
   ("tone: toneDescriptors", 7),
   ("tone: toneTargets", 36),
   ("tone: tonePlan (the solve)", 36),
