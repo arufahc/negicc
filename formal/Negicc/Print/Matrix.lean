@@ -3,7 +3,7 @@ The 3x3 matrix operations the print emulation uses.
 -/
 module
 
-public import Negicc.Base.Defs
+public import Negicc.WhiteLight.Balance
 
 @[expose] public section
 
@@ -12,7 +12,8 @@ public import Negicc.Base.Defs
 
 The print emulation inverts and transposes 3x3 matrices and sums them (`invert3` and
 `multiply3` in `np_print.cc`; the inverses written out in `print_table`). The product is
-`Mat3.mul` and the diagonal matrix `Mat3.diag` of `Negicc.Base.Vec`.
+`Mat3.mul` and the diagonal matrix `Mat3.diag` of `Negicc.Base.Vec`; the entry `Mat3.entry` and the
+determinant `Mat3.det` are those of `Negicc.WhiteLight.Balance`.
 -/
 
 namespace Negicc
@@ -23,19 +24,9 @@ variable {α : Type} [Scalar α]
 
 namespace Mat3
 
-/-- The entry in row `i` and column `j` (`0`, `1`, `2`; any other index reads row or column 2). -/
-def entry (m : Mat3 α) (i j : Nat) : α :=
-  let r := if i = 0 then m.row0 else if i = 1 then m.row1 else m.row2
-  if j = 0 then r.x else if j = 1 then r.y else r.z
-
-/-- The determinant, expanded along the first row as `invert3` writes it. -/
-def det (m : Mat3 α) : α :=
-  m.row0.x * (m.row1.y * m.row2.z - m.row1.z * m.row2.y) -
-    m.row0.y * (m.row1.x * m.row2.z - m.row1.z * m.row2.x) +
-    m.row0.z * (m.row1.x * m.row2.y - m.row1.y * m.row2.x)
-
 /-- The inverse as the adjugate over the determinant, entry for entry as `invert3` (and
-`print_table`) write it. For a matrix whose determinant is not zero it is the inverse
+`print_table`) write it; the determinant is `Mat3.det` (the C++ expands it along the first row in
+the same products, added in another order). For a matrix whose determinant is not zero it is the inverse
 (`Mat3.mul_adjInv` in `Negicc.Print.Props`). -/
 def adjInv (m : Mat3 α) : Mat3 α :=
   let d := det m

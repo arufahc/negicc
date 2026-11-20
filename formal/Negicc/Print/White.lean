@@ -3,14 +3,14 @@ The print's white: the print ICC made relative to its paper.
 -/
 module
 
-public import Negicc.Base.Defs
+public import Negicc.Scene.Linear
 
 @[expose] public section
 
 /-!
 # The print's white
 
-The print ICC's table is absolute: its lightest node is the paper's base under its viewing light.
+The print ICC's table is absolute: its lightest node is the paper's base under its viewing light. The PCS white is `pcsWhite` of `Negicc.Scene.Linear`.
 The conversion shows the print relative to its paper, as the ICC's media-relative colorimetry
 defines it (DESIGN.md 5.7): each of X, Y and Z of every node is multiplied by the PCS white's over
 the paper base's, so the base becomes the display's white (`to_paper_white` in `np_pipeline.cc`).
@@ -27,10 +27,6 @@ namespace Negicc
 open Scalar
 
 variable {α : Type} [Scalar α]
-
-/-- The PCS white, D50 as an ICC profile stores it: `(63190, 65536, 54061) / 65536`
-(`kPcsWhite` in `color_pipeline.h`). -/
-def pcsWhite : Vec3 α := ⟨63190.0 / 65536.0, 1.0, 54061.0 / 65536.0⟩
 
 /-- The largest XYZ a `lut16` holds, code `FFFFh` as a `u1Fixed15Number`: `1 + 32767 / 32768`
 (`kPcsMax`). A table value `v` read from the profile stands for the XYZ `v kPcsMax`. -/

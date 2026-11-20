@@ -92,15 +92,22 @@ theorem diag_add (s t : Vec3 ℝ) : (diag s).add (diag t) = diag ⟨s.x + t.x, s
 theorem identity_eq_diag_one : (identity : Mat3 ℝ) = diag ⟨1, 1, 1⟩ := by
   simp only [identity, Vec3.fill]; norm_num
 
+/-- The determinant expanded along the first row, as `invert3` writes it. -/
+theorem det_eq : det a = a.row0.x * (a.row1.y * a.row2.z - a.row1.z * a.row2.y) -
+    a.row0.y * (a.row1.x * a.row2.z - a.row1.z * a.row2.x) +
+    a.row0.z * (a.row1.x * a.row2.y - a.row1.y * a.row2.x) := by
+  simp [det, adjugate, entry]
+  ring
+
 /-- The adjugate over a non-zero determinant is a right inverse. -/
 theorem mul_adjInv (h : det a ≠ 0) : a.mul (adjInv a) = identity := by
   ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, mul_div_assoc'] <;>
-    rw [← add_div, ← add_div, div_eq_iff h] <;> simp only [det] <;> norm_num <;> ring
+    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
 
 /-- The adjugate over a non-zero determinant is a left inverse. -/
 theorem adjInv_mul (h : det a ≠ 0) : (adjInv a).mul a = identity := by
   ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, div_mul_eq_mul_div] <;>
-    rw [← add_div, ← add_div, div_eq_iff h] <;> simp only [det] <;> norm_num <;> ring
+    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
 
 theorem adjInv_mul_cancel_left (h : det a ≠ 0) : (adjInv a).mul (a.mul b) = b := by
   rw [← mul_assoc, adjInv_mul a h, identity_mul]
@@ -186,13 +193,13 @@ theorem printMatrix_of_allOne {q : Mat3 ℝ} {dm : DensityMatrices ℝ} (h1 : al
 /-! ## The colour matrices -/
 
 theorem det_cat02 : Mat3.det (cat02 : Mat3 ℝ) ≠ 0 := by
-  simp only [Mat3.det, cat02]; norm_num
+  rw [Mat3.det_eq]; simp only [cat02]; norm_num
 
 theorem det_xyzToSrgbLindbloom : Mat3.det (xyzToSrgbLindbloom : Mat3 ℝ) ≠ 0 := by
-  simp only [Mat3.det, xyzToSrgbLindbloom]; norm_num
+  rw [Mat3.det_eq]; simp only [xyzToSrgbLindbloom]; norm_num
 
 theorem det_bradford : Mat3.det (bradford : Mat3 ℝ) ≠ 0 := by
-  simp only [Mat3.det, bradford]; norm_num
+  rw [Mat3.det_eq]; simp only [bradford]; norm_num
 
 theorem scaleRowsBy_mulVec (m : Mat3 ℝ) (num den v : Vec3 ℝ)
     (h : (m.mulVec v).x ≠ 0 ∧ (m.mulVec v).y ≠ 0 ∧ (m.mulVec v).z ≠ 0) (hden : den = m.mulVec v) :

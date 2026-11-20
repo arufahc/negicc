@@ -3,7 +3,7 @@ The film base of a print, held no darker than the picture's thinnest film.
 -/
 module
 
-public import Negicc.Base.Defs
+public import Negicc.Scene.Bracket
 
 @[expose] public section
 
@@ -18,7 +18,7 @@ push thin film past the knee. When the base is not a capture its level is multip
 β = max(1, max_c P99.5{ (X v)_c / f_c }  over the inner crop)
 ```
 
-read on every fourth pixel each way. `X` is the crosstalk correction (the identity on white light)
+read on every fourth pixel each way of the inner crop (`innerCrop` of `Negicc.Scene.Bracket`). `X` is the crosstalk correction (the identity on white light)
 and `f` the base. `β` is at least 1 and at least each channel's 99.5 % point
 (`printFloorFactor_ge_one`, `printFloorFactor_ge_channel` in `Negicc.Print.Props`), so on the base
 `β f` the picture's thinnest film reads at most the base's level.
@@ -29,17 +29,6 @@ namespace Negicc
 open Scalar
 
 variable {α : Type} [Scalar α]
-
-/-- The inner crop of a `w` × `h` frame at `ratio` (`compute_inner_crop` in `color_pipeline.h`):
-`(x0, y0, width, height)`, the margins `round(w (1 − ratio) / 2)` and `round(h (1 − ratio) / 2)`
-held to `(w − 1) / 2` and `(h − 1) / 2`; the whole frame at `ratio ≥ 1`. -/
-def innerCrop (w h : Nat) (ratio : α) : Nat × Nat × Nat × Nat :=
-  if w = 0 ∨ h = 0 then (0, 0, 0, 0)
-  else if 1.0 ≤ ratio then (0, 0, w, h)
-  else
-    let x0 := min (roundNat ((w : α) * (1.0 - ratio) * 0.5)) ((w - 1) / 2)
-    let y0 := min (roundNat ((h : α) * (1.0 - ratio) * 0.5)) ((h - 1) / 2)
-    (x0, y0, w - 2 * x0, h - 2 * y0)
 
 /-- The pixels the floor reads: every fourth pixel each way of the crop, rows outermost. -/
 def floorSamples (crop : Nat × Nat × Nat × Nat) : List (Nat × Nat) :=

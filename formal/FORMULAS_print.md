@@ -43,7 +43,7 @@ the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negic
 | `np_print.cc`: `frame_print` | `framePrint`, `FrameGrey` | | own search and bracket, 3 measures |
 | `np_print.cc`: `frame_print_clf` (first matrix) | `frameClfMatrix`, `clfPrintingDensity`, `codeDensity` | `clfPrintingDensity_slope_form`, `clf_mid_grey`, `clf_grey_density_cancels` | yes, 12 frames |
 | `np_print.cc`: `print_clf_nodes` | `clfExposureOffsets`, `clfTop`, `clfCurveRow`, `clfCubeNode` | `exposureOf_shift` | yes |
-| `color_pipeline.h`: `compute_inner_crop` | `innerCrop` | | yes |
+| `color_pipeline.h`: `compute_inner_crop` | `innerCrop` (`Negicc.Scene.Bracket`) | | yes, here too |
 | `multi_target_optimizer.cc`: `print_floor_factor` | `printFloorFactor`, `floorChannel`, `percentilePoint` | `printFloorFactor_ge_one`, `printFloorFactor_ge_channel` | yes |
 | `multi_target_optimizer.cc`: `raise_base_to_print_floor` | `baseBeforeFloor`, `raisedBase` | | yes |
 | `np_pipeline.cc`: `apply_print_floor` (the frame) | `floorFrame`, `clampRect` | | no: a lambda of the pipeline |
