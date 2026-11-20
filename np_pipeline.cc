@@ -176,6 +176,29 @@ void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc
   }
 }
 
+// A custom -P profile is written through: the conversion writes three samples a pixel through a transform from PCS
+// XYZ into it (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
+// transform from the PCS. False, with the error logged, for one it cannot.
+static bool output_profile_ok(const std::string& arg) {
+  cmsHPROFILE prof = cmsOpenProfileFromFile(resolve_profile_path(arg).c_str(), "r");
+  if (!prof) {
+    log_error("Cannot read output ICC profile: %s\n", arg.c_str());
+    return false;
+  }
+  cmsHPROFILE xyz = cmsCreateXYZProfile();
+  cmsHTRANSFORM probe = nullptr;
+  if (cmsGetColorSpace(prof) == cmsSigRgbData) {
+    probe = cmsCreateTransform(xyz, TYPE_XYZ_FLT, prof, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+  }
+  if (probe) cmsDeleteTransform(probe);
+  cmsCloseProfile(xyz);
+  cmsCloseProfile(prof);
+  if (!probe) {
+    log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n", arg.c_str());
+  }
+  return probe != nullptr;
+}
+
 static bool paths_match(const std::string& a, const std::string& b) {
   if (a == b) return true;
   std::error_code ec;
@@ -722,29 +745,6 @@ static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
 static PassThroughRenderer& pass_through_renderer() {
   static PassThroughRenderer r;
   return r;
-}
-
-// A custom -P profile is written through: the conversion writes three samples a pixel through a transform from PCS
-// XYZ into it (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
-// transform from the PCS. False, with the error logged, for one it cannot.
-static bool output_profile_ok(const std::string& arg) {
-  cmsHPROFILE prof = cmsOpenProfileFromFile(resolve_profile_path(arg).c_str(), "r");
-  if (!prof) {
-    log_error("Cannot read output ICC profile: %s\n", arg.c_str());
-    return false;
-  }
-  cmsHPROFILE xyz = cmsCreateXYZProfile();
-  cmsHTRANSFORM probe = nullptr;
-  if (cmsGetColorSpace(prof) == cmsSigRgbData) {
-    probe = cmsCreateTransform(xyz, TYPE_XYZ_FLT, prof, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
-  }
-  if (probe) cmsDeleteTransform(probe);
-  cmsCloseProfile(xyz);
-  cmsCloseProfile(prof);
-  if (!probe) {
-    log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n", arg.c_str());
-  }
-  return probe != nullptr;
 }
 
 int prepare(const Options& o, Setup& s) {
