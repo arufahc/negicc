@@ -21599,6 +21599,11 @@
     0.8257,
     1.0823
    ],
+   "light_density_factors_sd": [
+    0.0,
+    0.0062,
+    0.007
+   ],
    "exposure_offsets_log": [
     -0.492,
     -0.214
@@ -26106,7 +26111,7 @@
    "spektrafilm_sha256": "0db98e5b8e2ed5248696e62bc39b7f21459a8812d64049b1275d7be995af873b",
    "reference_bracket": "Target 4",
    "icc_profile": "print_fujifilm_crystal_archive_typeii.icc",
-   "icc_profile_sha256": "2b395444eb441f58988d6045a79460d774a3f29541a36b2d1a2b33de9262859f"
+   "icc_profile_sha256": "40b00ab7e0c1085fa65ad4b1139f1c3a1c02ab9a746e5adeb1bfe7d11e3b1003"
   },
   "kodak_2383": {
    "name": "Kodak Vision 2383",
@@ -26114,7 +26119,7 @@
    "spektrafilm_sha256": "eb7fdfa3b75a909bf5c400802f7401160c8017ed1ac3e8e0d1c8448d56fbe184",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2383.icc",
-   "icc_profile_sha256": "7f379ecf0b6b705746c9f8ee2c0d9cd7a3714f9e3bf8113e81cc55d1c860e261"
+   "icc_profile_sha256": "585c54c277153ef72f18eb31a541fa06e84e11af84a6d6d2a0f80dac7837fe6c"
   },
   "kodak_2393": {
    "name": "Kodak Vision Premier 2393",
@@ -26122,7 +26127,7 @@
    "spektrafilm_sha256": "b564aece5e9fe43a5c7878d661a8c260c9f73a647a55899596c78487c79678dc",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_2393.icc",
-   "icc_profile_sha256": "ce78ca577a8d18f2c1bcdbc9f53c61491762d3a3eec93f543f952be68cd7be79"
+   "icc_profile_sha256": "5d3487ed8fea8629061af868a4ca1cb2874c830cf89e5e0832bca1a8a7b01b10"
   },
   "kodak_ektacolor_edge": {
    "name": "Kodak Ektacolor Edge",
@@ -26130,7 +26135,7 @@
    "spektrafilm_sha256": "5db23694d478c35cc0f96d42f94da79e552b2f8eb0853767449a24ac0f0f890e",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ektacolor_edge.icc",
-   "icc_profile_sha256": "e7b9ce1adfce7f61fc35e84d6b67fd2a4973469046a4bdb1ca965606df95daf7"
+   "icc_profile_sha256": "6abb983abd00312938ccfbd505daaf69675740720adc601df410daa69f16cff6"
   },
   "kodak_endura_premier": {
    "name": "Kodak Professional Endura Premier",
@@ -26138,7 +26143,7 @@
    "spektrafilm_sha256": "fd37807d61eb730cda54e85d36640e35a0f8da58666bfc6aa83db888b2e364c2",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_endura_premier.icc",
-   "icc_profile_sha256": "9ac923706e424798304731b39757f6b323bbfba9a4935dcbb7e054cb802d5a9f"
+   "icc_profile_sha256": "c5092239d6c2369a283e682cb9d0a1aa6530eadbcac89bf959be5129b8d2d0e3"
   },
   "kodak_portra_endura": {
    "name": "Kodak Professional Portra Endura",
@@ -26146,7 +26151,7 @@
    "spektrafilm_sha256": "e3bb6069e02d088d8080d38ce28035816038f62786e2aff9176bf4aeeb4820a0",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_portra_endura.icc",
-   "icc_profile_sha256": "9d29a5d8baaf4c78a01d6865ac2dcd0f9042c3352e2412b1fc1c764f3e35133d"
+   "icc_profile_sha256": "1fb38a60b1de5d01553f22d6743f956a82f3aec12b5608c34b22391701775652"
   },
   "kodak_supra_endura": {
    "name": "Kodak Professional Supra Endura",
@@ -26154,7 +26159,7 @@
    "spektrafilm_sha256": "3a0928013effbb33e81acd01db426937faa3a12021a267c54b4d96e916286bd6",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_supra_endura.icc",
-   "icc_profile_sha256": "47de4a0f7ec0401005990fb444ce3e77ae0e7b96465832528b43800c5e83ca96"
+   "icc_profile_sha256": "4a126a463e80202fdcf0e07da68a70965e68ebc4a5d9b4af93c53bfb0a6dbb39"
   },
   "kodak_ultra_endura": {
    "name": "Kodak Professional Ultra Endura",
@@ -26162,17 +26167,17 @@
    "spektrafilm_sha256": "319fa2514e9a6809fd09ce587c4f714effc035e7f9ebaeb3b55d9bc1b52c2a72",
    "reference_bracket": "Target 4",
    "icc_profile": "print_kodak_ultra_endura.icc",
-   "icc_profile_sha256": "ba08268acd6e557a227ede11d435b9866a10272861a87d3023f7f65be38cadbd"
+   "icc_profile_sha256": "690716dc48cf2b0ea4318c981b79afe929368a15726067dfc9033b11ec402d5b"
   }
  },
  "export": {
   "bundle_key": "Ektar100-A7R4-TriLED",
   "stock_key": "ektar100",
   "source_file": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
-  "source_sha256": "40e439715c03d1caf76622f24248b0e97481671aba674d2de883b6e217bbcb46",
+  "source_sha256": "dae7d4a1b167330edbfe42dad1bc1d4269e1ed120de76b6ddc71832c99c6c645",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "cee9ffe1b7af4c99da61193c32cb6b6e261bc510",
+  "station_commit": "c77fb671c793512f33a58b5657a9a16f7a0edc8e",
   "tilt_form": "own"
  }
 }

@@ -229,6 +229,7 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["backend"] = sc.dino_backend;
   j["inferences"] = a.inferences;
   j["time_ms"] = num(sc.t_auto_ms, "%.1f");
+  if (sc.search_renderer != "cpu") j["renderer"] = sc.search_renderer;
   return j;
 }
 
@@ -589,10 +590,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (!sc.print_id.empty()) {
       j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
                                {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
-                               {"curves", std::isfinite(sc.print_a)
-                                              ? "computed at the print's mid grey A (a) from the bundle's "
-                                                "grey_balance_curves, with the gains g and b after the knee"
-                                              : "computed for the bracket from the bundle's grey_balance_curves"}};
+                               {"curves", "computed at the print's mid grey A (a) from the bundle's "
+                                          "grey_balance_curves, with the gains g and b after the knee"}};
       // A material given as a file: which file, and its content, so the replay can be checked against it.
       if (!sc.print_file.empty()) {
         j["profile"]["print"]["file"] = sc.print_file;
@@ -603,7 +602,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"),
                                                   num(sc.print_paper_xyz[1], "%.6g"),
                                                   num(sc.print_paper_xyz[2], "%.6g")};
-      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
       // The brackets' tilt (grey_relative.b) at that A, linear in A between brackets.
@@ -690,8 +689,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     cli.insert(cli.end(), {"--tone_stage", "off"});
   }
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
-  // if any, and re-running it re-runs the search (deterministic, with --dino and --dino_iters when given), then the
-  // same knobs on its result.
+  // if any, and re-running it re-runs the search (deterministic, with --dino, --dino_iters and --dino_backend when
+  // given: the last keeps the passes where they ran), then the same knobs on its result.
   if (!sc.print_id.empty() && sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -701,6 +700,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     }
     if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
     if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    if (!sc.dino_backend_arg.empty()) cli.insert(cli.end(), {"--dino_backend", sc.dino_backend_arg});
     if (sc.has_knobs) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
       if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
@@ -723,9 +723,11 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
-    // The search's model and iterations, as on a print: the recorded balance and each print's search depend on them.
+    // The search's model, iterations and backend, as on a print: the recorded balance and each print's search depend
+    // on them.
     if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
     if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    if (!sc.dino_backend_arg.empty()) cli.insert(cli.end(), {"--dino_backend", sc.dino_backend_arg});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
     if (!sc.density_prints.empty()) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
@@ -889,7 +891,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
   t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
-  // The bracket analysis outside Auto's time (enclosures, knobs, roll-off); before, it counted as raw_decode.
+  // The bracket analysis outside Auto's time (the knobs, the roll-off); before, it counted as raw_decode.
   t["analysis"] = num(sc.t_analysis_ms, "%.1f");
   const bool has_cached_dino = !sc.cached_dino_json_str.empty();
   t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f")

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <string>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "rgb_view.h"
@@ -144,11 +145,11 @@ const char* to_string(ClipFallbackOutcome outcome);
 // WhiteLightFitResult, ToneStagePlan) are then partly filled, and a caller must not read them.
 //
 // neg_process --check_renderer runs a conversion with a pass-through renderer (PassThroughRenderer) and counts any
-// pass that runs outside it (PassAudit), on any thread, and fails when a pass ran outside it or none ran at all; its
-// picture must equal the conversion without it, bit for bit, which nothing checks for it. Run it, and compare its
-// picture with a plain conversion's (cmp), on a TriLED scan and on a white-light scan with -P srgb
-// (the curve fit and the tone plan), before a change to the search, the curve fit, the tone plan or this interface is
-// merged.
+// pass that runs outside it (PassAudit), on any thread, and fails when a pass ran outside it or none ran at all; with a
+// CUDA device it also compares each pass with the GPU's (CompareRenderer). Its picture must equal a conversion whose
+// passes run on the CPU, bit for bit, which nothing checks for it. Run it, and compare its picture with such a
+// conversion's (cmp), on a TriLED scan and on a white-light scan with -P srgb (the curve fit and the tone plan), before
+// a change to the search, the curve fit, the tone plan or this interface is merged.
 struct PreviewRenderer {
   virtual ~PreviewRenderer() = default;
   virtual void bind_frame(const negicc::RgbView& frame) { (void)frame; }
@@ -168,6 +169,76 @@ struct PassThroughRenderer : PreviewRenderer {
   void bind_frame(const negicc::RgbView& frame) override;
   void render(const negicc::RenderArgs& a) override;
   void highlight_clip(const negicc::HighlightClipArgs& a) override;
+};
+
+// The passes on a CUDA device (rgb_view.h gpu_render and gpu_highlight_clip): neg_process's on a USE_CUDA=1 build
+// with a device whose kernels it was built for (gpu_device_available), unless --dino_backend cpu. The constructor
+// throws without one.
+// - The frame: bind_frame copies the bound frame to the device, each pixel as the view samples it (a CFA view's flat
+//   field included), unless device_frame gives the address at which the GPU already reads it (a caller whose frame is
+//   already in pinned, mapped memory). Binding the same view again (the same pointers, size, layout and flat field)
+//   keeps the copy, so a caller that rewrites a frame in place, or frees it and allocates another at the same address,
+//   calls release_frame before binding it. A pass's view, the bound frame or an upright crop inside it with the same
+//   layout, is read there at its offset; any other view throws.
+// - release_frame: drops the bound frame and frees its device copy (neg_process calls it after the last pass of the
+//   search, before the full-resolution conversion).
+// - The tables: each table a pass reads (the cLUT, the input and output tables, the tone table) is compared with the
+//   copy on the device on every pass and copied again when its contents differ, so a table changed in place (the
+//   curve fit's) or another one at the same address is never read stale.
+// - The output: a render is written to device memory and copied into the search's buffer.
+// A failed pass throws negicc::GpuError, which leaves the search to its caller.
+struct GpuRenderer : PreviewRenderer {
+  GpuRenderer();
+  ~GpuRenderer() override;
+  GpuRenderer(const GpuRenderer&) = delete;
+  GpuRenderer& operator=(const GpuRenderer&) = delete;
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
+  void release_frame();
+  // For a frame the GPU reads in place: the device address of frame.r_ptr (an interleaved RGB view without a flat
+  // field, whose pitch and stride hold on the device), or null to have the frame copied.
+  std::function<const uint16_t*(const negicc::RgbView& frame)> device_frame;
+  long binds = 0, renders = 0, clips = 0;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+// The CPU and the GPU passes compared (neg_process --check_renderer on a build with a device that runs its kernels):
+// every pass runs on both from the same inputs and the search reads the CPU's, so the search is the CPU's and each GPU
+// pass is measured against it. The CPU's side is PassThroughRenderer's, so the passes are counted as without a device.
+// - A render: how many values differ and the largest difference; the largest and the mean change in L* per pixel,
+//   each pixel read in the render's encoding (sRGB or linear sRGB; an 8-bit preview, what the network reads, a 16-bit
+//   or a float render alike); and with
+//   statistics, the largest difference of the white and black clip shares and of each histogram bin (as a share of
+//   the crop's pixels), and of the six zone means of a* and b*.
+// - A clip pass: the largest difference of its three exceedance shares and its white-clip share, its median L*, and
+//   each bin of its max-channel histogram (as a share of the crop's pixels).
+// - A value that is not finite on either side counts as differing and fails the comparison.
+// within_tolerance(): every render's mean change in L* per pixel and every zone mean within kCompareMeanDL, every
+// share (a clip share or a histogram bin's) within kCompareShare %, every median within one histogram bin
+// (kCompareMedianL), and no value that is not finite.
+struct CompareRenderer : PassThroughRenderer {
+  static constexpr double kCompareMeanDL = 0.05;   // CIELAB: a render's mean change in L* per pixel; a zone mean
+  static constexpr double kCompareShare = 0.01;    // %: each clip share, each histogram bin
+  static constexpr double kCompareMedianL = 0.1;   // L*: the median, one bin of the clip pass's histogram
+  void bind_frame(const negicc::RgbView& frame) override;
+  void render(const negicc::RenderArgs& a) override;
+  void highlight_clip(const negicc::HighlightClipArgs& a) override;
+  bool within_tolerance() const;
+  std::string summary() const;   // one line for the log
+  struct Pass {
+    bool render = false, stats = false;   // a render, with its statistics
+    long long values = 0, differing = 0, nonfinite = 0;
+    // max_share: the clip shares (a render's white and black clip); max_hist: a histogram bin, as a share of the
+    // crop's pixels (%); max_zone: a render's zone means of a* and b*.
+    double max_abs = 0.0, max_dl = 0.0, mean_dl = 0.0, max_share = 0.0, max_median_l = 0.0, max_hist = 0.0,
+           max_zone = 0.0;
+  };
+  std::vector<Pass> passes;
+  GpuRenderer gpu;
 };
 
 struct ParamSearchOptions {
@@ -310,28 +381,6 @@ struct ParamSearchResult {
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
 };
-
-// A bracket's exposure range on a frame, as the bundle search's Step 1 meters it (bracket_enclosure): the scene's
-// green 0.5% and 99.5% points over the inner crop (crop_ratio), scaled by e_norm on white-light bundles, onto the
-// bracket's calibrated range. E is in the units of -E and of Auto's result (ParamSearchResult::params), so the default
-// exposure of given values is the one Auto meters for that bracket.
-struct BracketExposure {
-  bool valid = false;       // the bracket has patch readings
-  bool feasible = false;    // e_min <= e_max
-  float e_min = 0.0f, e_max = 0.0f;
-  float e_center = 0.0f;    // sqrt(e_min * e_max)
-  float search_lo = 0.0f, search_hi = 0.0f;  // the range the search would search E in
-  // The metered exposure (Step 2): the E at which the scene's log-average renders at L* 50 through the bracket with
-  // the bootstrap's g 1.10 and b 1.15, clamped to the search range: the E Auto's bootstrap starts that bracket from.
-  // e_center when the bracket has no neutral L* 50 or the metering does not converge (has_metered false).
-  bool has_metered = false;
-  float e_metered = 0.0f;
-};
-// One BracketExposure per bracket of the bundle (out.size() == bundle.targets.size()). film_base_rgb: a film base read
-// from this scan, as for measure_rolloff_x_hi; null for the bundle's.
-void meter_bracket_exposures(const ProfileBundle& bundle, const negicc::RgbView& frame, double scan_shutter_s,
-                             double scan_iso, float crop_ratio, const double* film_base_rgb,
-                             std::vector<BracketExposure>& out);
 
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and
 // orientation, converted through prof (first overload: a bracket's profile, or a combined profile built from it) or

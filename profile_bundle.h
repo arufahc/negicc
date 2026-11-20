@@ -86,9 +86,6 @@ inline negicc::PipelineConfig make_pipeline_config(const ProfileData& prof, floa
 // The profile bundle: a film stock's brackets, each with its film profile.
 // --------------------------------------------------------------------------------------------------------------------
 
-// Default minimum target bracket index to consider (skips extreme highlight overexposure brackets, e.g. +2EV, +1.5EV)
-static constexpr int kDefaultMinTargetIdx = 2;
-
 struct BundleTarget {
   int index = 0;
   std::string name;
@@ -108,15 +105,6 @@ struct BundleTarget {
   float exposure_s = 0.125f;
   float tonal_capacity_ev = 0.0f;
   std::string profcheck_output;
-
-  // Frame enclosure metrics
-  bool is_feasible = false;
-  float e_min = 0.0f;
-  float e_max = 0.0f;
-  float e_center = 0.0f;
-  float slack_ev = 0.0f;
-  float fill_ratio = 0.0f;
-  float tgt_capacity_ev = 0.0f;
 };
 
 // The colour space a bundle's brackets were measured in, which is the space a scan is decoded to for it.
@@ -279,16 +267,6 @@ void load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle
 // read_file supplies the ICC profiles of a split bundle. Throws as load_profile_bundle.
 void load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
                                      const BundleFileReader& read_file, ProfileBundle& bundle);
-
-// Compute scene green percentiles [0.5%, 99.5%] and gamut volume enclosures for all targets
-void compute_bundle_enclosures(ProfileBundle& bundle, const uint16_t (*image)[4],
-                              int width, int height, float& g_lo, float& g_hi,
-                              float& scene_ev, int& num_feasible);
-void compute_bundle_enclosures(ProfileBundle& bundle, const negicc::RgbView& view,
-                              float& g_lo, float& g_hi, float& scene_ev, int& num_feasible);
-
-// Target selection without DINOv3 (picks feasible target minimizing |fill_ratio - 0.85|)
-int select_bundle_target_without_dino(const ProfileBundle& bundle, int min_target_idx = kDefaultMinTargetIdx);
 
 // --------------------------------------------------------------------------------------------------------------------
 // Profiles

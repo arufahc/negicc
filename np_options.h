@@ -50,7 +50,7 @@ struct Options {
   bool row_given[3] = {false, false, false};
   float exposure_comp = 1.0f;                  // -E
   bool exposure_given = false;                 // -E (the search keeps it)
-  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (given: no search on TriLED; held on white light)
+  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (the search holds them)
   bool gain_g_given = false, gain_b_given = false;
   float brightness = 0.0f;                     // --brightness (stops of the grey's luminance)
   float tint = 0.0f;                           // --tint (a* of the grey)
@@ -90,8 +90,8 @@ struct Options {
   bool dino_iters_given = false;
 
   // Fitted G/B input curves (input_curves.h). --fit_curves auto (the default) fits them on every white-light bundle
-  // search with -P srgb or srgb-g10 and nowhere else (TriLED, whose curves are the measured ones; another or no -P;
-  // given parameters); on does the same and is an error where it does not apply; off turns the fit off. The tone
+  // search with -P srgb or srgb-g10, given parameters or not, and nowhere else (TriLED, whose curves are the measured
+  // ones; another or no -P); on does the same and is an error where it does not apply; off turns the fit off. The tone
   // stage has its own flag.
   enum FitCurvesMode { kFitCurvesAuto, kFitCurvesOn, kFitCurvesOff };
   FitCurvesMode fit_curves = kFitCurvesAuto;

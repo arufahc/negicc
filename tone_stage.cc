@@ -270,7 +270,7 @@ void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, con
             kc += (o[0] == 0 && o[1] == 0 && o[2] == 0);
         }
     }
-    *white = n ? (double)wc / (double)n : 0.0;
+    if (white) *white = n ? (double)wc / (double)n : 0.0;
     if (black) *black = n ? (double)kc / (double)n : 0.0;
 }
 

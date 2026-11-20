@@ -456,6 +456,18 @@ ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or n
 (`solve_dinov3_intent`) and a given gain turns the search off. `--brightness`, `--tint` and `--warmth` move the
 result afterwards, in stops of the reference grey's luminance and in its `a*` and `b*`.
 
+**Where the passes run.** Every preview and clip pass of the search, the print's search, the curve fit and the tone
+plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
+device that runs its kernels the GPU's (`GpuRenderer`, `gpu_passes.cu`), else the CPU's; `--dino_backend cpu` keeps
+the passes, and the network, on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
+multiply-add off on both sides, but the two round `powf`, `tanhf` and `cbrtf` differently in the last place, so a
+preview can differ by one code and a result in its last digits. The sidecar's `auto` block records `renderer`: `gpu`,
+or `cpu, compared with the gpu` under `--check_renderer` with a device (no key: the CPU's). A run reuses a sidecar
+only when its search ran where this run's would. `--check_renderer` runs every pass on the CPU and counts it; with a
+device it also runs each on the GPU from the same inputs, the search reading the CPU's, and fails before anything is
+written when a render's mean change in `L*` per pixel or a zone mean exceeds 0.05, a clip share or a histogram bin
+0.01 % of the crop, a median `L*` one bin, or a value is not finite.
+
 **Limits.** The search does not always reach the same answer from different starts. The thresholds of steps 1, 5 and
 6 and the tolerances of 3.3 are stated values, not derived.
 
