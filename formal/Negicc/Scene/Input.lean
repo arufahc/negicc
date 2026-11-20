@@ -84,8 +84,10 @@ def captureExposure (shutter iso : α) : α := shutter * (iso / 100.0)
 `n / f_r * ratio`. `f` is the film base (after the crosstalk correction), `n` the bundle's
 normalisation target (55000), and `ratio` the exposure of the film base's capture over the
 scan's, or `1` when the base was read from the scan itself. A row whose base is not positive is
-left unscaled. With it, bare film lands on the level `n` in every channel.
-`compute_station_merged_matrix` in `profile_bundle.cc`. -/
+left unscaled. `f` and `n` are in 16-bit codes, so a pixel of bare film in the scan (its 16-bit
+reading through `X` is `f / ratio`) comes out at the code `n` in every channel
+(`mergedMatrix_mulVec_scan_base`), and after the load at `n / 65535 = 0.839`, the level that
+enters the knee at `E = g = b = 1`. `compute_station_merged_matrix` in `profile_bundle.cc`. -/
 def mergedMatrix (X : Mat3 α) (f : Vec3 α) (n ratio : α) : Mat3 α :=
   Mat3.scaleRows (f.map fun fr => if 0.0 < fr then n / fr * ratio else 1.0) X
 

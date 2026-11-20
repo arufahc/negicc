@@ -21,8 +21,9 @@ each resampled pixel, and the mean of the `patch²` CIELAB values of each cell.
 `z2 = 1 / (3 N) Σ_i Σ_k ((lab_ik - μ_ik) / σ_ik)²` (`self_consistency_residual`).
 
 **The frame's statistics** (`compute_frame_stats` in `multi_target_optimizer.cc`) over its inner
-crop: the green 0.5 % and 99.5 % points (`g_lo`, `g_hi`), the geometric mean of each channel, and
-the crop resampled to the network's grid, one 16-bit camera RGB value per cell.
+crop: the green 0.5 % and 99.5 % points (`g_lo`, `g_hi`, as `Negicc.Scene.Bracket` states them),
+the geometric mean of each channel, and the crop resampled to the network's grid, one 16-bit camera
+RGB value per cell.
 
 **The optimiser's loss** (`intent_loss`): each cell of that grid rendered at a candidate `(E, g, b)`
 through the bracket, its CIELAB after the shoulder against the field, as the mean squared z-score
@@ -86,43 +87,17 @@ def residual (preview : Array (Vec3 Nat)) (w h gw gh patch : Nat) (f : IntentFie
 
 /-! ## The frame's statistics -/
 
-/-- The first code whose cumulative count exceeds `k`, scanning the histogram from code `v` with
-`below` pixels counted already; 65535 when none does. -/
-def firstAbove (k : Nat) : List Nat → Nat → Nat → Nat
-  | [], _, _ => 65535
-  | c :: rest, v, below => if k < below + c then v else firstAbove k rest (v + 1) (below + c)
-
-/-- The `q` point of a 16-bit histogram of `total` pixels, interpolated between the two order
-statistics around rank `q (total - 1)` (`u16_percentile_linear`); zero for no pixels. -/
-def u16Percentile (hist : Array Nat) (total : Nat) (q : α) : α :=
-  if total = 0 then 0.0
-  else
-    let pos : α := q * ((total - 1 : Nat) : α)
-    let iLo := natFloor pos
-    let iHi := natCeil pos
-    let frac := pos - (iLo : α)
-    let vLo := firstAbove iLo hist.toList 0 0
-    let vHi := firstAbove iHi hist.toList 0 0
-    (1.0 - frac) * (vLo : α) + frac * (vHi : α)
-
-/-- The histogram of the green codes of a set of 16-bit pixels. -/
-def greenHistogram (px : Array (Vec3 Nat)) : Array Nat :=
-  px.foldl (fun h p => h.modify p.y (· + 1)) (Array.replicate 65536 0)
-
 /-- The scene's range: its green 0.5 % and 99.5 % points, `g_lo` at least 1 and `g_hi` at least
 one above `g_lo` (`compute_frame_stats`, and again where the search reads them). -/
 def sceneRange (pLo pHi : α) : α × α :=
   let gLo := max 1.0 pLo
   (gLo, max (gLo + 1.0) pHi)
 
-/-- The scene's tail: its range is taken between the 0.5 % and the 99.5 % points
-(`SCENE_TAIL`). -/
-def sceneTail : α := 0.005
-
-/-- The scene's green range over the crop's pixels: `(g_lo, g_hi)`. -/
-def sceneGreenRange (crop : Array (Vec3 Nat)) : α × α :=
-  let hist := greenHistogram crop
-  sceneRange (u16Percentile hist crop.size sceneTail) (u16Percentile hist crop.size (1.0 - sceneTail))
+/-- The scene's green range over a crop of `cw × ch` pixels: `(g_lo, g_hi)`, from the crop's green
+histogram (`greenHistogram`, `sceneGreenRange` of `Negicc.Scene.Bracket`). -/
+def cropGreenRange (crop : Array (Vec3 Nat)) (cw ch : Nat) : α × α :=
+  let h := greenHistogram (α := α) crop cw ch 1.0
+  sceneGreenRange h.1 h.2
 
 /-- The geometric mean of each channel over the crop, in `[0, 1]`: codes below 1 count as 1
 (`log_avg_rgb`). -/
@@ -155,7 +130,7 @@ structure FrameStats (α : Type) where
 /-- The statistics of a crop `cw × ch` pixels (`compute_frame_stats`). -/
 def frameStats (crop : Array (Vec3 Nat)) (cw ch maxSize patch : Nat) : FrameStats α :=
   let s := aspectShape (α := α) cw ch maxSize patch
-  let r := sceneGreenRange (α := α) crop
+  let r := cropGreenRange (α := α) crop cw ch
   ⟨r.1, r.2, logAverage crop, s, statsGrid (α := α) crop cw ch s patch⟩
 
 /-! ## The optimiser's cells and loss -/
@@ -185,7 +160,8 @@ structure Gains (α : Type) where
   b : α
 
 /-- The pipeline configuration of a render setup (no tone curve). -/
-def RenderSetup.config (r : RenderSetup α) : PipelineConfig α := ⟨r.profile, r.knee, r.shoulder, none⟩
+def RenderSetup.config (r : RenderSetup α) : PipelineConfig α :=
+  { profile := r.profile, knee := r.knee, shoulder := r.shoulder, tone := none }
 
 /-- The input matrix of a candidate: the merged matrix with its rows scaled by `E`, `E g`,
 `E b` (`candidate_matrix`). -/

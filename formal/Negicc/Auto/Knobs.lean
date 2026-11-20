@@ -26,11 +26,6 @@ open Scalar
 
 variable {α : Type} [Scalar α]
 
-/-- CIE's exact break and slope of `L*` (`kLabEpsilon` = (6/29)³, `kLabKappa` = (29/3)³). -/
-def labEpsilon : α := 216.0 / 24389.0
-
-@[inherit_doc labEpsilon] def labKappa : α := 24389.0 / 27.0
-
 /-- The relative luminance of a lightness `L*`. -/
 def yOfLstar (L : α) : α := if 8.0 < L then pow ((L + 16.0) / 116.0) 3.0 else L / labKappa
 

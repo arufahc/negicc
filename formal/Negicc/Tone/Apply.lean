@@ -13,6 +13,8 @@ public import Negicc.Base.Defs
 The tone stage's curve is one lightness curve. It reaches the pixels as a table `lut` of
 `Y' = f(Y)` on the display's linear luminance, sampled at `Y = (i / n)^2` for `i = 0 .. n`
 (`n = 8192`; the table has `n + 1` entries and is built by `toneTable` in `Negicc.Tone.Curve`).
+A table needs at least two entries (`n ≥ 1`); the conversion treats a shorter one as no tone stage
+(`PipelineConfig.activeTone`).
 
 `applyTone` moves a pixel's luminance along the curve and carries its colour along: the
 luminance `Y` goes to `Y'` on the neutral axis, and the pixel's difference from the neutral of its
@@ -27,19 +29,18 @@ open Scalar
 
 variable {α : Type} [Scalar α]
 
-/-- The derivative of CIELAB's `f`: `1 / (3 t^(2/3))` above `216/24389`, the slope of the linear
-segment `(24389/27) / 116` below (`tone_lab_fprime`). -/
+/-- The derivative of CIELAB's `f`: `1 / (3 t^(2/3))` above the break `labEpsilon = 216/24389`,
+the slope of the linear segment `labKappa / 116 = 841/108` below (`tone_lab_fprime`). -/
 def toneLabFprime (t : α) : α :=
-  if 216.0 / 24389.0 < t then (1.0 / 3.0) / cbrt (t * t) else 24389.0 / 27.0 / 116.0
+  if labEpsilon < t then (1.0 / 3.0) / cbrt (t * t) else labKappa / 116.0
 
-/-- The luminance of a display linear sRGB pixel as the tone curve reads it (the weights of
-`apply_tone`; they differ from those of `linearSrgbLuminance` in the sixth decimal). -/
-def toneLuminance (v : Vec3 α) : α :=
-  0.2126729 * v.x + 0.7151522 * v.y + 0.0721750 * v.z
+/-- The luminance of a display linear sRGB pixel as the tone curve reads it: the luminance row of
+`linear_srgb_to_lab`, the row the tone stage's descriptors read (`apply_tone`). -/
+def toneLuminance (v : Vec3 α) : α := linearSrgbLuminance v
 
 /-- The curve's luminance `Y'` for a luminance `Y`, read from the table by linear interpolation
 in `sqrt Y`. `Y` is held to `[0, 1]` for the lookup; above 1 the ratio `Y' / Y` keeps its value at
-1 (`tone_table_Y`). -/
+1 (`tone_table_Y`). Precondition: at least two entries (`tt.n ≥ 1`). -/
 def toneTableY (lut : Array α) (Y : α) : α :=
   let n := lut.size - 1
   let y := min (max Y 0.0) 1.0

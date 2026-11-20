@@ -39,29 +39,19 @@ open Scalar
 
 /-! ## Geometry -/
 
-/-- The inner crop is centred: its two margins and its width make up the frame. -/
-theorem innerCrop_centred_w (W H : Nat) (r : ℝ) (hW : 0 < W) (hH : 0 < H) :
-    2 * (innerCrop W H r).x0 + (innerCrop W H r).w = W := by
+/-- The inner crop is centred and keeps at least one pixel each way: its two margins and its width
+make up the frame, and so do the height's. -/
+theorem innerCrop_spec (W H : Nat) (r : ℝ) (hW : 0 < W) (hH : 0 < H) :
+    2 * (innerCrop W H r).1 + (innerCrop W H r).2.2.1 = W ∧ 2 * (innerCrop W H r).2.1 + (innerCrop W H r).2.2.2 = H ∧
+    0 < (innerCrop W H r).2.2.1 ∧ 0 < (innerCrop W H r).2.2.2 := by
   unfold innerCrop
-  have : ¬ (W = 0 ∨ H = 0) := by omega
-  simp only [this, ↓reduceIte]
+  have : (W = 0 || H = 0) = false := by simp; omega
+  simp only [this, Bool.false_eq_true, ↓reduceIte]
   split_ifs
-  · simp
-  · have : cropMargin W r ≤ (W - 1) / 2 := min_le_right _ _
-    show 2 * cropMargin W r + (W - 2 * cropMargin W r) = W
-    omega
-
-/-- The inner crop of a non-empty frame keeps at least one pixel each way. -/
-theorem innerCrop_pos (W H : Nat) (r : ℝ) (hW : 0 < W) (hH : 0 < H) :
-    0 < (innerCrop W H r).w ∧ 0 < (innerCrop W H r).h := by
-  unfold innerCrop
-  have : ¬ (W = 0 ∨ H = 0) := by omega
-  simp only [this, ↓reduceIte]
-  split_ifs
-  · exact ⟨hW, hH⟩
-  · have h1 : cropMargin W r ≤ (W - 1) / 2 := min_le_right _ _
-    have h2 : cropMargin H r ≤ (H - 1) / 2 := min_le_right _ _
-    show 0 < W - 2 * cropMargin W r ∧ 0 < H - 2 * cropMargin H r
+  · simp; omega
+  · simp only
+    have h1 : min (roundNat ((W : ℝ) * (1.0 - r) * 0.5)) ((W - 1) / 2) ≤ (W - 1) / 2 := min_le_right _ _
+    have h2 : min (roundNat ((H : ℝ) * (1.0 - r) * 0.5)) ((H - 1) / 2) ≤ (H - 1) / 2 := min_le_right _ _
     omega
 
 /-- The network's grid has at least one cell each way, and its input is a whole number of
@@ -681,69 +671,59 @@ theorem exposureForLightness_mem (prof : Profile ℝ) (p : Vec3 ℝ) (g b : ℝ)
 /-- **Inverted exactly when inadmissible.** Over the real numbers, with positive patch values,
 exposure and scene range, a bracket's usable range is inverted exactly when the scene's span
 exceeds the bracket's by more than the two tolerances together (2.7 stops). -/
-theorem usableInverted_iff_not_admissible (b : Bracket ℝ) (i : Nat) (gLo gHi : ℝ) (e : Enclosure ℝ)
-    (hmin : 0 < b.tgtMinG) (hmax : 0 < b.tgtMaxG) (hx : 0 < b.exposure) (hlo : 0 < gLo) (hhi : 0 < gHi)
-    (h : bracketEnclosure b i gLo gHi = some e) : e.usableInverted = !e.admissible := by
-  unfold bracketEnclosure at h
-  split_ifs at h with hp
-  simp only [Option.some.injEq] at h
-  subst h
-  simp only [usableRange, referenceExposure, usableHiEv, usableShEv, pow_real, log2_real]
-  have kt : 0 < 0.125 * (100.0 / 100.0) / b.exposure := by positivity
-  set k := 0.125 * (100.0 / 100.0) / b.exposure with hk
+theorem usableInverted_iff_not_admissible (gMin gMax x gLo gHi : ℝ)
+    (hmin : 0 < gMin) (hmax : 0 < gMax) (hx : 0 < x) (hlo : 0 < gLo) (hhi : 0 < gHi) :
+    (bracketEnclosure gMin gMax x gLo gHi).usableInverted = !(bracketEnclosure gMin gMax x gLo gHi).admissible := by
+  simp only [bracketEnclosure, usableHiEv, usableShEv, pow_real, log2_real]
+  have kt : 0 < referenceExposure / x := by
+    simp only [referenceExposure, captureExposure]; norm_num; positivity
+  set k := referenceExposure / x with hk
   have r1 : Real.logb 2 ((2.0 : ℝ) ^ (1.2 : ℝ)) = 1.2 := by
     rw [show (2.0 : ℝ) = 2 by norm_num, Real.logb_rpow (by norm_num) (by norm_num)]
   have r2 : Real.logb 2 ((2.0 : ℝ) ^ (-1.5 : ℝ)) = -1.5 := by
     rw [show (2.0 : ℝ) = 2 by norm_num, Real.logb_rpow (by norm_num) (by norm_num)]
-  have L2 : Real.logb 2 (b.tgtMaxG / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ)) =
-      Real.logb 2 b.tgtMaxG - Real.logb 2 gHi + Real.logb 2 k + 1.2 := by
+  have L2 : Real.logb 2 (gMax / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ)) =
+      Real.logb 2 gMax - Real.logb 2 gHi + Real.logb 2 k + 1.2 := by
     rw [Real.logb_mul (by positivity) (by positivity), Real.logb_mul (by positivity) (by positivity),
-      Real.logb_div (x := b.tgtMaxG) (y := gHi) (by positivity) (by positivity), r1]
-  have L1 : Real.logb 2 (b.tgtMinG / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ)) =
-      Real.logb 2 b.tgtMinG - Real.logb 2 gLo + Real.logb 2 k - 1.5 := by
+      Real.logb_div (x := gMax) (y := gHi) (by positivity) (by positivity), r1]
+  have L1 : Real.logb 2 (gMin / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ)) =
+      Real.logb 2 gMin - Real.logb 2 gLo + Real.logb 2 k - 1.5 := by
     rw [Real.logb_mul (by positivity) (by positivity), Real.logb_mul (by positivity) (by positivity),
-      Real.logb_div (x := b.tgtMinG) (y := gLo) (by positivity) (by positivity), r2]
+      Real.logb_div (x := gMin) (y := gLo) (by positivity) (by positivity), r2]
     ring
-  have lhs : b.tgtMaxG / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ) < b.tgtMinG / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ) ↔
-      Real.logb 2 b.tgtMaxG - Real.logb 2 gHi + Real.logb 2 k + 1.2 <
-        Real.logb 2 b.tgtMinG - Real.logb 2 gLo + Real.logb 2 k - 1.5 := by
+  have lhs : gMax / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ) < gMin / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ) ↔
+      Real.logb 2 gMax - Real.logb 2 gHi + Real.logb 2 k + 1.2 <
+        Real.logb 2 gMin - Real.logb 2 gLo + Real.logb 2 k - 1.5 := by
     rw [← L1, ← L2, Real.logb_lt_logb_iff (b := 2) (by norm_num) (by positivity) (by positivity)]
   have l1 : Real.logb 2 (gHi / gLo) = Real.logb 2 gHi - Real.logb 2 gLo :=
     Real.logb_div (by positivity) (by positivity)
-  have l2 : Real.logb 2 (b.tgtMaxG / b.tgtMinG) = Real.logb 2 b.tgtMaxG - Real.logb 2 b.tgtMinG :=
+  have l2 : Real.logb 2 (gMax / gMin) = Real.logb 2 gMax - Real.logb 2 gMin :=
     Real.logb_div (by positivity) (by positivity)
   rw [l1, l2]
-  by_cases hc : b.tgtMaxG / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ) < b.tgtMinG / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ)
+  by_cases hc : gMax / gHi * k * (2.0 : ℝ) ^ (1.2 : ℝ) < gMin / gLo * k * (2.0 : ℝ) ^ (-1.5 : ℝ)
   · have h' := lhs.1 hc
-    have hn : ¬ (Real.logb 2 gHi - Real.logb 2 gLo ≤ Real.logb 2 b.tgtMaxG - Real.logb 2 b.tgtMinG + 1.5 + 1.2) := by
+    have hn : ¬ (Real.logb 2 gHi - Real.logb 2 gLo ≤ Real.logb 2 gMax - Real.logb 2 gMin + 1.5 + 1.2) := by
       intro hh; linarith
     simp only [hn, decide_false, Bool.not_false]
     exact decide_eq_true hc
-  · have hn : Real.logb 2 gHi - Real.logb 2 gLo ≤ Real.logb 2 b.tgtMaxG - Real.logb 2 b.tgtMinG + 1.5 + 1.2 := by
+  · have hn : Real.logb 2 gHi - Real.logb 2 gLo ≤ Real.logb 2 gMax - Real.logb 2 gMin + 1.5 + 1.2 := by
       by_contra hh; push Not at hh; exact hc (lhs.2 (by linarith))
     simp only [hn, decide_true, Bool.not_true]
     exact decide_eq_false hc
 
-
 /-- **The scene's exposure only scales the calibrated range.** Scaling the scene's green range by
-`k > 0` divides `e_min`, `e_max` (and so the window) by `k` and changes neither the flags nor the
-fill ratio. This is why the white-light search may scale `g_lo`, `g_hi` by `e_norm` instead of
-dividing the matrix by it. -/
-theorem bracketEnclosure_scale (b : Bracket ℝ) (i : Nat) (gLo gHi k : ℝ) (e e' : Enclosure ℝ)
-    (hk : 0 < k) (hlo : 0 < gLo) (hhi : 0 < gHi)
-    (h : bracketEnclosure b i gLo gHi = some e) (h' : bracketEnclosure b i (k * gLo) (k * gHi) = some e') :
+`k > 0` divides `e_min`, `e_max` by `k` and changes neither the flags nor the fill ratio. This is
+why the white-light search may scale `g_lo`, `g_hi` by `e_norm` instead of dividing the matrix by
+it. -/
+theorem bracketEnclosure_scale (gMin gMax x gLo gHi k : ℝ) (hk : 0 < k) (hlo : 0 < gLo) (hhi : 0 < gHi) :
+    let e := bracketEnclosure gMin gMax x gLo gHi
+    let e' := bracketEnclosure gMin gMax x (k * gLo) (k * gHi)
     e'.eMin = e.eMin / k ∧ e'.eMax = e.eMax / k ∧ e'.feasible = e.feasible ∧ e'.admissible = e.admissible ∧
     e'.usableInverted = e.usableInverted ∧ e'.fillRatio = e.fillRatio := by
-  unfold bracketEnclosure at h h'
-  split_ifs at h h' with hp
-  simp only [Option.some.injEq] at h h'
-  subst h h'
-  simp only [usableRange]
-  have m1 : b.tgtMinG / (k * gLo) * (referenceExposure / b.exposure) =
-      b.tgtMinG / gLo * (referenceExposure / b.exposure) / k := by
+  simp only [bracketEnclosure]
+  have m1 : gMin / (k * gLo) * (referenceExposure / x) = gMin / gLo * (referenceExposure / x) / k := by
     field_simp
-  have m2 : b.tgtMaxG / (k * gHi) * (referenceExposure / b.exposure) =
-      b.tgtMaxG / gHi * (referenceExposure / b.exposure) / k := by
+  have m2 : gMax / (k * gHi) * (referenceExposure / x) = gMax / gHi * (referenceExposure / x) / k := by
     field_simp
   have r : k * gHi / (k * gLo) = gHi / gLo := mul_div_mul_left _ _ hk.ne'
   rw [m1, m2, r]
@@ -752,8 +732,8 @@ theorem bracketEnclosure_scale (b : Bracket ℝ) (i : Nat) (gLo gHi k : ℝ) (e 
     exact propext (div_le_div_iff_of_pos_right hk)
   · congr 1
     apply propext
-    generalize b.tgtMaxG / gHi * (referenceExposure / b.exposure) = A
-    generalize b.tgtMinG / gLo * (referenceExposure / b.exposure) = B
+    generalize gMax / gHi * (referenceExposure / x) = A
+    generalize gMin / gLo * (referenceExposure / x) = B
     rw [div_mul_eq_mul_div, div_mul_eq_mul_div]
     exact div_lt_div_iff_of_pos_right hk
 

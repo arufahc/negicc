@@ -167,6 +167,17 @@ def pixels (a : Array Nat) : Array (Vec3 Nat) :=
 def labs (a : Array Float) : Array (Lab Float) :=
   (Array.range (a.size / 3)).map fun i => ⟨a[3 * i]!, a[3 * i + 1]!, a[3 * i + 2]!⟩
 
+/-- The inner crop as a record. -/
+structure Crop where
+  x0 : Nat
+  y0 : Nat
+  w : Nat
+  h : Nat
+
+def cropOf (W H : Nat) (r : Float) : Crop :=
+  let (x0, y0, w, h) := innerCrop W H r
+  ⟨x0, y0, w, h⟩
+
 def readJson (path : System.FilePath) : IO Json := do
   let text ← IO.FS.readFile path
   match Json.parse text with
@@ -242,9 +253,9 @@ def readBundle (root : System.FilePath) (j : Json) : IO BundleIn := do
 
 def checkGeometry (j : Json) : CheckM Unit := do
   for c in ← arrAt j "inner_crop" do
-    let r := innerCrop (← natAt c "W") (← natAt c "H") (← numAt c "ratio")
+    let (x0, y0, w, h) := innerCrop (← natAt c "W") (← natAt c "H") (← numAt c "ratio")
     let o ← natsAt c "out"
-    same "geometry: innerCrop" #[r.x0, r.y0, r.w, r.h] o
+    same "geometry: innerCrop" #[x0, y0, w, h] o
   for c in ← arrAt j "aspect" do
     let s := aspectShape (α := Float) (← natAt c "w") (← natAt c "h") (← natAt c "max") (← natAt c "patch")
     same "geometry: aspectShape" #[s.targetW, s.targetH, s.gridW, s.gridH] (← natsAt c "out")
@@ -280,7 +291,7 @@ def checkStats (j : Json) : CheckM Unit := do
   for c in ← arrAt j "frame_stats" do
     let (w, h) := (← natAt c "w", ← natAt c "h")
     let px := pixels (← natsAt c "px")
-    let cr := innerCrop w h (← numAt c "crop_ratio")
+    let cr := cropOf w h (← numAt c "crop_ratio")
     let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x =>
       px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
     let st := frameStats (α := Float) crop cr.w cr.h (← natAt c "max") (← natAt c "patch")
@@ -299,7 +310,7 @@ def checkStats (j : Json) : CheckM Unit := do
   for c in ← arrAt j "percentile" do
     let vals ← natsAt c "values"
     let hist := vals.foldl (fun h v => h.modify v (· + 1)) (Array.replicate 65536 0)
-    nearRel "stats: u16Percentile" tolRel (u16Percentile hist vals.size (← numAt c "q")) (← numAt c "out")
+    nearRel "stats: u16Percentile" tolRel (u16PercentileLinear hist vals.size (← numAt c "q")) (← numAt c "out")
   for c in ← arrAt j "trained_cells" do
     let pv := pixels (← natsAt c "preview")
     let (w, h, gw, gh, p) := (← natAt c "w", ← natAt c "h", ← natAt c "gw", ← natAt c "gh", ← natAt c "patch")
@@ -358,7 +369,7 @@ def checkOptimiser (b : BundleIn) (j : Json) : CheckM Unit := do
 def checkBrackets (b : BundleIn) (j : Json) : CheckM Unit := do
   for c in ← arrAt j "enclosure" do
     let i ← natAt c "idx"
-    match bracketEnclosure b.brackets[i]!.data i (← numAt c "g_lo") (← numAt c "g_hi") with
+    match bracketRange b.brackets[i]!.data i (← numAt c "g_lo") (← numAt c "g_hi") with
     | none => same "brackets: bracketEnclosure (exists)" false true
     | some e =>
       same "brackets: bracketEnclosure (flags)" #[e.feasible, e.admissible, e.usableInverted]
@@ -411,7 +422,7 @@ def checkMetering (b : BundleIn) (j : Json) : CheckM Unit := do
 def checkClip (b : BundleIn) (j : Json) : CheckM Unit := do
   let (w, h) := (← natAt j "w", ← natAt j "h")
   let px := pixels (← natsAt j "px")
-  let cr := innerCrop w h (← numAt j "crop_ratio")
+  let cr := cropOf w h (← numAt j "crop_ratio")
   let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
   let merged := mat3 (← numsAt j "merged")
   let prof := b.brackets[← natAt j "target_idx"]!.profile
@@ -424,7 +435,8 @@ def checkClip (b : BundleIn) (j : Json) : CheckM Unit := do
   for c in ← arrAt j "cases" do
     let cand := vec3 (← numsAt c "cand")
     let m := candidateMatrix merged cand.x cand.y cand.z
-    let cfg : PipelineConfig Float := ⟨prof, autoKnee, setShoulder (← numAt c "shoulder"), none⟩
+    let cfg : PipelineConfig Float :=
+      { profile := prof, knee := autoKnee, shoulder := setShoulder (← numAt c "shoulder"), tone := none }
     let ceil := vec3 (← numsAt c "ceil")
     let thr := ceil.map ceilLin
     let s := clipStats cfg m crop thr
@@ -505,7 +517,7 @@ def checkSearch (bundles : Array BundleIn) (c : Json) : CheckM Unit := do
   let some b := bundles[← natAt c "bundle"]? | fail "no such bundle"
   let (w, h) := (← natAt c "w", ← natAt c "h")
   let px := pixels (← natsAt c "px")
-  let cr := innerCrop w h (← numAt c "crop_ratio")
+  let cr := cropOf w h (← numAt c "crop_ratio")
   let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
   let scale := frameScale b.scale (← numAt c "shutter") (← numAt c "iso") none false
   let pinsJ ← arrAt c "pins"
@@ -593,10 +605,10 @@ def checkGiven (bundles : Array BundleIn) (j : Json) : CheckM Unit := do
     let b := bundles[← natAt f "bundle"]!
     let (w, h) := (← natAt f "w", ← natAt f "h")
     let px := pixels (← natsAt f "px")
-    let cr := innerCrop w h (← numAt f "crop_ratio")
+    let cr := cropOf w h (← numAt f "crop_ratio")
     let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
     let scale := frameScale b.scale (← numAt f "shutter") (← numAt f "iso") none false
-    let ex := meterBracketExposures b.brackets b.hasCrosstalk scale crop
+    let ex := meterBracketExposures b.brackets b.hasCrosstalk scale crop cr.w cr.h
     for (e, we) in ex.toList.zip (← arrAt f "exposures").toList do
       match e with
       | none => same "given: meterBracketExposures (valid)" false (← boolAt we "valid")

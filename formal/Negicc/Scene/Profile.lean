@@ -24,7 +24,12 @@ them is, and is defined here as `applyProfile` (`apply_profile` in `color_pipeli
 
 The colour table is what makes the conversion non-linear in colour: it is fitted to the chart's
 patches. Its interpolation is exact at the grid's nodes and, inside a cell, a weighted mean of
-four of the cell's corners with weights that add up to one.
+four of the cell's corners with non-negative weights that add up to one, so it never leaves the
+range of its nodes (`clutEval_mem`).
+
+A profile without a colour table (an empty `clut` or a zero grid size, the C++'s null pointer or
+zero `clut_dim`) skips step 3: the output curves then read the input curves' values, and the matrix
+result is not used, as in `apply_profile`. The bundles' profiles all have a table.
 -/
 
 namespace Negicc
@@ -69,7 +74,18 @@ def tetraBlend (v0 va vp vq : Vec3 α) (w0 w1 w2 w3 : α) : Vec3 α :=
    v0.y * w0 + va.y * w1 + vp.y * w2 + vq.y * w3,
    v0.z * w0 + va.z * w1 + vp.z * w2 + vq.z * w3⟩
 
+/-- The profile has a colour table to interpolate: a non-empty table and a grid of at least one
+node along each axis (`apply_profile`'s test before `interpolate_clut`). -/
+def Profile.hasClut (p : Profile α) : Bool :=
+  0 < p.dim.x && 0 < p.dim.y && 0 < p.dim.z && 0 < p.clut.size
+
 /-- Tetrahedral interpolation of the colour table at `t` in `[0, 1]³` (`interpolate_clut`).
+
+Precondition: `t` in `[0, 1]³` and every grid size at least 1, which `applyProfile` guarantees (it
+clamps the coordinates and tests `hasClut`). On that domain the definition is the C++'s. Outside
+it the two differ: here the lower corner's index is held at `0`, while `interpolate_clut` computes
+the upper corner's index before it clamps the lower one, so a coordinate at or below
+`-1 / (dim - 1)` makes it read before the table.
 
 Each coordinate is scaled to the grid; `(i, j, k)` is the cell's lower corner and `(dr, dg, db)`
 the position inside the cell. The cell is cut into six tetrahedra by the order of `dr`, `dg`,
@@ -111,7 +127,7 @@ def clutEval (p : Profile α) (t : Vec3 α) : Vec3 α :=
 def applyProfile (p : Profile α) (v : Vec3 α) : Vec3 α :=
   let v1 := Vec3.zipWith tableEval p.inCurves v
   let t := (p.matrix.mulVec v1 + p.offset).map clamp01
-  let v2 := clutEval p t
+  let v2 := if p.hasClut then clutEval p t else v1
   (Vec3.zipWith tableEval p.outCurves v2).map (· * pcsScale)
 
 end Negicc

@@ -15,7 +15,7 @@ public import Negicc.Auto.Metering
 function (`predict`, a preview to a field), so that everything but the network's weights is
 stated. The steps:
 
-1. **Brackets and their ranges** (`filterAdmissible`, `bracketEnclosure`); with a pinned bracket,
+1. **Brackets and their ranges** (`filterAdmissible`, `bracketRange`); with a pinned bracket,
    that bracket alone.
 2. **Metering and the lightness wish**: each admissible bracket (every one when none is) metered
    (`referenceGrey`, `exposureForLightness`); the bootstrap field is the mean of the fields
@@ -127,7 +127,7 @@ structure SearchInput (α : Type) where
 
 /-- A screened bracket (`ScreeningResult` with its enclosure). -/
 structure Screened (α : Type) where
-  enc : Enclosure α
+  enc : BracketRange α
   params : Params α
   loss : α
   lo : α
@@ -206,8 +206,8 @@ def bracket (i : Nat) : SearchBracket α :=
     ⟨⟨#[], #[], #[]⟩, Mat3.identity, Vec3.fill 0.0, ⟨0, 0, 0⟩, #[], ⟨#[], #[], #[]⟩⟩⟩
 
 /-- The enclosure of a bracket on this frame. -/
-def enclosureOf (i : Nat) : Option (Enclosure α) :=
-  bracketEnclosure (inp.bracket i).data i inp.gRef.1 inp.gRef.2
+def enclosureOf (i : Nat) : Option (BracketRange α) :=
+  bracketRange (inp.bracket i).data i inp.gRef.1 inp.gRef.2
 
 /-- What bracket `i` renders a candidate with at roll-off `xHi`. -/
 def setup (i : Nat) (xHi : α) : RenderSetup α :=
@@ -305,20 +305,20 @@ where
 
 /-- The trust region of a screened bracket's loop: `trustBounds` around its screened `E`. -/
 def trust (s : Screened α) : EBounds α :=
-  let t := trustBounds s.lo s.hi s.params.gains.e (pullCentre s.enc)
+  let t := trustBounds s.lo s.hi s.params.gains.e s.enc.centre
   ⟨t.1, t.2.1, t.2.2⟩
 
 /-- The screening (step 3): each metered bracket (each of the pool from its `e_centre` when none
 metered) optimised against the field from no start within its window, aimed at the field minus
 its correction; ranked by loss, a stable sort. -/
-def screenAll (pool : List (Enclosure α)) (ds : List (Metered α)) (f : IntentField α) (pullback : Bool) :
+def screenAll (pool : List (BracketRange α)) (ds : List (Metered α)) (f : IntentField α) (pullback : Bool) :
     SM α (List (Screened α)) := do
-  let items : List (Enclosure α × α × α × α) :=
+  let items : List (BracketRange α × α × α × α) :=
     if ds.isEmpty then pool.map fun c => (c, c.searchLo, c.searchHi, c.eCenter)
     else ds.map fun d => (d.enc, d.lo, d.hi, d.eMet)
   let corrs ← get
   let rows := items.map fun (c, lo, hi, em) =>
-    let (p, l) := inp.search (corrs.getD c.idx none) c.idx f none ⟨lo, hi, pullCentre c⟩ pullback
+    let (p, l) := inp.search (corrs.getD c.idx none) c.idx f none ⟨lo, hi, c.centre⟩ pullback
     (⟨c, p, l, lo, hi, em⟩ : Screened α)
   pure (rows.mergeSort fun a b => decide (a.loss ≤ b.loss))
 

@@ -118,4 +118,10 @@ theorem clamp01_of_mem {x : ℝ} (h0 : 0 ≤ x) (h1 : x ≤ 1) : clamp01 x = x :
 
 end Scalar
 
+/-- CIELAB's slope `labKappa` over `ℝ`, as an ordinary fraction. -/
+theorem labKappa_real : (labKappa : ℝ) = 24389 / 27 := by simp only [labKappa]; norm_num
+
+/-- CIELAB's break `labEpsilon` over `ℝ`, as an ordinary fraction. -/
+theorem labEpsilon_real : (labEpsilon : ℝ) = 216 / 24389 := by simp only [labEpsilon]; norm_num
+
 end Negicc

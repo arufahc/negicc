@@ -11,20 +11,10 @@ public import Negicc.Auto.Cells
 /-!
 # The brackets and their exposure ranges
 
-**A bracket's calibrated range** (`bracket_enclosure` in `multi_target_optimizer.cc`, DESIGN.md
-3.3). With `g_min`, `g_max` the smallest and largest green value of the bracket's patches,
-`g_lo`, `g_hi` the scene's range and `ρ_b` the reference exposure (1/8 s, ISO 100) over the
-bracket's capture exposure:
-
-```
-e_min = g_min / g_lo · ρ_b      e_max = g_max / g_hi · ρ_b      e_centre = sqrt(e_min e_max)
-usable range: e_min / 2^1.5 … e_max · 2^1.2
-```
-
-The search window is the usable range, ordered. The bracket is *feasible* when `e_min ≤ e_max`,
-*admissible* when the scene's span `log2(g_hi / g_lo)` is at most the bracket's
-`log2(g_max / g_min)` plus 2.7 stops. Over the real numbers a bracket is inadmissible exactly when
-its usable range is inverted (`usableInverted_iff_not_admissible` in `Negicc.Auto.Props`).
+**A bracket's calibrated range** is `bracketEnclosure` of `Negicc.Scene.Bracket` (DESIGN.md 3.3);
+`BracketRange` adds the bracket's index. The search window is the usable range, ordered. Over the
+real numbers a bracket is inadmissible exactly when its usable range is inverted
+(`usableInverted_iff_not_admissible` in `Negicc.Auto.Props`).
 
 **Which brackets are searched** (`filter_admissible_targets`): in a set of five or more, those
 whose grey scale spans at least 0.75 of the widest one's, at least three.
@@ -55,56 +45,42 @@ structure Bracket (α : Type) where
   exposure : α
   tonalCapacity : α
 
-/-- The reference exposure of the search: 1/8 s at ISO 100. -/
-def referenceExposure : α := 0.125 * (100.0 / 100.0)
-
-/-- How far a scene may exceed a bracket's calibrated range: 1.5 stops of highlight. -/
-def usableHiEv : α := 1.5
-
-/-- How far a scene may exceed a bracket's calibrated range: 1.2 stops of shadow. -/
-def usableShEv : α := 1.2
-
-/-- A bracket's exposure range on a frame (`Enclosure`). -/
-structure Enclosure (α : Type) where
+/-- A bracket's range on a frame with the bracket's index: `Enclosure` of `Negicc.Scene.Bracket`
+(`bracket_enclosure`) for one bracket of the bundle. -/
+structure BracketRange (α : Type) where
   idx : Nat
-  feasible : Bool
-  admissible : Bool
-  eMin : α
-  eMax : α
-  searchLo : α
-  searchHi : α
-  eCenter : α
-  usableInverted : Bool
-  slackEv : α
-  fillRatio : α
+  range : Enclosure α
 
-/-- The ends of the usable range: `e_min / 2^1.5` and `e_max · 2^1.2`. -/
-def usableRange (eMin eMax : α) : α × α :=
-  (eMin * pow 2.0 (-usableHiEv), eMax * pow 2.0 usableShEv)
+namespace BracketRange
+variable (c : BracketRange α)
+/-- `e_min ≤ e_max`. -/
+def feasible : Bool := c.range.feasible
+/-- The scene's span fits the bracket's plus the two tolerances. -/
+def admissible : Bool := c.range.admissible
+/-- The calibrated range's lower end. -/
+def eMin : α := c.range.eMin
+/-- The calibrated range's upper end. -/
+def eMax : α := c.range.eMax
+/-- The search window's lower end. -/
+def searchLo : α := c.range.searchLo
+/-- The search window's upper end. -/
+def searchHi : α := c.range.searchHi
+/-- `sqrt(e_min e_max)`. -/
+def eCenter : α := c.range.eCentre
+/-- The usable range is inverted. -/
+def usableInverted : Bool := c.range.usableInverted
+/-- `log2(e_max / e_min)`. -/
+def slackEv : α := c.range.slackEv
+/-- The scene's contrast over the bracket's. -/
+def fillRatio : α := c.range.fillRatio
+/-- The centre of the exposure penalty (`pull_centre`). -/
+def centre : α := pullCentre c.range
+end BracketRange
 
-/-- A bracket's calibrated and usable range on a scene with green range `[g_lo, g_hi]`
-(`bracket_enclosure`); none for a bracket without patch readings. -/
-def bracketEnclosure (b : Bracket α) (idx : Nat) (gLo gHi : α) : Option (Enclosure α) :=
-  if !b.hasPatches then none
-  else
-    let kt := referenceExposure / b.exposure
-    let eMin := b.tgtMinG / gLo * kt
-    let eMax := b.tgtMaxG / gHi * kt
-    let u := usableRange eMin eMax
-    let capacity := log2 (b.tgtMaxG / b.tgtMinG) + usableHiEv + usableShEv
-    some { idx, eMin, eMax
-           eCenter := sqrt (eMin * eMax)
-           slackEv := log2 (eMax / eMin)
-           feasible := decide (eMin ≤ eMax)
-           admissible := decide (log2 (gHi / gLo) ≤ capacity)
-           usableInverted := decide (u.2 < u.1)
-           searchLo := min u.1 u.2
-           searchHi := max u.1 u.2
-           fillRatio := gHi / gLo / (b.tgtMaxG / b.tgtMinG) }
-
-/-- The centre the optimiser's exposure penalty pulls `E` toward: `e_centre`, or `0` (no pull)
-when the usable range is inverted (`pull_centre`). -/
-def pullCentre (c : Enclosure α) : α := if c.usableInverted then 0.0 else c.eCenter
+/-- Bracket `idx`'s range on a scene with green range `[g_lo, g_hi]` (`bracket_enclosure`); none
+for a bracket without patch readings. -/
+def bracketRange (b : Bracket α) (idx : Nat) (gLo gHi : α) : Option (BracketRange α) :=
+  if !b.hasPatches then none else some ⟨idx, bracketEnclosure b.tgtMinG b.tgtMaxG b.exposure gLo gHi⟩
 
 /-- The brackets that are searched, by index (`filter_admissible_targets`): all of a set of fewer
 than five; otherwise those whose tonal capacity is at least 0.75 of the largest, and when fewer
@@ -122,11 +98,11 @@ def filterAdmissible (caps : List α) : List Nat :=
 
 /-- The best-fit score of a bracket: `|fill - 0.85|` plus 0.5 per stop by which the scene
 overflows an infeasible bracket (`rank` in `search_conversion_params`; `SLACK_PENALTY_SCALE`). -/
-def fitRank (c : Enclosure α) : α := fabs (c.fillRatio - 0.85) + 0.5 * max 0.0 (-c.slackEv)
+def fitRank (c : BracketRange α) : α := fabs (c.fillRatio - 0.85) + 0.5 * max 0.0 (-c.slackEv)
 
 /-- `a` comes before `b` in the best-fit order: an admissible bracket before an inadmissible one,
 then the lower `fitRank`. -/
-def fitBefore (a b : Enclosure α) : Bool :=
+def fitBefore (a b : BracketRange α) : Bool :=
   if a.admissible != b.admissible then a.admissible else decide (fitRank a < fitRank b)
 
 /-- The first smallest element of a non-empty list under a strict order `lt`, as
@@ -137,12 +113,12 @@ def minFirst {β : Type} (lt : β → β → Bool) : List β → Option β
   | x :: xs => some (xs.foldl (fun best y => if lt y best then y else best) x)
 
 /-- The bracket whose calibrated range the scene fits best (`best_fit`). -/
-def bestFit (cs : List (Enclosure α)) : Option (Enclosure α) := minFirst fitBefore cs
+def bestFit (cs : List (BracketRange α)) : Option (BracketRange α) := minFirst fitBefore cs
 
 /-- A metered bracket: its exposure for `L*` 50, the window it is searched in and the depth of the
 metered exposure inside that window (`Depth`). -/
 structure Metered (α : Type) where
-  enc : Enclosure α
+  enc : BracketRange α
   eMet : α
   depth : α
   lo : α
@@ -151,7 +127,7 @@ structure Metered (α : Type) where
 /-- The depth of a metered exposure: its distance in stops from the nearer end of the window
 (ends held at least `1e-6`), less 0.5 per stop of overflow of an infeasible bracket
 (`metered`). -/
-def metered (c : Enclosure α) (eMet lo hi : α) : Metered α :=
+def metered (c : BracketRange α) (eMet lo hi : α) : Metered α :=
   let d := min (log2 (eMet / max 0.000001 lo)) (log2 (max 0.000001 hi / eMet)) - 0.5 * max 0.0 (-c.slackEv)
   ⟨c, eMet, d, lo, hi⟩
 
@@ -178,7 +154,7 @@ def enclosurePenalty (eMin eMax e : α) : α :=
 /-- The score that ranks the pullback's tournament: the residual plus the enclosure penalties at the
 run's exposure (`tourney_score`); the residual alone without an enclosure or for `e ≤ 0`. The
 overflow is read as `-slack_ev`, which over the real numbers is `log2(e_min / e_max)`. -/
-def tourneyScore (enc : Option (Enclosure α)) (resid e : α) : α :=
+def tourneyScore (enc : Option (BracketRange α)) (resid e : α) : α :=
   match enc with
   | some c =>
     if 0.0 < e then

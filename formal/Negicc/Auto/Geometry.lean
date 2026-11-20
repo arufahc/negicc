@@ -1,5 +1,5 @@
 /-
-The frame's inner crop and the network's input size.
+The network's input size.
 -/
 module
 
@@ -8,12 +8,10 @@ public import Negicc.Base.Defs
 @[expose] public section
 
 /-!
-# The inner crop and the network's grid
+# The network's grid
 
-The search reads a frame's centred inner crop (90 % of each side by default), so that the
-frame's border does not count (`compute_inner_crop` in `color_pipeline.h`).
-
-The network takes an image whose longer side is scaled to `max_size` (512) and whose two sides
+The search reads a frame's centred inner crop (`innerCrop` of `Negicc.Scene.Bracket`). The network
+takes an image whose longer side is scaled to `max_size` (512) and whose two sides
 are rounded to whole patches of `patch_size` (16) pixels; each patch is one cell of the intent
 grid (`compute_aspect_preserved_shape` in `color_pipeline.h`). A 3:2 crop gives 32 × 21 cells.
 -/
@@ -23,30 +21,6 @@ namespace Negicc
 open Scalar
 
 variable {α : Type} [Scalar α]
-
-/-- A rectangle of a frame: its top left corner and its size, in pixels (`InnerCrop`). -/
-structure InnerCrop where
-  x0 : Nat
-  y0 : Nat
-  w : Nat
-  h : Nat
-deriving Repr, BEq
-
-/-- The margin of one side of the inner crop: `round(n (1 - ratio) / 2)`, held to at most
-`(n - 1) / 2` so that at least one pixel remains. -/
-def cropMargin (n : Nat) (ratio : α) : Nat :=
-  min (roundNat ((n : α) * (1.0 - ratio) * 0.5)) ((n - 1) / 2)
-
-/-- The centred `ratio` share of a `W × H` frame (`compute_inner_crop`): the whole frame for a
-ratio of 1 or more, nothing for an empty frame. The margins are rounded halves upward, as C
-`roundf` does for the non-negative values a ratio in `[0, 1]` gives. -/
-def innerCrop (W H : Nat) (ratio : α) : InnerCrop :=
-  if W = 0 ∨ H = 0 then ⟨0, 0, 0, 0⟩
-  else if 1.0 ≤ ratio then ⟨0, 0, W, H⟩
-  else
-    let x0 := cropMargin W ratio
-    let y0 := cropMargin H ratio
-    ⟨x0, y0, W - 2 * x0, H - 2 * y0⟩
 
 /-- The network's input size for a `w × h` image: `(target_w, target_h, grid_w, grid_h)`
 (`AspectPreservedShape`). -/

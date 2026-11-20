@@ -20,10 +20,10 @@ The constants are the ones written in `color_pipeline.h`. Two remarks on them:
 * The C++ writes the encoding exponent as the single precision literal `0.41666667f`, the
   nearest single precision number to `1 / 2.4`. Here it is `1 / 2.4`, the value the sRGB
   standard defines.
-* The CIELAB constants are the rounded ones, `0.008856`, `7.787` and `903.3`, with the sRGB to XYZ
-  matrix rounded to six decimals, and not the exact fractions `216/24389`, `841/108` and
-  `24389/27`. The tone stage uses the exact fractions for its own lightness; that variant is
-  defined with the tone stage.
+* CIELAB's break and slope are CIE 15's exact fractions, `labEpsilon = 216/24389 = (6/29)^3` and
+  `labKappa = 24389/27 = (29/3)^3` (`kLabEpsilon`, `kLabKappa`), so the two branches of `labF` and of
+  `lstarOfY` meet at the break. The sRGB to XYZ matrix and the white are OpenCV's, rounded to six
+  decimals; the white `(0.950456, 1, 1.088754)` is the matrix's row sums.
 -/
 
 namespace Negicc
@@ -73,10 +73,22 @@ instance : Sub (Lab α) := ⟨sub⟩
 
 end Lab
 
-/-- CIELAB's compression of a relative tristimulus value: the cube root, with a line near zero
-(`lab_f`). -/
+/-- CIELAB's break `(6/29)^3 = 216/24389` (`kLabEpsilon`). -/
+def labEpsilon : α := 216.0 / 24389.0
+
+/-- CIELAB's slope `(29/3)^3 = 24389/27` (`kLabKappa`): `L* = labKappa Y` below the break. -/
+def labKappa : α := 24389.0 / 27.0
+
+/-- CIELAB's compression of a relative tristimulus value: the cube root, with a line near zero,
+`(labKappa t + 16) / 116` (`lab_f`). -/
 def labF (t : α) : α :=
-  if 0.008856 < t then cbrt t else 7.787 * t + 16.0 / 116.0
+  if labEpsilon < t then cbrt t else (labKappa * t + 16.0) / 116.0
+
+/-- The inverse of `labF`: the cube above the break's `f`, the line's inverse below it
+(`tone_lab_finv` in `tone_stage.cc`, and the Lab inverse of `pcs_lab_to_srgb_u8` in
+`multi_target_optimizer.cc`). -/
+def labFInv (f : α) : α :=
+  if labEpsilon < f * f * f then f * f * f else (116.0 * f - 16.0) / labKappa
 
 /-- The luminance `Y` of a linear sRGB colour: the middle row of the sRGB to XYZ matrix. White
 `(1, 1, 1)` has `Y = 1`. -/
@@ -92,11 +104,11 @@ def linearSrgbToXyzRel (c : Vec3 α) : Vec3 α :=
 
 /-- CIE lightness `L*` of a relative luminance `Y`. -/
 def lstarOfY (Y : α) : α :=
-  if 0.008856 < Y then 116.0 * cbrt Y - 16.0 else 903.3 * Y
+  if labEpsilon < Y then 116.0 * cbrt Y - 16.0 else labKappa * Y
 
 /-- CIELAB of XYZ relative to the white point. -/
 def xyzRelToLab (w : Vec3 α) : Lab α :=
-  ⟨if 0.008856 < w.y then 116.0 * labF w.y - 16.0 else 903.3 * w.y,
+  ⟨if labEpsilon < w.y then 116.0 * labF w.y - 16.0 else labKappa * w.y,
    500.0 * (labF w.x - labF w.y),
    200.0 * (labF w.y - labF w.z)⟩
 

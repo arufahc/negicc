@@ -4,6 +4,7 @@ Metering: the exposure at which a bracket renders the scene at L* 50.
 module
 
 public import Negicc.Auto.Loop
+public import Negicc.WhiteLight.Defs
 
 @[expose] public section
 
@@ -101,7 +102,8 @@ def lstsq3 (J : M9 α) (r : Vec3 α) (rcond : α) : Vec3 α :=
 
 /-- The configuration the grey point renders with: the bracket's profile, knee 0.95, no shoulder,
 no tone curve. -/
-def greyConfig (p : Profile α) : PipelineConfig α := ⟨p, autoKnee, Shoulder.off, none⟩
+def greyConfig (p : Profile α) : PipelineConfig α :=
+  { profile := p, knee := autoKnee, shoulder := Shoulder.off, tone := none }
 
 /-- A camera-linear input as the grey point feeds it: divided by the batch's scale, held to
 `[0, 1]`, rounded to 16 bits (`std::lround`). -/
@@ -198,10 +200,6 @@ def exposureForLightness (prof : Profile α) (p : Vec3 α) (g b : α) : α × Bo
 def sceneVector (inputMatrix : Mat3 α) (logAvg : Vec3 α) : Vec3 α := inputMatrix.mulVec logAvg
 
 /-! ## The single-bracket solver's anchor -/
-
-/-- The value at index `n / 2` of the sorted values, the upper median (`std::nth_element` at
-`n / 2`). -/
-def upperMedian (xs : List α) : α := (xs.mergeSort fun a b => decide (a ≤ b)).getD (xs.length / 2) 0.0
 
 /-- The single-bracket solver's anchor (`solve_dinov3_intent`, step 1): 16 bisections of `log2 E`
 over `[-4, 4]` on the median `L*` of the grid's cells rendered (no shoulder) at `E` and the

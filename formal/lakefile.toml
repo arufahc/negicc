@@ -17,7 +17,7 @@ name = "Negicc"
 name = "check"
 root = "Check"
 
-# The numeric check of the Auto search against the C++ (see README.md).
+# The numeric check of the Auto search against the C++ (see FORMULAS_auto.md).
 [[lean_exe]]
 name = "checkAuto"
 root = "CheckAuto"

@@ -3,7 +3,7 @@ Resampling an image to the network's grid.
 -/
 module
 
-public import Negicc.Base.Defs
+public import Negicc.Scene.Defs
 
 @[expose] public section
 
@@ -111,9 +111,6 @@ def resampleImage (img : Array (Vec3 α)) (sw sh dw dh : Nat) : Array (Vec3 α) 
   let area := decide (1.0 ≤ (sw : α) / (dw : α)) && decide (1.0 ≤ (sh : α) / (dh : α))
   ((List.range dh).flatMap fun dy => (List.range dw).map fun dx =>
     if area then areaPixel img sw sh dw dh dx dy else bilinearPixel img sw sh dw dh dx dy).toArray
-
-/-- A value rounded to a 16-bit code: halves upward, held to `[0, 65535]`. -/
-def toU16 (v : α) : Nat := min (roundNat v) 65535
 
 /-- A 16-bit image resampled to `dw × dh` and rounded back to 16-bit codes
 (`resample_view_rgb16`; an image of the same size is copied). -/

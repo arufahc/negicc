@@ -53,9 +53,9 @@ def solveIntent (predict : Array (Vec3 Nat) → IntentField α) (prof : Profile 
   let bootG : α := if pins.g then 1.0 else 1.10
   let bootB : α := if pins.b then 1.0 else 1.15
   -- 1. The anchor: the median L* of the grid rendered without the roll-off at 50.
-  let anchorCfg : PipelineConfig α := ⟨prof, knee, Shoulder.off, none⟩
+  let anchorCfg : PipelineConfig α := { profile := prof, knee, shoulder := Shoulder.off, tone := none }
   let medianL := fun (e : α) =>
-    upperMedian (grid.toList.map fun px => (srgbToLab (convertPixel anchorCfg (candidateMatrix merged e bootG bootB)
+    upperMedian (grid.map fun px => (srgbToLab (convertPixel anchorCfg (candidateMatrix merged e bootG bootB)
       (loadU16 px))).L)
   let eC : α := if pins.e then 1.0 else (anchorExposure medianL).1
   let norm := Mat3.scaleRows (Vec3.fill eC) merged
@@ -104,9 +104,9 @@ leaves `g_lo`, `g_hi` and the log-average unchanged), converted to the units of 
 `e_norm` on a narrow-band bundle). A bracket without a positive exposure or without patches gets
 nothing. -/
 def meterBracketExposures (brackets : Array (SearchBracket α)) (hasCrosstalk : Bool) (scale : FrameScale α)
-    (crop : Array (Vec3 Nat)) : Array (Option (BracketExposure α)) :=
+    (crop : Array (Vec3 Nat)) (cw ch : Nat) : Array (Option (BracketExposure α)) :=
   let white := !hasCrosstalk
-  let r := sceneGreenRange (α := α) crop
+  let r := sceneGreenRange (α := α) (greenHistogram (α := α) crop cw ch 1.0).1 crop.size
   let gr := sceneRange r.1 r.2
   let gScale := if white then scale.eNorm else 1.0
   let matDiv := if white then 1.0 else scale.eNorm
@@ -114,7 +114,7 @@ def meterBracketExposures (brackets : Array (SearchBracket α)) (hasCrosstalk : 
   let toE := if white then 1.0 else 1.0 / scale.eNorm
   (brackets.mapIdx fun i b =>
     if !(decide ((0.0 : α) < b.data.exposure)) then none
-    else match bracketEnclosure b.data i (gr.1 * gScale) (gr.2 * gScale) with
+    else match bracketRange b.data i (gr.1 * gScale) (gr.2 * gScale) with
       | none => none
       | some e =>
         let eMin := e.eMin * toE
