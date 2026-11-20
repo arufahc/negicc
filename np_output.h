@@ -51,6 +51,7 @@ struct FileFingerprint {
 
 struct Sidecar {
   std::string output_path;               // the TIFF; the sidecar is <output_path>.json
+  std::string search_renderer = "cpu";   // where the search's passes ran; the auto block records it when not the CPU
   int argc = 0;
   char** argv = nullptr;
   const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
@@ -100,6 +101,7 @@ struct Sidecar {
   ShoulderInfo shoulder;
   const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
   std::string dino_model, dino_backend, dino_arg;
+  std::string dino_backend_arg;   // --dino_backend when given other than auto (where the search's passes run)
   bool dino_iters_given = false;
   int dino_iters = 4;
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran

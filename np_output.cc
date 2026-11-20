@@ -229,6 +229,7 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["backend"] = sc.dino_backend;
   j["inferences"] = a.inferences;
   j["time_ms"] = num(sc.t_auto_ms, "%.1f");
+  if (sc.search_renderer != "cpu") j["renderer"] = sc.search_renderer;
   return j;
 }
 
@@ -688,8 +689,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     cli.insert(cli.end(), {"--tone_stage", "off"});
   }
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
-  // if any, and re-running it re-runs the search (deterministic, with --dino and --dino_iters when given), then the
-  // same knobs on its result.
+  // if any, and re-running it re-runs the search (deterministic, with --dino, --dino_iters and --dino_backend when
+  // given: the last keeps the passes where they ran), then the same knobs on its result.
   if (!sc.print_id.empty() && sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {
@@ -699,6 +700,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     }
     if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
     if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    if (!sc.dino_backend_arg.empty()) cli.insert(cli.end(), {"--dino_backend", sc.dino_backend_arg});
     if (sc.has_knobs) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});
       if (sc.tint != 0.0f) cli.insert(cli.end(), {"--tint", num_str(sc.tint, "%.9g")});
@@ -721,9 +723,11 @@ bool write_json_sidecar(const Sidecar& sc) {
         cli.push_back(std::to_string(v));
     }
     if (sc.density_fit_off) cli.insert(cli.end(), {"--fit_curves", "off"});
-    // The search's model and iterations, as on a print: the recorded balance and each print's search depend on them.
+    // The search's model, iterations and backend, as on a print: the recorded balance and each print's search depend
+    // on them.
     if (!sc.dino_arg.empty()) cli.insert(cli.end(), {"--dino", sc.dino_arg});
     if (sc.dino_iters_given) cli.insert(cli.end(), {"--dino_iters", std::to_string(sc.dino_iters)});
+    if (!sc.dino_backend_arg.empty()) cli.insert(cli.end(), {"--dino_backend", sc.dino_backend_arg});
     for (const std::string& m : sc.density_prints) cli.insert(cli.end(), {"--print", m});   // once per material
     if (!sc.density_prints.empty()) {
       if (sc.brightness != 0.0f) cli.insert(cli.end(), {"--brightness", num_str(sc.brightness, "%.9g")});

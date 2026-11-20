@@ -84,6 +84,9 @@ struct CachedSidecar {
 
 // What the profile and the options decide before the scan is read.
 struct Setup {
+  // The renderer the search's passes run through: the GPU's, or --check_renderer's comparison with it (null: the CPU's,
+  // or --check_renderer's pass-through renderer without a device). Made only where a search runs.
+  std::unique_ptr<PreviewRenderer> renderer;
   // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
   // reused by the sidecar writer.
   std::vector<FileFingerprint> input_fingerprints;
@@ -347,6 +350,10 @@ struct Conversion {
 
 int prepare(const Options& o, Setup& s);
 int decode(const Options& o, Setup& s, Scan& scan);
+// After the last pass of the search (after decode, or where --probe_intent stops): logs the GPU's passes and frees its
+// frame copy, and fails when --check_renderer counts a pass outside the renderer or its comparison with the GPU is
+// outside the tolerance, before anything is written.
+int finish_search_passes(const Options& o, Setup& s);
 int begin_conversion(const Options& o, const Setup& s, Conversion& c);
 int render(const Options& o, const Setup& s, Scan& scan, Backend& backend);
 int solve(const Options& o, Setup& s, Scan& scan, Conversion& c);
