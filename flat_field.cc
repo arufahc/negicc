@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -76,8 +77,12 @@ FlatField::FlatField(std::vector<float> gain, int grid_h, int grid_w, int block,
         throw std::invalid_argument("flat field: grid must be at least 2x2, block and size positive");
     if (m_gain.size() != (size_t)m_gh * m_gw * 3)
         throw std::invalid_argument("flat field: gain size != grid_h*grid_w*3");
+    // A gain divides a sample: within [kFlatGainMin, kFlatGainMax] (six stops either way; measured flats lie within
+    // 0.38 and 1.02) the bilinear interpolation of flat_divide and apply_cfa, whose rounding error is at most about
+    // kFlatGainMax * 2^-24, cannot cancel a gain to 0, so every flattened sample is a finite number.
     for (float g : m_gain)
-        if (!(g > 0.0f) || !std::isfinite(g)) throw std::invalid_argument("flat field: gains must be finite and > 0");
+        if (!(g >= kFlatGainMin && g <= kFlatGainMax))
+            throw std::invalid_argument("flat field: gains must lie within 1/64 and 64 (finite and positive)");
 }
 
 size_t count_clipped(const uint16_t* rgb, size_t pixels, uint16_t clip_level) {
@@ -191,6 +196,8 @@ uint32_t rd_u32(const uint8_t* p) {
 // file header (4.3.12, 0x02014b50, 46 bytes) and the local file header (4.3.7, 0x04034b50, 30 bytes). Method 8 is raw
 // DEFLATE (RFC 1951), which zlib inflates with negative window bits.
 std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) throw std::runtime_error("flat field " + path + " is not a file");
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs) throw std::runtime_error("cannot open flat field file: " + path);
     const std::streamsize sz = ifs.tellg();
@@ -322,9 +329,12 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
     if ((ghdr.descr != "<f4" && ghdr.descr != "f4") || ghdr.shape.size() != 3 || ghdr.shape[2] != 3)
         throw std::runtime_error("gain.npy must be float32 [grid_h, grid_w, 3] in: " + path);
     const int gh = ghdr.shape[0], gw = ghdr.shape[1];
+    // The grid checked against the entry's bytes before anything is allocated for it.
+    const size_t payload = it_gain->second.size() > ghdr.data_offset ? it_gain->second.size() - ghdr.data_offset : 0;
+    if (gh < 2 || gw < 2 || (size_t)gh > payload / ((size_t)gw * 3 * sizeof(float)))
+        throw std::runtime_error("gain.npy shape [" + std::to_string(gh) + ", " + std::to_string(gw) +
+                                 ", 3] does not fit its payload in: " + path);
     const size_t n_floats = (size_t)gh * gw * 3;
-    if (ghdr.data_offset + n_floats * sizeof(float) > it_gain->second.size())
-        throw std::runtime_error("gain.npy payload truncated in: " + path);
     std::vector<float> gain(n_floats);
     std::memcpy(gain.data(), it_gain->second.data() + ghdr.data_offset, n_floats * sizeof(float));
 
@@ -333,10 +343,13 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
     const size_t ibytes = it_info->second.size() - ihdr.data_offset;
     std::string info_str;
     if (ihdr.descr.find('U') != std::string::npos) {
-        // A numpy unicode string: UTF-32 code points, written out as UTF-8 for the JSON parser.
+        // A numpy unicode string: little-endian UTF-32 code points, written out as UTF-8 for the JSON parser.
+        if (ihdr.descr[0] == '>') throw std::runtime_error("info.npy is big-endian UTF-32 in: " + path);
         for (size_t k = 0; k + 4 <= ibytes; k += 4) {
             const uint32_t cp = rd_u32(ip + k);
             if (cp == 0) break;
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+                throw std::runtime_error("info.npy holds a code point that is not a Unicode scalar value in: " + path);
             if (cp < 0x80) {
                 info_str.push_back((char)cp);
             } else if (cp < 0x800) {
@@ -354,7 +367,10 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
             }
         }
     } else {
-        info_str.assign(reinterpret_cast<const char*>(ip), ibytes);
+        // A numpy byte string: NUL-padded to its declared width.
+        size_t n = ibytes;
+        while (n > 0 && ip[n - 1] == 0) --n;
+        info_str.assign(reinterpret_cast<const char*>(ip), n);
     }
 
     const auto j = nlohmann::json::parse(info_str);

@@ -46,6 +46,10 @@ struct FlatSampleArgs {
     const float* ay_t = nullptr;
 };
 
+// The range of a flat field's gains (FlatField refuses others): within it flat_divide cannot cancel a gain to 0.
+constexpr float kFlatGainMin = 1.0f / 64.0f;
+constexpr float kFlatGainMax = 64.0f;
+
 // Divides pixel (fx, fy) of the decode by its gain, rounded once to the nearest integer (ties to even) and clamped to
 // 65535: bilinear in the grid, first along y (each grid column), then along x.
 NEGICC_FLAT_HD void flat_divide(const FlatSampleArgs& f, int fx, int fy, uint16_t px[3]) {
