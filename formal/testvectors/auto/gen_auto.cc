@@ -204,14 +204,14 @@ static json resample_vectors() {
 
 static json stats_vectors(const ProfileBundle& bundle) {
   json j;
-  const int sizes[][4] = {{120, 80, 64, 8}, {40, 30, 512, 16}, {75, 110, 96, 16}};
+  const int sizes[][4] = {{120, 80, 64, 8}, {40, 32, 512, 16}, {76, 112, 96, 16}};
   uint32_t seed = 101;
   for (const auto& s : sizes) {
     const std::vector<uint16_t> px = negative(s[0], s[1], bundle.film_base_avg, 0.2f, 1.7f, seed++);
     FrameStats st;
-    compute_frame_stats(negicc::RgbView::from_interleaved_rgb(px.data(), s[0], s[1], 3), 0.9f, s[2], s[3], st);
-    j["frame_stats"].push_back({{"w", s[0]}, {"h", s[1]}, {"crop_ratio", 0.9f}, {"max", s[2]}, {"patch", s[3]},
-                                {"px", px},
+    compute_frame_stats(negicc::RgbView::from_interleaved_rgb(px.data(), s[0], s[1], 3), ParamSearchOptions{}.crop_ratio,
+                        s[2], s[3], st);
+    j["frame_stats"].push_back({{"w", s[0]}, {"h", s[1]}, {"max", s[2]}, {"patch", s[3]}, {"px", px},
                                 {"g_lo", st.g_lo}, {"g_hi", st.g_hi},
                                 {"log_avg", {st.log_avg_rgb[0], st.log_avg_rgb[1], st.log_avg_rgb[2]}},
                                 {"grid_w", st.grid_w}, {"grid_h", st.grid_h}, {"grid", st.grid}});
@@ -445,12 +445,11 @@ static json clip_vectors(const ProfileBundle& bundle, int target_idx) {
   const int w = 60, h = 40;
   const std::vector<uint16_t> px = negative(w, h, bundle.film_base_avg, 0.05f, 2.2f, 31);
   const negicc::RgbView view = negicc::RgbView::from_interleaved_rgb(px.data(), w, h, 3);
-  const InnerCrop crop = compute_inner_crop(w, h, 0.9f);
+  const InnerCrop crop = compute_inner_crop(w, h, ParamSearchOptions{}.crop_ratio);
   float merged[9];
   reference_input_matrix(bundle, merged);
   j["w"] = w;
   j["h"] = h;
-  j["crop_ratio"] = 0.9f;
   j["px"] = px;
   j["merged"] = std::vector<float>(merged, merged + 9);
   j["target_idx"] = target_idx;
@@ -578,8 +577,7 @@ static json search_case(const ProfileBundle& bundle, const char* name, int w, in
   ParamSearchResult out;
   const bool ok = search_conversion_params(bundle, engine, negicc::RgbView::from_interleaved_rgb(px.data(), w, h, 3),
                                            shutter, iso, opts, out);
-  json j = {{"name", name}, {"w", w}, {"h", h}, {"crop_ratio", opts.crop_ratio}, {"px", px}, {"shutter", shutter},
-            {"iso", iso},
+  json j = {{"name", name}, {"w", w}, {"h", h}, {"px", px}, {"shutter", shutter}, {"iso", iso},
             {"pin_target", pin_target}, {"pins", {(pin_mask & PIN_E) != 0, (pin_mask & PIN_G) != 0,
                                                   (pin_mask & PIN_B) != 0}},
             {"pin_values", {pin_e, pin_g, pin_b}}, {"max_size", max_size}, {"patch", patch}, {"ok", ok}};
@@ -675,7 +673,7 @@ static json head_vectors() {
   return j;
 }
 
-// The single-profile solver with the stand-in network, the brackets' exposures and the roll-off at given values.
+// The single-profile solver with the stand-in network and the roll-off at given values.
 static json given_vectors(const ProfileBundle& tri, const ProfileBundle& white) {
   json j;
   const int w = 48, h = 32;
@@ -718,26 +716,17 @@ static json given_vectors(const ProfileBundle& tri, const ProfileBundle& white) 
                            {"absolute", {out.solved_absolute.e, out.solved_absolute.g, out.solved_absolute.b}},
                            {"e_center", out.e_center}, {"steps", (int)out.iterations.size()}});
   }
-  // The brackets' exposures and the roll-off, on a frame of each bundle.
+  // The roll-off at given values, on a frame of each bundle.
   for (int bi = 0; bi < 2; ++bi) {
     const ProfileBundle& b = bi == 0 ? tri : white;
     const int fw = 60, fh = 40;
     const float shutter = bi == 0 ? 0.1f : 0.0667f;
     const std::vector<uint16_t> f = negative(fw, fh, b.film_base_avg, 0.2f, 1.6f, 51 + bi);
     const negicc::RgbView view = negicc::RgbView::from_interleaved_rgb(f.data(), fw, fh, 3);
-    std::vector<BracketExposure> ex;
-    meter_bracket_exposures(b, view, shutter, 100.0, 0.9f, nullptr, ex);
-    json row = {{"bundle", bi}, {"w", fw}, {"h", fh}, {"crop_ratio", 0.9f}, {"px", f}, {"shutter", shutter},
-                {"iso", 100.0f}};
-    for (const auto& e : ex) {
-      row["exposures"].push_back({{"valid", e.valid}, {"feasible", e.feasible}, {"e_min", e.e_min},
-                                  {"e_max", e.e_max}, {"e_center", e.e_center}, {"search_lo", e.search_lo},
-                                  {"search_hi", e.search_hi}, {"has_metered", e.has_metered},
-                                  {"e_metered", e.e_metered}});
-    }
+    json row = {{"bundle", bi}, {"w", fw}, {"h", fh}, {"px", f}, {"shutter", shutter}, {"iso", 100.0f}};
     for (const auto& g : std::vector<std::array<float, 3>>{{1.0f, 1.1f, 1.15f}, {0.25f, 1.0f, 1.0f}, {3.0f, 0.9f, 1.2f}}) {
       float q = 0.0f;
-      const float x = measure_rolloff_x_hi(b, 3, view, shutter, 100.0, g[0], g[1], g[2], 0.9f, &q);
+      const float x = measure_rolloff_x_hi(b, 3, view, shutter, 100.0, g[0], g[1], g[2], ParamSearchOptions{}.crop_ratio, &q);
       row["rolloff"].push_back({{"target_idx", 3}, {"params", {g[0], g[1], g[2]}}, {"x_hi", x}});
     }
     j["frames"].push_back(row);

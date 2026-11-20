@@ -167,17 +167,6 @@ def pixels (a : Array Nat) : Array (Vec3 Nat) :=
 def labs (a : Array Float) : Array (Lab Float) :=
   (Array.range (a.size / 3)).map fun i => ⟨a[3 * i]!, a[3 * i + 1]!, a[3 * i + 2]!⟩
 
-/-- The inner crop as a record. -/
-structure Crop where
-  x0 : Nat
-  y0 : Nat
-  w : Nat
-  h : Nat
-
-def cropOf (W H : Nat) (r : Float) : Crop :=
-  let (x0, y0, w, h) := innerCrop W H r
-  ⟨x0, y0, w, h⟩
-
 def readJson (path : System.FilePath) : IO Json := do
   let text ← IO.FS.readFile path
   match Json.parse text with
@@ -291,10 +280,7 @@ def checkStats (j : Json) : CheckM Unit := do
   for c in ← arrAt j "frame_stats" do
     let (w, h) := (← natAt c "w", ← natAt c "h")
     let px := pixels (← natsAt c "px")
-    let cr := cropOf w h (← numAt c "crop_ratio")
-    let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x =>
-      px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
-    let st := frameStats (α := Float) crop cr.w cr.h (← natAt c "max") (← natAt c "patch")
+    let st := frameStats (α := Float) px w h searchCropRatio (← natAt c "max") (← natAt c "patch")
     nearRel "stats: g_lo, g_hi" tolRel st.gLo (← numAt c "g_lo")
     nearRel "stats: g_lo, g_hi" tolRel st.gHi (← numAt c "g_hi")
     let la ← numsAt c "log_avg"
@@ -422,8 +408,7 @@ def checkMetering (b : BundleIn) (j : Json) : CheckM Unit := do
 def checkClip (b : BundleIn) (j : Json) : CheckM Unit := do
   let (w, h) := (← natAt j "w", ← natAt j "h")
   let px := pixels (← natsAt j "px")
-  let cr := cropOf w h (← numAt j "crop_ratio")
-  let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
+  let crop := (cropPixels px w h (searchCropRatio : Float)).1
   let merged := mat3 (← numsAt j "merged")
   let prof := b.brackets[← natAt j "target_idx"]!.profile
   -- One pixel's share of the crop, in percent. A pixel whose pre-shoulder value lies within 1e-4 (relative) of a
@@ -517,8 +502,6 @@ def checkSearch (bundles : Array BundleIn) (c : Json) : CheckM Unit := do
   let some b := bundles[← natAt c "bundle"]? | fail "no such bundle"
   let (w, h) := (← natAt c "w", ← natAt c "h")
   let px := pixels (← natsAt c "px")
-  let cr := cropOf w h (← numAt c "crop_ratio")
-  let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
   let scale := frameScale b.scale (← numAt c "shutter") (← numAt c "iso") none false
   let pinsJ ← arrAt c "pins"
   let pins : Pins := ⟨← bool pinsJ[0]!, ← bool pinsJ[1]!, ← bool pinsJ[2]!⟩
@@ -526,11 +509,11 @@ def checkSearch (bundles : Array BundleIn) (c : Json) : CheckM Unit := do
   let pt ← intAt c "pin_target"
   let (maxSize, patch) := (← natAt c "max_size", ← natAt c "patch")
   let inp : SearchInput Float := {
-    brackets := b.brackets, hasCrosstalk := b.hasCrosstalk, scale, crop, cw := cr.w, ch := cr.h, maxSize, patch
+    brackets := b.brackets, hasCrosstalk := b.hasCrosstalk, scale, frame := px, W := w, H := h, maxSize, patch
     maxSteps := 8, pinTarget := if pt < 0 then none else some pt.toNat, pins
     pinE := if b.hasCrosstalk then pv.x * scale.eNorm else pv.x, pinG := pv.y, pinB := pv.z }
   let g := s!"search ({name})"
-  match inp.searchParams fun pvw => infer (standIn patch) pvw cr.w cr.h maxSize patch with
+  match inp.searchParams fun pvw => infer (standIn patch) pvw inp.cw inp.ch maxSize patch with
   | none => same s!"{g}: ran" false true
   | some r =>
     let scr ← arrAt c "screening"
@@ -562,7 +545,7 @@ def checkSearch (bundles : Array BundleIn) (c : Json) : CheckM Unit := do
     near s!"{g}: result (E, g, b)" tolSingle r.params.gains.b p[2]!
     near s!"{g}: result (x_hi)" tolRoot r.params.shoulder p[3]!
     nearRel s!"{g}: result (residual)" tolLoss r.residual (← numAt res "residual")
-    near s!"{g}: result (white clip)" (1.0 / crop.size.toFloat) r.clipFallbackWhiteClip (← numAt res "clip_fallback_white_clip")
+    near s!"{g}: result (white clip)" (1.0 / inp.crop.size.toFloat) r.clipFallbackWhiteClip (← numAt res "clip_fallback_white_clip")
     let er ← numsAt res "e_range"
     nearRel s!"{g}: result (calibrated range)" tolRel r.eRangeLo er[0]!
     nearRel s!"{g}: result (calibrated range)" tolRel r.eRangeHi er[1]!
@@ -645,23 +628,12 @@ def checkGiven (bundles : Array BundleIn) (j : Json) : CheckM Unit := do
     let b := bundles[← natAt f "bundle"]!
     let (w, h) := (← natAt f "w", ← natAt f "h")
     let px := pixels (← natsAt f "px")
-    let cr := cropOf w h (← numAt f "crop_ratio")
-    let crop := (List.range cr.h).flatMap (fun y => (List.range cr.w).map fun x => px[(cr.y0 + y) * w + cr.x0 + x]!) |>.toArray
     let scale := frameScale b.scale (← numAt f "shutter") (← numAt f "iso") none false
-    let ex := meterBracketExposures b.brackets b.hasCrosstalk scale crop cr.w cr.h
-    for (e, we) in ex.toList.zip (← arrAt f "exposures").toList do
-      match e with
-      | none => same "given: meterBracketExposures (valid)" false (← boolAt we "valid")
-      | some e =>
-        same "given: meterBracketExposures (flags)" s!"{e.valid} {e.feasible} {e.hasMetered}"
-          s!"{← boolAt we "valid"} {← boolAt we "feasible"} {← boolAt we "has_metered"}"
-        for (got, key) in [(e.eMin, "e_min"), (e.eMax, "e_max"), (e.eCenter, "e_center"), (e.searchLo, "search_lo"),
-                           (e.searchHi, "search_hi"), (e.eMetered, "e_metered")] do
-          nearRel "given: meterBracketExposures (values)" tolRel got (← numAt we key)
     for r in ← arrAt f "rolloff" do
       let p := vec3 (← numsAt r "params")
       near "given: measureRolloffXHi" tolRoot
-        (measureRolloffXHi b.brackets[← natAt r "target_idx"]!.profile scale crop ⟨p.x, p.y, p.z⟩) (← numAt r "x_hi")
+        (measureRolloffXHi b.brackets[← natAt r "target_idx"]!.profile scale px w h searchCropRatio ⟨p.x, p.y, p.z⟩)
+        (← numAt r "x_hi")
 
 def run (root : System.FilePath) : CheckM Unit := do
   let a ← readJson "testvectors/auto/auto.json"

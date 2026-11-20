@@ -22,8 +22,7 @@ public import Negicc.Auto.Props
 * `Negicc.Auto.Metering`: the grey point, the metered exposure, the single-bracket anchor.
 * `Negicc.Auto.Search`: the whole search and its decisions.
 * `Negicc.Auto.Knobs`: brightness, tint and warmth on a result.
-* `Negicc.Auto.Given`: the single-profile solver, the brackets' exposures for `-E`, the roll-off at
-  given parameters.
+* `Negicc.Auto.Given`: the single-profile solver and the roll-off at given parameters.
 * `Negicc.Auto.Defs`: the modules above together (no Mathlib).
 * `Negicc.Auto.Props`: proved properties over the real numbers.
 -/

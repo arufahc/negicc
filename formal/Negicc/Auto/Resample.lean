@@ -12,7 +12,7 @@ public import Negicc.Scene.Defs
 
 Three resamplings bring a frame or a preview to the network's size:
 
-* **Area average** (`resample_grid_rgb16`, `resample_view_rgb16` in `rgb_view.cc`, the first branch
+* **Area average** (`resample_view_rgb16` in `rgb_view.cc`, the first branch
   of `compute_frame_stats` and both passes of `trained_cells_lab`): output pixel `d` of a side
   covers the source interval `[d s, (d + 1) s]`, `s` the ratio of the source size to the output
   size, and is the mean of the source pixels weighted by how much of each the interval covers.

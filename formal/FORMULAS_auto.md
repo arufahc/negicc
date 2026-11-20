@@ -31,7 +31,7 @@ random.
 | `dinov3_auto_solver.cc`: `infer_checked`; `multi_target_optimizer.cc`: `SearchFrame::predict` | `fieldValid`, `SearchInput.predictChecked` | | search |
 | `dinov3_auto_solver.cc`: `trained_cells_lab` | `trainedCellsLab` | | stats |
 | `dinov3_auto_solver.cc`: `self_consistency_residual` | `z2`, `zsq`, `residual` | `z2_nonneg`, `z2_self`, `zsq_shift`, `zsq_nonneg`, `zsq_self` | stats |
-| `multi_target_optimizer.cc`: `compute_frame_stats` | `frameStats`, `statsGrid`, `logAverage`, `cropGreenRange` (with `greenHistogram`, `sceneGreenRange` of `Negicc.Scene.Bracket`), `sceneRange` | | stats |
+| `multi_target_optimizer.cc`: `compute_frame_stats` | `frameStats`, `cropPixels`, `statsGrid`, `logAverage` (the green points: `greenHistogram`, `sceneGreenRange` of `Negicc.Scene.Bracket`), `sceneRange` | | stats |
 | `multi_target_optimizer.cc`: `u16_percentile_linear` | `u16PercentileLinear` (of `Negicc.Scene.Bracket`) | | stats |
 | `dinov3_auto_solver.cc`: `intent_cells`, `candidate_config` | `intentCells`, `RenderSetup` | | cells |
 | `dinov3_auto_solver.cc`: `intent_loss` | `intentLoss`, `whiteClippedChannels`, `IntentLoss.mean` | | cells |
@@ -60,7 +60,6 @@ random.
 | `exposure_for_lightness` | `exposureForLightness`, `meterGo`, `sceneVector` | `meterGo_mem`, `exposureForLightness_mem` | metering |
 | `solve_grey_knobs`, `GreyPoint::gains`, `GreyPoint::grey`, `lstar_after_stops`, `knob_grey_miss_stops` | `solveGreyKnobs`, `greyGains`, `greyAt`, `largestReachable`, `lstarAfterStops`, `knobGreyMissStops` | | knobs |
 | `solve_dinov3_intent` | `solveIntent`, `anchorExposure`, `upperMedian` (of `Negicc.WhiteLight.Fit`), `solverConv` | `fixedPoint_steps` | solver |
-| `meter_bracket_exposures` | `meterBracketExposures` | | given |
 | `measure_rolloff_x_hi` | `measureRolloffXHi` | | given |
 
 ## Not formalized
@@ -77,18 +76,16 @@ random.
 - **`--probe_intent`** (a measurement aid that writes a JSON file and stops), the renderer interface
   (`PreviewRenderer`, `PassAudit`), timing and logging.
 - **The gains in the print's curves** (`SolverConfig::gain_curves`): the print's search (5.6).
-- **`resample_grid_rgb16`**: it has no caller; it is the area average of `resample_view_rgb16`.
-- **`compute_bundle_enclosures`** (`profile_bundle.cc`), the ranges kept for given values and for a
-  bracket chosen without the search, is `bundleEnclosure` of `Negicc.Scene.Bracket`.
 
 ## The check
 
 `lake exe checkAuto` (`CheckAuto.lean`) reads `testvectors/auto/auto.json` (the components) and
 `testvectors/auto/auto_search.json` (whole searches) and the bundles' ICC profiles under
 `../profiles/`. Its tolerances are stated at the top of `CheckAuto.lean`; the C++ is single
-precision and the specification double precision. Inputs given to the C++ as single precision
-constants are passed in their single precision values (the crop ratio `0.9f`), so that a margin
-like `110 · 0.05` falls on the same side of a half.
+precision and the specification double precision. The search reads the inner crop
+`searchCropRatio` (0.90) of `Negicc.Scene.Bracket`; the vectors' frame sizes keep its margins away
+from a half (`110 · 0.05`, say), where `1 − 0.9` in double precision, a little below 0.1, and in
+single precision, a little above, round to different pixels.
 
 The network is replaced, in both the C++ and the check, by a stand-in of stated formula
 (`StandInRunner` in `gen_auto.cc`, `standIn` in `CheckAuto.lean`): per cell, from the means `m` of
@@ -104,3 +101,5 @@ make -j lib USE_CUDA=0 ORT_DIR=<onnxruntime>
 ORT_DIR=<onnxruntime> formal/testvectors/auto/build.sh
 OMP_NUM_THREADS=16 bin_out/gen_auto profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors/auto
 ```
+
+The committed vectors were generated from `91b2fcb` of `master`.

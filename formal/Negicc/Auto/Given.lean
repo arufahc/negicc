@@ -1,6 +1,5 @@
 /-
-Given values: the single-profile solver, the brackets' exposures for -E, the roll-off at given
-parameters.
+Given values: the single-profile solver and the roll-off at given parameters.
 -/
 module
 
@@ -17,9 +16,6 @@ public import Negicc.Auto.Search
   in `[2^-1.5, 2^1.5]` around it; a bootstrap render, then the fixed-point loop of
   `Negicc.Auto.Loop` with the solver's stopping rule (`solverConv`). No lightness wish and no
   correction: the field predicted from each render is used as predicted.
-* **The brackets' exposures** (`meter_bracket_exposures`): each bracket's calibrated and usable
-  range and its metered exposure, in the units of `-E`, so that given values default to what the
-  search meters.
 * **The roll-off at given parameters** (`measure_rolloff_x_hi`): the frame's 99.5 % point of the
   largest channel of the pre-shoulder render at `(E, g, b)`, mapped to code 242.
 -/
@@ -86,51 +82,12 @@ def solveIntent (predict : Array (Vec3 Nat) → IntentField α) (prof : Profile 
     some ⟨some r.status, r.best.2.1, ⟨eC * b.e, b.g, b.b⟩, ⟨user.e * eC * b.e, user.g * b.g, user.b * b.b⟩,
       user.e * eC, r.steps⟩
 
-/-- One bracket's exposures on a frame (`BracketExposure`), in the units of `-E`. -/
-structure BracketExposure (α : Type) where
-  valid : Bool
-  feasible : Bool
-  eMin : α
-  eMax : α
-  eCenter : α
-  searchLo : α
-  searchHi : α
-  hasMetered : Bool
-  eMetered : α
-
-/-- Each bracket's exposures on a frame's inner crop (`meter_bracket_exposures`): the search's
-enclosure and metering (statistics at the network's default patch of 16 on a 224 grid, which
-leaves `g_lo`, `g_hi` and the log-average unchanged), converted to the units of `-E` (divided by
-`e_norm` on a narrow-band bundle). A bracket without a positive exposure or without patches gets
-nothing. -/
-def meterBracketExposures (brackets : Array (SearchBracket α)) (hasCrosstalk : Bool) (scale : FrameScale α)
-    (crop : Array (Vec3 Nat)) (cw ch : Nat) : Array (Option (BracketExposure α)) :=
-  let white := !hasCrosstalk
-  let r := sceneGreenRange (α := α) (greenHistogram (α := α) crop cw ch 1.0).1 crop.size
-  let gr := sceneRange r.1 r.2
-  let gScale := if white then scale.eNorm else 1.0
-  let matDiv := if white then 1.0 else scale.eNorm
-  let pScene := sceneVector (scale.frameMatrix.divScalar matDiv) (logAverage crop)
-  let toE := if white then 1.0 else 1.0 / scale.eNorm
-  (brackets.mapIdx fun i b =>
-    if !(decide ((0.0 : α) < b.data.exposure)) then none
-    else match bracketRange b.data i (gr.1 * gScale) (gr.2 * gScale) with
-      | none => none
-      | some e =>
-        let eMin := e.eMin * toE
-        let eMax := e.eMax * toE
-        let eCenter := e.eCenter * toE
-        let valid := decide (0.0 < eMin) && decide (0.0 < eMax) && decide (0.0 < eCenter)
-        let m := if (referenceGrey b.profile).1 then
-            let x := exposureForLightness b.profile pScene 1.10 1.15
-            if x.2 && decide (0.0 < x.1) then some x.1 else none
-          else none
-        some ⟨valid, e.feasible, eMin, eMax, eCenter, e.searchLo * toE, e.searchHi * toE, m.isSome,
-          match m with | some x => clamp x e.searchLo e.searchHi * toE | none => eCenter⟩)
-
-/-- The roll-off of a frame's inner crop at given parameters (`measure_rolloff_x_hi`): `E` in the
-units of `-E`, rendered through `(M_frame / e_norm)` at `E e_norm`. -/
-def measureRolloffXHi (prof : Profile α) (scale : FrameScale α) (crop : Array (Vec3 Nat)) (g : Gains α) : α :=
+/-- The roll-off of a `W × H` frame's centred `ratio` crop at given parameters
+(`measure_rolloff_x_hi`): `E` in the units of `-E`, rendered through `(M_frame / e_norm)` at
+`E e_norm`. -/
+def measureRolloffXHi (prof : Profile α) (scale : FrameScale α) (frame : Array (Vec3 Nat)) (W H : Nat) (ratio : α)
+    (g : Gains α) : α :=
+  let crop := (cropPixels frame W H ratio).1
   let m := candidateMatrix (scale.frameMatrix.divScalar scale.eNorm) (g.e * scale.eNorm) g.g g.b
   shoulderXHiFromHist (maxHistOf (crop.map fun px => convertPixelLinear prof autoKnee m (loadU16 px)))
 

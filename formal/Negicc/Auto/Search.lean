@@ -107,15 +107,16 @@ structure Params (α : Type) where
   shoulder : α
 
 /-- The search's input: the bundle's brackets, whether it is narrow-band (it has a crosstalk
-matrix), the frame's scale, the frame's inner crop and the network's geometry, the loop's step
-limit and the pins (`ParamSearchOptions`). `pinE` is in the search's units. -/
+matrix), the frame's scale, the upright frame (`W × H` pixels of 16-bit camera RGB, its inner crop
+`searchCropRatio` of `Negicc.Scene.Bracket` read), the network's geometry, the loop's step limit
+and the pins (`ParamSearchOptions`). `pinE` is in the search's units. -/
 structure SearchInput (α : Type) where
   brackets : Array (SearchBracket α)
   hasCrosstalk : Bool
   scale : FrameScale α
-  crop : Array (Vec3 Nat)
-  cw : Nat
-  ch : Nat
+  frame : Array (Vec3 Nat)
+  W : Nat
+  H : Nat
   maxSize : Nat
   patch : Nat
   maxSteps : Nat
@@ -190,8 +191,20 @@ def inputMatrix : Mat3 α :=
 /-- The factor on the scene's range (`g_scale`). -/
 def gScale : α := if inp.hasCrosstalk then 1.0 else inp.scale.eNorm
 
+/-- The frame's inner crop: its pixels and size. -/
+def cropBox : Array (Vec3 Nat) × Nat × Nat := cropPixels inp.frame inp.W inp.H (searchCropRatio : α)
+
+/-- The inner crop's pixels, row by row. -/
+def crop : Array (Vec3 Nat) := inp.cropBox.1
+
+/-- The inner crop's width. -/
+def cw : Nat := inp.cropBox.2.1
+
+/-- The inner crop's height. -/
+def ch : Nat := inp.cropBox.2.2
+
 /-- The frame's statistics over the crop. -/
-def stats : FrameStats α := frameStats inp.crop inp.cw inp.ch inp.maxSize inp.patch
+def stats : FrameStats α := frameStats inp.frame inp.W inp.H searchCropRatio inp.maxSize inp.patch
 
 /-- The scene's range as the enclosures read it: `(g_lo, g_hi)` held as in `sceneRange`, times
 `g_scale`. -/

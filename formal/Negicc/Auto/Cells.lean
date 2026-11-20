@@ -93,11 +93,12 @@ def sceneRange (pLo pHi : α) : α × α :=
   let gLo := max 1.0 pLo
   (gLo, max (gLo + 1.0) pHi)
 
-/-- The scene's green range over a crop of `cw × ch` pixels: `(g_lo, g_hi)`, from the crop's green
-histogram (`greenHistogram`, `sceneGreenRange` of `Negicc.Scene.Bracket`). -/
-def cropGreenRange (crop : Array (Vec3 Nat)) (cw ch : Nat) : α × α :=
-  let h := greenHistogram (α := α) crop cw ch 1.0
-  sceneGreenRange h.1 h.2
+/-- The centred `ratio` crop of a `W × H` frame, its pixels row by row, and its size
+(`innerCrop` of `Negicc.Scene.Bracket`). -/
+def cropPixels (frame : Array (Vec3 Nat)) (W H : Nat) (ratio : α) : Array (Vec3 Nat) × Nat × Nat :=
+  let (x0, y0, w, h) := innerCrop W H ratio
+  (((List.range h).flatMap fun y => (List.range w).map fun x => frame.getD ((y0 + y) * W + x0 + x) ⟨0, 0, 0⟩).toArray,
+   w, h)
 
 /-- The geometric mean of each channel over the crop, in `[0, 1]`: codes below 1 count as 1
 (`log_avg_rgb`). -/
@@ -127,10 +128,14 @@ structure FrameStats (α : Type) where
   shape : NetShape
   grid : Array (Vec3 Nat)
 
-/-- The statistics of a crop `cw × ch` pixels (`compute_frame_stats`). -/
-def frameStats (crop : Array (Vec3 Nat)) (cw ch maxSize patch : Nat) : FrameStats α :=
+/-- The statistics of the centred `ratio` crop of a `W × H` frame (`compute_frame_stats`): the
+green points of `Negicc.Scene.Bracket` (`greenHistogram`, `sceneGreenRange`), the log-average and
+the grid. -/
+def frameStats (frame : Array (Vec3 Nat)) (W H : Nat) (ratio : α) (maxSize patch : Nat) : FrameStats α :=
+  let (crop, cw, ch) := cropPixels frame W H ratio
   let s := aspectShape (α := α) cw ch maxSize patch
-  let r := cropGreenRange (α := α) crop cw ch
+  let h := greenHistogram frame W H ratio
+  let r := sceneGreenRange (α := α) h.1 h.2
   ⟨r.1, r.2, logAverage crop, s, statsGrid (α := α) crop cw ch s patch⟩
 
 /-! ## The optimiser's cells and loss -/
