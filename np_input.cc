@@ -29,6 +29,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -886,10 +887,13 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
     } else {
       auto& crop_ref = proc->imgdata.sizes.raw_inset_crops[0];
       // LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff
-      // with a zero size; dcraw_process would refuse that as a bad crop box.
+      // with a zero size; dcraw_process would refuse that as a bad crop box. A crop at the origin that is narrower or
+      // shorter than the image is a crop too.
       const bool has_inset_crop = crop_ref.cwidth > 0 && crop_ref.cheight > 0 && crop_ref.cleft != 0xffff &&
                                   crop_ref.ctop != 0xffff;
-      if (crop && has_inset_crop && (crop_ref.cleft || crop_ref.ctop)) {
+      if (crop && has_inset_crop &&
+          (crop_ref.cleft || crop_ref.ctop || crop_ref.cwidth < proc->imgdata.sizes.width ||
+           crop_ref.cheight < proc->imgdata.sizes.height)) {
         proc->imgdata.params.cropbox[0] = crop_ref.cleft;
         proc->imgdata.params.cropbox[1] = crop_ref.ctop;
         proc->imgdata.params.cropbox[2] = crop_ref.cwidth;
@@ -901,8 +905,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
         delete proc;
         return NULL;
       }
-    } else {
-      proc->dcraw_process();
+    } else if ((ret = proc->dcraw_process()) != LIBRAW_SUCCESS) {
+      log_error("Cannot decode %s: %s\n", fn.c_str(), libraw_strerror(ret));
+      delete proc;
+      return NULL;
     }
     if (roi &&
         (sub_x != 0 || sub_y != 0 || sub_w != proc->imgdata.sizes.iwidth || sub_h != proc->imgdata.sizes.iheight)) {
@@ -1002,6 +1008,14 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
     err = path + ": only RGB or min-is-black grey TIFFs are supported (photometric " + std::to_string(photo) + ")";
     return false;
   }
+  // The image is held in a LibRaw image (new_image_proc), whose sizes are 16-bit: a larger size is refused before
+  // the pixels are allocated.
+  const uint32_t max_side = std::numeric_limits<decltype(libraw_image_sizes_t::width)>::max();
+  if (w > max_side || h > max_side) {
+    err = path + ": a " + std::to_string(w) + "x" + std::to_string(h) + " TIFF is larger than " +
+          std::to_string(max_side) + " pixels on a side";
+    return false;
+  }
   out = RgbImage();
   out.width = (int)w;
   out.height = (int)h;
@@ -1021,7 +1035,14 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
     uint32_t tw = 0, th = 0;
     TIFFGetField(tif.get(), TIFFTAG_TILEWIDTH, &tw);
     TIFFGetField(tif.get(), TIFFTAG_TILELENGTH, &th);
-    std::vector<uint8_t> tile(TIFFTileSize(tif.get()));
+    // A tile holds tw x th pixels of stride samples, which put_samples reads row by row.
+    const tmsize_t tile_size = TIFFTileSize(tif.get());
+    if (tw == 0 || th == 0 || tile_size <= 0 || (uint64_t)tile_size < (uint64_t)tw * th * stride * (bps / 8)) {
+      err = path + ": a " + std::to_string(tw) + "x" + std::to_string(th) + " tile of " + std::to_string(tile_size) +
+            " bytes cannot be read";
+      return false;
+    }
+    std::vector<uint8_t> tile(tile_size);
     for (int p = 0; p < planes; ++p) {
       for (uint32_t ty = 0; ty < h; ty += th) {
         for (uint32_t tx = 0; tx < w; tx += tw) {
@@ -1041,7 +1062,14 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
       }
     }
   } else {
-    std::vector<uint8_t> line(TIFFScanlineSize(tif.get()));
+    // A scanline holds w pixels of stride samples.
+    const tmsize_t line_size = TIFFScanlineSize(tif.get());
+    if (line_size <= 0 || (uint64_t)line_size < (uint64_t)w * stride * (bps / 8)) {
+      err = path + ": a scanline of " + std::to_string(line_size) + " bytes cannot hold " + std::to_string(w) +
+            " pixels";
+      return false;
+    }
+    std::vector<uint8_t> line(line_size);
     for (int p = 0; p < planes; ++p) {
       for (uint32_t y = 0; y < h; ++y) {
         if (TIFFReadScanline(tif.get(), line.data(), y, (uint16_t)p) < 0) {
@@ -1371,6 +1399,11 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     source = "three:" + kinds;
   }
 
+  // The analysis reads the image at half size (below), which an image one pixel wide or high does not have.
+  if (analyse && (w < 2 || h < 2)) {
+    log_error("%s is %dx%d: the analysis needs an image at least 2 pixels wide and high\n", files[0].c_str(), w, h);
+    return delete proc, nullptr;
+  }
   int region[4] = {0, 0, w, h};
   if (frame_det) {
     FilmImage fi = film_image_from_interleaved(&proc->imgdata.image[0][0], w, h, 4, 0, white);
@@ -1378,7 +1411,16 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     detect_frame_or_fallback(fi, params, *frame_det);
     if (frame_det->conf >= kLowFrameConfidence) std::copy(frame_det->crop, frame_det->crop + 4, region);
   } else if (roi) {
-    std::copy(roi, roi + 4, region);
+    // As load_raw: an ROI outside the image fails here, before the analysis runs the search, and one past its right
+    // or bottom edge is clamped to it.
+    if (roi[0] < 0 || roi[1] < 0 || roi[0] >= w || roi[1] >= h || roi[2] <= 0 || roi[3] <= 0) {
+      log_error("ROI [%d, %d, %d, %d] is outside the image (%dx%d)\n", roi[0], roi[1], roi[2], roi[3], w, h);
+      return delete proc, nullptr;
+    }
+    region[0] = roi[0];
+    region[1] = roi[1];
+    region[2] = std::min(roi[2], w - roi[0]);
+    region[3] = std::min(roi[3], h - roi[1]);
   }
   // As load_raw: the analysis sees the whole image at half size (the film base's statistics read the rebate and the
   // gaps around the frame, not only the picture), and places the frame in it (--roi halved, or --roi auto's detected
