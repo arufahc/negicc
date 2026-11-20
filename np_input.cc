@@ -683,18 +683,23 @@ bool subtract_cfa_black_in_place(LibRaw* proc, float& out_white_level) {
   return true;
 }
 
-// The RAW's inset crop (left, top, width, height in the visible image), when it gives one that is not the whole image.
-// LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left and top 0xffff with a
-// zero size; dcraw_process would refuse that as a bad crop box. A crop at the origin that is narrower or shorter than
-// the image is a crop too.
-static bool inset_crop(const LibRaw& r, int box[4]) {
-  const auto& c = r.imgdata.sizes.raw_inset_crops[0];
+// LibRaw gives the inset crop in the raw frame, margins included (its own adjust_to_raw_inset_crop makes cleft and ctop
+// the margins), so the margins are taken off to place it in the visible image; a crop that starts in the margins keeps
+// its part in the image. LibRaw reports an inset crop the RAW does not give (e.g. a DNG without DefaultCrop) as left
+// and top 0xffff with a zero size; dcraw_process would refuse that as a bad crop box. A crop at the origin that is
+// narrower or shorter than the image is a crop too.
+bool inset_crop(const LibRaw& r, int box[4]) {
+  const auto& S = r.imgdata.sizes;
+  const auto& c = S.raw_inset_crops[0];
   if (c.cwidth == 0 || c.cheight == 0 || c.cleft == 0xffff || c.ctop == 0xffff) return false;
-  if (!c.cleft && !c.ctop && c.cwidth >= r.imgdata.sizes.width && c.cheight >= r.imgdata.sizes.height) return false;
-  box[0] = c.cleft;
-  box[1] = c.ctop;
-  box[2] = c.cwidth;
-  box[3] = c.cheight;
+  int left = (int)c.cleft - S.left_margin, top = (int)c.ctop - S.top_margin, width = c.cwidth, height = c.cheight;
+  if (left < 0) width += left, left = 0;
+  if (top < 0) height += top, top = 0;
+  if (!left && !top && width >= S.width && height >= S.height) return false;
+  box[0] = left;
+  box[1] = top;
+  box[2] = width;
+  box[3] = height;
   return true;
 }
 

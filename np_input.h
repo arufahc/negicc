@@ -184,6 +184,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
                  const negicc::FlatField* flat = nullptr,
                  LibRaw* unpacked_proc = nullptr);
 
+// The RAW's inset crop as left, top, width and height in the visible image (sizes.width x sizes.height, after the
+// margins), when the RAW gives one that is not the whole image. Its right and bottom edges are not clamped to the image.
+bool inset_crop(const LibRaw& r, int box[4]);
+
 // --------------------------------------------------------------------------------------------------------------------
 // TIFF and JPEG files
 // Non-RAW inputs of neg_process: TIFF (libtiff) and JPEG (libjpeg-turbo) files read into 16-bit samples, and their
