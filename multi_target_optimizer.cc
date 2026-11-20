@@ -288,7 +288,7 @@ class GreyPoint {
   // The start point: inputs k * (1.4, 1.0, 0.88), the green-normalised neutral input of the Portra brackets (a
   // colour like the orange mask, only a starting direction), for k = 2^-10 .. 2^3 in half stops; the k whose L* is
   // nearest 50 wins. newton() then moves all three channels freely from there to hit (50, 0, 0) exactly.
-  bool reference_grey(float log_t0[3] = nullptr) const {
+  bool reference_grey(float log_t0[3] = nullptr, float* miss = nullptr) const {
     const float dir[3] = {1.4f, 1.0f, 0.88f};
     float best_k = 0.0f, best_d = std::numeric_limits<float>::infinity();
     for (int i = 0; i < 27; ++i) {
@@ -303,7 +303,9 @@ class GreyPoint {
     float log_t[3];
     for (int c = 0; c < 3; ++c) log_t[c] = std::log(best_k * dir[c]);
     const float target[3] = {50.0f, 0.0f, 0.0f};
-    const bool ok = newton(target, log_t, 20) <= 0.25f;
+    const float err = newton(target, log_t, 20);
+    const bool ok = err <= 0.25f;
+    if (miss) *miss = err;
     if (log_t0) {
       for (int c = 0; c < 3; ++c) log_t0[c] = log_t[c];
     }
@@ -1275,12 +1277,16 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   out.grey_lab[0] = 50.0f;
   out.grey_lab[1] = 0.0f;
   out.grey_lab[2] = 0.0f;
+  out.grey_miss = 0.0f;
   if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
 
   const GreyPoint gp(prof);
   // The grey: the input grey_prof (else prof) renders as neutral L* 50.
-  float log_t0[3];
-  if (!GreyPoint(grey_prof ? *grey_prof : prof).reference_grey(log_t0)) return false;
+  float log_t0[3], miss = 0.0f;
+  if (!GreyPoint(grey_prof ? *grey_prof : prof).reference_grey(log_t0, &miss)) {
+    out.grey_miss = miss;
+    return false;
+  }
   const float base[3] = {base_e, base_g, base_b};
 
   if (brightness_stops == 0.0f && tint_a == 0.0f && warmth_b == 0.0f) {
