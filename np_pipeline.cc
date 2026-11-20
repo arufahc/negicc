@@ -2269,18 +2269,22 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot)) {
         take_detected_frame(raw.imgdata.rawdata.sizes.width, raw.imgdata.rawdata.sizes.height);
       }
-      // --roi halved, or the whole image.
+      // --roi halved; three captures' inset crop halved (load_rgb_input gives it in raw's rawdata sizes, as the CFA
+      // path searches one RAW's); or the whole image.
       const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
       int* bbox = scan.auto_frame_half;
       bbox[0] = 0;
       bbox[1] = 0;
       bbox[2] = half_w;
       bbox[3] = half_h;
-      if (scan.has_roi) {
-        bbox[0] = scan.roi[0] / 2;
-        bbox[1] = scan.roi[1] / 2;
-        bbox[2] = std::max(1, (scan.roi[0] + scan.roi[2]) / 2 - bbox[0]);
-        bbox[3] = std::max(1, (scan.roi[1] + scan.roi[3]) / 2 - bbox[1]);
+      const auto& inset = raw.imgdata.rawdata.sizes.raw_inset_crops[0];
+      int full_frame[4] = {inset.cleft, inset.ctop, inset.cwidth, inset.cheight};
+      if (scan.has_roi) std::copy(scan.roi, scan.roi + 4, full_frame);
+      if (scan.has_roi || (o.input_mode == InputMode::kThreeShot && full_frame[2] > 0 && full_frame[3] > 0)) {
+        bbox[0] = full_frame[0] / 2;
+        bbox[1] = full_frame[1] / 2;
+        bbox[2] = std::max(1, (full_frame[0] + full_frame[2]) / 2 - bbox[0]);
+        bbox[3] = std::max(1, (full_frame[1] + full_frame[3]) / 2 - bbox[1]);
         clamp_rect(bbox, half_w, half_h);
       }
       scan.frame_is_whole = bbox[0] == 0 && bbox[1] == 0 && bbox[2] == half_w && bbox[3] == half_h;

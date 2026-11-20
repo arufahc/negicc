@@ -1431,8 +1431,8 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     region[3] = std::min(r[3], h - r[1]);
   }
   // As load_raw: the analysis sees the whole image at half size (the film base's statistics read the rebate and the
-  // gaps around the frame, not only the picture), and places the frame in it (--roi halved, or --roi auto's detected
-  // crop); the frame is cut from the full image after it.
+  // gaps around the frame, not only the picture), and places the frame in it (--roi halved, --roi auto's detected
+  // crop, or the inset crop halved); the frame is cut from the full image after it.
   if (analyse) {
     const int hw = w / 2, hh = h / 2;
     std::unique_ptr<LibRaw> half(new_image_proc(hw, hh));
@@ -1440,9 +1440,19 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
     half->imgdata.other.shutter = proc->imgdata.other.shutter;
     half->imgdata.other.iso_speed = proc->imgdata.other.iso_speed;
     half->imgdata.color.maximum = (unsigned)white;   // the image's clip, as a RAW's half-size image carries it
-    // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels).
+    // The full image's size, for the analysis to place --roi auto's detected frame (its crop is in those pixels), and
+    // the first RAW capture's inset crop in those pixels when it is the frame, for the analysis to search it as it
+    // does --roi (and as one RAW's CFA path does): a zero size when it is not.
     half->imgdata.rawdata.sizes.width = (ushort)w;
     half->imgdata.rawdata.sizes.height = (ushort)h;
+    auto& frame_crop = half->imgdata.rawdata.sizes.raw_inset_crops[0];
+    frame_crop = {};
+    if (!roi && !frame_det && inset[2] > 0) {
+      frame_crop.cleft = (ushort)region[0];
+      frame_crop.ctop = (ushort)region[1];
+      frame_crop.cwidth = (ushort)region[2];
+      frame_crop.cheight = (ushort)region[3];
+    }
     // Three captures: each channel's own half-size image (above), when all three have the image's half size. They are
     // the whole image whatever the frame (--roi, --roi auto's or the inset crop), which is cut after the analysis.
     bool planes = mode == InputMode::kThreeShot;
