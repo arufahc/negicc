@@ -590,10 +590,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     if (!sc.print_id.empty()) {
       j["profile"]["print"] = {{"id", sc.print_id}, {"name", sc.print_name},
                                {"table", sc.print_from_bundle ? "the bundle's print ICC" : "computed by neg_process"},
-                               {"curves", std::isfinite(sc.print_a)
-                                              ? "computed at the print's mid grey A (a) from the bundle's "
-                                                "grey_balance_curves, with the gains g and b after the knee"
-                                              : "computed for the bracket from the bundle's grey_balance_curves"}};
+                               {"curves", "computed at the print's mid grey A (a) from the bundle's "
+                                          "grey_balance_curves, with the gains g and b after the knee"}};
       // A material given as a file: which file, and its content, so the replay can be checked against it.
       if (!sc.print_file.empty()) {
         j["profile"]["print"]["file"] = sc.print_file;
@@ -604,7 +602,7 @@ bool write_json_sidecar(const Sidecar& sc) {
       j["profile"]["print"]["paper_white_xyz"] = {num(sc.print_paper_xyz[0], "%.6g"),
                                                   num(sc.print_paper_xyz[1], "%.6g"),
                                                   num(sc.print_paper_xyz[2], "%.6g")};
-      if (std::isfinite(sc.print_a)) j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
+      j["profile"]["print"]["a"] = num(sc.print_a, "%.17g");
       if (std::isfinite(sc.print_bracket_a_mid))
         j["profile"]["print"]["bracket_a_mid"] = num(sc.print_bracket_a_mid, "%.17g");
       // The brackets' tilt (grey_relative.b) at that A, linear in A between brackets.
@@ -893,7 +891,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   ordered_json t;
   t["raw_decode"] = num(sc.t_raw_decode_ms, "%.1f");
   t["frame_detection"] = sc.frame_det ? num(sc.t_frame_det_ms, "%.1f") : ordered_json(nullptr);
-  // The bracket analysis outside Auto's time (enclosures, knobs, roll-off); before, it counted as raw_decode.
+  // The bracket analysis outside Auto's time (the knobs, the roll-off); before, it counted as raw_decode.
   t["analysis"] = num(sc.t_analysis_ms, "%.1f");
   const bool has_cached_dino = !sc.cached_dino_json_str.empty();
   t["dino_views"] = sc.dino ? num(sc.dino->timing_views_ms, "%.1f")

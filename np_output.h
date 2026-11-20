@@ -64,7 +64,7 @@ struct Sidecar {
   const int* roi = nullptr;              // x, y, w, h when has_roi
   std::string roi_source;
   const FrameDetection* frame_det = nullptr;  // --roi auto's detection
-  std::string film_format;               // the format the base's detection looked for, not given to the run; or empty
+  std::string film_format;               // the format the base's detection looked for, given or not; or empty
   int rot_cw = 0;
   bool hflip = false, vflip = false;
   int out_w = 0, out_h = 0;

@@ -176,6 +176,29 @@ void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc
   }
 }
 
+// A custom -P profile is written through: the conversion writes three samples a pixel through a transform from PCS
+// XYZ into it (CpuBackend::convert), which LittleCMS cannot build for a Gray or CMYK profile, or for one without a
+// transform from the PCS. False, with the error logged, for one it cannot.
+static bool output_profile_ok(const std::string& arg) {
+  cmsHPROFILE prof = cmsOpenProfileFromFile(resolve_profile_path(arg).c_str(), "r");
+  if (!prof) {
+    log_error("Cannot read output ICC profile: %s\n", arg.c_str());
+    return false;
+  }
+  cmsHPROFILE xyz = cmsCreateXYZProfile();
+  cmsHTRANSFORM probe = nullptr;
+  if (cmsGetColorSpace(prof) == cmsSigRgbData) {
+    probe = cmsCreateTransform(xyz, TYPE_XYZ_FLT, prof, TYPE_RGB_16, INTENT_PERCEPTUAL, 0);
+  }
+  if (probe) cmsDeleteTransform(probe);
+  cmsCloseProfile(xyz);
+  cmsCloseProfile(prof);
+  if (!probe) {
+    log_error("Output ICC profile %s is not an RGB profile that can be converted to from PCS XYZ\n", arg.c_str());
+  }
+  return probe != nullptr;
+}
+
 static bool paths_match(const std::string& a, const std::string& b) {
   if (a == b) return true;
   std::error_code ec;
@@ -360,6 +383,21 @@ static void read_cached_print(const nlohmann::ordered_json& j, CachedSidecar& c)
   const auto& knobs = j.contains("knobs") && j["knobs"].is_object() ? j["knobs"] : none;
   const auto& base = knobs.is_object() && knobs.contains("base") && knobs["base"].is_object() ? knobs["base"] : none;
   if (base.is_object() && base.contains("a") && base["a"].is_number()) c.print_a = base["a"].get<double>();
+}
+
+// Recorded G and B input curves (--fit_curves ref:..., or a previous run's sidecar) on the bracket profile pd they are
+// composed into: the shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the
+// whole input table, curve_shape_ok). Numbers typed by hand, or edited, could fold the table over or move it
+// arbitrarily far from the bracket's TRC; a fit's own numbers (written to 9 significant digits, which round-trip a
+// float) pass. -1 when both pass, else the channel that does not (0 G, 1 B).
+static int recorded_curve_off_shape(const negicc::InputCurves& c, const ProfileData& pd) {
+  const float dev = negicc::CurveFitOptions().max_dev_stops;
+  for (int i = 0; i < 2; ++i) {
+    if (!negicc::curve_shape_ok(c.a[i], c.k[i], c.u_med[i], c.ref[i], pd.in_trc_size[i + 1], dev, c.u_hold(i))) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 // Whether the search's passes run on the GPU: a USE_CUDA=1 build with a device that runs its kernels, unless
@@ -560,6 +598,9 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
         ok = std::isfinite(c.a[i]) && std::isfinite(c.k[i]) && std::isfinite(c.u_med[i]) && std::isfinite(c.u_lo[i]);
       }
       if (!ok || !positive(c.ref[0]) || !positive(c.ref[1])) return why = "its input curves are not valid", false;
+      if (recorded_curve_off_shape(c, s.bundle.targets[tgt_idx].film_prof.data) >= 0) {
+        return why = "its input curves are not monotonic, or depart too far from the bracket's input TRC", false;
+      }
       s.cached_sidecar.has_curves = true;
       s.cached_sidecar.curves = c;
       s.cached_sidecar.curves_source = ic.value("source", "fit");
@@ -1052,6 +1093,11 @@ int prepare(const Options& o, Setup& s) {
   // pixels' (with --print no fit runs: fit_curves_active).
   const bool fit_encoding_ok = o.colorspace == "srgb" || o.colorspace == "srgb-g10" || o.colorspace == "srgb-linear" ||
                                (s.density && s.white_light);
+  // A custom -P profile is checked here, before anything is decoded or searched (output_profile_ok).
+  if (!o.colorspace.empty() && !o.density && o.colorspace != "srgb" && o.colorspace != "srgb-g10" &&
+      o.colorspace != "srgb-linear" && !output_profile_ok(o.colorspace)) {
+    return 1;
+  }
   // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
   // A print (--print on a profile bundle) has its tone from the print material's own curve: no tone stage.
@@ -1140,22 +1186,13 @@ int prepare(const Options& o, Setup& s) {
                 "one bracket's profile at the recorded E, g and b (the sidecar's cli_equivalent gives all of them)\n");
       return 1;
     }
-    // The shape the fit holds every curve to (monotonic and within max_dev_stops of the base TRC over the whole input
-    // table, curve_shape_ok): numbers typed by hand, or edited, could fold the table over or move it arbitrarily far
-    // from the bracket's TRC, and were composed unchecked. A fit's own numbers (written to 9 significant digits, which
-    // round-trip a float) pass.
-    {
-      const negicc::InputCurves& c = o.input_curves;
-      const ProfileData& pd = bundle.targets[s.manual_target_idx].film_prof.data;
-      const float dev = negicc::CurveFitOptions().max_dev_stops;
-      const char* names[2] = {"G", "B"};
-      for (int i = 0; i < 2; ++i) {
-        if (!negicc::curve_shape_ok(c.a[i], c.k[i], c.u_med[i], c.ref[i], pd.in_trc_size[i + 1], dev, c.u_hold(i))) {
-          log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
-                    "bracket's input TRC, over its input table\n", names[i], dev);
-          return 1;
-        }
-      }
+    // The shape the fit holds every curve to (recorded_curve_off_shape).
+    const int off = recorded_curve_off_shape(o.input_curves, bundle.targets[s.manual_target_idx].film_prof.data);
+    if (off >= 0) {
+      log_error("--fit_curves: the recorded %s curve is not monotonic, or departs more than %g stops from the "
+                "bracket's input TRC, over its input table\n", off == 0 ? "G" : "B",
+                negicc::CurveFitOptions().max_dev_stops);
+      return 1;
     }
     // The --target bracket's profile becomes the combined profile before anything renders through it (its un-curved
     // tables kept for the knobs).
@@ -1407,14 +1444,14 @@ static void set_search_pins(const Options& o, const Setup& s, ParamSearchOptions
   opts.pin_b = o.gain_b;
 }
 
-// The station's E of given values: -E, else the centre of bracket target_idx's exposure range as the bundle search
-// meters it (Scan::bracket_exposure, meter_bracket_exposures).
-static float given_station_e(const Options& o, const Scan& scan, int target_idx) {
-  if (o.exposure_given || target_idx < 0 || target_idx >= (int)scan.bracket_exposure.size() ||
-      !scan.bracket_exposure[target_idx].valid) {
-    return o.exposure_comp;
-  }
-  return scan.bracket_exposure[target_idx].e_center;
+
+// What the warnings about an estimated or clipped film base offer on TriLED: a capture of this roll's unexposed film
+// (--film_base), which parse_options takes with a single CFA RAW or a pixel shift capture alone (prepare refuses it on
+// white light).
+static const char* triled_base_remedy(const Options& o) {
+  return o.input_mode == InputMode::kRaw ? "give --film_base <capture of this roll's unexposed film>"
+                                         : "a capture of this roll's unexposed film (--film_base) needs the frame as "
+                                           "a single CFA RAW or a pixel shift capture";
 }
 
 // What a film base capture was read with, which a later run must share to take its base from the sidecar: the flat
@@ -1624,29 +1661,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     load_sidecar_film_base(o, s, scan);
   }
 
-  // Each bracket's exposure range (e_min, e_max, e_center, is_feasible) on the frame, which the bracket picked
-  // without the search and the exposure of given values read. Measured here, on the half-size frame every bundle
-  // conversion analyses, before anything picks a bracket: before, solve measured it after decode had already picked
-  // one (from the defaults, always the first admissible bracket) and measured the roll-off and solved the knobs
-  // there. The bundle search measures its own; a previous run's sidecar names its bracket.
-  const bool needs_enclosures = s.is_bundle && !s.bundle_search && !s.has_cached_sidecar &&
-                                (s.manual_target_idx < 0 || !s.exposure_given);
-  auto measure_enclosures = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
-    if (!needs_enclosures) return;
-    float g_lo = 0.0f, g_hi = 0.0f, scene_ev = 0.0f;
-    int num_feasible = 0;
-    compute_bundle_enclosures(bundle, frame, g_lo, g_hi, scene_ev, num_feasible);
-    // And each bracket's range in the station's E, as the bundle search meters it: the E given values default to.
-    meter_bracket_exposures(bundle, frame, scan_shutter_s, scan_iso, ParamSearchOptions{}.crop_ratio,
-                            scan.film_base_rgb(), scan.bracket_exposure);
-    scan.has_enclosures = true;
-  };
-  // The bracket of given values (the search's is its own), once the enclosures are measured.
-  auto given_target_idx = [&]() {
-    return !s.is_bundle ? -1
-           : s.manual_target_idx >= 0 ? s.manual_target_idx
-                                      : select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-  };
+  // The bracket of given values (the search's is its own): on a bundle without the search, --target, with -E and
+  // both gains (prepare).
+  auto given_target_idx = [&]() { return s.is_bundle ? s.manual_target_idx : -1; };
   // A frame that is the whole image (--roi auto that fell back, or a given --roi that is the whole image, as --roi
   // auto's fallback records it, so that its replay fits the same): the grid may hold rebate, bare light or holder,
   // which the curve fit and its re-anchoring leave out (ParamSearchOptions::fallback_crop).
@@ -1659,8 +1676,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // highlight roll-off measured at them.
   auto solve_knobs_and_rolloff = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso) {
     const int target_idx = scan.has_auto_res ? scan.auto_res.target_idx : given_target_idx();
-    const float base_e = scan.has_auto_res ? scan.params().e
-                                           : given_station_e(o, scan, target_idx);
+    const float base_e = scan.has_auto_res ? scan.params().e : o.exposure_comp;
     const float base_g = scan.has_auto_res ? scan.params().g : o.gain_g;
     const float base_b = scan.has_auto_res ? scan.params().b : o.gain_b;
     float e = base_e, g = base_g, b = base_b;
@@ -1959,8 +1975,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         }
       }
       const char* name = c == 0 ? "red" : c == 1 ? "green" : "blue";
-      const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
-                                         : "give --film_base <capture of this roll's unexposed film>";
+      const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)" : triled_base_remedy(o);
       const bool bundle_base = !scan.film_base.found || scan.film_base.source == "bundle";
       const bool estimate = bundle_base || scan.film_base.source == "statistics";
       char raised[160] = "";
@@ -1978,9 +1993,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  100.0 * s.print_res.past_cut[c], name, remedy);
       } else {
         // The base was read (a rebate, or a capture on TriLED), so a crop does not help: the cause these two name is a
-        // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture.
+        // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture
+        // (triled_base_remedy).
         const char* read_remedy = s.white_light ? "scan with a shorter exposure, so that unexposed film does not clip"
-                                                : "give --film_base <capture of this roll's unexposed film>";
+                                                : triled_base_remedy(o);
         if (raised[0]) {   // a rebate read and raised: a rebate on clipped film reads darker than the film
           log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not "
                    "the base (a long scan clips unexposed film); %s\n",
@@ -2100,14 +2116,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     // A base at the sensor's clip: the rebate's patch refused for it, or the thinnest film the base is then read
     // from at the clip itself.
     const bool from_thinnest = found && fb.source == negicc::kFilmBaseSourceStatistics;
+    // A capture of unexposed film is the other remedy where it is taken (triled_base_remedy).
+    const char* clip_remedy = !s.white_light && o.input_mode == InputMode::kRaw
+                                  ? "give --film_base <capture of unexposed film> or scan at a shorter exposure"
+                                  : "scan at a shorter exposure";
     if (from_thinnest && fb.thinnest_clipped) {
       log_warn("the scan clips its film base (%s at the sensor's clip): the base read from it is the clip, below the "
-               "true base; give --film_base <capture of unexposed film> or scan at a shorter exposure\n",
-               fb.rebate_clipped ? "the rebate and the thinnest film are" : "the thinnest film is");
+               "true base; %s\n",
+               fb.rebate_clipped ? "the rebate and the thinnest film are" : "the thinnest film is", clip_remedy);
     } else if (fb.rebate_clipped) {
       log_warn("the scan clips its film base (the rebate is at the sensor's clip): the base is read from %s instead, "
-               "below the true base; give --film_base <capture of unexposed film> or scan at a shorter exposure\n",
-               found ? "the thinnest film" : "the profile bundle");
+               "below the true base; %s\n",
+               found ? "the thinnest film" : "the profile bundle", clip_remedy);
     }
     if (found) {
       log_info("Film base (%s): R=%.1f G=%.1f B=%.1f\n", fb.source.c_str(), fb.rgb[0], fb.rgb[1], fb.rgb[2]);
@@ -2125,7 +2145,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
   int det_sensor_w = 0, det_sensor_h = 0;
   // The analysis of the half-size image on the LibRaw, TIFF, JPEG and three-capture paths: for every bundle conversion,
-  // since every one reads the film base from it and measures the enclosures on it (the CFA path does both inline).
+  // since every one reads the film base from it (the CFA path does that inline).
   // --roi auto's frame: the detected crop, or the whole full_w x full_h image when the detection is not confident.
   auto take_detected_frame = [&](int full_w, int full_h) {
     if (scan.frame_det.conf < kLowFrameConfidence) {
@@ -2298,9 +2318,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       }
-      // The bracket analysis (timings_ms.analysis, not raw_decode): the enclosures, the knobs and the roll-off.
+      // The bracket analysis (timings_ms.analysis, not raw_decode): the knobs and the roll-off.
       const double t_analysis_0 = omp_get_wtime();
-      if (!s.bundle_search) measure_enclosures(frame, scan_shutter_s, scan_iso);
       if (!solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso)) return false;
       scan.t_analysis_ms += (omp_get_wtime() - t_analysis_0) * 1000.0;
       return true;
@@ -2624,7 +2643,6 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
       const double t_analysis_0 = omp_get_wtime();  // timings_ms.analysis, as on the LibRaw path
-      if (!s.bundle_search) measure_enclosures(search_half_view, scan_shutter_s, scan_iso);
       if (!solve_knobs_and_rolloff(search_half_view, scan_shutter_s, scan_iso)) {
         delete proc;
         return 1;
@@ -2805,16 +2823,16 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   const std::vector<int> unit_fb = {1, 1, 1};
 
   if (s.is_bundle && !s.bundle_search) {
-    // Each bracket's exposure range, which the target selection and given_station_e read below,
-    // was measured in decode on the half-size frame (measure_enclosures), before decode picked a bracket.
-    if (!s.has_cached_sidecar && (s.manual_target_idx < 0 || !(c.pin_mask & PIN_E)) &&
-        !scan.has_enclosures) {
-      log_error("Internal error: the brackets' exposure ranges were not measured on the scan\n");
+    // Without the search a bundle converts with the given values: prepare runs the search unless --target, -E and
+    // both gains are all given.
+    if (s.manual_target_idx < 0 || !s.exposure_given) {
+      log_error("Internal error: a bundle conversion without the search lacks --target or -E\n");
       return 1;
     }
   } else if (!s.is_bundle) {
     if (!s.film_prof_arg.empty() && !load_film_profile(s.film_prof_arg, c.film_prof)) {
       log_error("Cannot load film profile %s\n", s.film_prof_arg.c_str());
+      return 1;
     }
   }
 
@@ -2975,24 +2993,19 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     adjust_correction_matrix(s.r_coeff, s.g_coeff, s.b_coeff, c.exposure_comp, c.gain_g, c.gain_b,
                              c.profile_film_base_rgb, unit_fb, c.merged_matrix);
   } else if (s.is_bundle) {
-    if (s.manual_target_idx >= 0) {
-      c.bundle_target_idx = s.manual_target_idx;
-    } else {
-      c.bundle_target_idx = select_bundle_target_without_dino(bundle, kDefaultMinTargetIdx);
-    }
+    c.bundle_target_idx = s.manual_target_idx;
     log_info("Selected target: %s\n", bundle.targets[c.bundle_target_idx].display_name.c_str());
     c.bundle_target_name = bundle.targets[c.bundle_target_idx].name;
     c.film_prof = bundle.targets[c.bundle_target_idx].film_prof;
     c.film_prof.rebind_pointers();
-    // The given values are the station's (E defaults to the bracket's e_center, g and b to 1).
+    // The given values are the station's.
     double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
     scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
     if (scan.has_knob_res) {
       apply_station(scan.knob_res.e, scan.knob_res.g, scan.knob_res.b);
       log_knobs();
     } else {
-      apply_station(given_station_e(o, scan, c.bundle_target_idx),
-                    c.gain_g, c.gain_b);
+      apply_station(o.exposure_comp, c.gain_g, c.gain_b);
     }
   } else if (o.knobs_given) {
     // A single ICC profile with given gains: the knobs move the given (absolute) E, g and b through that profile, as
@@ -3088,10 +3101,9 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // The film base is the zero of a density file. Read from a capture or the scan's rebate it is measured; taken from
     // the thinnest film of a frame with no unexposed film in view, or from the bundle's roll, it is an estimate, and
     // every density is off by its error, differently per channel and per frame.
-    // The remedy: a capture of unexposed film (--film_base) on TriLED; on white light, which takes no capture, a
-    // crop that shows the rebate.
-    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)"
-                                       : "give --film_base <capture of this roll's unexposed film>";
+    // The remedy: a capture of unexposed film (--film_base) on TriLED, where the input takes one (triled_base_remedy);
+    // on white light, which takes no capture, a crop that shows the rebate.
+    const char* remedy = s.white_light ? "crop so that the frame shows some rebate (--roi)" : triled_base_remedy(o);
     if (!scan.film_base.found || scan.film_base.source == "bundle") {
       log_warn("the film base is the profile bundle's own, not this roll's: the densities are relative to another "
                "roll's base; %s\n", remedy);
@@ -3153,7 +3165,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
         log_error("Cannot read output ICC profile: %s\n", colorspace_str.c_str());
         return 1;
       }
-      out.xyz = cmsCreateXYZProfile();
+      out.xyz = cmsCreateXYZProfile();   // an RGB profile with a transform from PCS XYZ (prepare checked it)
       out.encoding = ENCODE_CUSTOM;
       out.attach_profile = resolved_custom;
       log_info("Reading output ICC profile: %s\n", resolved_custom.c_str());
@@ -3372,10 +3384,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
     if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
       sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
-    {
-      const double a_used = std::isfinite(s.print_a) ? s.print_a : sc.print_bracket_a_mid;
-      if (std::isfinite(a_used)) print_tilt_at(s.bundle, a_used, sc.print_tilt);
-    }
+    print_tilt_at(s.bundle, s.print_a, sc.print_tilt);   // a picture print always has its search's A (solve)
     if (s.print_searched) {
       sc.print_searched = true;
       sc.print_a0 = s.print_res.a0;

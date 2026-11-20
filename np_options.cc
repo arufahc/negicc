@@ -301,7 +301,8 @@ int parse_options(int ac, char* av[], Options& o) {
           "a split bundle's directory (a bundle.json with its ICC profiles beside it, as in profiles/), or a single "
           "ICC profile that applies to the corrected RGB values (for research).");
   parser.add_argument("-P", "--colorspace")
-    .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile. "
+    .help("srgb, srgb-g10 or [ICC profile path]: the corrected RGB is converted using this as the output profile "
+          "(an RGB profile). "
           "statusm, rp180 or apd: the output is the negative's density above the film base (Status M, SMPTE RP 180 "
           "printing density, or Academy Printing Density), not a picture; -o's extension picks the file: .dpx (10 "
           "bits; rp180 gives a Cineon file, apd ADX10) or .tif/.tiff (16 bits; apd gives ADX16). apd is written "
@@ -773,7 +774,15 @@ int parse_options(int ac, char* av[], Options& o) {
       // A spektrafilm print profile given as a file is loaded now, without a bundle (every check of the real load
       // runs; only the matrices for the bundle's film wait for the conversion), so a wrong file stops the run before
       // it starts.
-      if (is_print_file(id) && std::filesystem::is_regular_file(id)) {
+      std::error_code ec;
+      const bool print_file = is_print_file(id) && std::filesystem::is_regular_file(id, ec);
+      // A path that does not exist is not a file; one that cannot be examined (permission, a link loop, a name too
+      // long) is an error.
+      if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory) {
+        log_error("--print %s: %s\n", id.c_str(), ec.message().c_str());
+        return 1;
+      }
+      if (print_file) {
         std::string text, stem, why;
         PrintMaterial material;
         if (!read_print_file(id, text, stem, why) ||
@@ -782,7 +791,7 @@ int parse_options(int ac, char* av[], Options& o) {
           return 1;
         }
       }
-      bool found = id == "all" || (is_print_file(id) && std::filesystem::is_regular_file(id));
+      bool found = id == "all" || print_file;
       std::string names;
       for (const PrintMaterial& m : known) {
         found = found || m.id == id;
