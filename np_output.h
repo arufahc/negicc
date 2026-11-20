@@ -168,8 +168,8 @@ struct Sidecar {
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
   float print_wish_l = 0.0f, print_above_knee = 0.0f;
-  // ContinuousPrintResult's: past_knee and past_cut at E (the matrix at E alone), shares; above_white and at_white,
-  // percent.
+  // ContinuousPrintResult's shares: past_knee and past_cut at E (the matrix at E alone), above_white and at_white at
+  // the result.
   float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};
   float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
   bool print_a0_at_end = false;

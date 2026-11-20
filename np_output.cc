@@ -556,7 +556,7 @@ bool write_json_sidecar(const Sidecar& sc) {
     fb["capture"] = ordered_json::parse(sc.film_base_capture_json, nullptr, false);
   }
   // A print on a base that is not a capture: film_base_rgb is the base raised to be no darker than the picture's
-  // thinnest film (print_floor_base, with print_base_floor's factor); the base as found and the factor.
+  // thinnest film (raise_base_to_print_floor, with print_floor_factor's factor); the base as found and the factor.
   if (sc.print_floor_applied) {
     fb["print_floor"] = {{"units", "the conversion's film base space at the scan's exposure (a bundle's base is "
                                     "scaled to it; film_base_rgb is the bundle's at its own exposure when nothing was "
@@ -624,8 +624,8 @@ bool write_json_sidecar(const Sidecar& sc) {
             {"base_factor", num(sc.print_floor_applied ? sc.print_floor_k : 1.0f, "%.6g")},
             {"past_knee_pct", three(sc.print_past_knee, 100.0)},
             {"past_cut_pct", three(sc.print_past_cut, 100.0)},
-            {"above_white_pct", three(sc.print_above_white, 1.0)},
-            {"at_white_pct", three(sc.print_at_white, 1.0)},
+            {"above_white_pct", three(sc.print_above_white, 100.0)},
+            {"at_white_pct", three(sc.print_at_white, 100.0)},
             {"a0_at_range_end", sc.print_a0_at_end},
             {"last_move", three(sc.print_last_move, 1.0)}};
       } else if (!sc.cached_print_search_json_str.empty()) {
@@ -713,8 +713,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   // A density output takes no exposure, gains or bracket: its replay is the frame, --fit_curves off when a white-light
   // run without --print turned the fit off (for its suggested balance), and the --print materials and any knobs on
   // their CLFs as given: with --print the base not a capture is raised to the picture's thinnest film
-  // (print_floor_base) and the densities are written against it, so the replay needs --print to write the same file
-  // and its CLFs.
+  // (raise_base_to_print_floor) and the densities are written against it, so the replay needs --print to write the
+  // same file and its CLFs.
   if (!sc.density_json.empty()) {
     cli.clear();
     if (sc.has_roi) {

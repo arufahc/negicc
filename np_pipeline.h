@@ -113,11 +113,11 @@ struct Setup {
   std::vector<ParsedFilmProfile> print_profs;
   std::vector<std::vector<uint8_t>> print_iccs;
   PrintContinuum print_cont;          // the print at a continuous mid grey (np_print.h)
-  ContinuousPrint print_cp;           // the search's view of it
+  ContinuousPrint print_in;           // the search's view of it
   double print_a = NAN;               // the print's mid grey A: the search's or a reused run's; NaN: the bracket's
   // The lightest node of the print's table: the paper's white.
   double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
-  ContinuousPrintResult print_cr;     // the print's search
+  ContinuousPrintResult print_res;    // the print's search
   std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a density run's --print, per material
   bool print_searched = false;
   bool has_crosstalk = false;
@@ -255,7 +255,7 @@ struct Scan {
   // film_base holds it and the scan's is not read.
   bool has_given_base = false;
   negicc::FilmBaseDetection given_base;
-  // A print on a base that is not a capture (print_base_floor): the base as found, its source ("rebate",
+  // A print on a base that is not a capture (print_floor_factor): the base as found, its source ("rebate",
   // "statistics" or "bundle") and the factor it was raised by (film_base holds the raised base; 1: not raised).
   bool print_floor_applied = false;
   double print_floor_found_rgb[3] = {0, 0, 0};

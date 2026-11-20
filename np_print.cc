@@ -1216,8 +1216,8 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     p.a0 = own->second.a0;
     p.wish_l = own->second.wish_l;
     for (int c = 0; c < 3; ++c) {
-      p.above_white_pct[c] = own->second.above_white_pct[c];
-      p.at_white_pct[c] = own->second.at_white_pct[c];
+      p.above_white[c] = own->second.above_white[c];
+      p.at_white[c] = own->second.at_white[c];
     }
     p.knobs = own->second.knobs;
     p.knobs_limited = own->second.knobs_limited;
@@ -1509,8 +1509,9 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
                          {"above_knee_pct", 100.0 * p.above_knee},
                          {"past_knee_pct", {100.0 * p.past_knee[0], 100.0 * p.past_knee[1], 100.0 * p.past_knee[2]}},
                          {"past_cut_pct", {100.0 * p.past_cut[0], 100.0 * p.past_cut[1], 100.0 * p.past_cut[2]}},
-                         {"above_white_pct", {p.above_white_pct[0], p.above_white_pct[1], p.above_white_pct[2]}},
-                         {"at_white_pct", {p.at_white_pct[0], p.at_white_pct[1], p.at_white_pct[2]}}};
+                         {"above_white_pct",
+                          {100.0 * p.above_white[0], 100.0 * p.above_white[1], 100.0 * p.above_white[2]}},
+                         {"at_white_pct", {100.0 * p.at_white[0], 100.0 * p.at_white[1], 100.0 * p.at_white[2]}}};
         if (p.knobs) {
           one["knobs"] = {{"what", "--brightness, --tint and --warmth on this print: mid_grey_a and gains are the "
                                    "moved ones (A, g and b solved on the print's profile, E held), from the search's"},

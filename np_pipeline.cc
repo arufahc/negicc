@@ -905,12 +905,12 @@ int prepare(const Options& o, Setup& s) {
       s.print_a = NAN;   // the print's search sets it (or a reused run's)
       {
         const PrintContinuum* pc = &s.print_cont;
-        s.print_cp.trc_at = [pc](double a, const double gains[3], std::vector<float> trc[3]) {
+        s.print_in.trc_at = [pc](double a, const double gains[3], std::vector<float> trc[3]) {
           pc->trc_at(a, gains, trc);
         };
-        s.print_cp.a_lo = pc->a_lo();
-        s.print_cp.a_hi = pc->a_hi();
-        s.print_cp.a_mid = pc->a_mid;
+        s.print_in.a_lo = pc->a_lo();
+        s.print_in.a_hi = pc->a_hi();
+        s.print_in.a_mid = pc->a_mid;
       }
       s.print_id = prints.id;
       s.print_name = prints.name;
@@ -1742,17 +1742,32 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                "search's bracket\n");
       return true;
     }
-    for (const std::string& id : ids) {
+    // Each material's print profile and continuum, then the searches of all of them (search_print_continuous, which
+    // reads the frame once for them), then each one's record. At fixed addresses: the searches point at them.
+    struct Material {
       BracketPrints prints;
+      ParsedFilmProfile prof;
+      ContinuousPrint in;
+      ParamSearchResult res;
+      ContinuousPrintResult cr;
+    };
+    std::vector<std::unique_ptr<Material>> materials;
+    for (const std::string& id : ids) {
+      auto m = std::make_unique<Material>();
+      BracketPrints& prints = m->prints;
       std::string why;
       if (!bracket_print_profiles(bundle, id, prints, why)) {
         log_error("--print %s: %s\n", id.c_str(), why.c_str());
         return false;
       }
-      if (s.density_print_search.count(prints.id)) continue;
+      if (s.density_print_search.count(prints.id) ||
+          std::any_of(materials.begin(), materials.end(),
+                      [&](const std::unique_ptr<Material>& o) { return o->prints.id == prints.id; })) {
+        continue;
+      }
       std::vector<uint8_t>& icc = prints.icc[prints.icc.size() / 2];
       cmsHPROFILE h = cmsOpenProfileFromMem(icc.data(), (cmsUInt32Number)icc.size());
-      ParsedFilmProfile prof;
+      ParsedFilmProfile& prof = m->prof;
       const bool ok = h && parse_film_profile_pipeline(h, prof);
       if (h) cmsCloseProfile(h);
       if (!ok) {
@@ -1762,16 +1777,21 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       prof.rebind_pointers();
       to_paper_white(prof);
       const PrintContinuum& pc = prints.continuum;
-      ContinuousPrint cp;
-      cp.trc_at = [&pc](double a, const double gains[3], std::vector<float> trc[3]) { pc.trc_at(a, gains, trc); };
-      cp.a_lo = pc.a_lo();
-      cp.a_hi = pc.a_hi();
-      cp.a_mid = pc.a_mid;
-      ParamSearchResult res;
-      ContinuousPrintResult cr;
-      if (!search_print_continuous(bundle, prof, cp, s.engine, frame, scan_shutter_s, scan_iso, opts, res, cr)) {
-        return false;
-      }
+      m->in.trc_at = [&pc](double a, const double gains[3], std::vector<float> trc[3]) { pc.trc_at(a, gains, trc); };
+      m->in.a_lo = pc.a_lo();
+      m->in.a_hi = pc.a_hi();
+      m->in.a_mid = pc.a_mid;
+      materials.push_back(std::move(m));
+    }
+    std::vector<PrintMaterialSearch> searches;
+    for (const std::unique_ptr<Material>& m : materials) searches.push_back({&m->prof, &m->in, &m->res, &m->cr});
+    if (!search_print_continuous(bundle, searches, s.engine, frame, scan_shutter_s, scan_iso, opts)) return false;
+    for (const std::unique_ptr<Material>& m : materials) {
+      const BracketPrints& prints = m->prints;
+      const ParsedFilmProfile& prof = m->prof;
+      const PrintContinuum& pc = prints.continuum;
+      const ParamSearchResult& res = m->res;
+      const ContinuousPrintResult& cr = m->cr;
       DensityRecord::PrintSearch ps;
       ps.a = cr.a;
       ps.e = res.params.e;
@@ -1787,8 +1807,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       ps.a0 = cr.a0;
       ps.wish_l = cr.wish_mean_l;
       for (int c = 0; c < 3; ++c) {
-        ps.above_white_pct[c] = cr.above_white_pct[c];
-        ps.at_white_pct[c] = cr.at_white_pct[c];
+        ps.above_white[c] = cr.above_white[c];
+        ps.at_white[c] = cr.at_white[c];
       }
       if (o.knobs_given) {
         // The knobs on this print as on the picture (solve_knobs_and_rolloff): A, g and b moved on its profile, E held.
@@ -1845,11 +1865,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       }
       return true;
     }
-    if (!search_print_continuous(bundle, s.print_profs[s.print_profs.size() / 2], s.print_cp, s.engine, frame,
-                                 scan_shutter_s, scan_iso, opts, scan.auto_res, s.print_cr)) {
+    const PrintMaterialSearch print_search{&s.print_profs[s.print_profs.size() / 2], &s.print_in, &scan.auto_res,
+                                           &s.print_res};
+    if (!search_print_continuous(bundle, {print_search}, s.engine, frame, scan_shutter_s, scan_iso, opts)) {
       return false;
     }
-    s.print_a = s.print_cr.a;
+    s.print_a = s.print_res.a;
     s.print_searched = true;
     {
       // The print's level is relative to the film base (E where the base reads n0): an estimated base moves it and puts
@@ -1862,9 +1883,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       constexpr double kPrintCutWarnShare = 0.01;
       int c = 0;
       for (int k = 1; k < 3; ++k) {
-        if (s.print_cr.past_cut[k] > s.print_cr.past_cut[c] ||
-            (s.print_cr.past_cut[k] == s.print_cr.past_cut[c] &&
-             s.print_cr.past_knee[k] > s.print_cr.past_knee[c])) {
+        if (s.print_res.past_cut[k] > s.print_res.past_cut[c] ||
+            (s.print_res.past_cut[k] == s.print_res.past_cut[c] &&
+             s.print_res.past_knee[k] > s.print_res.past_knee[c])) {
           c = k;
         }
       }
@@ -1883,9 +1904,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                  "knee and %.2f %% past the cut (no detail kept) in %s at the print's settings; %s\n",
                  bundle_base ? "the profile bundle's own, not this roll's"
                              : "estimated from the thinnest film on this frame, which shows no rebate",
-                 raised, 100.0 * s.print_cr.past_knee[c],
+                 raised, 100.0 * s.print_res.past_knee[c],
                  !scan.has_roi ? "search's crop (the whole scan)" : "crop",
-                 100.0 * s.print_cr.past_cut[c], name, remedy);
+                 100.0 * s.print_res.past_cut[c], name, remedy);
       } else {
         // The base was read (a rebate, or a capture on TriLED), so a crop does not help: the cause these two name is a
         // scan long enough to clip unexposed film. On white light the remedy is a shorter scan; on TriLED a capture.
@@ -1895,18 +1916,18 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           log_warn("the print's film base is the scan's %s%s: the film reads thinner than it in places, so it is not "
                    "the base (a long scan clips unexposed film); %s\n",
                    scan.film_base.source.c_str(), raised, read_remedy);
-        } else if (scan.has_roi && s.print_cr.past_cut[c] >= kPrintCutWarnShare) {
+        } else if (scan.has_roi && s.print_res.past_cut[c] >= kPrintCutWarnShare) {
           log_warn("%.2f %% of the crop is past the cut (no detail kept) in %s at the print's settings, with the film "
                    "base from %s: a rebate read on a scan long enough to clip unexposed film is not the base; if this "
                    "one is not, %s\n",
-                   100.0 * s.print_cr.past_cut[c], name, scan.film_base.source.c_str(), read_remedy);
+                   100.0 * s.print_res.past_cut[c], name, scan.film_base.source.c_str(), read_remedy);
         }
       }
     }
     log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
-             "%.2f %% of the crop above the knee at E = 1\n", s.print_cr.a0, s.print_cr.a,
-             scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_cr.steps,
-             s.print_cr.converged ? "" : ", not converged", s.print_cr.wish_mean_l, 100.0 * s.print_cr.above_knee);
+             "%.2f %% of the crop above the knee at E = 1\n", s.print_res.a0, s.print_res.a,
+             scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_res.steps,
+             s.print_res.converged ? "" : ", not converged", s.print_res.wish_mean_l, 100.0 * s.print_res.above_knee);
     return true;
   };
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
@@ -1920,7 +1941,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.has_auto_res = true;
   };
   // A print on a base that is not a capture: the base held no darker than the picture's thinnest film
-  // (print_base_floor), on the frame the search crops. The raised base replaces the found one for the whole
+  // (print_floor_factor), on the frame the search crops. The raised base replaces the found one for the whole
   // conversion (the print's search, given values, the density file, its print searches and CLFs), so a replay
   // derives the same; a capture (given, or a capture's values kept from an earlier run) is taken as it is, and so is
   // any base without --print. Called once per conversion, with the frame, before the search.
@@ -1937,8 +1958,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // the two scales when they agree within 2 % (the base patch's own test, film_base_detector.cc: a decode turned
   // against the sensor does not map). A --roi auto that fell back to the whole image is the whole scan. frame_conf is
   // written only where the detection decided the frame.
-  auto floor_print_base = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
-                              int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
+  auto apply_print_floor = [&](const negicc::RgbView& frame, const negicc::RgbView& half, const FrameDetection* det,
+                               int sensor_w, int sensor_h, double scan_shutter_s, double scan_iso) {
     const bool print = !s.print_profs.empty() || (s.density && !o.prints.empty());
     // A print without --roi: its search reads the whole scan (whatever the base, a capture included). Said once.
     if (print && s.is_bundle && !scan.has_roi && !scan.print_floor_applied)
@@ -1969,9 +1990,9 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     double fb[3], raised_rgb[3];
     const std::string src = scan.film_base.found ? scan.film_base.source : "bundle";
-    const float k = print_floor_base(s.bundle, floor_frame, ParamSearchOptions{}.crop_ratio,
-                                     scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s, scan_iso, fb,
-                                     raised_rgb);
+    const float k = raise_base_to_print_floor(s.bundle, floor_frame, ParamSearchOptions{}.crop_ratio,
+                                              scan.film_base.found ? scan.film_base.rgb : nullptr, scan_shutter_s,
+                                              scan_iso, fb, raised_rgb);
     scan.print_floor_applied = true;
     scan.print_floor_found_source = src;
     scan.print_floor_k = k;
@@ -2029,7 +2050,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The frame detection the film base reads with a given --roi on the white-light decode (find_frame, below).
   FrameDetection base_det;
   bool has_base_det = false;
-  // The CFA path's frame detection for the film base (below), kept for the print's floor (floor_print_base).
+  // The CFA path's frame detection for the film base (below), kept for the print's floor (apply_print_floor).
   FrameDetection floor_det;
   bool has_floor_det = false;
   // The size of the mosaic the frame detector ran on (its boxes are in those pixels), for the base patch's scale.
@@ -2178,8 +2199,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           half_view.crop_and_orient(bbox[0], bbox[1], bbox[2], bbox[3], scan.rot_cw, scan.hflip, scan.vflip);
       // A single RAW's or linear DNG's base detection (find_frame, below) serves the floor as on the CFA path; TIFF,
       // JPEG and three captures have no detection without --roi auto, so their floor reads the whole scan.
-      floor_print_base(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h, scan_shutter_s,
-                       scan_iso);
+      apply_print_floor(frame, half_view, has_base_det ? &base_det : nullptr, det_sensor_w, det_sensor_h,
+                        scan_shutter_s, scan_iso);
       if (s.bundle_search && s.has_cached_sidecar && s.cached_sidecar.is_auto) {
         restore_cached_auto();
       } else if (s.bundle_search) {
@@ -2491,8 +2512,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     {
       double scan_shutter_s = kDefaultScanShutterS, scan_iso = kDefaultScanIso;
       scan.scan_exposure(*proc, scan_shutter_s, scan_iso);
-      floor_print_base(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h,
-                       scan_shutter_s, scan_iso);
+      apply_print_floor(search_half_view, full_half_view, has_floor_det ? &floor_det : nullptr, src_w, src_h,
+                        scan_shutter_s, scan_iso);
     }
 
     // Step 4: Conversion parameter search inline on the zero-copy oriented RgbView.
@@ -3286,18 +3307,18 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     }
     if (s.print_searched) {
       sc.print_searched = true;
-      sc.print_a0 = s.print_cr.a0;
-      sc.print_wish_l = s.print_cr.wish_mean_l;
-      sc.print_steps = s.print_cr.steps;
-      sc.print_converged = s.print_cr.converged;
-      sc.print_above_knee = s.print_cr.above_knee;
+      sc.print_a0 = s.print_res.a0;
+      sc.print_wish_l = s.print_res.wish_mean_l;
+      sc.print_steps = s.print_res.steps;
+      sc.print_converged = s.print_res.converged;
+      sc.print_above_knee = s.print_res.above_knee;
       for (int c = 0; c < 3; ++c)
-        sc.print_past_knee[c] = s.print_cr.past_knee[c], sc.print_past_cut[c] = s.print_cr.past_cut[c];
-      for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_cr.above_white_pct[c];
-      for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_cr.at_white_pct[c];
-      sc.print_a0_at_end = s.print_cr.a0_at_range_end;
-      for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_cr.last_move[c];
-      sc.print_stopped_by = s.print_cr.stopped_by;
+        sc.print_past_knee[c] = s.print_res.past_knee[c], sc.print_past_cut[c] = s.print_res.past_cut[c];
+      for (int c = 0; c < 3; ++c) sc.print_above_white[c] = s.print_res.above_white[c];
+      for (int c = 0; c < 3; ++c) sc.print_at_white[c] = s.print_res.at_white[c];
+      sc.print_a0_at_end = s.print_res.a0_at_range_end;
+      for (int c = 0; c < 3; ++c) sc.print_last_move[c] = s.print_res.last_move[c];
+      sc.print_stopped_by = s.print_res.stopped_by;
     }
   }
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
