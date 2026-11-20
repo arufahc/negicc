@@ -17,7 +17,7 @@ covers the `Float` reading: rounding is not modelled (see the README).
 * **Geometry.** The inner crop is centred and keeps at least one pixel; the network's grid has at
   least one cell per side and its input is a whole number of patches.
 * **The candidates' bounds.** Every exposure the optimiser returns lies in its window when `E` is
-  searched, and is the start's when `E` is pinned; from a start, `g` moves by at most 0.06 and `b`
+  searched (in `[0.20, 3.0]` from a start without a window), and is the start's when `E` is pinned; from a start, `g` moves by at most 0.06 and `b`
   by at most 0.08 in one optimisation; the trust region lies inside the window; the metered
   exposure lies in `[2^-6, 2^6]`; the highlight pullback's nudge raises `E` by at most 0.15 stop.
 * **The objective.** Its z-scores are invariant to a common shift of the render and the field,
@@ -502,13 +502,15 @@ theorem secondPass_e_mem (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig 
   · exact he1
   · exact ePass_mem loss cfg true cands bd g3 b3 hb hc
 
-theorem optimize_e_mem (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig ℝ) (init : Option (Gains ℝ))
-    (bd : EBounds ℝ) (pins : Pins) (hp : pins.e = false) (hb : bd.lo ≤ bd.hi) :
-    bd.lo ≤ (optimize loss cfg init (some bd) pins).1.e ∧ (optimize loss cfg init (some bd) pins).1.e ≤ bd.hi := by
-  obtain ⟨h2, hc⟩ := eCandidates_mem cfg pins init bd hp hb
-  have hec : eCandidates cfg pins init (some bd) = ((eCandidates cfg pins init (some bd)).1, bd) :=
+/-- The optimiser's `E` lies in the range of its candidates' window when every candidate does. -/
+theorem optimize_e_mem_of (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig ℝ) (init : Option (Gains ℝ))
+    (bounds : Option (EBounds ℝ)) (pins : Pins) (bd : EBounds ℝ)
+    (h2 : (eCandidates cfg pins init bounds).2 = bd) (hb : bd.lo ≤ bd.hi)
+    (hc : ∀ e ∈ (eCandidates cfg pins init bounds).1, bd.lo ≤ e ∧ e ≤ bd.hi) :
+    bd.lo ≤ (optimize loss cfg init bounds pins).1.e ∧ (optimize loss cfg init bounds pins).1.e ≤ bd.hi := by
+  have hec : eCandidates cfg pins init bounds = ((eCandidates cfg pins init bounds).1, bd) :=
     Prod.ext rfl h2
-  generalize hcs : (eCandidates cfg pins init (some bd)).1 = cs at hc hec
+  generalize hcs : (eCandidates cfg pins init bounds).1 = cs at hc hec
   have he1 := fun g b => ePass_mem loss cfg (!pins.e) cs bd g b hb hc
   have he2 := fun g b => ePass_mem loss cfg true cs bd g b hb hc
   simp only [optimize, hec]
@@ -516,6 +518,27 @@ theorem optimize_e_mem (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig �
     | exact he2 _ _
     | exact secondPass_e_mem loss cfg pins cs bd _ _ _ _ _ hb hc (he1 _ _)
     | exact he1 _ _
+
+/-- **The exposure's bounds.** With a window `[lo, hi]` (`lo ≤ hi`) and `E` searched, the optimiser
+returns an `E` in the window, whatever the loss. -/
+theorem optimize_e_mem (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig ℝ) (init : Option (Gains ℝ))
+    (bd : EBounds ℝ) (pins : Pins) (hp : pins.e = false) (hb : bd.lo ≤ bd.hi) :
+    bd.lo ≤ (optimize loss cfg init (some bd) pins).1.e ∧ (optimize loss cfg init (some bd) pins).1.e ≤ bd.hi := by
+  obtain ⟨h2, hc⟩ := eCandidates_mem cfg pins init bd hp hb
+  exact optimize_e_mem_of loss cfg init (some bd) pins bd h2 hb hc
+
+/-- **A start without a window.** From a start and with no window, `E` searched, the optimiser
+returns an `E` in `[0.20, 3.0]`, wherever the start is. -/
+theorem optimize_e_mem_start (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig ℝ) (i : Gains ℝ) (pins : Pins)
+    (hp : pins.e = false) :
+    0.20 ≤ (optimize loss cfg (some i) none pins).1.e ∧ (optimize loss cfg (some i) none pins).1.e ≤ 3.0 := by
+  apply optimize_e_mem_of loss cfg (some i) none pins ⟨0.20, 3.0, clamp i.e 0.20 3.0⟩
+  · simp [eCandidates, hp]
+  · norm_num
+  · intro e he
+    simp only [eCandidates, hp, Bool.false_eq_true, ↓reduceIte, List.mem_filter, Bool.and_eq_true,
+      decide_eq_true_eq] at he
+    exact he.2
 
 theorem optimize_e_pinned_aux (loss : Gains ℝ → IntentLoss ℝ) (cfg : OptConfig ℝ) (init : Option (Gains ℝ))
     (bounds : Option (EBounds ℝ)) (pins : Pins) (hp : pins.e = true) (E0 : ℝ)

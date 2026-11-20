@@ -396,7 +396,7 @@ where
     let boundsOf := fun (i : Nat) => match enclosure.find? (·.idx == i) with
       | some c => some c
       | none => inp.enclosureOf i
-    -- Step 5: the clip fallback (the white clip and the median do not depend on the ceiling).
+    -- Step 5: the clip fallback, on the statistics at a ceiling of 255 (it reads only the white clip and the median).
     let hc0 := inp.clip chosen.idx params 255.0
     let clip0 := hc0.whiteClip / 100.0
     let mut outcome := ClipFallback.notNeeded

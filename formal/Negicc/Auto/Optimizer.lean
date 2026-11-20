@@ -102,7 +102,8 @@ def sortUnique (xs : List α) : List α :=
 * pinned `E`: the start's `E` (or the configured one), alone;
 * a window: 13 equally spaced points from `lo` to `hi` (`np.linspace`), with the start's
   `E + {-0.06, -0.03, 0, 0.03, 0.06}` that fall inside it, sorted, repeats left out;
-* no window, a start: the start's `E + {-0.15, …, 0.15}` that are at least 0.2, in `[0.2, 3]`;
+* no window, a start: the start's `E` held to `[0.2, 3]`, plus `{-0.15, …, 0.15}`, those inside
+  `[0.2, 3]`, around the held start;
 * neither: eleven fixed points from 0.4 to 1.7, in `[0.4, 1.8]` around 1. -/
 def eCandidates (cfg : OptConfig α) (pins : Pins) (initial : Option (Gains α)) (bounds : Option (EBounds α)) :
     List α × EBounds α :=
@@ -121,8 +122,9 @@ def eCandidates (cfg : OptConfig α) (pins : Pins) (initial : Option (Gains α))
     (sortUnique (lin ++ extra), bd)
   | none => match initial with
     | some i =>
-      ((([-0.15, -0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10, 0.15] : List α).map (i.e + ·)).filter
-        (fun c => decide (0.20 ≤ c)), ⟨0.20, 3.0, i.e⟩)
+      let c0 := clamp i.e 0.20 3.0
+      ((([-0.15, -0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10, 0.15] : List α).map (c0 + ·)).filter
+        (fun c => decide (0.20 ≤ c) && decide (c ≤ 3.0)), ⟨0.20, 3.0, c0⟩)
     | none => ([0.40, 0.50, 0.60, 0.70, 0.80, 0.95, 1.10, 1.25, 1.40, 1.55, 1.70], ⟨0.40, 1.80, 1.0⟩)
 
 /-- The refinement step of `E`: 1/40 of the window, at least 0.01; 0.02 for an empty window. -/

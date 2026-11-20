@@ -46,7 +46,7 @@ random.
 | `trust_bounds` | `trustBounds` | `trustBounds_mem` | search |
 | `tourney_score` | `tourneyScore`, `enclosurePenalty` | `enclosurePenalty_nonneg`, `enclosurePenalty_eq_zero` | search |
 | `compute_penalties` (both) | `penalty`, `clipPenalty`, `centrePenalty`, `enclosurePenalty` | `penalty_nonneg`, `clipPenalty_eq_zero`, `centrePenalty_self` | optimiser |
-| `optimize_impl`, `optimize_target_for_intent` | `optimize`, `eCandidates`, `sortUnique`, `dedupStep`, `eStep`, `eMoves`, `ePass`, `eRefineStep`, `gGrid`, `bGrid`, `gSweep`, `bSweep`, `chainMoves`, `chainStep`, `chain`, `secondPass`, `firstMin` | `optimize_e_mem`, `optimize_e_pinned`, `optimize_gains_near`, `eCandidates_mem`, `ePass_mem`, `chain_bound`, `firstMin_mem` | optimiser (13 cases), search |
+| `optimize_impl`, `optimize_target_for_intent` | `optimize`, `eCandidates`, `sortUnique`, `dedupStep`, `eStep`, `eMoves`, `ePass`, `eRefineStep`, `gGrid`, `bGrid`, `gSweep`, `bSweep`, `chainMoves`, `chainStep`, `chain`, `secondPass`, `firstMin` | `optimize_e_mem`, `optimize_e_mem_start`, `optimize_e_pinned`, `optimize_gains_near`, `eCandidates_mem`, `ePass_mem`, `chain_bound`, `firstMin_mem` | optimiser (15 cases), search |
 | `SearchFrame::fixed_point` | `fixedPoint`, `fpGo`, `bundleConv`, `diverges`, `relChange`, `gainsDist`, `SearchInput.runLoop`, `SearchInput.measureStep` | `fixedPoint_steps` | search |
 | `SearchFrame::shoulder_guard` | `Run.guard` | | search |
 | `winner` | `winner` | `winner_spec` | search |
@@ -70,9 +70,7 @@ random.
   a double precision one.
 - **The tone heads' input features** (`pooled`, `token_sd`, `tone_mass` in `DinoV3Engine::infer`):
   outputs and statistics of the backbone's tokens, the network's own values.
-- **Reading the bundle and the profcheck report** (`profile_bundle.cc`, `profile_highlight_ceiling`):
-  file parsing; their values are the vectors' inputs. The parsed ceilings set only the per-channel
-  exceedance shares, which no rule of the search reads.
+- **Reading the bundle** (`profile_bundle.cc`): file parsing; its values are the vectors' inputs.
 - **`--probe_intent`** (a measurement aid that writes a JSON file and stops), the renderer interface
   (`PreviewRenderer`, `PassAudit`), timing and logging.
 - **The gains in the print's curves** (`SolverConfig::gain_curves`): the print's search (5.6).
@@ -102,4 +100,4 @@ ORT_DIR=<onnxruntime> formal/testvectors/auto/build.sh
 OMP_NUM_THREADS=16 bin_out/gen_auto profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors/auto
 ```
 
-The committed vectors were generated from `91b2fcb` of `master`.
+The committed vectors were generated from `47a187d` of `master`.

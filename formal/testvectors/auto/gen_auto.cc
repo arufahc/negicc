@@ -317,6 +317,8 @@ static json optimiser_vectors(const ProfileBundle& bundle, int target_idx) {
       {"pullback screening, infeasible", false, {}, true, {0.3f, 3.0f, 0.0f}, 0, 1.6f, 0.7f, 1.0f},
       {"pullback loop", true, {1.0f, 1.1f, 1.0f}, true, {0.6f, 1.8f, 0.0f}, 0, 0.9f, 1.4f, 1.0f},
       {"no window, start", true, {1.0f, 1.2f, 1.1f}, false, {0, 0, 0}, 0, 0, 0, 1.0f},
+      {"no window, start below 0.20", true, {0.01f, 1.2f, 1.1f}, false, {0, 0, 0}, 0, 0, 0, 1.0f},
+      {"no window, start above 3.0", true, {3.5f, 1.2f, 1.1f}, false, {0, 0, 0}, 0, 0, 0, 1.0f},
       {"no window, no start", false, {}, false, {0, 0, 0}, 0, 0, 0, 1.0f},
   };
   for (const Case& c : cases) {

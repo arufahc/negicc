@@ -207,8 +207,8 @@ ORT_DIR=<onnxruntime> formal/testvectors/auto/build.sh
 OMP_NUM_THREADS=16 bin_out/gen_auto profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors/auto
 ```
 
-The committed vectors were generated from `91b2fcb` on x86-64 Linux with GCC 13.3; `lake exe
-checkAuto` makes 11839 comparisons, none outside its tolerance.
+The committed vectors were generated from `47a187d` on x86-64 Linux with GCC 13.3; `lake exe
+checkAuto` makes 11847 comparisons, none outside its tolerance.
 
 ## Using the package from another repository
 
