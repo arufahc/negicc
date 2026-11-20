@@ -359,10 +359,6 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("List the film stocks and light sources of the built-in profile bundles and exit.")
     .default_value(false)
     .implicit_value(true);
-  // Kept only to reject it with a reason: the tint trim stage was removed (its balance is part of the curve fit).
-  parser.add_argument("--tint_trim")
-    .help("Removed: the tint trim stage is gone; the overall magenta-green balance is now part of the curve fit. "
-          "Giving this flag is an error.");
   parser.add_argument("--tone_stage")
     .help("auto (default), on, off, or a recorded curve: curve:black,white,gamma,contrast. auto: the tone stage "
           "runs on every bundle conversion with -P srgb that is not a print, on white-light and TriLED bundles alike, "
@@ -698,12 +694,6 @@ int parse_options(int ac, char* av[], Options& o) {
               name, prefix, count, v.c_str());
     return false;
   };
-  if (parser.is_used("--tint_trim")) {
-    log_error("--tint_trim was removed: the tint trim stage is gone and the overall magenta-green balance is part of "
-              "the curve fit. Drop the flag (an older sidecar's cli_equivalent carries it; its other values still "
-              "apply, but the trim it recorded is not reproduced)\n");
-    return 1;
-  }
   if (!replay("--tone_stage", "curve:", 4, o.tone_replay_given, o.tone_replay)) return 1;
   o.quality = parser.get<int>("--quality");
   o.no_crop = parser.get<bool>("--no_crop");
