@@ -36,6 +36,19 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | `Negicc.Scene.Defs` | The five modules above together. No Mathlib |
 | `Negicc.Scene.Props` | Proved properties of the conversion |
 | `Negicc.Tone.Apply` | The tone curve on a pixel (`apply_tone`) |
+| `Negicc.Print.Cie` | The CIE 1931 observer and the illuminants D50 and D55 of `np_print.cc` |
+| `Negicc.Print.Spectral` | A print material's spectral model (dye amounts to XYZ), `numpy.interp`, the resampling of a profile's columns, the observer, the printer lamp |
+| `Negicc.Print.Matrix` | 3x3 inverse, transpose and sums of the print |
+| `Negicc.Print.Material` | `Q`, the print matrix `P`, the CLF's colour matrix, the Bradford adaptation, `aim`, a material's load |
+| `Negicc.Print.Grey` | The grey balance curve, a bracket's mid grey, the tilt at a mid grey, the slopes |
+| `Negicc.Print.Curves` | `Paper_c`, the print ICC's input curves at a mid grey with gains, its 16-bit codes, its table |
+| `Negicc.Print.White` | The print relative to its paper (`to_paper_white`, `scale_print_icc_table`) |
+| `Negicc.Print.Density` | The density file's codes, floor and clip counts, the balance offsets |
+| `Negicc.Print.Clf` | The density file's CLF: the frame's grey and slopes, its first matrix, the material's nodes |
+| `Negicc.Print.Floor` | The film base held no darker than the thinnest film (`print_floor_factor`), the frame it reads |
+| `Negicc.Print.Search` | The print's search (the held exposure, A0, the line search in A, the fixed point) and the knobs, around an oracle for the network |
+| `Negicc.Print.Defs` | The eleven print modules together. No Mathlib |
+| `Negicc.Print.Props` | Proved properties of the print emulation (DESIGN.md 5.11 among them) |
 
 ## One formula, two readings
 
@@ -143,6 +156,35 @@ bin_out/gen_vectors profiles/Portra400-A7R4-TriLED formal/testvectors
 The committed vectors were generated from the `master` this specification describes
 (`24ab7c8`), on x86-64 Linux with GCC 13.3 and glibc 2.39. Another compiler or C library may
 change the last digit of a single precision result, which the tolerances cover.
+
+## The print emulation's check
+
+```sh
+cd formal
+lake exe checkPrint
+```
+
+`checkPrint` (`CheckPrint.lean`) reads `testvectors/print.json`, the spektrafilm print profiles it
+names (`3rd_party/spektrafilm/profiles/`, read and resampled by the specification itself) and the
+bundles' print ICCs (`profiles/<bundle>/print_<material>.icc`), and compares the specification over
+`Float` with the C++: the material as loaded, `Q` and the print matrix, `Paper_c`, the input curves
+and their 16-bit tables, the table (every node of a bundle's print ICC to one 16-bit code), the
+print's white, a pixel through the print profile, the density codes, the CLF's numbers and the
+floor, for the Portra 400 TriLED bundle (a paper and a print film) and its white-light bundle. Its
+tolerances and their reasons are at the top of `CheckPrint.lean`; values the C++ computes in double
+precision agree to `1e-9`, a CLF's printed numbers to their printed digits.
+
+The vectors are written by `testvectors/gen/gen_print.cc` (with `gen_print_white.cc`, which
+compiles `np_pipeline.cc` to reach its file-local `to_paper_white`). From the repository root:
+
+```sh
+make -j lib bin_out/embedded_data.o bin_out/embedded_data_files.o bin_out/np_options.o \
+  bin_out/np_output.o bin_out/np_input.o bin_out/np_film_base.o bin_out/np_print.o USE_CUDA=0 ORT_DIR=<onnxruntime>
+ORT_DIR=<onnxruntime> formal/testvectors/gen/build_print.sh
+bin_out/gen_print profiles/Portra400-A7R4-TriLED formal/testvectors profiles/Portra400-A7R4-D65
+```
+
+The committed `print.json` was generated from `13369ac` on x86-64 Linux with GCC 13.3.
 
 ## Using the package from another repository
 
