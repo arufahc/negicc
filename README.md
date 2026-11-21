@@ -296,9 +296,9 @@ adapt the viewing light's white ([DESIGN.md](DESIGN.md) 5.9).
 ![Print TRC Curves and 3D cLUT Gamut](samples/print_trc_and_clut.png)
 
 On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's own tone curve.
-Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the spectral print model to 0.6 to 1.5
+Under the narrow-band RGB LED (`--light_source tri`), the emulation matches the spectral print model to 0.06 to 0.14
 ΔE₀₀ on average; under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
-printed chart patch differs from the RGB-LED print by 2.7 to 3.3 ΔE₀₀ on average.
+printed chart patch differs from the RGB-LED print by 4.1 to 4.6 ΔE₀₀ on average ([DESIGN.md](DESIGN.md) 5.4, 5.10).
 
 ![The same negative as negicc's picture and as a print on each of the eight print
 materials](samples/print_materials_triled.jpg)

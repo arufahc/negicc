@@ -721,6 +721,13 @@ slope across the toe and shoulder where `Q L` mixes the channels under white lig
 differ only in their curves. The table's sampling error on the chart is at most 0.4 ΔE00 on TriLED and 0.8 ΔE00 on
 white light (median under 0.1).
 
+**The print ICC against the chain.** On the RGB-LED profile sets, every chart patch of every bracket (288 patches in
+each of the seven brackets) is printed twice at its bracket's `A_mid` with gains 1: through the print ICC as the
+conversion runs it (the knee, the bracket's input curves, the table relative to the paper's white, 5.7), and directly
+by the chain above, from the patch's light density without the knee or the table, relative to the print where every
+layer holds its least dye. ΔE00 on CIELAB of the two PCS XYZ, with the PCS white as the white, averages 0.06 to 0.14
+per print material over the three stocks; the 95th percentile is at most 0.24 and the largest 0.5.
+
 The profile-building tools write one print ICC per material into the bundle (`print_*.icc`, curves for the middle
 bracket). `neg_process` uses the bundle's table when its curves equal the ones computed here to one 16-bit code, and
 otherwise (a material given as a file) computes the table, in about 0.3 s.
@@ -915,6 +922,11 @@ under both lights, the APD of a white-light reading is 0.03 to 0.09 RMS from the
 the best a 3×3 fitted to the chart could do. The rows of `F L` are about twice as long as those of the LED's `M`, so
 the scan's noise is about twice as large in the file. A broad channel compresses high densities, which a 3×3 cannot
 undo.
+
+**The white-light print against the RGB-LED print.** The same chart negatives read under both lights, each reading
+printed through its own light's print ICC at the RGB-LED bracket's `A_mid` with gains 1 and relative to the paper's
+white, differ by 4.1 to 4.6 ΔE00 on average per print material over the three stocks (3.7 to 5.2 per stock), and by 2.9
+to 3.3 on the grey steps alone; the largest, up to 30 on a patch, are in the two densest brackets.
 
 ## 5.11 Derivations
 
