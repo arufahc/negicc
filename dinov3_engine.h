@@ -29,15 +29,9 @@
 // are built only with USE_CUDA=1 and run the device-specific backbone.engine and adapter.engine files
 // `make dinov3_engine` builds. When USE_CUDA=0, dinov3_trt_runner.cc holds fallback stubs instead.
 // These sources live in negicc and are consumed by negicc-station via git submodule at 3rd_party/negicc.
-//
-// py-ref: negicc_station/src/export_intent_engine.py:49-70, 104-112 @ 2f7ee4a (output contract)
-// py-ref: negicc_station/src/tensorrt_intent_model.py:249-273 @ 2f7ee4a (multi-head output parsing)
-// py-ref: negicc_station/src/dino_geometry.py:23-27 @ 2f7ee4a (IntentPrediction namedtuple)
 // --------------------------------------------------------------------------------------------------------------------
 
 // Multi-head inference result matching Python IntentPrediction.
-// py-ref: negicc_station/src/dino_geometry.py:23-27 @ 2f7ee4a (IntentPrediction namedtuple)
-// py-ref: negicc_station/src/tensorrt_intent_model.py:249-273 @ 2f7ee4a (multi-head output parsing)
 struct DinoV3InferenceResult {
     std::vector<float> mu;            // [1, N, 3] Target Lab color field
     std::vector<float> sigma;         // [1, N, 3] Tolerance field
@@ -61,7 +55,6 @@ struct DinoV3InferenceResult {
 
 // Destination buffers for multi-head DINOv3 model outputs.
 // Any pointer left as nullptr will not be copied back by the runner.
-// py-ref: negicc_station/src/tensorrt_intent_model.py:249-273 @ 2f7ee4a
 struct DinoV3RunnerOutputs {
     float* tokens = nullptr;       // [1, patches, 768] layer 9 + 12 patch tokens (backbone models)
     float* mu = nullptr;           // [1, patches, 3] CIELAB mean field
@@ -361,8 +354,6 @@ private:
 
 // The fused DINOv3 intent model (src/export_intent_engine.py): inputs pixel_values, pool_weights; outputs mu,
 // sigma, pooled, pooled_tone. Preprocessing reproduces intent_model.predict / dino_geometry.
-// py-ref: negicc_station/src/dino_geometry.py:30-74 @ 2f7ee4a (geometry & tone weights)
-// py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict flow)
 class DinoV3Engine {
 public:
     DinoV3Engine();
@@ -380,7 +371,6 @@ public:
     // backend: "cpu" (ONNX Runtime), "gpu" (TensorRT, USE_CUDA=1 builds) or "auto" ("gpu" when this build has
     // a CUDA device and the model has a TensorRT engine, as intent_model.resolve_intent_backend).
     // Throws std::runtime_error (std::invalid_argument for a bad backend) when the model cannot be loaded.
-    // py-ref: negicc_station/src/intent_model.py:320-366 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
     void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
               int max_size = 512, int patch_size = 16);
 
@@ -437,7 +427,6 @@ public:
 
     // Run inference on 8-bit sRGB preview image. Not thread-safe (a TensorRT execution context runs one inference at
     // a time): callers that share one engine between threads serialize their calls, as negicc-station's binding does.
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict)
     DinoV3InferenceResult infer(const uint8_t* srgb_data, int width, int height, int stride);
 
 private:

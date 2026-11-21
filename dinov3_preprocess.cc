@@ -1,9 +1,4 @@
 // PIL-exact and OpenCV-compatible preprocessing for DINOv3 photographic intent.
-//
-// py-ref: negicc_station/src/tensorrt_intent_model.py:189 @ 2f7ee4a (PIL Image.Resampling.BILINEAR)
-// py-ref: negicc_station/src/dino_geometry.py:43-74 @ 2f7ee4a (compute_tone_weights)
-// py-ref: negicc_station/src/dino_geometry.py:30-41 @ 2f7ee4a (compute_aspect_preserved_shape)
-// py-ref: negicc_station/src/per_target_conversion.py:217-222 @ 2f7ee4a (cv_linear_resize_rgb)
 
 #include "dinov3_preprocess.h"
 

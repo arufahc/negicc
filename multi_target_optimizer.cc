@@ -129,8 +129,7 @@ struct Enclosure {
   float fill_ratio = 0;                // (g_hi / g_lo) / (g_max / g_min): the scene's contrast ratio over the bracket's
 };
 
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (bracket_enclosure)
-// (This port differs from that reference: the search window is the usable range on every bracket.)
+// The search window is the usable range on every bracket.
 bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, float g_hi, Enclosure& r);
 
 // The centre the search's exposure penalty pulls E toward (compute_penalties: 5 log2(E / centre)^2), or 0 for none. For
@@ -171,7 +170,6 @@ bool bracket_enclosure(const BundleTarget& tgt, int target_idx, float g_lo, floa
 // Brackets whose grey wedge spans at least 0.75 of the largest tonal capacity (at least three kept), when the
 // bundle has five or more: a bracket that calibrates a much shorter range than the best ones cannot hold a whole
 // scene, so it is not worth screening.
-// py-ref: negicc_station/src/target_selection.py @ 93be1ec (filter_admissible_targets)
 std::vector<int> filter_admissible_targets(const ProfileBundle& bundle) {
   const int n = bundle.targets.size();
   std::vector<int> out;
@@ -246,7 +244,6 @@ void lstsq3(const float J[3][3], const float r[3], float rcond, float x[3]) {
 }
 
 // The pipeline's response to synthetic camera-linear inputs for one bracket (identity matrix, knee 0.95).
-// py-ref: negicc_station/src/grey_point.py @ 93be1ec (GreyPoint)
 class GreyPoint {
  public:
   // steady: for the knobs' solves, a reference grey that the solve misses is sought again (reference_grey). The
@@ -444,7 +441,6 @@ class GreyPoint {
 // The E (see ConversionParams) at which the scene vector p, with gains g and b, renders at L* 50 through the
 // bracket: the metered exposure. A bisection on log2 E over [-6, 6] that stops at |L* - 50| <= 0.1. Its 25
 // halvings, the station's count, resolve E to 12 / 2^25 stop, far below that tolerance, so they only cap the loop.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (exposure_for_lightness)
 bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, float b, float& e_out) {
   constexpr float TARGET = 50.0f, TOL = 0.1f;
   constexpr int MAX_BISECTIONS = 25;
@@ -474,7 +470,6 @@ bool exposure_for_lightness(const GreyPoint& gp, const float p[3], float g, floa
 // onto the DINOv3 patch grid (one pixel per patch). The grid is the inner crop's shape at DINOv3's input size: its
 // longer side scaled to the engine's max_size, each side rounded to whole patches of patch_size pixels, so
 // grid_w x grid_h patches (32 x 21 for a 3:2 landscape crop at 512 and 16).
-// py-ref: negicc_station/src/image_capture.cpp @ 93be1ec (FrameView::raw_stats)
 // The search uses this grid only for the optimiser's cells, corrected per bracket by the trained cells of its last
 // preview (update_correction); the station's copy has no such correction.
 struct FrameStats {
@@ -653,8 +648,6 @@ struct ClipStats {
 };
 
 // The highlight clipping of img's crop rendered with each conversion matrix (9 floats per candidate in matrices).
-// py-ref: negicc_station/src/pipeline/converter.cpp @ 93be1ec (Converter::highlight_clip)
-// py-ref: negicc_station/src/pipeline/kernels_cpu.cpp @ 93be1ec (cpu_highlight_clip)
 std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const InnerCrop& crop_in,
                                               const std::vector<float>& matrices, float knee,
                                               const ProfileData& prof, const float ceil_rgb[3],
@@ -975,10 +968,8 @@ class SearchFrame {
   // (ScreeningResult::intent_loss). pullback_search (the highlight pullback's re-search) replaces the pull of E toward
   // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
   // searches g and b on wider grids (dinov3_auto_solver.cc).
-  // py-ref: negicc_station/src/optimizer.py @ 93be1ec (optimize_target_for_intent)
-  // (This port differs from that reference: the field the optimiser aims at is corrected per bracket by the picture
-  // its last preview gave (update_correction), and a bracket whose usable range is inverted gets no centre pull
-  // (pull_centre).)
+  // The field the optimiser aims at is corrected per bracket by the picture its last preview gave
+  // (update_correction), and a bracket whose usable range is inverted gets no centre pull (pull_centre).
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
                 const ConversionParams* initial, const float e_bounds[3], ConversionParams& out,
                 bool pullback_search = false) {
@@ -1028,9 +1019,7 @@ class SearchFrame {
   // toward the caller's centre (none when it is 0). pullback_search as for search(). Every caller passes an ordered
   // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
   // an unordered one is ordered here and keeps the caller's centre.
-  // py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (_FrameContext.fixed_point)
-  // (This port differs from that reference: L* is held to the frame's lightness wish, and the correction of
-  // update_correction is measured at every step.)
+  // L* is held to the frame's lightness wish, and the correction of update_correction is measured at every step.
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
@@ -1238,7 +1227,6 @@ class SearchFrame {
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
 // base and by the exposure ratio between the film base capture and the scan.
-// py-ref: negicc_station/src/film_profiling.py @ 93be1ec (compute_merged_crosstalk, compute_exposure_ratio)
 void merged_matrix(const ProfileBundle& bundle, const float fb[3], float exposure_ratio, float out[9]) {
   for (int r = 0; r < 3; ++r) {
     const float scale = fb[r] > 0 ? (bundle.normalization_target / fb[r]) * exposure_ratio : 1.0f;
@@ -1318,14 +1306,12 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
 
 // L* of a grey whose luminance is multiplied by 2 ** stops (CIE L* <-> relative luminance Y). CIE 1976 L* with CIE
 // 15's exact kLabKappa and kLabEpsilon, whose product is the break in L*, 8.
-// py-ref: negicc_station/src/grey_point.py (lstar_after_stops)
 static float lstar_after_stops(float L, float stops) {
   double Y = L > 8.0f ? std::pow(((double)L + 16.0) / 116.0, 3.0) : (double)L / negicc::kLabKappa;
   Y *= std::pow(2.0, (double)stops);
   return (float)(Y > negicc::kLabEpsilon ? 116.0 * std::cbrt(Y) - 16.0 : negicc::kLabKappa * Y);
 }
 
-// py-ref: negicc_station/src/conversion_session.py (ConversionSession._solve_knobs)
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
                       float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof) {
   out.e = base_e;
@@ -2009,7 +1995,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 1: the enclosure of each bracket (on white-light bundles, g_lo and g_hi are scaled by e_norm into reference
   // station ADU units; on TriLED, raw g_lo and g_hi are kept for bit-exact station parity).
-  // py-ref: negicc_station/src/optimizer.py @ 93be1ec (compute_gamut_volume_enclosure)
   const float g_lo = std::max(1.0f, stats.g_lo);
   const float g_hi = std::max(g_lo + 1.0f, stats.g_hi);
   const float g_scale = white_light ? e_norm : 1.0f;
@@ -2091,7 +2076,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 2: meter each admissible bracket to L* 50; the bootstrap field is the mean over every metered bracket's
   // render.
-  // py-ref: negicc_station/src/optimizer.py @ 93be1ec (select_metered_bootstrap_candidate)
   std::vector<Enclosure> pool;
   for (const auto& r : enclosure)
     if (r.admissible) pool.push_back(r);
@@ -2359,7 +2343,6 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 
   // Step 5: the clip fallback (ClipFallbackOutcome): move to the next bracket when the chosen one white-clips.
   // It reads the white-clip share and the median L*, which no ceiling enters (the ceiling counts only exc).
-  // py-ref: negicc_station/src/optimizer.py @ 93be1ec (measure_rescue_candidates, select_highlight_rescue)
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   const ClipStats hc0 = fr.highlight_clip(chosen.target_idx, {params}, kCeil)[0];
   const float clip_0 = hc0.white_clip / 100.0f;
@@ -3196,8 +3179,6 @@ bool fit_white_light_curves(const WhiteLightFitData& data, const negicc::CurveFi
   return WhiteLightFitCore(data, fit_opts, rolloff, out).run();
 }
 
-// py-ref: negicc_station/src/conversion_session.py (ConversionSession.set_fit_curves) and
-// negicc_station/src/per_target_conversion.py (PerTargetConverter.fit_bracket)
 bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,

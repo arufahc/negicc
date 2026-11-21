@@ -22,9 +22,6 @@
 // --------------------------------------------------------------------------------------------------------------------
 // Engine
 // DinoV3Engine: native C++ photographic intent inference engine.
-//
-// py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict flow)
-// py-ref: negicc_station/src/intent_model.py:320-375 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
 // --------------------------------------------------------------------------------------------------------------------
 
 namespace {
@@ -180,7 +177,6 @@ size_t DinoV3Engine::memory_bytes() const {
     return (runner_ ? runner_->memory_bytes() : 0) + (adapter_ ? adapter_->memory_bytes() : 0);
 }
 
-// py-ref: negicc_station/src/intent_model.py:320-375 @ 2f7ee4a (resolve_intent_backend & load_intent_model)
 void DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
                         int max_size, int patch_size) {
     runner_.reset();
@@ -276,7 +272,6 @@ void DinoV3Engine::load_memory(const void* engine_data, size_t engine_size, cons
     runner_ = make_ort_runner(onnx_data, onnx_size, num_threads);
 }
 
-// py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (predict implementation)
 DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, int height, int stride) {
     if (!is_loaded()) {
         throw std::runtime_error("DinoV3Engine::infer called before model loaded.");
@@ -288,20 +283,16 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     auto t0 = std::chrono::high_resolution_clock::now();
 
     DinoV3InferenceResult res;
-    // py-ref: negicc_station/src/dino_geometry.py:30-40 @ 2f7ee4a (compute_aspect_preserved_shape)
     compute_aspect_preserved_shape(width, height, max_size_, patch_size_,
                                   res.target_w, res.target_h, res.grid_w, res.grid_h);
     res.num_patches = res.grid_w * res.grid_h;
 
     // 1. Antialiased bilinear resize to (target_w, target_h)
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:189 @ 2f7ee4a (PIL Image.Resampling.BILINEAR)
     std::vector<uint8_t> resized_u8((size_t)res.target_w * res.target_h * 3);
     antialiased_bilinear_resize_rgb(srgb_data, width, height, stride,
                                     resized_u8.data(), res.target_w, res.target_h);
 
     // 2. pixel_values [1, 3, target_h, target_w]: (u8 / 255 - mean) / std in float32
-    // py-ref: negicc_station/src/dino_geometry.py:17-18 @ 2f7ee4a (DINO_MEAN, DINO_STD)
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:190-192 @ 2f7ee4a (ImageNet normalization)
     std::vector<float> pixel_values((size_t)3 * res.target_h * res.target_w);
     // The ImageNet statistics DINOv3's LVD-1689M weights take (facebookresearch/dinov3 README).
     const float mean[3] = {0.485f, 0.456f, 0.406f};
@@ -318,12 +309,10 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     }
 
     // 3. pool_weights [1, N, 3]
-    // py-ref: negicc_station/src/dino_geometry.py:43-74 @ 2f7ee4a (compute_tone_weights)
     std::vector<float> pool_weights((size_t)res.num_patches * 3);
     compute_tone_weights(resized_u8.data(), res.grid_w, res.grid_h, patch_size_, pool_weights.data());
 
     // 4. Multi-head forward pass
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:202-273 @ 2f7ee4a
     res.mu.resize((size_t)res.num_patches * 3);
     res.sigma.resize((size_t)res.num_patches * 3);
 
@@ -345,7 +334,6 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
     const bool want_ranker = runner_->has_pooled() || runner_->has_pooled_tone();
     if (want_ranker) {
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:269-270 @ 2f7ee4a (features_3459 contiguous buffer)
         res.features_3459.assign(1152 + 3 * 768 + 3, 0.0f);
         if (runner_->has_pooled()) {
             outs.pooled = res.features_3459.data();
@@ -358,7 +346,6 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     }
 
     runner_->run(pixel_values.data(), res.target_h, res.target_w, pool_weights.data(), res.num_patches, outs);
-    // py-ref: negicc_station/src/export_intent_engine.py @ 93be1ec (FusedIntentNetwork: adapter(cat(h_photo, h_sem)))
     if (device_adapter) {
         adapter_->run_device(runner_->device_tokens(), res.num_patches, res.mu.data(), res.sigma.data());
     } else if (!tokens.empty()) {
@@ -390,7 +377,6 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     }
 
     if (res.has_pooled_tone) {
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:268 @ 2f7ee4a (tone_mass = tone_weights.mean(axis=0))
         res.tone_mass.resize(3, 0.0f);
         for (int b = 0; b < 3; ++b) {
             float sum = 0.0f;
@@ -416,9 +402,6 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 // --------------------------------------------------------------------------------------------------------------------
 // ONNX Runtime CPU runners
 // ONNX Runtime CPU execution provider for DINOv3 photographic intent.
-//
-// py-ref: negicc_station/src/export_intent_engine.py:49-70 @ 2f7ee4a (model graph inputs/outputs)
-// py-ref: negicc_station/src/bench_fused_vs_separate.py:163-209 @ 2f7ee4a (ORT execution session)
 // --------------------------------------------------------------------------------------------------------------------
 
 namespace {
