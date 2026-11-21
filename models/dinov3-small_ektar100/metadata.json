@@ -90,11 +90,10 @@
     "all_passed": true
   },
   "exported_files": {
-    "pytorch_weights": "model.pt",
-    "torchscript": "adapter.torchscript",
     "adapter_onnx": "adapter.onnx",
     "metadata": "metadata.json"
   },
+  "adapter_onnx_sha256": "c745de2c5cf030b12f2dca1d2def051ab71b4ef022963ab4539d96703a3cb483",
   "stock_key": "ektar100",
   "source_profile_bundle": "Ektar100-A7R4-TriLED",
   "source_profile_json": "profile_Ektar100-A7R4-TriLED_20261003_183828.json",
@@ -112,6 +111,8 @@
   "feature_cache_sha256": "5e7805e16129af8ceec1dec48e85cb923ae3cbdee81c31afb5045565053860c4",
   "n_train_photos": 4351,
   "n_val_photos": 682,
+  "n_train_photographers": 969,
+  "n_val_photographers": 119,
   "n_train_tokens": 3262784,
   "n_val_tokens": 527584,
   "epochs": 15,
@@ -191,5 +192,42 @@
     }
   ],
   "git_commit": "d66dc5ef6423be09c0fab1c3fbff84e50c37fa89",
-  "hostname": "wp0"
+  "training": {
+    "repository": "the companion repository (negicc's profiling tools, not public), branch adapters-final-epoch",
+    "commit": "d66dc5ef6423be09c0fab1c3fbff84e50c37fa89",
+    "script": "tools/build_profile_adapter.py",
+    "command": "NEGICC_CORPUS_DIR=<corpus> python tools/build_profile_adapter.py --profile profiles/profile_Ektar100-A7R4-TriLED_20261003_183828.json --weighting token --jobs 24 --threads 16 --no-combined-onnx --force --models-dir <output>",
+    "defaults": "the script's own at that commit: --epochs 15 --checkpoint final --batch-size 64 --lr 0.001, seeds 42, 43 and 44, sigma calibration on"
+  },
+  "held_out": {
+    "what": "the photographer split's test photographers, in neither training nor validation, through the selected seed's model; computed after training from its checkpoint, not by the training script. mae, mae_L and mae_ab are the statistic of metrics.val_mae, val_mae_L and val_mae_ab (mean absolute error over all patches; a*b* the mean of the a* and b* errors), rounded to 0.001; per_photographer averages per photograph, then per photographer, with a bootstrap standard error over photographers",
+    "n_photos": 617,
+    "n_photographers": 92,
+    "n_tokens": 403296,
+    "mae": 4.64,
+    "mae_L": 3.992,
+    "mae_ab": 4.965,
+    "mae_Lab": [
+      3.992,
+      3.88,
+      6.049
+    ],
+    "per_photographer": {
+      "mae_Lab": [
+        3.832,
+        4.083,
+        6.272
+      ],
+      "mean_signed_error_Lab": [
+        -0.083,
+        -0.374,
+        -0.521
+      ],
+      "mean_signed_error_se_Lab": [
+        0.293,
+        0.336,
+        0.543
+      ]
+    }
+  }
 }
