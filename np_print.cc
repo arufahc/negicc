@@ -1227,7 +1227,7 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
     for (int c = 0; c < 3; ++c) p.past_knee[c] = own->second.past_knee[c], p.past_cut[c] = own->second.past_cut[c];
     p.stopped_by = own->second.stopped_by;
     p.a0 = own->second.a0;
-    p.wish_l = own->second.wish_l;
+    p.target_l = own->second.target_l;
     for (int c = 0; c < 3; ++c) {
       p.above_white[c] = own->second.above_white[c];
       p.at_white[c] = own->second.at_white[c];
@@ -1515,7 +1515,7 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
         double bal[3];
         print_balance(rec, p, bal);
         one["balance"] = {bal[0], bal[1], bal[2]};   // the formula's balance for this material, as its CLF applies it
-        one["search"] = {{"a0", p.a0}, {"wish_L", p.wish_l},
+        one["search"] = {{"a0", p.a0}, {"target_L", p.target_l},
                          {"converged", p.converged}, {"stopped_by", p.stopped_by}, {"steps", p.steps},
                          {"last_move", {p.last_move[0], p.last_move[1], p.last_move[2]}},
                          {"above_knee_pct", 100.0 * p.above_knee},

@@ -1910,7 +1910,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       for (int c = 0; c < 3; ++c) ps.past_knee[c] = cr.past_knee[c], ps.past_cut[c] = cr.past_cut[c];
       ps.stopped_by = cr.stopped_by;
       ps.a0 = cr.a0;
-      ps.wish_l = cr.wish_mean_l;
+      ps.target_l = cr.target_mean_l;
       for (int c = 0; c < 3; ++c) {
         ps.above_white[c] = cr.above_white[c];
         ps.at_white[c] = cr.at_white[c];
@@ -2031,10 +2031,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         }
       }
     }
-    log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness wish L* %.2f; "
+    log_info("Print search: A0 %.4f -> A %.4f (nearest %s), g %.4f, b %.4f, %d steps%s; lightness target L* %.2f; "
              "%.2f %% of the crop above the knee at E = 1\n", s.print_res.a0, s.print_res.a,
              scan.auto_res.target_name.c_str(), scan.auto_res.params.g, scan.auto_res.params.b, s.print_res.steps,
-             s.print_res.converged ? "" : ", not converged", s.print_res.wish_mean_l, 100.0 * s.print_res.above_knee);
+             s.print_res.converged ? "" : ", not converged", s.print_res.target_mean_l, 100.0 * s.print_res.above_knee);
     return true;
   };
   // The previous run's Auto result (bracket and its final E, g, b; with fitted curves, the re-metered E and the fit's
@@ -3426,7 +3426,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     if (s.print_searched) {
       sc.print_searched = true;
       sc.print_a0 = s.print_res.a0;
-      sc.print_wish_l = s.print_res.wish_mean_l;
+      sc.print_target_l = s.print_res.target_mean_l;
       sc.print_steps = s.print_res.steps;
       sc.print_converged = s.print_res.converged;
       sc.print_above_knee = s.print_res.above_knee;

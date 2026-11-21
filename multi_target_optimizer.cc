@@ -881,16 +881,16 @@ class SearchFrame {
   const std::vector<float>& last_neutral_p() const { return last_neutral_p_; }
   // The tone heads' input from the last predict() (FixedPointResult::tone_features; empty without the token spread).
   const std::vector<float>& last_tone_features() const { return last_tone_features_; }
-  // The frame's one lightness wish: the L* channel (mu and sigma) of the bootstrap field. Every fixed-point loop
+  // The frame's one lightness target: the L* channel (mu and sigma) of the bootstrap field. Every fixed-point loop
   // scores and searches L* against it, while a* and b* are re-predicted from each step's render (DESIGN.md, "The
   // Auto search").
-  void set_lightness_wish(const std::vector<float>& mu, const std::vector<float>& sigma) {
+  void set_lightness_target(const std::vector<float>& mu, const std::vector<float>& sigma) {
     const size_t n = mu.size() / 3;
-    wish_mu_l_.resize(n);
-    wish_sigma_l_.resize(n);
+    target_mu_l_.resize(n);
+    target_sigma_l_.resize(n);
     for (size_t i = 0; i < n; ++i) {
-      wish_mu_l_[i] = mu[i * 3];
-      wish_sigma_l_[i] = sigma[i * 3];
+      target_mu_l_[i] = mu[i * 3];
+      target_sigma_l_[i] = sigma[i * 3];
     }
   }
 
@@ -954,7 +954,7 @@ class SearchFrame {
   }
 
   // The residual of a preview against a field (FixedPointResult::residual): in the loops, the field predicted from the
-  // preview with L* replaced by the frame's lightness wish.
+  // preview with L* replaced by the frame's lightness target.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
     const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h,
@@ -1019,7 +1019,7 @@ class SearchFrame {
   // toward the caller's centre (none when it is 0). pullback_search as for search(). Every caller passes an ordered
   // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
   // an unordered one is ordered here and keeps the caller's centre.
-  // L* is held to the frame's lightness wish, and the correction of update_correction is measured at every step.
+  // L* is held to the frame's lightness target, and the correction of update_correction is measured at every step.
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
@@ -1043,11 +1043,11 @@ class SearchFrame {
       // The L* the model asks for follows the picture it is shown, so a loop re-predicting L* from its own render
       // drifts lighter or darker by itself, and residuals measured against different fields cannot rank lightness:
       // two finalists that screening placed at the same L* ended 10-14 L* apart and the lower residual picked one.
-      // L* is held to the frame's one wish; a* and b* keep the re-prediction.
-      if (wish_mu_l_.size() * 3 == mu.size()) {
-        for (size_t i = 0; i < wish_mu_l_.size(); ++i) {
-          mu[i * 3] = wish_mu_l_[i];
-          sigma[i * 3] = wish_sigma_l_[i];
+      // L* is held to the frame's one lightness target; a* and b* keep the re-prediction.
+      if (target_mu_l_.size() * 3 == mu.size()) {
+        for (size_t i = 0; i < target_mu_l_.size(); ++i) {
+          mu[i * 3] = target_mu_l_[i];
+          sigma[i * 3] = target_sigma_l_[i];
         }
       }
       const float err = residual(preview, mu, sigma);
@@ -1222,7 +1222,7 @@ class SearchFrame {
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
   std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
-  std::vector<float> wish_mu_l_, wish_sigma_l_;  // set_lightness_wish(): the bootstrap field's L* channel
+  std::vector<float> target_mu_l_, target_sigma_l_;  // set_lightness_target(): the bootstrap field's L* channel
 };
 
 // The merged input matrix M_frame (ParamSearchResult): the crosstalk rows scaled by normalization_target / film
@@ -1957,7 +1957,7 @@ static bool write_probe_file(const std::string& path, const nlohmann::json& doc,
 // Stage 1, the Auto search: picks the bracket and the exposure and gains (E, g, b) on the half-size scan. It takes the
 // profile bundle, the intent engine, the scan and its exposure; screens the brackets against the bootstrap field (the
 // mean over every metered bracket's render), runs the best through a fixed-point tournament (predicting a* and b*
-// again as the render changes, L* held to the frame's lightness wish), moves to a denser bracket or pulls E back
+// again as the render changes, L* held to the frame's lightness target), moves to a denser bracket or pulls E back
 // where the chosen one clips, and freezes the highlight shoulder. It hands on the bracket, (E, g, b, x_hi) and the
 // winning inference's intent field, neutral-patch probabilities and tone features to the white-light stages
 // (run_white_light_fit).
@@ -2144,7 +2144,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // no bracket meters, the best-fit bracket renders it alone at its e_center (at the pinned E when E is pinned). A
   // field from one bracket would depend on which bracket is deepest, and the two deepest are often within 0.02 stop of
   // each other: a 1 % tighter crop could swap them and move the result by several L*. The mean has no such switch. It
-  // is the screening's field and the frame's lightness wish.
+  // is the screening's field and the frame's lightness target.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1;
   // The bootstrap's renders, (bracket, E) each, at the bootstrap gains.
@@ -2173,7 +2173,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     return true;
   };
   if (!mean_field(mu1, sig1)) return false;
-  fr.set_lightness_wish(mu1, sig1);
+  fr.set_lightness_target(mu1, sig1);
 
   // --probe_intent: what the network predicts from chosen renders (ParamSearchOptions::probe_path), then stop.
   if (!opts.probe_path.empty()) {
@@ -2186,7 +2186,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       const std::vector<float> lab = fr.patch_lab(pv), opt = fr.optimiser_lab(target_idx, cp);
       recs.push_back({{"kind", kind}, {"set", set_idx}, {"stop", stop}, {"target_idx", target_idx},
                       {"target", bundle.targets[target_idx].name}, {"e", cp.e}, {"g", cp.g}, {"b", cp.b},
-                      {"shoulder", cp.shoulder}, {"wish", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
+                      {"shoulder", cp.shoulder}, {"predicted", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
                       {"render", probe_mean3(lab)}, {"optimiser_render", probe_mean3(opt)}, {"mu", mu},
                       {"sigma_cells", sg}, {"render_cells", lab}, {"optimiser_cells", opt}});
       return true;
@@ -2211,7 +2211,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     const nlohmann::json doc = {{"search", "scene"}, {"grid_w", stats.grid_w}, {"grid_h", stats.grid_h},
                                 {"e_norm", out.e_norm}, {"has_crosstalk", bundle.has_crosstalk},
-                                {"bootstrap_target", cand1.target_idx}, {"bootstrap_e", e1_init}, {"records", recs}};
+                                {"bootstrap_target", cand1.target_idx}, {"bootstrap_e", e1_init},
+                                {"target_L", probe_mean3(mu1)[0]}, {"records", recs}};
     if (!write_probe_file(opts.probe_path, doc, recs.size(), verbose)) return false;
     out.probed = true;
     return true;
@@ -3380,7 +3381,7 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
     cr.a0_at_range_end = a0 - in.a_lo < 1e-6 || in.a_hi - a0 < 1e-6;
   }
   cr.a0 = a0;
-  // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's wish.
+  // The bootstrap: the mean field of the renders at A0 - h, A0, A0 + h; its L* is the frame's lightness target.
   std::vector<uint8_t> preview;
   std::vector<float> mu1, sig1, mu, sg;
   std::vector<double> boot = {a0};
@@ -3404,12 +3405,12 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
   {
     double s = 0.0;
     for (size_t i = 0; i < n; ++i) s += mu1[i * 3];
-    cr.wish_mean_l = (float)(s / n);
+    cr.target_mean_l = (float)(s / n);
   }
   if (opts.verbose) {
     std::cout << "Print (continuous): A0 " << a0 << " (range " << in.a_lo << " to " << in.a_hi
-              << "), above the knee at E = 1: " << 100.0f * cr.above_knee << " %, wish L* " << cr.wish_mean_l
-              << " from " << boot.size() << " render(s)"
+              << "), above the knee at E = 1: " << 100.0f * cr.above_knee << " %, lightness target L* "
+              << cr.target_mean_l << " from " << boot.size() << " render(s)"
               << (cr.a0_at_range_end ? " (A0 at an end of the range: bootstrap renders there share an A)" : "") << "\n";
   }
   // The fixed point over (A, g, b), from g and b screened at A0 against the bootstrap field minus the correction of
@@ -3535,7 +3536,9 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
   // --probe_intent: what the network predicts from the print at the result's g, b and A moved by each probe stop
   // (stops of printing exposure, A + stop log10 2); written beside the search, which goes on to convert. Each record's
   // e is the search's E, in its units as the scene probe's: e_norm on TriLED (the base at n0), 1 on white light, where
-  // the search runs on M_frame itself (has_crosstalk false); the result's E is 1 on both.
+  // the search runs on M_frame itself (has_crosstalk false); the result's E is 1 on both. As in the scene probe, each
+  // record's predicted is the network's own prediction and the file's target_L the mean L* of the lightness target
+  // the search held.
   if (!opts.probe_path.empty()) {
     nlohmann::json recs = nlohmann::json::array();
     for (const float stop : opts.probe_stops) {
@@ -3546,12 +3549,12 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
       if (!fr.predict(preview, mu, sg)) return false;
       const std::vector<float> lab = fr.patch_lab(preview);
       recs.push_back({{"kind", "params"}, {"stop", applied_stop}, {"requested_stop", stop}, {"a", ap}, {"e", best.e},
-                      {"g", best.g}, {"b", best.b}, {"wish", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
+                      {"g", best.g}, {"b", best.b}, {"predicted", probe_mean3(mu)}, {"sigma", probe_mean3(sg)},
                       {"render", probe_mean3(lab)}, {"mu", mu}, {"sigma_cells", sg}, {"render_cells", lab}});
     }
     const nlohmann::json doc = {{"search", "print"}, {"grid_w", st.grid_w}, {"grid_h", st.grid_h},
                                 {"e_norm", e_norm}, {"has_crosstalk", bundle.has_crosstalk}, {"a", best_a},
-                                {"records", recs}};
+                                {"target_L", cr.target_mean_l}, {"records", recs}};
     if (!write_probe_file(opts.probe_path, doc, recs.size(), opts.verbose)) return false;
   }
   set_curves_at(best_a);
