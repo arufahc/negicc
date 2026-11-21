@@ -877,7 +877,6 @@ int prepare(const Options& o, Setup& s) {
   std::vector<float>* rows[3] = {&s.r_coeff, &s.g_coeff, &s.b_coeff};
   // A rec2020_linear (white-light) bundle takes the white-light decode, which has no crosstalk to correct and, as in
   // negicc-station, decodes single-shot captures only.
-  // py-ref: negicc_station/src/pipeline_api.py @ 813166c (prepare_image)
   s.white_light = s.is_bundle && bundle.input_space == InputSpace::kRec2020Linear;
   s.camera_rgb_input = o.tiff_input && s.is_bundle && !s.white_light;
   // A film base capture is read as a TriLED scan's mosaic is: camera RGB through the bundle's crosstalk correction.

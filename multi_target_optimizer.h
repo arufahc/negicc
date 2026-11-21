@@ -71,11 +71,6 @@ struct RgbImage {
 //   z2(render, field) = 1 / (3 N) * sum_i sum_{k in L, a, b} ((lab_i,k - mu_i,k) / sigma_i,k)^2,
 //
 // with lab_i the CIELAB of the render over patch i and N the number of patches.
-//
-// The py-ref comments name the functions of the station's Python implementation that each part was ported from. This
-// search differs from them where a comment says so (the lightness wish, the bootstrap mean, the usable-range windows,
-// the per-bracket correction), so the two do not pick the same bracket and parameters.
-// py-ref: negicc_station/src/per_target_conversion.py @ 93be1ec (PerTargetConverter.convert)
 
 // The parameters the search solves. With the input matrix M the search runs on (rows R, G, B; input_matrix on
 // TriLED, M_frame on white light, see ParamSearchResult::input_matrix) the conversion matrix is

@@ -120,7 +120,6 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
   return true;
 }
 
-// py-ref: negicc_station/src/film_frame.py @ 93be1ec (clamp)
 void clamp_rect(int r[4], int bw, int bh) {
   r[2] = std::min(r[2], bw);
   r[3] = std::min(r[3], bh);
@@ -396,7 +395,6 @@ static bool shrink_xtrans(LibRaw* proc) {
 // Reads LibRaw's half-size image of the unpacked RAW of proc (black subtracted, every 2x2 quad one pixel), before any
 // processing, and hands proc holding it to analyse. proc is then left as unpack() left it. False when proc is not a
 // 3-colour Bayer or X-Trans RAW (shrink_xtrans). For both, LibRaw's first three channels are R, G and B.
-// py-ref: negicc_station/src/raw_processor.cpp @ 93be1ec (load_raw_mosaic)
 static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   const unsigned filters = proc->imgdata.idata.filters;
   const bool xtrans = filters == 9;
@@ -434,10 +432,6 @@ static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
 // mosaic after black subtraction and white balance. load_raw then multiplies the mosaic by the gains that balance the
 // camera channels on the film base (ChannelBalance, scale_white_light_mosaic), so that a light of another colour
 // than the profile's is corrected before the camera matrix mixes the channels, not after.
-// py-ref: negicc_station/src/raw_processor.cpp @ 813166c (load_raw_white_light; output_color 8 from branch
-// libraw-from-negicc)
-// py-ref: negicc_station/src/image_capture.cpp @ 813166c (CapturedImage::decode_white_light_locked; no sRGB matrix from
-// libraw-from-negicc)
 //
 // Sets clip_fraction to the fraction of photosites at or above the white level. False, with the reason on stderr,
 // when the RAW has no 3-colour CFA or no daylight white balance.

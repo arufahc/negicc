@@ -141,8 +141,6 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
 void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch, float* lab_out);
 
 // Mean squared z-score of the preview's trained cells (trained_cells_lab) against the intent field predicted from it.
-// py-ref: negicc_station/src/optimizer.py @ 93be1ec (self_consistency_residual; that reference reads a bilinear point
-// sample of the preview at each cell instead, which on a preview thousands of pixels wide is mostly film grain)
 float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch,
                                 const float* mu, const float* sigma);
 

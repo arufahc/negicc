@@ -795,7 +795,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   }
 
   // The colour path the bundle was measured in. Bundles from before the field are camera_raw_rgb.
-  // py-ref: negicc_station/src/film_profiling.py @ 813166c (FilmProfile.__init__)
   const nlohmann::json& space = j.contains("input_space") ? j["input_space"] : nlohmann::json("camera_raw_rgb");
   if (space == "camera_raw_rgb") {
     bundle.input_space = InputSpace::kCameraRawRgb;
@@ -885,7 +884,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       tgt.target_ev = tj["ev"].get<double>();
     }
 
-    // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_exposure)
     tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
 
     if (tj.contains("patches") && tj["patches"].is_object()) {
@@ -896,7 +894,6 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         }
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
-      // py-ref: negicc_station/src/target_selection.py @ 93be1ec (bracket_tonal_capacity)
       for (int k = 0; k < 24; ++k) {
         const std::string key = "gs" + std::to_string(k);
         if (tj["patches"].contains(key) && tj["patches"][key].is_object() && tj["patches"][key].contains("g") &&

@@ -1087,7 +1087,6 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
   // The print matrix of each measure, for this bundle's film: Q inv(F), with any light_density_factors of the measure
   // undone on the light's channels (Q inv(F) + Q L diag(1 / alpha - 1) inv(L) inv(F) = Q L inv(M)) so that P M = Q L
   // for every measure and the bracket's uncalibrated APD slopes apply once.
-  // py-ref: negicc_station/src/print_emulation.py (print_matrix)
   auto print_matrix = [](const double q[9], const DensityMatrix& dm, double p[9]) {
     double inv_f[9];
     if (!dm.present || !invert3(dm.film_to_measure, inv_f)) return false;
@@ -1251,7 +1250,6 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   }
   // The exposure E multiplies the light's channels before the bracket's profile reads them: the film that the
   // profile reads as its mid grey is denser by log10(E) in every light channel, through the measure's matrix.
-  // py-ref: negicc_station/src/print_emulation.py (frame_grey)
   // A bundle with the film's grey balance curve: the mid grey and the slopes are the curve's, as in its
   // print ICCs.
   const double* m = rec.matrix->m;

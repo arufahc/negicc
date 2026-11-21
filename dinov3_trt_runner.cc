@@ -3,8 +3,6 @@
 // `make dinov3_engine` builds on the device. A backbone keeps its tokens on the device; the adapter binds that buffer
 // as its input, so only the intent field and the ranker features come back to the host.
 //
-// py-ref: negicc_station/src/tensorrt_intent_model.py:180-274 @ 2f7ee4a (TensorRTPhotographicIntentModel)
-//
 // A USE_CUDA=0 build compiles the stubs at the end of this file instead: no CUDA device, and runners that throw.
 #include "dinov3_engine.h"
 
@@ -55,7 +53,6 @@ struct DeviceBuffer {
     }
 };
 
-// py-ref: negicc_station/src/tensorrt_intent_model.py:65-170 @ 2f7ee4a (TrtRunner lifecycle and buffer management)
 class TrtRunner : public DinoV3Runner {
 public:
     explicit TrtRunner(const std::string& engine_path) {
@@ -85,7 +82,6 @@ public:
         context_.reset(engine_->createExecutionContext());
         if (!context_) throw std::runtime_error("createExecutionContext failed");
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:118-122 @ 2f7ee4a (detecting optional multi-head outputs)
         for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
             const char* name = engine_->getIOTensorName(i);
             if (std::strcmp(name, "pool_weights") == 0) has_pool_weights_ = true;
@@ -108,20 +104,17 @@ public:
     const void* device_tokens() const override { return has_tokens_ ? tok_.ptr : nullptr; }
     int token_downloads() const override { return token_downloads_; }
 
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:153-169 @ 2f7ee4a (memory_bytes)
     size_t memory_bytes() const override {
         return engine_bytes_ + pv_.bytes + pw_.bytes + tok_.bytes + mu_.bytes + sigma_.bytes +
                pooled_.bytes + pooled_tone_.bytes;
     }
 
-    // py-ref: negicc_station/src/tensorrt_intent_model.py:200-274 @ 2f7ee4a (predict / execution loop)
     void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
              const DinoV3RunnerOutputs& outputs) override {
         const size_t pv_bytes = (size_t)3 * height * width * sizeof(float);
         const size_t field_bytes = (size_t)patches * 3 * sizeof(float);
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:202-206 @ 2f7ee4a (input shapes must be set before output
-        // shapes)
+        // Input shapes must be set before output shapes.
         if (!context_->setInputShape("pixel_values", nvinfer1::Dims4{1, 3, height, width}))
             throw std::runtime_error("TensorRT engine rejects input shape (profile range)");
         context_->setTensorAddress("pixel_values", pv_.reserve(pv_bytes));
@@ -143,10 +136,8 @@ public:
         if (has_pooled_) context_->setTensorAddress("pooled", pooled_.reserve(1152 * sizeof(float)));
         if (has_pooled_tone_) context_->setTensorAddress("pooled_tone", pooled_tone_.reserve(3 * 768 * sizeof(float)));
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:245 @ 2f7ee4a (enqueue execution)
         if (!context_->enqueueV3(stream_)) throw std::runtime_error("TensorRT enqueueV3 failed");
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:252-266 @ 2f7ee4a (D2H output copy on stream)
         if (outputs.tokens && has_tokens_) {
             check_cuda(cudaMemcpyAsync(outputs.tokens, tok_.ptr, tok_bytes, cudaMemcpyDeviceToHost, stream_),
                        "D2H tokens");
@@ -164,7 +155,6 @@ public:
             check_cuda(cudaMemcpyAsync(outputs.pooled_tone, pooled_tone_.ptr, 3 * 768 * sizeof(float),
                                        cudaMemcpyDeviceToHost, stream_), "D2H pooled_tone");
 
-        // py-ref: negicc_station/src/tensorrt_intent_model.py:246 @ 2f7ee4a (sync stream before host access)
         check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
     }
 

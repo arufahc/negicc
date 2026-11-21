@@ -175,8 +175,6 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
 //     transmittance tau(lambda) = 10^-(sum_c delta_c dye_c(lambda) + base(lambda))
 //     XYZ           = sum_lambda tau(lambda) observer(lambda)
 // and a printing density pd is exposed as logE = aim - (pd - grey_density), aim the exposure that prints an 18 % grey.
-//
-// py-ref: negicc_station/src/print_emulation.py (PrintModel, frame_grey, print_clf)
 
 struct PrintMaterial {
   std::string id, name, viewing_illuminant;
@@ -228,7 +226,6 @@ struct PrintMaterial {
 //
 // id names the material when the profile's info.stock is not a string. False with why in err; a bundle without a
 // film_model gives a material without matrices, which frame_print refuses.
-// py-ref: negicc_station/src/print_emulation.py (spektrafilm_print, print_matrix, film_to_print_density, PrintModel)
 bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
                             PrintMaterial& out, std::string& err);
 
@@ -249,7 +246,6 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int
 //             (curve_slopes), else the bracket's own (read only for a bundle without the curve).
 //
 //     printing density = grey_density + slopes * (to_print * (D + balance - grey))
-//
 struct FramePrint {
   std::string id, name;               // the print material
   double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
