@@ -2437,7 +2437,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
       // calibrated range, not by its window or its field, so the field is not predicted again. The screening starts,
       // as the first one did, from the bootstrap renders' corrections, which the tournament has since replaced: each
       // metered bracket is rendered again at its bootstrap parameters to measure its correction (no inference). When no
-      // bracket metered, the bootstrap rendered one bracket and the corrections stay those the tournament left.
+      // bracket metered there are no bootstrap renders to repeat, and each bracket starts from its latest measured
+      // correction: the tournament's last for the two finalists, which it rendered again (and the clip fallback's for
+      // the bracket it tried, when it ran), and for every other bracket the one measured before the first screening
+      // (the bootstrap's render for its own bracket, a render at its e_center for the others), which nothing has
+      // rendered since. That is the best information each bracket has. No test frame reaches this case.
       if (!depths.empty()) {
         for (const auto& r : renders) {
           fr.render_preview(r.first, {r.second, boot_g, boot_b}, preview);
@@ -3115,7 +3119,10 @@ class WhiteLightFit {
     // The intent field the fit scores against: the search's, predicted from the preview at intent_params. The
     // highlight pullback (and the clip fallback) move E, or the bracket's parameters, after that preview, so there the
     // field is predicted again from a preview at the search's final parameters on the bracket's own profile, so the
-    // fit does not run at one E against a field predicted at another. One DINOv3 inference, only then.
+    // fit does not run at one E against a field predicted at another. One DINOv3 inference, only then. Its L* is held
+    // to the frame's lightness target (the search's field's L*), as the fixed point holds it, so the fit's L* losses
+    // are measured against one reference whether or not the field was predicted again; a* and b* keep the new
+    // prediction.
     d.mu = res_.intent_mu;
     d.sigma = res_.intent_sigma;
     d.neutral_p = res_.intent_neutral_p;                  // the neutral head's p of the same preview, if it ran
@@ -3128,6 +3135,10 @@ class WhiteLightFit {
         std::vector<uint8_t> preview;
         fr_.render_preview(idx, res_.params, preview);
         if (!fr_.predict(preview, d.mu, d.sigma)) return false;
+        for (size_t i = 0; i < n; ++i) {
+          d.mu[i * 3] = res_.intent_mu[i * 3];
+          d.sigma[i * 3] = res_.intent_sigma[i * 3];
+        }
         d.neutral_p = fr_.last_neutral_p();
         tone_features = fr_.last_tone_features();
         out_.intent_repredicted = true;

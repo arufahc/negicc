@@ -595,7 +595,8 @@ struct WhiteLightFitResult {
   // The bounds of E for the fit and the re-meter: the bracket's calibrated range widened to hold Auto's E.
   float e_lo = 0.0f, e_hi = 0.0f;
   // The search's intent field was predicted again at its final parameters (the pullback or the clip fallback moved
-  // them after its preview), and the fit scored against that one.
+  // them after its preview), and the fit scored against that one: its a* and b*, with L* held to the frame's
+  // lightness target.
   bool intent_repredicted = false;
   // The fit's options as it ran (the sidecar records them).
   negicc::CurveFitOptions options;
