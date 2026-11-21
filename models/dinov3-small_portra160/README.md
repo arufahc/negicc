@@ -27,7 +27,7 @@ the conversion closest to it.
     mean absolute L* error from 4.59 to 4.18. The replaced adapter passed the a*b* gate (4.92), and per held-out
     photographer its a* error is 0.25 lower.
   - On the held-out photographers the a*b* error is 4.57, the same statistic as the gate's.
-  - The owner accepted the miss when the three adapters were replaced together (#99), along with this stock's failures
+  - The miss was accepted when the three adapters were replaced together (#99), along with this stock's failures
     of the offset rule declared for that retrain: held-out b* -1.42 (outside two standard errors), training a* -0.69 and
     b* -1.27 (outside +-0.5).
 - Training: cosine schedule over 15 epochs, final epoch kept, loss weighted per patch; seed 43 of 42, 43, 44 by the
