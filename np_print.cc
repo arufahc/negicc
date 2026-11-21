@@ -311,6 +311,9 @@ constexpr double kCieD55[kCieSamples] = {
     75.105, 74.694, 74.283, 73.872, 73.4612, 73.0504, 72.6396, 72.2288,
     71.818};
 // ---- END CIE TABLES ----
+// The block above is written by the companion tools with its own grid constants: they are the film model's
+// (profile_bundle.h).
+static_assert(kCieSamples == kSpectralSamples && kCieFirstNm == kSpectralFirstNm, "the CIE tables' grid");
 
 void density_encode_in_place(uint16_t* pixels, int width, int height, int channels, const float merged[9],
                              double base_level, const double m[9], const DensityEncoding& enc, DensityClip& clip) {
@@ -633,7 +636,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
   }
   // The layout is SMPTE ST 268:2014's (DPX, header version V2.0): the file (768 bytes, 5.1), image (640, 5.2) and
   // image source (256, 5.3, the orientation information below) headers make the generic 1664, the film (256, 6.1) and
-  // television (128, 6.2) headers the industry 384, so the user-defined data starts at 2048 (clause 7; at most 1 MB,
+  // television (128, 6.2) headers the industry 384, so the user-defined data starts at 2048 (clause 7; at most 1 MiB,
   // 4.1). An undefined integer or real field holds all ones (4.2). Descriptor 50 is R, G, B (Table 1); transfer and
   // colorimetric codes 0 and 1 are user defined and printing density (Tables 5A and 5B); packing 1 is filled to 32-bit
   // words, method A (Table 3B).
@@ -642,7 +645,7 @@ int write_density_dpx(const std::string& path, const uint16_t* pixels, int width
   uint32_t user_size = kUserId + (uint32_t)description.size() + 1;
   user_size = (user_size + 7u) & ~7u;
   if (user_size > kMaxUser) {
-    log_error("The density metadata (%u bytes) does not fit a DPX file's user data (1 MB)\n", user_size);
+    log_error("The density metadata (%u bytes) does not fit a DPX file's user data (1 MiB)\n", user_size);
     return -1;
   }
   const uint64_t image_bytes = (uint64_t)width * (uint64_t)height * 4;
@@ -1631,9 +1634,6 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
-// D50 to four decimals, as ICC.1:2001-04 (A.1) and ICC.1:2022 (7.2.16) give the PCS illuminant; put_s15 stores it as
-// the s15Fixed16Number negicc::kPcsWhite is, (63190, 65536, 54061) / 65536.
-constexpr double kD50[3] = {0.9642, 1.0, 0.8249};
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
 
 }  // namespace
@@ -1768,13 +1768,15 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
   }
   for (int r = 0; r < 3; ++r) w[r] = inv[r * 3] + inv[r * 3 + 1] + inv[r * 3 + 2];
   // The PCS: the identity for a paper (D50), Bradford from the light's white to D50 for a print film. B: the linearised
-  // Bradford matrix of ICC.1:2022 Annex E.3 (equation E.1).
+  // Bradford matrix of ICC.1:2022 Annex E.3 (equation E.1). D50 is the PCS white as an ICC profile stores it
+  // (kPcsWhite), which the table's wtpt and the header's illuminant carry too.
   double pcs[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   if (m.viewing_illuminant != "D50") {
     static const double B[9] = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
+    const double* d50 = negicc::kPcsWhite;
     double src[3] = {m.white[0] / m.white[1], 1.0, m.white[2] / m.white[1]}, gain[3];
     for (int r = 0; r < 3; ++r) {
-      const double to = B[r * 3] * kD50[0] + B[r * 3 + 1] * kD50[1] + B[r * 3 + 2] * kD50[2];
+      const double to = B[r * 3] * d50[0] + B[r * 3 + 1] * d50[1] + B[r * 3 + 2] * d50[2];
       const double from = B[r * 3] * src[0] + B[r * 3 + 1] * src[1] + B[r * 3 + 2] * src[2];
       gain[r] = to / from;
     }
@@ -1919,7 +1921,7 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   a2b0.push_back(2);
   for (int c = 0; c < 3; ++c)
     for (double v : curves[c]) put_u16(a2b0, v);
-  for (double v : table) put_u16(a2b0, v / kPcsMax);
+  for (double v : table) put_u16(a2b0, v / negicc::kPcsScale);
   for (int c = 0; c < 3; ++c) {
     put_u16(a2b0, 0.0);
     put_u16(a2b0, 1.0);
@@ -1928,7 +1930,7 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   cprt.insert(cprt.end(), copyright.begin(), copyright.end());
   cprt.push_back(0);
   std::vector<uint8_t> wtpt = {'X', 'Y', 'Z', ' ', 0, 0, 0, 0};
-  for (double v : kD50) put_s15(wtpt, v);
+  for (double v : negicc::kPcsWhite) put_s15(wtpt, v);
   std::vector<uint8_t> icc;
   put_u32(icc, 0);   // the size: icc_assemble sets it
   put_u32(icc, 0);
@@ -1941,7 +1943,7 @@ std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vecto
   icc.insert(icc.end(), {'a', 'c', 's', 'p'});
   icc.insert(icc.end(), 24, 0);
   put_u32(icc, 0);
-  for (double v : kD50) put_s15(icc, v);
+  for (double v : negicc::kPcsWhite) put_s15(icc, v);
   icc.insert(icc.end(), 48, 0);
   return icc_assemble(std::move(icc), {{"desc", icc_desc_tag(description)}, {"cprt", std::move(cprt)},
                                        {"wtpt", std::move(wtpt)}, {"A2B0", std::move(a2b0)}});

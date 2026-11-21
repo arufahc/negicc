@@ -30,11 +30,9 @@
 //
 // The preview's L* (sRGB D65, in double precision, Y from the luminance row of linear sRGB D65 -> XYZ): the descriptors
 // the curve is solved from. Only the small preview is measured this way; no output pixel goes through Lab.
-// tone_srgb_decode is the sRGB curve of IEC 61966-2-1; tone_lab_f and tone_lab_finv are CIE 1976 L*a*b*'s f and its
-// inverse with the exact constants (CIE 15; ICC.1:2022 Annex A): break (6/29)^3 = 216/24389, slope 24389/27 / 116.
-static inline double tone_srgb_decode(double c) {
-    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-}
+// The sRGB curve is color_pipeline.h's srgb_decode, in double; tone_lab_f and tone_lab_finv are CIE 1976 L*a*b*'s f
+// and its inverse with the exact constants (CIE 15; ICC.1:2022 Annex A): break (6/29)^3 = 216/24389, slope 24389/27 /
+// 116.
 static inline double tone_lab_f(double t) {
     return t > negicc::kLabEpsilon ? std::cbrt(t) : (negicc::kLabKappa * t + 16.0) / 116.0;
 }
@@ -76,7 +74,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     std::vector<double> L(n);
     // An 8-bit channel has 256 values: their sRGB decode is tabulated (the same doubles as decoding each pixel).
     double decode[256];
-    for (int v = 0; v < 256; ++v) decode[v] = tone_srgb_decode(v / 255.0);
+    for (int v = 0; v < 256; ++v) decode[v] = negicc::srgb_decode(v / 255.0);
     for (size_t i = 0; i < n; ++i) {
         // Y: the luminance row of color_pipeline.h linear_srgb_to_lab (OpenCV's cvtColor RGB -> Lab matrix).
         const double Y = 0.212671 * decode[rgb[3 * i]] + 0.715160 * decode[rgb[3 * i + 1]] +

@@ -39,6 +39,10 @@
 #include <string>
 #include <vector>
 
+// The median absolute deviation's factor to a normal standard deviation, 1 / Phi^-1(3/4) to four decimals (Rousseeuw
+// and Croux, 1993).
+constexpr double kMadToSigma = 1.4826;
+
 // One colour channel of the input: a regular lattice of uint16_t samples, read in place. Sample (i, j) of the
 // channel is data[i * pitch + j * stride] and lies on image pixel (x0 + i * FilmImage::step, y0 + j * step). Its
 // value is (sample - black) / white, clamped below at 0.

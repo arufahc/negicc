@@ -343,8 +343,6 @@ constexpr const char* kPrintIccCopyright =
     "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
     "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
 constexpr int kPrintIccPoints = 4096;
-// The largest XYZ a lut16 (PCS XYZ) holds: code FFFFh as a u1Fixed15Number (ICC.1:2022 4.8 and 6.3.4.2 Table 11).
-constexpr double kPcsMax = 1.0 + 32767.0 / 32768.0;
 constexpr int kPrintIccCube = 45;
 // Paper_c's grid: -1.5 to 1.8 in steps of 0.005, 661 points.
 constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;

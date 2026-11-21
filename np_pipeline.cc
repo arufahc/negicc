@@ -739,7 +739,7 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 
 // The paper's white is the display's white: a print profile made media-relative, as the ICC defines it (ICC.1:2022
 // 6.3.2.2: each of X, Y and Z scaled by the PCS white's over the medium's), as an eye adapted to the paper sees it.
-// The node of largest Y in the print's table (PCS XYZ D50 as a lut16 holds it, its code scaled by kPcsMax) is the
+// The node of largest Y in the print's table (PCS XYZ D50 as a lut16 holds it, its code scaled by kPcsScale) is the
 // paper's base; each of X, Y and Z of every node is scaled by D50's over the base's, so the base is exactly the
 // display's white (its tint is not shown) and no node's Y passes D50's. Another node's X or Z can pass D50's, by a few
 // parts in a thousand on the shipped prints, and nothing clamps them; a saturated light colour can also have an sRGB
@@ -752,7 +752,7 @@ static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
     if (p.clut[i] > p.clut[best * 3 + 1]) best = i / 3;
   double base[3], k[3];
   for (int c = 0; c < 3; ++c) {
-    base[c] = p.clut[best * 3 + c] * kPcsMax;
+    base[c] = (double)p.clut[best * 3 + c] * negicc::kPcsScale;   // in double
     k[c] = d50[c] / base[c];
     if (paper_xyz) paper_xyz[c] = base[c];
   }

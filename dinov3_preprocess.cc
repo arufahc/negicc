@@ -190,11 +190,6 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
     const int target_w = grid_w * patch_size;
     const double inv_pixels = 1.0 / (double)(patch_size * patch_size);
 
-    // The sRGB curve's inverse (IEC 61966-2-1).
-    auto srgb_lin = [](double c) {
-        return (c <= 0.04045) ? (c / 12.92) : std::pow((c + 0.055) / 1.055, 2.4);
-    };
-
     #pragma omp parallel for schedule(static)
     for (int gy = 0; gy < grid_h; ++gy) {
         for (int gx = 0; gx < grid_w; ++gx) {
@@ -208,9 +203,9 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
                 }
             }
 
-            const double cr = srgb_lin(r_sum * inv_pixels / 255.0);
-            const double cg = srgb_lin(g_sum * inv_pixels / 255.0);
-            const double cb = srgb_lin(b_sum * inv_pixels / 255.0);
+            const double cr = negicc::srgb_decode(r_sum * inv_pixels / 255.0);
+            const double cg = negicc::srgb_decode(g_sum * inv_pixels / 255.0);
+            const double cb = negicc::srgb_decode(b_sum * inv_pixels / 255.0);
 
             // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of
             // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and CIE 15's exact break and slope (kLabEpsilon,

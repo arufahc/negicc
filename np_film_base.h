@@ -25,7 +25,7 @@
 // holder's edge, a sprocket hole, part of a picture):
 //   1. the whole frame is split into square tiles, kBaseTileGrid along its longer side, small enough that a strip of
 //      rebate beside a picture holds whole tiles; each tile's median per channel and the spread of its green density
-//      (1.4826 x the median absolute deviation) are taken;
+//      (the median absolute deviation times kMadToSigma) are taken;
 //   2. tiles with clipped photosites are dropped (clipping is counted on the mosaic as recorded, before the flat
 //      field, which moves the levels), and tiles whose spread stands out: above kBaseTileMaxSpread and above
 //      kBaseSpreadFactor times the median tile's (dust, scratches, edges; a grainy film is uneven in every tile alike,
