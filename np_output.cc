@@ -305,7 +305,7 @@ static std::string model_stem(std::string path) {
 // The intent field the parameter search converted against: per DINOv3 grid cell, row-major over the oriented frame,
 // the Lab colour (mu) and its tolerance (sigma) of the chosen step. The same block as the station's sidecar. Null when
 // no search ran. source: "auto" (the bundle search or the print's search, on the frame's inner crop_ratio crop): a*
-// and b* as the intent adapter predicted them from the chosen step's render, L* the frame's lightness wish (the
+// and b* as the intent adapter predicted them from the chosen step's render, L* the frame's lightness target (the
 // bootstrap field's; DESIGN.md 4.2); "dino" (the single-bracket search, on the whole frame): its best step's
 // prediction in all three.
 static ordered_json intent_field_json(const std::vector<float>& mu, const std::vector<float>& sigma, int grid_w,
@@ -629,7 +629,7 @@ bool write_json_sidecar(const Sidecar& sc) {
         };
         j["profile"]["print"]["search"] = {
             {"a0", num(sc.print_a0, "%.9g")},
-            {"wish_L", num(sc.print_wish_l, "%.6g")},
+            {"target_L", num(sc.print_target_l, "%.6g")},
             {"steps", sc.print_steps},
             {"converged", sc.print_converged},
             {"stopped_by", sc.print_stopped_by},

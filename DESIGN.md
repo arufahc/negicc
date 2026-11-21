@@ -774,7 +774,7 @@ the same way before its CLF is built. A picture output with `--print` needs a bu
 either light (5.10).
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
-and the search (`search`): `a0`, the lightness target (`wish_L`), `steps`, `converged`, `stopped_by`, the share of
+and the search (`search`): `a0`, the lightness target (`target_L`), `steps`, `converged`, `stopped_by`, the share of
 the crop above the knee in percent (`above_knee_pct`), the film base's factor (`base_factor`, `β` in 5.8), per
 channel the shares of the crop past the knee and past the cut at `E` (`past_knee_pct`, `past_cut_pct`) and above and
 at white (`above_white_pct`, `at_white_pct`), whether `A0` lies at an end of its range (`a0_at_range_end`) and the
