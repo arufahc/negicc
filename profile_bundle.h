@@ -108,7 +108,6 @@ struct BundleTarget {
 };
 
 // The colour space a bundle's brackets were measured in, which is the space a scan is decoded to for it.
-// py-ref: negicc_station/src/film_profiling.py @ 813166c (FilmProfile.input_space)
 enum class InputSpace {
   // Sensor RGB (narrowband TriLED light): black subtracted, no white balance, then the bundle's crosstalk matrix.
   kCameraRawRgb,
@@ -224,7 +223,6 @@ struct ProfileBundle {
 
 // Seconds of a shutter speed as the profiles record it, a string ("1/8s", "0.4s", "2"); throws
 // std::invalid_argument when it cannot be read.
-// py-ref: negicc_station/src/film_profiling.py @ 93be1ec (shutter_to_seconds)
 float shutter_to_seconds(const std::string& shutter);
 double shutter_to_seconds_d(const std::string& shutter);
 
@@ -241,7 +239,6 @@ void compute_station_merged_matrix(const ProfileBundle& bundle, double scan_shut
 
 // Bundle and stock keys of a profile name: "profile_Portra160-A7R4-TriLED_20261003_190751.json" gives
 // ("Portra160-A7R4-TriLED", "portra160"). Empty strings when the name has none.
-// py-ref: negicc_station/src/intent_model.py @ 93be1ec (_parse_profile_stem)
 void parse_profile_stem(const std::string& raw_name, std::string& bundle_key, std::string& stock_key);
 
 // Check by content if file is a JSON profile bundle (first non-space character is '{')
