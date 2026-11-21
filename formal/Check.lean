@@ -47,8 +47,9 @@ curve it bisects on in single precision, and the curve's code value changes slow
 def tolRoot : Float := 2e-5
 
 /-- The tone curve solved by Levenberg-Marquardt: both sides run the same iteration in double
-precision; the descriptors it starts from differ in the last bits (the sRGB decode's `c * (1 / 12.92)`
-against `c / 12.92`), which the solve carries to the curve. -/
+precision from the same descriptors, and on the committed vectors they agree exactly. A compiler or
+C library whose `pow` or `cbrt` rounds otherwise changes the descriptors in the last bits, which the
+solve carries to the curve. -/
 def tolSolve : Float := 1e-7
 
 /-- numpy's percentile in single precision (`percentile_f32` interpolates in float32) of values near

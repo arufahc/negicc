@@ -108,8 +108,9 @@ constexpr float kShoulderXHiLimit = 2.5f;
 constexpr float kShoulderAnchorCode = 242.0f;
 
 // ICC PCS encoding scale applied after the output TRCs: 1 + 32767/32768, the PCS XYZ value of code FFFFh, the largest
-// u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ.
-constexpr float kPcsScale = 1.99996948f;
+// u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ. A lut16's
+// table holds PCS XYZ as its code over this (np_print.cc). Exact in single precision.
+constexpr float kPcsScale = 1.0f + 32767.0f / 32768.0f;
 
 NEGICC_HD float clamp01(float v) {
     return fminf(1.0f, fmaxf(0.0f, v));
@@ -267,9 +268,13 @@ NEGICC_HD Rgb pcs_to_linear_srgb_pre_shoulder(Rgb v) {
 }
 
 // ---- Stage: output encoding --------------------------------------------------------------------------------
-// The sRGB transfer curve of IEC 61966-2-1 (0.41666667 is 1 / 2.4); srgb_decode is its inverse.
-NEGICC_HD float srgb_encode(float l) {
-    return (l <= 0.0031308f) ? (l * 12.92f) : (powf(l, 0.41666667f) * 1.055f - 0.055f);
+// The sRGB transfer curve of IEC 61966-2-1, one formula in single precision (the renderer, on the host and the device)
+// and in double (the tone stage and the shoulder's solve); srgb_decode is its inverse. srgb_pow is powf or pow.
+NEGICC_HD float srgb_pow(float x, float y) { return powf(x, y); }
+NEGICC_HD double srgb_pow(double x, double y) { return ::pow(x, y); }
+template <typename T>
+NEGICC_HD T srgb_encode(T l) {
+    return (l <= T(0.0031308)) ? (l * T(12.92)) : (srgb_pow(l, T(1) / T(2.4)) * T(1.055) - T(0.055));
 }
 
 NEGICC_HD Rgb encode_output(Rgb v, int encoding) {
@@ -277,8 +282,9 @@ NEGICC_HD Rgb encode_output(Rgb v, int encoding) {
     return { clamp01(v.r), clamp01(v.g), clamp01(v.b) };
 }
 
-NEGICC_HD float srgb_decode(float c) {
-    return (c <= 0.04045f) ? (c * (1.0f / 12.92f)) : powf((c + 0.055f) * (1.0f / 1.055f), 2.4f);
+template <typename T>
+NEGICC_HD T srgb_decode(T c) {
+    return (c <= T(0.04045)) ? (c * (T(1) / T(12.92))) : srgb_pow((c + T(0.055)) * (T(1) / T(1.055)), T(2.4));
 }
 
 // ---- Stage: highlight shoulder -----------------------------------------------------------------------------
@@ -517,12 +523,9 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     const double ramp = std::min(1.0, ((double)x_hi - 1.0) / (double)kShoulderRamp);
     const double C = 1.0 - (1.0 - (double)kShoulderCeiling) * ramp;
     const double ln2 = std::log(2.0);
-    // srgb_encode and srgb_decode (IEC 61966-2-1) in double precision.
-    auto enc = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
-    auto dec = [](double s) { return s <= 0.04045 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4); };
     auto slope = [&](double t) { return (1.055 / 2.4) * std::pow(std::exp2(t), 1.0 / 2.4) * ln2; };
     const double t_hi = std::log2((double)x_hi);
-    auto f = [&](double t_k) { return t_hi - t_k - (double)n * (C - enc(std::exp2(t_k))) / slope(t_k); };
+    auto f = [&](double t_k) { return t_hi - t_k - (double)n * (C - srgb_encode(std::exp2(t_k))) / slope(t_k); };
     double lo = -3.0, hi = 0.0;
     const bool lo_pos = f(lo) > 0.0;
     // The C1 condition changes sign once on [-3, 0] for every x_hi in range; if it ever did not, bisection would
@@ -540,9 +543,9 @@ inline void set_shoulder(PipelineConfig& cfg, float x_hi, float n = kShoulderExp
     cfg.shoulder_t_k = (float)t_k;
     cfg.shoulder_x_k = (float)std::exp2(t_k);
     cfg.shoulder_t_hi = (float)t_hi;
-    cfg.shoulder_s_k = (float)enc(std::exp2(t_k));
+    cfg.shoulder_s_k = (float)srgb_encode(std::exp2(t_k));
     cfg.shoulder_c = (float)C;
-    cfg.shoulder_y_c = (float)dec(C);
+    cfg.shoulder_y_c = (float)srgb_decode(C);
 }
 
 // The anchored shoulder's x_hi for a frame whose pre-shoulder max channel has its 99.5% point at q: the x_hi whose

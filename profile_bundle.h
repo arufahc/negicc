@@ -158,13 +158,18 @@ struct DensityBracket {
   double tilt[3] = {0.0, 0.0, 0.0};
 };
 
-// The film stock's spectra (the bundle's film_model), on 380-780 nm at 1 nm: the spectral density of a unit amount
+// The film model's spectral grid, 380-780 nm at 1 nm: kSpectralSamples samples from kSpectralFirstNm in steps of
+// kSpectralStepNm, the grid of np_print.cc's CIE tables.
+constexpr int kSpectralSamples = 401;
+constexpr double kSpectralFirstNm = 380.0, kSpectralStepNm = 1.0;
+
+// The film stock's spectra (the bundle's film_model), on the spectral grid: the spectral density of a unit amount
 // of each dye, the base, and the dye amounts along the film's neutral scale. A print material given as a file takes
 // its matrix from them (np_print.h load_spektrafilm_print).
 struct FilmModel {
   bool present = false;
   std::string name;
-  std::vector<double> dye[3], base;           // spectral densities, 401 samples
+  std::vector<double> dye[3], base;           // spectral densities, kSpectralSamples samples
   std::vector<double> log_exposure;           // ascending
   std::vector<double> neutral[3];             // dye amounts along log_exposure
 };

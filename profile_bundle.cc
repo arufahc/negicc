@@ -780,11 +780,11 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     bool ok = fm.contains("dye_density") && fm["dye_density"].is_array() && fm["dye_density"].size() == 3 &&
               fm.contains("neutral_dye_amounts") && fm["neutral_dye_amounts"].is_array() &&
               fm["neutral_dye_amounts"].size() == 3 && fm.contains("base_density") &&
-              numbers(fm["base_density"], film.base) && film.base.size() == 401 && fm.contains("log_exposure") &&
-              numbers(fm["log_exposure"], film.log_exposure) && film.log_exposure.size() >= 2 &&
-              fm.contains("wavelength_nm") && fm["wavelength_nm"].is_object() &&
-              fm["wavelength_nm"].value("start", 0.0) == 380.0 && fm["wavelength_nm"].value("step", 0.0) == 1.0;
-    // 401 samples from 380 nm in 1 nm steps: the grid of np_print.cc's CIE tables (kCieSamples, kCieFirstNm).
+              numbers(fm["base_density"], film.base) && film.base.size() == (size_t)kSpectralSamples &&
+              fm.contains("log_exposure") && numbers(fm["log_exposure"], film.log_exposure) &&
+              film.log_exposure.size() >= 2 && fm.contains("wavelength_nm") && fm["wavelength_nm"].is_object() &&
+              fm["wavelength_nm"].value("start", 0.0) == kSpectralFirstNm &&
+              fm["wavelength_nm"].value("step", 0.0) == kSpectralStepNm;
     for (int c = 0; ok && c < 3; ++c) {
       ok = numbers(fm["dye_density"][c], film.dye[c]) && film.dye[c].size() == film.base.size() &&
            numbers(fm["neutral_dye_amounts"][c], film.neutral[c]) &&

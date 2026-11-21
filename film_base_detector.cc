@@ -402,8 +402,9 @@ static void thinnest_film_base_impl(const RgbView& half, bool white_light, float
   } else {
     // A white-light decode is in 16-bit linear Rec.2020 (white-balanced by pre_mul, so orange film routinely exceeds a
     // 14-bit sensor's clip in Red). As in detect_film_frame, a channel is clipped when its work-image maxima sit at a
-    // plateau (>= 0.05% of pixels within 0.5% of the channel maximum, at >= 20% of 65535). A flat stretch of film can
-    // form that plateau too, so a clipped part is light only when it is bluer than the film (bluer_than_film).
+    // plateau (>= 0.05% of pixels within 0.5% of the channel maximum, at >= 13000, about 20% of 65535). A flat stretch
+    // of film can form that plateau too, so a clipped part is light only when it is bluer than the film
+    // (bluer_than_film).
     float clip_c[3];
     for (int c = 0; c < 3; ++c) {
       float mx = 0.0f;

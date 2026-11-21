@@ -18,6 +18,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <functional>
 #include <memory>
@@ -436,6 +437,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);
 
+// A stop of exposure in density, log10 2: the print search's unit of A.
+inline const double kStopDensity = std::log10(2.0);
+
 // The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
 // its mid grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the
 // search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
@@ -469,7 +473,7 @@ struct ContinuousPrint {
   std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
-  double boot_h = 0.150515;          // log10(2) / 2: half a stop of printing exposure (the bootstrap's spread)
+  double boot_h = kStopDensity / 2;  // half a stop of printing exposure (the bootstrap's spread)
 };
 struct ContinuousPrintResult {
   double a = 0.0, a0 = 0.0;

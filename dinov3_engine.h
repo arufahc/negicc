@@ -134,6 +134,10 @@ bool cuda_device_available();
 // anchors, and the tone heads (ToneHead), which give the tone stage its targets on both lights.
 // --------------------------------------------------------------------------------------------------------------------
 
+// The exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default), x Phi(x), in double: the heads' activation.
+// 0.7071... is 1 / sqrt(2).
+inline double exact_gelu(double a) { return 0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)); }
+
 // The neutral-patch head: per DINOv3 patch, the probability that the patch is neutral grey in a good rendering of
 // the frame, from the backbone's layer 9 + 12 tokens [N, 768] (DinoV3Runner "tokens", the adapters' input).
 // p = sigmoid(w2 . gelu(W1 ((t - mean) / std) + b1) + b2), W1 [256][768], exact (erf) GELU, as the PyTorch model it
@@ -215,8 +219,7 @@ public:
             double z = b2_;
             for (int j = 0; j < h; ++j) {
                 const double a = acc[j];
-                // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
-                z += (double)w2_[j] * (0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)));
+                z += (double)w2_[j] * exact_gelu(a);
             }
             p[i] = (float)(1.0 / (1.0 + std::exp(-z)));
         }
@@ -312,21 +315,19 @@ public:
     // mean[kTargets] and sd[kTargets] from the 1920 features. False when the head is not loaded.
     bool run(const float* features, double* mean, double* sd) const {
         if (!loaded()) return false;
-        // Exact GELU (Hendrycks and Gimpel, 2016; torch.nn.GELU's default): 0.7071... is 1 / sqrt(2).
-        auto gelu = [](double a) { return 0.5 * a * (1.0 + std::erf(a * 0.70710678118654752440)); };
         std::vector<double> x(in_dim_), a1(h1_), a2(h2_);
         for (int k = 0; k < in_dim_; ++k) x[k] = (double)((features[k] - xm_[k]) / xs_[k]);  // float, as in training
         for (int j = 0; j < h1_; ++j) {
             const float* w = w1_.data() + (size_t)j * in_dim_;
             double s = b1_[j];
             for (int k = 0; k < in_dim_; ++k) s += (double)w[k] * x[k];
-            a1[j] = gelu(s);
+            a1[j] = exact_gelu(s);
         }
         for (int j = 0; j < h2_; ++j) {
             const float* w = w2_.data() + (size_t)j * h1_;
             double s = b2_[j];
             for (int k = 0; k < h1_; ++k) s += (double)w[k] * a1[k];
-            a2[j] = gelu(s);
+            a2[j] = exact_gelu(s);
         }
         for (int t = 0; t < kTargets; ++t) {
             double o[2];

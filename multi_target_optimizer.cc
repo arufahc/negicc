@@ -3286,8 +3286,7 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
                                   const ParamSearchOptions& opts, Clock::time_point t0, ParamSearchResult& out,
                                   ContinuousPrintResult& cr) {
   cr = ContinuousPrintResult{};
-  // kStop: log10(2) to five decimals, a stop of exposure in density.
-  constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001, kStop = 0.30103;
+  constexpr double kContinuousStep = 0.1, kContinuousTol = 0.001;
   ProfileBundle& pb = pf.pb;
   pb.targets[0].film_prof = print_base;
   pb.targets[0].film_prof.rebind_pointers();
@@ -3531,7 +3530,7 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
     const double next_a = 0.5 * (lo + hi);
     ConversionParams next;
     loss(next_a, next);
-    cr.last_move[0] = (float)(std::fabs(next_a - a) / kStop);
+    cr.last_move[0] = (float)(std::fabs(next_a - a) / kStopDensity);
     cr.last_move[1] = std::fabs(next.g - curr.g);
     cr.last_move[2] = std::fabs(next.b - curr.b);
     const float move = cr.last_move[0] + cr.last_move[1] + cr.last_move[2];
@@ -3549,8 +3548,8 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
   if (!opts.probe_path.empty()) {
     nlohmann::json recs = nlohmann::json::array();
     for (const float stop : opts.probe_stops) {
-      const double ap = std::clamp(best_a + stop * kStop, in.a_lo, in.a_hi);
-      const double applied_stop = (ap - best_a) / kStop;
+      const double ap = std::clamp(best_a + stop * kStopDensity, in.a_lo, in.a_hi);
+      const double applied_stop = (ap - best_a) / kStopDensity;
       set_curves_at(ap);
       fr.render_preview(0, best, preview);
       if (!fr.predict(preview, mu, sg)) return false;

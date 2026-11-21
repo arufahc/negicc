@@ -2066,8 +2066,7 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
     if (mags.size() >= 16) {
       const float med = percentile(mags, 0.5);
       for (float& m : mags) m = std::fabs(m - med);
-      // 1.4826 = 1 / Phi^-1(3/4): the MAD's factor to a normal standard deviation (Rousseeuw and Croux, 1993).
-      const float thr = med + 8.0f * 1.4826f * std::max(percentile(mags, 0.5), 1e-4f);
+      const float thr = med + 8.0f * (float)kMadToSigma * std::max(percentile(mags, 0.5), 1e-4f);
       std::vector<int> edges;
       for (int x = 1; x + 1 < VW; ++x) {
         const float a = std::fabs(step[x]);
@@ -2243,7 +2242,8 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
                 (int)std::lround(0.4f * across_px) + 3, ps0, ps1, pe0, pe1);
     if (pe0 && pe1 && across_px > 0.0f) {
       const float ratio = (ps1 - ps0) / across_px, expected = fg.film_width / fg.across;
-      const float other = fg.sprockets ? 61.5f / 56.0f : 35.0f / 24.0f;   // the other format's (format_geom)
+      const FormatGeom og = format_geom(fg.sprockets ? FILM_6X6 : FILM_35MM);   // the other film's
+      const float other = og.film_width / og.across;
       format_mismatch = (ratio / expected < 0.92f || ratio / expected > 1.08f) &&
                         std::fabs(std::log(ratio / other)) < std::fabs(std::log(ratio / expected));
     }
