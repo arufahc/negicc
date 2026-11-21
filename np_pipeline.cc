@@ -1943,10 +1943,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         ps.b = pk.b;
         // The bracket is the one nearest the moved A, as the search names the one nearest its own (the CLF is computed
         // at A from the curve; the bracket only names it).
-        int nearest = 0;
-        for (size_t i = 0; i < pc.a_mid.size(); ++i)
-          if (std::fabs(pc.a_mid[i] - ps.a) < std::fabs(pc.a_mid[nearest] - ps.a)) nearest = (int)i;
-        ps.bracket = bundle.targets[nearest].name;
+        ps.bracket = bundle.targets[nearest_bracket(pc.a_mid, ps.a)].name;
         log_info("Knobs on %s's CLF: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f; the grey L* %.3f a* %.3f "
                  "b* %.3f%s\n",
                  prints.id.c_str(), ps.knob_base_a, ps.a, ps.knob_base_g, ps.g, ps.knob_base_b, ps.b, pk.grey_lab[0],
@@ -2916,8 +2913,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     log_knobs();
     if (!s.print_id.empty()) {
       // A print is made by its own search, which takes no -E, gains or --target: its A, g and b.
+      // The bracket nearest the print's final A (after the knobs, their moved A), as the sidecar records it.
       log_info("Print: A %.6g g %.9g b %.9g (E held; nearest %s)%s\n\n", s.print_a, fg, fb,
-               bundle.targets[c.bundle_target_idx].name.c_str(), scan.has_knob_res ? ", moved by the knobs" : "");
+               bundle.targets[nearest_bracket(s.print_cont.a_mid, s.print_a)].name.c_str(),
+               scan.has_knob_res ? ", moved by the knobs" : "");
     } else {
       log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
     }
@@ -3417,11 +3416,17 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_file = s.print_file;
   sc.print_file_sha256 = s.print_file_sha256;
   sc.print_from_bundle = s.print_from_bundle;
+  std::string print_bracket_name;   // a picture print's bracket as recorded: nearest its final A
   if (!s.print_profs.empty()) {
     sc.print_a = s.print_a;
     for (int c = 0; c < 3; ++c) sc.print_paper_xyz[c] = s.print_paper_xyz[c];
-    if (c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)s.print_cont.a_mid.size())
-      sc.print_bracket_a_mid = s.print_cont.a_mid[c.bundle_target_idx];
+    // The recorded bracket and its A_mid: the one nearest the final A (after the knobs, their moved A), as the search
+    // names the one nearest its own. The picture renders through the search's bracket's print ICC either way.
+    if (c.bundle_target_idx >= 0 && !s.print_cont.a_mid.empty()) {
+      const int nearest = nearest_bracket(s.print_cont.a_mid, s.print_a);
+      sc.print_bracket_a_mid = s.print_cont.a_mid[nearest];
+      print_bracket_name = s.bundle.targets[nearest].name;
+    }
     print_tilt_at(s.bundle, s.print_a, sc.print_tilt);   // a picture print always has its search's A (solve)
     if (s.print_searched) {
       sc.print_searched = true;
@@ -3442,7 +3447,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.balance_gains = s.white_light ? scan.balance_gains : nullptr;
   sc.profile_path = s.is_bundle ? s.bundle.path : s.film_prof_arg;
   sc.is_bundle = s.is_bundle;
-  sc.bundle_target_name = c.bundle_target_name;
+  sc.bundle_target_name = print_bracket_name.empty() ? c.bundle_target_name : print_bracket_name;
   sc.bundle_target_idx = c.bundle_target_idx;
   sc.input_space = s.bundle.input_space;
   sc.merged_matrix = c.merged_matrix;

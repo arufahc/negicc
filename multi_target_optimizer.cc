@@ -3273,6 +3273,13 @@ struct PrintFrame {
   float above_knee = 0.0f, past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
 };
 
+int nearest_bracket(const std::vector<double>& a_mid, double a) {
+  int nearest = 0;
+  for (size_t i = 0; i < a_mid.size(); ++i)
+    if (std::fabs(a_mid[i] - a) < std::fabs(a_mid[nearest] - a)) nearest = (int)i;
+  return nearest;
+}
+
 // One material's search on the shared frame pf, its time counted from t0.
 static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, const ParsedFilmProfile& print_base,
                                   const ContinuousPrint& in, DinoV3Engine& engine, const negicc::RgbView& frame,
@@ -3588,9 +3595,7 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
     share(1.002f, cr.above_white);
     share(0.999f, cr.at_white);
   }
-  int nearest = 0;
-  for (size_t i = 0; i < in.a_mid.size(); ++i)
-    if (std::fabs(in.a_mid[i] - best_a) < std::fabs(in.a_mid[nearest] - best_a)) nearest = (int)i;
+  const int nearest = nearest_bracket(in.a_mid, best_a);
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
   out.params = {white_light ? E : E / e_norm, best.g, best.b, best.shoulder};   // as search_conversion_params

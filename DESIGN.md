@@ -778,8 +778,10 @@ deterministic on the same build, machine and backend. `--brightness` moves the p
 print at the search's values renders as neutral L* 50 renders at the knobs' target, by Newton on (`A`, `ln g`,
 `ln b`); an unreachable target is scaled back as for a picture. The sidecar's `knobs.base.a` records the search's
 `A`, which a run reusing the sidecar starts from. A density output with `--print` moves each material's print search
-the same way before its CLF is built. A picture output with `--print` needs a bundle with grey balance curves, under
-either light (5.10).
+the same way before its CLF is built. The bracket a print records is the one nearest its final `A`, the knobs' `A`
+when they are given: the log's "nearest", `profile.bundle_target` and `profile.print.bracket_a_mid`, and a density
+material's `bracket`. A picture print renders through the search's bracket's print ICC at that `A` either way. A
+picture output with `--print` needs a bundle with grey balance curves, under either light (5.10).
 
 The sidecar's `profile.print` records `a`, the nearest bracket's `A_mid` (`bracket_a_mid`), the tilt at `a` (`tilt`)
 and the search (`search`): `a0`, the lightness target (`target_L`), `steps`, `converged`, `stopped_by`, the share of
