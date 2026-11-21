@@ -506,6 +506,9 @@ struct PrintMaterialSearch {
 bool search_print_continuous(const ProfileBundle& bundle, const std::vector<PrintMaterialSearch>& prints,
                              DinoV3Engine& engine, const negicc::RgbView& frame, double scan_shutter_s,
                              double scan_iso, const ParamSearchOptions& opts);
+// The bracket that names a print at mid grey a: the one whose own A_mid is nearest a (the first of equals, in the
+// bundle's order). The search names its result's this way, and a print the knobs moved is named by its moved A.
+int nearest_bracket(const std::vector<double>& a_mid, double a);
 
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
                               float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
