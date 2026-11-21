@@ -8,30 +8,51 @@ the conversion closest to it.
   not trained.
 - Model: a small MLP (595,590 parameters) with three outputs, mu, sigma and log variance; `neg_process` reads mu and
   sigma.
-- Training data: 4351 photographs of Kodak Ektar 100, and 682 by other photographers for validation.
-- Validation error: 3.83 L*, 4.97 a*b* (mean absolute error over the validation photographers' patches) on the
-  validation photographers the seed was chosen with.
+- Data: 4,351 photographs of Kodak Ektar 100 by 969 photographers for training, 682 by 119 others for validation, and
+  617 by 92 more held out (in neither training nor validation). The photographers are split 80/10/10 (`split_hash`
+  `de84985f720b`, seed 42).
+- Validation error: 3.83 L*, 4.97 a*b* (mean absolute error over the validation photographers' 527,584 patches; a*b* is
+  the mean of the a* and b* errors), on the validation photographers the seed was chosen with.
+- Held-out error, the same statistic: 3.99 L*, 4.96 a*b* (over the held-out photographers' 403,296 patches;
+  `metadata.json` `held_out`).
+- Per held-out photographer (averaged per photograph, then per photographer): mean absolute error 3.83 L*; mean signed
+  error -0.08 L*, -0.37 a*, -0.52 b* (bootstrap standard errors 0.29, 0.34, 0.54).
 - Acceptance gates (`metadata.json` `acceptance_gates`): validation loss at most 2.30, a*b* error at most 5.00, L* error
   at most 8.00; all three pass.
 - Training: cosine schedule over 15 epochs, final epoch kept, loss weighted per patch; seed 42 of 42, 43, 44 by the
   calibrated validation loss. Sigma calibrated per channel on the validation photographers (scale 1.25, 1.43, 1.45 for
   L*, a*, b*, folded into the variance head's bias); the mean is not changed.
-- Held-out photographers (in neither training nor validation): mean absolute error 3.83 L* per photographer; mean signed
-  error -0.08 L*, -0.37 a*, -0.52 b*. These are means per photographer, not over patches as the validation error is; no
-  held-out a*b* absolute error is given, and none of the held-out numbers is in `metadata.json`.
+- Trained by `tools/build_profile_adapter.py` of the companion repository (negicc's profiling tools, which are not
+  public), at commit `d66dc5e` (`git_commit`) on its `adapters-final-epoch` branch, which is not merged into its default
+  branch. The command, as run (`metadata.json` `training`):
 
-`metadata.json` has the training settings and the validation metrics. Its `metrics.val_loss`, and each seed's, is the
-loss after the sigma calibration, which was fitted on the same validation photographers; the seed choice and the loss
-gate therefore use the photographers the calibration was fitted on. The absolute errors do not change with the
-calibration. `metrics.epoch` is the last of the 15 epochs (`checkpoint` is `final`). `backbone_details` describes a
-square 512 x 512 input (32 x 32 = 1024 patches); the adapter takes any number of patches, and `neg_process` gives it the
-preview at the frame's own aspect (672 patches for 3:2). The adapter was trained with the companion profiling tools,
-which are not in this repository: `git_commit` is a commit of those tools, not of negicc, and `exported_files` also
-names `model.pt` and `adapter.torchscript`, which are not shipped here.
+  ```
+  NEGICC_CORPUS_DIR=<corpus> python tools/build_profile_adapter.py \
+      --profile profiles/profile_Ektar100-A7R4-TriLED_20261003_183828.json --weighting token \
+      --jobs 24 --threads 16 --no-combined-onnx --force --models-dir <output>
+  ```
+
+  The rest are the script's defaults at that commit: 15 epochs, the final checkpoint, batch 64, learning rate 1e-3,
+  seeds 42, 43 and 44, sigma calibration on. Only the stock is read from the profile, from its file name; the
+  photographs are the corpus manifest `ektar100.json` under `NEGICC_CORPUS_DIR` (`corpus_manifest_sha256`).
+
+`metadata.json` has the training settings, the validation metrics and the held-out record (`held_out`). Its
+`metrics.val_loss`, and each seed's, is the loss after the sigma calibration, which was fitted on the same validation
+photographers; the seed choice and the loss gate therefore use the photographers the calibration was fitted on. The
+absolute errors do not change with the calibration. `metrics.epoch` is the last of the 15 epochs (`checkpoint` is
+`final`). `backbone_details` describes a square 512 x 512 input (32 x 32 = 1024 patches); the adapter takes any number
+of patches, and `neg_process` gives it the preview at the frame's own aspect (672 patches for 3:2). `git_commit` and
+`training.commit` are commits of the companion repository, not of negicc. `exported_files` lists the files shipped here,
+and `adapter_onnx_sha256` is the hash of `adapter.onnx`. `seed_runs[*].checkpoint_sha256` are the hashes of the three
+seeds' PyTorch checkpoints, which stay with the training tools. The held-out figures were computed after training, by
+the statistics of the comparison that chose this recipe, from the selected seed's checkpoint on the split's test
+photographers; the training script does not write them. Computed the same way, the validation errors equal
+`metrics.val_mae_L` and `metrics.val_mae_ab` to three decimals, and running the shipped `adapter.onnx` on the held-out
+patches gives the held-out errors above, so the two are the same statistic of the same model.
 
 ## Files
 
 | File | Contents |
 |---|---|
 | `adapter.onnx` | the adapter, SHA-256 `c745de2c5cf030b12f2dca1d2def051ab71b4ef022963ab4539d96703a3cb483` |
-| `metadata.json` | the training settings and validation metrics |
+| `metadata.json` | the training settings, the validation metrics and the held-out record |

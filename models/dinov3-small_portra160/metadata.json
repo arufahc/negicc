@@ -90,11 +90,10 @@
     "all_passed": false
   },
   "exported_files": {
-    "pytorch_weights": "model.pt",
-    "torchscript": "adapter.torchscript",
     "adapter_onnx": "adapter.onnx",
     "metadata": "metadata.json"
   },
+  "adapter_onnx_sha256": "f2e6a2cc5cffa21cee30cc56da13d9415185bff948842986b3d6d36fd66fdf42",
   "stock_key": "portra160",
   "source_profile_bundle": "Portra160-A7R4-TriLED",
   "source_profile_json": "profile_Portra160-A7R4-TriLED_20261003_190751.json",
@@ -112,6 +111,8 @@
   "feature_cache_sha256": "8a963a74f766749f5f99e66968b7b00464a090d193a700842f1bc2c117766067",
   "n_train_photos": 1845,
   "n_val_photos": 282,
+  "n_train_photographers": 223,
+  "n_val_photographers": 26,
   "n_train_tokens": 1420800,
   "n_val_tokens": 235808,
   "epochs": 15,
@@ -191,5 +192,42 @@
     }
   ],
   "git_commit": "d66dc5ef6423be09c0fab1c3fbff84e50c37fa89",
-  "hostname": "wp0"
+  "training": {
+    "repository": "the companion repository (negicc's profiling tools, not public), branch adapters-final-epoch",
+    "commit": "d66dc5ef6423be09c0fab1c3fbff84e50c37fa89",
+    "script": "tools/build_profile_adapter.py",
+    "command": "NEGICC_CORPUS_DIR=<corpus> python tools/build_profile_adapter.py --profile profiles/profile_Portra160-A7R4-TriLED_20261003_190751.json --weighting token --jobs 24 --threads 16 --no-combined-onnx --force --models-dir <output>",
+    "defaults": "the script's own at that commit: --epochs 15 --checkpoint final --batch-size 64 --lr 0.001, seeds 42, 43 and 44, sigma calibration on"
+  },
+  "held_out": {
+    "what": "the photographer split's test photographers, in neither training nor validation, through the selected seed's model; computed after training from its checkpoint, not by the training script. mae, mae_L and mae_ab are the statistic of metrics.val_mae, val_mae_L and val_mae_ab (mean absolute error over all patches; a*b* the mean of the a* and b* errors), rounded to 0.001; per_photographer averages per photograph, then per photographer, with a bootstrap standard error over photographers",
+    "n_photos": 237,
+    "n_photographers": 21,
+    "n_tokens": 212864,
+    "mae": 4.493,
+    "mae_L": 4.334,
+    "mae_ab": 4.572,
+    "mae_Lab": [
+      4.334,
+      3.881,
+      5.263
+    ],
+    "per_photographer": {
+      "mae_Lab": [
+        4.183,
+        4.829,
+        5.094
+      ],
+      "mean_signed_error_Lab": [
+        -0.323,
+        -1.071,
+        -1.419
+      ],
+      "mean_signed_error_se_Lab": [
+        0.589,
+        0.947,
+        0.591
+      ]
+    }
+  }
 }
