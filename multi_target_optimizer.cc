@@ -1019,7 +1019,7 @@ class SearchFrame {
   // toward the caller's centre (none when it is 0). pullback_search as for search(). Every caller passes an ordered
   // region: the tournament's and the clip fallback's trust bounds lie around a screened E that is inside its window;
   // an unordered one is ordered here and keeps the caller's centre.
-  // L* is held to the frame's lightness wish, and the correction of update_correction is measured at every step.
+  // L* is held to the frame's lightness target, and the correction of update_correction is measured at every step.
   bool fixed_point(int target_idx, const ConversionParams& start, float e_bounds[3], FixedPointResult& fp,
                    bool pullback_search = false) {
     if (e_bounds[0] > e_bounds[1]) std::swap(e_bounds[0], e_bounds[1]);  // the centre stays the caller's
