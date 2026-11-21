@@ -170,7 +170,7 @@ struct Sidecar {
   double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
   bool print_searched = false, print_converged = false;
   int print_steps = 0;
-  float print_wish_l = 0.0f, print_above_knee = 0.0f;
+  float print_target_l = 0.0f, print_above_knee = 0.0f;
   // ContinuousPrintResult's shares: past_knee and past_cut at E (the matrix at E alone), above_white and at_white at
   // the result.
   float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};

@@ -45,11 +45,11 @@ struct RgbImage {
 //   2. Bootstrap: meter each admissible bracket so the scene's log-average renders at L* 50, render every metered
 //      bracket at its metered E clamped to its usable range (when none meters, the bracket whose range the scene fills
 //      best, at its e_center) and average the intent fields DINOv3 predicts from those renders: the bootstrap field.
-//      Its L* is the frame's one lightness wish.
+//      Its L* is the frame's one lightness target.
 //   3. Screening: search (E, g, b) of every metered bracket (every admissible one when none meters) against the
 //      bootstrap field.
 //   4. Tournament: run the fixed-point loop on the best two screened brackets and keep the lower residual, whichever
-//      way each loop ended. The loops hold L* to the frame's lightness wish.
+//      way each loop ended. The loops hold L* to the frame's lightness target.
 //   5. The clip fallback: move to the next bracket when the chosen one white-clips (ClipFallbackOutcome).
 //   6. The highlight pullback: when a bright frame still has many highlights near white (sRGB 242 and 235), nudge E
 //      (at most 0.15 stop) toward the chosen bracket's calibrated range, or, when that bracket cannot hold the scene,
@@ -62,7 +62,7 @@ struct RgbImage {
 // parameters, after the clip fallback and the pullback have moved E (and possibly the bracket) past the loop that
 // froze it, so the written image's shoulder matches its highlights. The intent field the result carries
 // (ParamSearchResult::intent_mu) is the one the chosen loop step was scored against, at intent_params: its L* is the
-// frame's lightness wish, its a* and b* the step's own prediction.
+// frame's lightness target, its a* and b* the step's own prediction.
 //
 // The intent field is DINOv3's prediction, from an 8-bit sRGB render of the frame, of how each patch of the image
 // should look: a mean mu and a spread sigma of CIELAB per patch of its grid. How far a render is from a field is
@@ -272,7 +272,9 @@ struct ParamSearchOptions {
   // units, g, b) at each exposure offset of probe_stops (stops), with the roll-off measured at each as the fixed-point
   // loop measures it. Each render's cells are recorded two ways: render_cells (the trained cells, as the residual reads
   // them and as the training targets are made) and optimiser_cells (what intent_loss scores at those parameters, before
-  // the per-bracket correction).
+  // the per-bracket correction). Each render's predicted is the network's own prediction from it, the mean of its mu
+  // cells, with nothing held; the file's target_L is the mean L* of the frame's lightness target (the bootstrap field's
+  // L*, which the search holds).
   std::string probe_path;
   std::vector<std::array<float, 4>> probe_params;
   std::vector<float> probe_stops = {0.0f};
@@ -296,13 +298,13 @@ struct ScreeningResult {
 
 // Step 4, one row for each of the best two screened brackets: its fixed-point loop. Each step renders the frame at
 // the current (E, g, b), runs DINOv3 on the render (one inference), replaces the predicted L* with the frame's
-// lightness wish, measures the residual and searches the next (E, g, b) against that field. The row keeps the step
+// lightness target, measures the residual and searches the next (E, g, b) against that field. The row keeps the step
 // with the lowest residual.
 struct FixedPointResult {
   int target_idx = 0;       // the bracket, an index into ProfileBundle::targets
   ConversionParams params;  // (E, g, b) of the best step, E in the search's units
   // The residual of that step: z2 of the render against the field it was scored against (L* the frame's lightness
-  // wish, a* and b* predicted from the same render). Low when the render already looks the way DINOv3 expects.
+  // target, a* and b* predicted from the same render). Low when the render already looks the way DINOv3 expects.
   float residual = 0;
   FixedPointStatus status = FixedPointStatus::kMaxIters;
   int steps = 0;  // render -> DINOv3 -> search steps run, one inference each
@@ -310,7 +312,7 @@ struct FixedPointResult {
   float shoulder_q995 = 0.0f;   // the measured 99.5% point before clamping (auto only)
   float shoulder_knee = 1.0f;   // the linear knee x_k (1 when off)
   bool shoulder_guard = false;  // the L* part of the intent loss is more than 2% worse with the shoulder than without
-  // The intent field of the best step: L* (and its sigma) the frame's lightness wish, a* and b* (and their sigma) as
+  // The intent field of the best step: L* (and its sigma) the frame's lightness target, a* and b* (and their sigma) as
   // DINOv3 predicted them from that step's preview. Its residual was measured against this field, and the next
   // parameters were searched against it. grid_h x grid_w cells, row-major, [L*, a*, b*] per cell.
   std::vector<float> mu, sigma;
@@ -437,13 +439,14 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
 // its mid grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the
 // search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
-// A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness wish
-// from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
+// A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness
+// target from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
 // screened at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its
-// A, measures the optimiser's correction, predicts a* b* (L* is the wish) and solves A (bracketed by steps of 0.1 APD
-// downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E pinned). The scene
-// loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No tournament, no
-// bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is nearest A.
+// A, measures the optimiser's correction, predicts a* b* (L* is the lightness target) and solves A (bracketed by steps
+// of 0.1 APD downhill from the current A, then golden section to 0.001, each A with g and b by the optimiser, E
+// pinned). The scene loop's thresholds stop it (A counted in stops, dA / log10 2); the lowest-residual step is kept. No
+// tournament, no bracket fallback, no highlight pullback. ParamSearchResult::target_idx is the bracket whose A_mid is
+// nearest A.
 // The print's film base held no darker than the picture's thinnest film, for a base that is not a capture (the
 // scan's rebate or statistics, or the bundle's): a base darker than the thinnest film would push thin film past the
 // knee and cut the print's shadows. The factor β = max(1, the largest over the three channels of the inner crop's
@@ -479,7 +482,7 @@ struct ContinuousPrintResult {
   // (above 1.1227, where the knee's tanh reaches its cap of 0.9999: 0.126 density thinner), where the picture keeps no
   // detail.
   float past_knee[3] = {0.0f, 0.0f, 0.0f}, past_cut[3] = {0.0f, 0.0f, 0.0f};
-  float wish_mean_l = 0.0f;          // the held wish's mean L*
+  float target_mean_l = 0.0f;        // the mean L* of the lightness target it held
   float above_white[3] = {0, 0, 0};   // the share of the inner crop with the channel above 1.002 (linear) at the
                                       // result: cut
   float at_white[3] = {0, 0, 0};      // the share with the channel at 0.999 or more: the paper's white and above
