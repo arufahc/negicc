@@ -378,6 +378,15 @@ struct ParamSearchResult {
   bool probed = false;  // --probe_intent: the search wrote its probe file and stopped (ParamSearchOptions::probe_path)
   // Time spent rendering previews, in DINOv3, in the (E, g, b) searches, on residuals, and in the whole search.
   std::chrono::steady_clock::duration render_time{}, infer_time{}, search_time{}, residual_time{}, total_time{};
+
+  // The frame statistics the search computed, and what they were computed from: the frame view, the crop ratio, and
+  // the network's size and patch. plan_auto_tone_stage takes them when it is called with the same ones, and computes
+  // its own otherwise. The view is only compared (its pointers and geometry), never read, so the frame's pixels must
+  // not change between the search and the plan.
+  std::shared_ptr<const void> frame_stats;  // a FrameStats, a type of multi_target_optimizer.cc
+  negicc::RgbView frame_stats_view;
+  float frame_stats_crop_ratio = 0.0f;
+  int frame_stats_max_size = 0, frame_stats_patch = 0;
 };
 
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and

@@ -363,17 +363,23 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     if (token_spread_ && !tokens.empty() && res.num_patches > 1) {
         const int n = res.num_patches;
         res.token_sd.resize(768);
-        for (int d = 0; d < 768; ++d) {
-            double s = 0.0;
-            for (int i = 0; i < n; ++i) s += tokens[(size_t)i * 768 + d];
-            const double mean = s / n;
-            double v = 0.0;
-            for (int i = 0; i < n; ++i) {
-                const double x = tokens[(size_t)i * 768 + d] - mean;
-                v += x * x;
-            }
-            res.token_sd[d] = (float)std::sqrt(v / (n - 1));
+        // Every dimension's sums, patch by patch: each dimension adds its patches in order, in double, as a loop
+        // over the dimensions first would.
+        double mean[768], var[768];
+        for (int d = 0; d < 768; ++d) mean[d] = var[d] = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const float* t = &tokens[(size_t)i * 768];
+            for (int d = 0; d < 768; ++d) mean[d] += t[d];
         }
+        for (int d = 0; d < 768; ++d) mean[d] = mean[d] / n;
+        for (int i = 0; i < n; ++i) {
+            const float* t = &tokens[(size_t)i * 768];
+            for (int d = 0; d < 768; ++d) {
+                const double x = t[d] - mean[d];
+                var[d] += x * x;
+            }
+        }
+        for (int d = 0; d < 768; ++d) res.token_sd[d] = (float)std::sqrt(var[d] / (n - 1));
     }
 
     if (res.has_pooled_tone) {

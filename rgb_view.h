@@ -122,6 +122,19 @@ struct RgbView {
     // Materialize into a contiguous width * height * 3 uint16_t buffer (only when explicitly requested).
     void materialize(uint16_t* dst_rgb) const;
 
+    // Whether o is this same view of the same buffers: every pointer and every geometry field equal. The pixels are
+    // not read.
+    bool same_view(const RgbView& o) const {
+        return width == o.width && height == o.height && r_ptr == o.r_ptr && g_ptr == o.g_ptr && g2_ptr == o.g2_ptr &&
+               b_ptr == o.b_ptr && pitch == o.pitch && stride == o.stride && ch_x0[0] == o.ch_x0[0] &&
+               ch_x0[1] == o.ch_x0[1] && ch_x0[2] == o.ch_x0[2] && ch_y0[0] == o.ch_y0[0] && ch_y0[1] == o.ch_y0[1] &&
+               ch_y0[2] == o.ch_y0[2] && cfa_step == o.cfa_step && flat.gain == o.flat.gain &&
+               flat.grid_w == o.flat.grid_w && flat.ax_i == o.flat.ax_i && flat.ax_t == o.flat.ax_t &&
+               flat.ay_i == o.flat.ay_i && flat.ay_t == o.flat.ay_t && flat_tables == o.flat_tables &&
+               sensor_x0 == o.sensor_x0 && sensor_y0 == o.sensor_y0 && sensor_dxx == o.sensor_dxx &&
+               sensor_dxy == o.sensor_dxy && sensor_dyx == o.sensor_dyx && sensor_dyy == o.sensor_dyy;
+    }
+
 private:
     // Affine mapping from view pixel (x, y) to unoriented half-size sensor pixel (fx, fy) for flat_divide:
     //   fx = sensor_x0 + x * sensor_dxx + y * sensor_dyx

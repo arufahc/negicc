@@ -801,6 +801,9 @@ class SearchFrame {
     std::vector<float> picture((size_t)n * 3), optimiser((size_t)n * 3);
     trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(),
                       picture.data());
+    cells_ = picture;  // kept for residual() on this same preview
+    cells_gen_ = preview_gen_;
+    cells_data_ = preview.data();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
@@ -815,6 +818,7 @@ class SearchFrame {
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
+    ++preview_gen_;  // a new preview: the cells kept from the last one are not reused
     const Clock::time_point t0 = Clock::now();
     // input_matrix_ with its rows scaled by E, E g and E b (with gain curves: by E, and g and b in the curves)
     SolverConfig sc;
@@ -957,8 +961,11 @@ class SearchFrame {
   // preview with L* replaced by the frame's lightness target.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
-    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h,
-                                                 engine_.patch_size(), mu.data(), sigma.data());
+    const int n = stats_.grid_w * stats_.grid_h;
+    const bool reuse = cells_gen_ == preview_gen_ && cells_data_ == preview.data() && cells_.size() == (size_t)n * 3;
+    const float err = reuse ? residual_from_cells(cells_.data(), n, mu.data(), sigma.data())
+                            : self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w,
+                                                        stats_.grid_h, engine_.patch_size(), mu.data(), sigma.data());
     residual_time_ += Clock::now() - t0;
     return err;
   }
@@ -1222,6 +1229,12 @@ class SearchFrame {
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
   std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
+  // update_correction(): the preview's trained cells, and the preview they came from (its render's generation and
+  // buffer). residual() takes them when it is given that same preview; render_preview advances the generation, so
+  // the cells of an earlier render are never reused.
+  std::vector<float> cells_;
+  unsigned long preview_gen_ = 0, cells_gen_ = ~0ul;
+  const uint8_t* cells_data_ = nullptr;
   std::vector<float> target_mu_l_, target_sigma_l_;  // set_lightness_target(): the bootstrap field's L* channel
 };
 
@@ -1980,6 +1993,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
+  // Kept for the tone plan of this same frame (plan_auto_tone_stage), which needs the same statistics.
+  out.frame_stats = std::make_shared<FrameStats>(stats);
+  out.frame_stats_view = frame;
+  out.frame_stats_crop_ratio = opts.crop_ratio;
+  out.frame_stats_max_size = engine.max_size();
+  out.frame_stats_patch = engine.patch_size();
 
   const bool white_light = !bundle.has_crosstalk;
   // The input matrix in reference units (ParamSearchResult).
@@ -3200,7 +3219,6 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
 }
-
 bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                           double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                           const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
@@ -3215,7 +3233,19 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
   fr.set_renderer(opts.renderer);
   fr.set_shoulder(1.0f, true);
-  fr.set_frame(frame, opts.crop_ratio);
+  {
+    // The frame statistics: the search's own (ParamSearchResult::frame_stats), when it computed them from this same
+    // view, crop ratio and network size; computed here otherwise.
+    const bool same = res.frame_stats && res.frame_stats_view.same_view(frame) &&
+                      res.frame_stats_crop_ratio == opts.crop_ratio && res.frame_stats_max_size == engine.max_size() &&
+                      res.frame_stats_patch == engine.patch_size();
+    if (same) {
+      fr.set_frame(frame, compute_inner_crop(frame.width, frame.height, opts.crop_ratio),
+                   *std::static_pointer_cast<const FrameStats>(res.frame_stats));
+    } else {
+      fr.set_frame(frame, opts.crop_ratio);
+    }
+  }
   const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
   fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
   const ProfileData& pd = bundle.targets[idx].film_prof.data;

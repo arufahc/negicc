@@ -50,3 +50,23 @@ files, scripts, or source comments. Use relative paths instead.
   `namespace negicc`, and so do the TIFF and JPEG readers in `np_input.h` and `np_input.cc` (`RgbImage`, `read_tiff`,
   `read_jpeg`, `to_linear_rec2020`) and `dilate` in `film_frame_detector.h`; the rest of `np_input.*` and
   `film_frame_detector.*` is in the global namespace.
+
+---
+
+## Parallel Regions
+
+Rules for any OpenMP parallel region added to this repository:
+
+- **Measure it for contention before adding it.** Time the region at several thread counts on a many-core machine (for
+  example 1, 8, 32, 96 and every hardware thread of a 192-thread machine) and on the smallest target (a Jetson Orin
+  Nano), one conversion at a time on an otherwise idle machine. Put the table in the pull request.
+- **Use no more threads than the measurement supports.** A region that does not gain from threads stays serial. A
+  region that does takes the program's thread count (`OMP_NUM_THREADS`), the same as every other region. Do not give
+  a region a thread count of its own (`num_threads`): the runtime rebuilds its thread team at every change of count,
+  and the regions around it get slower. Measured: with one region limited to 32 threads in a program running at 96,
+  the resize next to it took 11.5 ms in place of 0.9 ms.
+- **The results are identical at any thread count.** Keep sums whose order matters on one thread or in a fixed order,
+  and show equal output at two thread counts at least.
+- **Say it at the region.** A short comment gives what was measured, where, and what thread count the region uses.
+- **Batch runs set `OMP_NUM_THREADS` for every process,** so that processes times threads stays within the machine's
+  cores. The default is every hardware thread, which the small regions run once per network call do not gain from.
