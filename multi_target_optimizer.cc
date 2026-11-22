@@ -1993,6 +1993,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   fr.set_shoulder(1.0f, true);  // the roll-off, measured by the fixed-point loop
   fr.set_frame(frame, opts.crop_ratio);
   const FrameStats& stats = fr.stats();
+  // Kept for the tone plan of this same frame (plan_auto_tone_stage), which needs the same statistics.
+  out.frame_stats = std::make_shared<FrameStats>(stats);
+  out.frame_stats_view = frame;
+  out.frame_stats_crop_ratio = opts.crop_ratio;
+  out.frame_stats_max_size = engine.max_size();
+  out.frame_stats_patch = engine.patch_size();
 
   const bool white_light = !bundle.has_crosstalk;
   // The input matrix in reference units (ParamSearchResult).
@@ -3213,7 +3219,6 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
   return WhiteLightFit(bundle, engine, frame, scan_shutter_s, scan_iso, opts, res, fit_opts, encoding, tone_head, out)
       .run();
 }
-
 bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                           double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                           const ParamSearchResult& res, int encoding, const ToneHead& tone_head, ToneStagePlan& out) {
@@ -3228,7 +3233,19 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
   SearchFrame fr(bundle, engine, opts.verbose, opts.max_steps, scratch);
   fr.set_renderer(opts.renderer);
   fr.set_shoulder(1.0f, true);
-  fr.set_frame(frame, opts.crop_ratio);
+  {
+    // The frame statistics: the search's own (ParamSearchResult::frame_stats), when it computed them from this same
+    // view, crop ratio and network size; computed here otherwise.
+    const bool same = res.frame_stats && res.frame_stats_view.same_view(frame) &&
+                      res.frame_stats_crop_ratio == opts.crop_ratio && res.frame_stats_max_size == engine.max_size() &&
+                      res.frame_stats_patch == engine.patch_size();
+    if (same) {
+      fr.set_frame(frame, compute_inner_crop(frame.width, frame.height, opts.crop_ratio),
+                   *std::static_pointer_cast<const FrameStats>(res.frame_stats));
+    } else {
+      fr.set_frame(frame, opts.crop_ratio);
+    }
+  }
   const FrameScale scale = frame_scale(bundle, (float)scan_shutter_s, (float)scan_iso, opts);
   fr.set_frame_matrix(scale.frame_matrix, scale.e_norm);
   const ProfileData& pd = bundle.targets[idx].film_prof.data;
