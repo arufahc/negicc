@@ -403,22 +403,51 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
   float lut[256];
   for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
   const float sx = w / float(W), sy = h / float(H);
+  // Each output column's and row's source span and area weights. They depend only on the column or the row, so they
+  // are tabulated once, in the order the passes add them.
+  struct Span { int s = 0, n = 0; size_t w0 = 0; };
+  auto spans = [](int out_n, float scale, int in_n, std::vector<Span>& sp, std::vector<float>& wts) {
+    sp.assign(out_n, Span{});
+    wts.clear();
+    for (int d = 0; d < out_n; ++d) {
+      const float p0 = d * scale, p1 = (d + 1) * scale;
+      const int ps = (int)std::floor(p0), pe = std::min(in_n, (int)std::ceil(p1));
+      Span& q = sp[d];
+      q.w0 = wts.size();
+      bool first = true;
+      for (int pp = ps; pp < pe; ++pp) {
+        const float wt = std::min(p1, pp + 1.0f) - std::max(p0, (float)pp);
+        if (wt <= 0.0f) continue;
+        if (first) { q.s = pp; first = false; }
+        wts.push_back(wt);
+        ++q.n;
+      }
+      // A weight that is not positive can only lie at a span's ends, so the kept ones are contiguous from q.s.
+    }
+  };
+  std::vector<Span> xsp, ysp;
+  std::vector<float> xw, yw;
+  spans(W, sx, w, xsp, xw);
+  spans(H, sy, h, ysp, yw);
   std::vector<float> tmp((size_t)h * W * 3);  // horizontal pass, linear light
   #pragma omp parallel for schedule(static)
   for (int y = 0; y < h; ++y) {
     const uint8_t* row = preview_u8 + (size_t)y * w * 3;
     for (int dx = 0; dx < W; ++dx) {
-      const float x0 = dx * sx, x1 = (dx + 1) * sx;
-      const int xs = (int)std::floor(x0), xe = std::min(w, (int)std::ceil(x1));
-      float acc[3] = {0, 0, 0}, wsum = 0.0f;
-      for (int xx = xs; xx < xe; ++xx) {
-        const float wt = std::min(x1, xx + 1.0f) - std::max(x0, (float)xx);
-        if (wt <= 0.0f) continue;
-        for (int c = 0; c < 3; ++c) acc[c] += lut[row[xx * 3 + c]] * wt;
-        wsum += wt;
+      const Span& q = xsp[dx];
+      const float* wt = &xw[q.w0];
+      const uint8_t* px = row + (size_t)q.s * 3;
+      float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, wsum = 0.0f;
+      for (int i = 0; i < q.n; ++i) {
+        a0 += lut[px[i * 3 + 0]] * wt[i];
+        a1 += lut[px[i * 3 + 1]] * wt[i];
+        a2 += lut[px[i * 3 + 2]] * wt[i];
+        wsum += wt[i];
       }
       float* o = &tmp[((size_t)y * W + dx) * 3];
-      for (int c = 0; c < 3; ++c) o[c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
+      o[0] = wsum > 0.0f ? a0 / wsum : 0.0f;
+      o[1] = wsum > 0.0f ? a1 / wsum : 0.0f;
+      o[2] = wsum > 0.0f ? a2 / wsum : 0.0f;
     }
   }
   // Vertical pass and CIELAB per pixel, on all threads. The per-patch sums are then added on one thread, in row-major
@@ -429,19 +458,20 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
   std::vector<float> labpix((size_t)H * W * 3);
   #pragma omp parallel for schedule(static)
   for (int dy = 0; dy < H; ++dy) {
-    const float y0 = dy * sy, y1 = (dy + 1) * sy;
-    const int ys = (int)std::floor(y0), ye = std::min(h, (int)std::ceil(y1));
+    const Span& q = ysp[dy];
+    const float* wt = &yw[q.w0];
+    float wsum = 0.0f;
+    for (int i = 0; i < q.n; ++i) wsum += wt[i];
+    const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
     for (int dx = 0; dx < W; ++dx) {
-      float a3[3] = {0, 0, 0}, wsum = 0.0f;
-      for (int yy = ys; yy < ye; ++yy) {
-        const float wt = std::min(y1, yy + 1.0f) - std::max(y0, (float)yy);
-        if (wt <= 0.0f) continue;
-        const float* q = &tmp[((size_t)yy * W + dx) * 3];
-        for (int c = 0; c < 3; ++c) a3[c] += q[c] * wt;
-        wsum += wt;
+      float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+      for (int i = 0; i < q.n; ++i) {
+        const float* p = &tmp[((size_t)(q.s + i) * W + dx) * 3];
+        a0 += p[0] * wt[i];
+        a1 += p[1] * wt[i];
+        a2 += p[2] * wt[i];
       }
-      const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
-      const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
+      const negicc::Lab c = negicc::linear_srgb_to_lab({a0 * inv, a1 * inv, a2 * inv});
       float* o = &labpix[((size_t)dy * W + dx) * 3];
       o[0] = c.L;
       o[1] = c.a;
@@ -450,9 +480,10 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
   }
   std::vector<double> acc((size_t)gw * gh * 3, 0.0);
   for (int dy = 0; dy < H; ++dy) {
-    for (int dx = 0; dx < W; ++dx) {
-      const float* o = &labpix[((size_t)dy * W + dx) * 3];
-      double* a = &acc[((size_t)(dy / patch) * gw + dx / patch) * 3];
+    double* arow = &acc[(size_t)(dy / patch) * gw * 3];
+    const float* o = &labpix[(size_t)dy * W * 3];
+    for (int dx = 0; dx < W; ++dx, o += 3) {
+      double* a = arow + (size_t)(dx / patch) * 3;
       a[0] += o[0];
       a[1] += o[1];
       a[2] += o[2];
