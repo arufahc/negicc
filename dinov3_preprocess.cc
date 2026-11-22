@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include "color_pipeline.h"
@@ -110,12 +111,13 @@ void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, i
     }
 
     // Horizontal pass into an 8-bit image [src_h, dst_w] (or the source itself when the width is unchanged)
-    std::vector<uint8_t> tmp;
+    std::unique_ptr<uint8_t[]> tmp;  // not zero-filled: the horizontal pass writes all of it
     const uint8_t* mid = src;
     int mid_stride = src_stride;
     if (need_h) {
         const FilterCoeffs cx = compute_antialiased_bilinear_coeffs(src_w, dst_w);
-        uint8_t* out = need_v ? (tmp.resize((size_t)src_h * dst_w * 3), tmp.data()) : dst;
+        if (need_v) tmp.reset(new uint8_t[(size_t)src_h * dst_w * 3]);
+        uint8_t* out = need_v ? tmp.get() : dst;
         #pragma omp parallel for schedule(static)
         for (int y = 0; y < src_h; ++y) {
             const uint8_t* row = src + (size_t)y * src_stride;
@@ -135,20 +137,27 @@ void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, i
             }
         }
         if (!need_v) return;
-        mid = tmp.data();
+        mid = tmp.get();
         mid_stride = dst_w * 3;
     }
 
     const FilterCoeffs cy = compute_antialiased_bilinear_coeffs(src_h, dst_h);
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < dst_h; ++y) {
-        const int* k = &cy.kk[(size_t)y * cy.ksize];
-        uint8_t* orow = dst + (size_t)y * dst_w * 3;
-        for (int x = 0; x < dst_w * 3; ++x) {
-            int s = 1 << (kFilterPrecisionBits - 1);
-            for (int i = 0; i < cy.count[y]; ++i)
-                s += mid[(size_t)(cy.xmin[y] + i) * mid_stride + x] * k[i];
-            orow[x] = clip_u8(s);
+    // Each output row's sums are accumulated source row by source row: the same integer terms as a loop over the
+    // output bytes first, added in another order (integer sums do not depend on it).
+    #pragma omp parallel
+    {
+        std::vector<int> acc((size_t)dst_w * 3);
+        #pragma omp for schedule(static)
+        for (int y = 0; y < dst_h; ++y) {
+            const int* k = &cy.kk[(size_t)y * cy.ksize];
+            uint8_t* orow = dst + (size_t)y * dst_w * 3;
+            std::fill(acc.begin(), acc.end(), 1 << (kFilterPrecisionBits - 1));
+            for (int i = 0; i < cy.count[y]; ++i) {
+                const uint8_t* r = mid + (size_t)(cy.xmin[y] + i) * mid_stride;
+                const int ki = k[i];
+                for (int x = 0; x < dst_w * 3; ++x) acc[x] += r[x] * ki;
+            }
+            for (int x = 0; x < dst_w * 3; ++x) orow[x] = clip_u8(acc[x]);
         }
     }
 }
