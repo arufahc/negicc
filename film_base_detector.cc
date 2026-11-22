@@ -134,39 +134,65 @@ std::vector<float> downsample(const RgbView& src, int& ow, int& oh) {
   const std::vector<AreaTab> xtab = area_tab(W, ow, 3, scale_x);
   const std::vector<AreaTab> ytab = area_tab(H, oh, 1, scale_y);
   const int dw = ow * 3;
-  std::vector<float> buf(dw), sum(dw, 0.0f);
   std::vector<uint16_t> dst((size_t)dw * oh);
-  int prev_dy = ytab.empty() ? 0 : ytab[0].di;
-  int loaded = -1;
-  for (const AreaTab& yt : ytab) {
-    const float beta = yt.alpha;
-    if (yt.si != loaded) {
-      load_row(yt.si);
-      loaded = yt.si;
-    }
-    std::fill(buf.begin(), buf.end(), 0.0f);
-    for (const AreaTab& xt : xtab) {
-      const float alpha = xt.alpha;
-      const float t0 = buf[xt.di] + row[xt.si] * alpha;
-      const float t1 = buf[xt.di + 1] + row[xt.si + 1] * alpha;
-      const float t2 = buf[xt.di + 2] + row[xt.si + 2] * alpha;
-      buf[xt.di] = t0;
-      buf[xt.di + 1] = t1;
-      buf[xt.di + 2] = t2;
-    }
-    if (yt.di != prev_dy) {
-      uint16_t* d = &dst[(size_t)prev_dy * dw];
-      for (int dx = 0; dx < dw; dx++) {
-        d[dx] = saturate_u16(sum[dx]);
-        sum[dx] = beta * buf[dx];
+  // The ytab entries of each output row (they are contiguous). The output rows are then made on all threads: each
+  // is a sum over its own source rows only, read and added as one thread would, in the same order.
+  // Measured: on a 192-thread machine a read of a 61-megapixel scan with a flat field (two work images) takes 370 ms
+  // on one thread and gains up to 96 threads (about 20 ms), then loses at 192; on a Jetson Orin Nano it gains up to
+  // all 6 cores (628 to 153 ms). It takes the program's thread count, as every region does (AGENTS.md, "Parallel
+  // regions").
+  std::vector<std::pair<size_t, size_t>> groups;
+  for (size_t i = 0; i < ytab.size();) {
+    size_t j = i + 1;
+    while (j < ytab.size() && ytab[j].di == ytab[i].di) ++j;
+    groups.push_back({i, j});
+    i = j;
+  }
+  #pragma omp parallel
+  {
+    std::vector<uint16_t> trow((size_t)W * 3);
+    std::vector<float> buf(dw), sum(dw);
+    // The source row in trow. An output row's last source row is usually the next output row's first, and a thread's
+    // output rows are consecutive, so it is kept across them and read once.
+    int loaded = -1;
+    #pragma omp for schedule(static)
+    for (long gi = 0; gi < (long)groups.size(); ++gi) {
+      for (size_t e = groups[gi].first; e < groups[gi].second; ++e) {
+        const AreaTab& yt = ytab[e];
+        const float beta = yt.alpha;
+        if (yt.si != loaded) {
+          for (int x = 0; x < W; ++x) src.sample(x, yt.si, &trow[(size_t)x * 3]);
+          loaded = yt.si;
+        }
+        std::fill(buf.begin(), buf.end(), 0.0f);
+        for (const AreaTab& xt : xtab) {
+          const float alpha = xt.alpha;
+          const float t0 = buf[xt.di] + trow[xt.si] * alpha;
+          const float t1 = buf[xt.di + 1] + trow[xt.si + 1] * alpha;
+          const float t2 = buf[xt.di + 2] + trow[xt.si + 2] * alpha;
+          buf[xt.di] = t0;
+          buf[xt.di + 1] = t1;
+          buf[xt.di + 2] = t2;
+        }
+        if (e == groups[gi].first) {
+          // The first output row's sum starts from 0.0f plus its first product; every later row's from its first
+          // product alone. (The two differ only in the sign of a zero.)
+          if (gi == 0) {
+            for (int dx = 0; dx < dw; dx++) {
+              sum[dx] = 0.0f;
+              sum[dx] += beta * buf[dx];
+            }
+          } else {
+            for (int dx = 0; dx < dw; dx++) sum[dx] = beta * buf[dx];
+          }
+        } else {
+          for (int dx = 0; dx < dw; dx++) sum[dx] += beta * buf[dx];
+        }
       }
-      prev_dy = yt.di;
-    } else {
-      for (int dx = 0; dx < dw; dx++) sum[dx] += beta * buf[dx];
+      uint16_t* d = &dst[(size_t)ytab[groups[gi].first].di * dw];
+      for (int dx = 0; dx < dw; dx++) d[dx] = saturate_u16(sum[dx]);
     }
   }
-  uint16_t* d = &dst[(size_t)prev_dy * dw];
-  for (int dx = 0; dx < dw; dx++) d[dx] = saturate_u16(sum[dx]);
   out.assign(dst.begin(), dst.end());
   return out;
 }
