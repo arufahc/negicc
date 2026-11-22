@@ -801,6 +801,9 @@ class SearchFrame {
     std::vector<float> picture((size_t)n * 3), optimiser((size_t)n * 3);
     trained_cells_lab(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h, engine_.patch_size(),
                       picture.data());
+    cells_ = picture;  // kept for residual() on this same preview
+    cells_gen_ = preview_gen_;
+    cells_data_ = preview.data();
     SolverConfig cfg;
     cfg.prof = &bundle_.targets[target_idx].film_prof.data;
     cfg.knee = AUTO_KNEE;
@@ -815,6 +818,7 @@ class SearchFrame {
   // The inner crop rendered to 8-bit sRGB through bracket target_idx at params: what DINOv3 sees. out is crop_.w x
   // crop_.h pixels, row-major, 3 bytes each; DINOv3 resamples it to its input size.
   void render_preview(int target_idx, const ConversionParams& params, std::vector<uint8_t>& out) {
+    ++preview_gen_;  // a new preview: the cells kept from the last one are not reused
     const Clock::time_point t0 = Clock::now();
     // input_matrix_ with its rows scaled by E, E g and E b (with gain curves: by E, and g and b in the curves)
     SolverConfig sc;
@@ -957,8 +961,11 @@ class SearchFrame {
   // preview with L* replaced by the frame's lightness target.
   float residual(const std::vector<uint8_t>& preview, const std::vector<float>& mu, const std::vector<float>& sigma) {
     const Clock::time_point t0 = Clock::now();
-    const float err = self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w, stats_.grid_h,
-                                                 engine_.patch_size(), mu.data(), sigma.data());
+    const int n = stats_.grid_w * stats_.grid_h;
+    const bool reuse = cells_gen_ == preview_gen_ && cells_data_ == preview.data() && cells_.size() == (size_t)n * 3;
+    const float err = reuse ? residual_from_cells(cells_.data(), n, mu.data(), sigma.data())
+                            : self_consistency_residual(preview.data(), crop_.w, crop_.h, stats_.grid_w,
+                                                        stats_.grid_h, engine_.patch_size(), mu.data(), sigma.data());
     residual_time_ += Clock::now() - t0;
     return err;
   }
@@ -1222,6 +1229,12 @@ class SearchFrame {
   std::vector<float> last_neutral_p_;  // predict(): the neutral head's p of the last inference
   std::vector<float> last_tone_features_;  // predict(): the tone heads' input from the last inference
   std::map<int, std::vector<float>> correction_;  // update_correction(): per bracket, picture minus optimiser cells
+  // update_correction(): the preview's trained cells, and the preview they came from (its render's generation and
+  // buffer). residual() takes them when it is given that same preview; render_preview advances the generation, so
+  // the cells of an earlier render are never reused.
+  std::vector<float> cells_;
+  unsigned long preview_gen_ = 0, cells_gen_ = ~0ul;
+  const uint8_t* cells_data_ = nullptr;
   std::vector<float> target_mu_l_, target_sigma_l_;  // set_lightness_target(): the bootstrap field's L* channel
 };
 

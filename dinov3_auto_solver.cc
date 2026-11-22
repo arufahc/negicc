@@ -421,7 +421,13 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
       for (int c = 0; c < 3; ++c) o[c] = wsum > 0.0f ? acc[c] / wsum : 0.0f;
     }
   }
-  std::vector<double> acc((size_t)gw * gh * 3, 0.0);  // vertical pass, CIELAB per pixel, summed per patch
+  // Vertical pass and CIELAB per pixel, on all threads. The per-patch sums are then added on one thread, in row-major
+  // order, so they do not depend on the number of threads.
+  // Measured: on a 192-thread machine this pass takes 2.0, 0.5, 0.4 and 5.5 ms at 8, 32, 96 and 192 threads, and on a
+  // Jetson Orin Nano 37, 27, 16 and 11 ms at 1, 2, 4 and 6. It takes the program's thread count, as every region does
+  // (AGENTS.md, "Parallel regions").
+  std::vector<float> labpix((size_t)H * W * 3);
+  #pragma omp parallel for schedule(static)
   for (int dy = 0; dy < H; ++dy) {
     const float y0 = dy * sy, y1 = (dy + 1) * sy;
     const int ys = (int)std::floor(y0), ye = std::min(h, (int)std::ceil(y1));
@@ -436,10 +442,20 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
       }
       const float inv = wsum > 0.0f ? 1.0f / wsum : 0.0f;
       const negicc::Lab c = negicc::linear_srgb_to_lab({a3[0] * inv, a3[1] * inv, a3[2] * inv});
+      float* o = &labpix[((size_t)dy * W + dx) * 3];
+      o[0] = c.L;
+      o[1] = c.a;
+      o[2] = c.b;
+    }
+  }
+  std::vector<double> acc((size_t)gw * gh * 3, 0.0);
+  for (int dy = 0; dy < H; ++dy) {
+    for (int dx = 0; dx < W; ++dx) {
+      const float* o = &labpix[((size_t)dy * W + dx) * 3];
       double* a = &acc[((size_t)(dy / patch) * gw + dx / patch) * 3];
-      a[0] += c.L;
-      a[1] += c.a;
-      a[2] += c.b;
+      a[0] += o[0];
+      a[1] += o[1];
+      a[2] += o[2];
     }
   }
   const double inv_n = 1.0 / ((double)patch * patch);
@@ -451,6 +467,10 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
   const int n = gw * gh;
   std::vector<float> lab((size_t)n * 3);
   trained_cells_lab(preview_u8, w, h, gw, gh, patch, lab.data());
+  return residual_from_cells(lab.data(), n, mu, sigma);
+}
+
+float residual_from_cells(const float* lab, int n, const float* mu, const float* sigma) {
   double sum_res = 0.0;
   for (int i = 0; i < n; ++i) {
     const float dL = (lab[i * 3 + 0] - mu[i * 3 + 0]) / sigma[i * 3 + 0];

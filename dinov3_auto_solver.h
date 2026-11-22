@@ -144,6 +144,10 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
 float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch,
                                 const float* mu, const float* sigma);
 
+// The same residual from trained cells already computed (trained_cells_lab's gw*gh*3 values, n = gw*gh):
+// self_consistency_residual is trained_cells_lab followed by this.
+float residual_from_cells(const float* lab, int n, const float* mu, const float* sigma);
+
 // Solves optimal (E, g, b) parameters against active DINOv3 intent field
 bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
                          const uint16_t (*image)[4], int w, int h,
