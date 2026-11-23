@@ -122,23 +122,28 @@ bool tone_curve_ok(const ToneCurve& q);
 // curve planned at kToneClipShares[k]; it is called for k = 0 first and for no share after the one kept.
 int tone_pick_clip_share(double white_before, const std::function<double(int)>& white_after_of);
 
-// The shares of the clip check's sample of the unconverted image img (the 2 x 2 pixels at the origin of every
-// kToneClipSampleStep block that lie inside the inner crop, kToneClipCrop) that the conversion through pc and matrix
-// puts at white (a channel at the 16-bit maximum) and at black (a channel at 0): with pc as it is (q null), or with
-// curve q's table. Either output may be null.
-void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
-                      int stride, const ToneCurve* q, double* white, double* black);
+// The clip check's sample of the unconverted image img (the 2 x 2 pixels at the origin of every kToneClipSampleStep
+// block that lie inside the inner crop, kToneClipCrop), converted through pc and matrix up to the tone curve: each
+// pixel's display value (color_pipeline.h convert_pixel_display). It is converted once per conversion, and every curve
+// the plan tries is applied to it (tone_clip_shares).
+std::vector<negicc::Rgb> tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img,
+                                          int w, int h, int stride);
+// The shares of the sample that the rest of the conversion through pc (the tone curve on an sRGB export, then the
+// encoding) puts at white (a channel at the 16-bit maximum) and at black (a channel at 0): with pc as it is (q null),
+// or with curve q's table. Either output may be null.
+void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample, const ToneCurve* q,
+                      double* white, double* black);
 
-// The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
-// pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends
-// hold against the conversion's own shares (white_before, black_before: tone_clip_sample without a curve), else the
-// moves scaled as kToneClipAllowance says. share gets the share of the highlight and range moves kept, and
-// shadow_share (when given) that of the shadow move.
+// The plan's curve for the image the export converts (its clip check's sample, tone_clip_sample, through pc): the
+// designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends hold against the
+// conversion's own shares (white_before, black_before: tone_clip_shares without a curve), else the moves scaled as
+// kToneClipAllowance says. share gets the share of the highlight and range moves kept, and shadow_share (when given)
+// that of the shadow move.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const negicc::PipelineConfig& pc, const float* matrix,
-                              const uint16_t* img, int w, int h, int stride, double white_before, double black_before,
-                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
-                              double* share, double* shadow_share = nullptr);
+                              const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
+                              double white_before, double black_before, const ToneCurve& designed,
+                              const ToneTargets& designed_targets, ToneTargets* targets, double* share,
+                              double* shadow_share = nullptr);
 
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
 // predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.

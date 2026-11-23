@@ -608,8 +608,9 @@ which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `appl
 | Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
 
 **The clip check.** Before the export is converted, each candidate curve is tried on a sample of the frame through
-the conversion kernel (`tone_clip_sample`): the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner
-crop, the area the curve is planned on. A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
+the conversion kernel: the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner crop, the area the
+curve is planned on. The sample is converted once up to the tone curve (`tone_clip_sample`), and each candidate's
+table is applied to those values with the rest of the kernel (`tone_clip_shares`). A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
 on the others, so a sample of one pixel per block could miss it; the 2 × 2 covers every phase. Each end is compared
 with its own share before the stage: falling black clipping does not pay for rising white clipping, nor the reverse.
 The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole shadow move unless the black
