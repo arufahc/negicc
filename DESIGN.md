@@ -353,6 +353,16 @@ sRGB 242 (`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 t
 
 The tone stage (4.4) changes lightness only. A print (5.4) takes neither the shoulder nor the tone stage.
 
+**Where the full-size steps run.** `neg_process` makes the full-resolution image (2.1) and converts it through a
+backend (`np_pipeline.h`: `Backend`). On a USE_CUDA=1 build with a CUDA device that runs its kernels, the grain-aware
+debayer or the pixel-shift merge runs on the device (`gpu_passes.cu`: `gpu_grain_aware_debayer`,
+`gpu_pixel_shift_merge`), and so does the conversion to `-P srgb` or `-P srgb-g10`, through the search's GPU render
+(4.2). The device's debayer and merge give the CPU's values exactly. Its conversion computes the same `convert_pixel`
+but rounds `powf`, `tanhf` and `cbrtf` differently in the last place, so a value of the exported picture can differ
+from the CPU's by one 16-bit code. A custom output profile, whose last step is Little CMS, and an image that is not
+three samples a pixel are converted on the CPU. `--dino_backend cpu` keeps both steps on the CPU, and so does
+`--check_renderer`. The sidecar's `used.full_size` records where each ran.
+
 ## 4.2 The Auto search
 
 The search chooses the bracket and `(E, g, b)`. It works on the half-size image of the frame's inner 90 % crop
@@ -472,7 +482,7 @@ result afterwards, in stops of the reference grey's luminance and in its `a*` an
 **Where the passes run.** Every preview and clip pass of the search, the print's search, the curve fit and the tone
 plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
 device that runs its kernels the GPU's (`GpuRenderer`, `gpu_passes.cu`), else the CPU's; `--dino_backend cpu` keeps
-the passes, and the network, on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
+the passes, the network and the full-size steps (4.1) on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
 multiply-add off on both sides, but the two round `powf`, `tanhf` and `cbrtf` differently in the last place, so a
 preview can differ by one code and a result in its last digits. The sidecar's `auto` block records `renderer`: `gpu`,
 or `cpu, compared with the gpu` under `--check_renderer` with a device (no key: the CPU's). A run reuses a sidecar

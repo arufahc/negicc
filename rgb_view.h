@@ -404,6 +404,9 @@ void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 
 // The same three on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; they throw GpuError without one). Every pointer in
 // the arguments is device memory: the mosaics, the flat field's tables and rgb_out. The caller puts them there.
+// neg_process calls the debayer and the merge for its full-size image. It does not call gpu_preview_debayer, whose
+// half-size image it reads as a view (RgbView::from_cfa_half): that one is here for an application that shows the
+// half-size image from device memory, beside its CPU twin.
 void gpu_preview_debayer(const PreviewDebayerArgs& a);
 void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);

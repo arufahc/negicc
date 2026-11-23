@@ -14,8 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // neg_process's processing pipeline: the stages main runs in turn, the state they hand on, and the split between the
-// scan as data (MosaicInput, RgbInput) and the compute on it (Backend: the CPU now; a CUDA backend can implement the
-// same calls).
+// scan as data (MosaicInput, RgbInput) and the compute on it (Backend: the CPU's, and a CUDA device's for the
+// full-size steps).
 //
 //   prepare   the profile (bundle, ICC profile or bracket), the parameter search mode, the crosstalk correction, the
 //             DINOv3 engine
@@ -213,11 +213,12 @@ class Backend {
   virtual ~Backend() = default;
   // The full-resolution RGB of the region of a mosaic, turned and flipped, into rgb_out (3 samples a pixel,
   // dst_w x dst_h: w x h, or h x w when turned by 90 or 270 degrees): the grain-aware debayer of one frame, or the
-  // merge of a pixel shift's four, with the flat field. mosaics_done is called once the backend reads in's frames no
-  // more: it frees them. A backend that copies them elsewhere calls it as soon as they are copied, so that the two
-  // copies are not held while the output is made; the caller calls it after the render in any case.
-  virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
-                      const std::function<void()>& mosaics_done) = 0;
+  // merge of a pixel shift's four, with the flat field. The backend sizes rgb_out, at the point where it first needs
+  // it. frame_done(k) frees in.frames[k]: a backend that copies a frame elsewhere calls it as soon as that frame is
+  // copied and reads it no more, so that the two copies are not held longer than the copying takes; the caller calls
+  // it for every frame after the render in any case.
+  virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                      std::vector<uint16_t>& rgb_out, const std::function<void(int)>& frame_done) = 0;
   // Converts img in place to the output encoding through the shared pixel pipeline (color_pipeline.h) of pc: the
   // input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the shoulder. ENCODE_NONE stops
   // after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
@@ -230,27 +231,34 @@ class Backend {
 
 class CpuBackend : public Backend {
  public:
-  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
-              const std::function<void()>& mosaics_done) override;
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, std::vector<uint16_t>& rgb_out,
+              const std::function<void(int)>& frame_done) override;
   void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                const RgbInput& img) override;
 };
 
 // The same on a CUDA device: the debayer or the merge by gpu_grain_aware_debayer and gpu_pixel_shift_merge, and the
-// conversion to sRGB or linear sRGB by the search's GPU render (GpuRenderer), which computes convert_pixel as the CPU
-// does. The mosaics, the flat field's tables and the picture are copied to the device and the result copied back.
-// Another output encoding, or an image that is not three samples a pixel, keeps the CPU's conversion: a custom
-// profile's last step is Little CMS.
+// conversion to sRGB or linear sRGB by the search's GPU render (GpuRenderer). The mosaics, the flat field's tables and
+// the picture are copied to the device and the result copied back.
+//
+// Against the CPU's picture: the debayer and the merge are equal in every value. The conversion computes the same
+// convert_pixel, but the device rounds powf, tanhf and cbrtf differently in the last place (DESIGN.md 4.2), so a
+// value of the exported picture can differ from the CPU's by one 16-bit code.
+//
+// Another output encoding, or an image that is not three samples a pixel, keeps the CPU's conversion (a custom
+// profile's last step is Little CMS), and so does every step when no device runs this build's kernels: the device is
+// asked for only where a step is about to use it.
 class GpuBackend : public CpuBackend {
  public:
-  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
-              const std::function<void()>& mosaics_done) override;
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, std::vector<uint16_t>& rgb_out,
+              const std::function<void(int)>& frame_done) override;
   void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                const RgbInput& img) override;
 };
 
-// The backend of the full-size steps: the GPU's on a USE_CUDA=1 build with a device that runs its kernels, unless
-// --dino_backend cpu, which keeps everything on the CPU.
+// The backend of the full-size steps: the device's (which is the CPU's without a device that runs this build's
+// kernels), unless --dino_backend cpu, which keeps everything on the CPU, or --check_renderer, whose picture is the
+// CPU's. The same rule as the search's passes.
 std::unique_ptr<Backend> make_backend(const Options& o);
 
 struct LibRawDeleter {
