@@ -299,7 +299,7 @@ frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corre
 The search judges a render with a vision network: the frozen DINOv3 ViT-S/16 backbone (`models/dinov3-small`), whose
 input is the preview scaled so that its longer side is 512 pixels (enlarged when it is smaller), each side rounded to
 whole 16-pixel patches; one patch is one cell of the grid (32 × 21 cells for a 3:2 frame). Three heads read its
-tokens (`dinov3_engine.h`).
+tokens (`dinov3.h`).
 
 The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small MLP on the layer 9 and 12 tokens),
 predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
@@ -362,7 +362,7 @@ records, e.g. an aspect ratio set in it; for three captures, the first capture's
 sensor's margins (`np_input.cc`: `inset_crop`); else the whole image.
 
 **The score.** A render's preview goes to the intent head, which predicts `(μ_i, σ_i)` for each cell `i`. The
-render's own colour per cell is read as the head's targets were made (`dinov3_auto_solver.cc`:
+render's own colour per cell is read as the head's targets were made (`dinov3.cc`:
 `trained_cells_lab`): the preview resampled in linear light by area average to the network's input size, CIELAB per
 pixel, averaged over the cell. The residual is the mean squared z-score:
 
@@ -374,7 +374,7 @@ Under a Gaussian model per cell this is the negative log-likelihood, so cells th
 little. The network's lightness follows the picture it is shown, so the search fixes one lightness target per frame
 (step 2) and lets only `a*` and `b*` be predicted again from each render.
 
-**The (E, g, b) optimiser** (`dinov3_auto_solver.cc`: `optimize_target_for_intent`) is a coordinate descent against a
+**The (E, g, b) optimiser** (`dinov3.cc`: `optimize_target_for_intent`) is a coordinate descent against a
 fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_loss`;
 `intent_cells` gives the same cells for the correction below), not a full preview:
 

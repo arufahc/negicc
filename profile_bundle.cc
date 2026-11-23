@@ -15,7 +15,7 @@
 
 #include "profile_bundle.h"
 
-#include "dinov3_auto_solver.h"
+#include "dinov3.h"
 #include "np_log.h"
 
 #include <lcms2_plugin.h>

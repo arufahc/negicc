@@ -26,7 +26,7 @@
 #include "color_pipeline.h"
 #include "rgb_view.h"
 
-struct SolverConfig;  // dinov3_auto_solver.h
+struct SolverConfig;  // dinov3.h
 
 // --------------------------------------------------------------------------------------------------------------------
 // The film profile as the host holds it (the parsed tables and the pointers into them), the output encodings and the
