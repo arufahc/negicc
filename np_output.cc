@@ -468,6 +468,12 @@ FileFingerprint memory_fingerprint(const void* data, size_t size) {
   return fp;
 }
 
+std::string utf8_replaced(const std::string& s) {
+  using nlohmann::ordered_json;
+  return ordered_json::parse(ordered_json(s).dump(-1, ' ', false, ordered_json::error_handler_t::replace))
+      .get<std::string>();
+}
+
 bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return false;

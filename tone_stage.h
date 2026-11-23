@@ -28,7 +28,7 @@
 // ---- The tone stage (tone_stage.cc) ----
 // The tone stage, on white-light and TriLED bundles alike: one monotone lightness curve on CIE L* (D65), set per frame
 // from the tone heads
-// (ToneHead, dinov3_engine.h), applied in the conversion kernel to each pixel's display linear sRGB value
+// (ToneHead, dinov3.h), applied in the conversion kernel to each pixel's display linear sRGB value
 // (color_pipeline.h apply_tone): its luminance Y goes to Y' = Y(f(L*(Y))) on the white point's neutral, and its colour
 // difference from that neutral is scaled by f'(Y) / f'(Y') (Lab's f), which holds a* and b* to first order. Colour is
 // not re-balanced, and no pixel is converted to Lab.

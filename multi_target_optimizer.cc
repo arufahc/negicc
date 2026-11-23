@@ -31,8 +31,7 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "dinov3_auto_solver.h"
-#include "dinov3_preprocess.h"
+#include "dinov3.h"
 #include "profile_bundle.h"
 #include "nlohmann/json.hpp"
 
@@ -863,7 +862,7 @@ class SearchFrame {
       return false;
     }
     // Every loss divides by sigma: a non-positive or non-finite sigma, or a non-finite mu, would make the search's
-    // and the curve fit's losses NaN or infinite (as dinov3_auto_solver.cc's infer_checked rejects them).
+    // and the curve fit's losses NaN or infinite (as dinov3.cc's infer_checked rejects them).
     for (size_t i = 0; i < n; ++i) {
       if (!(r.sigma[i] > 0.0f) || !std::isfinite(r.sigma[i]) || !std::isfinite(r.mu[i])) {
         std::cerr << "ERROR! DINOv3 intent field has a non-positive or non-finite sigma or mu at " << i << std::endl;
@@ -974,7 +973,7 @@ class SearchFrame {
   // search's defaults when null) with E within e_bounds = {lo, hi, centre}; returns the intent loss
   // (ScreeningResult::intent_loss). pullback_search (the highlight pullback's re-search) replaces the pull of E toward
   // the centre with penalties on E outside the bracket's calibrated range and, when initial is null (its screening),
-  // searches g and b on wider grids (dinov3_auto_solver.cc).
+  // searches g and b on wider grids (dinov3.cc).
   // The field the optimiser aims at is corrected per bracket by the picture its last preview gave
   // (update_correction), and a bracket whose usable range is inverted gets no centre pull (pull_centre).
   float search(int target_idx, const std::vector<float>& mu, const std::vector<float>& sigma,
@@ -2335,7 +2334,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // The enclosure-regularised residual that ranks the pullback's tournament (Step 6): the residual plus quadratic
   // penalties on E outside the bracket's calibrated range, heaviest on the highlight side (E below e_min), and on the
   // scene overflowing an infeasible bracket. The weights are those of the pullback search's own penalties
-  // (dinov3_auto_solver.cc compute_penalties).
+  // (dinov3.cc compute_penalties).
   auto tourney_score = [&](const FixedPointResult& a) {
     for (const auto& c : enclosure) {
       if (c.target_idx == a.target_idx && a.params.e > 0.0f) {
