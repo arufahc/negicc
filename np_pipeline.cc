@@ -3276,22 +3276,23 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   const bool tone_plan_here = tone_here && plan.planned && !plan.preview.empty();
   const int iw = tp->imgdata.sizes.iwidth, ih = tp->imgdata.sizes.iheight;
   if (tone_here) {
-    // The clip check on a sparse sample of the input through the kernel, before the one full conversion.
+    // The clip check on a sparse sample of the input through the kernel, before the one full conversion: the sample
+    // is converted once up to the tone curve, and each curve tried is applied to it.
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
     scan.tone_shadow_share = 1.0;
     const double t_tone_0 = omp_get_wtime();
-    tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride, nullptr, &scan.tone_clip.white_before,
-                     &scan.tone_clip.black_before);
-    if (tone_plan_here) {
-      // This run's plan: its moves scaled where they would clip this image at either end (tone_plan_for_image).
-      scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
-                                            plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
-                                            export_pc, c.merged_matrix,
-                                            rgb, iw, ih, stride, scan.tone_clip.white_before,
-                                            scan.tone_clip.black_before, s.tone_plan.curve,
-                                            s.tone_plan.targets, &scan.tone_targets, &scan.tone_share,
-                                            &scan.tone_shadow_share);
+    {
+      const std::vector<negicc::Rgb> sample = tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride);
+      tone_clip_shares(export_pc, sample, nullptr, &scan.tone_clip.white_before, &scan.tone_clip.black_before);
+      if (tone_plan_here) {
+        // This run's plan: its moves scaled where they would clip this image at either end (tone_plan_for_image).
+        scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
+                                              plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
+                                              export_pc, sample, scan.tone_clip.white_before,
+                                              scan.tone_clip.black_before, s.tone_plan.curve, s.tone_plan.targets,
+                                              &scan.tone_targets, &scan.tone_share, &scan.tone_shadow_share);
+      }
     }
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;

@@ -255,8 +255,33 @@ ToneCurve tone_plan_shares(const ToneDescriptors& render, double pred_L2, double
 // The clip check's sample (tone_stage.h): every kToneClipSampleStep x kToneClipSampleStep block's 2 x 2 at its origin,
 // the blocks laid from the image's origin, of which the pixels inside the inner crop count. One pixel a block would
 // always fall on the same phase of a 2 x 2 colour mosaic, and a demosaiced image can clip on the other phases alone.
-void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
-                             int stride, const ToneCurve* q, double* white, double* black) {
+// Those pixels are the crossings of the inner crop's rows and columns at offsets 0 and 1 within their block. Each is
+// converted once, up to the tone curve; the shares with and without a curve are counted on these values.
+std::vector<negicc::Rgb> tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img,
+                                          int w, int h, int stride) {
+    const negicc::InnerCrop ic = negicc::compute_inner_crop(w, h, kToneClipCrop);
+    std::vector<int> xs, ys;
+    for (int x = ic.x0; x < ic.x0 + ic.w; ++x)
+        if (x % kToneClipSampleStep < 2) xs.push_back(x);
+    for (int y = ic.y0; y < ic.y0 + ic.h; ++y)
+        if (y % kToneClipSampleStep < 2) ys.push_back(y);
+    const size_t nx = xs.size();
+    const int ny = (int)ys.size();
+    std::vector<negicc::Rgb> sample(nx * (size_t)ny);
+    // Each pixel has its own slot, so the sample is the same at any thread count. Measured on a 192-thread x86-64
+    // machine, one conversion at a time (a 6376 x 6376 frame, 2.06 M pixels in the sample): 236 ms at 1 thread, 88 at
+    // 4, 37 at 8, 19 at 16, 10 at 32 and 7 at 48. On a Jetson Orin Nano the whole clip check on that frame took 3.9 s
+    // at 1 thread, 2.0 at 2, 1.07 at 4 and 0.71 at 6. It runs with the program's thread count.
+#pragma omp parallel for schedule(static)
+    for (int j = 0; j < ny; ++j)
+        for (size_t i = 0; i < nx; ++i)
+            sample[(size_t)j * nx + i] =
+                negicc::convert_pixel_display(pc, matrix, img + ((size_t)ys[j] * w + xs[i]) * stride);
+    return sample;
+}
+
+void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample, const ToneCurve* q,
+                      double* white, double* black) {
     negicc::PipelineConfig c = pc;
     std::vector<float> lut;
     if (q) {
@@ -264,21 +289,21 @@ void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, con
         c.tone.lut = lut.data();
         c.tone.n = kToneTableSize;
     }
-    const negicc::InnerCrop ic = negicc::compute_inner_crop(w, h, kToneClipCrop);
-    long long n = 0, wc = 0, kc = 0;
-#pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
-    for (int y0 = 0; y0 < h; y0 += kToneClipSampleStep) {
-        for (int x0 = 0; x0 < w; x0 += kToneClipSampleStep) {
-            for (int p = 0; p < 4; ++p) {
-                const int x = x0 + (p & 1), y = y0 + (p >> 1);
-                if (x < ic.x0 || x >= ic.x0 + ic.w || y < ic.y0 || y >= ic.y0 + ic.h) continue;
-                const negicc::Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
-                const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
-                ++n;
-                wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
-                kc += (o[0] == 0 || o[1] == 0 || o[2] == 0);
-            }
-        }
+    const bool tone = c.encoding == negicc::ENCODE_SRGB && c.tone.lut && c.tone.n > 0;
+    const long long n = (long long)sample.size();
+    long long wc = 0, kc = 0;
+    // The counts are integers, so they are the same at any thread count. Measured as tone_clip_sample, with a curve:
+    // 212 ms at 1 thread, 72 at 4, 38 at 8, 13 at 16, 6.6 at 32 and 5.5 at 48 (about half the tone curve, half the
+    // sRGB encoding). It runs with the program's thread count.
+#pragma omp parallel for schedule(static) reduction(+ : wc, kc)
+    for (long long i = 0; i < n; ++i) {
+        // convert_pixel (color_pipeline.h) after the display value: the tone curve, then the encoding.
+        negicc::Rgb v = sample[(size_t)i];
+        if (tone) v = negicc::apply_tone(c.tone, v);
+        v = negicc::encode_output(v, c.encoding);
+        const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
+        wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
+        kc += (o[0] == 0 || o[1] == 0 || o[2] == 0);
     }
     if (white) *white = n ? (double)wc / (double)n : 0.0;
     if (black) *black = n ? (double)kc / (double)n : 0.0;
@@ -304,10 +329,10 @@ int tone_pick_clip_share(double white_before, const std::function<double(int)>& 
 }
 
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
-                              const negicc::PipelineConfig& pc, const float* matrix,
-                              const uint16_t* img, int w, int h, int stride, double white_before, double black_before,
-                              const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
-                              double* share, double* shadow_share) {
+                              const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
+                              double white_before, double black_before, const ToneCurve& designed,
+                              const ToneTargets& designed_targets, ToneTargets* targets, double* share,
+                              double* shadow_share) {
     constexpr int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
     ToneCurve curves[n];
     ToneTargets tts[n];
@@ -320,11 +345,11 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
         ss[i] = 1.0;
         if (i > 0) curves[i] = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, 1.0, &tts[i]);
         double aw = 0.0, ab = 0.0;
-        tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &aw, &ab);
+        tone_clip_shares(pc, sample, &curves[i], &aw, &ab);
         if (ab - black_before > kToneClipAllowance && hs != 1.0) {
             // The full shadow move clips the black end: the shadow move is scaled with the rest.
             curves[i] = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, hs, &tts[i]);
-            tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &aw, &ab);
+            tone_clip_shares(pc, sample, &curves[i], &aw, &ab);
             ss[i] = hs;
         }
         if (aw - white_before <= kToneClipAllowance && ab - black_before <= kToneClipAllowance) {
