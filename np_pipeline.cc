@@ -1041,6 +1041,18 @@ int prepare(const Options& o, Setup& s) {
                                     ? "bundle"
                                     : "identity";
   }
+  // The correction is the inverse of the light's mixing (DESIGN.md 2.4), so it is invertible: rows that leave it
+  // singular (all zero, or linearly dependent) would collapse the picture. Checked on the matrix as it applies, the
+  // rows given with the bundle's or the identity's other rows.
+  if (s.has_crosstalk && (row_given[0] || row_given[1] || row_given[2])) {
+    float x[9];
+    for (int i = 0; i < 9; ++i) x[i] = s.is_bundle ? bundle.crosstalk_matrix[i] : (*rows[i / 3])[i % 3];
+    if (!crosstalk_matrix_invertible(x)) {
+      log_error("-r, -g and -b: the crosstalk correction matrix is not an invertible 3x3 of numbers within float "
+                "range (its float determinant a normal float)\n");
+      return 1;
+    }
+  }
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
   if (o.input_mode == InputMode::kRgbFile && !s.camera_rgb_input && s.has_crosstalk) {
@@ -1627,6 +1639,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                o.row_given[0] || o.row_given[1] || o.row_given[2] ? " (the rows given are applied)" : "");
     }
   }
+  // Rows given on a camera_raw_rgb bundle without a matrix of its own are its correction from here on, as a bundle's
+  // matrix is: the film base capture, the film base found in the frame, what the base was read with and the search
+  // read through them, as the conversion does. (Set after the camera check, which turns off only a bundle's own.)
+  if (s.is_bundle && s.has_crosstalk) bundle.has_crosstalk = true;
 
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
