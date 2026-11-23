@@ -29,14 +29,18 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
+#include <new>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <lcms2.h>
 #include <tiffio.h>
 #include <jpeglib.h>  // after <cstdio>: it needs FILE and size_t
+#include <jerror.h>   // the message codes (JWRN_JPEG_EOF, JWRN_HIT_MARKER)
 
 // --------------------------------------------------------------------------------------------------------------------
 // Geometry
@@ -1020,12 +1024,33 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
           std::to_string(max_side) + " pixels on a side";
     return false;
   }
+  // Nothing is sized from the header alone. Uncompressed samples are all in the file, so the bytes the header claims
+  // must fit in it, and the image is then allocated at once. Compressed data can truly hold more than the file's
+  // length, so the image's rows are allocated as libtiff decodes them.
+  const bool stored = compression == COMPRESSION_NONE;
+  std::error_code size_ec;
+  const uint64_t file_bytes = std::filesystem::file_size(path, size_ec);
+  if (size_ec) {
+    err = "cannot read the size of " + path;
+    return false;
+  }
+  const uint64_t image_bytes = (uint64_t)w * h * spp * (bps / 8);
+  if (stored && image_bytes > file_bytes) {
+    err = path + ": an uncompressed " + std::to_string(w) + "x" + std::to_string(h) + " TIFF holds " +
+          std::to_string(image_bytes) + " bytes of samples, more than the file's " + std::to_string(file_bytes);
+    return false;
+  }
   out = RgbImage();
   out.width = (int)w;
   out.height = (int)h;
   out.channels = channels;
   out.bits = bps;
-  out.pixels.assign((size_t)w * h * channels, 0);
+  const size_t row_samples = (size_t)w * channels;
+  if (stored) out.pixels.assign(row_samples * h, 0);
+  // The image holds rows 0 to rows - 1 at least (compressed data: called once those rows are known to decode).
+  const auto have_rows = [&](uint32_t rows) {
+    if (out.pixels.size() < row_samples * rows) out.pixels.resize(row_samples * rows, 0);
+  };
   uint32_t icc_len = 0;
   void* icc = nullptr;
   if (TIFFGetField(tif.get(), TIFFTAG_ICCPROFILE, &icc_len, &icc) && icc && icc_len) {
@@ -1053,17 +1078,38 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
             " bytes cannot be read";
       return false;
     }
-    std::vector<uint8_t> tile(tile_size);
+    // A tile's buffer is sized before libtiff reads a byte of it. An uncompressed tile is in the file. A compressed
+    // one may be no larger than the image rounded up to the tile unit, 16 pixels (TIFF 6.0, section 15: TileWidth
+    // and TileLength are multiples of 16): a larger tile is padding only.
+    if (stored && (uint64_t)tile_size > file_bytes) {
+      err = path + ": an uncompressed " + std::to_string(tw) + "x" + std::to_string(th) + " tile holds " +
+            std::to_string(tile_size) + " bytes, more than the file's " + std::to_string(file_bytes);
+      return false;
+    }
+    if (!stored && (tw > (w + 15) / 16 * 16 || th > (h + 15) / 16 * 16)) {
+      err = path + ": a " + std::to_string(tw) + "x" + std::to_string(th) + " tile is larger than the " +
+            std::to_string(w) + "x" + std::to_string(h) + " image";
+      return false;
+    }
+    // Not filled: its pages are written only as libtiff decodes into them.
+    const std::unique_ptr<uint8_t[]> tile_buf(new (std::nothrow) uint8_t[(size_t)tile_size]);
+    if (!tile_buf) {
+      err = path + ": no memory for a " + std::to_string(tw) + "x" + std::to_string(th) + " tile of " +
+            std::to_string(tile_size) + " bytes";
+      return false;
+    }
+    uint8_t* const tile = tile_buf.get();
     for (int p = 0; p < planes; ++p) {
       for (uint32_t ty = 0; ty < h; ty += th) {
         for (uint32_t tx = 0; tx < w; tx += tw) {
-          if (TIFFReadTile(tif.get(), tile.data(), tx, ty, 0, (uint16_t)p) < 0) {
+          if (TIFFReadTile(tif.get(), tile, tx, ty, 0, (uint16_t)p) < 0) {
             err = path + ": " + (tiff_message.empty() ? "cannot read a tile" : tiff_message);
             return false;
           }
+          have_rows(std::min(h, ty + th));
           const uint32_t nx = std::min(tw, w - tx), ny = std::min(th, h - ty);
           for (uint32_t y = 0; y < ny; ++y) {
-            const uint8_t* row = tile.data() + (size_t)y * tw * stride * (bps / 8);
+            const uint8_t* row = tile + (size_t)y * tw * stride * (bps / 8);
             uint16_t* dst = out.pixels.data() + ((size_t)(ty + y) * w + tx) * channels;
             for (int c = 0; c < (contig ? channels : 1); ++c) {
               put_samples(row, bps, stride, contig ? c : 0, (int)nx, dst, channels, contig ? c : p);
@@ -1087,6 +1133,7 @@ bool read_tiff(const std::string& path, RgbImage& out, std::string& err) {
           err = path + ": " + (tiff_message.empty() ? "cannot read a scanline" : tiff_message);
           return false;
         }
+        have_rows(y + 1);
         uint16_t* dst = out.pixels.data() + (size_t)y * w * channels;
         for (int c = 0; c < (contig ? channels : 1); ++c) {
           put_samples(line.data(), bps, stride, contig ? c : 0, (int)w, dst, channels, contig ? c : p);
@@ -1103,12 +1150,23 @@ struct JpegError {
   jpeg_error_mgr mgr;
   jmp_buf jump;
   char message[JMSG_LENGTH_MAX];
+  void (*emit_message)(j_common_ptr, int) = nullptr;   // libjpeg's own
 };
 
 void jpeg_error_exit(j_common_ptr cinfo) {
   JpegError* e = reinterpret_cast<JpegError*>(cinfo->err);
   (*cinfo->err->format_message)(cinfo, e->message);
   longjmp(e->jump, 1);
+}
+
+// libjpeg's warnings are damaged data it goes on from. Two of them mean the data ran out, and libjpeg then makes up
+// the rest of the picture (grey): the file ended early (JWRN_JPEG_EOF) or a data segment did (JWRN_HIT_MARKER). Those
+// are errors here: such a file is refused, not converted. The other warnings keep libjpeg's handling.
+void jpeg_emit_message(j_common_ptr cinfo, int msg_level) {
+  JpegError* e = reinterpret_cast<JpegError*>(cinfo->err);
+  if (msg_level < 0 && (cinfo->err->msg_code == JWRN_JPEG_EOF || cinfo->err->msg_code == JWRN_HIT_MARKER))
+    jpeg_error_exit(cinfo);
+  (*e->emit_message)(cinfo, msg_level);
 }
 
 }  // namespace
@@ -1123,6 +1181,8 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
   JpegError jerr;
   cinfo.err = jpeg_std_error(&jerr.mgr);
   jerr.mgr.error_exit = jpeg_error_exit;
+  jerr.emit_message = jerr.mgr.emit_message;
+  jerr.mgr.emit_message = jpeg_emit_message;
   if (setjmp(jerr.jump)) {
     jpeg_destroy_decompress(&cinfo);
     fclose(f);
@@ -1147,12 +1207,14 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
   out.height = (int)cinfo.output_height;
   out.channels = 3;
   out.bits = 8;
-  out.pixels.assign((size_t)out.width * out.height * 3, 0);
+  // The picture's rows are allocated as libjpeg decodes them, not from the header's size: a file that claims more
+  // than it holds ends in an error (above) before the rows it lacks are allocated.
   std::vector<JSAMPLE> row((size_t)out.width * 3);
   JSAMPROW rows[1] = {row.data()};
   while (cinfo.output_scanline < cinfo.output_height) {
     const JDIMENSION y = cinfo.output_scanline;
     jpeg_read_scanlines(&cinfo, rows, 1);
+    out.pixels.resize((size_t)(y + 1) * row.size());
     uint16_t* dst = out.pixels.data() + (size_t)y * out.width * 3;
     for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);   // 8 to 16 bits, as put_samples
   }
