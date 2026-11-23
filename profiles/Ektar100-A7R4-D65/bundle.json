@@ -24434,7 +24434,7 @@
   "source_sha256": "22f26f89f944554fab13df18148c859008ba98e130171c4f02d3acb396b052f0",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "cbd165f7e6cd355e7da251220365b23b40554d16",
+  "station_commit": "61131ad4d9cb638f5761d954d5ced594c783d98b",
   "tilt_form": "own"
  }
 }
