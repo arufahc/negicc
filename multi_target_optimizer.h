@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "rgb_view.h"
-#include "dinov3_engine.h"
+#include "dinov3.h"
 #include "input_curves.h"
 #include "profile_bundle.h"
 
@@ -265,7 +265,7 @@ struct ParamSearchOptions {
   bool film_base_is_rebate = false;
   // Pins (neg_process's --target, -E, --gain_g and --gain_b on a bundle): the search and the curve fit run
   // as without them, with the bracket restricted to pin_target (when >= 0) and E, g or b (pin_mask: PIN_E, PIN_G and
-  // PIN_B of dinov3_auto_solver.h) held at pin_e, pin_g and pin_b (E in ParamSearchResult::params' units). A pinned
+  // PIN_B of dinov3.h) held at pin_e, pin_g and pin_b (E in ParamSearchResult::params' units). A pinned
   // bracket leaves out the clip fallback, which only changes the bracket; a pinned E leaves out the highlight
   // pullback, which only moves E or the bracket. The curve fit (run_white_light_fit) holds the pinned g and b at the
   // search's and does not re-meter a pinned E.
@@ -560,7 +560,7 @@ bool reanchor_input_curves(const ProfileBundle& bundle, const DinoV3Engine& engi
 constexpr float kIntentMinL = 18.0f;
 constexpr float kIntentMaxL = 85.0f;
 
-// The tone stage's plan (tone_stage.h): the tone heads' predictions (dinov3_engine.h, on the features of
+// The tone stage's plan (tone_stage.h): the tone heads' predictions (dinov3.h, on the features of
 // one inference on the final render's preview) and that preview; the conversion solves the curve between the
 // preview's descriptors and the predictions (TonePlanCurve) and applies it to the final image.
 struct ToneStagePlan {

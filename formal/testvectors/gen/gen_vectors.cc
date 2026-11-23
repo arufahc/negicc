@@ -3,7 +3,7 @@
 // inputs and compares. See formal/README.md for how to build and run this program.
 //
 // Every value is computed by the library's functions (color_pipeline.h, flat_field.h, profile_bundle.h, rgb_view.h,
-// dinov3_auto_solver.h, tone_stage.h, input_curves.h, white_light_balance.h, film_base_detector.h, and through
+// dinov3.h, tone_stage.h, input_curves.h, white_light_balance.h, film_base_detector.h, and through
 // gen_internal.cc the functions of internal linkage of film_base_detector.cc; multi_target_optimizer.h for
 // ParamSearchOptions' crop ratio only); nothing is re-implemented here. The inputs are synthetic (fixed formulas or a
 // seeded generator) or the bundles' own data.
@@ -20,7 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include "color_pipeline.h"
-#include "dinov3_auto_solver.h"
+#include "dinov3.h"
 #include "film_base_detector.h"
 #include "flat_field.h"
 #include "input_curves.h"
@@ -420,11 +420,12 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
   j["clip"]["matrix"] = std::vector<float>(m, m + 9);
   j["clip"]["x_hi"] = 1.3f;
   double wb = 0.0, kb = 0.0;
-  tone_clip_sample(pc, m, img.data(), W, H, 3, nullptr, &wb, &kb);
+  const std::vector<negicc::Rgb> sample = tone_clip_sample(pc, m, img.data(), W, H, 3);
+  tone_clip_shares(pc, sample, nullptr, &wb, &kb);
   j["clip"]["none"] = {wb, kb};
   for (const ToneCurve& q : curves) {
     double wa = 0.0, ka = 0.0;
-    tone_clip_sample(pc, m, img.data(), W, H, 3, &q, &wa, &ka);
+    tone_clip_shares(pc, sample, &q, &wa, &ka);
     j["clip"]["curves"].push_back({{"curve", tone_curve_json(q)}, {"white", wa}, {"black", ka}});
   }
   {
@@ -432,8 +433,7 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
     const double pr[3] = {d.L2 + 3.0, d.L98 + 12.0, d.range() + 20.0};
     const ToneCurve designed = tone_plan(d, pr[0], pr[1], pr[2], 1.0, &dt);
     double share = 0.0;
-    const ToneCurve q = tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, m, img.data(), W, H, 3, wb, kb, designed, dt,
-                                            &t, &share);
+    const ToneCurve q = tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, sample, wb, kb, designed, dt, &t, &share);
     j["clip"]["plan"] = {{"pred", {pr[0], pr[1], pr[2]}}, {"share", share}, {"targets", {t.L2, t.L50, t.L98, t.range}},
                          {"curve", tone_curve_json(q)}};
   }
