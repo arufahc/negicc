@@ -67,7 +67,9 @@ half = ⌊(a + b + c + d + 2) / 4⌋              (a TIFF's 2×2 block)
 ```
 
 **White-light film-base balance** (`white_light_balance.h`: `film_base_balance_gains`; Lean
-`filmBaseBalanceGains`, `rec2020Rgb`, `Mat3.adjugate`, `Mat3.det`). With `C = rec2020_rgb · rgb_cam`:
+`filmBaseBalanceGains`, `rec2020Rgb`, `Mat3.adjugate`, `Mat3.det`). `rec2020_rgb` is
+`M_2020⁻¹ M_709`, each `M` the RGB to XYZ matrix of its primaries with Lindbloom's D65; LibRaw's six
+decimals are within `5.3e-7` of it (`rec2020Rgb_literal`). With `C = rec2020_rgb · rgb_cam`:
 
 ```
 K_c = (adj(C) f_profile)_c / (adj(C) f)_c,   then K_c ← K_c / max(K)
@@ -199,9 +201,15 @@ XYZ = 1.99996948 · out(clut(t))       (out(in(x)) when there is no colour table
 rgb = max(0, P XYZ),   P = [[3.13427485, −1.61727573, −0.490724277],
                             [−0.978795611, 1.91616171, 0.0334533327],
                             [0.0719770074, −0.228984979, 1.40571822]]
+C   = [rXYZ gXYZ bXYZ] of the embedded sRGB profile, s15Fixed16 (elleSrgbColorants)
+P   = C⁻¹ correctly rounded to nine significant digits   (pcsToLinearSrgbMatrix_literal)
+w   = s15Fixed16(0.9642, 1, 0.8249) = (63190, 65536, 54061) / 65536   (pcsWhite_eq)
 ```
 
-`P w = (1, 1, 1)` within `1e-8` (`pcsToLinearSrgb_white`).
+`C⁻¹ w = (1, 1, 1)` exactly (`pcsToLinearSrgbMatrix_white`) and `P w = (1, 1, 1)` within `1e-8`
+(`pcsToLinearSrgb_white`). `C` is BT.709 adapted by Bradford from D65 `(0.3127, 0.3290)` to the PCS
+illuminant within 1.03 units of `1/65536` (`elleSrgbColorants_bradford`). The conversion computes
+with `P` and with `1.99996948`, which is `1 + 32767/32768` within `2.5e-9` (`pcsScale_literal`).
 
 **Shoulder** (`set_shoulder`, `apply_shoulder_channel`, `apply_shoulder`, `to_display`,
 `shoulder_x_hi_anchored`, `max_hist_bin`, `max_hist_quantile`, `shoulder_x_hi_from_hist`; Lean
@@ -246,6 +254,11 @@ f(t) = t^(1/3) (t > 216/24389),  ((24389/27) t + 16)/116 otherwise
 Y = 0.212671 R + 0.715160 G + 0.072169 B
 L* = 116 f(Y) − 16,   a* = 500 (f(X/0.950456) − f(Y)),   b* = 200 (f(Y) − f(Z/1.088754))
 ```
+
+The XYZ rows are OpenCV's matrix to six decimals, the BT.709 primaries with OpenCV's D65
+`(0.950456, 1, 1.088754)` correctly rounded (`srgbToXyzOpenCV_literal`); the rows sum to that white
+exactly. The encoding's break `0.0031308` is IEC 61966-2-1's, `0.04045 / 12.92` within `5e-9`
+(`srgb_break_literal`).
 
 ## 4.3 The white-light curve fit
 
@@ -408,7 +421,7 @@ code by reading only.
 | `pull_centre` | `pullCentre` | | yes |
 | `interpolate_clut` | `clutEval`, `tetraBlend` | `clutEval_const`, `clutEval_mem` | yes |
 | `apply_profile` | `applyProfile`, `Profile.hasClut` | | yes |
-| `kPcsWhite`, `pcs_to_linear_srgb_unclamped`, `_pre_shoulder` | `pcsWhite`, `pcsToLinearSrgbUnclamped`, `pcsToLinearSrgbPreShoulder` | `pcsToLinearSrgb_white` | yes |
+| `kPcsWhite`, `pcs_to_linear_srgb_unclamped`, `_pre_shoulder` | `pcsWhite`, `pcsToLinearSrgbUnclamped`, `pcsToLinearSrgbPreShoulder`, `pcsToLinearSrgbMatrix` | `pcsWhite_eq`, `pcsToLinearSrgb_white`, `pcsToLinearSrgbMatrix_white`, `pcsToLinearSrgbMatrix_literal` | yes |
 | `convert_pixel_pcs`, `convert_pixel_linear`, `convert_pixel_display` | `convertPixelPcs`, `convertPixelLinear`, `convertPixelDisplay` | `convertPixelDisplay_of_off` | yes |
 | `set_shoulder` | `setShoulder`, `shoulderCeiling`, `shoulderKneeGap`, `bisect` | `setShoulder_of_le` | yes |
 | `apply_shoulder_channel`, `apply_shoulder`, `to_display` | `applyShoulderChannel`, `applyShoulder`, `toDisplay` | identity below the knee, ceiling, parabola, `toDisplay_mem` | yes |

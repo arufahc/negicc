@@ -28,20 +28,47 @@ open Scalar
 
 variable {α : Type} [Scalar α]
 
-/-- The PCS white: D50 as an ICC profile stores it, `(63190, 65536, 54061) / 65536`, the PCS
-illuminant as an `s15Fixed16Number` (`kPcsWhite`). -/
-def pcsWhite : Vec3 α := ⟨63190.0 / 65536.0, 1.0, 54061.0 / 65536.0⟩
+/-- The PCS illuminant: D50 to four decimals, as ICC.1:2022 (7.2.16) defines it (`kD50` in
+`np_print.cc`). The ICC states these numbers; they are not the CIE sum of D50 times the observer,
+whose `Z` is `0.82502` on the print's tables (`observerWhite_d50` in `Negicc.Print.Constants`). -/
+def iccD50 : Vec3 α := ⟨0.9642, 1.0, 0.8249⟩
 
-/-- PCS XYZ (D50) to linear sRGB: the inverse of the D50-adapted colorants `rXYZ`, `gXYZ`, `bXYZ`
-of the embedded sRGB profile, as written in `pcs_to_linear_srgb_unclamped`. -/
-def pcsToLinearSrgbMatrix : Mat3 α :=
+/-- A non-negative number as an ICC `s15Fixed16Number`: the nearest multiple of `1/65536`, a half
+upward (`put_s15` in `np_print.cc`, `lround(v · 65536)`). -/
+def s15Fixed16 (v : α) : α := (roundNat (v * 65536.0) : α) / 65536.0
+
+/-- The PCS white: the PCS illuminant as an ICC profile stores it, `s15Fixed16` of `iccD50`
+(`kPcsWhite`, which `color_pipeline.h` writes as `(63190, 65536, 54061) / 65536`; `pcsWhite_eq` in
+`Negicc.Scene.Props`). -/
+def pcsWhite : Vec3 α := iccD50.map s15Fixed16
+
+/-- The colorants `rXYZ`, `gXYZ`, `bXYZ` of the sRGB profile `neg_process` embeds (Elle Stone's
+sRGB V2; its sRGB-TRC and gamma 1.0 variants carry the same), as the columns of a matrix, each an
+`s15Fixed16Number` read from the profile. They are the profile's data: its maker adapted the BT.709
+primaries to D50 and quantised them (within 1.03 units of `1/65536` of Bradford from D65 to
+`iccD50`, `elleSrgbColorants_bradford` in `Negicc.Scene.Props`), and each row sums to the PCS
+white exactly. -/
+def elleSrgbColorants : Mat3 α :=
+  ⟨⟨28576.0 / 65536.0, 25239.0 / 65536.0, 9375.0 / 65536.0⟩,
+   ⟨14581.0 / 65536.0, 46983.0 / 65536.0, 3972.0 / 65536.0⟩,
+   ⟨912.0 / 65536.0, 6361.0 / 65536.0, 46788.0 / 65536.0⟩⟩
+
+/-- PCS XYZ (D50) to linear sRGB: the inverse of the embedded profile's colorants. -/
+def pcsToLinearSrgbMatrix : Mat3 α := Mat3.adjInv elleSrgbColorants
+
+/-- The inverse of the colorants as `pcs_to_linear_srgb_unclamped` writes it, to nine significant
+digits, the matrix the conversion computes with: each entry the value of `pcsToLinearSrgbMatrix`
+correctly rounded (`pcsToLinearSrgbMatrix_literal` in `Negicc.Scene.Props`). The digits are kept, as
+the C++ has them: the white-light fit's numeric check moves outside its tolerance when the matrix
+changes by that rounding. -/
+def pcsToLinearSrgbMatrixLiteral : Mat3 α :=
   ⟨⟨3.13427485, -1.61727573, -0.490724277⟩,
    ⟨-0.978795611, 1.91616171, 0.0334533327⟩,
    ⟨0.0719770074, -0.228984979, 1.40571822⟩⟩
 
 /-- PCS XYZ (D50) to linear sRGB, not clamped (`pcs_to_linear_srgb_unclamped`). -/
 def pcsToLinearSrgbUnclamped (v : Vec3 α) : Vec3 α :=
-  pcsToLinearSrgbMatrix.mulVec v
+  pcsToLinearSrgbMatrixLiteral.mulVec v
 
 /-- PCS XYZ (D50) to linear sRGB, held at zero from below
 (`pcs_to_linear_srgb_pre_shoulder`). -/

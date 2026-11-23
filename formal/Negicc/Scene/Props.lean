@@ -24,6 +24,10 @@ Proved over `ℝ`.
   (`clutEval_const`).
 * Between its knee and `x_hi` the shoulder is a parabola in the *encoded* value
   (`srgbEncode_applyShoulderChannel`).
+* The PCS white is the PCS illuminant stored as an `s15Fixed16Number` (`pcsWhite_eq`); the
+  inverse of the embedded profile's colorants maps it to `(1, 1, 1)` exactly
+  (`pcsToLinearSrgbMatrix_white`), and the C++'s nine-digit matrix is that inverse correctly
+  rounded (`pcsToLinearSrgbMatrix_literal`).
 -/
 
 namespace Negicc
@@ -449,13 +453,73 @@ theorem encodeOutput_mem (v : Vec3 ℝ) :
 
 /-! ## Linear sRGB -/
 
-/-- **The PCS white maps to `(1, 1, 1)`**, to within `1e-8` per channel: the matrix is the inverse of
-the embedded profile's colorants, whose sum is the PCS white, rounded to nine significant digits. -/
+/-- **The PCS white is the PCS illuminant as an ICC profile stores it**: `s15Fixed16` of `iccD50`
+is `(63190, 65536, 54061) / 65536`, the numbers `color_pipeline.h` writes for `kPcsWhite`. -/
+theorem pcsWhite_eq : (pcsWhite : Vec3 ℝ) = ⟨63190 / 65536, 1, 54061 / 65536⟩ := by
+  have hx : ⌊(0.9642 : ℝ) * 65536.0 + 0.5⌋₊ = 63190 := by
+    rw [Nat.floor_eq_iff (by norm_num)]; norm_num
+  have hy : ⌊(1.0 : ℝ) * 65536.0 + 0.5⌋₊ = 65536 := by
+    rw [Nat.floor_eq_iff (by norm_num)]; norm_num
+  have hz : ⌊(0.8249 : ℝ) * 65536.0 + 0.5⌋₊ = 54061 := by
+    rw [Nat.floor_eq_iff (by norm_num)]; norm_num
+  ext <;> simp only [pcsWhite, iccD50, Vec3.map, s15Fixed16, roundNat, natFloor_real, hx, hy, hz] <;>
+    norm_num
+
+/-- The embedded profile's colorants are independent. -/
+theorem det_elleSrgbColorants : Mat3.det (elleSrgbColorants : Mat3 ℝ) ≠ 0 := by
+  rw [Mat3.det_eq]; simp only [elleSrgbColorants]; norm_num
+
+/-- The colorants' rows sum to the PCS white: RGB `(1, 1, 1)` is the PCS white. -/
+theorem elleSrgbColorants_white : (elleSrgbColorants : Mat3 ℝ).mulVec ⟨1, 1, 1⟩ = pcsWhite := by
+  rw [pcsWhite_eq]
+  ext <;> simp only [elleSrgbColorants, Mat3.mulVec, Vec3.dot] <;> norm_num
+
+/-- **The PCS white maps to `(1, 1, 1)` exactly** through the inverse of the colorants. -/
+theorem pcsToLinearSrgbMatrix_white :
+    (pcsToLinearSrgbMatrix : Mat3 ℝ).mulVec pcsWhite = ⟨1, 1, 1⟩ := by
+  rw [← elleSrgbColorants_white, pcsToLinearSrgbMatrix,
+    Mat3.adjInv_mulVec_mulVec _ det_elleSrgbColorants]
+
+/-- **The C++'s nine-digit matrix is the inverse of the colorants, correctly rounded**: each entry
+lies within half a unit of its last digit (`5e-9` for the entries written with eight decimals,
+`5e-10` with nine, `5e-11` with ten). Exact rational arithmetic. -/
+theorem pcsToLinearSrgbMatrix_literal :
+    let a : Mat3 ℝ := pcsToLinearSrgbMatrixLiteral
+    let b : Mat3 ℝ := pcsToLinearSrgbMatrix
+    |a.row0.x - b.row0.x| ≤ 5e-9 ∧ |a.row0.y - b.row0.y| ≤ 5e-9 ∧ |a.row0.z - b.row0.z| ≤ 5e-10 ∧
+    |a.row1.x - b.row1.x| ≤ 5e-10 ∧ |a.row1.y - b.row1.y| ≤ 5e-9 ∧ |a.row1.z - b.row1.z| ≤ 5e-11 ∧
+    |a.row2.x - b.row2.x| ≤ 5e-11 ∧ |a.row2.y - b.row2.y| ≤ 5e-10 ∧ |a.row2.z - b.row2.z| ≤ 5e-9 := by
+  simp only [pcsToLinearSrgbMatrixLiteral, pcsToLinearSrgbMatrix, elleSrgbColorants, Mat3.adjInv,
+    Mat3.det_eq, abs_le]
+  norm_num
+
+/-- **The PCS white maps to `(1, 1, 1)`**, to within `1e-8` per channel, through the matrix the
+conversion uses: the inverse of the colorants, whose sum is the PCS white, rounded to nine
+significant digits. -/
 theorem pcsToLinearSrgb_white :
     |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).x - 1| ≤ 1e-8 ∧
     |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).y - 1| ≤ 1e-8 ∧
     |(pcsToLinearSrgbUnclamped (pcsWhite : Vec3 ℝ)).z - 1| ≤ 1e-8 := by
-  simp only [pcsToLinearSrgbUnclamped, pcsToLinearSrgbMatrix, pcsWhite, Mat3.mulVec, Vec3.dot]
+  simp only [pcsToLinearSrgbUnclamped, pcsToLinearSrgbMatrixLiteral, pcsWhite_eq, Mat3.mulVec,
+    Vec3.dot]
   refine ⟨?_, ?_, ?_⟩ <;> rw [abs_le] <;> constructor <;> norm_num
+
+/-- **The colorants are BT.709 adapted to D50, quantised**: each lies within `1.03 / 65536` (just
+over one unit of the profile's `s15Fixed16Number`) of the BT.709 primaries with their D65 white
+`(0.3127, 0.3290)`, adapted by Bradford to `iccD50`. They are not that formula rounded: blue's `Z`
+(46788) is 1.03 units from it, the others within 0.41, so the profile's numbers stay primary
+data. -/
+theorem elleSrgbColorants_bradford :
+    Mat3.Near elleSrgbColorants
+      ((vonKries bradford (xyToXyz bt709White) iccD50).mul
+        (rgbToXyz bt709Primaries (xyToXyz bt709White))) (1.03 / 65536) := by
+  simp only [Mat3.Near, elleSrgbColorants, vonKries, rgbToXyz, primaryMatrix, bradford, bt709White,
+    bt709Primaries, iccD50, xyToXyz, Mat3.mul, Mat3.diag, Mat3.adjInv, Mat3.det_eq, Mat3.mulVec,
+    Vec3.dot, Mat3.col0, Mat3.col1, Mat3.col2, abs_le]
+  norm_num
+
+/-- **`kPcsScale` is `1 + 32767/32768`**: the decimal `1.99996948` is within `2.5e-9` of it. -/
+theorem pcsScale_literal : |(pcsScale : ℝ) - (1 + 32767 / 32768)| ≤ 2.5e-9 := by
+  simp only [pcsScale, abs_le]; norm_num
 
 end Negicc

@@ -46,11 +46,16 @@ def continuousStep : α := 0.1
 /-- The golden-section search's tolerance in `A` (`kContinuousTol`), APD. -/
 def continuousTol : α := 0.001
 
-/-- A stop of printing exposure in density, `log10 2` to five decimals (`kStop`). -/
-def stopApd : α := 0.30103
+/-- A stop of printing exposure in density, `log10 2` (`kStop`, which the C++ writes to five
+decimals as `0.30103`, `stopApdLiteral`; `stopApd_literal` in `Negicc.Print.Constants`). -/
+def stopApd : α := log10 2.0
 
-/-- The bootstrap's spread, half a stop of printing exposure (`ContinuousPrint::boot_h`). -/
-def bootH : α := 0.150515
+/-- `kStop` as `multi_target_optimizer.cc` writes it. -/
+def stopApdLiteral : α := 0.30103
+
+/-- The bootstrap's spread, half a stop of printing exposure (`ContinuousPrint::boot_h`, which the
+C++ writes as `0.150515`, `stopApdLiteral / 2` exactly). -/
+def bootH : α := stopApd / 2.0
 
 /-- The fixed point's parameter tolerance, `|ΔA| / kStop + |Δg| + |Δb|` (`TOL_PARAM`). -/
 def tolParam : α := 0.02
@@ -58,8 +63,13 @@ def tolParam : α := 0.02
 /-- The fixed point's relative residual tolerance (`TOL_REL_ERR`). -/
 def tolRelErr : α := 0.015
 
-/-- `(√5 − 1) / 2` to sixteen digits, the golden section's ratio. -/
-def goldenPhi : α := 0.6180339887498949
+/-- The golden section's ratio `(√5 − 1) / 2`. The C++ writes it as `0.6180339887498949`
+(`goldenPhiLiteral`), the shortest decimal of the double nearest to it, within `1e-16` of it
+(`goldenPhi_literal` in `Negicc.Print.Constants`). -/
+def goldenPhi : α := (sqrt 5.0 - 1.0) / 2.0
+
+/-- The golden section's ratio as `multi_target_optimizer.cc` writes it. -/
+def goldenPhiLiteral : α := 0.6180339887498949
 
 /-- Equality decided by the two comparisons, as the C++ `==` on numbers that are not NaN. -/
 def eqA (x y : α) : Bool := decide (x ≤ y ∧ y ≤ x)

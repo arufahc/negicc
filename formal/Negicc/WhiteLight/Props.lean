@@ -19,6 +19,9 @@ Proved over `ℝ`.
 * The guard never counts a cell greener than it is, counts a deep-shadow cell at Auto's `a*`, and
   leaves a cell that did not turn greener alone (`greenGuardCellA_*`).
 * The shrink weight lies in `[0, 1)` (`shrinkWeight_mem`).
+* LibRaw's sRGB to Rec.2020 matrix is BT.2020 from XYZ after BT.709 to XYZ, with Lindbloom's D65,
+  within `5.3e-7` (`rec2020Rgb_literal`); one entry is more than half a unit of its last decimal
+  from it (`rec2020Rgb_literal_01`).
 -/
 
 namespace Negicc
@@ -100,5 +103,28 @@ theorem shrinkWeight_mem {m : ℝ} (hm : 0 ≤ m) : 0 ≤ shrinkWeight m ∧ shr
   refine ⟨div_nonneg hm h12.le, ?_⟩
   rw [div_lt_one h12]
   norm_num
+
+/-! ## LibRaw's sRGB to Rec.2020 matrix -/
+
+/-- **LibRaw's matrix is the formula to its six decimals, within `5.3e-7`**: every entry LibRaw
+writes lies within `5.3e-7` of BT.2020 from XYZ after BT.709 to XYZ, both with Lindbloom's D65.
+Exact rational arithmetic. -/
+theorem rec2020Rgb_literal : Mat3.Near rec2020RgbLiteral rec2020Rgb 5.3e-7 := by
+  norm_num [Mat3.Near, rec2020RgbLiteral, rec2020Rgb, rgbToXyz, primaryMatrix, bt709Primaries,
+    bt2020Primaries, lindbloomD65, xyToXyz, Mat3.mul, Mat3.diag, Mat3.adjInv, Mat3.det_eq,
+    Mat3.mulVec, Vec3.dot, Mat3.col0, Mat3.col1, Mat3.col2, abs_le]
+
+/-- One entry of LibRaw's matrix is not the formula correctly rounded: `0.329249` is more than half
+a unit of its sixth decimal (`5e-7`) from it. -/
+theorem rec2020Rgb_literal_01 :
+    5e-7 < |(rec2020RgbLiteral : Mat3 ℝ).row0.y - (rec2020Rgb : Mat3 ℝ).row0.y| := by
+  rw [lt_abs]; left
+  norm_num [rec2020RgbLiteral, rec2020Rgb, rgbToXyz, primaryMatrix, bt709Primaries,
+    bt2020Primaries, lindbloomD65, xyToXyz, Mat3.mul, Mat3.diag, Mat3.adjInv, Mat3.det_eq,
+    Mat3.mulVec, Vec3.dot, Mat3.col0, Mat3.col1, Mat3.col2]
+
+/-- Each row of LibRaw's written matrix sums to one exactly: white stays white. -/
+theorem rec2020RgbLiteral_white : (rec2020RgbLiteral : Mat3 ℝ).mulVec ⟨1, 1, 1⟩ = ⟨1, 1, 1⟩ := by
+  ext <;> simp only [rec2020RgbLiteral, Mat3.mulVec, Vec3.dot] <;> norm_num
 
 end Negicc

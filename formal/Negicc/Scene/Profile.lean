@@ -56,8 +56,12 @@ structure Profile (α : Type) where
   /-- The output curve of each channel, over `[0, 1]`. -/
   outCurves : Vec3 (Array α)
 
-/-- The ICC PCS encoding scale applied after the output curves (`kPcsScale`). The C++ literal
-`1.99996948f` is, in single precision, `1 + 32767/32768`. -/
+/-- The ICC PCS encoding scale applied after the output curves (`kPcsScale`), the largest XYZ a
+`u1Fixed15Number` holds, code `FFFFh`, `1 + 32767/32768` (the number `pcsMax` of the print is). The
+C++ writes it as the single precision literal `1.99996948f`, which is that number exactly; read as
+the decimal it is written as, it is within `2.5e-9` of it (`pcsScale_literal` in
+`Negicc.Scene.Props`). The decimal is kept: the white-light fit's numeric check moves outside its
+tolerance when the scale changes by that much. -/
 def pcsScale : α := 1.99996948
 
 namespace Profile

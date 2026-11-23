@@ -5,6 +5,7 @@ module
 
 public import Negicc.Print.Spectral
 public import Negicc.Print.Matrix
+public import Negicc.Scene.Linear
 
 @[expose] public section
 
@@ -24,7 +25,9 @@ film of a profile bundle (DESIGN.md 5.3):
 * the matrix from XYZ under the viewing light to linear sRGB, adapted to D65 with CAT02, used by
   the print CLF (`toSrgbMatrix`).
 
-It also holds the Bradford adaptation the print ICC applies to a print film's D55 (`bradfordToD50`).
+It also holds the Bradford adaptation the print ICC applies to a print film's D55 (`pcsAdaptation`).
+The matrices `bradford` and `cat02` and the PCS illuminant `iccD50` are primary data, defined in
+`Negicc.Base.Colour` and `Negicc.Scene.Linear`; Lindbloom's matrix is the formula it comes from.
 -/
 
 namespace Negicc
@@ -127,13 +130,14 @@ def printMatrix (q : Mat3 α) (dm : DensityMatrices α) : Option (Mat3 α) :=
 
 /-! ## The colour matrices -/
 
-/-- The CIECAM02 chromatic adaptation matrix (CIE 159:2004), `cat02` in `load_spektrafilm_print`. -/
-def cat02 : Mat3 α :=
-  ⟨⟨0.7328, 0.4296, -0.1624⟩, ⟨-0.7036, 1.6975, 0.0061⟩, ⟨0.0030, 0.0136, 0.9834⟩⟩
+/-- XYZ (D65) to linear sRGB as Bruce Lindbloom derives it: the inverse of the matrix of the BT.709
+primaries with his D65 white (`xyz_to_srgb` in `load_spektrafilm_print`). -/
+def xyzToSrgbLindbloom : Mat3 α := Mat3.adjInv (rgbToXyz bt709Primaries lindbloomD65)
 
-/-- XYZ (D65) to linear sRGB as Bruce Lindbloom tabulates it, `xyz_to_srgb` in
-`load_spektrafilm_print`. -/
-def xyzToSrgbLindbloom : Mat3 α :=
+/-- Lindbloom's XYZ to sRGB matrix as `load_spektrafilm_print` writes it, to seven decimals: the
+value of `xyzToSrgbLindbloom` correctly rounded (`xyzToSrgbLindbloom_literal` in
+`Negicc.Print.Constants`). The numeric check evaluates the CLF's matrix with these digits. -/
+def xyzToSrgbLindbloomLiteral : Mat3 α :=
   ⟨⟨3.2404542, -1.5371385, -0.4985314⟩, ⟨-0.9692660, 1.8760108, 0.0415560⟩,
    ⟨0.0556434, -0.2040259, 1.0572252⟩⟩
 
@@ -144,20 +148,17 @@ def Mat3.scaleRowsBy (m : Mat3 α) (num den : Vec3 α) : Mat3 α :=
    ⟨m.row1.x * num.y / den.y, m.row1.y * num.y / den.y, m.row1.z * num.y / den.y⟩,
    ⟨m.row2.x * num.z / den.z, m.row2.y * num.z / den.z, m.row2.z * num.z / den.z⟩⟩
 
-/-- XYZ under the viewing light (white `white`) to linear sRGB, adapted to D65 with CAT02: D65 is
-the XYZ the sRGB matrix takes to `(1, 1, 1)`, so the light's white lands on sRGB white
-(`PrintMaterial::to_srgb`; `toSrgbMatrix_white` in `Negicc.Print.Props`). -/
-def toSrgbMatrix (white : Vec3 α) : Mat3 α :=
-  let d65 := (Mat3.adjInv xyzToSrgbLindbloom).rowSums
+/-- XYZ under the viewing light (white `white`) to linear sRGB through the XYZ to sRGB matrix
+`xyzToSrgb`, adapted to D65 with CAT02: D65 is the XYZ the sRGB matrix takes to `(1, 1, 1)`, so the
+light's white lands on sRGB white (`PrintMaterial::to_srgb`). -/
+def toSrgbMatrixOf (xyzToSrgb : Mat3 α) (white : Vec3 α) : Mat3 α :=
+  let d65 := (Mat3.adjInv xyzToSrgb).rowSums
   let scaled := Mat3.scaleRowsBy cat02 (cat02.mulVec d65) (cat02.mulVec white)
-  xyzToSrgbLindbloom.mul ((Mat3.adjInv cat02).mul scaled)
+  xyzToSrgb.mul ((Mat3.adjInv cat02).mul scaled)
 
-/-- The linearised Bradford matrix of ICC.1:2022 Annex E.3 (equation E.1), `B` in `print_table`. -/
-def bradford : Mat3 α :=
-  ⟨⟨0.8951, 0.2664, -0.1614⟩, ⟨-0.7502, 1.7135, 0.0367⟩, ⟨0.0389, -0.0685, 1.0296⟩⟩
-
-/-- D50 to four decimals, the PCS illuminant (`kD50` in `np_print.cc`). -/
-def iccD50 : Vec3 α := ⟨0.9642, 1.0, 0.8249⟩
+/-- The CLF's matrix from XYZ under the viewing light to linear sRGB, with Lindbloom's matrix
+(`toSrgbMatrix_white` in `Negicc.Print.Props`). -/
+def toSrgbMatrix (white : Vec3 α) : Mat3 α := toSrgbMatrixOf xyzToSrgbLindbloom white
 
 /-- The adaptation of the print's XYZ to the PCS: the identity for a paper (D50), and for a print
 film `B⁻¹ diag(gain) B` from the light's white (normalised to `Y = 1`) to D50, with
@@ -232,21 +233,27 @@ structure SpektrafilmProfile (α : Type) where
   densityCurves : Vec3 (Array α)
   paper : Bool
 
-/-- The print material of a spektrafilm print profile (`load_spektrafilm_print`): its dyes and base
-resampled to the spectral grid (held at the nearest value outside the profile's data), its curves
-as given, the observer under D50 or D55 and `aim`. `none` when a column cannot be read or the
-curves do not reach an 18 % grey. -/
-def loadMaterial (p : SpektrafilmProfile α) : Option (PrintMaterial α) :=
+/-- The print material of a spektrafilm print profile under the viewing lights `light` (D50 for a
+paper, D55 for a print film): its dyes and base resampled to the spectral grid (held at the nearest
+value outside the profile's data), its curves as given, the observer under the light and `aim`.
+`none` when a column cannot be read or the curves do not reach an 18 % grey. -/
+def loadMaterialUnder (light : Bool → Array α) (p : SpektrafilmProfile α) : Option (PrintMaterial α) :=
   let col (v : Array (Option α)) := resampleColumn p.wavelengths v true 0.0 false
   match col p.baseDensity, col p.channelDensity.x, col p.channelDensity.y,
       col p.channelDensity.z with
   | some base, some d0, some d1, some d2 =>
-    let obs := observerWeights (viewingLight p.paper)
+    let obs := observerWeights (light p.paper)
     let m0 : PrintMaterial α :=
       { logExposure := p.logExposure, curves := p.densityCurves, dye := ⟨d0, d1, d2⟩, base := base,
         observer := obs, white := observerWhite obs, aim := ⟨0.0, 0.0, 0.0⟩, paper := p.paper }
     (aimSolve m0).map fun aim => { m0 with aim := aim }
   | _, _, _, _ => none
+
+/-- The print material of a spektrafilm print profile (`load_spektrafilm_print`), under D50 or D55
+(`viewingLight`). The numeric check loads it under the C++'s six-digit tables
+(`viewingLightLiteral`). -/
+def loadMaterial (p : SpektrafilmProfile α) : Option (PrintMaterial α) :=
+  loadMaterialUnder viewingLight p
 
 /-- The print's layers' sensitivity on the spectral grid: `10^` of the log sensitivity, zero where
 the profile has none. -/

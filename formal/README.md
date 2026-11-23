@@ -23,9 +23,9 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | Module | Contents |
 |---|---|
 | `Negicc.Base.Scalar` | The class `Scalar` of numbers a formula is written over, the functions derived from it (`log2`, `log10`, `exp2`, `fabs`, `sq`, `clamp`, `clamp01`, `roundNat`, `roundEvenNat`), and its `Float` instance |
-| `Negicc.Base.Vec` | 3-vectors `Vec3` and 3x3 matrices `Mat3` |
+| `Negicc.Base.Vec` | 3-vectors `Vec3` and 3x3 matrices `Mat3`, the determinant `Mat3.det` and the adjugate inverse `Mat3.adjInv` |
 | `Negicc.Base.Table` | `lerp`, a sampled table read by linear interpolation (`tableAt`, `tableEval`), `sum` and `mean` |
-| `Negicc.Base.Colour` | The sRGB curve (`srgbEncode`, `srgbDecode`), linear sRGB to XYZ and CIELAB (`linearSrgbToLab` and its parts, `labF` and its inverse `labFInv`), `density` and `transmission` |
+| `Negicc.Base.Colour` | The sRGB curve (`srgbEncode`, `srgbDecode`), RGB to XYZ from primaries and a white (`rgbToXyz`), the BT.709 and BT.2020 primaries, the chromatic adaptation matrices `bradford` and `cat02` and the von Kries adaptation (`vonKries`), linear sRGB to XYZ and CIELAB (`linearSrgbToLab` and its parts, `labF` and its inverse `labFInv`), `density` and `transmission` |
 | `Negicc.Base.Defs` | The four modules above together. No Mathlib |
 | `Negicc.Base.Real` | The real numbers as scalars (`Scalar ℝ`), and the operations restated in Mathlib's terms |
 | `Negicc.Base.Props` | Proved properties of the base definitions over the real numbers |
@@ -47,7 +47,7 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | `Negicc.WhiteLight.Curve` | The fitted green and blue input curves and their composition into the profile |
 | `Negicc.WhiteLight.Fit` | The white-light curve fit: per-cell model, anchors, residuals, guard, solve, re-meter |
 | `Negicc.WhiteLight.Defs`, `Negicc.WhiteLight.Props`, `Negicc.WhiteLight` | The white-light modules together (no Mathlib); proved properties; both |
-| `Negicc.Print.Cie` | The CIE 1931 observer and the illuminants D50 and D55 of `np_print.cc` |
+| `Negicc.Print.Cie` | The CIE 1931 observer, and the illuminants D50 and D55 as their 5 nm tables read at 1 nm (`at1nm`), with the 1 nm values `np_print.cc` holds |
 | `Negicc.Print.Spectral` | A print material's spectral model (dye amounts to XYZ), `numpy.interp`, the resampling of a profile's columns, the observer, the printer lamp |
 | `Negicc.Print.Matrix` | 3x3 inverse, transpose and sums of the print |
 | `Negicc.Print.Material` | `Q`, the print matrix `P`, the CLF's colour matrix, the Bradford adaptation, `aim`, a material's load |
@@ -60,6 +60,7 @@ The modules, in the order the pipeline runs. The base is what the other parts bu
 | `Negicc.Print.Search` | The print's search (the held exposure, A0, the line search in A, the fixed point) and the knobs, around an oracle for the network |
 | `Negicc.Print.Defs` | The eleven print modules together. No Mathlib |
 | `Negicc.Print.Props` | Proved properties of the print emulation (DESIGN.md 5.11 among them) |
+| `Negicc.Print.Constants` | The print's constants against the formulas that give them, and its spectral sums (the integration rule, the D50 white) |
 
 ## One formula, two readings
 
@@ -102,6 +103,31 @@ Conventions:
   and links without Mathlib.
 - The files are Lean modules (`module` with `public import`), like Mathlib's, so both module
   and non-module files can import them.
+
+## Constants
+
+A number the C++ writes is one of three kinds here:
+
+- **Primary data**, which no formula gives: stated once, with its source. The Bradford matrix
+  (ICC.1:2022 Annex E) and the CAT02 matrix (CIE 159:2004) were fitted to corresponding colour data;
+  the CIE 1931 observer at 1 nm and D50 and D55 at 5 nm are the CIE's tables; the PCS illuminant
+  `(0.9642, 1, 0.8249)` is ICC.1's; the BT.709 and BT.2020 primaries and white are ITU-R's; the
+  D65 whites of OpenCV and of Lindbloom and the embedded sRGB profile's colorants are theirs; the
+  printer lamp's `c₂` is ITS-90's.
+- **Derived** by a formula from primary data: defined by the formula (`rgbToXyz`, `vonKries`,
+  `Mat3.adjInv`, `s15Fixed16`, `at1nm`, `log10 2.0`, `(sqrt 5.0 - 1.0) / 2.0`). Where the C++ writes
+  the formula's value to a number of digits, those digits are kept beside it as `…Literal`, and a
+  theorem states how far they are from the formula, by exact rational arithmetic, or by interval
+  bounds where a square root or a logarithm enters. The definitions the pipeline uses are the
+  formulas, except for OpenCV's sRGB matrix, the PCS matrix and `kPcsScale` of the conversion: there
+  the numeric check (the tone stage compared to `1e-9`, the white-light fit) moves outside its
+  tolerance under the digits' rounding, so the conversion computes with the C++'s digits. The print's
+  check loads a material under the C++'s D50 and D55 and evaluates the CLF's matrix with the C++'s
+  digits for the same reason.
+- **Sums over a curve**: every spectral integral is a sum over the 401 samples of 380 to 780 nm at
+  1 nm, weight 1 each, both ends included (`sumRange`), normalised by another sum on the same grid,
+  so the step cancels. No such sum is stated as a number; its values are theorems
+  (`Negicc.Print.Constants`).
 
 ## Installing the toolchain and building
 
