@@ -277,18 +277,24 @@ bool raw_levels_valid(const LibRaw& proc, const std::string& fn) {
   const auto& C = proc.imgdata.color;
   const unsigned sample_max = std::numeric_limits<uint16_t>::max();
   if (C.maximum == 0 || C.maximum > sample_max) {
-    log_error("%s: white level %u is outside the 16-bit sample's range (1 to %u)\n", fn.c_str(), C.maximum, sample_max);
+    log_error("%s: white level %u is outside the 16-bit sample's range (1 to %u)\n", fn.c_str(), C.maximum,
+              sample_max);
     return false;
   }
-  // A DNG's black levels as the file gives them (BlackLevel, its deltas averaged in): LibRaw converts them to unsigned
-  // integers, which a level beyond that type does not survive (it may come out 0), so they are read as given too
-  // (dng_fcblack[4] and [5] hold the pattern's size, not a level). A negative one is named as given where LibRaw's
-  // black wrapped from it.
+  // A DNG's black levels as the file gives them (BlackLevel, its deltas averaged in), each of which must round to a
+  // sample's value (dng_fcblack[4] and [5] hold the pattern's size, not a level). They are tested as given, not
+  // through LibRaw's integer black: LibRaw converts them to unsigned, which is undefined for a level outside that
+  // type, and the result differs by machine (a negative level wraps on x86-64, where a sum of two can wrap back into
+  // range, and becomes 0 on ARM64), so the integer does not show what the file held.
   const auto& D = C.dng_levels;
+  const auto a_sample = [sample_max](float v) {
+    const double r = std::floor((double)v + 0.5);
+    return r >= 0.0 && r <= (double)sample_max;   // false for a NaN
+  };
   float dng_black = D.dng_fblack;
-  bool dng_ok = dng_black <= sample_max && !(dng_black < 0.0f && C.black > sample_max);
+  bool dng_ok = a_sample(dng_black);
   for (int i = 0; i < LIBRAW_CBLACK_SIZE && dng_ok; ++i) {
-    if (i != 4 && i != 5 && !(D.dng_fcblack[i] <= sample_max)) dng_ok = false, dng_black = D.dng_fcblack[i];
+    if (i != 4 && i != 5 && !a_sample(D.dng_fcblack[i])) dng_ok = false, dng_black = D.dng_fcblack[i];
   }
   if (!dng_ok) {
     log_error("%s: DNG black level %.0f is outside the 16-bit sample's range (0 to %u)\n", fn.c_str(), dng_black,
