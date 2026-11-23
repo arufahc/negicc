@@ -4,6 +4,24 @@ This file contains mandatory rules for any agent working in this repository.
 
 ---
 
+## Priorities
+
+The processor's goals, in order:
+
+1. **Protect detail:** no clipping at either end (highlights or shadows) that the processor could have avoided.
+2. **Minimise colour cast**, including crossover casts.
+3. **Automatic settings:** gains, film base and the curve.
+4. **Auto crop.**
+5. **Minimise artifacts** (for example, the grain-aware debayer).
+6. **Speed.**
+
+Lightness, contrast and the depth of the blacks can be adjusted afterwards. Lost detail and crossover casts are hard
+to recover, so the processor must get those right. A gain lower in this list never pays for a loss higher in it.
+Any change that alters pictures reports its effects in this order: clipping at both ends first (before and after the
+tone stage), then cast, then the settings, crop, artifacts, and speed last.
+
+---
+
 ## Git Configuration Rules
 
 All commits to this repository must use the repository owner's Git author and committer identity:
