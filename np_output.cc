@@ -873,6 +873,8 @@ bool write_json_sidecar(const Sidecar& sc) {
           {"moves", {{"shadow", n9((float)kToneShadowMove)}, {"highlight", n9((float)kToneHighlightMove)},
                      {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)},
                      {"shadow_share", n9(sc.tone_shadow_share)}}},
+          // Where no share held both ends, the rule that chose the curve (--tone_stage); null where one held.
+          {"fallback", sc.tone_fallback ? ordered_json(sc.tone_fallback) : ordered_json(nullptr)},
           // In full (17 digits): the curve the image went through, exactly.
           {"curve", tone_curve_json(tc)},
           {"clip", clip_json()}};

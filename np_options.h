@@ -26,6 +26,7 @@
 #include "input_curves.h"
 #include "np_input.h"
 #include "profile_bundle.h"
+#include "tone_stage.h"
 
 struct Options {
   int argc = 0;
@@ -73,9 +74,12 @@ struct Options {
   // The tone stage (tone_stage.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
   // white light and TriLED alike, whether or not the curve fit runs; on does the same and is an error where it does
   // not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded curve (a sidecar's
-  // cli_equivalent), with given values and no search.
+  // cli_equivalent), with given values and no search. shadows_first and highlights_first run it as auto does, with
+  // that end kept where no share of the moves holds both ends (tone_fallback; auto and on keep the least clipping at
+  // both ends together).
   enum ToneStageMode { kToneStageAuto, kToneStageOn, kToneStageOff };
   ToneStageMode tone_stage = kToneStageAuto;
+  ToneClipFallback tone_fallback = kToneFallbackLeastTotal;
   bool tone_replay_given = false;
   double tone_replay[4] = {};
   std::string dino_backend = "auto";
