@@ -236,6 +236,10 @@ std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& 
             throw std::runtime_error("corrupt zip entry name in: " + path);
         std::string name(reinterpret_cast<const char*>(&buf[pos + 46]), name_len);
         pos += entry_hdr_len;
+        // A flat field is two arrays. Nothing else in the file is inflated (a file may hold other arrays, which are
+        // not read), and neither array may come twice.
+        if (name != "gain.npy" && name != "info.npy") continue;
+        if (out.count(name)) throw std::runtime_error("flat field entry " + name + " comes twice in: " + path);
 
         if ((size_t)lhoff > buf.size() || buf.size() - (size_t)lhoff < 30 || rd_u32(&buf[lhoff]) != 0x04034b50u)
             throw std::runtime_error("corrupt zip local header in: " + path);
@@ -416,14 +420,23 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
         info_str.assign(reinterpret_cast<const char*>(ip), n);
     }
 
-    const auto j = nlohmann::json::parse(info_str);
-    const int block = j.at("block").get<int>();
-    const auto shape = j.at("shape");
-    if (!shape.is_array() || shape.size() != 2)
-        throw std::runtime_error("info.npy shape must be [half_h, half_w] in: " + path);
-    const int half_h = shape[0].get<int>();
-    const int half_w = shape[1].get<int>();
-    std::string fid = j.value("id", "");
+    // info.npy's text is JSON with the block size, the half-size shape and an id. What the JSON library finds wrong
+    // with it is reported as the flat field's fault, with the file.
+    int block = 0, half_h = 0, half_w = 0;
+    std::string fid;
+    try {
+        const auto j = nlohmann::json::parse(info_str);
+        block = j.at("block").get<int>();
+        const auto shape = j.at("shape");
+        if (!shape.is_array() || shape.size() != 2)
+            throw std::runtime_error("info.npy shape must be [half_h, half_w] in: " + path);
+        half_h = shape[0].get<int>();
+        half_w = shape[1].get<int>();
+        fid = j.value("id", "");
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error("flat field " + path + ": info.npy does not hold a flat field's record (" +
+                                 e.what() + ")");
+    }
     if (fid.empty()) {
         // Fallback to parent directory name if id is not embedded in info JSON
         size_t slash = path.find_last_of("/\\");
