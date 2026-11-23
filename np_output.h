@@ -191,4 +191,9 @@ bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
 // The same for bytes in memory (a built-in model).
 FileFingerprint memory_fingerprint(const void* data, size_t size);
 
+// s with its bytes that are not UTF-8 written as U+FFFD, as the sidecar's writer writes them (a camera model or a
+// path need not be UTF-8). The log shows a string as the sidecar records it, and a previous run's sidecar is compared
+// with this run's strings as they would be recorded. Valid UTF-8 comes back unchanged.
+std::string utf8_replaced(const std::string& s);
+
 bool write_json_sidecar(const Sidecar& sc);

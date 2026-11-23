@@ -427,7 +427,9 @@ std::string density_metadata_json(const DensityRecord& rec, int indent) {
   // How the frame prints on each print material (below), computed for this frame and not applied to it.
   if (!rec.print_json.empty()) j["print"] = ordered_json::parse(rec.print_json, nullptr, false);
   j["tool"] = rec.tool_version;
-  return j.dump(indent);
+  // The bundle's key and a print file's name need not be UTF-8: a byte that is not is written as U+FFFD, as the
+  // sidecar's writer writes it.
+  return j.dump(indent, ' ', false, ordered_json::error_handler_t::replace);
 }
 
 bool density_balance_offset(const DensityRecord& rec, double offset[3], double* mean_out) {
@@ -1556,7 +1558,8 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
                     "or by hand, not both"},
         {"materials", materials}};
   }
-  out.metadata_json = j["print"].dump();
+  // A print file's name (a material's id) need not be UTF-8: written as the sidecar's writer writes it.
+  out.metadata_json = j["print"].dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
   return out;
 }
 

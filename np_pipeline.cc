@@ -199,10 +199,13 @@ static bool output_profile_ok(const std::string& arg) {
   return probe != nullptr;
 }
 
-static bool paths_match(const std::string& a, const std::string& b) {
-  if (a == b) return true;
+// Whether a path a previous run's sidecar records names this run's path: the same name as the sidecar records it
+// (its bytes that are not UTF-8 as U+FFFD, utf8_replaced), or the same existing file.
+static bool paths_match(const std::string& recorded, const std::string& path) {
+  if (recorded == path || recorded == utf8_replaced(path)) return true;
   std::error_code ec;
-  if (std::filesystem::exists(a, ec) && std::filesystem::exists(b, ec) && std::filesystem::equivalent(a, b, ec)) {
+  if (std::filesystem::exists(recorded, ec) && std::filesystem::exists(path, ec) &&
+      std::filesystem::equivalent(recorded, path, ec)) {
     return true;
   }
   return false;
@@ -354,7 +357,8 @@ static bool argv_matches_except_knobs(const nlohmann::ordered_json& argv_json, c
     }
     prev.push_back(a.get<std::string>());
   }
-  for (int i = 0; i < o.argc; ++i) cur.push_back(o.argv[i]);
+  // This run's arguments as the sidecar would record them (utf8_replaced), as the previous run's were.
+  for (int i = 0; i < o.argc; ++i) cur.push_back(utf8_replaced(o.argv[i]));
   const std::vector<std::string> pa = result_args(prev), ca = result_args(cur);
   if (pa.size() != ca.size()) {
     why = "it was given other arguments";
@@ -1683,7 +1687,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                        : nlohmann::ordered_json(nullptr);
     }
     cj["read_with"] = film_base_read_with(o, s);
-    scan.base_capture_json = cj.dump();
+    // The path need not be UTF-8: written as the sidecar writes it (utf8_replaced).
+    scan.base_capture_json = cj.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
     // A base far from the bundle's own, at the scan's exposure, is probably not a capture of this film's base.
     if (s.bundle.has_film_base) {
       const double base_t =
@@ -3342,30 +3347,34 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
 // What the conversion used, logged once per conversion as a block and written to the sidecar as "used", in the
 // pipeline's order: the profile (a bundle: its key, where it was read and the camera models it lists), the camera, the
 // decode, the flat field, the crop, the crosstalk correction, the film base, and the ICC profiles the picture renders
-// through (the bracket's, or a print's).
+// through (the bracket's, or a print's). The strings from the input and the command line (the camera, paths, names
+// taken from file names) need not be UTF-8: the block and "used" both carry them as the sidecar records them, each
+// byte that is not UTF-8 as U+FFFD (utf8_replaced). The bundle's own strings are read as JSON and are UTF-8.
 static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, const Scan& scan, const Conversion& c) {
   using nlohmann::ordered_json;
   const ProfileBundle& bundle = s.bundle;
   ordered_json u;
   log_info("Used:\n");
+  const std::string camera_make = utf8_replaced(scan.camera_make), camera_model = utf8_replaced(scan.camera_model);
+  const std::string bundle_key = utf8_replaced(bundle.key), bundle_path = utf8_replaced(bundle.path);
 
   // The camera: the one the bundle records (camera_name, as stored) and this scan's (make and model); a narrow-band
   // bundle also lists the models its crosstalk matrix holds for, compared with the scan's model (decode). A bundle
   // without a matrix (white light) is not compared.
-  std::string scan_camera = scan.camera_model;
-  if (!scan.camera_make.empty() && scan.camera_model.rfind(scan.camera_make, 0) != 0)
-    scan_camera = scan.camera_make + (scan.camera_model.empty() ? "" : " " + scan.camera_model);
+  std::string scan_camera = camera_model;
+  if (!camera_make.empty() && camera_model.rfind(camera_make, 0) != 0)
+    scan_camera = camera_make + (camera_model.empty() ? "" : " " + camera_model);
   u["camera"] = {{"scan", scan_camera.empty() ? ordered_json(nullptr) : ordered_json(scan_camera)},
-                 {"scan_model", scan.camera_model.empty() ? ordered_json(nullptr) : ordered_json(scan.camera_model)},
+                 {"scan_model", camera_model.empty() ? ordered_json(nullptr) : ordered_json(camera_model)},
                  {"bundle", s.is_bundle ? ordered_json(bundle.camera_name) : ordered_json(nullptr)}};
   if (s.is_bundle) {
     const bool built_in = bundle.path.rfind("[built-in] ", 0) == 0;
-    u["profile_bundle"] = {{"key", bundle.key},
-                           {"path", bundle.path},
+    u["profile_bundle"] = {{"key", bundle_key},
+                           {"path", bundle_path},
                            {"built_in", built_in},
                            {"camera_models", bundle.has_camera_models ? ordered_json(bundle.camera_models)
                                                                       : ordered_json(nullptr)}};
-    log_info("  Profile bundle: %s, %s\n", bundle.key.c_str(), built_in ? "built in" : ("from " + bundle.path).c_str());
+    log_info("  Profile bundle: %s, %s\n", bundle_key.c_str(), built_in ? "built in" : ("from " + bundle_path).c_str());
   } else {
     u["profile_bundle"] = nullptr;
     log_info("  Profile bundle: none%s\n", s.film_prof_arg.empty() ? "" : " (an ICC profile)");
@@ -3382,10 +3391,10 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
              : models.empty()          ? "none"
                                        : models.c_str(),
              !bundle.has_camera_models    ? "not compared, the bundle's correction applies"
-             : scan.camera_model.empty()  ? "the camera is not stated by the input: not compared, the bundle's "
+             : camera_model.empty()       ? "the camera is not stated by the input: not compared, the bundle's "
                                             "correction applies"
-             : scan.camera_listed         ? ("this scan's model " + scan.camera_model + " is on the list").c_str()
-                                          : ("this scan's model " + scan.camera_model + " is not on the list").c_str());
+             : scan.camera_listed         ? ("this scan's model " + camera_model + " is on the list").c_str()
+                                          : ("this scan's model " + camera_model + " is not on the list").c_str());
   } else {
     u["camera"]["compared"] = false;
     u["camera"]["listed"] = nullptr;
@@ -3418,9 +3427,10 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
     u["flat_field"] = nullptr;
     log_info("  Flat field: none\n");
   } else {
-    const std::string id = s.flat_field ? s.flat_field->id() : std::string();
-    u["flat_field"] = {{"path", o.flat}, {"id", id}};
-    log_info("  Flat field: %s (id %s)\n", o.flat.c_str(), id.empty() ? "none recorded" : id.c_str());
+    // The id is the flat field's record's, else its folder's name.
+    const std::string flat = utf8_replaced(o.flat), id = utf8_replaced(s.flat_field ? s.flat_field->id() : "");
+    u["flat_field"] = {{"path", flat}, {"id", id}};
+    log_info("  Flat field: %s (id %s)\n", flat.c_str(), id.empty() ? "none recorded" : id.c_str());
   }
 
   // The crop in sensor pixels: --roi (given, or --roi auto's), else a single RAW's or three captures' inset crop
@@ -3457,7 +3467,7 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
     ordered_json mj = ordered_json::array(), rj = ordered_json::array();
     for (int i = 0; i < 9; ++i) mj.push_back(m[i]);
     for (int r = 0; r < 3; ++r) rj.push_back(s.crosstalk_row_source[r]);
-    std::string off = s.crosstalk_off;
+    std::string off = utf8_replaced(s.crosstalk_off);   // it can name the scan's camera
     if (off.empty() && o.input_mode == InputMode::kThreeShot && s.is_bundle)
       off = "three captures, one per light, have no crosstalk between the lights";
     u["crosstalk"] = {{"matrix", mj}, {"rows", rj}, {"off", off.empty() ? ordered_json(nullptr) : ordered_json(off)}};
@@ -3490,15 +3500,20 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
   if (!s.has_profile) {
     log_info("  Profile: none\n");
   } else if (!s.is_bundle) {
-    bracket = {{"icc", s.film_prof_arg}};
-    log_info("  ICC profile: %s\n", s.film_prof_arg.c_str());
+    const std::string icc = utf8_replaced(s.film_prof_arg);
+    bracket = {{"icc", icc}};
+    log_info("  ICC profile: %s\n", icc.c_str());
   } else if (s.density) {
     log_info("  Bracket ICC: none (a density output, -P %s, through the bundle's density matrix)\n",
-             o.colorspace.c_str());
+             utf8_replaced(o.colorspace).c_str());
     if (!o.prints.empty()) {
       std::string list;
-      for (const std::string& p : o.prints) list += (list.empty() ? "" : ", ") + p;
-      print = {{"clfs", o.prints}};
+      ordered_json clfs = ordered_json::array();
+      for (const std::string& p : o.prints) {
+        list += (list.empty() ? "" : ", ") + utf8_replaced(p);
+        clfs.push_back(utf8_replaced(p));
+      }
+      print = {{"clfs", clfs}};
       log_info("  Prints: a CLF for each of %s\n", list.c_str());
     }
   } else if (has_target) {
@@ -3518,12 +3533,12 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
       for (const BundlePrint& p : bundle.prints)
         if (p.id == s.print_id) icc = p.icc_file.empty() ? "inline in the bundle" : p.icc_file;
     }
-    print = {{"id", s.print_id},
+    const std::string id = utf8_replaced(s.print_id), file = utf8_replaced(s.print_file);
+    print = {{"id", id},
              {"icc", s.print_from_bundle ? ordered_json(icc) : ordered_json(nullptr)},
-             {"computed_from", s.print_from_bundle ? ordered_json(nullptr) : ordered_json(s.print_file)}};
-    log_info("  Print ICC: %s (%s), %s\n", s.print_id.c_str(), s.print_name.c_str(),
-             s.print_from_bundle ? ("the bundle's " + icc).c_str()
-                                 : ("computed by neg_process from " + s.print_file).c_str());
+             {"computed_from", s.print_from_bundle ? ordered_json(nullptr) : ordered_json(file)}};
+    log_info("  Print ICC: %s (%s), %s\n", id.c_str(), utf8_replaced(s.print_name).c_str(),
+             s.print_from_bundle ? ("the bundle's " + icc).c_str() : ("computed by neg_process from " + file).c_str());
   }
   u["bracket"] = bracket;
   u["print"] = print;
@@ -3657,7 +3672,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
-  sc.used_json = used.dump();
+  // As the sidecar's writer writes it: a byte that is not UTF-8 as U+FFFD.
+  sc.used_json = used.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
   sc.density_fit_off = s.density && s.white_light && o.prints.empty() && o.fit_curves == Options::kFitCurvesOff;
   if (s.density) sc.density_prints = o.prints;
   sc.print_id = s.print_id;
