@@ -432,8 +432,8 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
     const double pr[3] = {d.L2 + 3.0, d.L98 + 12.0, d.range() + 20.0};
     const ToneCurve designed = tone_plan(d, pr[0], pr[1], pr[2], 1.0, &dt);
     double share = 0.0;
-    const ToneCurve q = tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, m, img.data(), W, H, 3, wb, designed, dt, &t,
-                                            &share);
+    const ToneCurve q = tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, m, img.data(), W, H, 3, wb, kb, designed, dt,
+                                            &t, &share);
     j["clip"]["plan"] = {{"pred", {pr[0], pr[1], pr[2]}}, {"share", share}, {"targets", {t.L2, t.L50, t.L98, t.range}},
                          {"curve", tone_curve_json(q)}};
   }

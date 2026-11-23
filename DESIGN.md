@@ -598,11 +598,21 @@ which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `appl
 | Shadow move | 1.0 | All the way to the predicted shadow level. |
 | Highlight move | 0.5 | Half way to the predicted highlight level. |
 | Range move | 0.5 | Half way to the predicted tonal range. |
-| Clip allowance | 0.5 % of pixels | Beyond it, the highlight and range moves are scaled to 0.75, 0.5, 0.25 or 0 until it holds. |
+| Clip allowance | 0.5 % of the inner crop, at each end | Beyond it at either end, the highlight and range moves are scaled to 0.75, 0.5, 0.25 or 0 until both ends hold; the shadow move with them only where the black end fails with it whole. |
+| Clip check | inner crop 90 %; the 2 × 2 at the origin of every 8 × 8 block | The share at white (a channel at the 16-bit maximum) and at black (a channel at 0), each against its own share before the stage. |
 | Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
 
-**Limits.** The moves were chosen by comparing pictures, not derived. The clip check measures every 8th pixel of the
-whole export, film borders included, while the curve is planned on the inner crop.
+**The clip check.** Before the export is converted, each candidate curve is tried on a sample of the frame through
+the conversion kernel (`tone_clip_sample`): the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner
+crop, the area the curve is planned on. A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
+on the others, so a sample of one pixel per block could miss it; the 2 × 2 covers every phase. Each end is compared
+with its own share before the stage: falling black clipping does not pay for rising white clipping, nor the reverse.
+The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole shadow move unless the black
+end then fails, and only then is the shadow move scaled with the rest, so a curve that lifts the shadows keeps the
+lift. When no share holds, the last is kept. The sidecar records both shares before (the sample) and after (every
+pixel of the inner crop) as `tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
+
+**Limits.** The moves were chosen by comparing pictures, not derived.
 
 # 5. Print emulation
 

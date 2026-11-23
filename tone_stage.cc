@@ -110,10 +110,11 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
 }
 
 // highlight_share scales the highlight and range moves (1: as designed; less where they would clip, see above).
+// shadow_share scales the shadow move (1: as designed; less where it would clip the black end).
 static inline ToneTargets tone_targets(const ToneDescriptors& cur, double pred_L2, double pred_L98, double pred_range,
-                                       double highlight_share = 1.0) {
+                                       double highlight_share = 1.0, double shadow_share = 1.0) {
     ToneTargets t;
-    t.L2 = cur.L2 + kToneShadowMove * (pred_L2 - cur.L2);
+    t.L2 = cur.L2 + shadow_share * kToneShadowMove * (pred_L2 - cur.L2);
     t.L98 = cur.L98 + highlight_share * kToneHighlightMove * (pred_L98 - cur.L98);
     t.L50 = cur.L50;
     t.range = cur.range() + highlight_share * kToneRangeMove * (pred_range - cur.range());
@@ -244,12 +245,18 @@ ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L
     return tone_solve(render, t);
 }
 
-// The share of the conversion's pixels clipped white (a channel at the maximum) and black (every channel 0) on a sparse
-// sample of the unconverted image (every kToneClipSampleStep-th pixel each way), converted through the kernel as the
-// export converts them: with pc as it is (no tone), or with curve q's table.
+ToneCurve tone_plan_shares(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                           double highlight_share, double shadow_share, ToneTargets* targets) {
+    const ToneTargets t = tone_targets(render, pred_L2, pred_L98, pred_range, highlight_share, shadow_share);
+    if (targets) *targets = t;
+    return tone_solve(render, t);
+}
+
+// The clip check's sample (tone_stage.h): every kToneClipSampleStep x kToneClipSampleStep block's 2 x 2 at its origin,
+// the blocks laid from the image's origin, of which the pixels inside the inner crop count. One pixel a block would
+// always fall on the same phase of a 2 x 2 colour mosaic, and a demosaiced image can clip on the other phases alone.
 void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
                              int stride, const ToneCurve* q, double* white, double* black) {
-    static constexpr int kToneClipSampleStep = 8;
     negicc::PipelineConfig c = pc;
     std::vector<float> lut;
     if (q) {
@@ -257,15 +264,20 @@ void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, con
         c.tone.lut = lut.data();
         c.tone.n = kToneTableSize;
     }
+    const negicc::InnerCrop ic = negicc::compute_inner_crop(w, h, kToneClipCrop);
     long long n = 0, wc = 0, kc = 0;
 #pragma omp parallel for schedule(static) reduction(+ : n, wc, kc)
-    for (int y = 0; y < h; y += kToneClipSampleStep) {
-        for (int x = 0; x < w; x += kToneClipSampleStep) {
-            const negicc::Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
-            const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
-            ++n;
-            wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
-            kc += (o[0] == 0 && o[1] == 0 && o[2] == 0);
+    for (int y0 = 0; y0 < h; y0 += kToneClipSampleStep) {
+        for (int x0 = 0; x0 < w; x0 += kToneClipSampleStep) {
+            for (int p = 0; p < 4; ++p) {
+                const int x = x0 + (p & 1), y = y0 + (p >> 1);
+                if (x < ic.x0 || x >= ic.x0 + ic.w || y < ic.y0 || y >= ic.y0 + ic.h) continue;
+                const negicc::Rgb v = negicc::convert_pixel(c, matrix, img + ((size_t)y * w + x) * stride);
+                const uint16_t o[3] = {negicc::quantize_u16(v.r), negicc::quantize_u16(v.g), negicc::quantize_u16(v.b)};
+                ++n;
+                wc += (o[0] == 65535 || o[1] == 65535 || o[2] == 65535);
+                kc += (o[0] == 0 || o[1] == 0 || o[2] == 0);
+            }
         }
     }
     if (white) *white = n ? (double)wc / (double)n : 0.0;
@@ -293,20 +305,34 @@ int tone_pick_clip_share(double white_before, const std::function<double(int)>& 
 
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const float* matrix,
-                              const uint16_t* img, int w, int h, int stride, double white_before,
+                              const uint16_t* img, int w, int h, int stride, double white_before, double black_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
-                              double* share) {
+                              double* share, double* shadow_share) {
     constexpr int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
     ToneCurve curves[n];
     ToneTargets tts[n];
     curves[0] = designed;
     tts[0] = designed_targets;
-    const int k = tone_pick_clip_share(white_before, [&](int i) {
-        if (i > 0) curves[i] = tone_plan(render, pred_L2, pred_L98, pred_range, kToneClipShares[i], &tts[i]);
-        double after = 0.0;
-        tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &after, nullptr);
-        return after;
-    });
+    int k = n - 1;  // when no share holds at both ends, the last: no highlight or range move
+    double ss[n];
+    for (int i = 0; i < n; ++i) {
+        const double hs = kToneClipShares[i];
+        ss[i] = 1.0;
+        if (i > 0) curves[i] = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, 1.0, &tts[i]);
+        double aw = 0.0, ab = 0.0;
+        tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &aw, &ab);
+        if (ab - black_before > kToneClipAllowance && hs != 1.0) {
+            // The full shadow move clips the black end: the shadow move is scaled with the rest.
+            curves[i] = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, hs, &tts[i]);
+            tone_clip_sample(pc, matrix, img, w, h, stride, &curves[i], &aw, &ab);
+            ss[i] = hs;
+        }
+        if (aw - white_before <= kToneClipAllowance && ab - black_before <= kToneClipAllowance) {
+            k = i;
+            break;
+        }
+    }
+    if (shadow_share) *shadow_share = ss[k];
     *share = kToneClipShares[k];
     *targets = tts[k];
     return curves[k];

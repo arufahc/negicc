@@ -211,7 +211,8 @@ trend out.
 
 The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
 lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
-was.
+was. Where that would push more of the picture to black or to white than the render already has, the moves are
+scaled back until neither end clips more.
 
 ![Tone head and the lightness curve](samples/tone_prediction.png)
 
