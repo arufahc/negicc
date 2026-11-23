@@ -809,7 +809,10 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   }
 
   // The film stock's spectra, for a print material given as a file (np_print.h). A block that is not whole is left
-  // out: such a print then has no matrix and says so.
+  // out: such a print then has no matrix and says so. A whole block whose log_exposure does not strictly rise refuses
+  // the bundle: neutral_dye_amounts is a function along that axis, and the print matrix takes its samples by their log
+  // exposure, so a value out of order puts another sample into the matrix. Whether the densities give a finite matrix
+  // depends on the print material's sensitivity too, so that is checked where the matrix is computed (np_print.cc).
   if (j.contains("film_model") && j["film_model"].is_object()) {
     const nlohmann::json& fm = j["film_model"];
     auto numbers = [](const nlohmann::json& a, std::vector<double>& out) {
@@ -835,6 +838,12 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       ok = numbers(fm["dye_density"][c], film.dye[c]) && film.dye[c].size() == film.base.size() &&
            numbers(fm["neutral_dye_amounts"][c], film.neutral[c]) &&
            film.neutral[c].size() == film.log_exposure.size();
+    }
+    for (size_t i = 1; ok && i < film.log_exposure.size(); ++i) {
+      if (!(film.log_exposure[i] > film.log_exposure[i - 1])) {
+        refuse("film_model.log_exposure[" + std::to_string(i) + "]", fm["log_exposure"][i],
+               ("is not above the value before it, " + fm["log_exposure"][i - 1].dump()).c_str());
+      }
     }
     film.present = ok;
     if (ok) bundle.film_model = std::move(film);
