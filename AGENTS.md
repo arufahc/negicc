@@ -68,5 +68,15 @@ Rules for any OpenMP parallel region added to this repository:
 - **The results are identical at any thread count.** Keep sums whose order matters on one thread or in a fixed order,
   and show equal output at two thread counts at least.
 - **Say it at the region.** A short comment gives what was measured, where, and what thread count the region uses.
+- **One thread count for the whole program; when none is given, the smaller of 16 and the physical cores the process
+  may run on.** A program calls `negicc::apply_default_thread_count()` once before its first parallel region
+  (`neg_process` does). `OMP_NUM_THREADS` is honoured as it is. The 16 (`kDefaultThreadCap`, `rgb_view.h`) is the
+  owner's number: a default must not take every core for a small gain. Measured on a 192-thread machine (96 cores),
+  a conversion takes 12.1 s at 8 threads, 10.3 s at 16, 9.1 s at 32 and 7.7 s at 96, and uses 57, 62, 73 and 155 CPU
+  seconds; OpenMP's own default, every hardware thread, is slower than 96. A Jetson Orin Nano has 6 cores, so its
+  count stays 6.
+- **The network on the CPU runs with the program's thread count too.** ONNX Runtime keeps its own threads; a thread
+  count of 0 given to `DinoV3Engine` (the default for the backbone, and what `neg_process` gives the adapter) takes
+  the program's count, so nothing in the program runs with a number of its own. Do not give a runtime a fixed count.
 - **Batch runs set `OMP_NUM_THREADS` for every process,** so that processes times threads stays within the machine's
-  cores. The default is every hardware thread, which the small regions run once per network call do not gain from.
+  cores.

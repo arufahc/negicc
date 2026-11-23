@@ -119,10 +119,12 @@ std::unique_ptr<DinoV3Runner> make_trt_runner(const std::string& engine_path);
 // The same from a serialized engine held in memory.
 std::unique_ptr<DinoV3Runner> make_trt_runner(const void* engine_data, size_t engine_size);
 
-// Creates an ONNX Runtime CPU runner.
-std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads = 4);
+// Creates an ONNX Runtime CPU runner. num_threads: the runtime's own threads; 0 takes the program's thread count
+// (omp_get_max_threads(): see default_thread_count in rgb_view.h), so the network runs with the count every parallel
+// region has.
+std::unique_ptr<DinoV3Runner> make_ort_runner(const std::string& model_path, int num_threads = 0);
 // The same from an .onnx held in memory.
-std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads = 4);
+std::unique_ptr<DinoV3Runner> make_ort_runner(const void* onnx_data, size_t onnx_size, int num_threads = 0);
 
 // Checks if a CUDA device is available.
 bool cuda_device_available();
@@ -371,8 +373,10 @@ public:
     // (set_adapter) before infer().
     // backend: "cpu" (ONNX Runtime), "gpu" (TensorRT, USE_CUDA=1 builds) or "auto" ("gpu" when this build has
     // a CUDA device and the model has a TensorRT engine, as intent_model.resolve_intent_backend).
+    // num_threads: ONNX Runtime's threads for the backbone on the CPU; 0 takes the program's thread count (see
+    // make_ort_runner).
     // Throws std::runtime_error (std::invalid_argument for a bad backend) when the model cannot be loaded.
-    void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 4,
+    void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 0,
               int max_size = 512, int patch_size = 16);
 
     // The backbone built into neg_process, held in memory: its TensorRT engine (USE_CUDA=1 builds) and its .onnx,
@@ -380,14 +384,16 @@ public:
     // has a CUDA device and falls back to the .onnx when the engine is missing or fails to load. Throws as load()
     // does.
     void load_memory(const void* engine_data, size_t engine_size, const void* onnx_data, size_t onnx_size,
-                     const std::string& backend = "auto", int num_threads = 4, int max_size = 512,
+                     const std::string& backend = "auto", int num_threads = 0, int max_size = 512,
                      int patch_size = 16);
 
     // Adapter for a backbone model, after load(): its adapter.onnx and its TensorRT adapter.engine (make
     // dinov3_engine), held in memory (embedded in neg_process) or read from files. The adapter runs where the
     // backbone runs: a TensorRT backbone needs the engine (there is no CPU adapter behind a GPU backbone), an ONNX
     // Runtime backbone uses the .onnx. name is reported by adapter_name(). Ignored by fused models, which carry their
-    // own adapter. Throws std::runtime_error when the adapter the backbone needs is missing or cannot be loaded.
+    // own adapter. num_threads: ONNX Runtime's threads for the adapter on the CPU; 0 takes the program's thread
+    // count (see make_ort_runner). Throws std::runtime_error when the adapter the backbone needs is missing or cannot
+    // be loaded.
     void set_adapter(const void* onnx_data, size_t onnx_size, const std::string& name, int num_threads = 1,
                      const void* engine_data = nullptr, size_t engine_size = 0);
     // path: adapter.onnx or adapter.engine (or a directory holding them); the other file is taken from beside it. Only

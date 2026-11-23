@@ -402,6 +402,32 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 
+// -----------------------------------------------------------------------------------------------------------------
+// The program's thread count when none is given: the smaller of kDefaultThreadCap and the physical cores this process
+// may run on.
+//
+// OpenMP's own default is one thread per hardware thread. On a machine with many cores that takes all of them for a
+// small gain, and with two hardware threads per core it is slower than one per core (AGENTS.md, "Parallel Regions").
+// Every region takes the same count, so the default is set once for the program.
+//
+// kDefaultThreadCap is the owner's number, chosen from this measurement on a 192-thread machine (96 cores): six
+// frames, medians of three runs, the whole conversion's time and the CPU seconds it used:
+//    8 threads  12.1 s   57 CPU s
+//   16 threads  10.3 s   62 CPU s
+//   32 threads   9.1 s   73 CPU s
+//   96 threads   7.7 s  155 CPU s
+// A machine with fewer cores runs one thread per core (a Jetson Orin Nano: 6).
+//
+// default_thread_count() counts the physical cores among the CPUs the process may run on (its affinity mask, from the
+// kernel's topology; where that cannot be read, OpenMP's count of available CPUs) and returns the smaller of that and
+// the cap.
+// apply_default_thread_count() sets it as the OpenMP thread count unless OMP_NUM_THREADS is set, and returns the count
+// in effect. A program calls it once, before its first parallel region.
+// -----------------------------------------------------------------------------------------------------------------
+inline constexpr int kDefaultThreadCap = 16;
+int default_thread_count();
+int apply_default_thread_count();
+
 }  // namespace negicc
 
 #endif  // NEGICC_RGB_VIEW_H

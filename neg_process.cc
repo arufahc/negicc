@@ -62,6 +62,7 @@
 int main(int ac, char* av[]) {
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
+  negicc::apply_default_thread_count();  // at most 16 threads, unless OMP_NUM_THREADS is set
   // A failed GPU pass throws out of the search (negicc::GpuError); nothing else is meant to throw.
   try {
     Setup s;

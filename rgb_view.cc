@@ -2,12 +2,70 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
 
+#include <omp.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
+
 namespace negicc {
+
+// The physical cores among the CPUs this process may run on (its affinity mask, grouped by the kernel's list of each
+// core's hardware threads); where that cannot be read, OpenMP's count of available CPUs.
+static int allowed_physical_cores() {
+    const int cpus = omp_get_num_procs();  // the CPUs this process may run on
+#ifdef __linux__
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof allowed, &allowed) != 0) return cpus;
+    int cores = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (!CPU_ISSET(cpu, &allowed)) continue;
+        // The hardware threads of this CPU's core, as a list of numbers and ranges ("0,96" or "0-1"). The core is
+        // counted at its lowest-numbered hardware thread that the process may run on.
+        char path[96];
+        std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+        std::FILE* f = std::fopen(path, "r");
+        if (!f) return cpus;
+        char list[256];
+        const bool read = std::fgets(list, sizeof list, f) != nullptr;
+        std::fclose(f);
+        if (!read) return cpus;
+        int first = -1;
+        for (const char* p = list; *p && *p != '\n';) {
+            char* end = nullptr;
+            const long lo = std::strtol(p, &end, 10);
+            if (end == p) return cpus;
+            long hi = lo;
+            if (*end == '-') {
+                p = end + 1;
+                hi = std::strtol(p, &end, 10);
+                if (end == p) return cpus;
+            }
+            for (long s = lo; s <= hi && first < 0; ++s) {
+                if (s >= 0 && s < CPU_SETSIZE && CPU_ISSET((int)s, &allowed)) first = (int)s;
+            }
+            p = *end == ',' ? end + 1 : end;
+        }
+        if (first == cpu) ++cores;
+    }
+    return cores > 0 ? cores : cpus;
+#else
+    return cpus;
+#endif
+}
+
+int default_thread_count() { return std::min(kDefaultThreadCap, allowed_physical_cores()); }
+
+int apply_default_thread_count() {
+    if (!std::getenv("OMP_NUM_THREADS")) omp_set_num_threads(default_thread_count());
+    return omp_get_max_threads();
+}
 
 namespace {
 
