@@ -8,8 +8,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
-#include <regex>
 #include <stdexcept>
 
 #include "nlohmann/json.hpp"
@@ -251,7 +251,7 @@ std::map<std::string, std::vector<uint8_t>> read_zip_entries(const std::string& 
         std::vector<uint8_t> data(uncomp_sz);
         if (method == 0) {
             if (comp_sz != uncomp_sz) throw std::runtime_error("stored zip entry size mismatch in: " + path);
-            std::memcpy(data.data(), &buf[data_off], uncomp_sz);
+            if (uncomp_sz) std::memcpy(data.data(), buf.data() + data_off, uncomp_sz);  // an empty entry has no bytes
         } else if (method == 8) {
             z_stream zs{};
             zs.next_in = const_cast<Bytef*>(&buf[data_off]);
@@ -279,6 +279,24 @@ struct NpyHeader {
     size_t data_offset = 0;
 };
 
+// Calls value(pos) at each place where 'key' is followed by a colon, pos being the first character after the colon and
+// the white space around it, until value returns true.
+template <class F>
+void each_npy_value(const std::string& hdr, const char* key, F value) {
+    const auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+    };
+    const std::string quoted = std::string("'") + key + "'";
+    for (size_t p = hdr.find(quoted); p != std::string::npos; p = hdr.find(quoted, p + 1)) {
+        size_t q = p + quoted.size();
+        while (q < hdr.size() && is_space(hdr[q])) ++q;
+        if (q >= hdr.size() || hdr[q] != ':') continue;
+        ++q;
+        while (q < hdr.size() && is_space(hdr[q])) ++q;
+        if (value(q)) return;
+    }
+}
+
 // The .npy format (NumPy's numpy.lib.format): the magic "\x93NUMPY", a major and a minor version byte, then the header
 // length, 2 bytes in version 1.0 (10 bytes before the header) and 4 bytes in versions 2.0 and 3.0 (12 bytes).
 NpyHeader parse_npy_header(const std::vector<uint8_t>& raw, const std::string& name) {
@@ -302,16 +320,41 @@ NpyHeader parse_npy_header(const std::vector<uint8_t>& raw, const std::string& n
     NpyHeader h;
     h.data_offset = hdr_off + hdr_len;
 
-    std::smatch m;
-    if (std::regex_search(hdr, m, std::regex("'descr'\\s*:\\s*'([^']+)'"))) h.descr = m[1].str();
-    if (std::regex_search(hdr, m, std::regex("'fortran_order'\\s*:\\s*(True|False)")))
-        h.fortran_order = (m[1].str() == "True");
-    if (std::regex_search(hdr, m, std::regex("'shape'\\s*:\\s*\\(([^\\)]*)\\)"))) {
-        std::string s = m[1].str();
-        std::regex num_re("(\\d+)");
-        for (std::sregex_iterator it(s.begin(), s.end(), num_re), end; it != end; ++it)
-            h.shape.push_back(std::stoi((*it)[1].str()));
-    }
+    // The header is a Python dict literal, {'descr': '<f4', 'fortran_order': False, 'shape': (3, 4, 3), }. Each of
+    // the three values is taken at the first place its key is followed by a value of its form. They are read by
+    // hand: a regular expression recursed once per character of the header and overflowed the stack on a long one.
+    each_npy_value(hdr, "descr", [&](size_t q) {
+        if (q >= hdr.size() || hdr[q] != '\'') return false;
+        const size_t e = hdr.find('\'', q + 1);
+        if (e == std::string::npos || e == q + 1) return false;
+        h.descr = hdr.substr(q + 1, e - q - 1);
+        return true;
+    });
+    each_npy_value(hdr, "fortran_order", [&](size_t q) {
+        const bool is_true = hdr.compare(q, 4, "True") == 0;
+        if (!is_true && hdr.compare(q, 5, "False") != 0) return false;
+        h.fortran_order = is_true;
+        return true;
+    });
+    each_npy_value(hdr, "shape", [&](size_t q) {
+        if (q >= hdr.size() || hdr[q] != '(') return false;
+        const size_t e = hdr.find(')', q + 1);
+        if (e == std::string::npos) return false;
+        for (size_t i = q + 1; i < e;) {            // every run of digits is one dimension
+            if (hdr[i] < '0' || hdr[i] > '9') {
+                ++i;
+                continue;
+            }
+            long long v = 0;
+            for (; i < e && hdr[i] >= '0' && hdr[i] <= '9'; ++i) {
+                v = v * 10 + (hdr[i] - '0');
+                if (v > std::numeric_limits<int>::max())
+                    throw std::runtime_error("a dimension of the .npy shape is too large in " + name);
+            }
+            h.shape.push_back((int)v);
+        }
+        return true;
+    });
     if (h.fortran_order) throw std::runtime_error("Fortran-order .npy not supported in " + name);
     return h;
 }
