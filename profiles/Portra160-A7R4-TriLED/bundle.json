@@ -1,5 +1,8 @@
 {
  "camera_name": "ILCE-7RM4",
+ "camera_models": [
+  "ILCE-7RM4"
+ ],
  "camera_model": "Sony ILCE-7RM4",
  "crosstalk_profile": {
   "camera_model": "ILCE-7RM4",
@@ -26200,7 +26203,7 @@
   "source_sha256": "547f088976f20918b9b0c4c60c4d1c9b75dc297b911c0e5e56545168dadaa119",
   "adapter": "models/dinov3-small_portra160",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "c77fb671c793512f33a58b5657a9a16f7a0edc8e",
+  "station_commit": "cbd165f7e6cd355e7da251220365b23b40554d16",
   "tilt_form": "own"
  }
 }
