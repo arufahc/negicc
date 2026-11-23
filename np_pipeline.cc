@@ -3357,7 +3357,7 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
     u["profile_bundle"] = nullptr;
     log_info("  Profile bundle: none%s\n", s.film_prof_arg.empty() ? "" : " (an ICC profile)");
   }
-  log_info("  Camera: this scan's %s%s\n", scan_camera.empty() ? "none recorded" : scan_camera.c_str(),
+  log_info("  Camera: %s%s\n", scan_camera.empty() ? "the scan states none" : ("this scan's " + scan_camera).c_str(),
            s.is_bundle ? ("; the bundle records " + bundle.camera_name).c_str() : "");
   if (s.is_bundle && !s.white_light) {
     std::string models;
