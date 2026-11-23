@@ -145,8 +145,8 @@ struct Sidecar {
   const TonePlanCurve* tone_plan = nullptr;
   double tone_share = 1.0;
   double tone_shadow_share = 1.0;
-  // The rule that chose the curve where no share of the moves held both ends ("least_total", "shadows_first" or
-  // "highlights_first"); null where a share held.
+  // The rule that chose the curve where no share of the moves held both ends ("shadows_first", "highlights_first" or
+  // "least_total"); null where a share held.
   const char* tone_fallback = nullptr;
   bool tone_applied = false;
   const ToneClip* tone_clip = nullptr;

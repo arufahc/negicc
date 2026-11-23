@@ -70,20 +70,21 @@ constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // kToneClipSampleStep block, so the sample covers each phase of a 2 x 2 colour mosaic the image was demosaiced from.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
-// The curve kept when no share holds both ends (--tone_stage auto, shadows_first, highlights_first). Each share's
+// The curve kept when no share holds both ends (--tone_stage auto, highlights_first, least_total). Each share's
 // candidate is the curve the check tried last at it: the whole shadow move, or the scaled one where the black end
 // failed with it.
 enum ToneClipFallback {
-    // The candidate whose shares at white and at black together are least, of the shares' candidates and the last
-    // share with the shadow move scaled through kToneClipShares (every candidate the other two rules try); on a tie
-    // the larger share, then the larger shadow move (the default).
-    kToneFallbackLeastTotal,
-    // Shadows first: the last share's candidate, no highlight or range move, the shadow lift kept where black holds.
+    // Shadows first (the default): the last share's candidate, no highlight or range move, the shadow lift kept where
+    // black holds.
     kToneFallbackShadowsFirst,
     // Highlights first: the largest share whose white end holds; else, at the last share, the shadow move scaled
     // through kToneClipShares until the white end holds; else the candidate tried that clips least at white (the first
     // tried on a tie).
     kToneFallbackHighlightsFirst,
+    // Least total: the candidate whose shares at white and at black together are least, of the shares' candidates and
+    // the last share with the shadow move scaled through kToneClipShares (every candidate the other two rules try); on
+    // a tie the larger share, then the larger shadow move.
+    kToneFallbackLeastTotal,
 };
 constexpr int kToneClipSampleStep = 8;
 // The inner crop the clip check reads: the search's (ParamSearchOptions::crop_ratio), the area the plan's preview
@@ -159,7 +160,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                               const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
                               double white_before, double black_before, const ToneCurve& designed,
                               const ToneTargets& designed_targets, ToneTargets* targets, double* share,
-                              double* shadow_share = nullptr, ToneClipFallback fallback = kToneFallbackLeastTotal,
+                              double* shadow_share = nullptr, ToneClipFallback fallback = kToneFallbackShadowsFirst,
                               bool* fell_back = nullptr);
 
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'

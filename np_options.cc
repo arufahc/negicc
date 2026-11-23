@@ -384,7 +384,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--tone_stage")
-    .help("auto (default), on, off, shadows_first, highlights_first, or a recorded curve: "
+    .help("auto (default), on, off, highlights_first, least_total, or a recorded curve: "
           "curve:black,white,gamma,contrast. auto: the tone stage "
           "runs on every bundle conversion with -P srgb that is not a print, on white-light and TriLED bundles alike, "
           "whether or not the curve fit runs and with or without given --target, -E and gains (with all four given "
@@ -395,10 +395,10 @@ int parse_options(int ac, char* av[], Options& o) {
           "monotone L* curve, applied in the conversion itself, moves the image all the way to the predicted shadow "
           "level and half way to the highlight level and range, holding the mid-tones and each colour's a* and b*. "
           "Where the moves would clip either end beyond 0.5 % of the inner crop more than before the stage, they are "
-          "scaled down; where no scaling keeps both ends, auto and on keep the curve that clips least at both ends "
-          "together, shadows_first the one that keeps the shadow lift (the highlights clip), and highlights_first "
-          "the one that keeps the highlights (the shadow lift is scaled down until they hold). shadows_first and "
-          "highlights_first otherwise run as auto. "
+          "scaled down; where no scaling keeps both ends, auto and on keep the shadow lift (the highlights clip), "
+          "highlights_first keeps the highlights (the shadow lift is scaled down until they hold), and least_total "
+          "keeps the curve that clips least at both ends together. highlights_first and least_total otherwise run as "
+          "auto. "
           "A recorded curve (a sidecar's cli_equivalent) is replayed with --target, -E, --gain_g and --gain_b, "
           "without searching or predicting; one outside the stage's limits (black -15 to 15, white 80 to 110, gamma "
           "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
@@ -741,9 +741,9 @@ int parse_options(int ac, char* av[], Options& o) {
       o.tone_stage = v == "on" ? Options::kToneStageOn : v == "off" ? Options::kToneStageOff : Options::kToneStageAuto;
       return true;
     }
-    if (v == "shadows_first" || v == "highlights_first") {
+    if (v == "highlights_first" || v == "least_total") {
       o.tone_stage = Options::kToneStageAuto;
-      o.tone_fallback = v == "shadows_first" ? kToneFallbackShadowsFirst : kToneFallbackHighlightsFirst;
+      o.tone_fallback = v == "highlights_first" ? kToneFallbackHighlightsFirst : kToneFallbackLeastTotal;
       return true;
     }
     const std::string pre = prefix;
@@ -756,7 +756,7 @@ int parse_options(int ac, char* av[], Options& o) {
         return true;
       }
     }
-    log_error("%s takes auto, on, off, shadows_first, highlights_first, or recorded values: %s followed by %d "
+    log_error("%s takes auto, on, off, highlights_first, least_total, or recorded values: %s followed by %d "
               "comma-separated numbers, not '%s'\n",
               name, prefix, count, v.c_str());
     return false;
