@@ -401,12 +401,25 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 // -----------------------------------------------------------------------------------------------------------------
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+// The same pixels as cpu_grain_aware_debayer and cpu_pixel_shift_merge, for the n output positions xy (x2, y2 pairs in
+// a.dst_w x a.dst_h) only, written in that order to a.rgb_out (n x 3): the tone stage's clip check reads the
+// pixels it samples without demosaicing the frame.
+void cpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n);
+void cpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n);
+// The sensor photosite (row, col) of each output position xy (x2, y2) of a frame decoded from region (rx, ry, rw, rh),
+// turned rot_cw and flipped to dst_w x dst_h: the mapping the debayer kernels use, written as pairs to rc.
+void map_frame_to_sensor(int rx, int ry, int rw, int rh, int rot_cw, bool hflip, bool vflip, int dst_w, int dst_h,
+                         const int32_t* xy, long long n, int32_t* rc);
 
 // The same three on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; they throw GpuError without one). Every pointer in
 // the arguments is device memory: the mosaics, the flat field's tables and rgb_out. The caller puts them there.
 void gpu_preview_debayer(const PreviewDebayerArgs& a);
 void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+// The CUDA twins of cpu_grain_aware_debayer_sampled and cpu_pixel_shift_merge_sampled: xy in host memory, a.rgb_out
+// device-visible (n x 3).
+void gpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n);
+void gpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n);
 
 // -----------------------------------------------------------------------------------------------------------------
 // The program's thread count when none is given: the smaller of kDefaultThreadCap and the physical cores this process
