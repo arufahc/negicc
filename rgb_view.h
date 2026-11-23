@@ -419,10 +419,13 @@ void map_frame_to_sensor(int rx, int ry, int rw, int rh, int rot_cw, bool hflip,
 void gpu_preview_debayer(const PreviewDebayerArgs& a);
 void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
-// The CUDA twins of cpu_grain_aware_debayer_sampled and cpu_pixel_shift_merge_sampled: xy in host memory, a.rgb_out
-// device-visible (n x 3).
-void gpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n);
-void gpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n);
+// On the GPU, the pixels of cpu_grain_aware_debayer_sampled and cpu_pixel_shift_merge_sampled for the clip check's
+// sample laid out by its blocks (the 2 x 2 at the origin of every step x step
+// block inside the crop [cx0, cx1) x [cy0, cy1) of the a.dst_w x a.dst_h frame), in the order of that list of
+// positions, the positions computed on the device: a.rgb_out device-visible, sampled_grid_count(...) x 3.
+long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1);
+void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
+void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
 
 // -----------------------------------------------------------------------------------------------------------------
 // The program's thread count when none is given: the smaller of kDefaultThreadCap and the physical cores this process

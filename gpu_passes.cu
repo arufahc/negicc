@@ -654,13 +654,6 @@ __global__ void grain_aware_debayer_kernel(GrainAwareDebayerArgs a) {
     a.rgb_out[dst_idx + 2] = px[2];
 }
 
-__global__ void grain_aware_debayer_kernel_sampled(GrainAwareDebayerArgs a, const int32_t* __restrict__ xy,
-                                                  long long n) {
-    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    grain_aware_pixel_dev(a, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);
-}
-
 // One output pixel of the pixel-shift merge (pixel_shift_pixel_cpu): the full kernel and the sampled one use it.
 __device__ __forceinline__ void pixel_shift_pixel_dev(const PixelShiftMergeArgs& a, int x2, int y2,
                                                       uint16_t px_out[3]) {
@@ -720,13 +713,6 @@ __global__ void pixel_shift_merge_kernel(PixelShiftMergeArgs a) {
     a.rgb_out[dst_idx + 2] = px[2];
 }
 
-__global__ void pixel_shift_merge_kernel_sampled(PixelShiftMergeArgs a, const int32_t* __restrict__ xy,
-                                                long long n) {
-    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    pixel_shift_pixel_dev(a, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);
-}
-
 }  // namespace
 
 void gpu_preview_debayer(const PreviewDebayerArgs& a) {
@@ -784,50 +770,85 @@ void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
 
 
 namespace {
-// The sampled kernels' output positions, copied to the device for the call (the entry points' own scratch).
-const int32_t* upload_positions(const int32_t* xy, long long n) {
-    static int32_t* d = nullptr;
-    static size_t cap = 0;
-    const size_t bytes = (size_t)n * 2 * sizeof(int32_t);
-    if (bytes > cap) {
-        if (d) cudaFree(d);
-        d = nullptr;
-        cap = 0;
-        NEGICC_CUDA_CHECK(cudaMalloc(&d, bytes));
-        cap = bytes;
-    }
-    NEGICC_CUDA_CHECK(cudaMemcpy(d, xy, bytes, cudaMemcpyHostToDevice));
-    return d;
+// The clip check's sample laid out by its blocks (the 2 x 2 at the origin of every step x step block inside the crop
+// [cx0, cx1) x [cy0, cy1)), each thread one sampled pixel: thread (u, v) takes the u-th sampled column and the v-th
+// sampled row, so neighbouring threads read neighbouring photosites, and writes its pixel where the list of positions
+// would put it (blocks row by row, each block's pixels (0,0) (1,0) (0,1) (1,1), outside the crop skipped).
+struct SampleGrid {
+    int step, cx0, cy0, cx1, cy1;
+    long long cols, rows;     // sampled columns and rows in the crop
+};
+__host__ __device__ inline long long sampled_below(int t, int step) {   // sampled positions in [0, t) on one axis
+    return 2LL * (t / step) + (t % step < 2 ? t % step : 2);
+}
+__device__ __forceinline__ bool sample_position(const SampleGrid& gd, long long u, long long v, int& x, int& y,
+                                                long long& idx) {
+    const long long ku = u + sampled_below(gd.cx0, gd.step), kv = v + sampled_below(gd.cy0, gd.step);
+    x = (int)(gd.step * (ku / 2) + (ku % 2));
+    y = (int)(gd.step * (kv / 2) + (kv % 2));
+    const int bx = x / gd.step, by = y / gd.step, dx = x % gd.step, dy = y % gd.step;
+    const int bx0 = bx * gd.step, by0 = by * gd.step;
+    const int c0 = (bx0 >= gd.cx0 && bx0 < gd.cx1), c1 = (bx0 + 1 >= gd.cx0 && bx0 + 1 < gd.cx1);
+    const int r0 = (by0 >= gd.cy0 && by0 < gd.cy1), r1 = (by0 + 1 >= gd.cy0 && by0 + 1 < gd.cy1);
+    const long long rows_before = sampled_below(by0 < gd.cy1 ? by0 : gd.cy1, gd.step) - sampled_below(gd.cy0, gd.step);
+    const long long cols_before = sampled_below(bx0 < gd.cx1 ? bx0 : gd.cx1, gd.step) - sampled_below(gd.cx0, gd.step);
+    idx = (rows_before > 0 ? rows_before : 0) * gd.cols + (long long)(r0 + r1) * (cols_before > 0 ? cols_before : 0) +
+          (long long)(dy == 1 && r0) * (c0 + c1) + (dx == 1 && c0);
+    return x < gd.cx1 && y < gd.cy1;
+}
+
+__global__ void grain_aware_debayer_kernel_grid(GrainAwareDebayerArgs a, SampleGrid gd) {
+    const long long u = (long long)blockIdx.x * blockDim.x + threadIdx.x, v = blockIdx.y;
+    if (u >= gd.cols || v >= gd.rows) return;
+    int x, y;
+    long long idx;
+    if (!sample_position(gd, u, v, x, y, idx)) return;
+    grain_aware_pixel_dev(a, x, y, a.rgb_out + idx * 3);
+}
+
+__global__ void pixel_shift_merge_kernel_grid(PixelShiftMergeArgs a, SampleGrid gd) {
+    const long long u = (long long)blockIdx.x * blockDim.x + threadIdx.x, v = blockIdx.y;
+    if (u >= gd.cols || v >= gd.rows) return;
+    int x, y;
+    long long idx;
+    if (!sample_position(gd, u, v, x, y, idx)) return;
+    pixel_shift_pixel_dev(a, x, y, a.rgb_out + idx * 3);
+}
+
+SampleGrid sample_grid(int step, int cx0, int cy0, int cx1, int cy1) {
+    SampleGrid gd{step, cx0, cy0, cx1, cy1, 0, 0};
+    gd.cols = sampled_below(cx1, step) - sampled_below(cx0, step);
+    gd.rows = sampled_below(cy1, step) - sampled_below(cy0, step);
+    return gd;
 }
 }  // namespace
 
-void gpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n) {
-    if (a.rot_cw % 90 != 0) {
-        throw std::invalid_argument("gpu_grain_aware_debayer_sampled: rot_cw must be a multiple of 90");
-    }
-    if (!is_rggb_pattern_host(a.filters)) {
-        throw std::invalid_argument("gpu_grain_aware_debayer_sampled: currently only supports RGGB Bayer pattern");
-    }
-    if (n <= 0) return;
+void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int cx0, int cy0, int cx1, int cy1) {
+    if (a.rot_cw % 90 != 0)
+        throw std::invalid_argument("gpu_grain_aware_debayer_grid: rot_cw must be a multiple of 90");
+    if (!is_rggb_pattern_host(a.filters))
+        throw std::invalid_argument("gpu_grain_aware_debayer_grid: currently only supports RGGB Bayer pattern");
+    const SampleGrid gd = sample_grid(step, cx0, cy0, cx1, cy1);
+    if (gd.cols <= 0 || gd.rows <= 0) return;
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
-    const int32_t* d_xy = upload_positions(xy, n);
-    const int threads = 256;
-    grain_aware_debayer_kernel_sampled<<<(unsigned)((n + threads - 1) / threads), threads>>>(a, d_xy, n);
+    const int threads = 128;
+    const dim3 grid((unsigned)((gd.cols + threads - 1) / threads), (unsigned)gd.rows);
+    grain_aware_debayer_kernel_grid<<<grid, threads>>>(a, gd);
     NEGICC_CUDA_CHECK(cudaGetLastError());
     NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-void gpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n) {
-    if (a.rot_cw % 90 != 0) {
-        throw std::invalid_argument("gpu_pixel_shift_merge_sampled: rot_cw must be a multiple of 90");
-    }
-    if (n <= 0) return;
+void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0, int cy0, int cx1, int cy1) {
+    if (a.rot_cw % 90 != 0)
+        throw std::invalid_argument("gpu_pixel_shift_merge_grid: rot_cw must be a multiple of 90");
+    const SampleGrid gd = sample_grid(step, cx0, cy0, cx1, cy1);
+    if (gd.cols <= 0 || gd.rows <= 0) return;
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
-    const int32_t* d_xy = upload_positions(xy, n);
-    const int threads = 256;
-    pixel_shift_merge_kernel_sampled<<<(unsigned)((n + threads - 1) / threads), threads>>>(a, d_xy, n);
+    const int threads = 128;
+    const dim3 grid((unsigned)((gd.cols + threads - 1) / threads), (unsigned)gd.rows);
+    pixel_shift_merge_kernel_grid<<<grid, threads>>>(a, gd);
     NEGICC_CUDA_CHECK(cudaGetLastError());
     NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
 }

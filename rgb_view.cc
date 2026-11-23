@@ -757,8 +757,8 @@ void gpu_highlight_clip(const HighlightClipArgs&) { no_cuda(); }
 void gpu_preview_debayer(const PreviewDebayerArgs&) { no_cuda(); }
 void gpu_grain_aware_debayer(const GrainAwareDebayerArgs&) { no_cuda(); }
 void gpu_pixel_shift_merge(const PixelShiftMergeArgs&) { no_cuda(); }
-void gpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs&, const int32_t*, long long) { no_cuda(); }
-void gpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs&, const int32_t*, long long) { no_cuda(); }
+void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs&, int, int, int, int, int) { no_cuda(); }
+void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs&, int, int, int, int, int) { no_cuda(); }
 #endif
 
 void cpu_render(const RenderArgs& a) {
@@ -1379,6 +1379,12 @@ void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
             a.rgb_out[dst_idx + 2] = px[2];
         }
     }
+}
+
+long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1) {
+    auto below = [step](int t) { return 2LL * (t / step) + (t % step < 2 ? t % step : 2); };  // sampled in [0, t)
+    const long long cols = below(cx1) - below(cx0), rows = below(cy1) - below(cy0);
+    return cols > 0 && rows > 0 ? cols * rows : 0;
 }
 
 void map_frame_to_sensor(int rx, int ry, int rw, int rh, int rot_cw, bool hflip, bool vflip, int dst_w, int dst_h,
