@@ -244,8 +244,18 @@ bool crosstalk_matrix_invertible(const float m[9]) {
     if (!std::isfinite(m[k])) return false;
     x[k] = m[k];
   }
-  return std::fabs(x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
-                   x[2] * (x[3] * x[7] - x[4] * x[6])) >= (double)std::numeric_limits<float>::min();
+  const double det = x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
+                     x[2] * (x[3] * x[7] - x[4] * x[6]);
+  // The determinant of dependent rows is not computed as 0 but as rounding residue (two equal rows of general values
+  // give about 1e-17), so it is compared with the rounding error this computation can carry: a product of two floats
+  // is exact in double, each term then takes two rounded operations and the sum two more, at most four units of
+  // roundoff (2 x DBL_EPSILON) of the terms' magnitudes. A determinant within that of 0 is 0 as far as the arithmetic
+  // can tell.
+  const double magnitude = std::fabs(x[0]) * (std::fabs(x[4] * x[8]) + std::fabs(x[5] * x[7])) +
+                           std::fabs(x[1]) * (std::fabs(x[3] * x[8]) + std::fabs(x[5] * x[6])) +
+                           std::fabs(x[2]) * (std::fabs(x[3] * x[7]) + std::fabs(x[4] * x[6]));
+  if (std::fabs(det) <= 2.0 * std::numeric_limits<double>::epsilon() * magnitude) return false;
+  return std::fabs(det) >= (double)std::numeric_limits<float>::min();
 }
 
 static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double out_d[9] = nullptr) {
