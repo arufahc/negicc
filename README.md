@@ -70,7 +70,8 @@ adjust the result from that file without running the model again.
 Each conversion prints a block headed `Used:`, which `out.tif.json` keeps as `used`. In the pipeline's order it names
 the profile set (built in or from a path), the camera the set records and the scan's camera (make and model), and for
 a narrow-band set the camera models its crosstalk matrix holds for and whether the scan's model is one; then the decode
-(camera RGB, or LibRaw's white-light decode to linear Rec.2020), the flat field, the crop in sensor pixels and where it
+(camera RGB, or LibRaw's white-light decode to linear Rec.2020), where the full-size steps ran (`full_size`: the
+decode and the conversion, each on the `cpu` or the `gpu`), the flat field, the crop in sensor pixels and where it
 came from, the crosstalk correction (its nine numbers and their source, or why there is none), the film base and its
 source, and the ICC profile the picture renders through: the bracket's, or the print's.
 
@@ -352,7 +353,7 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | `-C`, `--no_crop` | Keep the RAW's full area. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
-| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs (`cpu` also keeps the search's passes on the CPU, DESIGN.md 4.2), and how many search iterations. |
+| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. `cpu` keeps everything on the CPU: the model, the search's passes (DESIGN.md 4.2) and the full-size debayer, merge and conversion, which a USE_CUDA=1 build otherwise runs on a CUDA device (DESIGN.md 4.1). On the device a value of the exported picture can differ from the CPU's by one 16-bit code. |
 | `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a renderer that runs and counts each pass on the CPU, and on a USE_CUDA=1 build with a device also on the GPU, comparing the two, DESIGN.md 4.2; the picture must equal a conversion whose passes run on the CPU, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with

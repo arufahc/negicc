@@ -118,9 +118,10 @@ __device__ void block_sum(double (&v)[NV], double* out) {
         for (int k = 0; k < NV; ++k) out[k] = sh[k][0];
 }
 
+// out is not __restrict__: a render over the frame's own copy (GpuRenderer::render_over_frame) passes the copy as
+// out. That is sound because a thread reads its own pixel, and no other, before it writes it.
 template <typename OutT>
-__global__ void render_kernel(InPix in, int width, long long npx, Mat9 mat, PipelineConfig cfg,
-                              OutT* __restrict__ out) {
+__global__ void render_kernel(InPix in, int width, long long npx, Mat9 mat, PipelineConfig cfg, OutT* out) {
     const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= npx) return;
     const long long y = i / width;
@@ -732,6 +733,7 @@ void gpu_preview_debayer(const PreviewDebayerArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("gpu_preview_debayer: rot_cw must be a multiple of 90");
     }
+    if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     dim3 block(16, 16);
@@ -756,6 +758,7 @@ void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     if (!is_rggb_pattern_host(a.filters)) {
         throw std::invalid_argument("gpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
     }
+    if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     dim3 block(16, 16);
@@ -769,6 +772,7 @@ void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("gpu_pixel_shift_merge: rot_cw must be a multiple of 90");
     }
+    if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     dim3 block(16, 16);
