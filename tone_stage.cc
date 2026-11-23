@@ -361,9 +361,36 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
     }
     if (fell_back) *fell_back = k < 0;
     if (k < 0 && fallback == kToneFallbackLeastTotal) {
-        k = 0;  // the least clipping at both ends together, the larger share on a tie
+        // The least clipping at both ends together, over every candidate either end's rule tries: the shares'
+        // candidates, and the last share with the shadow move scaled through the shares. On a tie, the larger share,
+        // then the larger shadow move.
+        k = 0;
         for (int i = 1; i < n; ++i)
             if (aws[i] + abs_[i] < aws[k] + abs_[k]) k = i;
+        double best_sum = aws[k] + abs_[k];
+        ToneCurve kept_curve = curves[k];
+        ToneTargets kept_targets = tts[k];
+        double kept_share = kToneClipShares[k], kept_shadow = ss[k];
+        const double hs = kToneClipShares[n - 1];
+        for (int j = 1; j < n; ++j) {
+            const double s2 = kToneClipShares[j];
+            ToneTargets t;
+            const ToneCurve q = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, s2, &t);
+            double aw = 0.0, ab = 0.0;
+            tone_clip_shares(pc, sample, &q, &aw, &ab);
+            const bool tie = aw + ab == best_sum;
+            if (aw + ab < best_sum || (tie && (hs > kept_share || (hs == kept_share && s2 > kept_shadow)))) {
+                best_sum = aw + ab;
+                kept_curve = q;
+                kept_targets = t;
+                kept_share = hs;
+                kept_shadow = s2;
+            }
+        }
+        if (shadow_share) *shadow_share = kept_shadow;
+        *share = kept_share;
+        *targets = kept_targets;
+        return kept_curve;
     } else if (k < 0 && fallback == kToneFallbackHighlightsFirst) {
         for (int i = 0; i < n && k < 0; ++i)
             if (aws[i] - white_before <= kToneClipAllowance) k = i;

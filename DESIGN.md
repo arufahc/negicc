@@ -616,7 +616,8 @@ with its own share before the stage: falling black clipping does not pay for ris
 The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole shadow move unless the black
 end then fails, and only then is the shadow move scaled with the rest, so a curve that lifts the shadows keeps the
 lift. When no share holds both ends, `--tone_stage` says which end gives way: `auto` (and `on`) keep the candidate whose
-shares at the two ends together are least (the larger share on a tie); `shadows_first` keeps the last share with the
+shares at the two ends together are least, among the shares' candidates and the last share with the shadow lift
+lowered through the same shares (the larger share on a tie, then the larger lift); `shadows_first` keeps the last share with the
 shadow lift; `highlights_first` keeps the largest share whose white end holds, else lowers the shadow lift at the last
 share through the same shares until white holds, else keeps the least white clipping. The sidecar names the rule as
 `tone_stage.fallback` (null where a share held). The sidecar records both shares before (the sample) and after (every

@@ -74,7 +74,9 @@ constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
 // candidate is the curve the check tried last at it: the whole shadow move, or the scaled one where the black end
 // failed with it.
 enum ToneClipFallback {
-    // The candidate whose shares at white and at black together are least; the larger share on a tie (the default).
+    // The candidate whose shares at white and at black together are least, of the shares' candidates and the last
+    // share with the shadow move scaled through kToneClipShares (every candidate the other two rules try); on a tie
+    // the larger share, then the larger shadow move (the default).
     kToneFallbackLeastTotal,
     // Shadows first: the last share's candidate, no highlight or range move, the shadow lift kept where black holds.
     kToneFallbackShadowsFirst,
