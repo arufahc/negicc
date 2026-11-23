@@ -273,11 +273,61 @@ int open_raw_file(LibRaw* proc, const std::string& fn) {
   return ret;
 }
 
+bool raw_levels_valid(const LibRaw& proc, const std::string& fn) {
+  const auto& C = proc.imgdata.color;
+  const unsigned sample_max = std::numeric_limits<uint16_t>::max();
+  if (C.maximum == 0 || C.maximum > sample_max) {
+    log_error("%s: white level %u is outside the 16-bit sample's range (1 to %u)\n", fn.c_str(), C.maximum, sample_max);
+    return false;
+  }
+  // A DNG's black levels as the file gives them (BlackLevel, its deltas averaged in): LibRaw converts them to unsigned
+  // integers, which a level beyond that type does not survive (it may come out 0), so they are read as given too
+  // (dng_fcblack[4] and [5] hold the pattern's size, not a level). A negative one is named as given where LibRaw's
+  // black wrapped from it.
+  const auto& D = C.dng_levels;
+  float dng_black = D.dng_fblack;
+  bool dng_ok = dng_black <= sample_max && !(dng_black < 0.0f && C.black > sample_max);
+  for (int i = 0; i < LIBRAW_CBLACK_SIZE && dng_ok; ++i) {
+    if (i != 4 && i != 5 && !(D.dng_fcblack[i] <= sample_max)) dng_ok = false, dng_black = D.dng_fcblack[i];
+  }
+  if (!dng_ok) {
+    log_error("%s: DNG black level %.0f is outside the 16-bit sample's range (0 to %u)\n", fn.c_str(), dng_black,
+              sample_max);
+    return false;
+  }
+  // The black of a photosite is black + cblack[colour] + its cblack[6..] pattern entry (as subtract_cfa_black_in_place
+  // and prepare_white_light_mosaic take it); a negative one wraps to a large unsigned value.
+  unsigned cblack_max = 0, pattern_max = 0;
+  for (int i = 0; i < 4; ++i) cblack_max = std::max(cblack_max, C.cblack[i]);
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  if (dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6) {
+    for (unsigned i = 0; i < dr * dc; ++i) pattern_max = std::max(pattern_max, C.cblack[6 + i]);
+  }
+  const struct { const char* name; unsigned value; } parts[3] = {
+      {"black level", C.black}, {"per-channel black level", cblack_max}, {"black level pattern entry", pattern_max}};
+  for (const auto& p : parts) {
+    if (p.value > sample_max) {
+      log_error("%s: %s %u is outside the 16-bit sample's range (0 to %u)\n", fn.c_str(), p.name, p.value,
+                sample_max);
+      return false;
+    }
+  }
+  const uint64_t black_max = (uint64_t)C.black + cblack_max + pattern_max;
+  if (black_max >= C.maximum) {
+    log_error("%s: black level %llu is not below the white level %u\n", fn.c_str(), (unsigned long long)black_max,
+              C.maximum);
+    return false;
+  }
+  return true;
+}
+
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
-  const int ret = open_raw_file(proc, fn);
+  int ret = open_raw_file(proc, fn);
   if (ret != LIBRAW_SUCCESS) return ret;
   log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
-  return proc->unpack();
+  ret = proc->unpack();
+  if (ret == LIBRAW_SUCCESS && !raw_levels_valid(*proc, fn)) ret = LIBRAW_DATA_ERROR;
+  return ret;
 }
 
 
