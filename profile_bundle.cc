@@ -573,17 +573,29 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     for (const auto& m : models) bundle.camera_models.push_back(m.get<std::string>());
     bundle.has_camera_models = true;
   }
-  // The 16-bit level the film base is scaled to (DESIGN.md 2.3): every channel is multiplied by it, so it is above 0,
-  // and no more than the 16-bit full scale. (The JSON parser refuses a number outside double's range.)
-  bundle.normalization_target = j.value("normalization_target", 55000.0);
-  if (!(bundle.normalization_target > 0.0 && bundle.normalization_target <= 65535.0)) {
-    throw std::runtime_error("profile bundle " + raw_path + ": normalization_target " +
-                             nlohmann::json(bundle.normalization_target).dump() + " is not in (0, 65535]");
+  // A field given with a type the loader cannot use refuses the bundle, naming it; a field left out takes its default.
+  // (The JSON parser refuses a number outside double's range, so every number read is finite.)
+  auto refuse = [&raw_path](const std::string& field, const nlohmann::json& v, const char* why) {
+    throw std::runtime_error("profile bundle " + raw_path + ": " + field + " " + v.dump() + " " + why);
+  };
+
+  // The 16-bit level the film base is scaled to (DESIGN.md 2.3), a code of the 16-bit output: from 1 to the full
+  // scale. Every channel is multiplied by it over the film base (at most 2147483647, below), which then stays a normal
+  // float, and n0 = normalization_target / 65535 a positive double.
+  if (j.contains("normalization_target")) {
+    const nlohmann::json& v = j["normalization_target"];
+    if (!v.is_number() || !(v.get<double>() >= 1.0 && v.get<double>() <= 65535.0)) {
+      refuse("normalization_target", v, "is not a number in [1, 65535]");
+    }
+    bundle.normalization_target = v.get<double>();
   }
 
   // The density export's matrices and the light's record (profile_bundle.h); absent from older bundles.
   if (j.contains("light_source") && j["light_source"].is_object()) bundle.light_source_json = j["light_source"].dump();
-  if (j.contains("density_matrices") && j["density_matrices"].is_object()) {
+  if (j.contains("density_matrices") && !j["density_matrices"].is_object()) {
+    refuse("density_matrices", j["density_matrices"], "is not an object");
+  }
+  if (j.contains("density_matrices")) {
     const nlohmann::json& dm = j["density_matrices"];
     // Everything but the matrices and the brackets is the fit's record, kept for the output's metadata.
     nlohmann::json fit = nlohmann::json::object();
@@ -639,6 +651,10 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           double v = 0.0;
           for (int k = 0; k < 3; ++k) v += film_to_measure[r * 3 + k] * light_to_film[k * 3 + c];
           out.m[r * 3 + c] = v * factor[c];
+          if (!std::isfinite(out.m[r * 3 + c])) {
+            throw std::runtime_error("profile bundle " + raw_path + ": density_matrices." + key +
+                                     ": the product of film_to_measure and light_to_film is not finite");
+          }
         }
       }
       for (int k = 0; k < 9; ++k) {
@@ -651,8 +667,11 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     }
     // What a print of a density file takes from the chart, per exposure bracket (np_print.h): the mid grey as the
     // light's density, and the slopes of the film's grey scale.
-    if (dm.contains("brackets") && dm["brackets"].is_object() && dm["brackets"].contains("targets") &&
-        dm["brackets"]["targets"].is_object()) {
+    if (dm.contains("brackets") && (!dm["brackets"].is_object() || !dm["brackets"].contains("targets") ||
+                                    !dm["brackets"]["targets"].is_object())) {
+      refuse("density_matrices.brackets", dm["brackets"], "is not an object with an object of targets");
+    }
+    if (dm.contains("brackets")) {
       auto three = [](const nlohmann::json& a, double out[3]) {
         if (!a.is_array() || a.size() != 3) return false;
         for (int c = 0; c < 3; ++c) {
@@ -664,20 +683,29 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       };
       const nlohmann::json& targets = dm["brackets"]["targets"];
       for (auto it = targets.begin(); it != targets.end(); ++it) {
+        const std::string at = "density_matrices.brackets.targets." + it.key();
+        const nlohmann::json& e = it.value();
+        if (!e.is_object()) refuse(at, e, "is not an object");
         DensityBracket bracket;
         bracket.name = it.key();
         // The slopes are optional: only a bundle without the grey balance curve reads them (frame_print).
-        bracket.has_slopes = it.value().is_object() && it.value().contains("slopes") &&
-                             three(it.value()["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
-                             bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;
-        if (!bracket.has_slopes) bracket.slopes[0] = bracket.slopes[1] = bracket.slopes[2] = 1.0;
-        if (it.value().is_object() && it.value().contains("grey_relative") && it.value()["grey_relative"].is_object() &&
-            it.value()["grey_relative"].contains("b")) {
-          bracket.has_tilt = three(it.value()["grey_relative"]["b"], bracket.tilt);
-          if (!bracket.has_tilt) bracket.tilt[0] = bracket.tilt[1] = bracket.tilt[2] = 0.0;
+        if (e.contains("slopes")) {
+          bracket.has_slopes = three(e["slopes"], bracket.slopes) && bracket.slopes[0] > 0.0 &&
+                               bracket.slopes[1] > 0.0 && bracket.slopes[2] > 0.0;
+          if (!bracket.has_slopes) refuse(at + ".slopes", e["slopes"], "is not three positive numbers");
         }
-        if (it.value().is_object() && it.value().contains("grey_light_density") &&
-            three(it.value()["grey_light_density"], bracket.grey_light)) {
+        if (e.contains("grey_relative")) {
+          if (!e["grey_relative"].is_object()) refuse(at + ".grey_relative", e["grey_relative"], "is not an object");
+          if (e["grey_relative"].contains("b")) {
+            bracket.has_tilt = three(e["grey_relative"]["b"], bracket.tilt);
+            if (!bracket.has_tilt) refuse(at + ".grey_relative.b", e["grey_relative"]["b"], "is not three numbers");
+          }
+        }
+        // A bracket without its mid grey is left out.
+        if (e.contains("grey_light_density")) {
+          if (!three(e["grey_light_density"], bracket.grey_light)) {
+            refuse(at + ".grey_light_density", e["grey_light_density"], "is not three numbers");
+          }
           bundle.density_brackets.push_back(bracket);
         }
       }
@@ -836,9 +864,12 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     // crosstalk_matrix stays the identity and has_crosstalk false.
   } else {
     // The correction is the inverse of the light's mixing (DESIGN.md 2.4), so it is invertible, and it is applied as
-    // floats. A matrix given (not null) that is not such a 3x3 refuses the bundle: left out, the scan would be
-    // converted without its correction.
+    // floats: the float matrix's determinant is a normal float. A matrix given (not null) that is not such a 3x3
+    // refuses the bundle: left out, the scan would be converted without its correction.
     const nlohmann::json* m = nullptr;
+    if (j.contains("crosstalk_profile") && !j["crosstalk_profile"].is_object() && !j["crosstalk_profile"].is_null()) {
+      refuse("crosstalk_profile", j["crosstalk_profile"], "is not an object");
+    }
     if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
       if (j["crosstalk_profile"].contains("crosstalk_correction_matrix")) {
         m = &j["crosstalk_profile"]["crosstalk_correction_matrix"];
@@ -847,14 +878,18 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       m = &j["crosstalk_correction_matrix"];
     }
     if (m && !m->is_null()) {
-      double* x = bundle.crosstalk_matrix_d;
-      bool ok = parse_3x3_matrix(*m, bundle.crosstalk_matrix, x);
-      for (int k = 0; ok && k < 9; ++k) ok = std::fabs(x[k]) <= (double)std::numeric_limits<float>::max();
-      ok = ok && x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
-                         x[2] * (x[3] * x[7] - x[4] * x[6]) != 0.0;
+      bool ok = parse_3x3_matrix(*m, bundle.crosstalk_matrix, bundle.crosstalk_matrix_d);
+      for (int k = 0; ok && k < 9; ++k) {
+        ok = std::fabs(bundle.crosstalk_matrix_d[k]) <= (double)std::numeric_limits<float>::max();
+      }
+      double x[9];
+      for (int k = 0; k < 9; ++k) x[k] = bundle.crosstalk_matrix[k];
+      ok = ok && std::fabs(x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
+                           x[2] * (x[3] * x[7] - x[4] * x[6])) >= (double)std::numeric_limits<float>::min();
       if (!ok) {
         throw std::runtime_error("profile bundle " + raw_path + ": the crosstalk correction matrix is not an "
-                                 "invertible 3x3 of numbers within float range");
+                                 "invertible 3x3 of numbers within float range (its float determinant a normal "
+                                 "float)");
       }
       bundle.has_crosstalk = true;
     }
@@ -871,17 +906,26 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     return e > 0.0f && e <= std::numeric_limits<float>::max();
   };
 
-  if (j.contains("film_base") && j["film_base"].is_object()) {
+  // A shutter speed is a string ("1/8s") or a number of seconds, read as written (dump() keeps every digit).
+  auto shutter_text = [&](const std::string& field, const nlohmann::json& v) {
+    if (v.is_string()) return v.get<std::string>();
+    if (v.is_number()) return v.dump();
+    refuse(field, v, "is not a shutter speed (a string or a number of seconds)");
+    return std::string();
+  };
+
+  if (j.contains("film_base") && !j["film_base"].is_object()) refuse("film_base", j["film_base"], "is not an object");
+  if (j.contains("film_base")) {
     const auto& fb = j["film_base"];
-    // Each channel's base is a mean of light through the film, so above 0: every channel is divided by it, and it is
-    // rounded to an int (profile_film_base_rgb).
+    // Each channel's base is a mean of light through the film: every channel is divided by it, and it is rounded to
+    // an int (profile_film_base_rgb) that is divided by too, so it rounds to 1 at least and fits an int.
     auto base = [&](const char* c) {
       const bool given = fb.contains(c) && fb[c].is_object() && fb[c].contains("avg") && fb[c]["avg"].is_number();
       const double v = given ? fb[c]["avg"].get<double>() : 0.0;
-      if (!(v > 0.0 && v <= (double)std::numeric_limits<int>::max())) {
+      if (!(v >= 0.5 && v <= (double)std::numeric_limits<int>::max())) {
         throw std::runtime_error("profile bundle " + raw_path + ": film_base." + c + ".avg " +
                                  (given ? fb[c]["avg"].dump() : std::string("(not a number)")) +
-                                 " is not in (0, 2147483647]");
+                                 " is not in [0.5, 2147483647]");
       }
       return v;
     };
@@ -893,13 +937,14 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     bundle.film_base_avg_d[1] = g_avg;
     bundle.film_base_avg_d[2] = b_avg;
     if (fb.contains("shutter")) {
-      if (fb["shutter"].is_string()) bundle.film_base_shutter = fb["shutter"].get<std::string>();
-      else if (fb["shutter"].is_number()) bundle.film_base_shutter = std::to_string(fb["shutter"].get<double>());
-      else throw std::invalid_argument("bad film_base shutter in " + raw_path);
+      bundle.film_base_shutter = shutter_text("film_base.shutter", fb["shutter"]);
       (void)shutter_to_seconds_d(bundle.film_base_shutter);
     }
     double iso = bundle.film_base_iso;
-    if (fb.contains("iso") && fb["iso"].is_number()) iso = fb["iso"].get<double>();
+    if (fb.contains("iso")) {
+      if (!fb["iso"].is_number()) refuse("film_base.iso", fb["iso"], "is not a number");
+      iso = fb["iso"].get<double>();
+    }
     if (!exposure_ok(bundle.film_base_shutter, iso)) {
       throw std::runtime_error("profile bundle " + raw_path + ": the film base's exposure (shutter " +
                                bundle.film_base_shutter + ", ISO " + std::to_string(iso) + ") " + kBadExposure);
@@ -916,23 +961,30 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   }
 
   bundle.targets.clear();
-  for (const auto& tj : j["targets"]) {
-    if (!tj.is_object()) continue;
+  for (size_t ti = 0; ti < j["targets"].size(); ++ti) {
+    const nlohmann::json& tj = j["targets"][ti];
+    const std::string at = "targets[" + std::to_string(ti) + "]";
+    if (!tj.is_object()) refuse(at, tj, "is not an object");
     BundleTarget tgt;
     tgt.index = (int)bundle.targets.size();
-    tgt.name = tj.value("name", "Target " + std::to_string(tgt.index + 1));
-    tgt.iso = tj.value("iso", 100.0);
-    if (tj.contains("shutter")) {
-      if (tj["shutter"].is_string()) tgt.shutter = tj["shutter"].get<std::string>();
-      else if (tj["shutter"].is_number()) tgt.shutter = std::to_string(tj["shutter"].get<double>());
+    tgt.name = "Target " + std::to_string(tgt.index + 1);
+    if (tj.contains("name")) {
+      if (!tj["name"].is_string()) refuse(at + ".name", tj["name"], "is not a string");
+      tgt.name = tj["name"].get<std::string>();
     }
+    if (tj.contains("iso")) {
+      if (!tj["iso"].is_number()) refuse(at + ".iso", tj["iso"], "is not a number");
+      tgt.iso = tj["iso"].get<double>();
+    }
+    if (tj.contains("shutter")) tgt.shutter = shutter_text(at + ".shutter", tj["shutter"]);
 
-    if (tj.contains("target_ev") && tj["target_ev"].is_number()) {
-      tgt.has_target_ev = true;
-      tgt.target_ev = tj["target_ev"].get<double>();
-    } else if (tj.contains("ev") && tj["ev"].is_number()) {
-      tgt.has_target_ev = true;
-      tgt.target_ev = tj["ev"].get<double>();
+    for (const char* key : {"target_ev", "ev"}) {
+      if (!tj.contains(key)) continue;
+      if (!tj[key].is_number()) refuse(at + "." + key, tj[key], "is not a number");
+      if (!tgt.has_target_ev) {
+        tgt.has_target_ev = true;
+        tgt.target_ev = tj[key].get<double>();
+      }
     }
 
     if (!exposure_ok(tgt.shutter, tgt.iso)) {
@@ -941,18 +993,21 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     }
     tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
 
-    if (tj.contains("patches") && tj["patches"].is_object()) {
+    if (tj.contains("patches") && !tj["patches"].is_object()) {
+      refuse(at + ".patches", tj["patches"], "is not an object");
+    }
+    if (tj.contains("patches")) {
       std::vector<float> gs_g;
       for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
-        if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
-          // Kept as a float (the grey wedge below reads these same entries).
-          const double g = it.value()["g"].get<double>();
-          if (!(std::fabs(g) <= (double)std::numeric_limits<float>::max())) {
-            throw std::runtime_error("profile bundle " + raw_path + ": target " + tgt.name + " patch " + it.key() +
-                                     " g " + it.value()["g"].dump() + " is outside float range");
-          }
-          tgt.patches_g.push_back((float)g);
+        const std::string pat = at + ".patches." + it.key();
+        if (!it.value().is_object()) refuse(pat, it.value(), "is not an object");
+        // A patch without a green is not counted. Kept as a float (the grey wedge below reads these same entries).
+        if (!it.value().contains("g")) continue;
+        const nlohmann::json& gv = it.value()["g"];
+        if (!gv.is_number() || !(std::fabs(gv.get<double>()) <= (double)std::numeric_limits<float>::max())) {
+          refuse(pat + ".g", gv, "is not a number within float range");
         }
+        tgt.patches_g.push_back((float)gv.get<double>());
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
       for (int k = 0; k < 24; ++k) {
@@ -973,8 +1028,13 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         tgt.tgt_max_g = *std::max_element(tgt.patches_g.begin(), tgt.patches_g.end());
       }
     }
-    if (tj.contains("profcheck_output") && tj["profcheck_output"].is_string()) {
-      tgt.profcheck_output = tj["profcheck_output"].get<std::string>();
+    if (tj.contains("profcheck_output")) {
+      const nlohmann::json& v = tj["profcheck_output"];
+      if (!v.is_string()) refuse(at + ".profcheck_output", v, "is not a string");
+      tgt.profcheck_output = v.get<std::string>();
+    }
+    for (const char* key : {"icc_profile_base64", "icc_profile"}) {
+      if (tj.contains(key) && !tj[key].is_string()) refuse(at + "." + key, tj[key], "is not a string");
     }
 
     // A bracket whose ICC is given (inline, or as a file) but cannot be read as a film profile refuses the bundle, as
