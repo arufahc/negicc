@@ -7,6 +7,13 @@ spektrafilm print profiles and the bundles' print ICCs it names (files of the re
 the Lean definitions on the vectors' inputs and compares the results with the values the C++
 functions gave. It prints one line per group of comparisons and ends with a non-zero exit code if
 any comparison is outside its tolerance.
+
+The check reads the program, so where the specification defines a constant by its formula and the
+C++ holds the formula's value to a few digits, the check uses the C++'s digits: it loads a material
+under the C++'s six-digit D50 and D55 (`viewingLightLiteral`) and evaluates the CLF's matrix with
+the C++'s seven-decimal XYZ to sRGB matrix (`xyzToSrgbLindbloomLiteral`). How far those digits are
+from the formulas is proved (`cieD50Literal_eq`, `cieD55Literal_eq`, `xyzToSrgbLindbloom_literal`
+in `Negicc.Print.Constants`), not checked.
 -/
 import Lean.Data.Json
 import Negicc.Base.Defs
@@ -311,7 +318,7 @@ def checkBundleIcc (root : System.FilePath) (b : Bundle) (j : Json) (tag : Strin
 
 def checkMaterial (root : System.FilePath) (b : Bundle) (j : Json) (tag : String) : CheckM Unit := do
   let prof ← readSpektrafilm (root / (← strAt j "profile"))
-  let some m := loadMaterial prof | fail s!"{tag}: the material does not load"
+  let some m := loadMaterialUnder viewingLightLiteral prof | fail s!"{tag}: the material does not load"
   -- The material as loaded.
   nearArr s!"{tag}material: log exposure, curves" 0.0 m.logExposure (← numsAt j "log_exposure")
   let curves ← arrs3At j "curves"
@@ -330,7 +337,7 @@ def checkMaterial (root : System.FilePath) (b : Bundle) (j : Json) (tag : String
   near3 s!"{tag}material: observerWhite" tolDouble m.white (← numsAt j "white")
   near3 s!"{tag}material: aimSolve" tolDouble m.aim (← numsAt j "aim")
   near3 s!"{tag}material: paperXyz" tolDouble (paperXyz m) (← numsAt j "paper_xyz")
-  nearMat s!"{tag}material: toSrgbMatrix" tolDouble (toSrgbMatrix m.white) (← numsAt j "to_srgb")
+  nearMat s!"{tag}material: toSrgbMatrix" tolDouble (toSrgbMatrixOf xyzToSrgbLindbloomLiteral m.white) (← numsAt j "to_srgb")
   let tp ← get j "to_print"
   for key in ["statusm", "rp180", "apd"] do
     let some p := materialPrintMatrix prof b.film (← b.dm key) | fail s!"{tag}: no print matrix {key}"
@@ -471,7 +478,7 @@ def checkClf (root : System.FilePath) (b : Bundle) (j : Json) (mats : Array Json
   let id ← strAt j "id"
   let some mj ← mats.findM? (fun m => do pure ((← strAt m "id") == id)) | fail s!"no material {id}"
   let prof ← readSpektrafilm (root / (← strAt mj "profile"))
-  let some m := loadMaterial prof | fail "the material does not load"
+  let some m := loadMaterialUnder viewingLightLiteral prof | fail "the material does not load"
   let nodes ← get j "nodes"
   let em ← numsAt nodes "exposure_matrix"
   let off := clfExposureOffsets m
@@ -491,7 +498,7 @@ def checkClf (root : System.FilePath) (b : Bundle) (j : Json) (mats : Array Json
     nearRel "clf nodes: clfCurveRow (LUT1D)" relG6 got.y (v.getD 2 0.0)
     nearRel "clf nodes: clfCurveRow (LUT1D)" relG6 got.z (v.getD 3 0.0)
   let n3 ← natAt nodes "cube_points"
-  let toSrgb := toSrgbMatrix m.white
+  let toSrgb := toSrgbMatrixOf xyzToSrgbLindbloomLiteral m.white
   for r in ← arrAt nodes "lut3d" do
     let v ← nums r
     let got := clfCubeNode m toSrgb n3 (v.getD 0 0.0).toUInt64.toNat

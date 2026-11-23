@@ -3,8 +3,6 @@ The CIE tables of the print's colour.
 -/
 module
 
-public import Negicc.Base.Scalar
-
 @[expose] public section
 
 /-!
@@ -12,14 +10,32 @@ public import Negicc.Base.Scalar
 
 The CIE 1931 2° standard observer and the relative spectral power of the CIE illuminants D50 and
 D55, on 380 to 780 nm at 1 nm (401 samples), as `np_print.cc` holds them (`kCieXBar`, `kCieYBar`,
-`kCieZBar`, `kCieD50`, `kCieD55`, between `BEGIN CIE TABLES` and `END CIE TABLES`). The numbers are
-copied from that block unchanged; three values of `z̄` near 650 nm are of the order of `1e-22`, as
-there.
+`kCieZBar`, `kCieD50`, `kCieD55`, between `BEGIN CIE TABLES` and `END CIE TABLES`).
+
+* The observer is primary data, the CIE's 1 nm table; its numbers are copied from that block
+  unchanged. Three values of `z̄` near 650 nm are of the order of `1e-22`, as there.
+* D50 and D55 are the CIE's 5 nm tables (`cieD50Knots`, `cieD55Knots`, the values the C++ holds at
+  whole multiples of 5 nm) read linearly at 1 nm (`at1nm`), which is how colour-science made the
+  1 nm tables the C++ copies. The C++'s 401 values are kept as `cieD50Literal` and `cieD55Literal`;
+  each is the interpolation rounded to six significant digits (`cieD50Literal_eq`,
+  `cieD55Literal_eq` in `Negicc.Print.Constants`).
+
+The tables need only decimal literals (and `at1nm` the four operations), so they can be read over
+the rational numbers, where the statements about them are decided by exact arithmetic.
 -/
 
 namespace Negicc
 
-variable {α : Type} [Scalar α]
+variable {α : Type} [Add α] [Sub α] [Mul α] [Div α] [Neg α] [NatCast α] [OfScientific α]
+
+/-- A table on 380 to 780 nm at 5 nm (81 knots) read at 1 nm (401 samples): sample `5 k + j`
+(`j < 5`) is `knots_k + (knots_{k+1} − knots_k) j / 5`, the knot itself when `j = 0`. -/
+def at1nm (knots : Array α) : Array α :=
+  ((List.range 401).map fun (i : Nat) =>
+    let k := i / 5
+    let j := i % 5
+    if j = 0 then knots.getD k 0.0
+    else knots.getD k 0.0 + (knots.getD (k + 1) 0.0 - knots.getD k 0.0) * (j : α) / 5.0).toArray
 
 /-- The CIE 1931 2° colour matching function x̄, 380 to 780 nm at 1 nm (`kCieXBar` in `np_print.cc`). -/
 def cieXBar : Array α := #[
@@ -183,8 +199,30 @@ def cieZBar : Array α := #[
   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
   0.0]
 
-/-- The relative spectral power of CIE illuminant D50, 380 to 780 nm at 1 nm (`kCieD50` in `np_print.cc`). -/
-def cieD50 : Array α := #[
+/-- The relative spectral power of CIE illuminant D50 at 5 nm, 380 to 780 nm (81 values): the
+CIE's table as colour-science 0.4.7 gives it, the values `kCieD50` of `np_print.cc` holds at whole
+multiples of 5 nm. -/
+def cieD50Knots : Array α := #[
+  24.488, 27.179, 29.871, 39.589, 49.308, 52.91, 56.513, 58.273,
+  60.034, 58.926, 57.818, 66.321, 74.825, 81.036, 87.247, 88.93,
+  90.612, 90.99, 91.368, 93.238, 95.109, 93.536, 91.963, 93.843,
+  95.724, 96.169, 96.613, 96.871, 97.129, 99.614, 102.099, 101.427,
+  100.755, 101.536, 102.317, 101.159, 100.0, 98.868, 97.735, 98.327,
+  98.918, 96.208, 93.499, 95.593, 97.688, 98.478, 99.269, 99.155,
+  99.042, 97.382, 95.722, 97.29, 98.857, 97.262, 95.667, 96.929,
+  98.19, 100.597, 103.003, 101.068, 99.133, 93.257, 87.381, 89.492,
+  91.604, 92.246, 92.889, 84.872, 76.854, 81.683, 86.511, 89.546,
+  92.58, 85.405, 78.23, 67.961, 57.692, 70.307, 82.923, 80.599,
+  78.274]
+
+/-- The relative spectral power of CIE illuminant D50, 380 to 780 nm at 1 nm: its 5 nm table read
+linearly between the knots (`at1nm`), as colour-science interpolated it for `kCieD50`. -/
+def cieD50 : Array α := at1nm cieD50Knots
+
+/-- `kCieD50` as `np_print.cc` writes it: each value `cieD50` rounded to six significant digits
+(`cieD50Literal_eq` in `Negicc.Print.Constants`). The numeric check reads the print with these
+digits. -/
+def cieD50Literal : Array α := #[
   24.488, 25.0262, 25.5644, 26.1026, 26.6408, 27.179, 27.7174, 28.2558,
   28.7942, 29.3326, 29.871, 31.8146, 33.7582, 35.7018, 37.6454, 39.589,
   41.5328, 43.4766, 45.4204, 47.3642, 49.308, 50.0284, 50.7488, 51.4692,
@@ -237,8 +275,30 @@ def cieD50 : Array α := #[
   81.9934, 81.5286, 81.0638, 80.599, 80.134, 79.669, 79.204, 78.739,
   78.274]
 
-/-- The relative spectral power of CIE illuminant D55, 380 to 780 nm at 1 nm (`kCieD55` in `np_print.cc`). -/
-def cieD55 : Array α := #[
+/-- The relative spectral power of CIE illuminant D55 at 5 nm, 380 to 780 nm (81 values): the
+CIE's table as colour-science 0.4.7 gives it, the values `kCieD55` of `np_print.cc` holds at whole
+multiples of 5 nm. -/
+def cieD55Knots : Array α := #[
+  32.584, 35.335, 38.087, 49.518, 60.949, 64.751, 68.554, 70.065,
+  71.577, 69.746, 67.914, 76.76, 85.605, 91.799, 97.993, 99.228,
+  100.463, 100.188, 99.913, 101.326, 102.739, 100.409, 98.078, 99.379,
+  100.68, 100.688, 100.695, 100.341, 99.987, 102.098, 104.21, 103.156,
+  102.102, 102.535, 102.968, 101.484, 100.0, 98.608, 97.216, 97.482,
+  97.749, 94.59, 91.432, 92.926, 94.419, 94.78, 95.14, 94.68,
+  94.22, 92.334, 90.448, 91.389, 92.33, 90.592, 88.854, 89.586,
+  90.317, 92.133, 93.95, 91.953, 89.956, 84.817, 79.677, 81.258,
+  82.84, 83.842, 84.844, 77.539, 70.235, 74.768, 79.301, 82.147,
+  84.993, 78.437, 71.88, 62.337, 52.793, 64.36, 75.927, 73.872,
+  71.818]
+
+/-- The relative spectral power of CIE illuminant D55, 380 to 780 nm at 1 nm: its 5 nm table read
+linearly between the knots (`at1nm`), as colour-science interpolated it for `kCieD55`. -/
+def cieD55 : Array α := at1nm cieD55Knots
+
+/-- `kCieD55` as `np_print.cc` writes it: each value `cieD55` rounded to six significant digits
+(`cieD55Literal_eq` in `Negicc.Print.Constants`). The numeric check reads the print with these
+digits. -/
+def cieD55Literal : Array α := #[
   32.584, 33.1342, 33.6844, 34.2346, 34.7848, 35.335, 35.8854, 36.4358,
   36.9862, 37.5366, 38.087, 40.3732, 42.6594, 44.9456, 47.2318, 49.518,
   51.8042, 54.0904, 56.3766, 58.6628, 60.949, 61.7094, 62.4698, 63.2302,

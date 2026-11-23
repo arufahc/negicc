@@ -5,6 +5,7 @@ module
 
 public import Negicc.Print.Defs
 public import Negicc.Print.Props
+public import Negicc.Print.Constants
 
 /-!
 # The print emulation
@@ -22,4 +23,5 @@ public import Negicc.Print.Props
 * `Negicc.Print.Search`: the print's search and the knobs.
 * `Negicc.Print.Defs`: all of the above (no Mathlib).
 * `Negicc.Print.Props`: proved properties over the real numbers.
+* `Negicc.Print.Constants`: the print's constants against their formulas, and its spectral sums.
 -/

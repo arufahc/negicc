@@ -97,7 +97,7 @@ with `y' = toneTableY lut y`, since the luminance weights add up to one. -/
 theorem applyTone_grey (lut : Array ℝ) (y : ℝ) :
     applyTone lut ⟨y, y, y⟩ = ⟨toneTableY lut y, toneTableY lut y, toneTableY lut y⟩ := by
   have hl : toneLuminance (⟨y, y, y⟩ : Vec3 ℝ) = y := by
-    simp only [toneLuminance, linearSrgbLuminance]; norm_num; ring
+    simp only [toneLuminance]; exact linearSrgbLuminance_grey y
   unfold applyTone
   simp only [hl, sub_self, mul_zero, add_zero]
 

@@ -2,26 +2,27 @@
 
 DESIGN.md section 5 against `Negicc.Print`. "Checked" means compared by `lake exe checkPrint` with
 values the C++ computed (`testvectors/print.json`, written by `testvectors/gen/gen_print.cc`), with
-the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negicc.Print.Props`.
+the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negicc.Print.Props` and
+`Negicc.Print.Constants`.
 
 ## Code function → Lean name
 
 | C++ (file: function) | Lean | Proved | Checked |
 |---|---|---|---|
-| `np_print.cc`: CIE tables | `cieXBar`, `cieYBar`, `cieZBar`, `cieD50`, `cieD55` | | through `observerWeights` |
+| `np_print.cc`: CIE tables | `cieXBar`, `cieYBar`, `cieZBar`, `cieD50`, `cieD55` (`at1nm` of `cieD50Knots`, `cieD55Knots`), `cieD50Literal`, `cieD55Literal` | `cieD50Literal_eq`, `cieD55Literal_eq` | the C++'s values, through `observerWeights` |
 | `np_print.cc`: `interp` | `interp` | | through every table read |
 | `np_print.cc`: `resample_column` | `resampleColumn` | | dyes and base of three materials |
 | `np_print.cc`: `amounts_to_xyz` | `amountsToXyz` | | through `paperXyz`, the table, the cube |
 | `np_print.cc`: `exposure_to_xyz` | `exposureToXyz`, `printOfDensity` | `exposureOf_grey`, `exposureOf_shift` | through `aimSolve`, the table |
 | `np_print.cc`: `print_paper_xyz` | `paperXyz` | | yes |
-| `load_spektrafilm_print`: observer and white | `observerWeights`, `observerWhite` | `observerWhite_y` | yes |
+| `load_spektrafilm_print`: observer and white | `observerWeights`, `observerWhite` | `observerWhite_y`, `observerWhite_x`, `observerWhite_z`, `observerWhite_d50` | yes |
 | `load_spektrafilm_print`: lamp, response | `planckLamp`, `printResponse` | | through `Q` |
-| `load_spektrafilm_print`: CAT02 to sRGB | `toSrgbMatrix`, `cat02`, `xyzToSrgbLindbloom` | `toSrgbMatrix_white` | yes |
+| `load_spektrafilm_print`: CAT02 to sRGB | `toSrgbMatrix`, `toSrgbMatrixOf`, `cat02`, `xyzToSrgbLindbloom`, `xyzToSrgbLindbloomLiteral` | `toSrgbMatrix_white`, `toSrgbMatrixOf_eq_vonKries`, `xyzToSrgbLindbloom_literal`, `xyzToSrgbLindbloom_d65` | with the C++'s digits |
 | `load_spektrafilm_print`: aim (Newton) | `aimNewton`, `aimSolve` | `aimSolve_residual`, `loadMaterial_grey` | yes |
 | `load_spektrafilm_print` | `loadMaterial`, `SpektrafilmProfile.sensitivity` | `loadMaterial_grey` | yes |
 | `np_print.cc`: `film_to_print_density` | `filmToPrintDensity`, `FilmModel.samples`, `colourVariation` | | through `P` (3 measures, 3 materials) |
 | `load_spektrafilm_print`: `print_matrix` | `printMatrix`, `materialPrintMatrix` | `printMatrix_mul_m`, `printMatrix_of_allOne` | yes, Status M calibrated (φ ≠ 1) included |
-| `np_print.cc`: `invert3`, `multiply3` | `Mat3.invert3`, `Mat3.adjInv`, `Mat3.mul` | `Mat3.mul_adjInv`, `Mat3.adjInv_mul`, `Mat3.invert3_eq_some` | through `P` |
+| `np_print.cc`: `invert3`, `multiply3` | `Mat3.invert3`, `Mat3.adjInv`, `Mat3.mul` | `Mat3.mul_adjInv`, `Mat3.adjInv_mul` (in `Negicc.Base.Props`), `Mat3.invert3_eq_some` | through `P` |
 | `np_print.cc`: `on_grid`, `grey_grid` | `onGrid`, `GreyBalance.grid` | | through the curves |
 | `np_print.cc`: `bracket_mid_apd` | `bracketMidApd` | | yes |
 | `np_print.cc`: `curve_grey_at`, `curve_grey` | `curveGreyAt` | | yes |
@@ -31,7 +32,7 @@ the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negic
 | `np_print.cc`: `bracket_print_curves` | `bracketPrintCurves`, `unknee`, `inputLightDensity`, `rampedRunMax` | `bracketPrintCurves_strictMono`, `kneeCompress_unknee`, `inputLightDensity_base` | yes (both lights) |
 | `PrintContinuum::curves_at`, `tilt_at`, `a_lo`, `a_hi` | `PrintContinuum.curvesAt`, `.aLo`, `.aHi` | | yes |
 | `PrintContinuum::trc_at`, `set_curves_at` | `PrintContinuum.trcAt`, `icc16` | | yes |
-| `np_print.cc`: `print_table` | `printTable`, `tableNode`, `nodeAlpha`, `pcsAdaptation` | `table_grey_axis`, `pcsAdaptation_white` | every 4th node, and every node of two bundle ICCs (one per light) to one code |
+| `np_print.cc`: `print_table` | `printTable`, `tableNode`, `nodeAlpha`, `pcsAdaptation` | `table_grey_axis`, `pcsAdaptation_white`, `pcsAdaptation_eq_vonKries` | every 4th node, and every node of two bundle ICCs (one per light) to one code |
 | `np_print.cc`: `write_print_icc` (table and curve codes) | `printTableCodes`, `iccCode16` | | against the bundles' files |
 | `np_pipeline.cc`: `to_paper_white` | `toPaperWhite`, `paperBase`, `lightestNode` | `toPaperWhite_y_le`, `toPaperWhite_base` | yes |
 | `np_print.cc`: `scale_print_icc_table` | `scaleIccCodes` | | yes |
@@ -54,6 +55,22 @@ the tolerance stated in `CheckPrint.lean`. "Proved" names the theorems of `Negic
 | `search_print_material`: the fixed point | `printSearchLoop`, `printSearch`, `keepBest` | `printSearch_a_mem` | no: around the network |
 | `search_print_material`: nearest bracket | `nearestBracket` | | no: local to the search |
 | `multi_target_optimizer.cc`: `solve_print_knobs` | `solvePrintKnobs`, `knobNewton`, `knobSolve`, `knobLargest` | `solvePrintKnobs_a_mem` | no: its render is `GreyPoint` |
+
+## Constants
+
+| Constant (C++) | Kind | Lean | Proved |
+|---|---|---|---|
+| `kCieXBar`, `kCieYBar`, `kCieZBar` | primary: the CIE 1931 observer at 1 nm | `cieXBar`, `cieYBar`, `cieZBar` | |
+| `kCieD50`, `kCieD55` | derived: the CIE's 5 nm tables (primary, 81 values each) read linearly at 1 nm | `cieD50`, `cieD55`; the C++'s values `cieD50Literal`, `cieD55Literal` | six significant digits (`cieD50Literal_eq`, `cieD55Literal_eq`) |
+| `B` of `print_table` | primary: Bradford (ICC.1:2022 E.3), fitted | `bradford` | |
+| `cat02` | primary: CAT02 (CIE 159:2004), fitted | `cat02` | |
+| `kD50` | primary: the PCS illuminant of ICC.1 | `iccD50` | not the D50 sum (`observerWhite_d50_ne_iccD50`) |
+| `xyz_to_srgb` | derived: inverse of BT.709 with Lindbloom's D65 | `xyzToSrgbLindbloom`; `xyzToSrgbLindbloomLiteral` | seven decimals (`xyzToSrgbLindbloom_literal`) |
+| `kStop` | derived: `log10 2` | `stopApd`; `stopApdLiteral` | within `5e-9` (`stopApd_literal`) |
+| `boot_h` | derived: `kStop / 2` | `bootH` | `bootH_literal` |
+| `phi` of the golden section | derived: `(√5 − 1) / 2` | `goldenPhi`; `goldenPhiLiteral` | within `1e-16` (`goldenPhi_literal`) |
+| `1.4388e-2` of the lamp | primary: ITS-90's `c₂` | in `planckLamp` | `h c / k` within `2.5e-7` (`planck_c2`) |
+| the viewing light's white | a sum on the grid | `observerWhite` | `observerWhite_x`, `_z`; D50 `(0.9642147, 1, 0.8250171)` (`observerWhite_d50`) |
 
 ## Not formalized
 

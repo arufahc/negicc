@@ -24,19 +24,6 @@ variable {α : Type} [Scalar α]
 
 namespace Mat3
 
-/-- The inverse as the adjugate over the determinant, entry for entry as `invert3` (and
-`print_table`) write it; the determinant is `Mat3.det` (the C++ expands it along the first row in
-the same products, added in another order). For a matrix whose determinant is not zero it is the inverse
-(`Mat3.mul_adjInv` in `Negicc.Print.Props`). -/
-def adjInv (m : Mat3 α) : Mat3 α :=
-  let d := det m
-  ⟨⟨(m.row1.y * m.row2.z - m.row1.z * m.row2.y) / d, (m.row0.z * m.row2.y - m.row0.y * m.row2.z) / d,
-    (m.row0.y * m.row1.z - m.row0.z * m.row1.y) / d⟩,
-   ⟨(m.row1.z * m.row2.x - m.row1.x * m.row2.z) / d, (m.row0.x * m.row2.z - m.row0.z * m.row2.x) / d,
-    (m.row0.z * m.row1.x - m.row0.x * m.row1.z) / d⟩,
-   ⟨(m.row1.x * m.row2.y - m.row1.y * m.row2.x) / d, (m.row0.y * m.row2.x - m.row0.x * m.row2.y) / d,
-    (m.row0.x * m.row1.y - m.row0.y * m.row1.x) / d⟩⟩
-
 /-- The inverse, or `none` when the determinant is below `1e-12` in magnitude (`invert3`). -/
 def invert3 (m : Mat3 α) : Option (Mat3 α) :=
   if fabs (det m) < 1.0e-12 then none else some (adjInv m)

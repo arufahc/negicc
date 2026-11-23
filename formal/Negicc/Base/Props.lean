@@ -10,7 +10,10 @@ public section
 /-!
 # Properties of the base definitions
 
-Proved over `ℝ`. Each statement says in its docstring what it means for the pipeline.
+Proved over `ℝ`. Each statement says in its docstring what it means for the pipeline. Among them:
+the adjugate inverse is the inverse (`Mat3.mul_adjInv`, `Mat3.adjInv_mul`); a matrix built from
+primaries takes RGB white to its white (`rgbToXyz_white`); OpenCV's six-decimal sRGB matrix is that
+formula correctly rounded (`srgbToXyzOpenCV_literal`).
 -/
 
 namespace Negicc
@@ -120,6 +123,96 @@ theorem Mat3.mulVec_diag (d v : Vec3 ℝ) : (Mat3.diag d).mulVec v = d.mul v := 
 /-- The identity matrix leaves a vector alone. -/
 theorem Mat3.mulVec_identity (v : Vec3 ℝ) : (Mat3.identity : Mat3 ℝ).mulVec v = v := by
   ext <;> simp only [Mat3.identity, Mat3.diag, Mat3.mulVec, Vec3.dot, Vec3.fill] <;> norm_num
+
+/-! ## The adjugate inverse -/
+
+namespace Mat3
+
+variable (a : Mat3 ℝ)
+
+/-- The determinant expanded along the first row, as `invert3` writes it. -/
+theorem det_eq : det a = a.row0.x * (a.row1.y * a.row2.z - a.row1.z * a.row2.y) -
+    a.row0.y * (a.row1.x * a.row2.z - a.row1.z * a.row2.x) +
+    a.row0.z * (a.row1.x * a.row2.y - a.row1.y * a.row2.x) := by
+  simp [det, adjugate, entry]
+  ring
+
+/-- The adjugate over a non-zero determinant is a right inverse. -/
+theorem mul_adjInv (h : det a ≠ 0) : a.mul (adjInv a) = identity := by
+  ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, mul_div_assoc'] <;>
+    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
+
+/-- The adjugate over a non-zero determinant is a left inverse. -/
+theorem adjInv_mul (h : det a ≠ 0) : (adjInv a).mul a = identity := by
+  ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, div_mul_eq_mul_div] <;>
+    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
+
+theorem adjInv_mulVec_mulVec (h : det a ≠ 0) (v : Vec3 ℝ) : (adjInv a).mulVec (a.mulVec v) = v := by
+  rw [← mulVec_mul, adjInv_mul a h, mulVec_identity]
+
+theorem mulVec_adjInv_mulVec (h : det a ≠ 0) (v : Vec3 ℝ) : a.mulVec ((adjInv a).mulVec v) = v := by
+  rw [← mulVec_mul, mul_adjInv a h, mulVec_identity]
+
+end Mat3
+
+/-! ## Colour spaces from their primaries -/
+
+/-- A matrix times a grey `(v, v, v)` is `v` times its product with `(1, 1, 1)`. -/
+theorem Mat3.mulVec_grey (m : Mat3 ℝ) (v : ℝ) :
+    m.mulVec ⟨v, v, v⟩ = ⟨v * (m.mulVec ⟨1, 1, 1⟩).x, v * (m.mulVec ⟨1, 1, 1⟩).y,
+      v * (m.mulVec ⟨1, 1, 1⟩).z⟩ := by
+  ext <;> simp only [Mat3.mulVec, Vec3.dot] <;> ring
+
+/-- **RGB `(1, 1, 1)` is the white**: the matrix built from primaries and a white takes RGB white to
+that white, whenever the primaries are independent. -/
+theorem rgbToXyz_white (p : Primaries ℝ) (w : Vec3 ℝ) (h : Mat3.det (primaryMatrix p) ≠ 0) :
+    (rgbToXyz p w).mulVec ⟨1, 1, 1⟩ = w := by
+  unfold rgbToXyz
+  rw [Mat3.mulVec_mul, Mat3.mulVec_diag]
+  have h1 : ∀ s : Vec3 ℝ, s.mul ⟨1, 1, 1⟩ = s := by
+    intro s; ext <;> simp only [Vec3.mul] <;> ring
+  rw [h1, Mat3.mulVec_adjInv_mulVec _ h]
+
+/-- The BT.709 primaries are independent. -/
+theorem det_primaryMatrix_bt709 : Mat3.det (primaryMatrix (bt709Primaries : Primaries ℝ)) ≠ 0 := by
+  rw [Mat3.det_eq]; simp only [primaryMatrix, bt709Primaries, xyToXyz]; norm_num
+
+/-- The BT.2020 primaries are independent. -/
+theorem det_primaryMatrix_bt2020 :
+    Mat3.det (primaryMatrix (bt2020Primaries : Primaries ℝ)) ≠ 0 := by
+  rw [Mat3.det_eq]; simp only [primaryMatrix, bt2020Primaries, xyToXyz]; norm_num
+
+/-- OpenCV's sRGB matrix takes white to OpenCV's D65: its row sums are the white. -/
+theorem srgbToXyzOpenCV_white : (srgbToXyzOpenCV : Mat3 ℝ).mulVec ⟨1, 1, 1⟩ = opencvD65 :=
+  rgbToXyz_white _ _ det_primaryMatrix_bt709
+
+/-- The six-decimal matrix the scoring uses takes white to OpenCV's D65 exactly: its rows sum to the
+white's values. -/
+theorem srgbToXyzOpenCVLiteral_white :
+    (srgbToXyzOpenCVLiteral : Mat3 ℝ).mulVec ⟨1, 1, 1⟩ = opencvD65 := by
+  ext <;> simp only [srgbToXyzOpenCVLiteral, opencvD65, Mat3.mulVec, Vec3.dot] <;> norm_num
+
+/-- The sRGB encoding's break `0.0031308`, which IEC 61966-2-1 states, is the decoding's break
+`0.04045` over its slope `12.92` to its seven decimals: within `5e-9` of `0.04045 / 12.92`. The two
+are not equal, which is the sliver `srgbDecode_srgbEncode_lt_in_gap` describes. -/
+theorem srgb_break_literal : |(0.0031308 : ℝ) - 0.04045 / 12.92| ≤ 5e-9 := by
+  rw [abs_le]; constructor <;> norm_num
+
+/-- Each entry of `a` lies within `ε` of the entry of `b`. -/
+@[expose] def Mat3.Near (a b : Mat3 ℝ) (ε : ℝ) : Prop :=
+  |a.row0.x - b.row0.x| ≤ ε ∧ |a.row0.y - b.row0.y| ≤ ε ∧ |a.row0.z - b.row0.z| ≤ ε ∧
+  |a.row1.x - b.row1.x| ≤ ε ∧ |a.row1.y - b.row1.y| ≤ ε ∧ |a.row1.z - b.row1.z| ≤ ε ∧
+  |a.row2.x - b.row2.x| ≤ ε ∧ |a.row2.y - b.row2.y| ≤ ε ∧ |a.row2.z - b.row2.z| ≤ ε
+
+/-- **OpenCV's six-decimal matrix is the formula, correctly rounded.** Each entry the C++ writes
+lies within half a unit of its sixth decimal of the matrix built from the BT.709 primaries and
+OpenCV's D65 (the largest difference is `3.99e-7`). Exact rational arithmetic. -/
+theorem srgbToXyzOpenCV_literal :
+    Mat3.Near srgbToXyzOpenCVLiteral srgbToXyzOpenCV 5e-7 := by
+  simp only [Mat3.Near, srgbToXyzOpenCVLiteral, srgbToXyzOpenCV, rgbToXyz, primaryMatrix,
+    bt709Primaries, opencvD65, xyToXyz, Mat3.mul, Mat3.diag, Mat3.adjInv, Mat3.det_eq,
+    Mat3.mulVec, Vec3.dot, Mat3.col0, Mat3.col1, Mat3.col2, abs_le]
+  norm_num
 
 /-! ## The sRGB curve
 
@@ -324,7 +417,12 @@ theorem srgbEncode_le_of_le {x y : ℝ} (hxy : x ≤ y) : srgbEncode x ≤ srgbE
 /-- A neutral linear sRGB colour has the same relative X, Y and Z: the rows of the matrix add up
 to the white point's values exactly. -/
 theorem linearSrgbToXyzRel_grey (v : ℝ) : linearSrgbToXyzRel ⟨v, v, v⟩ = ⟨v, v, v⟩ := by
-  ext <;> simp only [linearSrgbToXyzRel, linearSrgbLuminance] <;> norm_num <;> ring
+  ext <;> simp only [linearSrgbToXyzRel, linearSrgbLuminance, srgbToXyzOpenCVLiteral, opencvD65,
+    Vec3.dot] <;> norm_num <;> ring
+
+/-- The luminance of a neutral linear sRGB colour `(v, v, v)` is `v`. -/
+theorem linearSrgbLuminance_grey (v : ℝ) : linearSrgbLuminance ⟨v, v, v⟩ = v :=
+  congrArg Vec3.y (linearSrgbToXyzRel_grey v)
 
 /-- A neutral linear sRGB colour has `a* = 0`. -/
 theorem linearSrgbToLab_grey_a (v : ℝ) : (linearSrgbToLab ⟨v, v, v⟩).a = 0 := by
@@ -353,7 +451,7 @@ theorem linearSrgbToLab_white : linearSrgbToLab (⟨1, 1, 1⟩ : Vec3 ℝ) = ⟨
     rw [cbrt_of_nonneg zero_le_one, Real.one_rpow]
   ext
   · rw [linearSrgbToLab_L]
-    simp only [linearSrgbToL, lstarOfY, linearSrgbLuminance, labEpsilon]
+    simp only [linearSrgbToL, linearSrgbLuminance_grey, lstarOfY, labEpsilon]
     norm_num
     rw [h1]
     norm_num

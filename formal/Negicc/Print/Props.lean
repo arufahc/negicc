@@ -93,31 +93,8 @@ theorem diag_add (s t : Vec3 ℝ) : (diag s).add (diag t) = diag ⟨s.x + t.x, s
 theorem identity_eq_diag_one : (identity : Mat3 ℝ) = diag ⟨1, 1, 1⟩ := by
   simp only [identity, Vec3.fill]; norm_num
 
-/-- The determinant expanded along the first row, as `invert3` writes it. -/
-theorem det_eq : det a = a.row0.x * (a.row1.y * a.row2.z - a.row1.z * a.row2.y) -
-    a.row0.y * (a.row1.x * a.row2.z - a.row1.z * a.row2.x) +
-    a.row0.z * (a.row1.x * a.row2.y - a.row1.y * a.row2.x) := by
-  simp [det, adjugate, entry]
-  ring
-
-/-- The adjugate over a non-zero determinant is a right inverse. -/
-theorem mul_adjInv (h : det a ≠ 0) : a.mul (adjInv a) = identity := by
-  ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, mul_div_assoc'] <;>
-    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
-
-/-- The adjugate over a non-zero determinant is a left inverse. -/
-theorem adjInv_mul (h : det a ≠ 0) : (adjInv a).mul a = identity := by
-  ext <;> simp only [mul, adjInv, identity, diag, Vec3.fill, Vec3.dot, col0, col1, col2, div_mul_eq_mul_div] <;>
-    rw [← add_div, ← add_div, div_eq_iff h] <;> rw [det_eq] <;> norm_num <;> ring
-
 theorem adjInv_mul_cancel_left (h : det a ≠ 0) : (adjInv a).mul (a.mul b) = b := by
   rw [← mul_assoc, adjInv_mul a h, identity_mul]
-
-theorem adjInv_mulVec_mulVec (h : det a ≠ 0) (v : Vec3 ℝ) : (adjInv a).mulVec (a.mulVec v) = v := by
-  rw [← mulVec_mul, adjInv_mul a h, mulVec_identity]
-
-theorem mulVec_adjInv_mulVec (h : det a ≠ 0) (v : Vec3 ℝ) : a.mulVec ((adjInv a).mulVec v) = v := by
-  rw [← mulVec_mul, mul_adjInv a h, mulVec_identity]
 
 theorem rowSums_eq_mulVec : a.rowSums = a.mulVec ⟨1, 1, 1⟩ := by
   ext <;> simp only [rowSums, mulVec, Vec3.dot] <;> ring
@@ -197,7 +174,8 @@ theorem det_cat02 : Mat3.det (cat02 : Mat3 ℝ) ≠ 0 := by
   rw [Mat3.det_eq]; simp only [cat02]; norm_num
 
 theorem det_xyzToSrgbLindbloom : Mat3.det (xyzToSrgbLindbloom : Mat3 ℝ) ≠ 0 := by
-  rw [Mat3.det_eq]; simp only [xyzToSrgbLindbloom]; norm_num
+  norm_num [Mat3.det_eq, xyzToSrgbLindbloom, rgbToXyz, primaryMatrix, bt709Primaries, lindbloomD65,
+    xyToXyz, Mat3.mul, Mat3.diag, Mat3.adjInv, Mat3.mulVec, Vec3.dot, Mat3.col0, Mat3.col1, Mat3.col2]
 
 theorem det_bradford : Mat3.det (bradford : Mat3 ℝ) ≠ 0 := by
   rw [Mat3.det_eq]; simp only [bradford]; norm_num
@@ -214,7 +192,7 @@ theorem scaleRowsBy_mulVec (m : Mat3 ℝ) (num den v : Vec3 ℝ)
 theorem toSrgbMatrix_white (w : Vec3 ℝ)
     (hw : (cat02.mulVec w).x ≠ 0 ∧ (cat02.mulVec w).y ≠ 0 ∧ (cat02.mulVec w).z ≠ 0) :
     (toSrgbMatrix w).mulVec w = ⟨1, 1, 1⟩ := by
-  simp only [toSrgbMatrix, Mat3.mulVec_mul]
+  simp only [toSrgbMatrix, toSrgbMatrixOf, Mat3.mulVec_mul]
   rw [scaleRowsBy_mulVec _ _ _ _ hw rfl, Mat3.adjInv_mulVec_mulVec _ det_cat02, Mat3.rowSums_eq_mulVec,
     Mat3.mulVec_adjInv_mulVec _ det_xyzToSrgbLindbloom]
 
@@ -641,12 +619,12 @@ theorem toPaperWhite_y_le (clut : Array ℝ) (hpos : 0 < clut.getD (lightestNode
   have h1 : (n * 3 + 1) % 3 = 1 := by omega
   simp only [toPaperWhite, scaleTriples]
   rw [getD_map_range _ _ _ _ hi]
-  simp only [h1, ↓reduceIte, one_ne_zero, paperWhiteGains, paperBase, pcsWhite, pcsMax]
+  simp only [h1, ↓reduceIte, one_ne_zero, paperWhiteGains, paperBase, pcsWhite_eq, pcsMax]
   have hpm : (0:ℝ) < 1.0 + 32767.0 / 32768.0 := by norm_num
   generalize (1.0 + 32767.0 / 32768.0 : ℝ) = pm at *
   generalize clut.getD (lightestNode clut * 3 + 1) 0.0 = yb at *
   generalize clut.getD (n * 3 + 1) 0.0 = yn at *
-  rw [show (1.0:ℝ) = 1 by norm_num, show yn * (1 / (yb * pm)) * pm = yn / yb by field_simp]
+  rw [show yn * (1 / (yb * pm)) * pm = yn / yb by field_simp]
   exact (div_le_one hpos).mpr hle
 
 /-- **The paper's base becomes the PCS white**: after the scaling, the lightest node's X, Y and Z
@@ -858,7 +836,10 @@ theorem clamp_mem {lo hi : ℝ} (h : lo ≤ hi) (x : ℝ) : lo ≤ clamp x lo hi
   exact ⟨le_min (le_max_right _ _) h, min_le_right _ _⟩
 
 theorem goldenPhi_mem : (0 : ℝ) ≤ goldenPhi ∧ (goldenPhi : ℝ) ≤ 1 := by
-  simp only [goldenPhi]; norm_num
+  have h0 := Real.sqrt_nonneg 5
+  have h5 := Real.sq_sqrt (show (0 : ℝ) ≤ 5 by norm_num)
+  simp only [goldenPhi, sqrt_real]
+  constructor <;> norm_num <;> nlinarith
 
 /-- The golden-section loop's points stay in any interval that holds its starting points: each new
 point is a convex combination of two points it has. -/
@@ -1040,13 +1021,15 @@ theorem aimSolve_residual {m : PrintMaterial ℝ} {e : Vec3 ℝ} (h : aimSolve m
     subst h
     simpa only [fabs_real] using hc
 
-/-- **The mid grey prints as an 18 % grey**: a loaded material prints the printing density 0.70 in
-every channel within `1e-6` of 18 % of its viewing light, in each of X, Y and Z. -/
-theorem loadMaterial_grey {p : SpektrafilmProfile ℝ} {m : PrintMaterial ℝ} (h : loadMaterial p = some m) :
+/-- **The mid grey prints as an 18 % grey**: a material loaded under any viewing lights prints the
+printing density 0.70 in every channel within `1e-6` of 18 % of its viewing light, in each of X, Y
+and Z. -/
+theorem loadMaterialUnder_grey {light : Bool → Array ℝ} {p : SpektrafilmProfile ℝ}
+    {m : PrintMaterial ℝ} (h : loadMaterialUnder light p = some m) :
     |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).x - 0.18 * m.white.x| < 1.0e-6 ∧
     |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).y - 0.18 * m.white.y| < 1.0e-6 ∧
     |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).z - 0.18 * m.white.z| < 1.0e-6 := by
-  unfold loadMaterial at h
+  unfold loadMaterialUnder at h
   dsimp only at h
   split at h
   · rw [Option.map_eq_some_iff] at h
@@ -1055,5 +1038,12 @@ theorem loadMaterial_grey {p : SpektrafilmProfile ℝ} {m : PrintMaterial ℝ} (
     simp only [printOfDensity, exposureOf_grey]
     exact this
   · exact absurd h (by simp)
+
+/-- **The mid grey prints as an 18 % grey** for a material loaded under D50 or D55. -/
+theorem loadMaterial_grey {p : SpektrafilmProfile ℝ} {m : PrintMaterial ℝ} (h : loadMaterial p = some m) :
+    |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).x - 0.18 * m.white.x| < 1.0e-6 ∧
+    |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).y - 0.18 * m.white.y| < 1.0e-6 ∧
+    |(printOfDensity m ⟨printGreyDensity, printGreyDensity, printGreyDensity⟩).z - 0.18 * m.white.z| < 1.0e-6 :=
+  loadMaterialUnder_grey h
 
 end Negicc

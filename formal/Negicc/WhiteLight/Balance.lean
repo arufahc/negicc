@@ -29,25 +29,18 @@ open Scalar
 
 variable {α : Type} [Scalar α]
 
-/-- LibRaw's linear sRGB to Rec.2020 matrix (`LibRaw_constants::rec2020_rgb`). -/
+/-- LibRaw's linear sRGB to Rec.2020 matrix (`LibRaw_constants::rec2020_rgb`) as a formula: XYZ to
+BT.2020 after BT.709 to XYZ, both with Lindbloom's D65, so that each row sums to one. LibRaw does not
+say how it computed its numbers; this formula reproduces all nine within `5.3e-7`, where D65 as the
+chromaticity `(0.3127, 0.3290)` misses by `4.8e-5`. -/
 def rec2020Rgb : Mat3 α :=
+  (Mat3.adjInv (rgbToXyz bt2020Primaries lindbloomD65)).mul (rgbToXyz bt709Primaries lindbloomD65)
+
+/-- LibRaw's matrix as it writes it, to six decimals. Eight entries are the value of `rec2020Rgb`
+correctly rounded; the ninth, `0.329249`, is `5.2e-7` from it (its rounding is `0.329248`), and with
+it each written row sums to one exactly (`rec2020Rgb_literal` in `Negicc.WhiteLight.Props`). -/
+def rec2020RgbLiteral : Mat3 α :=
   ⟨⟨0.627452, 0.329249, 0.043299⟩, ⟨0.069109, 0.919531, 0.011360⟩, ⟨0.016398, 0.088030, 0.895572⟩⟩
-
-/-- The entry `(i, j)` of a matrix, indices taken modulo 3. -/
-def Mat3.entry (m : Mat3 α) (i j : Nat) : α :=
-  let row := match i % 3 with | 0 => m.row0 | 1 => m.row1 | _ => m.row2
-  match j % 3 with | 0 => row.x | 1 => row.y | _ => row.z
-
-/-- The adjugate `det(m) m⁻¹`, entry `(j, i)` the cofactor of `(i, j)`, as `film_base_balance_gains`
-forms it. -/
-def Mat3.adjugate (m : Mat3 α) : Mat3 α :=
-  let cof := fun (i j : Nat) =>
-    m.entry (i + 1) (j + 1) * m.entry (i + 2) (j + 2) - m.entry (i + 1) (j + 2) * m.entry (i + 2) (j + 1)
-  ⟨⟨cof 0 0, cof 1 0, cof 2 0⟩, ⟨cof 0 1, cof 1 1, cof 2 1⟩, ⟨cof 0 2, cof 1 2, cof 2 2⟩⟩
-
-/-- The determinant, along the first row with the adjugate's first column. -/
-def Mat3.det (m : Mat3 α) : α :=
-  m.row0.x * m.adjugate.row0.x + m.row0.y * m.adjugate.row1.x + m.row0.z * m.adjugate.row2.x
 
 /-- The gains on the camera channels that put the base `base` on the profile's base `profileBase`
 (both linear Rec.2020), for the decode's camera matrix `rgbCam` (`film_base_balance_gains`); `none`

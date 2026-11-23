@@ -25,7 +25,8 @@ This module holds that model (`amountsToXyz`, `exposureToXyz`, `printOfDensity`)
 reads (`interp`, `onGrid`, the resampling of a profile's columns to the 1 nm grid,
 `resampleColumn`), the observer under the viewing light (`observerWeights`) and the printer lamp
 (`planckLamp`). Every spectral sum runs over the 401 samples of 380 to 780 nm in order, as the
-C++ loops do.
+C++ loops do: each sample weighted 1, both ends included, the step of 1 nm not multiplied in, since
+each sum is normalised by another on the same grid (`sumRange`; `Negicc.Print.Constants`).
 -/
 
 namespace Negicc
@@ -187,6 +188,9 @@ def observerWhite (obs : Vec3 (Array α)) : Vec3 α :=
 /-- The viewing light of a material: D50 for a paper, D55 for a print film (by the profile's
 `support`). -/
 def viewingLight (paper : Bool) : Array α := if paper then cieD50 else cieD55
+
+/-- The viewing light as the C++'s tables hold it, to six significant digits. -/
+def viewingLightLiteral (paper : Bool) : Array α := if paper then cieD50Literal else cieD55Literal
 
 /-- The printer lamp at sample `i`: Planck's law for a 3200 K blackbody in relative units,
 `1 / (λ⁵ (exp(c₂ / (λ T)) − 1))` with `λ` in metres and `c₂ = 1.4388e-2 m K`. -/
