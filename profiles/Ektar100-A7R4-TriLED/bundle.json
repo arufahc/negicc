@@ -1,5 +1,9 @@
 {
  "camera_name": "ILCE-7RM4",
+ "camera_models": [
+  "ILCE-7RM4",
+  "ILCE-7RM4A"
+ ],
  "crosstalk_profile": {
   "camera_model": "ILCE-7RM4",
   "crosstalk_matrix_raw": [
@@ -26177,7 +26181,7 @@
   "source_sha256": "dae7d4a1b167330edbfe42dad1bc1d4269e1ed120de76b6ddc71832c99c6c645",
   "adapter": "models/dinov3-small_ektar100",
   "exported_by": "negicc-station tools/export_negicc_data.py",
-  "station_commit": "c77fb671c793512f33a58b5657a9a16f7a0edc8e",
+  "station_commit": "61131ad4d9cb638f5761d954d5ced594c783d98b",
   "tilt_form": "own"
  }
 }

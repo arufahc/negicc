@@ -562,6 +562,14 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     parse_profile_stem(raw_path, bundle.key, stock);
   }
   bundle.camera_name = j.value("camera_name", j.value("camera_model", "Unknown"));
+  if (j.contains("camera_models")) {
+    const nlohmann::json& models = j["camera_models"];
+    bool ok = models.is_array();
+    for (size_t i = 0; ok && i < models.size(); ++i) ok = models[i].is_string();
+    if (!ok) throw std::runtime_error("profile bundle " + raw_path + ": camera_models is not a list of model names");
+    for (const auto& m : models) bundle.camera_models.push_back(m.get<std::string>());
+    bundle.has_camera_models = true;
+  }
   bundle.normalization_target = j.value("normalization_target", 55000.0);
 
   // The density export's matrices and the light's record (profile_bundle.h); absent from older bundles.
@@ -718,6 +726,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         // An exported bundle: a file beside bundle.json, read through the bundle's own reader.
         const std::string file = e["icc_profile"].get<std::string>();
         p.icc_in_file = true;
+        p.icc_file = file;
         p.read_icc = [read_file, file, where](std::vector<uint8_t>& icc, std::string& err) {
           if (read_file && read_file(file, icc) && icc.size() >= 132) return true;
           return err = where + ": cannot read print ICC " + file, false;
@@ -932,6 +941,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         throw std::runtime_error("profile bundle " + raw_path + ": cannot read ICC profile " + icc_name +
                                  " of target " + tgt.name);
       }
+      tgt.icc_file = icc_name;
       have_icc = true;
     }
     if (have_icc) {

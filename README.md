@@ -67,6 +67,13 @@ search, the tone stage and (on white light) the curve fit still run, holding wha
 Next to `out.tif` it writes `out.tif.json` with everything it decided. `--brightness`, `--tint` and `--warmth`
 adjust the result from that file without running the model again.
 
+Each conversion prints a block headed `Used:`, which `out.tif.json` keeps as `used`. In the pipeline's order it names
+the profile set (built in or from a path), the camera the set records and the scan's camera (make and model), and for
+a narrow-band set the camera models its crosstalk matrix holds for and whether the scan's model is one; then the decode
+(camera RGB, or LibRaw's white-light decode to linear Rec.2020), the flat field, the crop in sensor pixels and where it
+came from, the crosstalk correction (its nine numbers and their source, or why there is none), the film base and its
+source, and the ICC profile the picture renders through: the bracket's, or the print's.
+
 ### The film base from a capture
 
 `--film_base base.ARW` reads the film base from a capture that shows unexposed film: a whole frame of it, or a
@@ -103,6 +110,15 @@ the film base found in the scan itself, so your lamp does not have to match the 
 
 With a narrow-band RGB LED (`--light_source tri`) each colour of light falls on one dye, which separates the layers
 better. One RAW is enough. Pixel-shift sets and three separate R, G and B frames also work.
+
+The camera's channels overlap, so a narrow-band profile set carries a crosstalk matrix measured on the camera the
+profiles were made with. Its `bundle.json` lists the camera models the matrix holds for (`camera_models`; the shipped
+sets list `ILCE-7RM4` and `ILCE-7RM4A`, the A7R IV and IVA), and `neg_process` compares the RAW's model with that list
+exactly. The only case that turns the correction off is a RAW that states a camera model the set's list does not
+contain; the log says so and why, and `-r`, `-g` and `-b` give the rows of a matrix measured on that camera. An input
+that states no model (a TIFF) and a set from before the list are not compared, and take the set's matrix. Three
+separate frames need no correction. A white-light set has no matrix and lists no models, and no camera is compared for
+it.
 
 Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
 turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than

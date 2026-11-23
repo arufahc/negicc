@@ -518,6 +518,8 @@ bool write_json_sidecar(const Sidecar& sc) {
                  {"camera", camera},
                  {"iso", sc.proc ? num(sc.proc->imgdata.other.iso_speed) : ordered_json(0)},
                  {"shutter", sc.proc ? num(sc.proc->imgdata.other.shutter) : ordered_json(0)}};
+  // What the conversion used, as its log's block says it (np_pipeline.cc conversion_used).
+  j["used"] = sc.used_json.empty() ? ordered_json(nullptr) : ordered_json::parse(sc.used_json, nullptr, false);
 
   ordered_json geom;
   geom["sensor_size"] = {sc.orig_w, sc.orig_h};

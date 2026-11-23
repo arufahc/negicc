@@ -98,6 +98,7 @@ struct BundleTarget {
   float tgt_min_g = 0.0f;
   float tgt_max_g = 0.0f;
   std::vector<uint8_t> icc_bytes;
+  std::string icc_file;   // the ICC file a split bundle names for the bracket; empty: inline in the bundle
   ParsedFilmProfile film_prof;
 
   // For the conversion parameter search (multi_target_optimizer.h): the bracket's camera exposure
@@ -192,6 +193,7 @@ struct GreyBalanceCurves {
 struct BundlePrint {
   std::string id, name, reference_bracket, spektrafilm_sha256, icc_sha256;
   bool icc_in_file = false;
+  std::string icc_file;   // the file beside bundle.json, when icc_in_file
   std::function<bool(std::vector<uint8_t>& icc, std::string& err)> read_icc;
 };
 
@@ -200,6 +202,11 @@ struct ProfileBundle {
   std::string key;          // bundle key ("Portra400-A7R4-TriLED"): the export record's, else parsed from path
   std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
+  // The camera models the bundle holds for (camera_models), as a RAW records them (LibRaw's imgdata.idata.model). A
+  // camera_raw_rgb bundle's crosstalk correction is not applied to a RAW that states a model not among them, compared
+  // exactly (np_pipeline.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
+  std::vector<std::string> camera_models;
+  bool has_camera_models = false;
   InputSpace input_space = InputSpace::kCameraRawRgb;
   // The crosstalk correction of a camera_raw_rgb bundle; identity (has_crosstalk false) for rec2020_linear.
   float crosstalk_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};

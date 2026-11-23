@@ -179,6 +179,11 @@ camera RGB over a central disc under LED `j`, each column is divided by its diag
 (`bundle.json`: `crosstalk_profile.crosstalk_correction_matrix`; `-r`, `-g`, `-b` replace it). White light has no
 separate LEDs to unmix, and `X` is the identity.
 
+`X` holds for the camera it was measured on. `bundle.json` lists the camera models it holds for (`camera_models`, as
+LibRaw reads a RAW's model). A scan that states a model not on the list takes the identity in place of the bundle's
+rows (the rows `-r`, `-g` and `-b` give are kept), and the conversion says so. A scan that states no model, or a bundle
+without the list, is not compared and takes `X`. A white-light bundle has no `X`, lists no models and is not compared.
+
 The measured matrix is used rather than one computed from the camera's published response curves and the LEDs'
 spectra: it is of this camera and this light and needs no spectral data of the camera. The two agree within 8 % on
 four of the six terms; the red pixel's two terms differ more.
