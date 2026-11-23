@@ -75,5 +75,8 @@ Rules for any OpenMP parallel region added to this repository:
   a conversion takes 12.1 s at 8 threads, 10.3 s at 16, 9.1 s at 32 and 7.7 s at 96, and uses 57, 62, 73 and 155 CPU
   seconds; OpenMP's own default, every hardware thread, is slower than 96. A Jetson Orin Nano has 6 cores, so its
   count stays 6.
+- **The network on the CPU runs with the program's thread count too.** ONNX Runtime keeps its own threads; a thread
+  count of 0 given to `DinoV3Engine` (the default for the backbone, and what `neg_process` gives the adapter) takes
+  the program's count, so nothing in the program runs with a number of its own. Do not give a runtime a fixed count.
 - **Batch runs set `OMP_NUM_THREADS` for every process,** so that processes times threads stays within the machine's
   cores.

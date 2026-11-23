@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include <omp.h>
 #include <onnxruntime_cxx_api.h>
 
 #include "dinov3_preprocess.h"
@@ -428,6 +429,7 @@ public:
     }
 
     void set_options(int num_threads) {
+        if (num_threads <= 0) num_threads = omp_get_max_threads();  // the program's thread count
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
         opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
@@ -516,6 +518,7 @@ private:
 class OrtAdapterRunner : public DinoV3AdapterRunner {
 public:
     OrtAdapterRunner(const void* onnx_data, size_t onnx_size, int num_threads) : bytes_(onnx_size) {
+        if (num_threads <= 0) num_threads = omp_get_max_threads();  // the program's thread count
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
         opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");

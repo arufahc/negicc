@@ -1295,7 +1295,7 @@ int prepare(const Options& o, Setup& s) {
       };
       if (!o.dino_adapter.empty()) {
         // The record names the file that ran: adapter.engine behind a TensorRT backbone, adapter.onnx otherwise.
-        s.engine.load_adapter_file(o.dino_adapter);
+        s.engine.load_adapter_file(o.dino_adapter, 0);  // 0: the program's thread count, as the backbone
         s.head_path[0] = s.engine.adapter_path();
         s.head_fp[0].ok = file_fingerprint(s.head_path[0], s.head_fp[0].size, s.head_fp[0].crc);
       } else {
@@ -1314,7 +1314,8 @@ int prepare(const Options& o, Setup& s) {
         }
         // USE_CUDA=1 builds carry the adapter's TensorRT engine beside it (make dinov3_engine).
         const EmbeddedFile* ae = find_embedded_file(adapter_dir + "/adapter.engine");
-        s.engine.set_adapter(a->data, a->size, adapter_dir, 1, ae ? ae->data : nullptr, ae ? ae->size : 0);
+        // 0: the program's thread count, as the backbone.
+        s.engine.set_adapter(a->data, a->size, adapter_dir, 0, ae ? ae->data : nullptr, ae ? ae->size : 0);
         // The record names what ran: the engine on the GPU, the .onnx on the CPU.
         const EmbeddedFile* ran = s.engine.adapter_on_device() ? ae : a;
         s.head_path[0] = std::string("[built-in] ") + ran->name;
