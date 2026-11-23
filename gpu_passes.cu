@@ -393,4 +393,356 @@ void gpu_highlight_clip(const HighlightClipArgs& a) {
     }
 }
 
+
+namespace {
+void require_device() {
+    if (!gpu_device_available()) throw GpuError("no CUDA device runs this build's kernels");
+}
+}  // namespace
+
+// ---- The full-size decode on the device -----------------------------------------------------------------------------
+// The CUDA twins of cpu_preview_debayer, cpu_grain_aware_debayer and cpu_pixel_shift_merge (rgb_view.cc): one output
+// pixel per thread, the same arithmetic. Every pointer in the arguments is device memory (the mosaics, the flat
+// field's tables, rgb_out).
+namespace {
+
+__device__ __forceinline__ void map_inverse_geometry_dev(
+    int x_dst, int y_dst, int dst_w, int dst_h,
+    int rw, int rh, int rot_cw, bool hflip, bool vflip,
+    int& x_rel, int& y_rel)
+{
+    rot_cw = ((rot_cw % 360) + 360) % 360;
+    if (rot_cw == 180) {
+        hflip = !hflip;
+        vflip = !vflip;
+        rot_cw = 0;
+    }
+    int x1 = hflip ? (dst_w - 1 - x_dst) : x_dst;
+    int y1 = vflip ? (dst_h - 1 - y_dst) : y_dst;
+
+    if (rot_cw == 0) {
+        x_rel = x1;
+        y_rel = y1;
+    } else if (rot_cw == 90) {
+        x_rel = y1;
+        y_rel = rh - 1 - x1;
+    } else { // 270
+        x_rel = rw - 1 - y1;
+        y_rel = x1;
+    }
+}
+
+__device__ __forceinline__ int get_bayer_color_dev(int r, int c, unsigned int filters) {
+    return (filters >> (((((unsigned int)r << 1) & 14u) | ((unsigned int)c & 1u)) << 1)) & 3;
+}
+
+__device__ __forceinline__ float get_px_refl_dev(const uint16_t* bayer, int r, int c, int h, int w, size_t pitch) {
+    int r_refl = (r < 0) ? -r : (r >= h ? 2 * (h - 1) - r : r);
+    int c_refl = (c < 0) ? -c : (c >= w ? 2 * (w - 1) - c : c);
+    r_refl = max(0, min(h - 1, r_refl));
+    c_refl = max(0, min(w - 1, c_refl));
+    return (float)bayer[(size_t)r_refl * pitch + c_refl];
+}
+
+__device__ __forceinline__ float reconstruct_green_soft_dev(const uint16_t* m, int r, int c, int h, int w,
+                                                            size_t pitch, float white, float eps) {
+    if ((r + c) & 1) {
+        return get_px_refl_dev(m, r, c, h, w, pitch);
+    }
+    float c_center = get_px_refl_dev(m, r, c, h, w, pitch);
+    float g_up     = get_px_refl_dev(m, r - 1, c, h, w, pitch);
+    float g_down   = get_px_refl_dev(m, r + 1, c, h, w, pitch);
+    float g_left   = get_px_refl_dev(m, r, c - 1, h, w, pitch);
+    float g_right  = get_px_refl_dev(m, r, c + 1, h, w, pitch);
+
+    float c_up2    = get_px_refl_dev(m, r - 2, c, h, w, pitch);
+    float c_down2  = get_px_refl_dev(m, r + 2, c, h, w, pitch);
+    float c_left2  = get_px_refl_dev(m, r, c - 2, h, w, pitch);
+    float c_right2 = get_px_refl_dev(m, r, c + 2, h, w, pitch);
+
+    float dv = fabsf(g_up - g_down) + fabsf(2.0f * c_center - c_up2 - c_down2);
+    float dh = fabsf(g_left - g_right) + fabsf(2.0f * c_center - c_left2 - c_right2);
+
+    float g_v = 0.5f * (g_up + g_down) + 0.25f * (2.0f * c_center - c_up2 - c_down2);
+    float g_h = 0.5f * (g_left + g_right) + 0.25f * (2.0f * c_center - c_left2 - c_right2);
+
+    float wv = 1.0f / (eps + dv * dv);
+    float wh = 1.0f / (eps + dh * dh);
+    float g_est = (wv * g_v + wh * g_h) / (wv + wh);
+    return fmaxf(0.0f, fminf(white, g_est));
+}
+
+__global__ void preview_debayer_kernel(PreviewDebayerArgs a) {
+    int x2 = blockIdx.x * blockDim.x + threadIdx.x;
+    int y2 = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x2 >= a.dst_w || y2 >= a.dst_h) return;
+
+    const int half_rw = a.rw / 2;
+    const int half_rh = a.rh / 2;
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
+
+    int x_rel = 0, y_rel = 0;
+    map_inverse_geometry_dev(x2, y2, a.dst_w, a.dst_h, half_rw, half_rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
+    int r = a.ry + y_rel * 2;
+    int c = a.rx + x_rel * 2;
+
+    uint16_t s00 = (uint16_t)get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+    uint16_t s01 = (uint16_t)get_px_refl_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch);
+    uint16_t s10 = (uint16_t)get_px_refl_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch);
+    uint16_t s11 = (uint16_t)get_px_refl_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+
+    int col00 = get_bayer_color_dev(r, c, a.filters);
+    int col01 = get_bayer_color_dev(r, c + 1, a.filters);
+    int col10 = get_bayer_color_dev(r + 1, c, a.filters);
+    int col11 = get_bayer_color_dev(r + 1, c + 1, a.filters);
+
+    // Both greens averaged, as negicc's cpu_preview_debayer and RgbView::from_cfa_half do.
+    uint16_t R = 0, B = 0;
+    uint32_t G_sum = 0;
+    const uint16_t samples[4] = {s00, s01, s10, s11};
+    const int cols[4] = {col00, col01, col10, col11};
+    for (int k = 0; k < 4; ++k) {
+        if (cols[k] & 1) G_sum += samples[k];
+        else if (cols[k] == 0) R = samples[k];
+        else B = samples[k];
+    }
+    uint16_t G = (uint16_t)(G_sum >> 1);
+    uint16_t px[3] = {R, G, B};
+    if (a.flat.gain) {
+        flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+    }
+
+    long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
+    a.rgb_out[dst_idx + 0] = px[0];
+    a.rgb_out[dst_idx + 1] = px[1];
+    a.rgb_out[dst_idx + 2] = px[2];
+}
+
+__global__ void grain_aware_debayer_kernel(GrainAwareDebayerArgs a) {
+    int x2 = blockIdx.x * blockDim.x + threadIdx.x;
+    int y2 = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x2 >= a.dst_w || y2 >= a.dst_h) return;
+
+    int x_rel = 0, y_rel = 0;
+    map_inverse_geometry_dev(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
+    int c = a.rx + x_rel;
+    int r = a.ry + y_rel;
+
+    const float k = 16.0f;
+    const float eps = (a.eps > 0.0f) ? a.eps : 4096.0f;
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
+
+    float G = reconstruct_green_soft_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+
+    bool r_even = ((r & 1) == 0);
+    bool c_even = ((c & 1) == 0);
+
+    float R = 0.0f;
+    float B = 0.0f;
+
+    float c_center = get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+    bool near_clip = (c_center >= (a.white_level - 64.0f)) || (G >= (a.white_level - 64.0f));
+
+    if (near_clip) {
+        if (r_even && c_even) {
+            R = get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+            float b00 = get_px_refl_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+            float b01 = get_px_refl_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+            float b10 = get_px_refl_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+            float b11 = get_px_refl_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+            B = 0.25f * (b00 + b01 + b10 + b11);
+        } else if (!r_even && !c_even) {
+            B = get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+            float r00 = get_px_refl_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+            float r01 = get_px_refl_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+            float r10 = get_px_refl_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+            float r11 = get_px_refl_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+            R = 0.25f * (r00 + r01 + r10 + r11);
+        } else if (r_even && !c_even) {
+            R = 0.5f * (get_px_refl_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                        get_px_refl_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+            B = 0.5f * (get_px_refl_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                        get_px_refl_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+        } else {
+            R = 0.5f * (get_px_refl_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                        get_px_refl_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+            B = 0.5f * (get_px_refl_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                        get_px_refl_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+        }
+    } else {
+        if (r_even && c_even) {
+            R = get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+        } else if (r_even && !c_even) {
+            float g_l = reconstruct_green_soft_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float g_r = reconstruct_green_soft_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float rl = (get_px_refl_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+            float rr = (get_px_refl_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+            R = (G + k) * (0.5f * (rl + rr)) - k;
+        } else if (!r_even && c_even) {
+            float g_u = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float g_d = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float ru = (get_px_refl_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+            float rd = (get_px_refl_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+            R = (G + k) * (0.5f * (ru + rd)) - k;
+        } else {
+            float g00 = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g01 = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g10 = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g11 = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float r00 = (get_px_refl_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
+            float r01 = (get_px_refl_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
+            float r10 = (get_px_refl_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
+            float r11 = (get_px_refl_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+            R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
+        }
+
+        if (!r_even && !c_even) {
+            B = get_px_refl_dev(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+        } else if (!r_even && c_even) {
+            float g_l = reconstruct_green_soft_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float g_r = reconstruct_green_soft_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float bl = (get_px_refl_dev(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+            float br = (get_px_refl_dev(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+            B = (G + k) * (0.5f * (bl + br)) - k;
+        } else if (r_even && !c_even) {
+            float g_u = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float g_d = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+            float bu = (get_px_refl_dev(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+            float bd = (get_px_refl_dev(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+            B = (G + k) * (0.5f * (bu + bd)) - k;
+        } else {
+            float g00 = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g01 = reconstruct_green_soft_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g10 = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float g11 = reconstruct_green_soft_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w,
+                                                   pitch, a.white_level, eps);
+            float b00 = (get_px_refl_dev(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g00 + k);
+            float b01 = (get_px_refl_dev(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g01 + k);
+            float b10 = (get_px_refl_dev(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) / (g10 + k);
+            float b11 = (get_px_refl_dev(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) / (g11 + k);
+            B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
+        }
+    }
+
+    uint16_t px[3] = {(uint16_t)roundf(fmaxf(0.0f, fminf(65535.0f, R))),
+                      (uint16_t)roundf(fmaxf(0.0f, fminf(65535.0f, G))),
+                      (uint16_t)roundf(fmaxf(0.0f, fminf(65535.0f, B)))};
+    if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+    long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
+    a.rgb_out[dst_idx + 0] = px[0];
+    a.rgb_out[dst_idx + 1] = px[1];
+    a.rgb_out[dst_idx + 2] = px[2];
+}
+
+__global__ void pixel_shift_merge_kernel(PixelShiftMergeArgs a) {
+    int x2 = blockIdx.x * blockDim.x + threadIdx.x;
+    int y2 = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x2 >= a.dst_w || y2 >= a.dst_h) return;
+
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
+    int x_rel = 0, y_rel = 0;
+    map_inverse_geometry_dev(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
+    int c = a.rx + x_rel;
+    int r = a.ry + y_rel;
+
+    uint16_t s0 = (uint16_t)get_px_refl_dev(a.bayer_f0, r,     c,     a.src_h, a.src_w, pitch);
+    uint16_t s1 = (uint16_t)get_px_refl_dev(a.bayer_f1, r - 1, c,     a.src_h, a.src_w, pitch);
+    uint16_t s2 = (uint16_t)get_px_refl_dev(a.bayer_f2, r - 1, c + 1, a.src_h, a.src_w, pitch);
+    uint16_t s3 = (uint16_t)get_px_refl_dev(a.bayer_f3, r,     c + 1, a.src_h, a.src_w, pitch);
+
+    const uint16_t samples[4] = {s0, s1, s2, s3};
+    const int coords[4][2] = {{r, c}, {r - 1, c}, {r - 1, c + 1}, {r, c + 1}};
+
+    uint16_t R = 0, B = 0;
+    uint32_t G_sum = 0;
+    int g_count = 0;
+    bool g_clipped = false;
+    for (int i = 0; i < 4; ++i) {
+        int col = get_bayer_color_dev(coords[i][0], coords[i][1], a.filters);
+        if (col & 1) {
+            G_sum += samples[i];
+            g_count++;
+            if (samples[i] >= (uint16_t)a.white_level) g_clipped = true;
+        } else if (col == 0) {
+            R = samples[i];
+        } else {
+            B = samples[i];
+        }
+    }
+
+    uint16_t G = (g_count > 0) ? (uint16_t)(G_sum / g_count) : 0;
+    if (g_clipped || G >= (uint16_t)a.white_level) G = (uint16_t)a.white_level;
+    if (R >= (uint16_t)a.white_level) R = (uint16_t)a.white_level;
+    if (B >= (uint16_t)a.white_level) B = (uint16_t)a.white_level;
+
+    uint16_t px[3] = {R, G, B};
+    if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+    long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
+    a.rgb_out[dst_idx + 0] = px[0];
+    a.rgb_out[dst_idx + 1] = px[1];
+    a.rgb_out[dst_idx + 2] = px[2];
+}
+
+}  // namespace
+
+void gpu_preview_debayer(const PreviewDebayerArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("gpu_preview_debayer: rot_cw must be a multiple of 90");
+    }
+    require_device();
+    std::lock_guard<std::mutex> lock(g_op_mutex);
+    dim3 block(16, 16);
+    dim3 grid((a.dst_w + block.x - 1) / block.x, (a.dst_h + block.y - 1) / block.y);
+    preview_debayer_kernel<<<grid, block>>>(a);
+    NEGICC_CUDA_CHECK(cudaGetLastError());
+    NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+inline bool is_rggb_pattern_host(unsigned int filters) {
+    const int c10 = negicc::bayer_color_at(1, 0, filters);
+    return (negicc::bayer_color_at(0, 0, filters) == 0 &&
+            negicc::bayer_color_at(0, 1, filters) == 1 &&
+            (c10 == 1 || c10 == 3) &&
+            negicc::bayer_color_at(1, 1, filters) == 2);
+}
+
+void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("gpu_grain_aware_debayer: rot_cw must be a multiple of 90");
+    }
+    if (!is_rggb_pattern_host(a.filters)) {
+        throw std::invalid_argument("gpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
+    }
+    require_device();
+    std::lock_guard<std::mutex> lock(g_op_mutex);
+    dim3 block(16, 16);
+    dim3 grid((a.dst_w + block.x - 1) / block.x, (a.dst_h + block.y - 1) / block.y);
+    grain_aware_debayer_kernel<<<grid, block>>>(a);
+    NEGICC_CUDA_CHECK(cudaGetLastError());
+    NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("gpu_pixel_shift_merge: rot_cw must be a multiple of 90");
+    }
+    require_device();
+    std::lock_guard<std::mutex> lock(g_op_mutex);
+    dim3 block(16, 16);
+    dim3 grid((a.dst_w + block.x - 1) / block.x, (a.dst_h + block.y - 1) / block.y);
+    pixel_shift_merge_kernel<<<grid, block>>>(a);
+    NEGICC_CUDA_CHECK(cudaGetLastError());
+    NEGICC_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 }  // namespace negicc

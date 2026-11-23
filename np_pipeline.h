@@ -38,6 +38,7 @@
 
 #include <array>
 #include <map>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -175,6 +176,7 @@ struct MosaicInput {
   unsigned filters = 0;                  // LibRaw's CFA pattern
   float white_level = 65535.0f;          // the clipping level above black
   negicc::FlatSampleArgs flat;           // the flat field at full size (empty without one)
+  const negicc::FlatTables* flat_tables = nullptr;   // the tables flat points into (for a copy on a device)
 };
 
 // The scan as data for a backend: an RGB image, `channels` samples a pixel (3, or LibRaw's 4).
@@ -211,21 +213,45 @@ class Backend {
   virtual ~Backend() = default;
   // The full-resolution RGB of the region of a mosaic, turned and flipped, into rgb_out (3 samples a pixel,
   // dst_w x dst_h: w x h, or h x w when turned by 90 or 270 degrees): the grain-aware debayer of one frame, or the
-  // merge of a pixel shift's four, with the flat field.
-  virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out) = 0;
+  // merge of a pixel shift's four, with the flat field. mosaics_done is called once the backend reads in's frames no
+  // more: it frees them. A backend that copies them elsewhere calls it as soon as they are copied, so that the two
+  // copies are not held while the output is made; the caller calls it after the render in any case.
+  virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
+                      const std::function<void()>& mosaics_done) = 0;
   // Converts img in place to the output encoding through the shared pixel pipeline (color_pipeline.h) of pc: the
   // input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the shoulder. ENCODE_NONE stops
   // after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
   virtual void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                        const RgbInput& img) = 0;
+  // Where the last render and the last convert ran: "cpu" or "gpu" (the record's "full_size").
+  const char* render_ran = "cpu";
+  const char* convert_ran = "cpu";
 };
 
 class CpuBackend : public Backend {
  public:
-  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out) override;
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
+              const std::function<void()>& mosaics_done) override;
   void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                const RgbInput& img) override;
 };
+
+// The same on a CUDA device: the debayer or the merge by gpu_grain_aware_debayer and gpu_pixel_shift_merge, and the
+// conversion to sRGB or linear sRGB by the search's GPU render (GpuRenderer), which computes convert_pixel as the CPU
+// does. The mosaics, the flat field's tables and the picture are copied to the device and the result copied back.
+// Another output encoding, or an image that is not three samples a pixel, keeps the CPU's conversion: a custom
+// profile's last step is Little CMS.
+class GpuBackend : public CpuBackend {
+ public:
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out,
+              const std::function<void()>& mosaics_done) override;
+  void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+               const RgbInput& img) override;
+};
+
+// The backend of the full-size steps: the GPU's on a USE_CUDA=1 build with a device that runs its kernels, unless
+// --dino_backend cpu, which keeps everything on the CPU.
+std::unique_ptr<Backend> make_backend(const Options& o);
 
 struct LibRawDeleter {
   void operator()(LibRaw* p) const;
@@ -330,6 +356,10 @@ struct Scan {
   // The bracket analysis on the half-size frame outside Auto's time: the knobs and the roll-off.
   double t_analysis_ms = 0.0;
   double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
+  // Where the full-size steps ran, "cpu" or "gpu": the debayer or the merge of a mosaic (the CPU's for any other
+  // decode), and the conversion to the output encoding.
+  const char* full_size_decode = "cpu";
+  const char* full_size_conversion = "cpu";
 
   // The scan's exposure: EXIF (of exposure_file, the first input), else LibRaw's, else 1/8 s at ISO 100 (warned once).
   std::string exposure_file;

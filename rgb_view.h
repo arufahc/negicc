@@ -56,7 +56,7 @@ struct RgbView {
     const uint16_t* r_ptr = nullptr;
     const uint16_t* g_ptr = nullptr;
     // The second green of a Bayer 2x2 cell: half-size views average it with g_ptr ((G1 + G2) >> 1), as
-    // cpu_preview_debayer and negicc-station's CUDA preview kernel do. Null for X-Trans and interleaved RGB.
+    // cpu_preview_debayer and gpu_preview_debayer do. Null for X-Trans and interleaved RGB.
     // film_image_from_cfa (the frame detector's input) still takes G1 only.
     const uint16_t* g2_ptr = nullptr;
     const uint16_t* b_ptr = nullptr;
@@ -401,6 +401,12 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 // -----------------------------------------------------------------------------------------------------------------
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+
+// The same three on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; they throw GpuError without one). Every pointer in
+// the arguments is device memory: the mosaics, the flat field's tables and rgb_out. The caller puts them there.
+void gpu_preview_debayer(const PreviewDebayerArgs& a);
+void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
+void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 
 // -----------------------------------------------------------------------------------------------------------------
 // The program's thread count when none is given: the smaller of kDefaultThreadCap and the physical cores this process
