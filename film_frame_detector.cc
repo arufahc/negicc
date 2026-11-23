@@ -2131,6 +2131,10 @@ bool detect_one_format(const FilmImage& im, const WorkImage& wi, const Canvas& c
         }
         ++x;
       }
+      // The run's first column can itself end it: with a gap of one column, a column at 50% picture smoothed but
+      // under 30% raw is a start and an end at once. It is an empty run; go on from the next column, or the scan
+      // would begin the same run at the same column again without end.
+      if (x == a) ++x;
       if (b - a >= std::max(3, (int)(0.12f * L_exp))) segs.push_back({a, b});
     }
   }
