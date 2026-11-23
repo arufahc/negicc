@@ -144,6 +144,7 @@ struct Sidecar {
   const ToneStagePlan* tone_stage_plan = nullptr;
   const TonePlanCurve* tone_plan = nullptr;
   double tone_share = 1.0;
+  double tone_shadow_share = 1.0;
   bool tone_applied = false;
   const ToneClip* tone_clip = nullptr;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);

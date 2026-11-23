@@ -3225,7 +3225,6 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   scan.tone_applied = false;
   const bool tone_here = s.has_tone && out.encoding == ENCODE_SRGB;
   LibRaw* tp = scan.proc.get();
-  const size_t npx = (size_t)tp->imgdata.sizes.iwidth * tp->imgdata.sizes.iheight;
   uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
   const int stride = !scan.rgb3.empty() ? 3 : 4;
   const ToneStagePlan& plan = s.tone_stage;
@@ -3235,16 +3234,19 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     // The clip check on a sparse sample of the input through the kernel, before the one full conversion.
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
+    scan.tone_shadow_share = 1.0;
     const double t_tone_0 = omp_get_wtime();
     tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride, nullptr, &scan.tone_clip.white_before,
                      &scan.tone_clip.black_before);
     if (tone_plan_here) {
-      // This run's plan: its highlight move capped where it would clip this image (tone_plan_for_image).
+      // This run's plan: its moves scaled where they would clip this image at either end (tone_plan_for_image).
       scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
                                             plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
                                             export_pc, c.merged_matrix,
-                                            rgb, iw, ih, stride, scan.tone_clip.white_before, s.tone_plan.curve,
-                                            s.tone_plan.targets, &scan.tone_targets, &scan.tone_share);
+                                            rgb, iw, ih, stride, scan.tone_clip.white_before,
+                                            scan.tone_clip.black_before, s.tone_plan.curve,
+                                            s.tone_plan.targets, &scan.tone_targets, &scan.tone_share,
+                                            &scan.tone_shadow_share);
     }
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;
@@ -3254,22 +3256,29 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     tone_pc.tone.n = kToneTableSize;
     backend.convert(out, tone_pc, c.merged_matrix, scan.image());
     const double t_tone_2 = omp_get_wtime();
+    // The shares after the stage on every pixel of the inner crop, as the clip check counts them.
+    const negicc::InnerCrop tic = negicc::compute_inner_crop(iw, ih, kToneClipCrop);
     long long wa = 0, ka = 0;
 #pragma omp parallel for schedule(static) reduction(+ : wa, ka)
-    for (long long i = 0; i < (long long)npx; ++i) {
-      const uint16_t* px = rgb + (size_t)i * stride;
-      wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
-      ka += (px[0] == 0 && px[1] == 0 && px[2] == 0);
+    for (int y = tic.y0; y < tic.y0 + tic.h; ++y) {
+      for (int x = tic.x0; x < tic.x0 + tic.w; ++x) {
+        const uint16_t* px = rgb + ((size_t)y * iw + x) * stride;
+        wa += (px[0] == 65535 || px[1] == 65535 || px[2] == 65535);
+        ka += (px[0] == 0 || px[1] == 0 || px[2] == 0);
+      }
     }
-    if (npx) {
-      scan.tone_clip.white_after = (double)wa / npx;
-      scan.tone_clip.black_after = (double)ka / npx;
+    const long long tn = (long long)tic.w * tic.h;
+    if (tn > 0) {
+      scan.tone_clip.white_after = (double)wa / tn;
+      scan.tone_clip.black_after = (double)ka / tn;
     }
     scan.tone_applied = true;
-    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); white clip %.4f%% -> "
-             "%.4f%%; %.0f ms checking the clipping, %.0f ms converting with the curve\n",
+    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); inner crop at white "
+             "%.4f%% -> %.4f%%, at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting with the "
+             "curve\n",
              q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
-             100.0 * scan.tone_clip.white_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
+             100.0 * scan.tone_clip.white_after, 100.0 * scan.tone_clip.black_before, 100.0 * scan.tone_clip.black_after,
+             1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
   } else {
     backend.convert(out, export_pc, c.merged_matrix, scan.image());
   }
@@ -3521,6 +3530,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
   sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
   sc.tone_share = scan.tone_share;
+  sc.tone_shadow_share = scan.tone_shadow_share;
   sc.tone_applied = scan.tone_applied;
   sc.tone_clip = &scan.tone_clip;
   if (!s.input_curves_source.empty()) {

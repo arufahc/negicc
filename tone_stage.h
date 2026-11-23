@@ -60,12 +60,20 @@ constexpr double kTonePrior = 0.02;
 // from several white points and keeps the lowest cost, so it does not depend on which basin a single start falls into.
 constexpr double kToneTopSlope = 0.07;
 constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
-// White clipping: where the curve would clip more than kToneClipAllowance more of the export's pixels white than the
-// conversion without it, the highlight and range moves are scaled down to the largest of kToneClipShares that keeps
-// it within the allowance, measured on every 8th pixel each way of the whole unconverted image (film borders included)
-// through the kernel. When none does, the share that clips least is kept.
+// Clipping at either end: a curve is kept when it puts no more than kToneClipAllowance more of the frame's inner crop
+// (kToneClipCrop of each side) at white (a channel at the 16-bit maximum) than the conversion without it, and no more
+// than kToneClipAllowance more at black (a channel at 0), each end against its own share before the stage. The moves
+// are scaled down to the first of kToneClipShares at which both ends hold: the highlight and range moves always, the
+// shadow move only when the black end fails with the full shadow move (a lift of the shadows is never scaled away).
+// When no share holds, the last (no highlight or range move) is kept. The shares are measured on a sample of the
+// image the export converts, through the kernel: the 2 x 2 pixels at the origin of every kToneClipSampleStep x
+// kToneClipSampleStep block, so the sample covers each phase of a 2 x 2 colour mosaic the image was demosaiced from.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
+constexpr int kToneClipSampleStep = 8;
+// The inner crop the clip check reads: the search's (ParamSearchOptions::crop_ratio), the area the plan's preview
+// shows.
+constexpr float kToneClipCrop = 0.90f;
 
 struct ToneCurve {
     double black = 0.0, white = 100.0, gamma = 1.0, contrast = 1.0;
@@ -82,8 +90,9 @@ struct ToneTargets {
     double L2 = 0, L50 = 0, L98 = 0, range = 0;
 };
 
-// The share of the export's pixels clipped white (a channel at the maximum) and black (every channel 0): before the
-// stage on the clip check's sample of the conversion without the curve, after it on the whole export.
+// The share of the frame's inner crop (kToneClipCrop) at white (a channel at the 16-bit maximum) and at black (a
+// channel at 0): before the stage on the clip check's sample of the conversion without the curve, after it on every
+// pixel of the export.
 struct ToneClip {
     double white_before = 0, white_after = 0, black_before = 0, black_after = 0;
 };
@@ -94,6 +103,9 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n);
 // The plan at a highlight share: the targets and the curve solved for them.
 ToneCurve tone_plan(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                     double highlight_share, ToneTargets* targets);
+// The same with the shadow move scaled by its own share (tone_plan's moves it all the way).
+ToneCurve tone_plan_shares(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
+                           double highlight_share, double shadow_share, ToneTargets* targets);
 
 // The kernel's table of curve q (color_pipeline.h ToneTable: kToneTableSize + 1 entries on [0, 1]).
 constexpr int kToneTableSize = 8192;
@@ -103,29 +115,30 @@ std::vector<float> tone_table(const ToneCurve& q);
 // contrast at or below 0, or white below black, inverts the table, and a contrast far past 1.5 makes it NaN.
 bool tone_curve_ok(const ToneCurve& q);
 
-// Which of kToneClipShares the plan keeps, as an index: 0 (the designed moves) when the designed curve clips no more
-// than kToneClipAllowance beyond white_before (the conversion's own white clipping); else the largest share that does
-// not; else the share that clips least (the larger on a tie). white_after_of(k) gives the white clipping with the
+// The white end's rule alone, for a caller that measures white clipping only: which of kToneClipShares to keep, as an
+// index: 0 (the designed moves) when the designed curve clips no more than kToneClipAllowance beyond white_before (the
+// conversion's own white clipping); else the largest share that does not; else the share that clips least (the
+// larger on a tie). tone_plan_for_image checks both ends. white_after_of(k) gives the white clipping with the
 // curve planned at kToneClipShares[k]; it is called for k = 0 first and for no share after the one kept.
 int tone_pick_clip_share(double white_before, const std::function<double(int)>& white_after_of);
 
-// The share of a sparse sample of the unconverted image img (every 8th pixel each way) that the conversion through pc
-// and matrix clips white (a channel at the 16-bit maximum) and black (every channel 0): with pc as it is (q null), or
-// with curve q's table. Either output may be null.
+// The shares of the clip check's sample of the unconverted image img (the 2 x 2 pixels at the origin of every
+// kToneClipSampleStep block that lie inside the inner crop, kToneClipCrop) that the conversion through pc and matrix
+// puts at white (a channel at the 16-bit maximum) and at black (a channel at 0): with pc as it is (q null), or with
+// curve q's table. Either output may be null.
 void tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img, int w, int h,
                       int stride, const ToneCurve* q, double* white, double* black);
 
 // The plan's curve for the image the export converts (img, unconverted, w x h with stride uint16 per pixel, through
-// pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1), or, where the
-// curve would clip more than kToneClipAllowance beyond the conversion's own clipping (white_before), the largest
-// share of the highlight and range moves that does not, or, when none does, the share that clips least. The clipping
-// is measured on a sparse sample of the whole of img (film borders included, while the plan's preview shows only the
-// inner crop: a known mismatch) converted through the kernel with each curve. share gets the share kept.
+// pc and matrix): the designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends
+// hold against the conversion's own shares (white_before, black_before: tone_clip_sample without a curve), else the
+// moves scaled as kToneClipAllowance says. share gets the share of the highlight and range moves kept, and
+// shadow_share (when given) that of the shadow move.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const float* matrix,
-                              const uint16_t* img, int w, int h, int stride, double white_before,
+                              const uint16_t* img, int w, int h, int stride, double white_before, double black_before,
                               const ToneCurve& designed, const ToneTargets& designed_targets, ToneTargets* targets,
-                              double* share);
+                              double* share, double* shadow_share = nullptr);
 
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
 // predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.

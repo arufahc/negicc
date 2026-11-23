@@ -866,9 +866,11 @@ bool write_json_sidecar(const Sidecar& sc) {
           {"render", desc(pl.render)},
           {"targets", {{"L2", n9((float)tt.L2)}, {"L50", n9((float)tt.L50)}, {"L98", n9((float)tt.L98)},
                        {"R9010", n9((float)tt.range)}}},
-          // The share of the highlight and range moves kept: 1, or less where they would clip the final image.
+          // The share of the highlight and range moves kept, and of the shadow move: 1, or less where they would clip
+          // the final image.
           {"moves", {{"shadow", n9((float)kToneShadowMove)}, {"highlight", n9((float)kToneHighlightMove)},
-                     {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)}}},
+                     {"range", n9((float)kToneRangeMove)}, {"highlight_share", n9(sc.tone_share)},
+                     {"shadow_share", n9(sc.tone_shadow_share)}}},
           // In full (17 digits): the curve the image went through, exactly.
           {"curve", tone_curve_json(tc)},
           {"clip", clip_json()}};
