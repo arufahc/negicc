@@ -187,7 +187,7 @@ def maxHistOf (pixels : Array (Vec3 α)) : Array Nat :=
   pixels.foldl (fun h v => h.modify (maxHistBin v.maxComp) (· + 1)) (Array.replicate maxHistBins 0)
 
 /-- The roll-off of a frame from the histogram of its pre-shoulder render: the 99.5 % point, mapped
-to code 242 (`shoulder_x_hi_from_hist` in `dinov3_auto_solver.cc`). -/
+to code 242 (`shoulder_x_hi_from_hist` in `dinov3.cc`). -/
 def shoulderXHiFromHist (hist : Array Nat) : α :=
   shoulderXHiAnchored (maxHistQuantile hist 0.995)
 
