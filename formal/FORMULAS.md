@@ -259,7 +259,7 @@ table_i = in(clamp01(curve(i / (n − 1))))                  (green and blue; re
 ## 4.4 The tone stage
 
 (`tone_stage.cc`: `tone_curve_L`, `tone_table`, `tone_curve_ok`, `tone_descriptors`, `tone_targets`,
-`tone_solve`, `tone_plan`, `tone_pick_clip_share`, `tone_clip_sample`, `tone_plan_for_image`;
+`tone_solve`, `tone_plan`, `tone_pick_clip_share`, `tone_clip_sample`, `tone_clip_shares`, `tone_plan_for_image`;
 `color_pipeline.h`: `tone_lab_fprime`, `tone_table_Y`, `apply_tone`. Lean `ToneCurve`, `toneCurveL`,
 `toneTable`, `toneCurveOk`, `toneLstarOfU8`, `percentileSorted`, `toneDescriptors`, `toneTargets`,
 `toneResiduals`, `toneCost`, `toneLM`, `toneSolve`, `tonePlan`, `tonePickClipShare`, `toneClipSample`,
@@ -337,7 +337,7 @@ code by reading only.
 | `tone_descriptors` | `toneDescriptors`, `percentileSorted`, `toneLstarOfU8` | | yes |
 | `tone_targets` | `toneTargets` | `toneTargets_share_zero` | yes (through `tone_plan`) |
 | `tone_solve`, `tone_plan` | `toneResiduals`, `toneCost`, `toneLM`, `solve4`, `toneSolve`, `tonePlan` | | yes |
-| `tone_pick_clip_share`, `tone_clip_sample`, `tone_plan_for_image` | `tonePickClipShare`, `toneClipSample`, `tonePlanForImage` | | yes |
+| `tone_pick_clip_share`, `tone_clip_sample` with `tone_clip_shares`, `tone_plan_for_image` | `tonePickClipShare`, `toneClipSample`, `tonePlanForImage` | | yes |
 | `tone_lab_fprime`, `tone_table_Y`, `apply_tone` | `toneLabFprime`, `toneTableY`, `applyTone` | `applyTone_grey` | yes |
 
 ## Defined but not evaluated by the check

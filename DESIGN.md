@@ -299,7 +299,7 @@ frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corre
 The search judges a render with a vision network: the frozen DINOv3 ViT-S/16 backbone (`models/dinov3-small`), whose
 input is the preview scaled so that its longer side is 512 pixels (enlarged when it is smaller), each side rounded to
 whole 16-pixel patches; one patch is one cell of the grid (32 × 21 cells for a 3:2 frame). Three heads read its
-tokens (`dinov3_engine.h`).
+tokens (`dinov3.h`).
 
 The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small MLP on the layer 9 and 12 tokens),
 predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
@@ -372,7 +372,7 @@ records, e.g. an aspect ratio set in it; for three captures, the first capture's
 sensor's margins (`np_input.cc`: `inset_crop`); else the whole image.
 
 **The score.** A render's preview goes to the intent head, which predicts `(μ_i, σ_i)` for each cell `i`. The
-render's own colour per cell is read as the head's targets were made (`dinov3_auto_solver.cc`:
+render's own colour per cell is read as the head's targets were made (`dinov3.cc`:
 `trained_cells_lab`): the preview resampled in linear light by area average to the network's input size, CIELAB per
 pixel, averaged over the cell. The residual is the mean squared z-score:
 
@@ -384,7 +384,7 @@ Under a Gaussian model per cell this is the negative log-likelihood, so cells th
 little. The network's lightness follows the picture it is shown, so the search fixes one lightness target per frame
 (step 2) and lets only `a*` and `b*` be predicted again from each render.
 
-**The (E, g, b) optimiser** (`dinov3_auto_solver.cc`: `optimize_target_for_intent`) is a coordinate descent against a
+**The (E, g, b) optimiser** (`dinov3.cc`: `optimize_target_for_intent`) is a coordinate descent against a
 fixed field. To be fast it scores the grid of patch-averaged camera RGB rendered at each candidate (`intent_loss`;
 `intent_cells` gives the same cells for the correction below), not a full preview:
 
@@ -618,8 +618,9 @@ which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `appl
 | Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
 
 **The clip check.** Before the export is converted, each candidate curve is tried on a sample of the frame through
-the conversion kernel (`tone_clip_sample`): the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner
-crop, the area the curve is planned on. A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
+the conversion kernel: the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner crop, the area the
+curve is planned on. The sample is converted once up to the tone curve (`tone_clip_sample`), and each candidate's
+table is applied to those values with the rest of the kernel (`tone_clip_shares`). A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
 on the others, so a sample of one pixel per block could miss it; the 2 × 2 covers every phase. Each end is compared
 with its own share before the stage: falling black clipping does not pay for rising white clipping, nor the reverse.
 The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole shadow move unless the black

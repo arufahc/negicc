@@ -42,7 +42,7 @@ four selection rules (low-key merge, collinearity drop, chart-like gate, shadow 
 - `neutral_head.pt`: the trained PyTorch dict `{features: "tok", kind: "mlp", state, mean, std}` (sha256 in
   `metadata.json`).
 - `neutral_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs
-  it in plain C++ (`NeutralHead` in `dinov3_engine.h`) on the tokens the backbone already produced. Format in
+  it in plain C++ (`NeutralHead` in `dinov3.h`) on the tokens the backbone already produced. Format in
   `export_neutral_head.py`.
 - `export_neutral_head.py`: writes `neutral_head.bin` from `neutral_head.pt`; `--check` compares PyTorch with the
   exported weights on random tokens.
