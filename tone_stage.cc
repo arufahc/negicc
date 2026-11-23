@@ -270,7 +270,8 @@ std::vector<negicc::Rgb> tone_clip_sample(const negicc::PipelineConfig& pc, cons
     std::vector<negicc::Rgb> sample(nx * (size_t)ny);
     // Each pixel has its own slot, so the sample is the same at any thread count. Measured on a 192-thread x86-64
     // machine, one conversion at a time (a 6376 x 6376 frame, 2.06 M pixels in the sample): 236 ms at 1 thread, 88 at
-    // 4, 37 at 8, 19 at 16, 10 at 32 and 7 at 48. It runs with the program's thread count.
+    // 4, 37 at 8, 19 at 16, 10 at 32 and 7 at 48. On a Jetson Orin Nano the whole clip check on that frame took 3.9 s
+    // at 1 thread, 2.0 at 2, 1.07 at 4 and 0.71 at 6. It runs with the program's thread count.
 #pragma omp parallel for schedule(static)
     for (int j = 0; j < ny; ++j)
         for (size_t i = 0; i < nx; ++i)
