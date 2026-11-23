@@ -1587,11 +1587,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   scan.hflip = o.hflip;
   scan.vflip = o.vflip;
 
-  // The camera, from the first input's metadata (an RGB TIFF or JPEG records none that LibRaw reads), and its inset
-  // crop. A camera_raw_rgb bundle's crosstalk correction holds for the camera models the bundle lists: a scan from
-  // another camera, or one that records no model, converts with the correction off (the identity), here before
-  // anything reads through it (the film base capture, the film base, the search, the conversion), except the rows -r,
-  // -g and -b give. Three captures, one per light, take the identity already.
+  // The camera, from the first input's metadata (an RGB TIFF or JPEG states none that LibRaw reads), and its inset
+  // crop. A camera_raw_rgb bundle's crosstalk correction holds for the camera models the bundle lists: a scan that
+  // states a model the list does not hold converts with the correction off (the identity), here before anything reads
+  // through it (the film base capture, the film base, the search, the conversion), except the rows -r, -g and -b give.
+  // A scan that states no model, or a bundle without the list (from before it), is not compared: the bundle's
+  // correction applies. Three captures, one per light, take the identity already.
   if (o.input_mode != InputMode::kRgbFile) {
     LibRaw probe;
     if (open_raw_file(&probe, o.files[0]) == LIBRAW_SUCCESS) {
@@ -1600,19 +1601,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.has_inset = inset_crop(probe, scan.inset);
     }
   }
-  if (s.is_bundle && !s.white_light) {
-    scan.camera_listed = !scan.camera_model.empty() &&
-                         std::find(bundle.camera_models.begin(), bundle.camera_models.end(), scan.camera_model) !=
-                             bundle.camera_models.end();
+  if (s.is_bundle && !s.white_light && !scan.camera_model.empty() && bundle.has_camera_models) {
+    scan.camera_compared = true;
+    scan.camera_listed = std::find(bundle.camera_models.begin(), bundle.camera_models.end(), scan.camera_model) !=
+                         bundle.camera_models.end();
     if (!scan.camera_listed && bundle.has_crosstalk && o.input_mode != InputMode::kThreeShot) {
-      if (scan.camera_model.empty()) {
-        s.crosstalk_off = o.input_mode == InputMode::kRgbFile ? "the input is a TIFF, which records no camera model"
-                                                              : "the RAW records no camera model";
-      } else if (!bundle.has_camera_models) {
-        s.crosstalk_off = "the bundle lists no camera models (camera_models), so it holds for no camera's RAW";
-      } else {
-        s.crosstalk_off = "the RAW's camera " + scan.camera_model + " is not one the bundle lists";
-      }
+      s.crosstalk_off = "the RAW's camera " + scan.camera_model + " is not one the bundle lists";
       std::vector<float>* rows[3] = {&s.r_coeff, &s.g_coeff, &s.b_coeff};
       for (int r = 0; r < 3; ++r) {
         if (o.row_given[r]) continue;
@@ -3368,15 +3362,19 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
   if (s.is_bundle && !s.white_light) {
     std::string models;
     for (const std::string& m : bundle.camera_models) models += (models.empty() ? "" : ", ") + m;
-    u["camera"]["listed"] = scan.camera_listed;
-    log_info("  Camera models the crosstalk matrix holds for: %s; this scan's model %s\n",
+    u["camera"]["compared"] = scan.camera_compared;
+    u["camera"]["listed"] = scan.camera_compared ? ordered_json(scan.camera_listed) : ordered_json(nullptr);
+    log_info("  Camera models the crosstalk matrix holds for: %s; %s\n",
              !bundle.has_camera_models ? "no list (a bundle from before camera_models)"
              : models.empty()          ? "none"
                                        : models.c_str(),
-             scan.camera_model.empty() ? "is not recorded"
-             : scan.camera_listed      ? ("is " + scan.camera_model + ", on the list").c_str()
-                                       : ("is " + scan.camera_model + ", not on the list").c_str());
+             !bundle.has_camera_models    ? "not compared, the bundle's correction applies"
+             : scan.camera_model.empty()  ? "the camera is not stated by the input: not compared, the bundle's "
+                                            "correction applies"
+             : scan.camera_listed         ? ("this scan's model " + scan.camera_model + " is on the list").c_str()
+                                          : ("this scan's model " + scan.camera_model + " is not on the list").c_str());
   } else {
+    u["camera"]["compared"] = false;
     u["camera"]["listed"] = nullptr;
   }
 

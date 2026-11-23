@@ -203,8 +203,8 @@ struct ProfileBundle {
   std::string source_file;  // the station bundle a split bundle was exported from
   std::string camera_name;
   // The camera models the bundle holds for (camera_models), as a RAW records them (LibRaw's imgdata.idata.model). A
-  // camera_raw_rgb bundle's crosstalk correction is applied only to a RAW whose model is one of them, compared exactly
-  // (np_pipeline.cc decode). has_camera_models false: a bundle from before the field, whose correction applies to none.
+  // camera_raw_rgb bundle's crosstalk correction is not applied to a RAW that states a model not among them, compared
+  // exactly (np_pipeline.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
   std::vector<std::string> camera_models;
   bool has_camera_models = false;
   InputSpace input_space = InputSpace::kCameraRawRgb;

@@ -113,10 +113,11 @@ better. One RAW is enough. Pixel-shift sets and three separate R, G and B frames
 
 The camera's channels overlap, so a narrow-band profile set carries a crosstalk matrix measured on the camera the
 profiles were made with. Its `bundle.json` lists the camera models the matrix holds for (`camera_models`; the shipped
-sets list `ILCE-7RM4`), and `neg_process` compares the RAW's model with that list exactly. A scan from a camera not on
-the list, a RAW that records no model, a TIFF, or a set from before the list converts with the correction off, and the
-log says so and why. `-r`, `-g` and `-b` give the rows of a matrix measured on your own camera. Three separate frames
-need no correction. A white-light set has no matrix and lists no models, and no camera is compared for it.
+sets list `ILCE-7RM4`), and `neg_process` compares the RAW's model with that list exactly. The only case that turns the
+correction off is a RAW that states a camera model the set's list does not contain; the log says so and why, and `-r`,
+`-g` and `-b` give the rows of a matrix measured on that camera. An input that states no model (a TIFF) and a set from
+before the list are not compared, and take the set's matrix. Three separate frames need no correction. A white-light
+set has no matrix and lists no models, and no camera is compared for it.
 
 Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
 turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than

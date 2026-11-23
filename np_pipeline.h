@@ -130,7 +130,7 @@ struct Setup {
   // Where each row comes from: "bundle", "given" (-r, -g, -b) or "identity" (three captures, one per light; an ICC
   // profile's row not given; a bundle's correction off); empty: no correction.
   std::string crosstalk_row_source[3];
-  // Why a camera_raw_rgb bundle's correction is off (decode: the scan's camera is not one the bundle lists); empty
+  // Why a camera_raw_rgb bundle's correction is off (decode: the scan states a camera the bundle does not list); empty
   // when it is applied.
   std::string crosstalk_off;
   negicc::FlatFieldPtr flat_field;
@@ -244,10 +244,11 @@ struct Scan {
   int orig_w = 0, orig_h = 0;            // the sensor size the sidecar records
   std::string input_source = "raw";      // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
   // The camera make and model of the first input as LibRaw reads them (empty: an RGB TIFF or JPEG, or a RAW that
-  // records none), and whether a camera_raw_rgb bundle lists the model (ProfileBundle::camera_models; a bundle without
-  // a crosstalk matrix is not compared).
+  // states none). camera_compared: a camera_raw_rgb bundle with a camera_models list and a stated model, compared
+  // (decode); camera_listed: the list holds the model. Not compared: a white-light bundle, a bundle without the list,
+  // or an input that states no model.
   std::string camera_make, camera_model;
-  bool camera_listed = false;
+  bool camera_compared = false, camera_listed = false;
   // The first input's inset crop (inset_crop), which a single RAW, or three captures, is cut to without --roi or
   // --no_crop.
   bool has_inset = false;

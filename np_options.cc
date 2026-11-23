@@ -236,7 +236,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("R (corrected) value is dot product of the vector r1 r2 r3, three separate numbers (-r 1 0 0), and "
           "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none, and neither does "
-          "a scan from a camera the bundle does not list).")
+          "a RAW that states a camera model the bundle does not list).")
     .nargs(3)
     .default_value(std::vector<float>{1, 0, 0})
     .scan<'g', float>();
@@ -244,7 +244,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("G (corrected) value is dot product of the vector g1 g2 g3, three separate numbers (-g 0 1 0), and "
           "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none, and neither does "
-          "a scan from a camera the bundle does not list).")
+          "a RAW that states a camera model the bundle does not list).")
     .nargs(3)
     .default_value(std::vector<float>{0, 1, 0})
     .scan<'g', float>();
@@ -252,7 +252,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .help("B (corrected) value is dot product of the vector b1 b2 b3, three separate numbers (-b 0 0 1), and "
           "'R G B' values from linear RAW. "
           "Defaults to the profile bundle's crosstalk correction (a rec2020_linear bundle takes none, and neither does "
-          "a scan from a camera the bundle does not list).")
+          "a RAW that states a camera model the bundle does not list).")
     .nargs(3)
     .default_value(std::vector<float>{0, 0, 1})
     .scan<'g', float>();
