@@ -2349,10 +2349,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       else if (!o.roi_auto && !o.no_crop && (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng))
         cropped = inset_crop(raw, full_frame);
       if (scan.has_roi || cropped) {
+        // The right and bottom edges are summed in 64 bits: a given --roi's x + w (or y + h) can pass INT_MAX. Their
+        // halves fit an int, and clamp_rect then clamps the frame to the half-size image.
         bbox[0] = full_frame[0] / 2;
         bbox[1] = full_frame[1] / 2;
-        bbox[2] = std::max(1, (full_frame[0] + full_frame[2]) / 2 - bbox[0]);
-        bbox[3] = std::max(1, (full_frame[1] + full_frame[3]) / 2 - bbox[1]);
+        bbox[2] = std::max(1, (int)(((long long)full_frame[0] + full_frame[2]) / 2) - bbox[0]);
+        bbox[3] = std::max(1, (int)(((long long)full_frame[1] + full_frame[3]) / 2) - bbox[1]);
         clamp_rect(bbox, half_w, half_h);
       }
       scan.frame_is_whole = bbox[0] == 0 && bbox[1] == 0 && bbox[2] == half_w && bbox[3] == half_h;
