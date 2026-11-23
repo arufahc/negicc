@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -216,12 +217,14 @@ static inline bool base64_decode(const std::string& in, std::vector<uint8_t>& ou
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
   };
-  int val = 0, valb = -8;
+  // Unsigned, so the bits shifted out at the top wrap away: only the low 12 bits are ever read.
+  uint32_t val = 0;
+  int valb = -8;
   for (unsigned char c : in) {
     if (c == '=') break;
     int d = T[c];
     if (d < 0) continue;
-    val = (val << 6) | d;
+    val = (val << 6) | (uint32_t)d;
     valb += 6;
     if (valb >= 0) {
       out.push_back((uint8_t)((val >> valb) & 0xFF));
@@ -570,7 +573,13 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     for (const auto& m : models) bundle.camera_models.push_back(m.get<std::string>());
     bundle.has_camera_models = true;
   }
+  // The 16-bit level the film base is scaled to (DESIGN.md 2.3): every channel is multiplied by it, so it is above 0,
+  // and no more than the 16-bit full scale. (The JSON parser refuses a number outside double's range.)
   bundle.normalization_target = j.value("normalization_target", 55000.0);
+  if (!(bundle.normalization_target > 0.0 && bundle.normalization_target <= 65535.0)) {
+    throw std::runtime_error("profile bundle " + raw_path + ": normalization_target " +
+                             nlohmann::json(bundle.normalization_target).dump() + " is not in (0, 65535]");
+  }
 
   // The density export's matrices and the light's record (profile_bundle.h); absent from older bundles.
   if (j.contains("light_source") && j["light_source"].is_object()) bundle.light_source_json = j["light_source"].dump();
@@ -825,29 +834,58 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
                                "tools/fix_d65_profiles.py removed it)");
     }
     // crosstalk_matrix stays the identity and has_crosstalk false.
-  } else if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
-    const auto& ct = j["crosstalk_profile"];
-    if (ct.contains("crosstalk_correction_matrix")) {
-      bundle.has_crosstalk = parse_3x3_matrix(ct["crosstalk_correction_matrix"], bundle.crosstalk_matrix,
-                                              bundle.crosstalk_matrix_d);
+  } else {
+    // The correction is the inverse of the light's mixing (DESIGN.md 2.4), so it is invertible, and it is applied as
+    // floats. A matrix given (not null) that is not such a 3x3 refuses the bundle: left out, the scan would be
+    // converted without its correction.
+    const nlohmann::json* m = nullptr;
+    if (j.contains("crosstalk_profile") && j["crosstalk_profile"].is_object()) {
+      if (j["crosstalk_profile"].contains("crosstalk_correction_matrix")) {
+        m = &j["crosstalk_profile"]["crosstalk_correction_matrix"];
+      }
+    } else if (j.contains("crosstalk_correction_matrix")) {
+      m = &j["crosstalk_correction_matrix"];
     }
-  } else if (j.contains("crosstalk_correction_matrix")) {
-    bundle.has_crosstalk = parse_3x3_matrix(j["crosstalk_correction_matrix"], bundle.crosstalk_matrix,
-                                            bundle.crosstalk_matrix_d);
+    if (m && !m->is_null()) {
+      double* x = bundle.crosstalk_matrix_d;
+      bool ok = parse_3x3_matrix(*m, bundle.crosstalk_matrix, x);
+      for (int k = 0; ok && k < 9; ++k) ok = std::fabs(x[k]) <= (double)std::numeric_limits<float>::max();
+      ok = ok && x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
+                         x[2] * (x[3] * x[7] - x[4] * x[6]) != 0.0;
+      if (!ok) {
+        throw std::runtime_error("profile bundle " + raw_path + ": the crosstalk correction matrix is not an "
+                                 "invertible 3x3 of numbers within float range");
+      }
+      bundle.has_crosstalk = true;
+    }
   }
+
+  // An exposure (the film base capture's, a bracket's) is shutter x ISO / 100 in seconds, taken as a float and divided
+  // by: the ISO is above 0 and both are within float range, and the product neither overflows nor rounds to 0.
+  static const char* const kBadExposure = "is not a positive float (shutter x ISO / 100, in seconds)";
+  auto exposure_ok = [](const std::string& shutter, double iso) {
+    const double t = shutter_to_seconds_d(shutter);
+    const double fmax = (double)std::numeric_limits<float>::max();
+    if (!(iso > 0.0 && iso <= fmax && t <= fmax)) return false;
+    const float e = (float)t * (float)iso / 100.0f;
+    return e > 0.0f && e <= std::numeric_limits<float>::max();
+  };
 
   if (j.contains("film_base") && j["film_base"].is_object()) {
     const auto& fb = j["film_base"];
-    double r_avg = 0.0, g_avg = 0.0, b_avg = 0.0;
-    if (fb.contains("r") && fb["r"].contains("avg") && fb["r"]["avg"].is_number()) {
-      r_avg = fb["r"]["avg"].get<double>();
-    }
-    if (fb.contains("g") && fb["g"].contains("avg") && fb["g"]["avg"].is_number()) {
-      g_avg = fb["g"]["avg"].get<double>();
-    }
-    if (fb.contains("b") && fb["b"].contains("avg") && fb["b"]["avg"].is_number()) {
-      b_avg = fb["b"]["avg"].get<double>();
-    }
+    // Each channel's base is a mean of light through the film, so above 0: every channel is divided by it, and it is
+    // rounded to an int (profile_film_base_rgb).
+    auto base = [&](const char* c) {
+      const bool given = fb.contains(c) && fb[c].is_object() && fb[c].contains("avg") && fb[c]["avg"].is_number();
+      const double v = given ? fb[c]["avg"].get<double>() : 0.0;
+      if (!(v > 0.0 && v <= (double)std::numeric_limits<int>::max())) {
+        throw std::runtime_error("profile bundle " + raw_path + ": film_base." + c + ".avg " +
+                                 (given ? fb[c]["avg"].dump() : std::string("(not a number)")) +
+                                 " is not in (0, 2147483647]");
+      }
+      return v;
+    };
+    const double r_avg = base("r"), g_avg = base("g"), b_avg = base("b");
     bundle.film_base_avg[0] = (float)r_avg;
     bundle.film_base_avg[1] = (float)g_avg;
     bundle.film_base_avg[2] = (float)b_avg;
@@ -860,13 +898,17 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       else throw std::invalid_argument("bad film_base shutter in " + raw_path);
       (void)shutter_to_seconds_d(bundle.film_base_shutter);
     }
-    if (fb.contains("iso") && fb["iso"].is_number()) bundle.film_base_iso = fb["iso"].get<float>();
-    if (r_avg > 0.0 && g_avg > 0.0 && b_avg > 0.0) {
-      bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
-      bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
-      bundle.profile_film_base_rgb[2] = (int)std::round(b_avg);
-      bundle.has_film_base = true;
+    double iso = bundle.film_base_iso;
+    if (fb.contains("iso") && fb["iso"].is_number()) iso = fb["iso"].get<double>();
+    if (!exposure_ok(bundle.film_base_shutter, iso)) {
+      throw std::runtime_error("profile bundle " + raw_path + ": the film base's exposure (shutter " +
+                               bundle.film_base_shutter + ", ISO " + std::to_string(iso) + ") " + kBadExposure);
     }
+    bundle.film_base_iso = (float)iso;
+    bundle.profile_film_base_rgb[0] = (int)std::round(r_avg);
+    bundle.profile_film_base_rgb[1] = (int)std::round(g_avg);
+    bundle.profile_film_base_rgb[2] = (int)std::round(b_avg);
+    bundle.has_film_base = true;
   }
 
   if (!j.contains("targets") || !j["targets"].is_array()) {
@@ -893,13 +935,23 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       tgt.target_ev = tj["ev"].get<double>();
     }
 
+    if (!exposure_ok(tgt.shutter, tgt.iso)) {
+      throw std::runtime_error("profile bundle " + raw_path + ": the exposure of target " + tgt.name + " (shutter " +
+                               tgt.shutter + ", ISO " + std::to_string(tgt.iso) + ") " + kBadExposure);
+    }
     tgt.exposure_s = std::max(1e-6f, shutter_to_seconds(tgt.shutter) * float(tgt.iso) / 100.0f);
 
     if (tj.contains("patches") && tj["patches"].is_object()) {
       std::vector<float> gs_g;
       for (auto it = tj["patches"].begin(); it != tj["patches"].end(); ++it) {
         if (it.value().is_object() && it.value().contains("g") && it.value()["g"].is_number()) {
-          tgt.patches_g.push_back(it.value()["g"].get<float>());
+          // Kept as a float (the grey wedge below reads these same entries).
+          const double g = it.value()["g"].get<double>();
+          if (!(std::fabs(g) <= (double)std::numeric_limits<float>::max())) {
+            throw std::runtime_error("profile bundle " + raw_path + ": target " + tgt.name + " patch " + it.key() +
+                                     " g " + it.value()["g"].dump() + " is outside float range");
+          }
+          tgt.patches_g.push_back((float)g);
         }
       }
       // Tonal capacity of the grey wedge gs0..gs23, or of all patches without one.
