@@ -3,7 +3,7 @@
 // inputs and compares. See formal/README.md for how to build and run this program.
 //
 // Every value is computed by the library's functions (color_pipeline.h, flat_field.h, profile_bundle.h, rgb_view.h,
-// dinov3_auto_solver.h, tone_stage.h, input_curves.h, white_light_balance.h, film_base_detector.h, and through
+// dinov3.h, tone_stage.h, input_curves.h, white_light_balance.h, film_base_detector.h, and through
 // gen_internal.cc the functions of internal linkage of film_base_detector.cc; multi_target_optimizer.h for
 // ParamSearchOptions' crop ratio only); nothing is re-implemented here. The inputs are synthetic (fixed formulas or a
 // seeded generator) or the bundles' own data.
@@ -20,7 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include "color_pipeline.h"
-#include "dinov3_auto_solver.h"
+#include "dinov3.h"
 #include "film_base_detector.h"
 #include "flat_field.h"
 #include "input_curves.h"

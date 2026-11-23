@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "dinov3_auto_solver.h"
+#include "dinov3.h"
 #include "film_base_detector.h"
 #include "film_frame_detector.h"
 #include "libraw/libraw.h"

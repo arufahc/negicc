@@ -1,17 +1,69 @@
-// The DINOv3 intent model: the inference runners (ONNX Runtime on the CPU, TensorRT on CUDA), the small heads that
-// read the backbone's tokens (NeutralHead, ToneHead), and DinoV3Engine, which preprocesses a frame and runs them.
+// Copyright 2026 Alpha Lam <arufa.hc@gmail.com>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#ifndef DINOV3_ENGINE_H
-#define DINOV3_ENGINE_H
+
+// The DINOv3 intent model and the Auto search that runs on it, in the pipeline's order: the preprocessing of a
+// preview, the inference runners and the token heads, DinoV3Engine, and the Auto solver. dinov3.cc holds the code.
+
+#ifndef DINOV3_H
+#define DINOV3_H
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "rgb_view.h"
+#include "profile_bundle.h"
+
+// ====================================================================================================================
+// Preprocessing
+// Takes an 8-bit RGB preview; gives the patch-aligned network size, the resized image and the tone-bin weights of
+// each patch, as the network was trained on them.
+// ====================================================================================================================
+
+// Antialiased 2-pass separable bilinear resize on 8-bit RGB with kernel support widening;
+// bit-exact with Pillow's Image.Resampling.BILINEAR (fixed point, 8-bit intermediate).
+void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
+                                     uint8_t* dst, int dst_w, int dst_h);
+
+// cv2.resize(..., interpolation=cv2.INTER_LINEAR) on 8-bit RGB (the fixed-point SIMD path): a bilinear point sample.
+// The search's residual does not use it (it reads trained_cells_lab, below); it is kept for
+// negicc-station's parity test of this resize (src/test_dinov3_preprocess.cpp).
+void cv_linear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
+                          uint8_t* dst, int dst_w, int dst_h);
+
+// intent_model.compute_tone_weights on a (grid_w * patch) x (grid_h * patch) RGB image: [N, 3] weights.
+void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int patch_size, float* out_weights);
+
+// Computes patch-aligned target dimensions preserving aspect ratio (intent_model.compute_aspect_preserved_shape)
+void compute_aspect_preserved_shape(int w, int h, int max_size, int patch_size,
+                                    int& target_w, int& target_h, int& grid_w, int& grid_h);
+
+// ====================================================================================================================
+// Engine
+// The DINOv3 intent model: the inference runners (ONNX Runtime on the CPU, TensorRT on CUDA), the small heads that
+// read the backbone's tokens (NeutralHead, ToneHead), and DinoV3Engine, which preprocesses a frame and runs them.
+// Takes an 8-bit sRGB preview and the backbone, its per-stock adapter and the token heads; gives the intent field
+// (mu, sigma per patch), the ranker features and the heads' outputs (DinoV3InferenceResult).
+// ====================================================================================================================
 
 // --------------------------------------------------------------------------------------------------------------------
 // Runners
@@ -25,9 +77,9 @@
 // The adapter runs where the backbone runs: ONNX Runtime with an ONNX Runtime backbone, TensorRT with a TensorRT
 // backbone, reading the backbone's tokens from device memory (DinoV3Runner::device_tokens) so they never leave the GPU.
 //
-// The ONNX Runtime CPU runners (dinov3_engine.cc) are built everywhere. The TensorRT runners (dinov3_trt_runner.cc)
+// The ONNX Runtime CPU runners (dinov3.cc) are built everywhere. The TensorRT runners (dinov3.cc, after them)
 // are built only with USE_CUDA=1 and run the device-specific backbone.engine and adapter.engine files
-// `make dinov3_engine` builds. When USE_CUDA=0, dinov3_trt_runner.cc holds fallback stubs instead.
+// `make dinov3_engine` builds. When USE_CUDA=0, dinov3.cc holds fallback stubs instead.
 // These sources live in negicc and are consumed by negicc-station via git submodule at 3rd_party/negicc.
 // --------------------------------------------------------------------------------------------------------------------
 
@@ -448,4 +500,143 @@ private:
     int patch_size_ = 16;
 };
 
-#endif  // DINOV3_ENGINE_H
+// ====================================================================================================================
+// Auto solver
+// Takes the frame (an RgbView in camera RGB), its profile and matrix, and the engine; gives the (E, g, b) the intent
+// field asks for, with the search's log (DinoSolveResult).
+// ====================================================================================================================
+
+// Flags for pin_mask (manual argument overrides)
+constexpr unsigned PIN_E = 1 << 0;
+constexpr unsigned PIN_G = 1 << 1;
+constexpr unsigned PIN_B = 1 << 2;
+
+struct IntentGains {
+  float e = 1.0f;
+  float g = 1.0f;
+  float b = 1.0f;
+};
+
+struct IntentLoss {
+  float L = 0.0f;
+  float a = 0.0f;
+  float b = 0.0f;
+  float clip = 0.0f;  // in percent [0, 100]
+};
+
+// The input curves of a profile with the gains g and b in them, after the knee (the print, np_print.h PrintContinuum):
+// three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
+using GainCurves = std::function<void(float g, float b, std::vector<float> trc[3])>;
+
+struct SolverConfig {
+  const ProfileData* prof = nullptr;
+  // When set, a candidate's g and b go into prof's input curves, after the knee, and its matrix carries E alone, as
+  // the print's conversion renders it; intent_cells and intent_loss (the search's optimiser) read it.
+  const GainCurves* gain_curves = nullptr;
+  float knee = 0.95f;
+  // Highlight shoulder x_hi (color_pipeline.h set_shoulder); 1.0 is off.
+  float shoulder = 1.0f;
+  float enc_e_min = 0.0f;
+  float enc_e_max = 0.0f;
+  // The values pinned parameters (pin_mask) take in optimize_target_for_intent when it is given no start; with a
+  // start they stay at the start's.
+  float pin_e = 1.0f, pin_g = 1.0f, pin_b = 1.0f;
+};
+
+struct DinoIterationLog {
+  char tag = ' ';  // 'b' for bootstrap, '0', '1', etc.
+  int step = 0;
+  float e = 1.0f;  // normalized E (relative to E_c)
+  float g = 1.0f;
+  float b = 1.0f;
+  float residual = -1.0f;  // -1 if unmeasured (bootstrap)
+  float loss_L = 0.0f;
+  float loss_a = 0.0f;
+  float loss_b = 0.0f;
+  float clip_pct = 0.0f;
+  float penalty_clip = 0.0f;
+  float penalty_anchor = 0.0f;
+  float objective = 0.0f;
+  float dp = 0.0f;
+  float rel = 0.0f;
+};
+
+struct DinoSolveResult {
+  std::string status = "CONVERGED";  // "CONVERGED", "DIVERGED", "MAX_ITERS", "PINNED"
+  int best_iteration = -1;
+  float best_residual = 0.0f;
+  IntentGains solved_relative;  // relative to user baseline (E_c * e_best, g_best, b_best)
+  IntentGains solved_absolute;  // E_user * E_c * e_best, g_user * g_best, b_user * b_best
+  float e_center = 1.0f;
+  bool anchor_clamped = false;  // E_c bisection did not straddle median L* 50
+  // The default e_bounds, as ratios to e_center: 2^-1.5 and 2^1.5, 1.5 stops either way.
+  float bounds_lo = 0.35355339f;
+  float bounds_hi = 2.82842712f;
+  std::vector<DinoIterationLog> iterations;
+  std::vector<float> best_mu;
+  std::vector<float> best_sigma;
+  std::vector<float> tone_mass;
+  int grid_w = 0;
+  int grid_h = 0;
+  int target_w = 0;
+  int target_h = 0;
+  int total_inferences = 0;
+  double timing_views_ms = 0.0;
+  double timing_render_ms = 0.0;
+  double timing_infer_ms = 0.0;
+  double timing_residual_ms = 0.0;
+  double timing_search_ms = 0.0;
+  double timing_total_ms = 0.0;
+};
+
+// The L*a*b* intent_loss scores for one candidate: each pixel of the camera-RGB grid rendered at cand as the loss
+// renders it (displayed value, after the shoulder), n_px x 3 values into lab_out.
+void intent_cells(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
+                  const IntentGains& cand, float* lab_out);
+
+// The pipeline configuration and the matrix (written to m) cfg renders candidate cand with: the gains in the matrix,
+// or, with cfg.gain_curves, in prof's input curves (trc holds the tables the configuration points into).
+negicc::PipelineConfig candidate_config(const SolverConfig& cfg, const float* merged, const IntentGains& cand,
+                                        float m[9], std::vector<float> trc[3]);
+
+// Batched loss calculation across candidate matrices
+void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16, int n_px,
+                 const IntentGains* cand, int n_cand, const float* mu, const float* sigma, IntentLoss* out);
+
+// The shoulder x_hi (color_pipeline.h) of a max-channel histogram of the pre-shoulder render (max_hist_bin layout):
+// the x_hi that maps its 99.5% point to sRGB kShoulderAnchorCode (shoulder_x_hi_anchored, the roll-off); q995_out
+// gets the point.
+float shoulder_x_hi_from_hist(const uint64_t* hist, float* q995_out = nullptr);
+
+// Coordinate descent parameter search against a frozen intent field (mu, sigma). Without e_bounds, E moves within
+// [0.40, 1.80] from no start, or within [0.20, 3.0] around a start (one outside that range is moved to its nearer end).
+float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, const uint16_t* grid_rgb16,
+                                 int gw, int gh, const float* mu, const float* sigma,
+                                 const IntentGains* initial, const float* e_bounds /* lo, hi, center or null */,
+                                 unsigned pin_mask, IntentGains& out);
+
+// The preview's L*a*b* per intent-grid cell, made as the intent adapter's training targets are made
+// (negicc-station training/extract.py, patch_lab_targets): the encoded preview (w x h, 3 bytes per pixel) resampled in
+// linear light by area average to gw*patch x gh*patch pixels, CIELAB per pixel, averaged over each patch. gw*gh*3
+// values, row-major, into lab_out.
+void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch, float* lab_out);
+
+// Mean squared z-score of the preview's trained cells (trained_cells_lab) against the intent field predicted from it.
+float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch,
+                                const float* mu, const float* sigma);
+
+// The same residual from trained cells already computed (trained_cells_lab's gw*gh*3 values, n = gw*gh):
+// self_consistency_residual is trained_cells_lab followed by this.
+float residual_from_cells(const float* lab, int n, const float* mu, const float* sigma);
+
+// Solves optimal (E, g, b) parameters against active DINOv3 intent field
+bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
+                         const uint16_t (*image)[4], int w, int h,
+                         IntentGains user_gains, unsigned pin_mask,
+                         int max_iters, DinoSolveResult& out);
+bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float* user_merged,
+                         const negicc::RgbView& view,
+                         IntentGains user_gains, unsigned pin_mask,
+                         int max_iters, DinoSolveResult& out);
+
+#endif  // DINOV3_H

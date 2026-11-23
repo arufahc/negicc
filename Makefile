@@ -292,8 +292,7 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
-DINOV3_OBJS = bin_out/dinov3_engine.o bin_out/dinov3_preprocess.o bin_out/dinov3_trt_runner.o \
-              bin_out/dinov3_auto_solver.o bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o \
+DINOV3_OBJS = bin_out/dinov3.o bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o \
               bin_out/film_base_detector.o bin_out/tone_stage.o bin_out/profile_bundle.o \
               bin_out/multi_target_optimizer.o
 
@@ -307,18 +306,12 @@ bin_out/gpu_passes.o: gpu_passes.cu rgb_view.h color_pipeline.h flat_field.h fil
 	$(NVCC) -c gpu_passes.cu -o $@ -O3 --fmad=false -std=c++17 -Xcompiler -fPIC -Xcompiler -fsigned-char -I. \
 	    -DNEGICC_CUDA_ARCH=$(CUDA_ARCH) -gencode arch=compute_$(CUDA_ARCH),code=[sm_$(CUDA_ARCH),compute_$(CUDA_ARCH)]
 
-bin_out/dinov3_engine.o: dinov3_engine.cc dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
+# The DINOv3 engine and the Auto solver, with the TensorRT runners with USE_CUDA=1 (which defines NEGICC_USE_CUDA),
+# their stubs otherwise.
+bin_out/dinov3.o: dinov3.cc dinov3.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h profile_bundle.h \
+                  $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_engine.cc -o $@
-
-bin_out/dinov3_preprocess.o: dinov3_preprocess.cc dinov3_preprocess.h color_pipeline.h $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_preprocess.cc -o $@
-
-bin_out/dinov3_auto_solver.o: dinov3_auto_solver.cc dinov3_auto_solver.h rgb_view.h color_pipeline.h flat_field.h \
-                              film_frame_detector.h profile_bundle.h dinov3_engine.h dinov3_preprocess.h $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_auto_solver.cc -o $@
+	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3.cc -o $@
 
 bin_out/flat_field.o: flat_field.cc flat_field.h $(BUILD_STAMP)
 	mkdir -p bin_out
@@ -328,19 +321,14 @@ bin_out/rgb_view.o: rgb_view.cc rgb_view.h color_pipeline.h flat_field.h film_fr
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c rgb_view.cc -o $@
 
-# The TensorRT runners with USE_CUDA=1 (which defines NEGICC_USE_CUDA), their stubs otherwise.
-bin_out/dinov3_trt_runner.o: dinov3_trt_runner.cc dinov3_engine.h $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) $(DINOV3_CXXFLAGS) -c dinov3_trt_runner.cc -o $@
-
 bin_out/profile_bundle.o: profile_bundle.cc profile_bundle.h rgb_view.h color_pipeline.h flat_field.h \
-                          film_frame_detector.h dinov3_auto_solver.h np_log.h $(BUILD_STAMP)
+                          film_frame_detector.h dinov3.h np_log.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c profile_bundle.cc -o $@
 
 bin_out/multi_target_optimizer.o: multi_target_optimizer.cc multi_target_optimizer.h input_curves.h \
-                                  dinov3_preprocess.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h \
-                                  profile_bundle.h dinov3_auto_solver.h dinov3_engine.h $(BUILD_STAMP)
+                                  dinov3.h rgb_view.h color_pipeline.h flat_field.h film_frame_detector.h \
+                                  profile_bundle.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -c multi_target_optimizer.cc -o $@
 
@@ -376,8 +364,8 @@ bin_out/film_base_detector.o: film_base_detector.cc film_base_detector.h rgb_vie
 # --gain_b on an ICC profile. A print and a density output need it.
 # USE_CUDA=1 builds also carry each adapter's TensorRT engine (make dinov3_engine): with the backbone's engine loaded,
 # the adapter runs on TensorRT too, reading the backbone's tokens on the device (no CPU adapter behind a GPU backbone).
-# models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3_engine.h) of the white-light
-# curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3_engine.h) of the
+# models/neutral_head/neutral_head.bin is the neutral-patch head (NeutralHead, dinov3.h) of the white-light
+# curve fit's neutral anchors; models/tone_head/tone_head.bin the tone heads (ToneHead, dinov3.h) of the
 # tone stage (both lights).
 # A USE_CUDA=1 build embeds an engine for the backbone (when it is there) and for every adapter: listed whether or
 # not they exist, so that a missing or stale one stops the build (the rules after dinov3_engine).
@@ -459,8 +447,8 @@ NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_
 NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc np_film_base.cc np_print.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
-          dinov3_auto_solver.h film_frame_detector.h film_base_detector.h profile_bundle.h \
-          multi_target_optimizer.h input_curves.h dinov3_engine.h white_light_balance.h embedded_data.h tone_stage.h \
+          dinov3.h film_frame_detector.h film_base_detector.h profile_bundle.h \
+          multi_target_optimizer.h input_curves.h white_light_balance.h embedded_data.h tone_stage.h \
           3rd_party/tiff_head.h
 
 bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)

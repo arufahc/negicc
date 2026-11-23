@@ -43,8 +43,7 @@
 #include <string>
 #include <vector>
 
-#include "dinov3_auto_solver.h"
-#include "dinov3_engine.h"
+#include "dinov3.h"
 #include "film_base_detector.h"
 #include "flat_field.h"
 #include "libraw/libraw.h"
