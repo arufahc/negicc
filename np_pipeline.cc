@@ -1031,6 +1031,12 @@ int prepare(const Options& o, Setup& s) {
     }
   }
   s.has_crosstalk = row_given[0] || row_given[1] || row_given[2] || (s.is_bundle && bundle.has_crosstalk);
+  for (int r = 0; s.has_crosstalk && r < 3; ++r) {
+    s.crosstalk_row_source[r] = row_given[r] ? "given"
+                                : (s.is_bundle && o.input_mode != InputMode::kThreeShot && bundle.has_crosstalk)
+                                    ? "bundle"
+                                    : "identity";
+  }
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
   if (o.input_mode == InputMode::kRgbFile && !s.camera_rgb_input && s.has_crosstalk) {
@@ -1580,6 +1586,48 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   scan.rot_cw = o.rot_cw;
   scan.hflip = o.hflip;
   scan.vflip = o.vflip;
+
+  // The camera, from the first input's metadata (an RGB TIFF or JPEG records none that LibRaw reads), and its inset
+  // crop. A camera_raw_rgb bundle's crosstalk correction holds for the camera models the bundle lists: a scan from
+  // another camera, or one that records no model, converts with the correction off (the identity), here before
+  // anything reads through it (the film base capture, the film base, the search, the conversion), except the rows -r,
+  // -g and -b give. Three captures, one per light, take the identity already.
+  if (o.input_mode != InputMode::kRgbFile) {
+    LibRaw probe;
+    if (open_raw_file(&probe, o.files[0]) == LIBRAW_SUCCESS) {
+      scan.camera_make = probe.imgdata.idata.make;
+      scan.camera_model = probe.imgdata.idata.model;
+      scan.has_inset = inset_crop(probe, scan.inset);
+    }
+  }
+  if (s.is_bundle && !s.white_light) {
+    scan.camera_listed = !scan.camera_model.empty() &&
+                         std::find(bundle.camera_models.begin(), bundle.camera_models.end(), scan.camera_model) !=
+                             bundle.camera_models.end();
+    if (!scan.camera_listed && bundle.has_crosstalk && o.input_mode != InputMode::kThreeShot) {
+      if (scan.camera_model.empty()) {
+        s.crosstalk_off = o.input_mode == InputMode::kRgbFile ? "the input is a TIFF, which records no camera model"
+                                                              : "the RAW records no camera model";
+      } else if (!bundle.has_camera_models) {
+        s.crosstalk_off = "the bundle lists no camera models (camera_models), so it holds for no camera's RAW";
+      } else {
+        s.crosstalk_off = "the RAW's camera " + scan.camera_model + " is not one the bundle lists";
+      }
+      std::vector<float>* rows[3] = {&s.r_coeff, &s.g_coeff, &s.b_coeff};
+      for (int r = 0; r < 3; ++r) {
+        if (o.row_given[r]) continue;
+        for (int c = 0; c < 3; ++c) {
+          bundle.crosstalk_matrix[r * 3 + c] = r == c ? 1.0f : 0.0f;
+          bundle.crosstalk_matrix_d[r * 3 + c] = r == c ? 1.0 : 0.0;
+        }
+        rows[r]->assign(bundle.crosstalk_matrix + r * 3, bundle.crosstalk_matrix + r * 3 + 3);
+        s.crosstalk_row_source[r] = "identity";
+      }
+      log_warn("the crosstalk correction of the profile bundle %s is off: %s%s; -r, -g and -b give rows measured on "
+               "this camera\n", bundle.key.c_str(), s.crosstalk_off.c_str(),
+               o.row_given[0] || o.row_given[1] || o.row_given[2] ? " (the rows given are applied)" : "");
+    }
+  }
 
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
@@ -3284,11 +3332,200 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   return 0;
 }
 
+// What the conversion used, logged once per conversion as a block and written to the sidecar as "used", in the
+// pipeline's order: the profile (a bundle: its key, where it was read and the camera models it lists), the camera, the
+// decode, the flat field, the crop, the crosstalk correction, the film base, and the ICC profiles the picture renders
+// through (the bracket's, or a print's).
+static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, const Scan& scan, const Conversion& c) {
+  using nlohmann::ordered_json;
+  const ProfileBundle& bundle = s.bundle;
+  ordered_json u;
+  log_info("Used:\n");
+
+  // The camera: the one the bundle records (camera_name, as stored) and this scan's (make and model); a narrow-band
+  // bundle also lists the models its crosstalk matrix holds for, compared with the scan's model (decode). A bundle
+  // without a matrix (white light) is not compared.
+  std::string scan_camera = scan.camera_model;
+  if (!scan.camera_make.empty() && scan.camera_model.rfind(scan.camera_make, 0) != 0)
+    scan_camera = scan.camera_make + (scan.camera_model.empty() ? "" : " " + scan.camera_model);
+  u["camera"] = {{"scan", scan_camera.empty() ? ordered_json(nullptr) : ordered_json(scan_camera)},
+                 {"scan_model", scan.camera_model.empty() ? ordered_json(nullptr) : ordered_json(scan.camera_model)},
+                 {"bundle", s.is_bundle ? ordered_json(bundle.camera_name) : ordered_json(nullptr)}};
+  if (s.is_bundle) {
+    const bool built_in = bundle.path.rfind("[built-in] ", 0) == 0;
+    u["profile_bundle"] = {{"key", bundle.key},
+                           {"path", bundle.path},
+                           {"built_in", built_in},
+                           {"camera_models", bundle.has_camera_models ? ordered_json(bundle.camera_models)
+                                                                      : ordered_json(nullptr)}};
+    log_info("  Profile bundle: %s, %s\n", bundle.key.c_str(), built_in ? "built in" : ("from " + bundle.path).c_str());
+  } else {
+    u["profile_bundle"] = nullptr;
+    log_info("  Profile bundle: none%s\n", s.film_prof_arg.empty() ? "" : " (an ICC profile)");
+  }
+  log_info("  Camera: this scan's %s%s\n", scan_camera.empty() ? "none recorded" : scan_camera.c_str(),
+           s.is_bundle ? ("; the bundle records " + bundle.camera_name).c_str() : "");
+  if (s.is_bundle && !s.white_light) {
+    std::string models;
+    for (const std::string& m : bundle.camera_models) models += (models.empty() ? "" : ", ") + m;
+    u["camera"]["listed"] = scan.camera_listed;
+    log_info("  Camera models the crosstalk matrix holds for: %s; this scan's model %s\n",
+             !bundle.has_camera_models ? "no list (a bundle from before camera_models)"
+             : models.empty()          ? "none"
+                                       : models.c_str(),
+             scan.camera_model.empty() ? "is not recorded"
+             : scan.camera_listed      ? ("is " + scan.camera_model + ", on the list").c_str()
+                                       : ("is " + scan.camera_model + ", not on the list").c_str());
+  } else {
+    u["camera"]["listed"] = nullptr;
+  }
+
+  std::string decode, decode_text;
+  if (o.input_mode == InputMode::kRgbFile) {
+    decode = s.camera_rgb_input ? "camera_rgb" : "rec2020";
+    decode_text = s.camera_rgb_input ? "a TIFF of linear camera RGB" : "an RGB file converted to linear Rec.2020";
+  } else if (o.input_mode == InputMode::kThreeShot) {
+    decode = "camera_rgb";
+    decode_text = "camera RGB of three captures, one channel from each";
+  } else if (o.files.size() == 4) {
+    decode = "camera_rgb";
+    decode_text = "camera RGB of the pixel shift's four captures, merged";
+  } else if (s.raw_decode == RawDecode::kCameraRgb) {
+    decode = "camera_rgb";
+    decode_text = "camera RGB (black subtracted, no white balance)";
+  } else if (s.raw_decode == RawDecode::kWhiteLight) {
+    decode = "white_light_rec2020";
+    decode_text = "LibRaw's white-light decode to linear Rec.2020";
+  } else {
+    decode = "rec2020";
+    decode_text = "LibRaw's decode to linear Rec.2020";
+  }
+  u["decode"] = {{"space", decode}, {"input", scan.input_source}};
+  log_info("  Decode: %s; input %s\n", decode_text.c_str(), scan.input_source.c_str());
+
+  if (o.flat.empty()) {
+    u["flat_field"] = nullptr;
+    log_info("  Flat field: none\n");
+  } else {
+    const std::string id = s.flat_field ? s.flat_field->id() : std::string();
+    u["flat_field"] = {{"path", o.flat}, {"id", id}};
+    log_info("  Flat field: %s (id %s)\n", o.flat.c_str(), id.empty() ? "none recorded" : id.c_str());
+  }
+
+  // The crop in sensor pixels: --roi (given, or --roi auto's), else a single RAW's or three captures' inset crop
+  // unless --no_crop, else the whole image; clamped to the image as the decode clamps it.
+  int crop[4] = {0, 0, scan.orig_w, scan.orig_h};
+  std::string crop_source = "whole image";
+  const bool inset_applies = !o.no_crop && scan.has_inset &&
+                             (o.input_mode == InputMode::kThreeShot ||
+                              (o.files.size() == 1 &&
+                               (o.input_mode == InputMode::kRaw || o.input_mode == InputMode::kLinearDng)));
+  if (scan.has_roi) {
+    std::copy(scan.roi, scan.roi + 4, crop);
+    crop_source = !o.roi_auto ? "given" : scan.frame_det.conf < kLowFrameConfidence ? "whole image (--roi auto found "
+                                                                                      "no frame)"
+                                                                                    : "detected";
+  } else if (inset_applies) {
+    std::copy(scan.inset, scan.inset + 4, crop);
+    crop_source = "the RAW's inset crop";
+  }
+  crop[2] = std::min(crop[2], scan.orig_w - crop[0]);
+  crop[3] = std::min(crop[3], scan.orig_h - crop[1]);
+  u["crop"] = {{"region", {crop[0], crop[1], crop[2], crop[3]}}, {"source", crop_source}};
+  log_info("  Crop: x %d y %d, %dx%d sensor pixels, %s\n", crop[0], crop[1], crop[2], crop[3], crop_source.c_str());
+
+  if (!s.has_crosstalk) {
+    const char* why = s.white_light ? "not applicable (white-light decode to linear Rec.2020)"
+                                    : "none (no TriLED bundle and no -r, -g or -b)";
+    u["crosstalk"] = {{"matrix", nullptr}, {"rows", nullptr}, {"off", why}};
+    log_info("  Crosstalk correction: %s\n", why);
+  } else {
+    double m[9];
+    const std::vector<float>* rows[3] = {&s.r_coeff, &s.g_coeff, &s.b_coeff};
+    for (int i = 0; i < 9; ++i) m[i] = s.is_bundle ? bundle.crosstalk_matrix_d[i] : (double)(*rows[i / 3])[i % 3];
+    ordered_json mj = ordered_json::array(), rj = ordered_json::array();
+    for (int i = 0; i < 9; ++i) mj.push_back(m[i]);
+    for (int r = 0; r < 3; ++r) rj.push_back(s.crosstalk_row_source[r]);
+    std::string off = s.crosstalk_off;
+    if (off.empty() && o.input_mode == InputMode::kThreeShot && s.is_bundle)
+      off = "three captures, one per light, have no crosstalk between the lights";
+    u["crosstalk"] = {{"matrix", mj}, {"rows", rj}, {"off", off.empty() ? ordered_json(nullptr) : ordered_json(off)}};
+    const std::string* src = s.crosstalk_row_source;
+    std::string from;
+    if (src[0] == src[1] && src[1] == src[2]) {
+      from = src[0] == "bundle" ? "the bundle's" : src[0] == "given" ? "given (-r, -g, -b)" : "the identity";
+    } else {
+      from = "R " + src[0] + ", G " + src[1] + ", B " + src[2];
+    }
+    if (!off.empty()) from += (s.crosstalk_off.empty() ? ": " : "; the bundle's is off: ") + off;
+    log_info("  Crosstalk correction: %s\n    [%.9g %.9g %.9g; %.9g %.9g %.9g; %.9g %.9g %.9g]\n", from.c_str(), m[0],
+             m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+  }
+
+  if (!s.is_bundle) {
+    u["film_base"] = nullptr;
+    log_info("  Film base: none (no profile bundle)\n");
+  } else {
+    const bool found = scan.film_base.found;
+    const double* fb = found ? scan.film_base.rgb : bundle.film_base_avg_d;
+    const std::string src = found ? scan.film_base.source : "bundle";
+    u["film_base"] = {{"rgb", {fb[0], fb[1], fb[2]}}, {"source", src}};
+    log_info("  Film base: R=%.1f G=%.1f B=%.1f (%s%s)\n", fb[0], fb[1], fb[2], src.c_str(),
+             found ? "" : ", at the bundle's own exposure");
+  }
+
+  ordered_json bracket = nullptr, print = nullptr;
+  const bool has_target = s.is_bundle && c.bundle_target_idx >= 0 && c.bundle_target_idx < (int)bundle.targets.size();
+  if (!s.has_profile) {
+    log_info("  Profile: none\n");
+  } else if (!s.is_bundle) {
+    bracket = {{"icc", s.film_prof_arg}};
+    log_info("  ICC profile: %s\n", s.film_prof_arg.c_str());
+  } else if (s.density) {
+    log_info("  Bracket ICC: none (a density output, -P %s, through the bundle's density matrix)\n",
+             o.colorspace.c_str());
+    if (!o.prints.empty()) {
+      std::string list;
+      for (const std::string& p : o.prints) list += (list.empty() ? "" : ", ") + p;
+      print = {{"clfs", o.prints}};
+      log_info("  Prints: a CLF for each of %s\n", list.c_str());
+    }
+  } else if (has_target) {
+    const BundleTarget& t = bundle.targets[c.bundle_target_idx];
+    const std::string file = t.icc_file.empty() ? "inline in the bundle" : t.icc_file;
+    if (s.print_id.empty()) {
+      bracket = {{"target", t.name}, {"icc", file}};
+      log_info("  Bracket: %s, ICC %s\n", t.name.c_str(), file.c_str());
+    } else {
+      bracket = {{"target", t.name}, {"icc", nullptr}};
+      log_info("  Bracket: %s (the print's; its chart ICC %s is not used)\n", t.name.c_str(), file.c_str());
+    }
+  }
+  if (!s.print_id.empty() && !s.density) {
+    std::string icc;
+    if (s.print_from_bundle) {
+      for (const BundlePrint& p : bundle.prints)
+        if (p.id == s.print_id) icc = p.icc_file.empty() ? "inline in the bundle" : p.icc_file;
+    }
+    print = {{"id", s.print_id},
+             {"icc", s.print_from_bundle ? ordered_json(icc) : ordered_json(nullptr)},
+             {"computed_from", s.print_from_bundle ? ordered_json(nullptr) : ordered_json(s.print_file)}};
+    log_info("  Print ICC: %s (%s), %s\n", s.print_id.c_str(), s.print_name.c_str(),
+             s.print_from_bundle ? ("the bundle's " + icc).c_str()
+                                 : ("computed by neg_process from " + s.print_file).c_str());
+  }
+  u["bracket"] = bracket;
+  u["print"] = print;
+  return u;
+}
+
 int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   LibRaw* proc = scan.proc.get();
   const std::string& attach_profile = c.out.attach_profile;
   const OutputEncoding encoding = c.out.encoding;
   const int out_w = proc->imgdata.sizes.iwidth, out_h = proc->imgdata.sizes.iheight;
+
+  const nlohmann::ordered_json used = conversion_used(o, s, scan, c);
 
   const double t_tiff_0 = omp_get_wtime();
   int ret = 0;
@@ -3409,6 +3646,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.film_base_detection = s.is_bundle ? &scan.film_base : nullptr;
   sc.film_base_capture_json = scan.base_capture_json;
   sc.density_json = density_json;
+  sc.used_json = used.dump();
   sc.density_fit_off = s.density && s.white_light && o.prints.empty() && o.fit_curves == Options::kFitCurvesOff;
   if (s.density) sc.density_prints = o.prints;
   sc.print_id = s.print_id;

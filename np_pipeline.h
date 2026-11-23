@@ -127,6 +127,12 @@ struct Setup {
   bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
   RawDecode raw_decode = RawDecode::kRec2020;
   std::vector<float> r_coeff, g_coeff, b_coeff;  // the crosstalk correction's rows
+  // Where each row comes from: "bundle", "given" (-r, -g, -b) or "identity" (three captures, one per light; an ICC
+  // profile's row not given; a bundle's correction off); empty: no correction.
+  std::string crosstalk_row_source[3];
+  // Why a camera_raw_rgb bundle's correction is off (decode: the scan's camera is not one the bundle lists); empty
+  // when it is applied.
+  std::string crosstalk_off;
   negicc::FlatFieldPtr flat_field;
   DinoV3Engine engine;
   std::string dino_path;                 // the backbone that runs ([built-in] ...)
@@ -237,6 +243,15 @@ struct Scan {
   std::vector<uint16_t> rgb3;            // on the CFA path: the rendered frame, 3 samples a pixel
   int orig_w = 0, orig_h = 0;            // the sensor size the sidecar records
   std::string input_source = "raw";      // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
+  // The camera make and model of the first input as LibRaw reads them (empty: an RGB TIFF or JPEG, or a RAW that
+  // records none), and whether a camera_raw_rgb bundle lists the model (ProfileBundle::camera_models; a bundle without
+  // a crosstalk matrix is not compared).
+  std::string camera_make, camera_model;
+  bool camera_listed = false;
+  // The first input's inset crop (inset_crop), which a single RAW, or three captures, is cut to without --roi or
+  // --no_crop.
+  bool has_inset = false;
+  int inset[4] = {0, 0, 0, 0};
 
   FrameDetection frame_det;              // --roi auto
   // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
