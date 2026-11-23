@@ -104,7 +104,8 @@ inline PixelShiftGroupCheck check_pixel_shift_group(const PixelShiftTags tags[4]
 
 // Opens a RAW or DNG file into proc, repairing leading spaces in UniqueCameraModel (e.g. SilverFast DNGs) if needed.
 int open_raw_file(LibRaw* proc, const std::string& fn);
-// Opens and unpacks a RAW or DNG file into proc (open_raw_file, then unpack()).
+// Opens and unpacks a RAW or DNG file into proc (open_raw_file, then unpack()). LIBRAW_FILE_UNSUPPORTED, with the
+// reason on stderr, for an X-Trans pattern holding a colour other than 0, 1 and 2.
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn);
 
 // Called with a LibRaw whose imgdata.image holds the half-size image of its RAW (read_half_size): iwidth x iheight
