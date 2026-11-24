@@ -277,7 +277,8 @@ residuals: f(L2) − L2', f(L98) − L98', f(L50) − L50', f(L90) − f(L10) �
            0.07 (f(100) − min(100, f(L98) + 100 − L98))
 bounds: black ±15, white 80 … 110, γ 0.7 … 1.45, c 0.7 … 1.5; starts at white 100, 110, 85
 share: 1 if the curve clips within 0.5 % more than without it, else the first of 0.75, 0.5, 0.25, 0
-       that does, else the one that clips least (sample: every 8th pixel each way, 16-bit outputs)
+       that does, else the one that clips least (sample: the 2 × 2 at each 8 × 8 block's origin inside
+       the inner crop, 0.90; 16-bit outputs; white: a channel at 65535, black: a channel at 0)
 Y' = table(sqrt(clamp01(Y)) · 8192) (· Y above 1),   Y = 0.212671 R + 0.715160 G + 0.072169 B
 out = Y' + (v − Y) min(f'(max(Y, 0)) / f'(max(Y', 1e-9)), 8)
 f'(t) = 1 / (3 t^(2/3)) above 216/24389, 841/108 below
