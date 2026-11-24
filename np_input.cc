@@ -276,6 +276,20 @@ int open_raw_file(LibRaw* proc, const std::string& fn) {
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
   const int ret = open_raw_file(proc, fn);
   if (ret != LIBRAW_SUCCESS) return ret;
+  // LibRaw's dcraw_process replaces the image after demosaicing when the sensor's photosites are not a square grid:
+  // turned 45 degrees (fuji_rotate: a Fuji Super CCD, or a DNG with CFALayout 2) or stretched to square pixels
+  // (stretch: a pixel aspect other than 1). Either changes sizes.width and height but not iwidth and iheight, and puts
+  // the picture off the sensor's pixel grid that crops, regions, the film base and flat fields are given in.
+  if (proc->is_fuji_rotated()) {
+    log_error("%s: the sensor's photosites are on a 45-degree grid (a Fuji Super CCD, or a DNG with CFALayout 2), "
+              "which is not supported\n", fn.c_str());
+    return LIBRAW_FILE_UNSUPPORTED;
+  }
+  if (proc->imgdata.sizes.pixel_aspect != 1) {
+    log_error("%s: the sensor's pixels are not square (pixel aspect %g), which is not supported\n", fn.c_str(),
+              proc->imgdata.sizes.pixel_aspect);
+    return LIBRAW_FILE_UNSUPPORTED;
+  }
   // An X-Trans pattern (filters 9) has three colours, 0 R, 1 G and 2 B, and COLOR() gives them as they are: LibRaw
   // clamps a RAF's to these but takes a DNG's CFAPattern as written, masked to 0..3. Every reader of the colours takes
   // them as 0..2 (a Bayer pattern's 3, its second green, comes from LibRaw's 2-bit filters and is read as such).

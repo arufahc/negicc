@@ -424,15 +424,42 @@ FlatFieldPtr load_flat_field_file(const std::string& path) {
     // with it is reported as the flat field's fault, with the file.
     int block = 0, half_h = 0, half_w = 0;
     std::string fid;
+    const auto bad_field = [&path](const std::string& field, const std::string& why) {
+        return std::runtime_error("flat field " + path + ": info.npy does not hold a flat field's record (" + field +
+                                  " " + why + ")");
+    };
+    // A size of the record: a positive whole number within int's range, as a JSON integer or a number with no
+    // fraction. Its value is checked before it is converted (a conversion out of range is undefined).
+    const auto positive_int = [&bad_field](const nlohmann::json& v, const std::string& field) {
+        const int top = std::numeric_limits<int>::max();
+        const std::string want = ", not a whole number from 1 to " + std::to_string(top);
+        if (v.is_number_unsigned()) {
+            const uint64_t u = v.get<uint64_t>();
+            if (u >= 1 && u <= (uint64_t)top) return (int)u;
+        } else if (v.is_number_integer()) {
+            const int64_t i = v.get<int64_t>();
+            if (i >= 1 && i <= top) return (int)i;
+        } else if (v.is_number_float()) {
+            const double d = v.get<double>();
+            if (d >= 1 && d <= top && d == std::floor(d)) return (int)d;
+        } else {
+            throw bad_field(field, std::string("is ") + v.type_name() + want);
+        }
+        throw bad_field(field, "is " + v.dump() + want);
+    };
     try {
         const auto j = nlohmann::json::parse(info_str);
-        block = j.at("block").get<int>();
+        block = positive_int(j.at("block"), "block");
         const auto shape = j.at("shape");
         if (!shape.is_array() || shape.size() != 2)
             throw std::runtime_error("info.npy shape must be [half_h, half_w] in: " + path);
-        half_h = shape[0].get<int>();
-        half_w = shape[1].get<int>();
-        fid = j.value("id", "");
+        half_h = positive_int(shape[0], "shape[0] (half_h)");
+        half_w = positive_int(shape[1], "shape[1] (half_w)");
+        if (j.contains("id")) {
+            const auto& id = j["id"];
+            if (!id.is_string()) throw bad_field("id", std::string("is ") + id.type_name() + ", not a string");
+            fid = id.get<std::string>();
+        }
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error("flat field " + path + ": info.npy does not hold a flat field's record (" +
                                  e.what() + ")");
