@@ -947,10 +947,17 @@ class SearchFrame {
                 << std::endl;
       return false;
     }
+    // As predict: a field that is not finite, or a sigma not above 0, is no prediction.
+    for (size_t i = 0; i < n; ++i) {
+      if (!(r.sigma[i] > 0.0f) || !std::isfinite(r.sigma[i]) || !std::isfinite(r.mu[i])) return false;
+    }
     mu = std::move(r.mu);
     sigma = std::move(r.sigma);
     tone_features.clear();
-    if (r.pooled.size() == 1152 && r.token_sd.size() == 768) {
+    auto finite = [](const std::vector<float>& v) {
+      return std::all_of(v.begin(), v.end(), [](float x) { return std::isfinite(x); });
+    };
+    if (r.pooled.size() == 1152 && r.token_sd.size() == 768 && finite(r.pooled) && finite(r.token_sd)) {
       tone_features = r.pooled;
       tone_features.insert(tone_features.end(), r.token_sd.begin(), r.token_sd.end());
     }
@@ -1279,7 +1286,11 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
   // A measured base comes from this capture: no exposure ratio.
   const bool has_custom_fb =
       (opts.film_base_rgb != nullptr || opts.film_base_rgb_d != nullptr) && opts.film_base_from_scan;
-  s.ratio_frame = has_custom_fb ? 1.0f : fb_exposure / (scan_shutter_s * (scan_iso / 100.0f));
+  // The scan's exposure divides the bundle's: without a base from this capture it must be a positive finite number.
+  const float scan_exposure = scan_shutter_s * (scan_iso / 100.0f);
+  if (!has_custom_fb && !(scan_exposure > 0.0f && std::isfinite(scan_exposure)))
+    throw std::invalid_argument("the scan's shutter and ISO must be positive finite numbers");
+  s.ratio_frame = has_custom_fb ? 1.0f : fb_exposure / scan_exposure;
   const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
   float ref_matrix[9];
   merged_matrix(bundle, s.fb, s.ratio_frame, s.frame_matrix);
@@ -1291,6 +1302,8 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
 float measure_rolloff_x_hi(const ProfileBundle& bundle, int target_idx, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995, const double* film_base_rgb, PreviewRenderer* renderer) {
+  if (target_idx < 0 || (size_t)target_idx >= bundle.targets.size())
+    throw std::invalid_argument("measure_rolloff_x_hi: target_idx is not one of the bundle's brackets");
   return measure_rolloff_x_hi(bundle, bundle.targets[target_idx].film_prof.data, frame, scan_shutter_s, scan_iso, e, g,
                               b, crop_ratio, q995, film_base_rgb, renderer);
 }
@@ -1335,7 +1348,10 @@ bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float
   out.grey_lab[1] = 0.0f;
   out.grey_lab[2] = 0.0f;
   out.grey_miss = 0.0f;
-  if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f)) return false;
+  if (!(base_e > 0.0f) || !(base_g > 0.0f) || !(base_b > 0.0f) || !std::isfinite(base_e) || !std::isfinite(base_g) ||
+      !std::isfinite(base_b) || !std::isfinite(brightness_stops) || !std::isfinite(tint_a) || !std::isfinite(warmth_b)) {
+    return false;
+  }
 
   const GreyPoint gp(prof, true);
   // The grey: the input grey_prof (else prof) renders as neutral L* 50.
@@ -1436,7 +1452,8 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
   out = PrintKnobResult{};
   out.a = a0; out.g = g0; out.b = b0;
   if (!std::isfinite(a0) || !std::isfinite(g0) || !std::isfinite(b0) || !(g0 > 0.0f) || !(b0 > 0.0f) ||
-      !std::isfinite(a_lo) || !std::isfinite(a_hi) || !(a_lo < a_hi) || !(a_lo <= a0 && a0 <= a_hi)) {
+      !std::isfinite(a_lo) || !std::isfinite(a_hi) || !(a_lo < a_hi) || !(a_lo <= a0 && a0 <= a_hi) ||
+      !std::isfinite(brightness_stops) || !std::isfinite(tint_a) || !std::isfinite(warmth_b)) {
     return false;
   }
   ParsedFilmProfile prof;
@@ -1530,6 +1547,8 @@ bool solve_print_knobs(const std::function<void(double a, double g, double b, Pa
 
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]) {
+  for (int c = 0; c < 3; ++c)
+    if (!(base[c] > 0.0f) || !std::isfinite(base[c]) || !(egb[c] > 0.0f) || !std::isfinite(egb[c])) return false;
   float log_t0[3];
   if (!GreyPoint(grey_prof, true).reference_grey(log_t0)) return false;
   GreyPoint(prof).grey(log_t0, base, egb, lab_out);
@@ -2882,7 +2901,8 @@ class WhiteLightFitCore {
   // scene-neutral anchors ----
   bool prepare() {
     const size_t n = (size_t)d_.n;
-    if (d_.mu.size() != n * 3 || d_.sigma.size() != n * 3 || n == 0 || !d_.prof || !d_.grid || !d_.merged) {
+    if (d_.mu.size() != n * 3 || d_.sigma.size() != n * 3 || n == 0 || !d_.prof || !d_.grid || !d_.merged ||
+        d_.grid_w < 1 || n % (size_t)d_.grid_w != 0) {
       std::cerr << "ERROR! The curve fit's intent field does not match the frame's grid" << std::endl;
       return false;
     }
@@ -3773,6 +3793,10 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
     share(0.999f, cr.at_white);
   }
   const int nearest = nearest_bracket(in.a_mid, best_a);
+  if (nearest < 0 || (size_t)nearest >= bundle.targets.size()) {
+    std::cerr << "ERROR! The print's bracket midpoints are not the bundle's brackets" << std::endl;
+    return false;
+  }
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
   out.params = {white_light ? E : E / e_norm, best.g, best.b, best.shoulder};   // as search_conversion_params
@@ -3797,7 +3821,8 @@ bool search_print_continuous(const ProfileBundle& bundle, const std::vector<Prin
   const AuditScope audit_scope;  // PassAudit (neg_process --check_renderer)
   const Clock::time_point t0 = Clock::now();
   for (const PrintMaterialSearch& p : prints) {
-    if (bundle.targets.empty() || !p.print_base->data.has_profile || !p.in->trc_at || !(p.in->a_hi > p.in->a_lo)) {
+    if (bundle.targets.empty() || !p.print_base || !p.in || !p.out || !p.res || !p.print_base->data.has_profile ||
+        !p.in->trc_at || !std::isfinite(p.in->a_lo) || !std::isfinite(p.in->a_hi) || !(p.in->a_hi > p.in->a_lo)) {
       std::cerr << "ERROR! The continuous print search needs a bundle's print (its grey balance curve)" << std::endl;
       return false;
     }

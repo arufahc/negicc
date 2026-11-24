@@ -297,6 +297,20 @@ void gpu_download(void* dst, const void* src, size_t bytes) {
     NEGICC_CUDA_CHECK(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost));
 }
 
+// The device's largest grid height (gridDim.y): the launches that put one row of work on each grid row refuse more rows
+// than that, as one launch cannot take them.
+static long long max_grid_rows() {
+    int dev = 0, rows = 0;
+    NEGICC_CUDA_CHECK(cudaGetDevice(&dev));
+    NEGICC_CUDA_CHECK(cudaDeviceGetAttribute(&rows, cudaDevAttrMaxGridDimY, dev));
+    return rows;
+}
+static void check_grid_rows(const char* fn, long long rows) {
+    if (rows > max_grid_rows())
+        throw GpuError(std::string(fn) + ": " + std::to_string(rows) + " rows are more than one launch takes (" +
+                       std::to_string(max_grid_rows()) + ")");
+}
+
 void gpu_render(const RenderArgs& a) {
     std::lock_guard<std::mutex> lock(g_op_mutex);
     const long long npx = (long long)a.width * a.height;
@@ -381,6 +395,7 @@ void gpu_highlight_clip(const HighlightClipArgs& a) {
     }
     const int chunks = reduction_chunks(npx);
     const size_t dyn_smem = a.max_hist ? kMaxHistBins * sizeof(unsigned int) : 0;
+    check_grid_rows("gpu_highlight_clip", a.n);
     highlight_clip_kernel<<<dim3(chunks, a.n), kThreads, dyn_smem>>>(pass_input(a.in, a.in_view, a.width), crop,
                                                                       d_mats, a.cfg, a.ceil_lin[0], a.ceil_lin[1],
                                                                       a.ceil_lin[2], d_bins, d_max);
@@ -844,6 +859,7 @@ void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int 
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     const int threads = 128;
+    check_grid_rows(__func__, gd.rows);
     const dim3 grid((unsigned)((gd.cols + threads - 1) / threads), (unsigned)gd.rows);
     grain_aware_debayer_kernel_grid<<<grid, threads>>>(a, gd);
     NEGICC_CUDA_CHECK(cudaGetLastError());
@@ -860,6 +876,7 @@ void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0,
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     const int threads = 128;
+    check_grid_rows(__func__, gd.rows);
     const dim3 grid((unsigned)((gd.cols + threads - 1) / threads), (unsigned)gd.rows);
     pixel_shift_merge_kernel_grid<<<grid, threads>>>(a, gd);
     NEGICC_CUDA_CHECK(cudaGetLastError());

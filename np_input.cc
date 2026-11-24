@@ -483,6 +483,23 @@ static bool shrink_xtrans(LibRaw* proc) {
 // Reads LibRaw's half-size image of the unpacked RAW of proc (black subtracted, every 2x2 quad one pixel), before any
 // processing, and hands proc holding it to analyse. proc is then left as unpack() left it. False when proc is not a
 // 3-colour Bayer or X-Trans RAW (shrink_xtrans). For both, LibRaw's first three channels are R, G and B.
+bool flat_after_half_size(const LibRaw& r) {
+  const auto& S = r.imgdata.rawdata.sizes;
+  return r.imgdata.idata.filters && S.width > 0 && S.height > 0 && S.width % 2 == 0 && S.height % 2 == 0;
+}
+
+// The colour of each photosite of a 6x6 tile as the flat field takes it (0 R, 1 G, 2 B; the second green is green).
+static std::array<uint8_t, 36> col3_of(LibRaw& proc) {
+  std::array<uint8_t, 36> col3{};
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {
+      const int k = proc.COLOR(r, c);
+      col3[r * 6 + c] = (uint8_t)(k == 3 ? 1 : k);
+    }
+  }
+  return col3;
+}
+
 static bool read_half_size(LibRaw* proc, const HalfSizeAnalysis& analyse) {
   const unsigned filters = proc->imgdata.idata.filters;
   const bool xtrans = filters == 9;
@@ -557,8 +574,9 @@ static bool prepare_white_light_mosaic(LibRaw* proc, double& clip_fraction, cons
     }
   float pre[4];
   for (int i = 0; i < 4; ++i) pre[i] = C.pre_mul[i];
-  if (pre[3] <= 0) pre[3] = pre[1];
-  if (!(pre[0] > 0 && pre[1] > 0 && pre[2] > 0)) {
+  if (!(pre[3] > 0) || !std::isfinite(pre[3])) pre[3] = pre[1];   // no second green of its own: the first's
+  if (!(pre[0] > 0 && pre[1] > 0 && pre[2] > 0) || !std::isfinite(pre[0]) || !std::isfinite(pre[1]) ||
+      !std::isfinite(pre[2]) || !std::isfinite(pre[0] / pre[1]) || !std::isfinite(pre[2] / pre[1])) {
     log_error("No daylight white balance (pre_mul) for this camera; the white-light decode needs one\n");
     return false;
   }
@@ -897,25 +915,29 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
         delete proc;
         return NULL;
       }
-      uint8_t col3[36];
-      for (int r = 0; r < 6; ++r) {
-        for (int c = 0; c < 6; ++c) {
-          const int k = proc->COLOR(r, c);
-          col3[r * 6 + c] = (uint8_t)(k == 3 ? 1 : k);
-        }
-      }
-      const auto& S = proc->imgdata.sizes;
+      proc->imgdata.params.user_black = 0;
+      for (int i = 0; i < 4; ++i) proc->imgdata.params.user_cblack[i] = 0;
+    }
+    // The flat divides the mosaic in place, for the output. The half-size image the analysis reads is decoded before
+    // it, when its size is the flat's half size (an even mosaic), and the analysis then reads it through the flat
+    // (flat_after_half_size): the film base's clip test sees the levels as recorded, as on the CFA path, not divided
+    // by gains below 1 to above the clip.
+    const auto& S = proc->imgdata.sizes;
+    const bool half_before_flat = flat && analyse && flat_after_half_size(*proc);
+    auto apply_flat = [&]() {
       const size_t pitch = S.raw_pitch / 2;
       try {
         flat->apply_cfa(proc->imgdata.rawdata.raw_image + (size_t)S.top_margin * pitch + S.left_margin,
-                        pitch, S.width, S.height, col3);
+                        pitch, S.width, S.height, col3_of(*proc).data());
       } catch (const std::exception& e) {
         log_error("%s\n", e.what());
-        delete proc;
-        return NULL;
+        return false;
       }
-      proc->imgdata.params.user_black = 0;
-      for (int i = 0; i < 4; ++i) proc->imgdata.params.user_cblack[i] = 0;
+      return true;
+    };
+    if (flat && !half_before_flat && !apply_flat()) {
+      delete proc;
+      return NULL;
     }
     // The black was subtracted above, before the flat: the half-size image's clip is the white level less it, which
     // LibRaw's maximum (restored as recorded, with no black left to take off) does not say. Given to the analysis
@@ -928,6 +950,10 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
       return ok;
     };
     if (analyse && !read_half_size(proc, flat ? analyse_flat : analyse)) {
+      delete proc;
+      return NULL;
+    }
+    if (half_before_flat && !apply_flat()) {
       delete proc;
       return NULL;
     }
@@ -1292,15 +1318,25 @@ bool read_jpeg(const std::string& path, RgbImage& out, std::string& err) {
   out.channels = 3;
   out.bits = 8;
   // The picture's rows are allocated as libjpeg decodes them, not from the header's size: a file that claims more
-  // than it holds ends in an error (above) before the rows it lacks are allocated.
-  std::vector<JSAMPLE> row((size_t)out.width * 3);
-  JSAMPROW rows[1] = {row.data()};
-  while (cinfo.output_scanline < cinfo.output_height) {
-    const JDIMENSION y = cinfo.output_scanline;
-    jpeg_read_scanlines(&cinfo, rows, 1);
-    out.pixels.resize((size_t)(y + 1) * row.size());
-    uint16_t* dst = out.pixels.data() + (size_t)y * out.width * 3;
-    for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);   // 8 to 16 bits, as put_samples
+  // than it holds ends in an error (above) before the rows it lacks are allocated. Memory that runs out ends the
+  // read like such an error, with libjpeg's state and the file released.
+  try {
+    std::vector<JSAMPLE> row((size_t)out.width * 3);
+    JSAMPROW rows[1] = {row.data()};
+    while (cinfo.output_scanline < cinfo.output_height) {
+      const JDIMENSION y = cinfo.output_scanline;
+      jpeg_read_scanlines(&cinfo, rows, 1);
+      out.pixels.resize((size_t)(y + 1) * row.size());
+      uint16_t* dst = out.pixels.data() + (size_t)y * out.width * 3;
+      for (size_t i = 0; i < row.size(); ++i) dst[i] = (uint16_t)(row[i] * 257);   // 8 to 16 bits, as put_samples
+    }
+  } catch (const std::bad_alloc&) {
+    jpeg_destroy_decompress(&cinfo);
+    fclose(f);
+    err = path + ": not enough memory for its " + std::to_string(out.width) + "x" + std::to_string(out.height) +
+          " pixels";
+    out = RgbImage();
+    return false;
   }
   jpeg_finish_decompress(&cinfo);
   jpeg_destroy_decompress(&cinfo);
@@ -1478,8 +1514,10 @@ LibRaw* load_rgb_input(const std::vector<std::string>& files, InputMode mode, bo
         ch = raw->imgdata.sizes.iheight;
         channel.resize((size_t)cw * ch);
         for (size_t i = 0; i < channel.size(); ++i) channel[i] = raw->imgdata.image[i][k];
-        if (raw->imgdata.other.shutter > 0 && raw->imgdata.other.iso_speed > 0)
-          exposure[k] = (double)raw->imgdata.other.shutter * raw->imgdata.other.iso_speed;
+        // A shutter or ISO that is not a positive finite number records no exposure (an infinite one scaled the other
+        // channels by infinity, to 65535).
+        const double ek = (double)raw->imgdata.other.shutter * raw->imgdata.other.iso_speed;
+        if (raw->imgdata.other.shutter > 0 && raw->imgdata.other.iso_speed > 0 && std::isfinite(ek)) exposure[k] = ek;
         white = std::min(white, std::max(1.0f, (float)raw->imgdata.color.maximum - (float)raw->imgdata.color.black));
         if (k == 0) {  // the first capture's metadata (camera, exposure) describes the result
           if (!(proc = new_image_proc(cw, ch))) {
