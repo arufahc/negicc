@@ -43,7 +43,9 @@ namespace negicc {
 // gives it) on the profile's film base |profile_base|: K = (M^-1 profile_base) / (M^-1 base) per channel, M the camera
 // matrix the decode applies (rec2020_rgb x rgb_cam), divided by its largest so no channel is raised and nothing new
 // clips. k is left as it is when either base has a camera channel that is not positive, or when a gain is not a finite
-// positive number (a base so extreme that the arithmetic overflows or underflows).
+// positive number (a base so extreme that the arithmetic overflows or underflows), or when the camera matrix's
+// determinant is 0 or not finite. (A camera matrix of rank 2 whose determinant is rounding residue still passes; the
+// gains it gives then lie within a few 1e-4 of 1.)
 //
 // Why before the matrix: a light of another colour than the profile's gives the base another colour in the camera's
 // own channels. Corrected after the matrix has mixed them, the matrix's negative terms drive dense areas below zero
@@ -66,6 +68,7 @@ inline void film_base_balance_gains(const LibRaw& proc, const double base[3], co
       adj[j][i] = m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3] -
                   m[(i + 1) % 3][(j + 2) % 3] * m[(i + 2) % 3][(j + 1) % 3];
   const double det = m[0][0] * adj[0][0] + m[0][1] * adj[1][0] + m[0][2] * adj[2][0];
+  if (!std::isfinite(det) || det == 0.0) return;   // no inverse: k as it is
   double gain[3];
   for (int c = 0; c < 3; ++c) {
     double cam = 0, cam_profile = 0;  // the two bases in camera channel c, each times det(M)
@@ -96,7 +99,10 @@ inline void scale_white_light_mosaic(LibRaw* proc, const float k[3]) {
   const auto& S = proc->imgdata.sizes;
   const auto& R = proc->imgdata.rawdata;
   const int samples = R.raw_image ? 1 : R.color4_image ? 4 : 3;
-  uint16_t* raw = R.raw_image ? R.raw_image : samples == 4 ? &R.color4_image[0][0] : &R.color3_image[0][0];
+  uint16_t* raw = R.raw_image      ? R.raw_image
+                  : R.color4_image ? &R.color4_image[0][0]
+                  : R.color3_image ? &R.color3_image[0][0]
+                                   : nullptr;   // no mosaic
   if (!raw) return;
   const size_t pitch = S.raw_pitch / 2 / samples;  // pixels per row of the raw buffer
   float tile[36];  // the gain of each photosite of a 6x6 CFA tile (Bayer repeats every 2, X-Trans every 6)
@@ -300,6 +306,12 @@ LibRaw* load_raw(const std::string& fn, bool debayer, int qual, bool crop,
 // The RAW's inset crop as left, top, width and height in the visible image (sizes.width x sizes.height, after the
 // margins), when the RAW gives one that is not the whole image. Its right and bottom edges are not clamped to the image.
 bool inset_crop(const LibRaw& r, int box[4]);
+
+// Whether load_raw's decode through LibRaw with a flat field (not white light) decodes the half-size image its
+// analysis reads before the flat divides the mosaic: when the visible mosaic is even, so the half-size image is the
+// flat's half size. The analysis then reads that image through the flat (an RgbView carrying it), as the CFA path
+// does; otherwise the flat divided the mosaic first.
+bool flat_after_half_size(const LibRaw& r);
 
 // --------------------------------------------------------------------------------------------------------------------
 // TIFF and JPEG files
@@ -1693,7 +1705,9 @@ struct ParamSearchResult {
 // the pre-shoulder max channel over its inner crop, mapped to sRGB 242. The search's last step measures the same on its
 // half-size frame; neg_process measures every bundle conversion's there too, so given values reproduce it. q995 gets
 // the point. film_base_rgb: a film base read from this scan (the film base detector part of negicc_core.h), as
-// ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's.
+// ParamSearchOptions::film_base_rgb_d with film_base_from_scan; null for the bundle's. Throws std::invalid_argument
+// when target_idx is not one of the bundle's brackets, or, without a base from this scan, when the scan's shutter and
+// ISO are not positive finite numbers (as the search does).
 float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileData& prof, const negicc::RgbView& frame,
                            double scan_shutter_s, double scan_iso, float e, float g, float b, float crop_ratio,
                            float* q995 = nullptr, const double* film_base_rgb = nullptr,
@@ -1716,7 +1730,7 @@ struct KnobSolveResult {
 // through prof by brightness_stops (in stops of luminance), tint_a (CIELAB a*), and warmth_b (CIELAB b*), matching
 // negicc-station's GreyPoint and ConversionSession._solve_knobs. grey_prof, when given, is the profile whose neutral
 // L* 50 defines the grey (the bracket's profile before re-anchored curves changed it), rendered through prof. False
-// when base is not positive, or when no grey is found (out.grey_miss).
+// when base is not positive and finite, when a knob is not finite, or when no grey is found (out.grey_miss).
 bool solve_grey_knobs(const ProfileData& prof, float base_e, float base_g, float base_b, float brightness_stops,
                       float tint_a, float warmth_b, KnobSolveResult& out, const ProfileData* grey_prof = nullptr);
 struct PrintKnobResult {
@@ -1731,7 +1745,8 @@ struct PrintKnobResult {
 bool solve_print_knobs(const std::function<void(double a, double g, double b, ParsedFilmProfile& prof)>& print_at,
                        double a0, float g0, float b0, double a_lo, double a_hi, float brightness_stops, float tint_a,
                        float warmth_b, PrintKnobResult& out);
-// The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof.
+// The Lab through prof at gains egb of the grey that base renders as neutral L* 50 through grey_prof. False when base
+// or egb is not positive and finite, or when no grey is found.
 bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const float base[3], const float egb[3],
                    float lab_out[3]);
 // How far, in stops of luminance, a grey rendered at L* grey_L lies from the L* brightness_stops asks for.
@@ -1739,7 +1754,8 @@ float knob_grey_miss_stops(float brightness_stops, float grey_L);
 
 // Searches the conversion parameters of one frame. frame is the frame upright, already cut out of the half-size
 // decode and oriented as the output (DINOv3 judges an image the way it will be seen); scan_shutter_s and scan_iso
-// are the capture's exposure.
+// are the capture's exposure, positive finite numbers unless the film base is read from this scan
+// (opts.film_base_from_scan): otherwise it throws std::invalid_argument.
 bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const negicc::RgbView& frame,
                               double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                               ParamSearchResult& out);

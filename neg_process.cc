@@ -8183,8 +8183,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // The film base read from a half-size image (detect_base); gives the image as a view.
   auto read_base = [&](const LibRaw& raw) {
     const int half_w = raw.imgdata.sizes.iwidth, half_h = raw.imgdata.sizes.iheight;
+    // A RAW decoded through LibRaw with a flat field: the half-size image is the mosaic as recorded (the flat divides
+    // it after this analysis, flat_after_half_size), read through the flat as on the CFA path.
+    std::shared_ptr<const negicc::FlatTables> half_flat;
+    if (s.flat_field && !s.white_light && o.input_mode == InputMode::kRaw && flat_after_half_size(raw))
+      half_flat = s.flat_field->tables(half_w, half_h, true);
     negicc::RgbView half_view = negicc::RgbView::from_interleaved_rgb(
-        &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4);
+        &raw.imgdata.image[0][0], half_w, half_h, 4, (ptrdiff_t)half_w * 4,
+        half_flat ? half_flat->host() : negicc::FlatSampleArgs{}, half_flat);
     // The detector's boxes are in the mosaic's pixels: give its size, not the decode's (the half-size decode's
     // own size put the base patch off the image, so neg_process fell back to the statistics).
     // A single RAW's or linear DNG's detection (--roi auto's, or base_det with a given frame) ran on its raw data (a

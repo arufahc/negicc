@@ -492,7 +492,7 @@ NEGICC_HD InnerCrop pass_crop(InnerCrop c, int W, int H) {
 
 NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
     if (W <= 0 || H <= 0) return {0, 0, 0, 0};
-    if (crop_ratio >= 1.0f) return {0, 0, W, H};
+    if (!(crop_ratio < 1.0f)) return {0, 0, W, H};   // 1 or more, or not a number: the whole frame
     int x0 = (int)roundf(W * (1.0f - crop_ratio) * 0.5f);
     int y0 = (int)roundf(H * (1.0f - crop_ratio) * 0.5f);
     if (x0 < 0) x0 = 0;
@@ -1526,12 +1526,15 @@ inline InputCurves anchor_curves(const InputCurves& shape, const CurveFrame& f, 
 // density range [u_lo, 0] (the densest grid cell): pixels denser than any grid cell land below it, where the curve
 // could otherwise fold over or move arbitrarily far from the TRC. A hold point above 0 (above ref, where the curve does
 // not act) is refused: every entry below ref is then held, and the curve meets the identity at ref with a step of
-// f(u_hold) - u_hold stops. The identity (a = k = 0) always passes.
+// f(u_hold) - u_hold stops. The identity (a = k = 0) always passes; any other curve needs a, k, u_med and ref finite and
+// ref above 0.
 inline bool curve_shape_ok(float a, float k, float u_med, float ref, int table_n, float max_dev,
                            float u_hold = -INFINITY) {
   if (a == 0.0f && k == 0.0f) return true;
   if (!(u_hold <= 0.0f)) return false;
-  if (!(ref > 0.0f) || table_n < 2) return true;
+  // A curve is numbers: a, k, its median and its reference finite, the reference above 0 (the film base's level).
+  if (!(std::isfinite(a) && std::isfinite(k) && std::isfinite(u_med) && std::isfinite(ref) && ref > 0.0f)) return false;
+  if (table_n < 2) return true;
   // f at the entry above; the table is walked from ref down, from f = 0 there (the identity at and above ref), so the
   // curve stays below ref as it leaves it.
   float prev = 0.0f;
@@ -2343,6 +2346,8 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
   // sigma, or block indices that do not cover the cells) or with no precision at all, the fifth residual is absent
   // and the fit is the four-residual fit.
   bool intent = fi.mu && fi.sigma && fi.nbx > 0 && (int)fi.bx.size() == n && (int)fi.by.size() == n;
+  // Each cell's block within the field: 0 <= bx < nbx, and 0 <= by < n (a block row holds at least one cell).
+  for (int i = 0; intent && i < n; ++i) intent = fi.bx[i] >= 0 && fi.bx[i] < fi.nbx && fi.by[i] >= 0 && fi.by[i] < n;
   std::vector<double> al(n, 0.0);
   double asum = 0;
   if (intent) {
@@ -2374,10 +2379,10 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
       szd += al[i] * z * (d0[i] - dbar);
     }
     const double kd = szz > 0 ? szd / szz : 0.0;
-    std::vector<double> bs(fi.nbx * (1 + *std::max_element(fi.by.begin(), fi.by.end())), 0.0);
+    std::vector<double> bs((size_t)fi.nbx * (1 + *std::max_element(fi.by.begin(), fi.by.end())), 0.0);
     for (int i = 0; i < n; ++i) {
       const double dt = (d0[i] - dbar) - kd * (lab0[i].L - La) / 50.0;
-      bs[fi.by[i] * fi.nbx + fi.bx[i]] += al[i] * dt;
+      bs[(size_t)fi.by[i] * fi.nbx + fi.bx[i]] += al[i] * dt;
     }
     double se2 = 0;
     for (double v : bs) se2 += v * v;
