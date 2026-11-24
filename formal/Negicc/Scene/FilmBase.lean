@@ -11,7 +11,7 @@ public import Negicc.Scene.Input
 # The film base
 
 The film base `f` is taken, in this order (`neg_process.cc`, `detect_film_base` in
-`film_base_detector.cc`):
+`film_detector.cc`):
 
 1. a capture of unexposed film (`--film_base`), scaled by the scan's exposure over the capture's
    (`baseFromCapture`); refused when the film it reads is at the sensor's clip before the flat field;

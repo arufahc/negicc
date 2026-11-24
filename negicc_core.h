@@ -628,7 +628,7 @@ inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
 // detector reads it in three ways: a box-averaged downsample to a work image of at most params.work_size pixels on
 // the long side, a few thousand bilinear samples along the primary frame's edges (refinement), and every sample
 // inside each candidate film base patch (film_sample_patch). Intermediate buffers are work-image sized, besides the
-// patch samples (see film_frame_detector.cc for each one).
+// patch samples (see film_detector.cc for each one).
 //
 // Output coordinates are image pixels: the pixel grid FilmImage::width x FilmImage::height (the sensor for a CFA
 // mosaic, the decoded image for an RGB image), x right and y down, pixel (i, j) covering [i, i + 1) x [j, j + 1).

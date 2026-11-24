@@ -117,7 +117,7 @@ after the load (`mergedMatrix_mulVec_scan_base`).
 **Base from a capture** (`neg_process.cc`; Lean `baseFromCapture`): `X v · exposure(scan) /
 exposure(capture)`; refused when the film it reads is at the sensor's clip before the flat field.
 
-**Rebate** (`film_base_detector.cc`: `detect_film_base`; Lean `rebatePlaced`, `rebateBox`,
+**Rebate** (`film_detector.cc`: `detect_film_base`; Lean `rebatePlaced`, `rebateBox`,
 `patchClipped`, `outshoneStops`, `rebateAccepted`, `medianU16`; checked through `detect_film_base` on
 synthetic decodes, with the thinnest film, which the segmentation gives, as input). Placed from a detection of confidence
 ≥ 0.5 on a decode with `|sx − sy| ≤ 0.02 max(sx, sy)`; the box inset by 15 % on each side, scaled and

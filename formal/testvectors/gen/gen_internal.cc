@@ -1,8 +1,8 @@
-// The functions of film_base_detector.cc that have internal linkage (percentile_f32, median_u16), made callable for
+// The functions of film_detector.cc that have internal linkage (percentile_f32, median_u16), made callable for
 // gen_vectors.cc. The source file is compiled into this translation unit as it is, so the generator calls the
 // library's own code; the library's object of the same file is then not linked. Nothing here computes a value itself.
 
-#include "film_base_detector.cc"  // NOLINT(bugprone-suspicious-include)
+#include "film_detector.cc"  // NOLINT(bugprone-suspicious-include)
 
 namespace genint {
 

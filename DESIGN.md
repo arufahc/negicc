@@ -130,7 +130,7 @@ same flat.
 
 The film base is the orange mask of unexposed film. Dividing by it makes each channel a transmittance relative to
 bare film, so a profile and a scan agree whatever the mask's colour or the scan's exposure. The base `f` is taken,
-in this order (`neg_process.cc`, `film_base_detector.cc`: `detect_film_base`):
+in this order (`neg_process.cc`, `film_detector.cc`: `detect_film_base`):
 
 1. **A capture of unexposed film** (`--film_base <file>[:x,y,w,h]`, TriLED only): decoded as the half-size view,
    flat-fielded, read over the given region or over a region found by tiles (the brightest group of smooth tiles of

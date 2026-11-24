@@ -292,8 +292,8 @@ DINOV3_CXXFLAGS = -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -fsigned-char 
 
 # The library negicc-station links (NEGICC_LIB): the DINOv3 engine and solver, and the conversion code shared with
 # neg_process (profile bundles, cropping, flat field, zero-copy CFA pipeline, the conversion parameter search).
-DINOV3_OBJS = bin_out/dinov3.o bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_frame_detector.o \
-              bin_out/film_base_detector.o bin_out/tone_stage.o bin_out/profile_bundle.o \
+DINOV3_OBJS = bin_out/dinov3.o bin_out/flat_field.o bin_out/rgb_view.o bin_out/film_detector.o \
+              bin_out/tone_stage.o bin_out/profile_bundle.o \
               bin_out/multi_target_optimizer.o
 
 # The bundle search's passes on the GPU with USE_CUDA=1 (CUDA_ARCH, above).
@@ -338,18 +338,15 @@ lib: bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(TIFF_LI
 
 GIT_VERSION ?= $(shell git describe --always --dirty --tags --exclude latest 2>/dev/null || echo "master")
 
-bin_out/film_frame_detector.o: film_frame_detector.cc negicc_core.h $(BUILD_STAMP)
+# The film frame detector and the film base detector.
+bin_out/film_detector.o: film_detector.cc negicc_core.h $(BUILD_STAMP)
 	mkdir -p bin_out
-	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_frame_detector.cc -o $@
+	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_detector.cc -o $@
 
 # The tone stage's curve, plan and clip check (neg_process and negicc-station).
 bin_out/tone_stage.o: tone_stage.cc negicc.h negicc_core.h $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(DINOV3_CXXFLAGS) -c tone_stage.cc -o $@
-
-bin_out/film_base_detector.o: film_base_detector.cc negicc_core.h $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) -std=c++17 -O3 -fPIC -fopenmp -ffp-contract=off -Wall -Wextra -I. -c film_base_detector.cc -o $@
 
 # Data files built into neg_process: the profile bundles and the intent adapters, exported from negicc-station
 # (tools/export_negicc_data.py), and the DINOv3 backbone: backbone.onnx (make dinov3_model), and in USE_CUDA=1 builds

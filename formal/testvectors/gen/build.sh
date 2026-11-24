@@ -6,7 +6,7 @@
 #   bin_out/gen_vectors profiles/Portra400-A7R4-TriLED profiles/Portra400-A7R4-D65 formal/testvectors
 #
 # ORT_DIR is the ONNX Runtime directory the Makefile uses (include/ and lib/<arch>/). The generator calls no
-# inference, but the library it links refers to the runtime. gen_internal.cc compiles film_base_detector.cc into the
+# inference, but the library it links refers to the runtime. gen_internal.cc compiles film_detector.cc into the
 # generator (for its functions of internal linkage); the library's object of that file is then not linked.
 set -e
 cd "$(dirname "$0")/../../.."

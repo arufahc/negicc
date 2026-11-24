@@ -4,7 +4,7 @@
 //
 // Every value is computed by the library's functions (negicc.h: the colour pipeline, flat field, profile bundle,
 // image view, DINOv3, tone stage, input curves, white-light balance and film base detector parts, and through
-// gen_internal.cc the functions of internal linkage of film_base_detector.cc; the parameter search part for
+// gen_internal.cc the functions of internal linkage of film_detector.cc; the parameter search part for
 // ParamSearchOptions' crop ratio only); nothing is re-implemented here. The inputs are synthetic (fixed formulas or a
 // seeded generator) or the bundles' own data.
 
