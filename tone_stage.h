@@ -138,12 +138,14 @@ void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc
 // designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends hold against the
 // conversion's own shares (white_before, black_before: tone_clip_shares without a curve), else the moves scaled as
 // kToneClipAllowance says. share gets the share of the highlight and range moves kept, and shadow_share (when given)
-// that of the shadow move.
+// that of the shadow move; white_after and black_after (when given) the sample's shares at white and at black with the
+// curve kept, as the check counted them.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
                               double white_before, double black_before, const ToneCurve& designed,
                               const ToneTargets& designed_targets, ToneTargets* targets, double* share,
-                              double* shadow_share = nullptr);
+                              double* shadow_share = nullptr, double* white_after = nullptr,
+                              double* black_after = nullptr);
 
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
 // predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.

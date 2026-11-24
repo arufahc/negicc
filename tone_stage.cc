@@ -332,7 +332,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                               const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
                               double white_before, double black_before, const ToneCurve& designed,
                               const ToneTargets& designed_targets, ToneTargets* targets, double* share,
-                              double* shadow_share) {
+                              double* shadow_share, double* white_after, double* black_after) {
     constexpr int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
     ToneCurve curves[n];
     ToneTargets tts[n];
@@ -340,6 +340,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
     tts[0] = designed_targets;
     int k = n - 1;  // when no share holds at both ends, the last: no highlight or range move
     double ss[n];
+    double kw = 0.0, kb = 0.0;  // the shares of the last curve checked: the one kept
     for (int i = 0; i < n; ++i) {
         const double hs = kToneClipShares[i];
         ss[i] = 1.0;
@@ -352,12 +353,16 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
             tone_clip_shares(pc, sample, &curves[i], &aw, &ab);
             ss[i] = hs;
         }
+        kw = aw;
+        kb = ab;
         if (aw - white_before <= kToneClipAllowance && ab - black_before <= kToneClipAllowance) {
             k = i;
             break;
         }
     }
     if (shadow_share) *shadow_share = ss[k];
+    if (white_after) *white_after = kw;
+    if (black_after) *black_after = kb;
     *share = kToneClipShares[k];
     *targets = tts[k];
     return curves[k];
