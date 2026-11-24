@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -1366,6 +1367,9 @@ static inline void pixel_shift_pixel_cpu(const PixelShiftMergeArgs& a, size_t pi
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("cpu_pixel_shift_merge: rot_cw must be a multiple of 90");
+    }
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
+        throw std::invalid_argument("cpu_pixel_shift_merge: white_level must be within a 16-bit sample's range");
     }
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)

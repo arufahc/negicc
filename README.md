@@ -121,6 +121,11 @@ that states no model (a TIFF) and a set from before the list are not compared, a
 separate frames need no correction. A white-light set has no matrix and lists no models, and no camera is compared for
 it.
 
+Rows given with `-r`, `-g` and `-b` are in the units of the profile set's own correction matrix. The set stores its
+film base as read through that matrix, and the automatic exposure compares the scan's film base with the stored one,
+so rows of another overall scale move the automatic exposure, by log2 of the scale in stops. Rows that leave the
+matrix not invertible are refused.
+
 Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
 turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than
 bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by LibRaw. `-q` chooses LibRaw's method,
@@ -349,7 +354,7 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
 | `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |
 | `-q`, `--quality` | Demosaic: −1 automatic, or a LibRaw quality (4 is DCB). |
-| `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's). |
+| `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's), in the units of the set's own matrix. |
 | `-C`, `--no_crop` | Keep the RAW's full area. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |

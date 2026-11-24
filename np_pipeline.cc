@@ -882,6 +882,11 @@ static PassThroughRenderer& pass_through_renderer() {
   return r;
 }
 
+// Rows given with -r, -g and -b that leave the crosstalk correction, as it applies, not invertible.
+static const char kRowsNotInvertible[] =
+    "-r, -g and -b: the crosstalk correction matrix is not an invertible 3x3 of numbers within float range (its "
+    "float determinant a normal float)\n";
+
 // The renderer of the search's passes: --check_renderer's (counting, and comparing with the GPU's where a device runs
 // its kernels), the GPU's (search_runs_on_gpu), or null (the CPU's).
 static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
@@ -1152,6 +1157,18 @@ int prepare(const Options& o, Setup& s) {
                                 : (s.is_bundle && o.input_mode != InputMode::kThreeShot && bundle.has_crosstalk)
                                     ? "bundle"
                                     : "identity";
+  }
+  // The correction is the inverse of the light's mixing (DESIGN.md 2.4), so it is invertible: rows that leave it
+  // singular (all zero, or linearly dependent) would collapse the picture. Checked on the matrix as it applies. With
+  // an ICC profile that is the rows here; with a bundle it is known only once the scan's camera has decided which
+  // rows the bundle gives (decode).
+  if (!s.is_bundle && s.has_crosstalk && (row_given[0] || row_given[1] || row_given[2])) {
+    float x[9];
+    for (int i = 0; i < 9; ++i) x[i] = (*rows[i / 3])[i % 3];
+    if (!crosstalk_matrix_invertible(x)) {
+      log_error("%s", kRowsNotInvertible);
+      return 1;
+    }
   }
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
@@ -1739,6 +1756,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                o.row_given[0] || o.row_given[1] || o.row_given[2] ? " (the rows given are applied)" : "");
     }
   }
+  // The matrix as it applies, now that the camera check has decided the rows the bundle gives: with rows given it is
+  // tested as a bundle's own matrix is when it loads, before anything reads through it.
+  if (s.is_bundle && s.has_crosstalk && (o.row_given[0] || o.row_given[1] || o.row_given[2]) &&
+      !crosstalk_matrix_invertible(bundle.crosstalk_matrix)) {
+    log_error("%s", kRowsNotInvertible);
+    return 1;
+  }
+  // Rows given on a camera_raw_rgb bundle without a matrix of its own are its correction from here on, as a bundle's
+  // matrix is: the film base capture, the film base found in the frame, what the base was read with and the search
+  // read through them, as the conversion does. (Set after the camera check, which turns off only a bundle's own.)
+  if (s.is_bundle && s.has_crosstalk) bundle.has_crosstalk = true;
 
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
@@ -2686,6 +2714,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         int fret = fp->open_file(o.files[mi].c_str());
         if (fret != LIBRAW_SUCCESS || (fret = fp->unpack()) != LIBRAW_SUCCESS) {
           log_error("Cannot open/unpack %s: %s\n", o.files[mi].c_str(), libraw_strerror(fret));
+          delete proc;
+          return 1;
+        }
+        if (!raw_levels_valid(*fp, o.files[mi])) {
           delete proc;
           return 1;
         }

@@ -171,7 +171,7 @@ struct FilmModel {
   bool present = false;
   std::string name;
   std::vector<double> dye[3], base;           // spectral densities, kSpectralSamples samples
-  std::vector<double> log_exposure;           // ascending
+  std::vector<double> log_exposure;           // of each sample; it selects those the print matrix is fitted to
   std::vector<double> neutral[3];             // dye amounts along log_exposure
 };
 
@@ -241,6 +241,13 @@ double shutter_to_seconds_d(const std::string& shutter);
 // Reads (ExposureTime in seconds, ISO) in double precision from a TIFF-based RAW's EXIF IFD (matching
 // auto_exposure.read_exif_exposure). Returns true when ExposureTime was read.
 bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double& iso);
+
+// Whether a crosstalk correction matrix, as the floats that are applied, is usable: every element finite, and the
+// determinant a normal float that is larger than the rounding error of its own computation (so exactly dependent
+// rows, whose determinant comes out as rounding residue, are not taken as invertible). The correction is the inverse
+// of the light's mixing (DESIGN.md 2.4), so it is invertible. One rule for a bundle's matrix and for rows given with
+// -r, -g and -b.
+bool crosstalk_matrix_invertible(const float m[9]);
 
 // Computes negicc-station's merged crosstalk matrix (film_profiling.compute_merged_crosstalk) in double precision
 // and rounds to float32 when out_f32 is non-null. When film_base_from_scan is true (e.g. rebate sampled from the

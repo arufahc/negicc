@@ -273,11 +273,81 @@ int open_raw_file(LibRaw* proc, const std::string& fn) {
   return ret;
 }
 
+bool raw_levels_valid(const LibRaw& proc, const std::string& fn) {
+  const auto& C = proc.imgdata.color;
+  const unsigned sample_max = std::numeric_limits<uint16_t>::max();
+  if (C.maximum == 0 || C.maximum > sample_max) {
+    log_error("%s: white level %u is outside the 16-bit sample's range (1 to %u)\n", fn.c_str(), C.maximum,
+              sample_max);
+    return false;
+  }
+  // A DNG's black levels as the file gives them (BlackLevel, its deltas averaged in), each of which must round to a
+  // sample's value (dng_fcblack[4] and [5] hold the pattern's size, not a level). They are tested as given, not
+  // through LibRaw's integer black: LibRaw converts them to unsigned, which is undefined for a level outside that
+  // type, and the result differs by machine (a negative level wraps on x86-64, where a sum of two can wrap back into
+  // range, and becomes 0 on ARM64), so the integer does not show what the file held.
+  const auto& D = C.dng_levels;
+  const auto a_sample = [sample_max](float v) {
+    const double r = std::floor((double)v + 0.5);
+    return r >= 0.0 && r <= (double)sample_max;   // false for a NaN
+  };
+  float dng_black = D.dng_fblack;
+  bool dng_ok = a_sample(dng_black);
+  for (int i = 0; i < LIBRAW_CBLACK_SIZE && dng_ok; ++i) {
+    if (i != 4 && i != 5 && !a_sample(D.dng_fcblack[i])) dng_ok = false, dng_black = D.dng_fcblack[i];
+  }
+  if (!dng_ok) {
+    log_error("%s: DNG black level %.0f is outside the 16-bit sample's range (0 to %u)\n", fn.c_str(), dng_black,
+              sample_max);
+    return false;
+  }
+  // The black of a photosite is black + cblack[colour] + its cblack[6..] pattern entry (as subtract_cfa_black_in_place
+  // and prepare_white_light_mosaic take it); a negative one wraps to a large unsigned value.
+  unsigned cblack_max = 0, pattern_max = 0;
+  for (int i = 0; i < 4; ++i) cblack_max = std::max(cblack_max, C.cblack[i]);
+  const unsigned dr = C.cblack[4], dc = C.cblack[5];
+  if (dr > 0 && dc > 0 && (size_t)dr * dc <= LIBRAW_CBLACK_SIZE - 6) {
+    for (unsigned i = 0; i < dr * dc; ++i) pattern_max = std::max(pattern_max, C.cblack[6 + i]);
+  }
+  const struct { const char* name; unsigned value; } parts[3] = {
+      {"black level", C.black}, {"per-channel black level", cblack_max}, {"black level pattern entry", pattern_max}};
+  for (const auto& p : parts) {
+    if (p.value > sample_max) {
+      log_error("%s: %s %u is outside the 16-bit sample's range (0 to %u)\n", fn.c_str(), p.name, p.value,
+                sample_max);
+      return false;
+    }
+  }
+  const uint64_t black_max = (uint64_t)C.black + cblack_max + pattern_max;
+  if (black_max >= C.maximum) {
+    log_error("%s: black level %llu is not below the white level %u\n", fn.c_str(), (unsigned long long)black_max,
+              C.maximum);
+    return false;
+  }
+  return true;
+}
+
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
-  const int ret = open_raw_file(proc, fn);
+  int ret = open_raw_file(proc, fn);
   if (ret != LIBRAW_SUCCESS) return ret;
+  // LibRaw's dcraw_process replaces the image after demosaicing when the sensor's photosites are not a square grid:
+  // turned 45 degrees (fuji_rotate: a Fuji Super CCD, or a DNG with CFALayout 2) or stretched to square pixels
+  // (stretch: a pixel aspect other than 1). Either changes sizes.width and height but not iwidth and iheight, and puts
+  // the picture off the sensor's pixel grid that crops, regions, the film base and flat fields are given in.
+  if (proc->is_fuji_rotated()) {
+    log_error("%s: the sensor's photosites are on a 45-degree grid (a Fuji Super CCD, or a DNG with CFALayout 2), "
+              "which is not supported\n", fn.c_str());
+    return LIBRAW_FILE_UNSUPPORTED;
+  }
+  if (proc->imgdata.sizes.pixel_aspect != 1) {
+    log_error("%s: the sensor's pixels are not square (pixel aspect %g), which is not supported\n", fn.c_str(),
+              proc->imgdata.sizes.pixel_aspect);
+    return LIBRAW_FILE_UNSUPPORTED;
+  }
   log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
-  return proc->unpack();
+  ret = proc->unpack();
+  if (ret == LIBRAW_SUCCESS && !raw_levels_valid(*proc, fn)) ret = LIBRAW_DATA_ERROR;
+  return ret;
 }
 
 
