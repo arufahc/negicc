@@ -442,7 +442,7 @@ NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_
               $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
 NP_SRCS = np_input.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
-NP_HDRS = negicc.h negicc_core.h 3rd_party/tiff_head.h
+NP_HDRS = negicc.h negicc_core.h 3rd_party/tiff_head.h 3rd_party/picosha2/picosha2.h
 
 bin_out/neg_process.o: neg_process.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
