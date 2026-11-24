@@ -1,4 +1,4 @@
-#include "rgb_view.h"
+#include "negicc.h"
 
 #include <algorithm>
 #include <cmath>

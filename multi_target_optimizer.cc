@@ -13,8 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "multi_target_optimizer.h"
-#include "film_base_detector.h"
+#include "negicc.h"
 
 #include <algorithm>
 #include <chrono>
@@ -31,10 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "dinov3.h"
-#include "profile_bundle.h"
 #include "nlohmann/json.hpp"
-#include "tone_stage.h"  // kToneClipAllowance (the shadow alternative)
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {
@@ -593,7 +589,7 @@ void compute_frame_stats(const negicc::RgbView& frame, float crop_ratio, int max
     }
   } else {
     // An axis that enlarges (scale < 1): per axis, an area average where it shrinks and a clamped bilinear pair where
-    // it enlarges (rgb_view.h resample_taps).
+    // it enlarges (negicc_core.h resample_taps).
     const auto ty = negicc::resample_taps<float>(crop.h, dino_h, sy);
     const auto tx = negicc::resample_taps<float>(crop.w, dino_w, sx);
 #pragma omp parallel for schedule(static)
@@ -1594,7 +1590,7 @@ void PassThroughRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   negicc::cpu_highlight_clip(a);
 }
 
-// ---- The GPU renderer (multi_target_optimizer.h GpuRenderer) -------------------------------------------------------
+// ---- The GPU renderer (negicc.h GpuRenderer) -----------------------------------------------------------------------
 
 namespace {
 
@@ -1799,7 +1795,7 @@ void GpuRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   negicc::gpu_highlight_clip(d);
 }
 
-// ---- The comparison (multi_target_optimizer.h CompareRenderer) ------------------------------------------------------
+// ---- The comparison (negicc.h CompareRenderer) ----------------------------------------------------------------------
 
 void CompareRenderer::bind_frame(const negicc::RgbView& frame) {
   PassThroughRenderer::bind_frame(frame);

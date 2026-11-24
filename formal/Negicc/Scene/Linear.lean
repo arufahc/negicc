@@ -14,7 +14,7 @@ public import Negicc.Scene.Profile
 The film profile gives XYZ under D50. One fixed matrix takes it to linear sRGB: the inverse of the
 D50-adapted colorants of the sRGB profile the outputs embed (Elle Stone's sRGB V2), so that the codes
 written mean, through the embedded profile, the PCS they were computed from, and the PCS white
-`pcsWhite` maps to `(1, 1, 1)` (`pcs_to_linear_srgb_unclamped` in `color_pipeline.h`). The result is
+`pcsWhite` maps to `(1, 1, 1)` (`pcs_to_linear_srgb_unclamped` in `negicc_core.h`). The result is
 held at zero from below only: values above 1, brighter than the chart's white, are kept for the
 highlight shoulder (`pcs_to_linear_srgb_pre_shoulder`).
 

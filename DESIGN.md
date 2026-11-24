@@ -34,8 +34,8 @@ The stages, and which run for each output:
 | The print's search on the print profile | 5.6 | no | no | yes | with `--print`: once per material |
 | Conversion | 4.1, 5.4 | chart profile | chart profile | print profile | density, then CLF |
 
-Every pixel is converted once, by one chain of per-pixel stages (`color_pipeline.h`). The searches decide only the
-numbers that chain uses; they render small previews and never touch the output's pixels.
+Every pixel is converted once, by one chain of per-pixel stages (the colour pipeline part of `negicc_core.h`). The
+searches decide only the numbers that chain uses; they render small previews and never touch the output's pixels.
 
 ## Notation
 
@@ -70,9 +70,9 @@ A RAW is opened with LibRaw and its black level is subtracted per channel (`np_i
 
 - **The half-size image** is what the searches and the film base read. Under the RGB LED it is read straight from the
   CFA mosaic, one pixel per 2×2 Bayer quad: `(R, (G1 + G2) / 2, B)`, with no demosaic. It is a view into the mosaic,
-  not a copy (`rgb_view.h`: `RgbView::from_cfa_half`, `cpu_preview_debayer`).
+  not a copy (`negicc_core.h`: `RgbView::from_cfa_half`, `cpu_preview_debayer`).
 - **The full-resolution image** is what the output is converted from. Under the RGB LED a single Sony RGGB RAW is
-  demosaiced by a grain-aware debayer (`rgb_view.h`: `cpu_grain_aware_debayer`): green from the two Hamilton-Adams
+  demosaiced by a grain-aware debayer (`negicc_core.h`: `cpu_grain_aware_debayer`): green from the two Hamilton-Adams
   estimates blended by `1 / (4096 + gradient²)`, red and blue as ratios `(R + 16) / (G + 16)`, bilinear where a
   channel is within 64 of white. Four pixel-shift captures (Sony A7R IV) are merged instead
   (`cpu_pixel_shift_merge`). Other RAWs go through LibRaw's `dcraw_process` to camera RGB.
@@ -115,7 +115,7 @@ identity unless `-r`, `-g` or `-b` give one.
 The flat field removes the light's and the lens's falloff. It is measured on the empty gate (`--flat`, an `.npz`
 from the profile-building tools) as a coarse grid of per-channel gains in half-size sensor coordinates, normalised to
 1 at the centre. Every decode is divided by the gain bilinearly interpolated at the pixel's sensor position, before
-any crop or rotation (`flat_field.h`: `flat_divide`):
+any crop or rotation (`negicc_core.h`: `flat_divide`):
 
 ```
 v_c(x, y) = round(v_raw_c(x, y) / gain_c(x, y))
@@ -167,7 +167,7 @@ s_c = normalization_target / f_c × ρ          ρ = (shutter × ISO of the base
 After the scale the film base reads 55000 in 16 bits, `n0` in [0, 1].
 
 On white light the base is also used before the camera matrix: gains `K_c = (C⁻¹ f_profile)_c / (C⁻¹ f)_c`, divided by
-their largest, on the camera channels, with `C` LibRaw's camera-to-Rec.2020 matrix (`white_light_balance.h`:
+their largest, on the camera channels, with `C` LibRaw's camera-to-Rec.2020 matrix (`negicc.h`:
 `film_base_balance_gains`). A light of another colour than the profile's then gives the base the profile's colour
 before the matrix mixes the channels, so dense areas are not pushed below zero.
 
@@ -192,7 +192,7 @@ four of the six terms; the red pixel's two terms differ more.
 
 ## 2.5 The input matrix and the soft knee
 
-The steps above, with the exposure and the gains, are one 3×3 per frame (`color_pipeline.h`: `candidate_matrix`,
+The steps above, with the exposure and the gains, are one 3×3 per frame (`negicc_core.h`: `candidate_matrix`,
 `knee_compress`):
 
 ```
@@ -299,7 +299,7 @@ frame-to-frame cast of a white-light conversion, which the curve fit (4.3) corre
 The search judges a render with a vision network: the frozen DINOv3 ViT-S/16 backbone (`models/dinov3-small`), whose
 input is the preview scaled so that its longer side is 512 pixels (enlarged when it is smaller), each side rounded to
 whole 16-pixel patches; one patch is one cell of the grid (32 × 21 cells for a 3:2 frame). Three heads read its
-tokens (`dinov3.h`).
+tokens (the DINOv3 part of `negicc.h`).
 
 The **intent head**, one per film stock (`models/dinov3-small_<stock>`, a small MLP on the layer 9 and 12 tokens),
 predicts per cell the CIELAB `μ` a finished picture would have there and its spread `σ`. Its targets are, per cell,
@@ -321,7 +321,7 @@ so that they read the content and not the render's own cast or levels.
 
 ## 4.1 The per-pixel conversion
 
-With `-P srgb` or `-P srgb-g10`, every output pixel goes through these stages once (`color_pipeline.h`:
+With `-P srgb` or `-P srgb-g10`, every output pixel goes through these stages once (`negicc_core.h`:
 `convert_pixel`):
 
 ```
@@ -494,9 +494,9 @@ ICC profile (`-p file.icc`) has no chart readings to meter with: there `-E` or n
 result afterwards, in stops of the reference grey's luminance and in its `a*` and `b*`.
 
 **Where the passes run.** Every preview and clip pass of the search, the print's search, the curve fit and the tone
-plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
+plan goes through one renderer (`negicc.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
 device that runs its kernels the GPU's (`GpuRenderer`, `gpu_passes.cu`), else the CPU's; `--dino_backend cpu` keeps
-the passes, the network and the full-size steps (4.1) on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
+the passes, the network and the full-size steps (4.1) on the CPU. The GPU runs the same per-pixel pipeline (`negicc_core.h`) with fused
 multiply-add off on both sides, but the two round `powf`, `tanhf` and `cbrtf` differently in the last place, so a
 preview can differ by one code and a result in its last digits. The sidecar's `auto` block records `renderer`: `gpu`,
 or `cpu, compared with the gpu` under `--check_renderer` with a device (no key: the CPU's). A run reuses a sidecar
@@ -513,9 +513,9 @@ written when a render's mean change in `L*` per pixel or a zone mean exceeds 0.0
 A white-light conversion leaves a cast that differs from frame to frame more than a TriLED one does: the broad
 channels mix the film's layers, which a 3×3 cannot undo. After the search, the fit corrects the green and blue gains
 and the slopes of the green and blue input curves so that what the frame shows as neutral comes out grey
-(`input_curves.h`; `multi_target_optimizer.cc`: `run_white_light_fit`). It runs on white light with `-P srgb` or
-`srgb-g10` (`--fit_curves`), and for a white-light density file without `--print`, where it gives the suggested
-balance only. A print takes no fit (5.10).
+(the input curves part of `negicc_core.h`; `multi_target_optimizer.cc`: `run_white_light_fit`). It runs on white light
+with `-P srgb` or `srgb-g10` (`--fit_curves`), and for a white-light density file without `--print`, where it gives the
+suggested balance only. A print takes no fit (5.10).
 
 **The curve.** On the green and blue input of the bracket's profile, below the pivot `ref` (the film base through
 the input matrix and the knee):
@@ -526,10 +526,10 @@ f(u)  = u (1 + a)                              held at slope 1 below the densest
 x'    = ref 2^f(u)
 ```
 
-`a` is the channel's bend, the slope term the fit solves. The curve's form in `input_curves.h` also has a bend around
-the median cell's `u`, which the fit holds at 0. The fitted curve is composed into the bracket's input tables (stage
-"profile tables": `apply_input_curves`), so the one conversion applies it, and `E` is metered again on the combined
-profile.
+`a` is the channel's bend, the slope term the fit solves. The curve's form in the input curves part of `negicc_core.h`
+also has a bend around the median cell's `u`, which the fit holds at 0. The fitted curve is composed into the bracket's
+input tables (stage "profile tables": `apply_input_curves`), so the one conversion applies it, and `E` is metered again
+on the combined profile.
 
 **The anchors.** Every cell that Auto's render puts between `L*` 2 and 92 is an anchor, weighted by `p²`:
 
@@ -570,7 +570,7 @@ the target toward magenta by one standard error. The 1 under the root and the 1 
 estimate's systematic error in `a*`.
 
 **The solve.** One Levenberg-Marquardt solve over four numbers, the green and blue gains and the green and blue slope
-terms (`input_curves.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against its
+terms (`negicc_core.h`: `fit_input_curves_joint`). Its residuals are the anchor term, the anchors' `b̄` against its
 target, the two trends `k_a` and `k_b` against theirs (weighted by `0.5 sqrt(var_ω(L*) / (var_ω(L*) + 100))`), the
 intent term and a ridge on the slope terms; the `a*` and `b*` terms are divided by 1.5. `E` is re-solved at every
 step so the median lightness stays where Auto put it.
@@ -620,7 +620,7 @@ goes to `Y'` through `f` on `L*`, and the colour difference is carried along:
 out = Y' + (v − Y) f'(Y) / f'(Y')          f' the derivative of CIELAB's cube root; ratio at most 8
 ```
 
-which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `apply_tone`).
+which holds each pixel's `a*` and `b*` to first order (`negicc_core.h`: `apply_tone`).
 
 | Parameter | Value | Purpose |
 |---|---|---|

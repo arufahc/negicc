@@ -10,12 +10,12 @@ public import Negicc.Base.Vec
 /-!
 # Colour primitives
 
-* The sRGB transfer curve and its inverse (`srgb_encode`, `srgb_decode` in `color_pipeline.h`).
+* The sRGB transfer curve and its inverse (`srgb_encode`, `srgb_decode` in `negicc_core.h`).
 * Linear sRGB (D65) to XYZ relative to the white point, and to CIELAB, with the constants the
   pipeline's scoring uses (`lab_f`, `linear_srgb_to_lab`, `linear_srgb_to_L`, `srgb_to_lab`).
 * Density, `-log10` of a transmission.
 
-The constants are the ones written in `color_pipeline.h`. Two remarks on them:
+The constants are the ones written in the colour pipeline part of `negicc_core.h`. Two remarks on them:
 
 * The C++ writes the encoding exponent as the single precision literal `0.41666667f`, the
   nearest single precision number to `1 / 2.4`. Here it is `1 / 2.4`, the value the sRGB

@@ -15,8 +15,8 @@
 
 // neg_process, the program: converts film negative RAW scans with the profiles and intent adapters built into it.
 // In this order: the declarations of the print, the film base, the options, the output and the pipeline (each needs
-// only those before it); then their code, in the same order; then main. Its inputs (np_input.h, np_input.cc) and
-// the library negicc-station also links (libnegicc_dinov3.a) are apart.
+// only those before it); then their code, in the same order; then main. Its inputs (the inputs part of negicc.h,
+// np_input.cc) and the library negicc-station also links (libnegicc_dinov3.a) are apart.
 
 #include <lcms2.h>
 #include <netinet/in.h>
@@ -55,24 +55,12 @@
 #include <vector>
 
 #include "argparse/argparse.hpp"
-#include "color_pipeline.h"
-#include "dinov3.h"
 #include "elle_icc_profiles/sRGB_elle_V2_g10.h"
 #include "elle_icc_profiles/sRGB_elle_V2_srgbtrc.h"
-#include "embedded_data.h"
-#include "film_base_detector.h"
-#include "film_frame_detector.h"
-#include "flat_field.h"
-#include "input_curves.h"
 #include "libraw/libraw.h"
-#include "multi_target_optimizer.h"
+#include "negicc.h"
 #include "nlohmann/json.hpp"
-#include "np_input.h"
-#include "np_log.h"
-#include "profile_bundle.h"
-#include "rgb_view.h"
 #include "tiff_head.h"
-#include "tone_stage.h"
 
 // ====================================================================================================================
 // Print: declarations
@@ -86,11 +74,11 @@
 //
 //     T = v / base_level,  D_light = -log10(max(T, kDensityMinT)),  D = M * D_light,  code = round(offset + scale * D)
 //
-// M is the bundle's 3x3 matrix for the measure (profile_bundle.h). The two encodings are the Cineon one (10 bits:
-// offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density), so RP 180
-// density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these offsets
-// and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors on the
-// density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
+// M is the bundle's 3x3 matrix for the measure (the profile bundle part of negicc.h). The two encodings are the Cineon
+// one (10 bits: offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density),
+// so RP 180 density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these
+// offsets and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors
+// on the density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
 // Status M and RP 180 take no factors (k = 1).
 //
 // Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the
@@ -133,7 +121,7 @@ struct DensityClip {
 };
 
 // Converts the image in place (width x height, `channels` 16-bit samples a pixel, the first three R, G, B) to density
-// codes: merged the film base's merged matrix (color_pipeline.h apply_matrix on the sample / 65535), base_level the
+// codes: merged the film base's merged matrix (negicc_core.h apply_matrix on the sample / 65535), base_level the
 // value the film base lands on (the bundle's normalization target / 65535), m the measure's matrix.
 void density_encode_in_place(uint16_t* pixels, int width, int height, int channels, const float merged[9],
                              double base_level, const double m[9], const DensityEncoding& enc, DensityClip& clip);
@@ -493,7 +481,7 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
 // ====================================================================================================================
 
 // The film base read from a capture of unexposed film (--film_base <file>[:x,y,w,h]), in place of the base read from
-// the scan itself (film_base_detector.h).
+// the scan itself (the film base detector part of negicc_core.h).
 //
 // The capture is decoded as the scan's half-size view is: a Sony CFA RAW, black subtracted, its 2x2 cells as RGB,
 // with the flat field. The base is read over a region of it, taken through the crosstalk matrix and scaled to the
@@ -518,8 +506,8 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
 //   5. of that group, the largest piece of touching tiles is kept when it is large enough: one stretch of film (a
 //      rebate strip) and not film of the same level elsewhere in the frame;
 //   6. the base is the median, per channel, of the kept tiles' medians.
-// With no such group the thinnest film on the capture is taken (film_base_detector.h's statistics); with nothing
-// usable, or a clipped result, the capture is refused.
+// With no such group the thinnest film on the capture is taken (the statistics of the film base detector part of
+// negicc_core.h); with nothing usable, or a clipped result, the capture is refused.
 //
 // The thresholds of steps 2 to 4 were set on simulated captures. The tile size and steps 4 and 5 were set on seven
 // captures of Portra 400 frames with a rebate strip at one edge (2026-10-04), where the search agrees with the
@@ -612,11 +600,12 @@ struct Options {
   // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
   // the built-in ones; empty: the built-in one. dino_arg is --dino's value as given, which the replay line repeats.
   std::string dino_arg, dino_adapter, neutral_head_file, tone_head_file;
-  // The tone stage (tone_stage.h). --tone_stage auto (the default) runs it after every bundle search with -P srgb, on
-  // white light and TriLED alike, whether or not the curve fit runs; on does the same and is an error where it does
-  // not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded curve (a sidecar's
-  // cli_equivalent), with given values and no search. highlights_first and least_total run it as auto does, with
-  // their own rule where no share of the moves holds both ends (tone_fallback; auto and on keep the shadows first).
+  // The tone stage (the tone stage part of negicc_core.h). --tone_stage auto (the default) runs it after every bundle
+  // search with -P srgb, on white light and TriLED alike, whether or not the curve fit runs; on does the same and is an
+  // error where it does not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded
+  // curve (a sidecar's cli_equivalent), with given values and no search. highlights_first and least_total run it as
+  // auto does, with their own rule where no share of the moves holds both ends (tone_fallback; auto and on keep the
+  // shadows first).
   enum ToneStageMode { kToneStageAuto, kToneStageOn, kToneStageOff };
   ToneStageMode tone_stage = kToneStageAuto;
   ToneClipFallback tone_fallback = kToneFallbackShadowsFirst;
@@ -633,10 +622,10 @@ struct Options {
   std::vector<float> probe_stops = {0.0f};
   bool dino_iters_given = false;
 
-  // Fitted G/B input curves (input_curves.h). --fit_curves auto (the default) fits them on every white-light bundle
-  // search with -P srgb or srgb-g10, given parameters or not, and nowhere else (TriLED, whose curves are the measured
-  // ones; another or no -P); on does the same and is an error where it does not apply; off turns the fit off. The tone
-  // stage has its own flag.
+  // Fitted G/B input curves (the input curves part of negicc_core.h). --fit_curves auto (the default) fits them on
+  // every white-light bundle search with -P srgb or srgb-g10, given parameters or not, and nowhere else (TriLED, whose
+  // curves are the measured ones; another or no -P); on does the same and is an error where it does not apply; off
+  // turns the fit off. The tone stage has its own flag.
   enum FitCurvesMode { kFitCurvesAuto, kFitCurvesOn, kFitCurvesOff };
   FitCurvesMode fit_curves = kFitCurvesAuto;
   bool input_curves_given = false;             // recorded curves given to --fit_curves (replayed, not fitted)
@@ -685,7 +674,7 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
-// The tone stage's types (tone_stage.h), which the sidecar refers to.
+// The tone stage's types (the tone stage part of negicc_core.h), which the sidecar refers to.
 struct ToneCurve;
 struct ToneTargets;
 struct ToneClip;
@@ -771,8 +760,8 @@ struct Sidecar {
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
   double t_auto_ms = 0.0;
   double t_analysis_ms = 0.0;  // Scan::t_analysis_ms
-  // Fitted G/B input curves of the conversion's bracket (input_curves.h): source "fit" (--fit_curves on, with
-  // curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
+  // Fitted G/B input curves of the conversion's bracket (the input curves part of negicc_core.h): source "fit"
+  // (--fit_curves on, with curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
   std::string input_curves_source;
   const negicc::InputCurves* input_curves = nullptr;
   const WhiteLightFitResult* curve_fit = nullptr;
@@ -967,9 +956,9 @@ struct Setup {
   std::string replay_source;
   bool has_tone = false;
   ToneCurve tone_curve;
-  // Fitted G/B input curves the conversion's bracket renders through (input_curves.h): source "fit" (--fit_curves
-  // on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given to --fit_curves) or
-  // empty (none).
+  // Fitted G/B input curves the conversion's bracket renders through (the input curves part of negicc_core.h): source
+  // "fit" (--fit_curves on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given
+  // to --fit_curves) or empty (none).
   std::string input_curves_source;
   negicc::InputCurves input_curves;
   WhiteLightFitResult curve_fit;
@@ -1038,9 +1027,9 @@ class Backend {
   // it for every frame after the render in any case.
   virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
                       std::vector<uint16_t>& rgb_out, const std::function<void(int)>& frame_done) = 0;
-  // Converts img in place to the output encoding through the shared pixel pipeline (color_pipeline.h) of pc: the
-  // input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the shoulder. ENCODE_NONE stops
-  // after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
+  // Converts img in place to the output encoding through the shared pixel pipeline (the colour pipeline part of
+  // negicc_core.h) of pc: the input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the
+  // shoulder. ENCODE_NONE stops after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
   virtual void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                        const RgbInput& img) = 0;
   // Where the last render and the last convert ran: "cpu" or "gpu" (the record's "full_size").
@@ -1176,8 +1165,8 @@ struct Scan {
   int rot_cw = 0;
   bool hflip = false, vflip = false;
 
-  // The film base read from the scan (film_base_detector.h) for a bundle conversion, as negicc-station's Auto reads it
-  // when no film base is given; not found: the bundle's.
+  // The film base read from the scan (the film base detector part of negicc_core.h) for a bundle conversion, as
+  // negicc-station's Auto reads it when no film base is given; not found: the bundle's.
   negicc::FilmBaseDetection film_base;
   const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
   // The film base given in place of the scan's own (--film_base): read from a capture of unexposed film
@@ -1594,7 +1583,7 @@ constexpr double kCieD55[kCieSamples] = {
     71.818};
 // ---- END CIE TABLES ----
 // The block above is written by the companion tools with its own grid constants: they are the film model's
-// (profile_bundle.h).
+// (the profile bundle part of negicc.h).
 static_assert(kCieSamples == kSpectralSamples && kCieFirstNm == kSpectralFirstNm, "the CIE tables' grid");
 
 void density_encode_in_place(uint16_t* pixels, int width, int height, int channels, const float merged[9],
@@ -2981,7 +2970,7 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
-constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (profile_bundle.h), in double
+constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (the profile bundle part of negicc.h), in double
 
 }  // namespace
 
@@ -4206,7 +4195,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
-  // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film),
+  // A bundle conversion reads the film base from the scan (negicc_core.h: the rebate, else the thinnest film),
   // as negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; the film base declarations
   // above); --film_base_rgb, which took it as numbers or from the rebate, is gone.
   parser.add_argument("--film_stock")
@@ -4312,7 +4301,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "the CPU's by one 16-bit code.")
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
-    .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
+    .help("Check aid (the renderer interface, negicc.h PreviewRenderer): run the bundle search, the "
           "print's search, the curve fit and the tone plan through a renderer that runs each pass on the CPU and "
           "counts it, count every pass of theirs that runs outside it, and print both; exit 1 when one does, or when "
           "no pass ran. On a USE_CUDA=1 build with a CUDA device that runs its kernels, each pass also runs on the GPU "
@@ -4351,7 +4340,7 @@ int parse_options(int ac, char* av[], Options& o) {
           "and everything else is as without --target: E and the gains are solved (unless given), and the curve fit "
           "(white light) and the tone stage run. The clip fallback, which only changes the bracket, is left out.")
     .default_value(std::string(""));
-  // Fitted G/B input curves (input_curves.h).
+  // Fitted G/B input curves (the input curves part of negicc_core.h).
   parser.add_argument("--fit_curves")
     .help("auto (default), off, on, or recorded curves: ref:refG,refB,u_medG,u_medB,aG,kG,aB,kB (one value, comma-"
           "separated; ten numbers, with u_loG,u_loB appended, for a curve held below u_lo). auto: as on wherever on "
@@ -5128,7 +5117,7 @@ static ordered_json intent_field_json(const std::vector<float>& mu, const std::v
   return j;
 }
 
-// The fitted G/B input curves of the conversion's bracket (input_curves.h): what rebuilds
+// The fitted G/B input curves of the conversion's bracket (the input curves part of negicc_core.h): what rebuilds
 // the combined profile (the bracket's profile with its G and B input tables composed with the curves), the fit, and
 // the parameters before it. The same block as the station's sidecar; numbers to 9 significant digits, so a replay
 // (--fit_curves with the recorded numbers, as the cli_equivalent writes them) rebuilds the same tables.
@@ -5353,8 +5342,8 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else {
     fb["film_base_rgb"] = sc.film_base_rgb;
   }
-  // Read from the scan (film_base_detector.h): the base in the half-size decode's units, the rebate patch sampled and
-  // the frame detector's record.
+  // Read from the scan (the film base detector part of negicc_core.h): the base in the half-size decode's units, the
+  // rebate patch sampled and the frame detector's record.
   const bool rebate = d && d->found && d->source == "rebate";
   fb["decode_rgb"] = d && d->found ? num3(d->decode_rgb) : ordered_json(nullptr);
   fb["box"] = rebate ? ordered_json{d->box[0], d->box[1], d->box[2], d->box[3]} : ordered_json(nullptr);
@@ -5560,7 +5549,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   if (!sc.film_format.empty()) cli.insert(cli.end(), {"--film_format", sc.film_format});
   j["cli_equivalent"] = cli;
 
-  // auto: the conversion parameter search (multi_target_optimizer.h)
+  // auto: the conversion parameter search (the parameter search part of negicc.h)
   if (!sc.cached_auto_json_str.empty()) {
     j["auto"] = ordered_json::parse(sc.cached_auto_json_str);
   } else {
@@ -6593,7 +6582,7 @@ static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
   p.rebind_pointers();
 }
 
-// --check_renderer's renderer (multi_target_optimizer.h PassThroughRenderer).
+// --check_renderer's renderer (negicc.h PassThroughRenderer).
 static PassThroughRenderer& pass_through_renderer() {
   static PassThroughRenderer r;
   return r;
@@ -6916,7 +6905,7 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
 
-  // Fitted G/B input curves (input_curves.h): white light only. A TriLED
+  // Fitted G/B input curves (the input curves part of negicc_core.h): white light only. A TriLED
   // bundle's curves are measured under the light the scan was made with, so fitting them per frame has no basis; the
   // white-light fit corrects for a lamp and camera the profiles were not made with. The output must apply the film
   // profile (-P): without it the TIFF is the corrected camera RGB with the bracket's own ICC profile, which does not
@@ -6942,7 +6931,7 @@ int prepare(const Options& o, Setup& s) {
       return 1;
     }
   }
-  // The fit scores the grid in CIELAB through linear sRGB (input_curves.h, to_display), which is what -P srgb and
+  // The fit scores the grid in CIELAB through linear sRGB (negicc_core.h, to_display), which is what -P srgb and
   // srgb-g10 write; a custom -P goes through its ICC profile with LittleCMS, which the fit does not model, while the
   // sidecar recorded the fit as made for it. So fitting takes -P srgb or srgb-g10 (srgb-linear); replaying recorded
   // curves takes any -P, since it renders the combined profile and fits nothing.
@@ -6955,7 +6944,7 @@ int prepare(const Options& o, Setup& s) {
       o.colorspace != "srgb-linear" && !output_profile_ok(o.colorspace)) {
     return 1;
   }
-  // The tone stage is one L* curve between the display value and the sRGB encoding (color_pipeline.h apply_tone), so
+  // The tone stage is one L* curve between the display value and the sRGB encoding (negicc_core.h apply_tone), so
   // it takes -P srgb; it runs on white light and TriLED alike, with or without the curve fit.
   // A print (--print on a profile bundle) has its tone from the print material's own curve: no tone stage.
   const bool tone_on = o.tone_stage == Options::kToneStageOn;
@@ -6966,8 +6955,8 @@ int prepare(const Options& o, Setup& s) {
     return 1;
   }
 
-  // The parameter search. On a bundle it is negicc-station's conversion parameter search (multi_target_optimizer.h),
-  // which picks the bracket, the exposure and the gains.
+  // The parameter search. On a bundle it is negicc-station's conversion parameter search (the parameter search part of
+  // negicc.h), which picks the bracket, the exposure and the gains.
   //
   // A bundle, on either light: whatever --target, -E, --gain_g and --gain_b give is held and the same search solves the
   // rest (pinned_search), followed by the curve fit (white light) and the tone stage as after an unpinned search,
@@ -7178,7 +7167,7 @@ int prepare(const Options& o, Setup& s) {
         s.head_fp[0] = memory_fingerprint(ran->data, ran->size);
       }
       // The neutral-patch head on the backbone's tokens, for the white-light curve fit's scene-neutral anchors
-      // (input_curves.h, JointCurveModel::set_scene_neutral): only where the fit runs.
+      // (negicc_core.h, JointCurveModel::set_scene_neutral): only where the fit runs.
       if (s.fit_curves_active) {
         std::vector<char> file;
         const void* data = nullptr;
@@ -8121,14 +8110,14 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
   };
 
-  // The film base read from the scan for a bundle conversion (film_base_detector.h): from the whole half-size image
-  // (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's Auto reads it. On the
-  // zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light decode runs the detector
-  // on the mosaic before decoding it (find_frame), as the station's does; RGB files have no mosaic for the detector, so
-  // the base comes from the statistics.
+  // The film base read from the scan for a bundle conversion (the film base detector part of negicc_core.h): from the
+  // whole half-size image (flat field applied) and the frame detector's base patch on the mosaic, as negicc-station's
+  // Auto reads it. On the zero-copy CFA path (Sony RAWs, pixel shift) that is the station's reading; the white-light
+  // decode runs the detector on the mosaic before decoding it (find_frame), as the station's does; RGB files have no
+  // mosaic for the detector, so the base comes from the statistics.
   // A film base given in its place (--film_base's capture, or a previous run's: Scan::has_given_base) is taken as it
   // is.
-  // |white|: the clipping level of half's samples before its flat field (film_base_detector.h).
+  // |white|: the clipping level of half's samples before its flat field (the film base detector part of negicc_core.h).
   auto detect_base = [&](const negicc::RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
                          float white) {
     if (!s.is_bundle) return;
@@ -8246,7 +8235,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       // The curves on the bracket the search chose, then E re-metered on its combined profile to Auto's median
       // L* (the station's Fit curves toggle); the conversion takes those (Scan::params). Auto: the same on every
       // white-light bundle search.
-      negicc::CurveFitOptions fit_opts;  // the defaults (input_curves.h); the sidecar records them
+      negicc::CurveFitOptions fit_opts;  // the defaults (negicc_core.h); the sidecar records them
       // The fit and the re-meter render the grid as the export will: -P's encoding (srgb or srgb-g10, prepare).
       const int export_encoding = (o.colorspace == "srgb" || s.density) ? ENCODE_SRGB : ENCODE_SRGB_LINEAR;
       s.curves_base_idx = scan.auto_res.target_idx;  // the fit composes the curves into it in place
@@ -9445,17 +9434,17 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   }
 
   const double t_start = omp_get_wtime();
-  // The shared pipeline (color_pipeline.h) with the frozen shoulder: the stage every consumer runs. Only the sRGB
-  // encoding applies it.
+  // The shared pipeline (the colour pipeline part of negicc_core.h) with the frozen shoulder: the stage every consumer
+  // runs. Only the sRGB encoding applies it.
   const negicc::PipelineConfig export_pc =
       make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
-  // The tone stage (tone_stage.h): this run's plan, or the recorded curve on a replay, applied in the
-  // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
-  // the curve is the one without them, applied after them: on a replay the recorded curve, as recorded; on a fresh
-  // run the plan checked on the conversion without the knobs (solve, knob_free_tone_check), so it equals the knobs on
-  // the record of a run without them. A fixed monotone map on top of the knobbed render (zero knobs reproduce the
-  // export; a brighter knob gives a brighter result), not re-solved against the knobbed render, which would pull the
-  // shadow level back to the prediction and undo the knob.
+  // The tone stage (the tone stage part of negicc_core.h): this run's plan, or the recorded curve on a replay, applied
+  // in the conversion kernel (negicc_core.h apply_tone) between the display value and the sRGB encoding. Under the
+  // knobs the curve is the one without them, applied after them: on a replay the recorded curve, as recorded; on a
+  // fresh run the plan checked on the conversion without the knobs (solve, knob_free_tone_check), so it equals the
+  // knobs on the record of a run without them. A fixed monotone map on top of the knobbed render (zero knobs reproduce
+  // the export; a brighter knob gives a brighter result), not re-solved against the knobbed render, which would pull
+  // the shadow level back to the prediction and undo the knob.
   scan.tone_applied = false;
   const bool tone_here = s.has_tone && out.encoding == ENCODE_SRGB;
   LibRaw* tp = scan.proc.get();
@@ -10082,16 +10071,17 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
 //   crosstalk correction for a tri bundle, the DNG's colour data to linear Rec.2020 for a d65 bundle. A fourth
 //   sample per pixel (a scanner's infrared) is left out.
 // - An RGB TIFF (8 or 16 bits) or JPEG, with a d65 bundle: converted to linear Rec.2020 through its embedded ICC
-//   profile (np_input.h); without one, 8-bit data is taken as sRGB and 16-bit data as linear Rec.2020.
+//   profile (the inputs part of negicc.h); without one, 8-bit data is taken as sRGB and 16-bit data as linear Rec.2020.
 // - Three images, each captured under one of the red, green and blue lights (RAWs, DNGs or TIFFs, the same size):
 //     neg_process --film_stock portra400 --light_source tri -o out.tif red.ARW green.ARW blue.ARW
 //   R comes from the first, G from the second and B from the third (a grey TIFF gives its one channel), each scaled
 //   to the first capture's exposure when all three record theirs. There is no crosstalk between the lights to
 //   correct, so the correction is the identity (-r, -g and -b give another). --flat applies to RAWs only.
 //
-// With a bundle, the film base is read from the scan itself, as negicc-station's Auto reads it (film_base_detector.h):
-// the unexposed film beside the frame (the rebate or a gap between frames) when the frame detector finds it, else the
-// thinnest film on the scan; the bundle's when neither gives one. The sidecar's film_base records which.
+// With a bundle, the film base is read from the scan itself, as negicc-station's Auto reads it (the film base detector
+// part of negicc_core.h): the unexposed film beside the frame (the rebate or a gap between frames) when the frame
+// detector finds it, else the thinnest film on the scan; the bundle's when neither gives one. The sidecar's film_base
+// records which.
 //
 // The parameter search (the calibration bracket, the exposure and the gains, solved with DINOv3 intent) runs
 // whenever a profile is given. With a bundle, on either light, --target, -E, --gain_g and --gain_b pin what they give
@@ -10101,10 +10091,10 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
 // solves only the gains (the single-bracket solver).
 // The search sees the frame --roi gives or --roi auto finds, on the half-size image.
 //
-// --roi auto [h|v] finds the frame to crop (film_frame_detector.h): 35mm, 645, 6x6, 6x7 or 6x9 film on bare light, in
-// a strip holder or in a frame holder, tilted up to 5 degrees, partial neighbour frames beside it. --film_format gives
-// the format (more accurate than trying each); h or v gives the strip direction. The detection reads the RAW's CFA
-// mosaic in place before anything is decoded, and only the frame is decoded, e.g.
+// --roi auto [h|v] finds the frame to crop (the frame detector part of negicc_core.h): 35mm, 645, 6x6, 6x7 or 6x9 film
+// on bare light, in a strip holder or in a frame holder, tilted up to 5 degrees, partial neighbour frames beside it.
+// --film_format gives the format (more accurate than trying each); h or v gives the strip direction. The detection
+// reads the RAW's CFA mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
   Options o;

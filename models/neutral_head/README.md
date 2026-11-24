@@ -2,7 +2,7 @@
 
 Predicts, for every 16x16 patch of a preview, p(neutral): the probability that the patch should render grey in the
 intended positive, whatever colour cast the current render has. `neg_process` uses it to weight the scene-neutral
-anchors of the white-light joint curve fit (`input_curves.h`, `JointCurveModel::set_scene_neutral`): every grid cell
+anchors of the white-light joint curve fit (`negicc_core.h`, `JointCurveModel::set_scene_neutral`): every grid cell
 Auto renders at L* 2..92 is an anchor with weight p^2, with no threshold, no minimum count and no balancing between
 tone ranges, and the sum of p^2 is the fit's evidence m. The fit pulls the anchors toward neutral with strength
 m / (m + 12) and pools them with the search's intent field for the overall magenta-green balance; without the head
@@ -42,7 +42,7 @@ four selection rules (low-key merge, collinearity drop, chart-like gate, shadow 
 - `neutral_head.pt`: the trained PyTorch dict `{features: "tok", kind: "mlp", state, mean, std}` (sha256 in
   `metadata.json`).
 - `neutral_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs
-  it in plain C++ (`NeutralHead` in `dinov3.h`) on the tokens the backbone already produced. Format in
+  it in plain C++ (`NeutralHead` in `negicc.h`) on the tokens the backbone already produced. Format in
   `export_neutral_head.py`.
 - `export_neutral_head.py`: writes `neutral_head.bin` from `neutral_head.pt`; `--check` compares PyTorch with the
   exported weights on random tokens.

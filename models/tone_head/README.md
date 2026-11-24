@@ -53,7 +53,7 @@ negicc renders, flattening or steepening a render by 4-10 L* moves the predictio
 - `tone_head.pt`: the trained PyTorch dict `{kind: "pool", state, xm, xs, ym, ys, tgt, pool: "A"}` (sha256 in
   `metadata.json`).
 - `tone_head.bin`: the same weights flattened for `neg_process`, which embeds it (Makefile `EMBED_FILES`) and runs it
-  in plain C++ (`ToneHead` in `dinov3.h`), once per frame, on the features of the tone stage's own inference
+  in plain C++ (`ToneHead` in `negicc.h`), once per frame, on the features of the tone stage's own inference
   on the final render's preview (below). Format in `export_tone_head.py`.
 - `export_tone_head.py`: writes `tone_head.bin` from `tone_head.pt`; `--check` compares PyTorch with the exported
   weights on random features.

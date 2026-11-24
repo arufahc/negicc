@@ -16,7 +16,7 @@ and for a density per channel. `Mat3 α` is a 3x3 matrix given by its three rows
 the C++ `float m[9]` arrays (row-major).
 
 The C++ counterparts are `negicc::Rgb`, `apply_matrix` and `candidate_matrix` in
-`color_pipeline.h`.
+the colour pipeline part of `negicc_core.h`.
 -/
 
 namespace Negicc
@@ -76,7 +76,7 @@ namespace Mat3
 
 variable {α : Type} [Scalar α]
 
-/-- The matrix times a column vector (`apply_matrix` in `color_pipeline.h`). -/
+/-- The matrix times a column vector (`apply_matrix` in `negicc_core.h`). -/
 def mulVec (m : Mat3 α) (v : Vec3 α) : Vec3 α := ⟨m.row0.dot v, m.row1.dot v, m.row2.dot v⟩
 
 /-- The first, second and third column. -/

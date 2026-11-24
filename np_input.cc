@@ -14,10 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // neg_process's inputs: image geometry, RAW decoding with LibRaw, TIFF and JPEG files, and the inputs besides one
-// RAW (np_input.h).
+// RAW (the inputs part of negicc.h).
 
-#include "np_log.h"
-#include "np_input.h"
+#include "negicc.h"
 
 #include <omp.h>
 #include <stdio.h>
