@@ -787,6 +787,9 @@ struct Sidecar {
   // "least_total"); null where a share held.
   const char* tone_fallback = nullptr;
   bool tone_applied = false;
+  // This run's plan kept shares that move nothing (tone_moves_nothing), so no curve was applied: the record says so,
+  // with the shares, the targets and the clipping, and the replay converts without the stage.
+  bool tone_moved_nothing = false;
   const ToneClip* tone_clip = nullptr;
   // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
   // null: input_curves.
@@ -1233,6 +1236,7 @@ struct Scan {
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   double tone_shadow_share = 1.0;  // and of the shadow move
   bool tone_fell_back = false;     // and whether no share held both ends (Options::tone_fallback chose the curve)
+  bool tone_moved_nothing = false; // and whether its kept shares moved nothing, so no curve was applied
   // The search's shadow alternative (ParamSearchResult::shadow, as the search returned it), the alternative after its
   // stages (null: none, or already chosen in solve), the choice, and the kept candidate's clip check.
   ShadowAlternative shadow_search;
@@ -5487,6 +5491,8 @@ bool write_json_sidecar(const Sidecar& sc) {
     for (double x : {q.black, q.white, q.gamma, q.contrast})
       v += (v.size() > 6 ? "," : "") + num_str(x, "%.17g");
     cli.insert(cli.end(), {"--tone_stage", v});
+  } else if (sc.tone_moved_nothing) {
+    cli.insert(cli.end(), {"--tone_stage", "off"});  // the plan applied no curve: the same pixels without the stage
   }
   // A bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone render these
   // pixels, and --tone_stage off (with --fit_curves off on white light, the fit's light) keeps the stages that run
@@ -5628,7 +5634,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   // The tone stage: the heads' predictions, the final render's descriptors before it, the targets, the
   // curve, and the clipping before (the clip check's sample) and after (the whole export).
   auto clip_json = [&]() {
-    if (!sc.tone_applied || !sc.tone_clip) return ordered_json(nullptr);
+    if (!(sc.tone_applied || sc.tone_moved_nothing) || !sc.tone_clip) return ordered_json(nullptr);
     const ToneClip& k = *sc.tone_clip;
     return ordered_json{{"white_before", num(k.white_before, "%.6f")}, {"white_after", num(k.white_after, "%.6f")},
                         {"black_before", num(k.black_before, "%.6f")}, {"black_after", num(k.black_after, "%.6f")}};
@@ -5667,8 +5673,8 @@ bool write_json_sidecar(const Sidecar& sc) {
                      {"shadow_share", n9(sc.tone_shadow_share)}}},
           // Where no share held both ends, the rule that chose the curve (--tone_stage); null where one held.
           {"fallback", sc.tone_fallback ? ordered_json(sc.tone_fallback) : ordered_json(nullptr)},
-          // In full (17 digits): the curve the image went through, exactly.
-          {"curve", tone_curve_json(tc)},
+          // In full (17 digits): the curve the image went through, exactly; null where the shares moved nothing.
+          {"curve", sc.tone_moved_nothing ? ordered_json(nullptr) : tone_curve_json(tc)},
           {"clip", clip_json()}};
     } else {
       j["tone_stage"] = {{"applied", false}, {"skipped", tp.skipped ? tp.skipped : ""}};
@@ -9496,11 +9502,17 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     }
     const double t_tone_1 = omp_get_wtime();
     const ToneCurve& q = scan.tone_curve;
-    const std::vector<float> lut = tone_table(q);
-    negicc::PipelineConfig tone_pc = export_pc;
-    tone_pc.tone.lut = lut.data();
-    tone_pc.tone.n = kToneTableSize;
-    backend.convert(out, tone_pc, c.merged_matrix, scan.image());
+    // A plan whose kept shares move nothing applies no curve: the conversion without the stage (tone_moves_nothing).
+    scan.tone_moved_nothing = tone_plan_here && tone_moves_nothing(scan.tone_share, scan.tone_shadow_share);
+    if (scan.tone_moved_nothing) {
+      backend.convert(out, export_pc, c.merged_matrix, scan.image());
+    } else {
+      const std::vector<float> lut = tone_table(q);
+      negicc::PipelineConfig tone_pc = export_pc;
+      tone_pc.tone.lut = lut.data();
+      tone_pc.tone.n = kToneTableSize;
+      backend.convert(out, tone_pc, c.merged_matrix, scan.image());
+    }
     const double t_tone_2 = omp_get_wtime();
     // The shares after the stage on every pixel of the inner crop, as the clip check counts them.
     const negicc::InnerCrop tic = negicc::compute_inner_crop(iw, ih, kToneClipCrop);
@@ -9518,13 +9530,20 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
       scan.tone_clip.white_after = (double)wa / tn;
       scan.tone_clip.black_after = (double)ka / tn;
     }
-    scan.tone_applied = true;
-    log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); inner crop at white "
-             "%.4f%% -> %.4f%%, at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting with the "
-             "curve\n",
-             q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
-             100.0 * scan.tone_clip.white_after, 100.0 * scan.tone_clip.black_before, 100.0 * scan.tone_clip.black_after,
-             1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
+    scan.tone_applied = !scan.tone_moved_nothing;
+    if (scan.tone_moved_nothing)
+      log_info("Tone stage: highlight and shadow shares 0, so no curve applied; inner crop at white %.4f%% -> %.4f%%, "
+               "at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting\n",
+               100.0 * scan.tone_clip.white_before, 100.0 * scan.tone_clip.white_after,
+               100.0 * scan.tone_clip.black_before, 100.0 * scan.tone_clip.black_after, 1000.0 * (t_tone_1 - t_tone_0),
+               1000.0 * (t_tone_2 - t_tone_1));
+    else
+      log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); inner crop at white "
+               "%.4f%% -> %.4f%%, at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting with the "
+               "curve\n",
+               q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
+               100.0 * scan.tone_clip.white_after, 100.0 * scan.tone_clip.black_before,
+               100.0 * scan.tone_clip.black_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
   } else {
     backend.convert(out, export_pc, c.merged_matrix, scan.image());
   }
@@ -10022,8 +10041,12 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     sc.head_fp[i] = s.head_fp[i];
   }
   sc.replay_source = s.replay_source;
-  sc.tone_curve = scan.tone_applied ? &scan.tone_curve : s.has_tone ? &s.tone_curve : nullptr;
-  sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
+  sc.tone_curve = scan.tone_applied ? &scan.tone_curve
+                 : scan.tone_moved_nothing ? nullptr
+                 : s.has_tone              ? &s.tone_curve
+                                           : nullptr;
+  sc.tone_targets = scan.tone_applied || scan.tone_moved_nothing ? &scan.tone_targets : nullptr;
+  sc.tone_moved_nothing = scan.tone_moved_nothing;
   sc.tone_share = scan.tone_share;
   sc.tone_shadow_share = scan.tone_shadow_share;
   // The rule that chose the curve where no share of the moves held both ends (Options::tone_fallback).

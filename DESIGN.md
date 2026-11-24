@@ -645,7 +645,10 @@ lowers the shadow lift at the last share through the same shares until white hol
 `least_total` keeps the curve whose shares at the two ends together are least, among every curve the other two try (the
 larger share on a tie, then the larger lift). The sidecar names the rule as `tone_stage.fallback` (null where a share
 held). The sidecar records both shares before (the sample) and after (every pixel of the inner crop) as
-`tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
+`tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`. Where both shares kept are
+0 the moves are nothing: the stage applies no curve, and the export is the conversion without the stage, exactly. The
+sidecar records `applied` false with the shares, the targets and the clipping, `curve` null, and the replay converts
+with `--tone_stage off`.
 
 **Under the knobs.** `--brightness`, `--tint` and `--warmth` act under the tone curve: the curve is the one the run
 without them keeps, applied after them. A replay of a record applies its curve as recorded; a fresh run with the knobs
