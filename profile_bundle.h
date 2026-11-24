@@ -171,7 +171,7 @@ struct FilmModel {
   bool present = false;
   std::string name;
   std::vector<double> dye[3], base;           // spectral densities, kSpectralSamples samples
-  std::vector<double> log_exposure;           // ascending
+  std::vector<double> log_exposure;           // of each sample; it selects those the print matrix is fitted to
   std::vector<double> neutral[3];             // dye amounts along log_exposure
 };
 

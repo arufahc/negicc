@@ -2717,6 +2717,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           delete proc;
           return 1;
         }
+        if (!raw_levels_valid(*fp, o.files[mi])) {
+          delete proc;
+          return 1;
+        }
         const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
         if (!is_sony_a7rm4(fp) || fp->imgdata.sizes.width != src_w || fp->imgdata.sizes.height != src_h ||
             fpitch != cfa_pitch || fp->imgdata.idata.filters != filters ||
@@ -3435,6 +3439,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     scan.tone_curve = s.tone_curve;
     scan.tone_share = 1.0;
     scan.tone_shadow_share = 1.0;
+    scan.tone_fell_back = false;
     const double t_tone_0 = omp_get_wtime();
     {
       const std::vector<negicc::Rgb> sample = tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride);
@@ -3445,7 +3450,8 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                                               plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],
                                               export_pc, sample, scan.tone_clip.white_before,
                                               scan.tone_clip.black_before, s.tone_plan.curve, s.tone_plan.targets,
-                                              &scan.tone_targets, &scan.tone_share, &scan.tone_shadow_share);
+                                              &scan.tone_targets, &scan.tone_share, &scan.tone_shadow_share,
+                                              o.tone_fallback, &scan.tone_fell_back);
       }
     }
     const double t_tone_1 = omp_get_wtime();
@@ -3941,6 +3947,11 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.tone_targets = scan.tone_applied ? &scan.tone_targets : nullptr;
   sc.tone_share = scan.tone_share;
   sc.tone_shadow_share = scan.tone_shadow_share;
+  // The rule that chose the curve where no share of the moves held both ends (Options::tone_fallback).
+  if (scan.tone_fell_back)
+    sc.tone_fallback = o.tone_fallback == kToneFallbackShadowsFirst      ? "shadows_first"
+                       : o.tone_fallback == kToneFallbackHighlightsFirst ? "highlights_first"
+                                                                         : "least_total";
   sc.tone_applied = scan.tone_applied;
   sc.tone_clip = &scan.tone_clip;
   if (!s.input_curves_source.empty()) {

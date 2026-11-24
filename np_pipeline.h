@@ -357,6 +357,7 @@ struct Scan {
   ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   double tone_shadow_share = 1.0;  // and of the shadow move
+  bool tone_fell_back = false;     // and whether no share held both ends (Options::tone_fallback chose the curve)
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;

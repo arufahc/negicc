@@ -400,6 +400,7 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 // Under white light the blue channel is too noisy for the ratios; those scans decode through LibRaw instead.
 // -----------------------------------------------------------------------------------------------------------------
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
+// Throws std::invalid_argument when white_level is outside a 16-bit sample's range (0 to 65535).
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 
 // The same three on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; they throw GpuError without one). Every pointer in
