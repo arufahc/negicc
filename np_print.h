@@ -187,6 +187,8 @@ struct PrintMaterial {
     std::array<double, 9> m;
   };
   std::vector<ToPrint> to_print[kDensityMeasures];
+  // Why a measure has no matrix when the bundle's film_model gives none (not finite); empty otherwise.
+  std::string no_print_matrix[kDensityMeasures];
   // The matrix for a film model; null when the material has none for the measure and the film.
   const ToPrint* to_print_for(int measure, const std::string& film) const {
     for (const ToPrint& t : to_print[measure]) {
@@ -225,13 +227,14 @@ struct PrintMaterial {
 // bundle, so every rule here stops a wrong file before any frame is converted.
 //
 // id names the material when the profile's info.stock is not a string. False with why in err; a bundle without a
-// film_model gives a material without matrices, which frame_print refuses.
+// film_model gives a material without matrices, which frame_print refuses, and one whose film_model gives a matrix
+// that is not finite a material without matrices and no_print_matrix saying why.
 bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
                             PrintMaterial& out, std::string& err);
 
 // The material as CLF nodes, to follow a Matrix that gives its printing density: Matrix (density -> log exposure) /
 // Range / LUT1D (the curve of each layer) / Matrix / LUT3D (dye amounts -> linear sRGB, cube points a side) /
-// Exponent (the sRGB curve). The text ends before </ProcessList>.
+// Exponent (the sRGB curve). The text ends before </ProcessList>; empty when a value is not a finite number.
 std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int cube = 45);
 
 // How one frame prints on one print material. Everything is looked up and multiplied; nothing is fitted when a file
@@ -376,7 +379,7 @@ PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
 // print's gains as a density offset after the knee, dL_c = -log10(unknee(x) g_c / n0) (null: none).
 PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
                                  const double tilt[3], const double gains[3] = nullptr);
-// The table: kPrintIccCube^3 XYZ D50, red slowest.
+// The table: kPrintIccCube^3 XYZ D50, red slowest; empty when a value is not a finite number.
 std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
                                 const PrintCurves& paper);
 // An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves),

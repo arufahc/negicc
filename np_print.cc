@@ -840,8 +840,11 @@ void exposure_to_xyz(const PrintMaterial& m, const double log_e[3], double xyz[3
 }
 
 // Q: the 3x3 from a film's dye amounts to the density above the film base that response (rows R, G, B, 401 samples)
-// reads, least squares with no offset on the film model's fixed sample colours.
-bool film_to_print_density(const FilmModel& film, const std::vector<double> response[3], double q[9]) {
+// reads, least squares with no offset on the film model's fixed sample colours. Every density read is the logarithm of
+// a transmittance 10^-D weighted by the response, which must be a finite number above 0: a density for which a double
+// holds 10^-D as 0 or infinity (a dye density of -13822, say) has none. False with why in why.
+bool film_to_print_density(const FilmModel& film, const std::vector<double> response[3], double q[9],
+                           std::string& why) {
   const double kSpread = 0.15 * std::sqrt(1.5);   // each dye amount times exp(kSpread z), z = -1, 0, 1
   double sum[3] = {0, 0, 0}, base_density[3];
   for (int c = 0; c < 3; ++c) {
@@ -850,8 +853,12 @@ bool film_to_print_density(const FilmModel& film, const std::vector<double> resp
       sum[c] += response[c][w];
       t += std::pow(10.0, -film.base[w]) * response[c][w];
     }
-    if (!(sum[c] > 0.0)) return false;
+    if (!(sum[c] > 0.0)) return why = "the print's layer " + std::to_string(c) + " has no response", false;
     base_density[c] = -std::log10(t / sum[c]);
+    if (!std::isfinite(base_density[c])) {
+      return why = "the density of film_model.base_density that the print's layer " + std::to_string(c) +
+                   " reads is not a finite number", false;
+    }
   }
   double ata[9] = {0}, atd[9] = {0};            // sums of a a^T and of a d^T over the samples
   std::vector<double> transmittance(kCieSamples);
@@ -869,6 +876,13 @@ bool film_to_print_density(const FilmModel& film, const std::vector<double> resp
         double t = 0.0;
         for (int w = 0; w < kCieSamples; ++w) t += transmittance[w] * response[c][w];
         d[c] = -std::log10(t / sum[c]) - base_density[c];
+        if (!std::isfinite(d[c])) {
+          char at[32];
+          snprintf(at, sizeof at, "%.9g", film.log_exposure[i]);
+          return why = std::string("the density that the print's layer ") + std::to_string(c) + " reads of " +
+                       "film_model's neutral at log exposure " + at + " (its dye_density, neutral_dye_amounts and " +
+                       "base_density) is not a finite number", false;
+        }
       }
       for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
@@ -879,10 +893,16 @@ bool film_to_print_density(const FilmModel& film, const std::vector<double> resp
     }
   }
   double inverse[9], solved[9];
-  if (!invert3(ata, inverse)) return false;
+  if (!invert3(ata, inverse)) {
+    return why = "film_model's neutral_dye_amounts between log exposure -1.5 and 1.0 do not determine the matrix (the "
+                 "least squares is singular or not finite)", false;
+  }
   multiply3(inverse, atd, solved);              // solved[k][c]: the weight of amount k in density c
   for (int r = 0; r < 3; ++r) {
     for (int c = 0; c < 3; ++c) q[r * 3 + c] = solved[c * 3 + r];
+  }
+  for (int k = 0; k < 9; ++k) {
+    if (!std::isfinite(q[k])) return why = "the matrix from film_model's dye amounts is not finite", false;
   }
   return true;
 }
@@ -1022,6 +1042,14 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
       const double lamp = 1.0 / (std::pow(metres, 5) * (std::exp(1.4388e-2 / (metres * 3200.0)) - 1.0));
       response[c][i] = sensitivity[c][i] * lamp;
     }
+    // 10^log_sensitivity times the lamp, and their sum, as doubles: a value above what a double holds has none.
+    double sum = 0.0;
+    for (int i = 0; i < kCieSamples; ++i) sum += response[c][i];
+    if (!std::isfinite(sum)) {
+      err = "layer " + std::to_string(c) + "'s log_sensitivity of the spektrafilm print profile gives a response "
+            "under the printer lamp that is not a finite number";
+      return false;
+    }
   }
   // The observer under the viewing light, Y of the light 1; the print's white is the light itself.
   const double* light = m.viewing_illuminant == "D50" ? kCieD50 : kCieD55;
@@ -1079,6 +1107,11 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
       return false;
     }
     for (int k = 0; k < 3; ++k) e[k] -= inverse[k * 3] * f[0] + inverse[k * 3 + 1] * f[1] + inverse[k * 3 + 2] * f[2];
+    // A step that is not a finite number has no exposure to read the curves at.
+    if (!std::isfinite(e[0]) || !std::isfinite(e[1]) || !std::isfinite(e[2])) {
+      err = "the print's curves do not reach an 18 % grey";
+      return false;
+    }
   }
   double check[3];
   exposure_to_xyz(m, e, check);
@@ -1111,11 +1144,22 @@ bool load_spektrafilm_print(const std::string& json_text, const std::string& id,
     for (int k = 0; k < 9; ++k) p[k] += corr[k];
     return true;
   };
+  // A film_model that gives no finite matrix leaves the material without one, and why, which a print reports.
   double q[9];
-  if (bundle.film_model.present && film_to_print_density(bundle.film_model, response, q)) {
+  std::string why;
+  if (bundle.film_model.present && !film_to_print_density(bundle.film_model, response, q, why)) {
+    for (std::string& no : m.no_print_matrix) {
+      no = "the profile bundle's film_model gives no print matrix on " + m.name + ": " + why;
+    }
+  } else if (bundle.film_model.present) {
     for (int k = 0; k < kDensityMeasures; ++k) {
       PrintMaterial::ToPrint t;
       if (!print_matrix(q, bundle.density_matrix[k], t.m.data())) continue;
+      if (!std::all_of(t.m.begin(), t.m.end(), [](double v) { return std::isfinite(v); })) {
+        m.no_print_matrix[k] = "the print matrix on " + m.name + " for " + density_measure_key((DensityMeasure)k) +
+                            " from the profile bundle's film_model and density matrix is not finite";
+        continue;
+      }
       t.film = bundle.film_model.name;
       m.to_print[k].push_back(t);
     }
@@ -1136,7 +1180,10 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
     s += buf;
   }
   s += "    </Array>\n  </Matrix>\n";
+  // Every value written is a finite number, or there is no CLF (an empty text): the exposure range, the curves' scale
+  // and the cube.
   const double lo = m.log_exposure.front(), hi = m.log_exposure.back();
+  if (!std::isfinite(hi - lo)) return {};
   snprintf(buf, sizeof buf,
            "  <Range inBitDepth=\"32f\" outBitDepth=\"32f\">\n    <minInValue>%.10g</minInValue>\n"
            "    <maxInValue>%.10g</maxInValue>\n    <minOutValue>0</minOutValue>\n    <maxOutValue>1</maxOutValue>\n"
@@ -1149,6 +1196,7 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
   double top = 0.0;
   for (int c = 0; c < 3; ++c) top = std::max(top, *std::max_element(m.curves[c].begin(), m.curves[c].end()));
   top = std::ceil(top * 10.0) / 10.0;
+  if (!std::isfinite(top) || !std::isfinite(1.0 / top)) return {};
   for (int i = 0; i < curve_points; ++i) {
     const double x = lo + (hi - lo) * i / (curve_points - 1);
     snprintf(buf, sizeof buf, "      %.6g %.6g %.6g\n", interp(m.log_exposure, m.curves[0], x),
@@ -1182,6 +1230,7 @@ std::string print_clf_nodes(const PrintMaterial& m, int curve_points, int cube) 
       rgb[idx * 3 + c] = m.to_srgb[c * 3] * xyz[0] + m.to_srgb[c * 3 + 1] * xyz[1] + m.to_srgb[c * 3 + 2] * xyz[2];
     }
   }
+  if (!std::all_of(rgb.begin(), rgb.end(), [](double v) { return std::isfinite(v); })) return {};
   for (size_t idx = 0; idx < points; ++idx) {
     snprintf(buf, sizeof buf, "      %.6g %.6g %.6g\n", rgb[idx * 3], rgb[idx * 3 + 1], rgb[idx * 3 + 2]);
     s += buf;
@@ -1201,7 +1250,10 @@ bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FrameP
   const nlohmann::json fit_record = nlohmann::json::parse(bundle.density_fit_json, nullptr, false);
   const std::string film = fit_record.is_object() ? fit_record.value("film_dye_spectra", std::string()) : std::string();
   const PrintMaterial::ToPrint* to_print = material.to_print_for((int)rec.measure, film);
-  if (!to_print) return err = "no print matrix for this measure and this film", false;
+  if (!to_print) {
+    const std::string& why = material.no_print_matrix[(int)rec.measure];
+    return err = why.empty() ? "no print matrix for this measure and this film" : why, false;
+  }
   if (bundle.targets.empty()) return err = "the bundle has no brackets", false;
   FramePrint p;
   p.id = material.id;
@@ -1568,9 +1620,19 @@ void remove_print_clfs(const DensityPrints& prints) {
 }
 
 int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints) {
+  // Every material's nodes before any file is written, so a material with none writes nothing.
+  std::vector<std::string> nodes;
+  for (size_t k = 0; k < prints.frames.size(); ++k) {
+    nodes.push_back(print_clf_nodes(prints.materials[k]));
+    if (nodes.back().empty()) {
+      log_error("No print CLF for %s: its log exposure range, its curves or its colours are not finite numbers\n",
+                prints.materials[k].id.c_str());
+      return 1;
+    }
+  }
   for (size_t k = 0; k < prints.frames.size(); ++k) {
     const FramePrint& print = prints.frames[k];
-    const std::string clf = frame_print_clf(rec, print, print_clf_nodes(prints.materials[k]));
+    const std::string clf = frame_print_clf(rec, print, nodes[k]);
     FILE* f = fopen(prints.paths[k].c_str(), "wb");
     const bool ok = f && fwrite(clf.data(), 1, clf.size(), f) == clf.size();
     if ((f && fclose(f) != 0) || !ok) {
@@ -1820,10 +1882,14 @@ std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], c
         double amount[3], xyz[3];
         for (int c = 0; c < 3; ++c) {
           const double pd = m.grey_density + ql[c * 3] * wa[0] + ql[c * 3 + 1] * wa[1] + ql[c * 3 + 2] * wa[2];
+          if (!std::isfinite(pd)) return {};
           amount[c] = interp(m.log_exposure, m.curves[c], m.aim[c] - (pd - m.grey_density));
         }
         amounts_to_xyz(m, amount, xyz);
-        for (int c = 0; c < 3; ++c) out[o++] = pcs[c * 3] * xyz[0] + pcs[c * 3 + 1] * xyz[1] + pcs[c * 3 + 2] * xyz[2];
+        for (int c = 0; c < 3; ++c) {
+          out[o] = pcs[c * 3] * xyz[0] + pcs[c * 3 + 1] * xyz[1] + pcs[c * 3 + 2] * xyz[2];
+          if (!std::isfinite(out[o++])) return {};
+        }
       }
   return out;
 }
@@ -2064,8 +2130,18 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   }
   if (!found) return err = "no such print material", false;
   const double* p = apd_print_matrix(bundle, material);
-  if (!p) return err = "no print matrix for the bundle's film", false;
+  if (!p) {
+    const std::string& why = material.no_print_matrix[kDensityApd];
+    return err = why.empty() ? "no print matrix for the bundle's film" : why, false;
+  }
+  // Paper_c divides by its top, the print's density at the film's brightest: one not above 0 gives no curve.
   const PrintCurves paper = paper_curve(material, p);
+  for (int c = 0; c < 3; ++c) {
+    if (!std::all_of(paper[c].begin(), paper[c].end(), [](double v) { return std::isfinite(v); })) {
+      return err = "the print's curve of layer " + std::to_string(c) + " through the film's print matrix is not "
+                   "finite (its density at the film's brightest is not above 0)", false;
+    }
+  }
   const double n0 = bundle.normalization_target / 65535.0;
   auto bracket_of = [&](const std::string& name) -> const DensityBracket* {
     for (const DensityBracket& b : bundle.density_brackets)
@@ -2152,10 +2228,14 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
     const DensityBracket* mid =
         bracket_of(bundle.targets.empty() ? "" : bundle.targets[bundle.targets.size() / 2].name);
     if (!mid) return err = "the profile bundle has no density_matrices.brackets entry for its middle bracket", false;
+    const std::vector<double> table = print_table(material, p, bundle.density_matrix[kDensityApd].m, paper);
+    if (table.empty()) {
+      return err = "the print's colours computed from the film's print matrix and the print material are not "
+                   "finite", false;
+    }
     base = write_print_icc(bracket_print_curves(bundle.grey_balance, paper, bracket_mid_apd(bundle, *mid), n0,
                                                 mid->tilt),
-                           print_table(material, p, bundle.density_matrix[kDensityApd].m, paper),
-                           description, kPrintIccCopyright, bundle_date(bundle));
+                           table, description, kPrintIccCopyright, bundle_date(bundle));
   }
   for (const BundleTarget& t : bundle.targets) {
     const DensityBracket* b = bracket_of(t.name);
