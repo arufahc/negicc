@@ -65,10 +65,11 @@ files, scripts, or source comments. Use relative paths instead.
   `tone_stage.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by
   `negicc-station` (the colour pipeline, flat field, image view, input curves and film base detector parts of
   `negicc_core.h`, the white-light balance part of `negicc.h`, and `rgb_view.cc`, `gpu_passes.cu`, `flat_field.cc`
-  and `film_base_detector.cc`) use `namespace negicc`, and so do the TIFF and JPEG readers in the inputs part of
+  and the film base detector in `film_detector.cc`) use `namespace negicc`, and so do the TIFF and JPEG readers in
+  the inputs part of
   `negicc.h` and in `np_input.cc` (`RgbImage`, `read_tiff`, `read_jpeg`, `to_linear_rec2020`) and `dilate` in the
   frame detector part of `negicc_core.h`; the rest of the inputs part and `np_input.cc`, and of the frame detector
-  part and `film_frame_detector.cc`, is in the global namespace.
+  part and the frame detector in `film_detector.cc`, is in the global namespace.
 
 ---
 

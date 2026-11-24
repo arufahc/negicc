@@ -381,4 +381,5 @@ and the pictures made through one are free. The `film_model` block of every prof
 spektrafilm's film spectra, under the same licence, and so do the eight print ICCs of each profile set
 (`print_<material>.icc`), whose tables derive from spektrafilm's print profiles; each says so in its own copyright tag.
 The licence covers those blocks and files only, not the rest of a bundle or its chart profiles (`Target_<n>.icc`), nor
-the pictures made with a print ICC.
+the pictures made with a print ICC. The SHA-256 in `3rd_party/picosha2/` is PicoSHA2's, unmodified, under the MIT
+licence (Copyright (c) 2017 okdshin, `3rd_party/picosha2/LICENSE`).

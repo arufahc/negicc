@@ -29,6 +29,10 @@
   submodules pin the same versions (the two headers byte for byte), so nothing changes but where they come from. To
   move one: check out another tag in the submodule, commit it, and check that the TriLED conversions stay
   bit-identical (negicc-station's `tools/triled_parity.py`).
+- `picosha2/`: [PicoSHA2](https://github.com/okdshin/PicoSHA2)'s `picosha2.h`, a header-only SHA-256, copied unmodified
+  from commit `161cb3fc4170fa7a3eca9e582cebd27cc4d1fe29` (MIT, Copyright (c) 2017 okdshin, see `picosha2/LICENSE`),
+  included as `"picosha2/picosha2.h"` with `-I3rd_party`. neg_process hashes the print ICCs, the built-in spektrafilm
+  print profiles and a print material given as a file with it (`picosha2/README.md`).
 - `onnxruntime_prebuilt/`: ONNX Runtime v1.30.0's headers (MIT, see `onnxruntime_prebuilt/LICENSE`) and `fetch.sh`,
   which takes its shared library from Microsoft's `onnxruntime` wheel on PyPI, checked by SHA-256. The default build
   links against it when no other ONNX Runtime is found, and fetches the library first if it is missing; see
