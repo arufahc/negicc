@@ -351,6 +351,11 @@ double clipped_share(const RgbView& sensor, const int box[4], float clip) {
 
 static void thinnest_film_base_impl(const RgbView& half, bool white_light, float white, float out[3],
                                     bool* at_clip = nullptr) {
+  if (!half.valid()) {  // no image to read (a size not positive, or a channel without samples): no film
+    out[0] = out[1] = out[2] = 0.0f;
+    if (at_clip) *at_clip = false;
+    return;
+  }
   int w = 0, h = 0;
   std::vector<float> v = downsample(half, w, h);
   const size_t n = (size_t)w * h;
@@ -539,9 +544,14 @@ static void add_reason(std::string& reason, const char* why) {
   reason += why;
 }
 
+// Whether the three values of a base, read through the crosstalk matrix, are finite (a matrix whose products overflow
+// gives no base).
+static bool finite3(const double v[3]) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
+
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
                       const double* crosstalk, float white, FilmBaseDetection& out) {
   out = FilmBaseDetection{};
+  if (!half.valid()) return false;  // no image to read
   const int W = half.width, H = half.height;
   bool has_box = false;
   int box[4] = {0, 0, 0, 0};
@@ -562,13 +572,11 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
         const int x = det->base_box[0], y = det->base_box[1], w = det->base_box[2], h = det->base_box[3];
         const double x0 = x + kBasePatchInset * w, x1 = x + (1.0 - kBasePatchInset) * w;
         const double y0 = y + kBasePatchInset * h, y1 = y + (1.0 - kBasePatchInset) * h;
-        int b[4] = {(int)std::ceil(x0 * sx), (int)std::ceil(y0 * sy), (int)std::floor(x1 * sx),
-                    (int)std::floor(y1 * sy)};
-        b[0] = std::max(0, b[0]);
-        b[1] = std::max(0, b[1]);
-        b[2] = std::min(W, b[2]);
-        b[3] = std::min(H, b[3]);
-        // A patch past the decode's edge on both axes has two negative spans, whose product is positive.
+        // Each edge is held within the decode before it becomes an int (a box far outside it, as only a detection the
+        // detector did not make can give, would not fit an int); a box that leaves the decode comes out empty below.
+        auto edge = [](double v, int n) { return (int)std::min(std::max(v, 0.0), (double)n); };
+        const int b[4] = {edge(std::ceil(x0 * sx), W), edge(std::ceil(y0 * sy), H), edge(std::floor(x1 * sx), W),
+                          edge(std::floor(y1 * sy), H)};
         if (b[2] <= b[0] || b[3] <= b[1] || (long)(b[2] - b[0]) * (b[3] - b[1]) < kBaseMinSamples) {
           add_reason(out.reason, "patch_too_small");
         } else {
@@ -609,7 +617,8 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
     for (int c = 0; c < 3; ++c) outshone = std::max(outshone, std::log2(thinnest[c] / std::max(dec[c], 1.0)));
     out.has_outshone = true;
     out.thinnest_over_patch_stops = outshone;
-    if (std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0 && outshone <= kRebateMargin) {
+    if (std::min({dec[0], dec[1], dec[2]}) > 0 && std::min({rgb[0], rgb[1], rgb[2]}) > 0 && finite3(rgb) &&
+        outshone <= kRebateMargin) {
       out.found = true;
       out.source = kFilmBaseSourceRebate;
       std::copy(dec, dec + 3, out.decode_rgb);
@@ -621,7 +630,10 @@ bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor
   }
   double rgb[3];
   corrected(thinnest, crosstalk, rgb);
-  if (std::min({thinnest[0], thinnest[1], thinnest[2]}) <= 1.0 || std::min({rgb[0], rgb[1], rgb[2]}) <= 0) return false;
+  if (std::min({thinnest[0], thinnest[1], thinnest[2]}) <= 1.0 || std::min({rgb[0], rgb[1], rgb[2]}) <= 0 ||
+      !finite3(rgb)) {
+    return false;
+  }
   out.found = true;
   out.source = kFilmBaseSourceStatistics;
   std::copy(thinnest, thinnest + 3, out.decode_rgb);

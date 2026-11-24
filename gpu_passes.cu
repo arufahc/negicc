@@ -14,8 +14,10 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -723,10 +725,25 @@ __global__ void pixel_shift_merge_kernel(PixelShiftMergeArgs a) {
 
 }  // namespace
 
+// As rgb_view.cc's: when an entry writes any pixel (work), the mosaics it reads and the output it writes are given and
+// the mosaic has a size; the grain-aware debayer's white level and eps are finite.
+static void check_mosaic_args(const char* fn, bool work, int src_w, int src_h, const void* out,
+                              std::initializer_list<const void*> in) {
+    if (!work) return;
+    bool ok = src_w > 0 && src_h > 0 && out != nullptr;
+    for (const void* m : in) ok = ok && m != nullptr;
+    if (!ok) throw std::invalid_argument(std::string(fn) + ": the mosaic must have a size, and it and the output be given");
+}
+static void check_grain_levels(const char* fn, const GrainAwareDebayerArgs& a) {
+    if (!std::isfinite(a.white_level) || !std::isfinite(a.eps))
+        throw std::invalid_argument(std::string(fn) + ": white_level and eps must be finite");
+}
+
 void gpu_preview_debayer(const PreviewDebayerArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("gpu_preview_debayer: rot_cw must be a multiple of 90");
     }
+    check_mosaic_args("gpu_preview_debayer", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out, {a.cfa_bayer});
     if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
@@ -752,6 +769,9 @@ void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     if (!is_rggb_pattern_host(a.filters)) {
         throw std::invalid_argument("gpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
     }
+    check_grain_levels("gpu_grain_aware_debayer", a);
+    check_mosaic_args("gpu_grain_aware_debayer", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out,
+                      {a.cfa_bayer});
     if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
@@ -769,6 +789,8 @@ void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
         throw std::invalid_argument("gpu_pixel_shift_merge: white_level must be within a 16-bit sample's range");
     }
+    check_mosaic_args("gpu_pixel_shift_merge", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out,
+                      {a.bayer_f0, a.bayer_f1, a.bayer_f2, a.bayer_f3});
     if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
@@ -790,7 +812,7 @@ struct SampleGrid {
     long long cols, rows;     // sampled columns and rows in the crop
 };
 __host__ __device__ inline long long sampled_below(int t, int step) {   // sampled positions in [0, t) on one axis
-    return 2LL * (t / step) + (t % step < 2 ? t % step : 2);
+    return t <= 0 ? 0LL : 2LL * (t / step) + (t % step < 2 ? t % step : 2);   // none below 0
 }
 __device__ __forceinline__ bool sample_position(const SampleGrid& gd, long long u, long long v, int& x, int& y,
                                                 long long& idx) {
@@ -828,6 +850,7 @@ __global__ void pixel_shift_merge_kernel_grid(PixelShiftMergeArgs a, SampleGrid 
 
 SampleGrid sample_grid(int step, int cx0, int cy0, int cx1, int cy1) {
     SampleGrid gd{step, cx0, cy0, cx1, cy1, 0, 0};
+    if (step <= 0) return gd;   // no grid
     gd.cols = sampled_below(cx1, step) - sampled_below(cx0, step);
     gd.rows = sampled_below(cy1, step) - sampled_below(cy0, step);
     return gd;
@@ -839,8 +862,10 @@ void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int 
         throw std::invalid_argument("gpu_grain_aware_debayer_grid: rot_cw must be a multiple of 90");
     if (!is_rggb_pattern_host(a.filters))
         throw std::invalid_argument("gpu_grain_aware_debayer_grid: currently only supports RGGB Bayer pattern");
+    check_grain_levels("gpu_grain_aware_debayer_grid", a);
     const SampleGrid gd = sample_grid(step, cx0, cy0, cx1, cy1);
     if (gd.cols <= 0 || gd.rows <= 0) return;
+    check_mosaic_args("gpu_grain_aware_debayer_grid", true, a.src_w, a.src_h, a.rgb_out, {a.cfa_bayer});
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     const int threads = 128;
@@ -857,6 +882,8 @@ void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0,
         throw std::invalid_argument("gpu_pixel_shift_merge_grid: white_level must be within a 16-bit sample's range");
     const SampleGrid gd = sample_grid(step, cx0, cy0, cx1, cy1);
     if (gd.cols <= 0 || gd.rows <= 0) return;
+    check_mosaic_args("gpu_pixel_shift_merge_grid", true, a.src_w, a.src_h, a.rgb_out,
+                      {a.bayer_f0, a.bayer_f1, a.bayer_f2, a.bayer_f3});
     require_device();
     std::lock_guard<std::mutex> lock(g_op_mutex);
     const int threads = 128;

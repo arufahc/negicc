@@ -5,9 +5,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <omp.h>
@@ -1105,10 +1107,28 @@ void cpu_lab_stats(const LabStatsArgs& a) {
 
 // ---- CPU Debayer & Pixel-Shift Kernels ---------------------------------------------------------------------
 
+// What every debayer and pixel-shift entry reads before its first pixel: when it writes any (work), the mosaics it
+// reads and the output it writes are given and the mosaic has a size.
+static void check_mosaic_args(const char* fn, bool work, int src_w, int src_h, const void* out,
+                              std::initializer_list<const void*> in) {
+    if (!work) return;
+    bool ok = src_w > 0 && src_h > 0 && out != nullptr;
+    for (const void* m : in) ok = ok && m != nullptr;
+    if (!ok) throw std::invalid_argument(std::string(fn) + ": the mosaic must have a size, and it and the output be given");
+}
+
+// The grain-aware debayer's white level and eps are finite: an infinite eps makes both weights 0 and every green
+// estimate NaN, a NaN white level makes every clamp NaN. (eps at or below 0 still means the default, 4096.)
+static void check_grain_levels(const char* fn, const GrainAwareDebayerArgs& a) {
+    if (!std::isfinite(a.white_level) || !std::isfinite(a.eps))
+        throw std::invalid_argument(std::string(fn) + ": white_level and eps must be finite");
+}
+
 void cpu_preview_debayer(const PreviewDebayerArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("cpu_preview_debayer: rot_cw must be a multiple of 90");
     }
+    check_mosaic_args("cpu_preview_debayer", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out, {a.cfa_bayer});
     const int half_rw = a.rw / 2;
     const int half_rh = a.rh / 2;
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
@@ -1298,6 +1318,9 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     if (!is_rggb_pattern_cpu(a.filters)) {
         throw std::invalid_argument("cpu_grain_aware_debayer: currently only supports RGGB Bayer pattern");
     }
+    check_grain_levels("cpu_grain_aware_debayer", a);
+    check_mosaic_args("cpu_grain_aware_debayer", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out,
+                      {a.cfa_bayer});
     const float k = 16.0f;
     const float eps = (a.eps > 0.0f) ? a.eps : 4096.0f;
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
@@ -1322,6 +1345,8 @@ void cpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32
     if (!is_rggb_pattern_cpu(a.filters)) {
         throw std::invalid_argument("cpu_grain_aware_debayer_sampled: currently only supports RGGB Bayer pattern");
     }
+    check_grain_levels("cpu_grain_aware_debayer_sampled", a);
+    check_mosaic_args("cpu_grain_aware_debayer_sampled", n > 0, a.src_w, a.src_h, a.rgb_out, {a.cfa_bayer, xy});
     const float k = 16.0f;
     const float eps = (a.eps > 0.0f) ? a.eps : 4096.0f;
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
@@ -1385,6 +1410,8 @@ void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
         throw std::invalid_argument("cpu_pixel_shift_merge: white_level must be within a 16-bit sample's range");
     }
+    check_mosaic_args("cpu_pixel_shift_merge", a.dst_w > 0 && a.dst_h > 0, a.src_w, a.src_h, a.rgb_out,
+                      {a.bayer_f0, a.bayer_f1, a.bayer_f2, a.bayer_f3});
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)
     for (int y2 = 0; y2 < a.dst_h; ++y2) {
@@ -1400,7 +1427,10 @@ void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
 }
 
 long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1) {
-    auto below = [step](int t) { return 2LL * (t / step) + (t % step < 2 ? t % step : 2); };  // sampled in [0, t)
+    if (step <= 0) return 0;  // no grid
+    auto below = [step](int t) {  // sampled in [0, t): none below 0
+        return t <= 0 ? 0LL : 2LL * (t / step) + (t % step < 2 ? t % step : 2);
+    };
     const long long cols = below(cx1) - below(cx0), rows = below(cy1) - below(cy0);
     return cols > 0 && rows > 0 ? cols * rows : 0;
 }
@@ -1423,6 +1453,8 @@ void cpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* 
         throw std::invalid_argument(
             "cpu_pixel_shift_merge_sampled: white_level must be within a 16-bit sample's range");
     }
+    check_mosaic_args("cpu_pixel_shift_merge_sampled", n > 0, a.src_w, a.src_h, a.rgb_out,
+                      {a.bayer_f0, a.bayer_f1, a.bayer_f2, a.bayer_f3, xy});
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)
     for (long long i = 0; i < n; ++i) pixel_shift_pixel_cpu(a, pitch, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);
