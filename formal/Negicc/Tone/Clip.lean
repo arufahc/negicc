@@ -17,8 +17,10 @@ unconverted image through the conversion (`tone_clip_sample`, `tone_clip_shares`
 at the origin of every 8 x 8 block that lie inside the inner crop (`toneClipCrop` of each side), so
 that every phase of a 2 x 2 colour mosaic is seen. The shares are those of the sampled pixels with a
 channel at the 16-bit maximum (white) and with a channel at 0 (black). Where the curve would clip
-more than `toneClipAllowance` more of them white than the conversion without it, the highlight and
-range moves are scaled down (`tone_plan_for_image`).
+either end more than `toneClipAllowance` beyond its own share without it, the moves are scaled down
+(`tone_plan_for_image`): the highlight and range moves always, the shadow move only where the black
+end fails with it whole. When no share holds both ends, the last is kept (shadows first, the
+default of `--tone_stage`).
 -/
 
 namespace Negicc
@@ -54,15 +56,31 @@ def toneClipSample (c : PipelineConfig α) (m : Mat3 α) (img : Array (Vec3 Nat)
   let (n, wc, kc) := counts
   if n = 0 then (0.0, 0.0) else ((wc : α) / (n : α), (kc : α) / (n : α))
 
-/-- The plan's curve for the image the export converts (`tone_plan_for_image`): the designed curve
-(share 1, `designed`), or the curve of the share `tonePickClipShare` keeps, each later share's curve
-planned by `tonePlan`. Returns the share kept, the targets and the curve. -/
+/-- The plan's curve for the image the export converts (`tone_plan_for_image`, with its default rule):
+the shares of `toneClipShares` in turn, each end against its own share before the stage
+(`whiteBefore`, `blackBefore`) plus `toneClipAllowance`. At each share the curve keeps the whole
+shadow move (the designed curve `designed` at the first share, `tonePlanShares` at the others); only
+where the black end then fails is the shadow move scaled with the rest. The first share at which both
+ends hold is kept; when none holds, the last share's curve (shadows first). Returns the highlight
+share kept, the shadow share kept, the targets and the curve. -/
 def tonePlanForImage (render : ToneDescriptors α) (predL2 predL98 predRange : α)
-    (c : PipelineConfig α) (m : Mat3 α) (img : Array (Vec3 Nat)) (w h : Nat) (whiteBefore : α)
-    (designed : ToneTargets α × ToneCurve α) : α × ToneTargets α × ToneCurve α :=
-  let planAt : Nat → ToneTargets α × ToneCurve α := fun k =>
-    if k = 0 then designed else tonePlan render predL2 predL98 predRange (toneClipShares.getD k 0.0)
-  let k := tonePickClipShare whiteBefore fun k => (toneClipSample c m img w h (some (planAt k).2)).1
-  (toneClipShares.getD k 0.0, planAt k)
+    (c : PipelineConfig α) (m : Mat3 α) (img : Array (Vec3 Nat)) (w h : Nat) (whiteBefore blackBefore : α)
+    (designed : ToneTargets α × ToneCurve α) : α × α × ToneTargets α × ToneCurve α := Id.run do
+  let clip := fun (q : ToneCurve α) => toneClipSample c m img w h (some q)
+  let mut kept : α × α × ToneTargets α × ToneCurve α := (1.0, 1.0, designed)
+  for i in [0:(toneClipShares : Array α).size] do
+    let hs : α := toneClipShares.getD i 0.0
+    let mut p := if i = 0 then designed else tonePlanShares render predL2 predL98 predRange hs 1.0
+    let mut ss : α := 1.0
+    let mut cl := clip p.2
+    if i ≠ 0 ∧ toneClipAllowance < cl.2 - blackBefore then
+      -- The whole shadow move clips the black end: the shadow move is scaled with the rest.
+      p := tonePlanShares render predL2 predL98 predRange hs hs
+      ss := hs
+      cl := clip p.2
+    kept := (hs, ss, p)
+    if cl.1 - whiteBefore ≤ toneClipAllowance ∧ cl.2 - blackBefore ≤ toneClipAllowance then
+      return kept
+  pure kept
 
 end Negicc

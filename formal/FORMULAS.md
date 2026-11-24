@@ -259,11 +259,12 @@ table_i = in(clamp01(curve(i / (n − 1))))                  (green and blue; re
 ## 4.4 The tone stage
 
 (`tone_stage.cc`: `tone_curve_L`, `tone_table`, `tone_curve_ok`, `tone_descriptors`, `tone_targets`,
-`tone_solve`, `tone_plan`, `tone_pick_clip_share`, `tone_clip_sample`, `tone_clip_shares`, `tone_plan_for_image`;
+`tone_solve`, `tone_plan`, `tone_plan_shares`, `tone_pick_clip_share`, `tone_clip_sample`, `tone_clip_shares`,
+`tone_plan_for_image`;
 `color_pipeline.h`: `tone_lab_fprime`, `tone_table_Y`, `apply_tone`. Lean `ToneCurve`, `toneCurveL`,
 `toneTable`, `toneCurveOk`, `toneLstarOfU8`, `percentileSorted`, `toneDescriptors`, `toneTargets`,
-`toneResiduals`, `toneCost`, `toneLM`, `toneSolve`, `tonePlan`, `tonePickClipShare`, `toneClipSample`,
-`tonePlanForImage`, `toneLabFprime`, `toneLuminance`, `toneTableY`, `applyTone`.)
+`toneTargetsShares`, `toneResiduals`, `toneCost`, `toneLM`, `toneSolve`, `tonePlan`, `tonePlanShares`,
+`tonePickClipShare`, `toneClipSample`, `tonePlanForImage`, `toneLabFprime`, `toneLuminance`, `toneTableY`, `applyTone`.)
 
 ```
 x = clamp(L/100, 1e-5, 1 − 1e-5),   g = x^γ
@@ -276,9 +277,10 @@ residuals: f(L2) − L2', f(L98) − L98', f(L50) − L50', f(L90) − f(L10) �
            0.02 black/5, 0.02 (white − 100)/5, 0.02 ln γ / 0.1, 0.02 ln c / 0.1,
            0.07 (f(100) − min(100, f(L98) + 100 − L98))
 bounds: black ±15, white 80 … 110, γ 0.7 … 1.45, c 0.7 … 1.5; starts at white 100, 110, 85
-share: 1 if the curve clips within 0.5 % more than without it, else the first of 0.75, 0.5, 0.25, 0
-       that does, else the one that clips least (sample: the 2 × 2 at each 8 × 8 block's origin inside
-       the inner crop, 0.90; 16-bit outputs; white: a channel at 65535, black: a channel at 0)
+share: the first of 1, 0.75, 0.5, 0.25, 0 at which the curve clips each end within 0.5 % more than
+       without it, the shadow move whole unless the black end then fails (then L2' = L2 + s (L2_pred − L2)
+       too); when none holds, the last (sample: the 2 × 2 at each 8 × 8 block's origin inside the inner
+       crop, 0.90; 16-bit outputs; white: a channel at 65535, black: a channel at 0)
 Y' = table(sqrt(clamp01(Y)) · 8192) (· Y above 1),   Y = 0.212671 R + 0.715160 G + 0.072169 B
 out = Y' + (v − Y) min(f'(max(Y, 0)) / f'(max(Y', 1e-9)), 8)
 f'(t) = 1 / (3 t^(2/3)) above 216/24389, 841/108 below
@@ -337,7 +339,7 @@ code by reading only.
 | `tone_table`, `tone_curve_ok` | `toneTable`, `toneCurveOk` | | yes |
 | `tone_descriptors` | `toneDescriptors`, `percentileSorted`, `toneLstarOfU8` | | yes |
 | `tone_targets` | `toneTargets` | `toneTargets_share_zero` | yes (through `tone_plan`) |
-| `tone_solve`, `tone_plan` | `toneResiduals`, `toneCost`, `toneLM`, `solve4`, `toneSolve`, `tonePlan` | | yes |
+| `tone_solve`, `tone_plan`, `tone_plan_shares` | `toneResiduals`, `toneCost`, `toneLM`, `solve4`, `toneSolve`, `tonePlan`, `toneTargetsShares`, `tonePlanShares` | | yes |
 | `tone_pick_clip_share`, `tone_clip_sample` with `tone_clip_shares`, `tone_plan_for_image` | `tonePickClipShare`, `toneClipSample`, `tonePlanForImage` | | yes |
 | `tone_lab_fprime`, `tone_table_Y`, `apply_tone` | `toneLabFprime`, `toneTableY`, `applyTone` | `applyTone_grey` | yes |
 

@@ -170,9 +170,10 @@ difference is then either a change of the specification to follow or a defect.
 
 Vectors generated from commit `b2318d0` on x86-64 Linux with GCC 13.3 and glibc 2.39
 (another compiler or C library may change the last digit of a single precision result, which the
-tolerances cover). With Lean `v4.36.0`, the check makes 9884 comparisons, none outside its
+tolerances cover). With Lean `v4.36.0`, the check makes 9897 comparisons, none outside its
 tolerance. `lake build` last ended with `Build completed successfully` and no warning at `165da12`;
-no theorem uses the definition changed since (`toneClipSample`).
+no theorem uses the definitions changed or added since (`toneClipSample`, `tonePlanForImage`,
+`toneTargetsShares`, `tonePlanShares`).
 
 ## Using the package from another repository
 

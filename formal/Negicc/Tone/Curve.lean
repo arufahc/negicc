@@ -294,6 +294,21 @@ def tonePlan (render : ToneDescriptors α) (predL2 predL98 predRange share : α)
   let t := toneTargets render predL2 predL98 predRange share
   (t, toneSolve render t)
 
+/-- The targets with the shadow move scaled by its own share (`tone_targets` with a shadow share;
+`toneTargets` moves it all the way). -/
+def toneTargetsShares (cur : ToneDescriptors α) (predL2 predL98 predRange share shadowShare : α) :
+    ToneTargets α :=
+  ⟨cur.L2 + shadowShare * toneShadowMove * (predL2 - cur.L2),
+   cur.L50,
+   cur.L98 + share * toneHighlightMove * (predL98 - cur.L98),
+   cur.range + share * toneRangeMove * (predRange - cur.range)⟩
+
+/-- The plan with the shadow move scaled by its own share (`tone_plan_shares`). -/
+def tonePlanShares (render : ToneDescriptors α) (predL2 predL98 predRange share shadowShare : α) :
+    ToneTargets α × ToneCurve α :=
+  let t := toneTargetsShares render predL2 predL98 predRange share shadowShare
+  (t, toneSolve render t)
+
 /-! ## The clip check -/
 
 /-- The share of the export's pixels the curve may clip white beyond the conversion's own

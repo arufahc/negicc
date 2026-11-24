@@ -466,13 +466,22 @@ def checkTone (root : System.FilePath) (pixel : Json) (j : Json) : CheckM Unit :
     let (wa, ka) := toneClipSample cfg m img16 w h (some (← toneCurveOf (← get c "curve")))
     near "tone: toneClipSample" tolDouble wa (← numAt c "white")
     near "tone: toneClipSample" tolDouble ka (← numAt c "black")
-  let pl ← get cl "plan"
-  let pr ← numsAt pl "pred"
-  let designed := tonePlan d (pr.getD 0 0.0) (pr.getD 1 0.0) (pr.getD 2 0.0) 1.0
-  let (share, t, q) := tonePlanForImage d (pr.getD 0 0.0) (pr.getD 1 0.0) (pr.getD 2 0.0) cfg m img16 w h wb designed
-  near "tone: tonePlanForImage" tolDouble share (← numAt pl "share")
-  nearTargets "tone: tonePlanForImage" tolDouble t (← numsAt pl "targets")
-  nearCurve "tone: tonePlanForImage" tolSolve q (← numsAt pl "curve")
+  -- The plan on that image, and on a darker one where the black end steps the shares down.
+  let dk ← get cl "dark"
+  let imgDark := pixelsOf (← natsAt dk "img")
+  let (dwb, dkb) := toneClipSample cfg m imgDark w h none
+  let wantDark ← numsAt dk "none"
+  near "tone: toneClipSample" tolDouble dwb (wantDark.getD 0 0.0)
+  near "tone: toneClipSample" tolDouble dkb (wantDark.getD 1 0.0)
+  for (pl, img, wb, kb) in [(← get cl "plan", img16, wb, kb), (← get dk "plan", imgDark, dwb, dkb)] do
+    let pr ← numsAt pl "pred"
+    let designed := tonePlan d (pr.getD 0 0.0) (pr.getD 1 0.0) (pr.getD 2 0.0) 1.0
+    let (share, shadow, t, q) :=
+      tonePlanForImage d (pr.getD 0 0.0) (pr.getD 1 0.0) (pr.getD 2 0.0) cfg m img w h wb kb designed
+    near "tone: tonePlanForImage" tolDouble share (← numAt pl "share")
+    near "tone: tonePlanForImage" tolDouble shadow (← numAt pl "shadow_share")
+    nearTargets "tone: tonePlanForImage" tolDouble t (← numsAt pl "targets")
+    nearCurve "tone: tonePlanForImage" tolSolve q (← numsAt pl "curve")
 
 def holdOf (j : Json) : IO (Option Float) := do
   match (← get j "hold").getNum? with
@@ -706,8 +715,8 @@ def expectedCounts : List (String × Nat) := [
   ("tone: toneTargets", 36),
   ("tone: tonePlan (the solve)", 36),
   ("tone: tonePickClipShare", 4),
-  ("tone: toneClipSample", 12),
-  ("tone: tonePlanForImage", 9),
+  ("tone: toneClipSample", 14),
+  ("tone: tonePlanForImage", 20),
   ("white: curveStops", 15),
   ("white: inputCurve", 24),
   ("white: composeInputTable (size)", 1),
