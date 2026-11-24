@@ -754,6 +754,9 @@ void gpu_upload(void*, const void*, size_t) { no_cuda(); }
 void gpu_download(void*, const void*, size_t) { no_cuda(); }
 void gpu_render(const RenderArgs&) { no_cuda(); }
 void gpu_highlight_clip(const HighlightClipArgs&) { no_cuda(); }
+void gpu_preview_debayer(const PreviewDebayerArgs&) { no_cuda(); }
+void gpu_grain_aware_debayer(const GrainAwareDebayerArgs&) { no_cuda(); }
+void gpu_pixel_shift_merge(const PixelShiftMergeArgs&) { no_cuda(); }
 #endif
 
 void cpu_render(const RenderArgs& a) {

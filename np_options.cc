@@ -398,9 +398,11 @@ int parse_options(int ac, char* av[], Options& o) {
           "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
-    .help("DINOv3 inference backend: auto (the default), cpu, or gpu (USE_CUDA=1 builds). cpu also keeps the "
-          "search's passes over the frame on the CPU, which a USE_CUDA=1 build otherwise runs on a CUDA device that "
-          "runs its kernels (see CUDA_ARCH in the README's build section).")
+    .help("DINOv3 inference backend: auto (the default), cpu, or gpu (USE_CUDA=1 builds). cpu keeps everything on "
+          "the CPU: the network, the search's passes over the frame, and the full-size debayer, pixel-shift merge "
+          "and conversion, which a USE_CUDA=1 build otherwise runs on a CUDA device that runs its kernels (see "
+          "CUDA_ARCH in the README's build section). On the device a value of the exported picture can differ from "
+          "the CPU's by one 16-bit code.")
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "

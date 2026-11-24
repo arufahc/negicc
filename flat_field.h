@@ -140,6 +140,10 @@ public:
     FlatTables& operator=(const FlatTables&) = delete;
     const FlatSampleArgs& host() const { return m_host; }
     const FlatSampleArgs& device() const { return m_device; }
+    // host()'s tables are one block of host_bytes() at host_block(), for a caller that copies them (to a device) and
+    // points a FlatSampleArgs at the copy: every pointer of host() moved by the copy's offset.
+    const void* host_block() const { return m_block; }
+    size_t host_bytes() const { return m_bytes; }
 
 private:
     void* m_block = nullptr;
