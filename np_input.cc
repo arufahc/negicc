@@ -344,6 +344,21 @@ int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn) {
               proc->imgdata.sizes.pixel_aspect);
     return LIBRAW_FILE_UNSUPPORTED;
   }
+  // An X-Trans pattern (filters 9) has three colours, 0 R, 1 G and 2 B, and COLOR() gives them as they are: LibRaw
+  // clamps a RAF's to these but takes a DNG's CFAPattern as written, masked to 0..3. Every reader of the colours takes
+  // them as 0..2 (a Bayer pattern's 3, its second green, comes from LibRaw's 2-bit filters and is read as such).
+  if (proc->imgdata.idata.filters == 9) {
+    for (int r = 0; r < 6; ++r) {
+      for (int c = 0; c < 6; ++c) {
+        const int k = proc->imgdata.idata.xtrans[r][c];
+        if (k < 0 || k > 2) {
+          log_error("%s: the 6x6 colour filter pattern holds colour %d at row %d, column %d; its colours are 0 (red), "
+                    "1 (green) and 2 (blue)\n", fn.c_str(), k, r, c);
+          return LIBRAW_FILE_UNSUPPORTED;
+        }
+      }
+    }
+  }
   log_info("Image size: %dx%d\n", proc->imgdata.sizes.iwidth, proc->imgdata.sizes.iheight);
   ret = proc->unpack();
   if (ret == LIBRAW_SUCCESS && !raw_levels_valid(*proc, fn)) ret = LIBRAW_DATA_ERROR;
