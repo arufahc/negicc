@@ -427,7 +427,7 @@ struct ParamSearchResult {
   int frame_stats_max_size = 0, frame_stats_patch = 0;
 
   // The shadow alternative this result's search found (ShadowAlternative): the conversion takes it in place of this
-  // result only when the tone stage's clip check says so (np_pipeline.cc).
+  // result only when the tone stage's clip check says so (neg_process.cc).
   ShadowAlternative shadow;
 };
 
@@ -492,7 +492,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 inline const double kStopDensity = std::log10(2.0);
 
 // The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
-// its mid grey A as a continuous variable in place of the bracket (np_print.h PrintContinuum), E held at 1 in the
+// its mid grey A as a continuous variable in place of the bracket (neg_process.cc PrintContinuum), E held at 1 in the
 // search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
 // A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness
 // target from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
@@ -520,7 +520,7 @@ float raise_base_to_print_floor(const ProfileBundle& bundle, const negicc::RgbVi
 
 struct ContinuousPrint {
   // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
-  // renders the print (np_print.h PrintContinuum::trc_at).
+  // renders the print (neg_process.cc PrintContinuum::trc_at).
   std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets

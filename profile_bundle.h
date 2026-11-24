@@ -43,7 +43,7 @@ enum OutputEncoding : int {
   ENCODE_SRGB_LINEAR = negicc::ENCODE_SRGB_LINEAR,  // linear-light sRGB primaries
   ENCODE_CUSTOM = 2,                                // PCS XYZ through Little-CMS into an output ICC profile
   ENCODE_NONE = 3,                                  // the corrected camera RGB, no film profile applied
-  ENCODE_DENSITY = 4                                // density above the film base as code values (np_print.h)
+  ENCODE_DENSITY = 4                                // density above the film base as code values (neg_process.cc)
 };
 
 // The film profile's AToB0 pipeline (negicc::ProfileData) with host defaults: no profile, identity matrix.
@@ -146,27 +146,27 @@ struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
   // The bracket's own slopes, when the bundle keeps them. They are read only for a bundle without grey_balance_curves;
-  // a bundle with the curve, under either light, takes its slopes from the curve (np_print.h curve_slopes).
+  // a bundle with the curve, under either light, takes its slopes from the curve (neg_process.cc curve_slopes).
   bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
   // The bracket's slope relative to the grey balance curve
   // (density_matrices.brackets.targets.<bracket>.grey_relative.b), fitted by the profile-building tools over its grey
   // steps: each step's residual from the curve, r_c = G_green - G_c in the curve's APD, regressed as a_c + t_c
   // (G_c - A_mid). The print takes the tilt t_c linear in its mid grey A between the two brackets whose A_mid enclose
-  // A, held beyond the end ones (np_print.h print_tilt_at); the offset a_c is not read. Zero without grey_relative: the
-  // curve alone.
+  // A, held beyond the end ones (neg_process.cc print_tilt_at); the offset a_c is not read. Zero without grey_relative:
+  // the curve alone.
   bool has_tilt = false;
   double tilt[3] = {0.0, 0.0, 0.0};
 };
 
 // The film model's spectral grid, 380-780 nm at 1 nm: kSpectralSamples samples from kSpectralFirstNm in steps of
-// kSpectralStepNm, the grid of np_print.cc's CIE tables.
+// kSpectralStepNm, the grid of neg_process.cc's CIE tables.
 constexpr int kSpectralSamples = 401;
 constexpr double kSpectralFirstNm = 380.0, kSpectralStepNm = 1.0;
 
 // The film stock's spectra (the bundle's film_model), on the spectral grid: the spectral density of a unit amount
 // of each dye, the base, and the dye amounts along the film's neutral scale. A print material given as a file takes
-// its matrix from them (np_print.h load_spektrafilm_print).
+// its matrix from them (neg_process.cc load_spektrafilm_print).
 struct FilmModel {
   bool present = false;
   std::string name;
@@ -185,11 +185,11 @@ struct GreyBalanceCurves {
 };
 
 // One of a bundle's print ICCs (print_profiles): the film printed on a print material, for --print <id>. The ICC's
-// own input curves are for reference_bracket; neg_process writes each bracket's from it (np_print.h). The ICC itself
-// is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without --print
-// does not keep, and a missing one refuses only the print that needs it. The two SHA-256 (hex; empty when not recorded)
-// are of the spektrafilm profile the ICC was computed from and of the ICC itself; an exported bundle (its ICC a file
-// beside bundle.json) records the ICC's, a station bundle (the ICC inline) does not.
+// own input curves are for reference_bracket; neg_process writes each bracket's from it (neg_process.cc). The ICC
+// itself is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without
+// --print does not keep, and a missing one refuses only the print that needs it. The two SHA-256 (hex; empty when not
+// recorded) are of the spektrafilm profile the ICC was computed from and of the ICC itself; an exported bundle (its ICC
+// a file beside bundle.json) records the ICC's, a station bundle (the ICC inline) does not.
 struct BundlePrint {
   std::string id, name, reference_bracket, spektrafilm_sha256, icc_sha256;
   bool icc_in_file = false;
@@ -204,7 +204,7 @@ struct ProfileBundle {
   std::string camera_name;
   // The camera models the bundle holds for (camera_models), as a RAW records them (LibRaw's imgdata.idata.model). A
   // camera_raw_rgb bundle's crosstalk correction is not applied to a RAW that states a model not among them, compared
-  // exactly (np_pipeline.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
+  // exactly (neg_process.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
   std::vector<std::string> camera_models;
   bool has_camera_models = false;
   InputSpace input_space = InputSpace::kCameraRawRgb;

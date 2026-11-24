@@ -2572,7 +2572,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // screening order on a tie) runs its fixed point on the clip fallback's path (the tournament's run when it had one)
   // and has its roll-off measured as the result's was: the alternative, which the conversion takes in place of the
   // result only when the tone stage's clip check finds it no higher at either end, before and after the stage, and
-  // lower at one (np_pipeline.cc). None when the chosen bracket is the lowest or tied lowest at black, and none with
+  // lower at one (neg_process.cc). None when the chosen bracket is the lowest or tied lowest at black, and none with
   // a pinned bracket or E (the step only moves the bracket and E), with one bracket, or where the caller says no
   // alternative could be kept (ParamSearchOptions::shadow_alternative). The chosen bracket's own row is compared
   // whether or not it is within the white allowance: the allowance selects a bracket to move to, and the chosen one is
@@ -2685,7 +2685,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // ---- Stage 3, the profile tables: the fitted G/B input curves --------------------------------------------------
 //
 // The curves live in the bracket's input tables, composed at an E, g and b (apply_input_curves): the fit's, a
-// replay's, or the knobs', which compose them again from the bracket's own tables (np_pipeline.cc). Every render after
+// replay's, or the knobs', which compose them again from the bracket's own tables (neg_process.cc). Every render after
 // that, on the CPU or the GPU, reads one ordinary profile.
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
@@ -3228,7 +3228,7 @@ class WhiteLightFit {
         fr_(bundle, engine, opts.verbose, opts.max_steps, scratch_) {}
 
   bool run() {
-    // White light only (see the --fit_curves gate in np_pipeline.cc): a TriLED bundle's curves are the measured ones.
+    // White light only (see the --fit_curves gate in neg_process.cc): a TriLED bundle's curves are the measured ones.
     if (bundle_.has_crosstalk) {
       std::cerr << "ERROR! Fitted input curves are for white-light bundles: a TriLED bundle converts through its "
                    "measured curves" << std::endl;
