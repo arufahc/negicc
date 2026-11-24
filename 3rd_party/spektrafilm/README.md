@@ -6,7 +6,7 @@ hash.
 
 `neg_process` builds them in. With `--print <material> -P srgb` on a profile set it computes from one of them a
 print ICC and writes the print itself as a picture; for a density file written with `--print <material>` it computes
-a CLF that renders the file as a print on that material (the print part of `neg_process.cc`, and "Print emulation" in
+a CLF that renders the file as a print on that material (`print_emulation.cc`, and "Print emulation" in
 `DESIGN.md`). `--print` alone lists them.
 
 | File | Print material |

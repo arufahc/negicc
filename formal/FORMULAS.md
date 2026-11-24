@@ -114,7 +114,7 @@ M_frame = diag(s) X          exposure = shutter · ISO / 100
 `ρ = 1` for a base read on the scan. A scan pixel of bare film comes out at the code `n`, `n / 65535`
 after the load (`mergedMatrix_mulVec_scan_base`).
 
-**Base from a capture** (`neg_process.cc`; Lean `baseFromCapture`): `X v · exposure(scan) /
+**Base from a capture** (`np_input.cc`; Lean `baseFromCapture`): `X v · exposure(scan) /
 exposure(capture)`; refused when the film it reads is at the sensor's clip before the flat field.
 
 **Rebate** (`film_detector.cc`: `detect_film_base`; Lean `rebatePlaced`, `rebateBox`,
@@ -346,7 +346,7 @@ code by reading only.
 ## Defined but not evaluated by the check
 
 - `subtractBlack`, `whiteAfterBlack`, `captureScale`, `tiffHalf`, `capturePlanesUsed` (`np_input.cc`)
-  and `baseFromCapture` (`neg_process.cc`): those files are not in the library the generator links,
+  and `baseFromCapture` (`np_input.cc`): those files are not in the library the generator links,
   and the functions work on LibRaw's state or on files.
 - `profileLayoutAccepted`: the parser reads Little-CMS's pipeline of an ICC file; the check's own
   reader takes only the bundles' layout, and every bundle profile is taken. The parser's two other

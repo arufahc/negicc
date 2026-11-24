@@ -62,7 +62,8 @@ files, scripts, or source comments. Use relative paths instead.
 ## Code Style Rules
 
 - Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`,
-  `tone_stage.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by
+  `pipeline.cc`, `print_emulation.cc`, `np_output.cc`, `tone_stage.cc`, etc.), which reside in the global namespace.
+  The shared pipeline files consumed by
   `negicc-station` (the colour pipeline, flat field, image view, input curves and film base detector parts of
   `negicc_core.h`, the white-light balance part of `negicc.h`, and `rgb_view.cc`, `gpu_passes.cu`, `flat_field.cc`
   and the film base detector in `film_detector.cc`) use `namespace negicc`, and so do the TIFF and JPEG readers in

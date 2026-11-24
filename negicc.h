@@ -25,6 +25,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <optional>
 
 #include "libraw/libraw.h"
 #include "negicc_core.h"
@@ -403,7 +404,7 @@ enum OutputEncoding : int {
   ENCODE_SRGB_LINEAR = negicc::ENCODE_SRGB_LINEAR,  // linear-light sRGB primaries
   ENCODE_CUSTOM = 2,                                // PCS XYZ through Little-CMS into an output ICC profile
   ENCODE_NONE = 3,                                  // the corrected camera RGB, no film profile applied
-  ENCODE_DENSITY = 4                                // density above the film base as code values (neg_process.cc)
+  ENCODE_DENSITY = 4                                // density above the film base as code values (print_emulation.cc)
 };
 
 // The film profile's AToB0 pipeline (negicc::ProfileData) with host defaults: no profile, identity matrix.
@@ -506,27 +507,27 @@ struct DensityBracket {
   std::string name;
   double grey_light[3] = {0.0, 0.0, 0.0};
   // The bracket's own slopes, when the bundle keeps them. They are read only for a bundle without grey_balance_curves;
-  // a bundle with the curve, under either light, takes its slopes from the curve (neg_process.cc curve_slopes).
+  // a bundle with the curve, under either light, takes its slopes from the curve (print_emulation.cc curve_slopes).
   bool has_slopes = false;
   double slopes[3] = {1.0, 1.0, 1.0};
   // The bracket's slope relative to the grey balance curve
   // (density_matrices.brackets.targets.<bracket>.grey_relative.b), fitted by the profile-building tools over its grey
   // steps: each step's residual from the curve, r_c = G_green - G_c in the curve's APD, regressed as a_c + t_c
   // (G_c - A_mid). The print takes the tilt t_c linear in its mid grey A between the two brackets whose A_mid enclose
-  // A, held beyond the end ones (neg_process.cc print_tilt_at); the offset a_c is not read. Zero without grey_relative:
-  // the curve alone.
+  // A, held beyond the end ones (print_emulation.cc print_tilt_at); the offset a_c is not read. Zero without
+  // grey_relative: the curve alone.
   bool has_tilt = false;
   double tilt[3] = {0.0, 0.0, 0.0};
 };
 
 // The film model's spectral grid, 380-780 nm at 1 nm: kSpectralSamples samples from kSpectralFirstNm in steps of
-// kSpectralStepNm, the grid of neg_process.cc's CIE tables.
+// kSpectralStepNm, the grid of print_emulation.cc's CIE tables.
 constexpr int kSpectralSamples = 401;
 constexpr double kSpectralFirstNm = 380.0, kSpectralStepNm = 1.0;
 
 // The film stock's spectra (the bundle's film_model), on the spectral grid: the spectral density of a unit amount
 // of each dye, the base, and the dye amounts along the film's neutral scale. A print material given as a file takes
-// its matrix from them (neg_process.cc load_spektrafilm_print).
+// its matrix from them (print_emulation.cc load_spektrafilm_print).
 struct FilmModel {
   bool present = false;
   std::string name;
@@ -545,7 +546,7 @@ struct GreyBalanceCurves {
 };
 
 // One of a bundle's print ICCs (print_profiles): the film printed on a print material, for --print <id>. The ICC's
-// own input curves are for reference_bracket; neg_process writes each bracket's from it (neg_process.cc). The ICC
+// own input curves are for reference_bracket; neg_process writes each bracket's from it (print_emulation.cc). The ICC
 // itself is read only when a print asks for it (read_icc): a bundle holds eight, 4.6 MB, which a conversion without
 // --print does not keep, and a missing one refuses only the print that needs it. The two SHA-256 (hex; empty when not
 // recorded) are of the spektrafilm profile the ICC was computed from and of the ICC itself; an exported bundle (its ICC
@@ -564,7 +565,7 @@ struct ProfileBundle {
   std::string camera_name;
   // The camera models the bundle holds for (camera_models), as a RAW records them (LibRaw's imgdata.idata.model). A
   // camera_raw_rgb bundle's crosstalk correction is not applied to a RAW that states a model not among them, compared
-  // exactly (neg_process.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
+  // exactly (pipeline.cc decode). has_camera_models false: a bundle from before the field, which is not compared.
   std::vector<std::string> camera_models;
   bool has_camera_models = false;
   InputSpace input_space = InputSpace::kCameraRawRgb;
@@ -1180,7 +1181,7 @@ struct IntentLoss {
   float clip = 0.0f;  // in percent [0, 100]
 };
 
-// The input curves of a profile with the gains g and b in them, after the knee (the print, neg_process.cc
+// The input curves of a profile with the gains g and b in them, after the knee (the print, print_emulation.cc
 // PrintContinuum): three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
 using GainCurves = std::function<void(float g, float b, std::vector<float> trc[3])>;
 
@@ -1690,7 +1691,7 @@ struct ParamSearchResult {
   int frame_stats_max_size = 0, frame_stats_patch = 0;
 
   // The shadow alternative this result's search found (ShadowAlternative): the conversion takes it in place of this
-  // result only when the tone stage's clip check says so (neg_process.cc).
+  // result only when the tone stage's clip check says so (pipeline.cc).
   ShadowAlternative shadow;
 };
 
@@ -1759,9 +1760,9 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 inline const double kStopDensity = std::log10(2.0);
 
 // The print's search (--print with Auto on a bundle with grey_balance_curves, either light): the print searched with
-// its mid grey A as a continuous variable in place of the bracket (neg_process.cc PrintContinuum), E held at 1 in the
-// search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once (the
-// A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness
+// its mid grey A as a continuous variable in place of the bracket (print_emulation.cc PrintContinuum), E held at 1 in
+// the search's reference units (the negative's own density above base, as the brackets were measured): A0 metered once
+// (the A at which the frame's log-average cell prints at L* 50, as the scene's search meters a bracket); the lightness
 // target from the mean field of the renders at A0 - boot_h, A0, A0 + boot_h (A0 alone when boot_h is 0), held; g and b
 // screened at A0 on the optimiser's wide grids; then the fixed point over (A, g, b): each step renders the print at its
 // A, measures the optimiser's correction, predicts a* b* (L* is the lightness target) and solves A (bracketed by steps
@@ -1787,7 +1788,7 @@ float raise_base_to_print_floor(const ProfileBundle& bundle, const negicc::RgbVi
 
 struct ContinuousPrint {
   // The print's input tables at A with the gains (r, g, b) in them, after the knee (null: none), as the conversion
-  // renders the print (neg_process.cc PrintContinuum::trc_at).
+  // renders the print (print_emulation.cc PrintContinuum::trc_at).
   std::function<void(double a, const double gains[3], std::vector<float> trc[3])> trc_at;
   double a_lo = 0.0, a_hi = 0.0;     // the range A is searched in
   std::vector<double> a_mid;         // per bundle.targets
@@ -2004,5 +2005,1240 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                          int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
+
+// ====================================================================================================================
+// Print: declarations
+// ====================================================================================================================
+
+// The density output (-P statusm, rp180, apd): the negative's density above the film base in a standard measure, as
+// code values in a 10-bit DPX or a 16-bit TIFF.
+//
+// A pixel, after the film base's merged matrix (crosstalk correction and film base scale; the film base lands on
+// base_level), is a transmittance relative to bare film in each of the scanning light's channels:
+//
+//     T = v / base_level,  D_light = -log10(max(T, kDensityMinT)),  D = M * D_light,  code = round(offset + scale * D)
+//
+// M is the bundle's 3x3 matrix for the measure (the profile bundle part of negicc.h). The two encodings are the Cineon
+// one (10 bits: offset 95, 500 codes per unit density) and the 16-bit one (offset 1520, 8000 codes per unit density),
+// so RP 180 density in a DPX is a Cineon file. Academy Printing Density is written as ADX: ADX10 and ADX16 have these
+// offsets and scales (SMPTE ST 2065-3:2020 4.3.3 equation 2 and 4.3.2 equation 1), with the standard's channel factors
+// on the density, code = offset + scale * k * D with k = 1.00, 0.92, 0.95 for R, G, B.
+// Status M and RP 180 take no factors (k = 1).
+//
+// Both files carry what is needed to read and recompute them, as JSON (schema negicc.density/1): the measure, the
+// encoding, the film base, the matrix applied and the light's record with its spectrum. A TIFF has it in its
+// ImageDescription tag, a DPX in its user-defined data section.
+
+constexpr double kDensityMinT = 1e-4;   // the transmittance floor before the log (4.0 density)
+
+struct DensityEncoding {
+  int bits = 16;
+  int offset = 1520;
+  int scale = 8000;
+  double k[3] = {1.0, 1.0, 1.0};      // the channel factors on the density (ADX: 1.00, 0.92, 0.95)
+  int max_code() const { return (1 << bits) - 1; }
+};
+// The channel factors of ADX (SMPTE ST 2065-3:2020, equations 1 and 2).
+constexpr double kAdxChannelFactor[3] = {1.00, 0.92, 0.95};
+inline DensityEncoding density_encoding(bool dpx, DensityMeasure measure) {
+  DensityEncoding e;
+  if (dpx) {
+    e.bits = 10;
+    e.offset = 95;
+    e.scale = 500;
+  }
+  if (measure == kDensityApd) {
+    for (int c = 0; c < 3; ++c) e.k[c] = kAdxChannelFactor[c];
+  }
+  return e;
+}
+
+// Pixels whose code was clamped, per channel (R, G, B): below 0 (film much thinner than the base) and above the
+// largest code (film denser than the encoding reaches).
+// floor: pixels whose transmittance in a light channel was at or below kDensityMinT, so that the density of that
+// channel was held at its floor before the matrix (R, G, B of the light).
+struct DensityClip {
+  uint64_t low[3] = {0, 0, 0};
+  uint64_t high[3] = {0, 0, 0};
+  uint64_t floor[3] = {0, 0, 0};
+  uint64_t pixels = 0;
+};
+
+// Converts the image in place (width x height, `channels` 16-bit samples a pixel, the first three R, G, B) to density
+// codes: merged the film base's merged matrix (negicc_core.h apply_matrix on the sample / 65535), base_level the
+// value the film base lands on (the bundle's normalization target / 65535), m the measure's matrix.
+void density_encode_in_place(uint16_t* pixels, int width, int height, int channels, const float merged[9],
+                             double base_level, const double m[9], const DensityEncoding& enc, DensityClip& clip);
+
+// What the file's metadata records beyond the bundle's own (ProfileBundle::light_source_json, density_fit_json).
+struct DensityRecord {
+  DensityMeasure measure = kDensityStatusM;
+  DensityEncoding encoding;
+  std::string container;              // "dpx" or "tiff"
+  std::string bundle_key;             // the profile bundle
+  double film_base_rgb[3] = {0, 0, 0};
+  std::string film_base_source;
+  const DensityMatrix* matrix = nullptr;
+  const ProfileBundle* bundle = nullptr;
+  const DensityClip* clip = nullptr;  // null before the conversion
+  // The balance the picture conversion's parameter search found for this frame (E, g, b as -E, --gain_g and --gain_b
+  // take them, and the bracket it chose). It is not applied to the densities; the file records the colour part
+  // (g and b) as offsets a grading tool can add (density_metadata_json: suggested_balance).
+  bool has_balance = false;
+  double balance_e = 1.0, balance_g = 1.0, balance_b = 1.0;
+  std::string balance_target;
+  std::string tool_version;
+  // The metadata's "print" block, as JSON text: how the frame prints on each print material
+  // (DensityPrints::metadata_json). Empty: none.
+  std::string print_json;
+  // A density run with --print, on either light: each material's own print search (pipeline.cc;
+  // search_print_continuous), by material id: its mid grey A, E (the -E units), g, b and the nearest bracket. Its CLF
+  // prints the frame as the picture conversion would print it on that material. Empty (a material without a print
+  // search): its CLF takes the scene's search.
+  struct PrintSearch {
+    double a = 0.0, e = 1.0, g = 1.0, b = 1.0;
+    std::string bracket;
+    bool converged = false;
+    int steps = 0;
+    double last_move[3] = {0, 0, 0};    // |dA| in stops, |dg|, |db| of the search's last step
+    double above_knee = 0.0;            // the crop's share above the knee at the bootstrap
+    double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
+    std::string stopped_by;             // parameters, residual or steps
+    double a0 = 0.0, target_l = 0.0;    // the A its bootstrap started from; the mean L* of the lightness target it held
+    double above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // at the result, per channel (shares)
+    // --brightness, --tint, --warmth on this print (solve_print_knobs): a, g and b above are the moved ones; these the
+    // search's, the knobs as given (brightness in stops, tint a*, warmth b*), and the print's grey where they put it
+    bool knobs = false, knobs_limited = false;
+    double knob_base_a = 0.0, knob_base_g = 1.0, knob_base_b = 1.0;
+    double knob_given[3] = {0, 0, 0};
+    double knob_grey_lab[3] = {0, 0, 0};
+  };
+  std::map<std::string, PrintSearch> print_search;
+};
+// The metadata as JSON text (schema negicc.density/1); indent < 0 for one line.
+std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
+
+// The colour balance the picture conversion found for the frame, as offsets on the measure's density with their mean
+// taken out (zero sum), and that mean. The conversion multiplies the light's channels by E, E g and E b, so the whole
+// of what g and b do to the density is offset + mean in every channel: the zero-sum part is the colour, the mean is
+// level. False, and zeros, when the record has no balance.
+bool density_balance_offset(const DensityRecord& rec, double offset[3], double* mean = nullptr);
+
+struct DensityFileInfo {
+  std::string make, model;            // the camera
+  std::string software;               // "neg_process <version>"
+  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
+};
+
+// Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
+// description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
+// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
+// user-defined data. 0 on success.
+int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                       const std::string& description, const DensityFileInfo& info);
+int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
+                      const DensityFileInfo& info);
+
+
+// ---- The print of a density file ------------------------------------------------------------------------------------
+//
+// Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print
+// material's printing density -> its curves and dyes -> sRGB.
+//
+// A print material (a paper or a print film) and what is computed with it when a density file is written: one
+// matrix for the frame, and the print's curves and colour table as CLF nodes.
+//
+// A print material is a print profile of spektrafilm (https://github.com/andreavolpato/spektrafilm), a JSON file read
+// as published: those under 3rd_party/spektrafilm/profiles/ are built into neg_process, and --print takes any other
+// by its path. The profile gives the curve of each layer, the dye spectra and base, and the layers' spectral
+// sensitivity; the rest is computed when it is loaded (load_spektrafilm_print), the print matrix for the film of the
+// bundle in use. A profile holds nothing of a film stock, and a film's bundle holds nothing of a print material.
+//
+// The model, for a log exposure of each layer:
+//     dye amounts   delta_c = curve_c(logE_c)                    (linear interpolation, held at the ends)
+//     transmittance tau(lambda) = 10^-(sum_c delta_c dye_c(lambda) + base(lambda))
+//     XYZ           = sum_lambda tau(lambda) observer(lambda)
+// and a printing density pd is exposed as logE = aim - (pd - grey_density), aim the exposure that prints an 18 % grey.
+
+struct PrintMaterial {
+  std::string id, name, viewing_illuminant;
+  // The printing density exposed as the print's mid grey: a stated value (DESIGN.md), which cancels inside the CLF.
+  double grey_density = 0.70;
+  // The 3x3 from a measure's density to the density this material reads, indexed by DensityMeasure (Status M, RP 180,
+  // Academy Printing Density), for the film model named (the bundle's the material was loaded for).
+  struct ToPrint {
+    std::string film;
+    std::array<double, 9> m;
+  };
+  std::vector<ToPrint> to_print[kDensityMeasures];
+  // Why a measure has no matrix when the bundle's film_model gives none (not finite); empty otherwise.
+  std::string no_print_matrix[kDensityMeasures];
+  // The matrix for a film model; null when the material has none for the measure and the film.
+  const ToPrint* to_print_for(int measure, const std::string& film) const {
+    for (const ToPrint& t : to_print[measure]) {
+      if (t.film == film) return &t;
+    }
+    return nullptr;
+  }
+  std::vector<double> log_exposure;           // ascending
+  std::vector<double> curves[3];              // dye amount of each layer along log_exposure
+  std::vector<double> dye[3], base;           // spectral densities on the wavelength grid
+  std::vector<double> observer[3];            // X, Y, Z weights on the grid (viewing light x observer)
+  double white[3] = {1, 1, 1};
+  double aim[3] = {0, 0, 0};
+  double to_srgb[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // XYZ under the viewing light -> linear sRGB
+};
+
+// A print material from its spektrafilm print profile (a JSON with info and data), for the film of one bundle.
+// Computed here:
+//
+//   the print's own density   read with its layers' sensitivity under a 3200 K blackbody printer lamp
+//   the observer              the CIE 1931 2 degree observer (the print code's CIE tables) under D50 for a paper, D55
+//                             for a print film (info.support), adapted to D65 with CAT02 for sRGB
+//   aim                       the exposure of each layer that prints an 18 % grey
+//   the print matrix          Q L inv(M) for each measure of the bundle, computed as Q inv(F) when the measure has
+//                             no light_density_factors: F its film_to_measure (dye amounts to the measure's density),
+//                             L the bundle's light_to_film, M = F L diag(alpha) the measure's full matrix, and Q the
+//                             3x3 from the film's dye amounts to the print's own density, least squares on fixed
+//                             sample colours of the bundle's film_model (every point of its neutral scale between
+//                             log exposure -1.5 and 1.0, each with 27 colour variations). P M = Q L for every
+//                             measure, so the bracket's uncalibrated APD slopes apply once
+//
+// The profile is checked first: info.stage "printing", info.support paper or film (it picks the viewing light),
+// log_exposure ascending with one row of density_curves per value, each layer's curve rising with exposure (by more
+// than 0.5 over the profile, never more than 0.02 below its highest value so far) and each layer's log_sensitivity
+// peaking within 6 (log10) of the most sensitive layer's. --print loads a file given to it at option time, without a
+// bundle, so every rule here stops a wrong file before any frame is converted.
+//
+// id names the material when the profile's info.stock is not a string. False with why in err; a bundle without a
+// film_model gives a material without matrices, which frame_print refuses, and one whose film_model gives a matrix
+// that is not finite a material without matrices and no_print_matrix saying why.
+bool load_spektrafilm_print(const std::string& json_text, const std::string& id, const ProfileBundle& bundle,
+                            PrintMaterial& out, std::string& err);
+
+// The material as CLF nodes, to follow a Matrix that gives its printing density: Matrix (density -> log exposure) /
+// Range / LUT1D (the curve of each layer) / Matrix / LUT3D (dye amounts -> linear sRGB, cube points a side) /
+// Exponent (the sRGB curve). The text ends before </ProcessList>; empty when a value is not a finite number.
+std::string print_clf_nodes(const PrintMaterial& m, int curve_points = 4096, int cube = 45);
+
+// How one frame prints on one print material. Everything is looked up and multiplied; nothing is fitted when a file
+// is written. The bundle gives, for the exposure bracket the picture conversion's search chose (without a search, the
+// middle one), what the film's chart says of that bracket (DensityBracket), and the print material gives its matrix:
+//
+//   grey      the frame's mid grey as the measure's density: the bracket's mid grey, denser by log10(E) in every
+//             light channel for the exposure E the search found. With the balance (the gains g and b, level
+//             included) it prints as the print's mid grey. A bundle with the film's grey balance curve, under
+//             either light, takes the curve's grey at the bracket's mid grey APD (curve_grey), as its print ICCs do.
+//   slopes    they give the film's grey scale equal contrast in the three channels: from the grey balance curve
+//             (curve_slopes), else the bracket's own (read only for a bundle without the curve).
+//
+//     printing density = grey_density + slopes * (to_print * (D + balance - grey))
+struct FramePrint {
+  std::string id, name;               // the print material
+  double to_print[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  std::string to_print_for;           // the film model the matrix is for
+  std::string bracket;
+  bool searched = false;              // the bracket and exposure come from the search
+  double exposure = 1.0;
+  double grey[3] = {0, 0, 0};
+  double slopes[3] = {1, 1, 1};
+  bool from_curve = false;            // grey and slopes are the film's grey balance curve's (curve_grey, curve_slopes)
+  // The material's own print search (DensityRecord::print_search): the mid grey A the grey and slopes are taken at,
+  // and its gains, which the CLF's balance applies in place of the picture conversion's.
+  bool print_searched = false;
+  double a = NAN, gain_g = 1.0, gain_b = 1.0;
+  bool converged = false;
+  int steps = 0;
+  double last_move[3] = {0, 0, 0}, above_knee = 0.0;
+  double past_knee[3] = {0, 0, 0}, past_cut[3] = {0, 0, 0};   // at E (the matrix at E alone), per channel (shares)
+  std::string stopped_by;
+  double a0 = 0.0, target_l = 0.0, above_white[3] = {0, 0, 0}, at_white[3] = {0, 0, 0};   // (PrintSearch)
+  bool knobs = false, knobs_limited = false;   // the knobs moved a, gain_g and gain_b from these (PrintSearch)
+  double knob_base_a = NAN, knob_base_g = 1.0, knob_base_b = 1.0, knob_grey_lab[3] = {0, 0, 0};
+  double knob_given[3] = {0, 0, 0};            // brightness, tint, warmth as given
+  double grey_density = 0.70;
+};
+// False, with why in err, when the bundle has nothing for the bracket or the material has no matrix for the measure.
+bool frame_print(const DensityRecord& rec, const PrintMaterial& material, FramePrint& out, std::string& err);
+
+// A Common LUT Format (CLF, ST 2136-1) transform for one density file and one print material: the file's code values
+// (0-1) to the print, as sRGB. Its first node is a Matrix for the frame, with the balance (density_balance_offset),
+// the exposure and the slopes of FramePrint; nodes is the print material's own (print_clf_nodes). This is the only
+// place the balance, the exposure and the slopes are applied.
+std::string frame_print_clf(const DensityRecord& rec, const FramePrint& print, const std::string& nodes);
+
+// The print materials built into neg_process (3rd_party/spektrafilm/profiles/<id>.json), in the order of their ids,
+// with their matrices for the film of bundle; without a bundle, or with one that has no film_model, they have no
+// matrix (enough to list them). One that cannot be read is left out, with a warning.
+std::vector<PrintMaterial> builtin_print_materials(const ProfileBundle* bundle = nullptr);
+// Whether a --print value names a file (a spektrafilm print profile: a path, or a name ending in .json) and not a
+// built-in print material.
+bool is_print_file(const std::string& name);
+
+// The text of a spektrafilm print profile given as a file, and its stem (the name without folder and .json), the id of
+// a profile without info.stock. False with "cannot be read" in err for a file that cannot be opened or read.
+bool read_print_file(const std::string& path, std::string& text, std::string& stem, std::string& err);
+
+struct DensityPrints {
+  std::vector<PrintMaterial> materials;
+  std::vector<FramePrint> frames;
+  std::vector<std::string> paths;
+  std::string metadata_json;          // the "print" block of the file's metadata; empty with no print
+  std::string error;                  // a material asked for that has no CLF, and why: the run fails
+};
+// The prints of one density file: for each print material asked for (--print: ids of builtin_print_materials, "all",
+// or the path of a spektrafilm print profile; none gives no print), how the frame prints on it and the CLF to write,
+// named after the whole output as the sidecar is (<output>.<material>.clf: a CLF fits one file, its code scale,
+// measure and channel factors).
+DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
+                             const std::vector<std::string>& print_ids);
+// Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
+int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
+void remove_print_clfs(const DensityPrints& prints);
+
+// ---- The print ICC: a frame printed as the picture conversion renders it --------------------------------------------
+//
+// With --print and a picture output on a profile bundle, the print's own search runs on the print profile
+// (search_print_continuous) and the conversion renders that profile at the search's A: the film printed on the print
+// material, shaped as the chart profiles are (ICC v2, RGB -> PCS XYZ D50, A2B0 lut16: 4096-entry input curves, a 45^3
+// table, identity output curves), so the conversion and the output run it as they run them. The bundle carries one
+// print ICC per print material (print_profiles, built by the profiling tool when it saved the bundle);
+// its table serves every bracket, and each bracket's three input curves are computed here:
+//
+//     in_c(x) = Paper_c((G_c(-log10(unknee(x) / n0)) - A_mid) (1 + t_c))
+//
+//   G_c       the film's grey balance curve (GreyBalanceCurves): light density in channel c -> APD of the film's grey
+//   A_mid     the bracket's mid grey as APD: the green APD of its gs10 (bracket_mid_apd)
+//   t_c       the bracket's tilt relative to the curve (DensityBracket::tilt; 0 without grey_relative)
+//   Paper_c   0.75 curve_c(aim_c - eta_c alpha_i) / top_c + 0.25 (1 - i / (kPaperAlphaPoints - 1)) on
+//             alpha_i = kPaperAlphaStart + kPaperAlphaStep i (-1.5 .. 1.8), eta = P (1, 1, 1) with P the material's
+//             print matrix for APD, top_c the channel's largest value; held strictly decreasing on [0, 1]
+//             (paper_curve)
+//   unknee    the inverse of the soft knee at kKnee the conversion applies before the profile
+//
+// and the table, at node a: alpha_c = Paper_c^-1(a_c), printing density 0.70 + Q L (psi alpha) with
+// psi = M^-1 (1, 1, 1) and Q L = P M, the material's dyes, XYZ under its viewing light adapted to D50 (Bradford; none
+// for a paper). A print material without a bundle ICC (a --print file), or whose bundle ICC no longer matches what is
+// computed here, gets its table computed here (print_table).
+// The print ICC's copyright tag, as spektrafilm's licence asks of a derivative (its author, its source, the licence,
+// and that and by whom it was modified). The profile-building tools write the same text into the bundle's print ICCs.
+// The print CLF's description (frame_print_clf in print_emulation.cc) gives the same attribution in its own words,
+// with the licence at spektrafilm's main branch rather than at this pinned commit.
+constexpr const char* kPrintIccCopyright =
+    "Tables derived by negicc from spektrafilm's print profile (Andrea Volpato, "
+    "https://github.com/andreavolpato/spektrafilm), modified: its curves resampled and its dye spectra computed into "
+    "colours. CC BY-SA 4.0, https://github.com/andreavolpato/spektrafilm/blob/"
+    "3bb2c2d2801ff68b92019cf1dbcbb133d60832bc/SPEKTRAFILM_LICENSE.txt";
+constexpr int kPrintIccPoints = 4096;
+constexpr int kPrintIccCube = 45;
+// Paper_c's grid: -1.5 to 1.8 in steps of 0.005, 661 points.
+constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
+constexpr int kPaperAlphaPoints = 661;
+using PrintCurves = std::array<std::vector<double>, 3>;
+
+// The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
+// curve_grey and curve_slopes at a mid grey A (green APD) in place of a bracket's.
+void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
+void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);
+// The print's bracket term at a mid grey A, the one rule for the picture and the CLF: each bracket has its own tilt,
+// and between two brackets' A_mid the tilt is interpolated linearly in A, held beyond the end ones, so at a bracket's
+// own A_mid it is that bracket's tilt; a bundle with one bracket has that bracket's tilt. a_mid and tilt per bracket,
+// in any order; zeros without brackets.
+void print_tilt_at(const std::vector<double>& a_mid, const std::vector<std::array<double, 3>>& tilt, double a,
+                   double t[3]);
+// The same from a bundle's density brackets.
+void print_tilt_at(const ProfileBundle& bundle, double a, double t[3]);
+// The light densities of the grey balance curve's grey with the bracket's mid grey APD: the bracket's mid grey as the
+// curve has it. A print CLF of a bundle with grey_balance_curves, under either light, takes it as the frame's mid grey
+// (frame_print).
+void curve_grey(const ProfileBundle& bundle, const DensityBracket& bracket, double light[3]);
+// The slopes a print CLF takes for the bracket from the curve (DESIGN.md 5.9): with n(A) the light densities of the
+// curve's grey at green APD A, gamma_c = sum_j M_cj dn_j/dA at the mid grey (dn_j/dA = 1 / G_j', G_j' a central
+// difference of one step of the curve's table), slopes = (gamma_green / gamma_red, 1, gamma_green / gamma_blue).
+void curve_slopes(const ProfileBundle& bundle, const DensityBracket& bracket, double slopes[3]);
+// Paper_c on kPaperAlphaStart + kPaperAlphaStep i.
+PrintCurves paper_curve(const PrintMaterial& m, const double p_apd[9]);
+// A bracket's input curves on x = i / (kPrintIccPoints - 1), held non-decreasing (a 1e-9 ramp). gains (r, g, b): the
+// print's gains as a density offset after the knee, dL_c = -log10(unknee(x) g_c / n0) (null: none).
+PrintCurves bracket_print_curves(const GreyBalanceCurves& g, const PrintCurves& paper, double a_mid, double n0,
+                                 const double tilt[3], const double gains[3] = nullptr);
+// The table: kPrintIccCube^3 XYZ D50, red slowest; empty when a value is not a finite number.
+std::vector<double> print_table(const PrintMaterial& m, const double p_apd[9], const double m_apd[9],
+                                const PrintCurves& paper);
+// An ICC v2.4 input profile with tags desc, cprt, wtpt and A2B0 (the curves, the table, identity output curves),
+// dated date (year, month, day, hour, minute, second), so the same inputs give the same bytes.
+std::vector<uint8_t> write_print_icc(const PrintCurves& curves, const std::vector<double>& table,
+                                     const std::string& description, const std::string& copyright,
+                                     const std::array<int, 6>& date);
+// The date a bundle's print ICCs carry: its source file's timestamp (profile_<Key>_<YYYYMMDD>_<HHMMSS>), else
+// 2026-01-01 00:00:00.
+std::array<int, 6> bundle_date(const ProfileBundle& bundle);
+// Multiplies the X, Y and Z of an ICC's A2B0 table (a lut16's) by k[0], k[1] and k[2] in place, each code rounded and
+// held at 65535: the print relative to its paper's white in the profile an output embeds. False when it has none.
+bool scale_print_icc_table(std::vector<uint8_t>& icc, const double k[3]);
+// Writes xyz into an ICC's wtpt tag in place (the media white: the paper's, for a print made relative to its paper).
+// False when it has none.
+bool set_icc_wtpt(std::vector<uint8_t>& icc, const double xyz[3]);
+// The paper's white under the material's viewing light, as the print CLF's XYZ has it: the colour of the print where
+// every layer holds its least dye (each curve's lowest value: the base and the layers' fog), the lightest it gets.
+void print_paper_xyz(const PrintMaterial& m, double xyz[3]);
+// Writes curves into an ICC's A2B0 input tables in place (a lut16 with as many entries). False when it has none.
+bool set_print_icc_curves(std::vector<uint8_t>& icc, const PrintCurves& curves);
+
+// The print at a continuous mid grey A (pipeline.cc: the print search): the input curves above with A for
+// A_mid and the brackets' tilt at A (print_tilt_at: linear in A between the two neighbouring brackets, held beyond
+// the end ones). At A = A_mid of a bracket the profile is that bracket's to the bit (set_curves_at writes the 16-bit
+// codes an ICC holds, as code / 65535).
+struct PrintContinuum {
+  GreyBalanceCurves g;
+  PrintCurves paper;
+  double n0 = 1.0;
+  std::vector<double> a_mid;                  // per bundle.targets, in its order
+  std::vector<std::array<double, 3>> tilt;    // per bundle.targets
+  void tilt_at(double a, double t[3]) const;  // print_tilt_at over these brackets
+  // gains (r, g, b): the print's gains in its curves, after the knee (null: none).
+  PrintCurves curves_at(double a, const double gains[3] = nullptr) const;
+  void set_curves_at(double a, ParsedFilmProfile& prof, const double gains[3] = nullptr) const;
+  // The tables set_curves_at writes into prof.in_trc.
+  void trc_at(double a, const double gains[3], std::vector<float> trc[3]) const;
+  double a_lo() const;                        // the range A is searched in: the curve's green APD range
+  double a_hi() const;
+};
+
+// The print profile of every bracket of a bundle on one print material (a built-in id or a spektrafilm file).
+struct BracketPrints {
+  PrintContinuum continuum;                    // the print at a continuous A
+  std::string id, name;
+  std::string file, file_sha256;               // a material given as a file: its path as given and its SHA-256
+  bool from_bundle = false;                    // the table is the bundle's print ICC's, else computed here
+  std::vector<std::vector<uint8_t>> icc;       // per bundle.targets, in its order
+};
+bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& print, BracketPrints& out,
+                            std::string& err);
+
+// ====================================================================================================================
+// Film base: declarations
+// ====================================================================================================================
+
+// The film base read from a capture of unexposed film (--film_base <file>[:x,y,w,h]), in place of the base read from
+// the scan itself (the film base detector part of negicc_core.h).
+//
+// The capture is decoded as the scan's half-size view is: a Sony CFA RAW, black subtracted, its 2x2 cells as RGB,
+// with the flat field. The base is read over a region of it, taken through the crosstalk matrix and scaled to the
+// scan's exposure, which gives it in the conversion's film base space, as a base read from the scan is.
+//
+// The region, when none is given, is found on the capture, which is seldom perfectly clean (dust, scratches, the
+// holder's edge, a sprocket hole, part of a picture):
+//   1. the whole frame is split into square tiles, kBaseTileGrid along its longer side, small enough that a strip of
+//      rebate beside a picture holds whole tiles; each tile's median per channel and the spread of its green density
+//      (the median absolute deviation times kMadToSigma) are taken;
+//   2. tiles with clipped photosites are dropped (clipping is counted on the mosaic as recorded, before the flat
+//      field, which moves the levels), and tiles whose spread stands out: above kBaseTileMaxSpread and above
+//      kBaseSpreadFactor times the median tile's (dust, scratches, edges; a grainy film is uneven in every tile alike,
+//      which the median allows for);
+//   3. tiles whose colour is not the film base's are dropped: through the crosstalk matrix, G/R and B/R must lie
+//      within kBaseColourTol (density) of the bundle's film base. Bare light beside the film is brighter than the
+//      base and not orange;
+//   4. of the rest, the brightest group is kept: going down from the brightest tile, the first whose green has enough
+//      tiles within kBaseTileMargin (density) of it (kBaseMinTiles, and one tile in kBaseMinShare). The base is the
+//      thinnest film, so darker tiles are picture or shadow, whatever share of the frame they cover. The group is
+//      then taken again around its own median;
+//   5. of that group, the largest piece of touching tiles is kept when it is large enough: one stretch of film (a
+//      rebate strip) and not film of the same level elsewhere in the frame;
+//   6. the base is the median, per channel, of the kept tiles' medians.
+// With no such group the thinnest film on the capture is taken (the statistics of the film base detector part of
+// negicc_core.h); with nothing usable, or a clipped result, the capture is refused.
+//
+// The thresholds of steps 2 to 4 were set on simulated captures. The tile size and steps 4 and 5 were set on seven
+// captures of Portra 400 frames with a rebate strip at one edge (2026-10-04), where the search agrees with the
+// station's hand-marked base to 0.005 density on five; on two it reads the strip on the other side of the picture,
+// which a region given by hand reads 0.01 to 0.03 density brighter than the marked one.
+
+// The exposure of a scan or a film base capture whose file records none (Scan::scan_exposure,
+// read_film_base_capture): 1/8 s at ISO 100.
+constexpr double kDefaultScanShutterS = 0.125, kDefaultScanIso = 100.0;
+
+constexpr int kBaseTileGrid = 96;             // square tiles along the longer side (fewer when they would be under 8
+                                              // pixels)
+constexpr int kBaseMinTiles = 8;              // tiles that must agree, and at least ...
+constexpr int kBaseMinShare = 200;            // ... one tile in this many
+constexpr double kBaseTileMaxSpread = 0.03;   // density: a tile's green spread up to which it is smooth whatever the
+                                              // rest
+constexpr double kBaseSpreadFactor = 1.5;     // ... and up to this many times the median tile's spread
+constexpr double kBaseTileMargin = 0.02;      // density: how far from the group's brightest tile a kept tile may lie
+constexpr double kBaseColourTol = 0.25;       // density: how far a tile's G/R and B/R may lie from the bundle's base
+
+struct FilmBaseCapture {
+  double rgb[3] = {0.0, 0.0, 0.0};         // the film base: through the crosstalk matrix, at the scan's exposure
+  double decode_rgb[3] = {0.0, 0.0, 0.0};  // as the capture's half-size decode gives it, at the capture's exposure
+  int roi[4] = {0, 0, 0, 0};               // the region read (x, y, w, h in sensor pixels): the given one, or the kept
+                                           // tiles' bounding box
+  std::string roi_source;                  // "given", "tiles" or "statistics"
+  int tiles_kept = 0, tiles_total = 0;     // with the tiles
+  double spread_density = 0.0;             // the spread of the kept tiles' green medians (a given region: of its
+                                           // pixels)
+  double shutter_s = 0.0, iso = 0.0;       // the capture's exposure
+  double exposure_scale = 1.0;             // scan exposure / capture exposure, which rgb carries
+};
+
+// Reads the film base from the capture at path. roi: the region in sensor pixels, or null to find it. flat: the scan's
+// flat field (null for none). crosstalk: the 3x3 row-major crosstalk matrix (null for none). expected_base: the
+// bundle's film base through the crosstalk matrix, whose colour the tiles are held to (null: no colour test).
+// scan_shutter_s, scan_iso: the scan's exposure. False with err on a file that cannot be read, a capture that is not a
+// Sony CFA RAW, a region off the sensor or clipped, or a capture with no usable film.
+bool read_film_base_capture(const std::string& path, const int* roi, const negicc::FlatFieldPtr& flat,
+                            const double* crosstalk, const double* expected_base, double scan_shutter_s,
+                            double scan_iso, FilmBaseCapture& out, std::string& err);
+
+// ====================================================================================================================
+// Options: declarations
+// ====================================================================================================================
+
+// neg_process's command line: the options, parsed and checked on their own (what needs the profile is checked by
+// prepare, the pipeline part of negicc.h).
+
+struct Options {
+  int argc = 0;
+  char** argv = nullptr;                       // the command line, for the sidecar
+
+  // Input
+  std::vector<std::string> files;              // one RAW, DNG, TIFF or JPEG, three captures, or a pixel shift's four
+  InputMode input_mode = InputMode::kRaw;
+  bool tiff_input = false;                     // one TIFF: camera RGB with a tri bundle, else Rec.2020
+  const char* implied_light = nullptr;         // the light the input implies ("tri", "d65"), nullptr for a RAW
+  int quality = -1;                            // --quality
+  bool no_crop = false;                        // --no_crop
+  std::string flat;                            // --flat, empty when not given
+
+  // Profile
+  std::string film_stock, light_source, film_profile;  // --film_stock, --light_source, -p (empty when not given)
+  std::string target;                          // --target, empty when not given
+  bool target_given = false;
+
+  // Conversion parameters
+  std::vector<float> r_coeff, g_coeff, b_coeff;  // -r, -g, -b
+  bool row_given[3] = {false, false, false};
+  float exposure_comp = 1.0f;                  // -E
+  bool exposure_given = false;                 // -E (the search keeps it)
+  float gain_g = 1.0f, gain_b = 1.0f;          // --gain_g, --gain_b (the search holds them)
+  bool gain_g_given = false, gain_b_given = false;
+  float brightness = 0.0f;                     // --brightness (stops of the grey's luminance)
+  float tint = 0.0f;                           // --tint (a* of the grey)
+  float warmth = 0.0f;                         // --warmth (b* of the grey)
+  bool knobs_given = false;                    // --brightness, --tint or --warmth given
+
+  // Geometry
+  int roi[4] = {0, 0, 0, 0};                   // --roi x y w h (sensor pixels)
+  bool has_roi = false, roi_auto = false;      // --roi given as numbers / as 'auto'
+  char roi_axis_hint = 0;                      // --roi auto h|v
+  FilmFormat film_format = FILM_35MM;          // --film_format
+  bool film_format_given = false;              // --film_format was given (else 35mm for --roi auto)
+  int rot_cw = 0;                              // --rot_cw (or the --roi's fifth value)
+  bool hflip = false, vflip = false;
+
+  // Parameter search
+  // --dino: the intent adapter (an adapter.onnx or its directory) and the neutral and tone heads' files that replace
+  // the built-in ones; empty: the built-in one. dino_arg is --dino's value as given, which the replay line repeats.
+  std::string dino_arg, dino_adapter, neutral_head_file, tone_head_file;
+  // The tone stage (the tone stage part of negicc_core.h). --tone_stage auto (the default) runs it after every bundle
+  // search with -P srgb, on white light and TriLED alike, whether or not the curve fit runs; on does the same and is an
+  // error where it does not apply; off turns it off. curve:black,white,gamma,contrast (ToneCurve) replays a recorded
+  // curve (a sidecar's cli_equivalent), with given values and no search. highlights_first and least_total run it as
+  // auto does, with their own rule where no share of the moves holds both ends (tone_fallback; auto and on keep the
+  // shadows first).
+  enum ToneStageMode { kToneStageAuto, kToneStageOn, kToneStageOff };
+  ToneStageMode tone_stage = kToneStageAuto;
+  ToneClipFallback tone_fallback = kToneFallbackShadowsFirst;
+  bool tone_replay_given = false;
+  double tone_replay[4] = {};
+  std::string dino_backend = "auto";
+  int dino_iters = 4;
+  bool check_renderer = false;   // --check_renderer: the bundle search's passes through a counting renderer
+  // --probe_intent FILE, --probe_params "t,E,g,b;...", --probe_stops s [s ...]: a measurement aid
+  // (ParamSearchOptions::probe_path). The search writes the network's predictions for chosen renders to
+  // FILE and neg_process stops without converting (the print's search writes it and the conversion goes on).
+  std::string probe_intent;
+  std::vector<std::array<float, 4>> probe_params;
+  std::vector<float> probe_stops = {0.0f};
+  bool dino_iters_given = false;
+
+  // Fitted G/B input curves (the input curves part of negicc_core.h). --fit_curves auto (the default) fits them on
+  // every white-light bundle search with -P srgb or srgb-g10, given parameters or not, and nowhere else (TriLED, whose
+  // curves are the measured ones; another or no -P); on does the same and is an error where it does not apply; off
+  // turns the fit off. The tone stage has its own flag.
+  enum FitCurvesMode { kFitCurvesAuto, kFitCurvesOn, kFitCurvesOff };
+  FitCurvesMode fit_curves = kFitCurvesAuto;
+  bool input_curves_given = false;             // recorded curves given to --fit_curves (replayed, not fitted)
+  negicc::InputCurves input_curves;
+
+  // The film base (--film_base): auto (the default: a base capture's values kept in <output>.json by a previous run,
+  // else read from the scan), or a capture of unexposed film, with the region to read it over (x y w h in sensor
+  // pixels) when given after a colon; without one the region is found on the capture (the film base part of
+  // negicc.h).
+  std::string film_base_file;                  // empty: auto, or scan
+  bool film_base_scan = false;                 // --film_base scan: read from the scan, whatever <output>.json holds
+  bool film_base_roi_given = false;
+  int film_base_roi[4] = {0, 0, 0, 0};
+
+  // Output
+  std::string output;                          // -o
+  std::string colorspace;                      // -P, empty when not given
+  // -P statusm, rp180 or apd: the output is the negative's density above the film base in that measure, not a
+  // picture. -o's extension gives the container: .dpx (10 bits, code = 95 + 500 D) or .tif / .tiff (16 bits,
+  // code = 1520 + 8000 D).
+  bool density = false;
+  DensityMeasure density_measure = kDensityStatusM;
+  bool output_dpx = false;
+  // --print: the print materials (ids of the built-in ones, "all", or the path of a spektrafilm print profile): with a
+  // picture output the first is the print the conversion renders; with a density output a CLF is written beside the
+  // file for each.
+  std::vector<std::string> prints;
+  bool no_metadata = false;
+};
+
+// ====================================================================================================================
+// Output: declarations
+// ====================================================================================================================
+
+// neg_process's output: the 16-bit TIFF with its ICC profile, and the JSON sidecar beside it.
+
+// Writes proc's image (or rgb3, 3 samples a pixel, in its place) as a 16-bit TIFF to output with the ICC profile
+// attach_profile names ("srgb", "srgb-g10" or a file) or, when that is empty, embedded_icc. 0 on success.
+int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
+               const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
+
+// What the sidecar records.
+// An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
+// the sidecar writer share it.
+
+struct FileFingerprint {
+  bool ok = false;
+  uintmax_t size = 0;
+  uint32_t crc = 0;
+};
+
+struct Sidecar {
+  std::string output_path;               // the TIFF; the sidecar is <output_path>.json
+  std::string search_renderer = "cpu";   // where the search's passes ran; the auto block records it when not the CPU
+  int argc = 0;
+  char** argv = nullptr;
+  const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
+  std::vector<std::string> files;
+  std::vector<std::string> bundle_files;  // the ICC files beside a bundle given as a file (bundle_side_files)
+  // Each file's fingerprint when this run already took it (the sidecar loader); null or short: taken here.
+  const std::vector<FileFingerprint>* file_fingerprints = nullptr;
+  int orig_w = 0, orig_h = 0;
+  bool half_size = false;
+  bool has_roi = false;
+  const int* roi = nullptr;              // x, y, w, h when has_roi
+  std::string roi_source;
+  const FrameDetection* frame_det = nullptr;  // --roi auto's detection
+  std::string film_format;               // the format the base's detection looked for, given or not; or empty
+  int rot_cw = 0;
+  bool hflip = false, vflip = false;
+  int out_w = 0, out_h = 0;
+  // The film base: source "rebate" or "statistics" (read from the scan: film_base_detection), "bundle" or "none".
+  bool film_base_applied = false;
+  std::vector<double> film_base_rgb;
+  std::vector<int> profile_film_base_rgb;
+  std::string film_base_source;
+  // A print on a base that is not a capture (Scan::print_floor_*): the base as found, its source and the factor.
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (knobs.base.a)
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
+  // frame detector's crop, at or above kBaseMinFrameConf), "inset_crop" (no --roi and no confident detection: the RAW's
+  // inset crop, the search's frame) or "whole_scan" (the same with no inset crop, or a --roi auto that fell back to the
+  // whole image). The detection's confidence only where the detection decided the
+  // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
+  std::string print_floor_frame;
+  float print_floor_frame_conf = -1.0f;
+  const negicc::FilmBaseDetection* film_base_detection = nullptr;
+  // The white-light decode's gains on the camera channels before the camera matrix; null: not a white-light decode.
+  const float* balance_gains = nullptr;
+  std::string profile_path;              // empty: no profile
+  bool is_bundle = false;
+  std::string bundle_target_name;
+  int bundle_target_idx = -1;
+  InputSpace input_space = InputSpace::kCameraRawRgb;
+  const float* merged_matrix = nullptr;
+  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;  // absolute, on the crosstalk (matrix.*)
+  const float* station_params = nullptr;  // with a bundle: E, g, b as -E, --gain_g, --gain_b take them
+  unsigned pin_mask = 0;
+  float knee = 0.95f;
+  ShoulderInfo shoulder;
+  const DinoSolveResult* dino = nullptr; // the single-profile search, when it ran
+  std::string dino_model, dino_backend, dino_arg;
+  std::string dino_backend_arg;   // --dino_backend when given other than auto (where the search's passes run)
+  bool dino_iters_given = false;
+  int dino_iters = 4;
+  const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
+  const int* auto_frame_half = nullptr;
+  std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar
+  std::string shadow_json_str;           // the search's shadow alternative and the choice (auto.shadow_alternative)
+  std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
+  std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
+  std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar
+  std::string cached_print_search_json_str;  // preserved "profile.print.search" JSON when reusing a sidecar
+  double cached_dino_views_ms = 0.0, cached_dino_render_ms = 0.0;
+  double cached_dino_infer_ms = 0.0, cached_dino_search_ms = 0.0;
+  bool has_knobs = false;
+  float brightness = 0.0f, tint = 0.0f, warmth = 0.0f;
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
+  std::string colorspace;
+  double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
+  double t_auto_ms = 0.0;
+  double t_analysis_ms = 0.0;  // Scan::t_analysis_ms
+  // Fitted G/B input curves of the conversion's bracket (the input curves part of negicc_core.h): source "fit"
+  // (--fit_curves on, with curve_fit), "auto" (likewise) or "cli" (recorded curves given to --fit_curves); empty: none.
+  std::string input_curves_source;
+  const negicc::InputCurves* input_curves = nullptr;
+  const WhiteLightFitResult* curve_fit = nullptr;
+  // The models the search ran with: the intent adapter, the neutral head and the tone heads ("[built-in] <name>" or
+  // the path --dino gave, with the file's size and CRC-32; empty: not loaded). A run that reused a previous sidecar
+  // keeps that run's record (cached_heads_json_str).
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
+  std::string cached_heads_json_str;
+  // The tone curve the conversion rendered with (curve_fit's, or replayed; null: none), whether it was applied to the
+  // final image, and the clipping it measured.
+  // A replay ("knobs" or "cli", else empty).
+  std::string replay_source;
+  const ToneCurve* tone_curve = nullptr;
+  const ToneTargets* tone_targets = nullptr;  // this run's plan, as applied: its targets and highlight share
+  // This run's tone stage, when it was planned (after the curve fit, or after the search where no fit runs): the
+  // heads' plan and the curve the conversion solved from it.
+  const ToneStagePlan* tone_stage_plan = nullptr;
+  const TonePlanCurve* tone_plan = nullptr;
+  double tone_share = 1.0;
+  double tone_shadow_share = 1.0;
+  // The rule that chose the curve where no share of the moves held both ends ("shadows_first", "highlights_first" or
+  // "least_total"); null where a share held.
+  const char* tone_fallback = nullptr;
+  bool tone_applied = false;
+  // This run's plan kept shares that move nothing (tone_moves_nothing), so no curve was applied: the record says so,
+  // with the shares, the targets and the clipping, and the replay converts without the stage.
+  bool tone_moved_nothing = false;
+  const ToneClip* tone_clip = nullptr;
+  // The curves the cli_equivalent replays when they differ from input_curves (re-anchored at the knobs' E, g and b);
+  // null: input_curves.
+  const negicc::InputCurves* cli_input_curves = nullptr;
+  // A film base read from a capture (--film_base; film_base_source "capture", or "sidecar" when a previous run's is
+  // taken): the capture's record as JSON (film_base.capture). Empty: none.
+  std::string film_base_capture_json;
+  // The density output's record (the print part of negicc.h, schema negicc.density/1) as JSON, also in the file.
+  // Empty: none.
+  std::string density_json;
+  std::string used_json;                 // what the conversion used (conversion_used in pipeline.cc)
+  bool density_fit_off = false;      // a white-light density run without --print, with --fit_curves off: its replay
+                                     // keeps it
+  // A density run's --print materials as given (built-in ids, 'all', or files): its replay gives them again, so the
+  // base's floor (raised only with --print) and the CLFs are made again. Empty: no --print.
+  std::vector<std::string> density_prints;
+  std::string print_id, print_name;  // --print with a picture output: the print ICC that replaced the chart profiles
+  std::string print_file, print_file_sha256;  // a material given as a file: its path as given and its SHA-256
+  bool print_from_bundle = false;
+  // The print's mid grey A (NaN without a print), the chosen bracket's A_mid, and the search's A0 (the A at which
+  // the frame's log-average cell prints at L* 50).
+  double print_a = NAN, print_bracket_a_mid = NAN, print_a0 = NAN;
+  double print_tilt[3] = {NAN, NAN, NAN};   // the brackets' tilt at the A the print used (print_tilt_at)
+  // The paper's white the print is relative to (PCS D50).
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
+  bool print_searched = false, print_converged = false;
+  int print_steps = 0;
+  float print_target_l = 0.0f, print_above_knee = 0.0f;
+  // ContinuousPrintResult's shares: past_knee and past_cut at E (the matrix at E alone), above_white and at_white at
+  // the result.
+  float print_past_knee[3] = {0, 0, 0}, print_past_cut[3] = {0, 0, 0};
+  float print_above_white[3] = {0, 0, 0}, print_at_white[3] = {0, 0, 0};
+  bool print_a0_at_end = false;
+  float print_last_move[3] = {0, 0, 0};
+  std::string print_stopped_by;
+};
+
+// Writes <output_path>.json: what neg_process read and did (schema negicc.neg_process.sidecar/1).
+// The build's version (git describe), as the sidecar's tool.version records it.
+const char* neg_process_version();
+
+// A file's size and CRC-32 (zlib), as the sidecar records each input (inputs.raw_file_stats). False when unreadable.
+bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc);
+// The same for bytes in memory (a built-in model).
+FileFingerprint memory_fingerprint(const void* data, size_t size);
+
+// s with its bytes that are not UTF-8 written as U+FFFD, as the sidecar's writer writes them (a camera model or a
+// path need not be UTF-8). The log shows a string as the sidecar records it, and a previous run's sidecar is compared
+// with this run's strings as they would be recorded. Valid UTF-8 comes back unchanged.
+std::string utf8_replaced(const std::string& s);
+
+bool write_json_sidecar(const Sidecar& sc);
+
+// Whether a path a previous run's sidecar records names this run's path (pipeline.cc).
+bool paths_match(const std::string& recorded, const std::string& path);
+// The ICC files beside a bundle given as a file (a split bundle's brackets and prints), as paths; none for a built-in
+// bundle or one that holds its profiles inline (np_output.cc).
+std::vector<std::string> bundle_side_files(const ProfileBundle& b);
+
+// ====================================================================================================================
+// Pipeline: declarations
+// ====================================================================================================================
+
+// neg_process's processing pipeline: the stages main runs in turn, the state they hand on, and the split between the
+// scan as data (MosaicInput, RgbInput) and the compute on it (Backend: the CPU's, and a CUDA device's for the
+// full-size steps).
+//
+//   prepare   the profile (bundle, ICC profile or bracket), the parameter search mode, the crosstalk correction, the
+//             DINOv3 engine
+//   decode    the input as data: the zero-copy CFA path (a Sony Bayer RAW or a pixel shift: the mosaic, black
+//             subtracted in place, with a half-size view over it) or LibRaw's decode, a TIFF, a JPEG or three
+//             captures (an RGB image); the frame (--roi, --roi auto); and the bundle's parameter search on the
+//             half-size view, as each path has it
+//   begin_conversion
+//             the film base the sidecar records, the pins (-E, --gain_g, --gain_b) and the input matrix to start from
+//   render    the full-resolution image of the frame: the backend debayers or merges a mosaic; an RGB image is one
+//             already
+//   solve     the conversion parameters the bundle search did not give: the bracket, E, g and b (an ICC profile's
+//             single-profile search, or a bundle's four given values), the knee and the shoulder
+//   convert   the backend converts the image in place to the output encoding
+//   write     the TIFF and the sidecar
+
+// Cached Auto / DINOv3 metadata loaded from <output>.json when solving grey-point knobs.
+struct CachedSidecar {
+  bool is_auto = false;                  // true: cached from "auto"; false: cached from "dino"
+  int target_idx = -1;
+  std::string target_name;
+  float base_e = 1.0f, base_g = 1.0f, base_b = 1.0f;
+  double print_a = NAN;                  // a print's mid grey A (profile.print.a); NaN: none
+  std::string print_search_json_str;     // the print's search that found it (profile.print.search); empty: none
+  std::string auto_json_str;             // raw "auto" JSON object from previous sidecar
+  std::string dino_json_str;             // raw "dino" JSON object from previous sidecar
+  std::string dino_backend;
+  double t_dino_views_ms = 0.0, t_dino_render_ms = 0.0;
+  double t_dino_infer_ms = 0.0, t_dino_search_ms = 0.0;
+  // The previous run's fitted G/B input curves (replayed on its bracket, not refitted) and its intent field, carried
+  // into the new sidecar so the knobs' output still records them.
+  bool has_curves = false;
+  negicc::InputCurves curves;
+  std::string curves_source;
+  std::string input_curves_json_str;
+  std::string intent_field_json_str;
+  std::string heads_json_str;
+  // Its tone curve (tone_stage.curve), when it applied one.
+  bool has_tone = false;
+  ToneCurve tone_curve;
+};
+
+// What the profile and the options decide before the scan is read.
+struct Setup {
+  // The renderer the search's passes run through: the GPU's, or --check_renderer's comparison with it (null: the CPU's,
+  // or --check_renderer's pass-through renderer without a device). Made only where a search runs.
+  std::unique_ptr<PreviewRenderer> renderer;
+  // Each input's size and CRC-32, taken once (by the sidecar loader when the knobs look for <output>.json) and
+  // reused by the sidecar writer.
+  std::vector<FileFingerprint> input_fingerprints;
+  bool is_bundle = false;
+  ProfileBundle bundle;
+  std::string film_prof_arg;             // -p naming an ICC profile (not a bundle)
+  bool has_profile = false;
+  int manual_target_idx = -1;            // --target, -1 when not given
+  bool exposure_given = false;           // -E: the exposure is not searched
+  bool use_dino = false;                 // a parameter search runs
+  bool bundle_search = false;            // the bundle's search (bracket, exposure and gains)
+  // The bundle's search with --target, -E, --gain_g or --gain_b held (either light): Auto with those pinned.
+  bool pinned_search = false;
+  bool fit_curves_active = false;        // the curve fit runs (--fit_curves auto or on, where it applies)
+  bool tone_active = false;              // the tone stage runs (--tone_stage auto or on, where it applies)
+  bool has_cached_sidecar = false;       // <output>.json matched and supplies the base parameters
+  CachedSidecar cached_sidecar;
+  bool white_light = false;              // a rec2020_linear (d65) bundle
+  bool density = false;                  // -P statusm, rp180 or apd: the output is density (the print declarations
+                                         // above)
+  // --print with a picture output on a profile bundle: the print material, and each bracket's print profile
+  // (bracket_print_profiles in the print part of negicc.h, in bundle.targets' order). Auto searches the print itself
+  // (search_print_continuous); the conversion renders the print at its mid grey A (print_a: the search's, or the
+  // reused run's). Empty without.
+  std::string print_id, print_name;
+  std::string print_file, print_file_sha256;  // a material given as a file: the path as given and the file's SHA-256
+  bool print_from_bundle = false;        // the print ICC's table is the bundle's (else computed by neg_process)
+  std::vector<ParsedFilmProfile> print_profs;
+  std::vector<std::vector<uint8_t>> print_iccs;
+  PrintContinuum print_cont;          // the print at a continuous mid grey (the print part of negicc.h)
+  ContinuousPrint print_in;           // the search's view of it
+  double print_a = NAN;               // the print's mid grey A: the search's or a reused run's (NaN until then)
+  // The lightest node of the print's table: the paper's white.
+  double print_paper_xyz[3] = {negicc::kPcsWhite[0], negicc::kPcsWhite[1], negicc::kPcsWhite[2]};
+  ContinuousPrintResult print_res;    // the print's search
+  std::map<std::string, DensityRecord::PrintSearch> density_print_search;   // a density run's --print, per material
+  bool print_searched = false;
+  bool has_crosstalk = false;
+  bool camera_rgb_input = false;         // a TIFF of linear camera RGB (a TIFF with a camera_raw_rgb bundle)
+  RawDecode raw_decode = RawDecode::kRec2020;
+  std::vector<float> r_coeff, g_coeff, b_coeff;  // the crosstalk correction's rows
+  // Where each row comes from: "bundle", "given" (-r, -g, -b) or "identity" (three captures, one per light; an ICC
+  // profile's row not given; a bundle's correction off); empty: no correction.
+  std::string crosstalk_row_source[3];
+  // Why a camera_raw_rgb bundle's correction is off (decode: the scan states a camera the bundle does not list); empty
+  // when it is applied.
+  std::string crosstalk_off;
+  negicc::FlatFieldPtr flat_field;
+  DinoV3Engine engine;
+  std::string dino_path;                 // the backbone that runs ([built-in] ...)
+  std::string neutral_head;              // the neutral-patch head that runs ([built-in] ...), empty when none
+  // The intent adapter, neutral head and tone heads that run ([built-in] <name> or the --dino path) and their files'
+  // size and CRC-32, for the sidecar.
+  std::string head_path[3];
+  FileFingerprint head_fp[3];
+  ToneHead tone_head;                    // the tone heads (where the tone stage runs)
+  // The tone curve the conversion renders with: this run's tone stage's, a previous run's (the knobs on its sidecar) or
+  // given (--tone_stage curve:...); not predicted again on a replay.
+  // A replay: "knobs" (the knobs on a previous run's sidecar) or "cli" (recorded values given); empty otherwise.
+  std::string replay_source;
+  bool has_tone = false;
+  ToneCurve tone_curve;
+  // Fitted G/B input curves the conversion's bracket renders through (the input curves part of negicc_core.h): source
+  // "fit" (--fit_curves on: curve_fit has the fit), "auto" (--fit_curves auto, likewise), "cli" (recorded curves given
+  // to --fit_curves) or empty (none).
+  std::string input_curves_source;
+  negicc::InputCurves input_curves;
+  WhiteLightFitResult curve_fit;
+  // This run's tone stage: the heads' plan (the curve fit's on its result, or plan_auto_tone_stage's on the search's
+  // own result where no fit runs) and the curve solved from it (when tone_stage.planned). tone_stage_ran: a plan was
+  // attempted this run (the sidecar then says what came of it).
+  ToneStagePlan tone_stage;
+  bool tone_stage_ran = false;
+  TonePlanCurve tone_plan;
+  // The bracket the curves were composed into (-1: none) and its profile before that (the un-curved input tables),
+  // from which the knobs compose the curves again at the E, g and b they move to (reanchor_input_curves).
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
+};
+
+// The scan as data for a backend: a CFA mosaic (one, or the four frames of a pixel shift), black subtracted, in place.
+struct MosaicInput {
+  const uint16_t* frames[4] = {nullptr, nullptr, nullptr, nullptr};
+  int n_frames = 0;                      // 1, or 4 for a pixel shift
+  size_t pitch = 0;                      // uint16_t elements per row
+  int width = 0, height = 0;             // the visible sensor area
+  unsigned filters = 0;                  // LibRaw's CFA pattern
+  float white_level = 65535.0f;          // the clipping level above black
+  negicc::FlatSampleArgs flat;           // the flat field at full size (empty without one)
+  const negicc::FlatTables* flat_tables = nullptr;   // the tables flat points into (for a copy on a device)
+};
+
+// The scan as data for a backend: an RGB image, `channels` samples a pixel (3, or LibRaw's 4).
+struct RgbInput {
+  uint16_t* pixels = nullptr;
+  int width = 0, height = 0, channels = 3;
+};
+
+// A region of the sensor (x, y, w, h) and its orientation: the frame to render.
+struct Region {
+  int x = 0, y = 0, w = 0, h = 0;
+  int rot_cw = 0;
+  bool hflip = false, vflip = false;
+};
+
+// The output encoding and its profiles.
+struct OutputSpec {
+  OutputEncoding encoding = ENCODE_NONE;
+  std::string attach_profile;            // "srgb", "srgb-g10", an ICC file, or the -p profile
+  cmsHPROFILE xyz = nullptr;             // ENCODE_CUSTOM: the XYZ input and the output profile
+  cmsHPROFILE custom = nullptr;
+};
+// The density output's conversion (the print part of negicc.h): the measure's matrix, the encoding and the clamped
+// pixels.
+struct DensityOutput {
+  double base_level = 1.0;               // what the film base lands on after the film base's merged matrix
+  float merged[9] = {0};                 // that matrix (crosstalk correction x film base scale), E = g = b = 1
+  DensityEncoding encoding;
+  DensityClip clip;
+};
+
+// The compute on the scan's data.
+class Backend {
+ public:
+  virtual ~Backend() = default;
+  // The full-resolution RGB of the region of a mosaic, turned and flipped, into rgb_out (3 samples a pixel,
+  // dst_w x dst_h: w x h, or h x w when turned by 90 or 270 degrees): the grain-aware debayer of one frame, or the
+  // merge of a pixel shift's four, with the flat field. The backend sizes rgb_out, at the point where it first needs
+  // it. frame_done(k) frees in.frames[k]: a backend that copies a frame elsewhere calls it as soon as that frame is
+  // copied and reads it no more, so that the two copies are not held longer than the copying takes; the caller calls
+  // it for every frame after the render in any case.
+  virtual void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                      std::vector<uint16_t>& rgb_out, const std::function<void(int)>& frame_done) = 0;
+  // Converts img in place to the output encoding through the shared pixel pipeline (the colour pipeline part of
+  // negicc_core.h) of pc: the input matrix and knee, the film profile (tone curves and cLUT) and, for sRGB, the
+  // shoulder. ENCODE_NONE stops after the knee; ENCODE_CUSTOM hands the profile's PCS XYZ to out.custom.
+  virtual void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+                       const RgbInput& img) = 0;
+  // Where the last render and the last convert ran: "cpu" or "gpu" (the record's "full_size").
+  const char* render_ran = "cpu";
+  const char* convert_ran = "cpu";
+};
+
+class CpuBackend : public Backend {
+ public:
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, std::vector<uint16_t>& rgb_out,
+              const std::function<void(int)>& frame_done) override;
+  void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+               const RgbInput& img) override;
+};
+
+// The same on a CUDA device: the debayer or the merge by gpu_grain_aware_debayer and gpu_pixel_shift_merge, and the
+// conversion to sRGB or linear sRGB by the search's GPU render (GpuRenderer). The mosaics, the flat field's tables and
+// the picture are copied to the device and the result copied back.
+//
+// Against the CPU's picture: the debayer and the merge are equal in every value. The conversion computes the same
+// convert_pixel, but the device rounds powf, tanhf and cbrtf differently in the last place (DESIGN.md 4.2), so a
+// value of the exported picture can differ from the CPU's by one 16-bit code.
+//
+// Another output encoding, or an image that is not three samples a pixel, keeps the CPU's conversion (a custom
+// profile's last step is Little CMS), and so does every step when no device runs this build's kernels: the device is
+// asked for only where a step is about to use it.
+class GpuBackend : public CpuBackend {
+ public:
+  void render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, std::vector<uint16_t>& rgb_out,
+              const std::function<void(int)>& frame_done) override;
+  void convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+               const RgbInput& img) override;
+};
+
+// The backend of the full-size steps: the device's (which is the CPU's without a device that runs this build's
+// kernels), unless --dino_backend cpu, which keeps everything on the CPU, or --check_renderer, whose picture is the
+// CPU's. The same rule as the search's passes.
+std::unique_ptr<Backend> make_backend(const Options& o);
+
+struct LibRawDeleter {
+  void operator()(LibRaw* p) const;
+};
+using LibRawPtr = std::unique_ptr<LibRaw, LibRawDeleter>;
+
+// The search's shadow alternative (ParamSearchResult::shadow) through the stages after the search: one candidate's
+// state from them (the curve fit, the tone plan and the roll-off), with its bracket's profile before (prof0) and after
+// (prof) the fit composed curves into it.
+struct ShadowCandidate {
+  ParamSearchResult auto_res;
+  bool has_curve_params = false;
+  ConversionParams curve_params;
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  WhiteLightFitResult curve_fit;
+  ToneStagePlan tone_stage;
+  bool tone_stage_ran = false;
+  TonePlanCurve tone_plan;
+  bool has_tone = false;
+  ToneCurve tone_curve;
+  negicc::InputCurves input_curves;
+  std::string input_curves_source;
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
+  // The knobs' state (--brightness, --tint, --warmth): their solve on this candidate, and the curves re-anchored at it.
+  bool has_knob_res = false;
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
+  double knob_base_a = NAN;
+  bool has_plain = false;  // and the conversion without them (Scan::has_plain)
+  float plain_x_hi = 1.0f, plain_q995 = 0.0f;
+  bool has_plain_prof = false;
+  ParsedFilmProfile plain_prof;
+  int prof_idx = -1;
+  ParsedFilmProfile prof0, prof;
+  ParsedFilmProfile result_prof0;  // in the alternative's: the result's bracket's profile before the stages
+};
+
+// The tone stage's clip check of the kept candidate, made in solve; convert takes it instead of checking again.
+struct ToneCheck {
+  bool valid = false;
+  double white_before = 0, black_before = 0;
+  ToneCurve curve;
+  ToneTargets targets;
+  double share = 1.0, shadow_share = 1.0;
+  bool fell_back = false;  // no share held both ends (Options::tone_fallback chose the curve)
+  // Made on the conversion without the knobs: convert takes its curve and counts the shares before the stage on the
+  // knobbed image it converts, as a replay does.
+  bool without_knobs = false;
+};
+
+// The choice between the search's result and its shadow alternative (solve). The shares are of the tone stage's clip
+// check sample: white before, black before, white after and black after the stage.
+struct ShadowChoice {
+  bool checked = false;            // both went through the clip check
+  bool kept_alternative = false;   // the alternative was taken
+  double result[4] = {0, 0, 0, 0}, alternative[4] = {0, 0, 0, 0};
+  double stages_ms = 0.0;          // the alternative's stages after the search
+  double check_ms = 0.0;           // the alternative's solve and both candidates' clip checks
+  const char* not_checked = nullptr;  // why an alternative was not checked
+};
+
+// The scan through the pipeline.
+struct Scan {
+  LibRawPtr proc;                        // the RAW (its metadata, and its image on the LibRaw path)
+  LibRawPtr ps_extra[3];                 // a pixel shift's other three frames
+  bool cfa = false;                      // the zero-copy CFA path
+  MosaicInput mosaic;                    // on the CFA path
+  Region cfa_region;                     // on the CFA path: the frame to render (sensor pixels)
+  std::shared_ptr<const negicc::FlatTables> flat_full_tables;  // keeps mosaic.flat's tables alive
+  std::vector<uint16_t> rgb3;            // on the CFA path: the rendered frame, 3 samples a pixel
+  int orig_w = 0, orig_h = 0;            // the sensor size the sidecar records
+  std::string input_source = "raw";      // what was read: "raw", "tiff:icc", "jpeg:srgb", "three:raw,raw,raw", ...
+  // The camera make and model of the first input as LibRaw reads them (empty: an RGB TIFF or JPEG, or a RAW that
+  // states none). camera_compared: a camera_raw_rgb bundle with a camera_models list and a stated model, compared
+  // (decode); camera_listed: the list holds the model. Not compared: a white-light bundle, a bundle without the list,
+  // or an input that states no model.
+  std::string camera_make, camera_model;
+  bool camera_compared = false, camera_listed = false;
+  // The first input's inset crop (inset_crop), which a single RAW, or three captures, is cut to without --roi or
+  // --no_crop.
+  bool has_inset = false;
+  int inset[4] = {0, 0, 0, 0};
+
+  FrameDetection frame_det;              // --roi auto
+  // The format the frame detection that placed the film base's patch looked for (FILM_FORMAT_AUTO: every format, or
+  // no detection ran); cli_equivalent gives it as --film_format whenever the detection used one, given or --roi auto's,
+  // so that a replay with the explicit --roi reads the same base.
+  FilmFormat base_det_format = FILM_FORMAT_AUTO;
+  int roi[4] = {0, 0, 0, 0};             // the frame in sensor pixels (--roi, or --roi auto's)
+  bool has_roi = false;
+  int rot_cw = 0;
+  bool hflip = false, vflip = false;
+
+  // The film base read from the scan (the film base detector part of negicc_core.h) for a bundle conversion, as
+  // negicc-station's Auto reads it when no film base is given; not found: the bundle's.
+  negicc::FilmBaseDetection film_base;
+  const double* film_base_rgb() const { return film_base.found ? film_base.rgb : nullptr; }
+  // The film base given in place of the scan's own (--film_base): read from a capture of unexposed film
+  // (the film base part of negicc.h; film_base.source "capture"), or, with --film_base auto, the base a previous run
+  // read from a capture and kept in <output>.json (source "sidecar", with that run's capture record as JSON).
+  // has_given_base: film_base holds it and the scan's is not read.
+  bool has_given_base = false;
+  negicc::FilmBaseDetection given_base;
+  // A print on a base that is not a capture (print_floor_factor): the base as found, its source ("rebate",
+  // "statistics" or "bundle") and the factor it was raised by (film_base holds the raised base; 1: not raised).
+  bool print_floor_applied = false;
+  double print_floor_found_rgb[3] = {0, 0, 0};
+  std::string print_floor_found_source;
+  float print_floor_k = 1.0f;
+  // The frame the floor read (the picture's): "roi" (the given --roi, or --roi auto's crop), "detected" (no --roi: the
+  // frame detector's crop, at or above kBaseMinFrameConf), "inset_crop" (no --roi and no confident detection: the RAW's
+  // inset crop, the search's frame) or "whole_scan" (the same with no inset crop, or a --roi auto that fell back to the
+  // whole image). The detection's confidence only where the detection decided the
+  // frame (a --roi auto that fell back; no --roi, with a detection that maps onto the scan), else -1.
+  std::string print_floor_frame;
+  float print_floor_frame_conf = -1.0f;
+  double knob_base_a = NAN;   // a print's A before the knobs (recorded as knobs.base.a)
+  bool has_base_capture = false;
+  FilmBaseCapture base_capture;
+  std::string base_capture_json;         // the capture record for the sidecar (film_base.capture)
+  // The white-light decode's gains on the camera channels (ChannelBalance); 1, 1, 1: the mosaic was left as it was.
+  float balance_gains[3] = {1, 1, 1};
+
+  bool has_auto_res = false;             // the bundle search ran
+  ParamSearchResult auto_res;
+  int auto_frame_half[4] = {0, 0, 0, 0}; // the frame (x, y, w, h) in the half-size image the search saw
+  bool frame_is_whole = false;           // that frame is the whole half-size image
+  // Where the fit runs: the curve fit's re-metered E and fitted g and b on the combined profile, which the
+  // conversion takes in place of the search's (auto_res keeps the search's own).
+  bool has_curve_params = false;
+  ConversionParams curve_params;
+  const ConversionParams& params() const { return has_curve_params ? curve_params : auto_res.params; }
+  // The curves re-anchored at the knobs' E, g and b, which the bracket renders through after the knobs and the
+  // cli_equivalent replays (Setup::input_curves stays the record at the knobs' base, as the sidecar keeps it).
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
+
+  bool has_knob_res = false;             // --brightness, --tint or --warmth solved
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
+  // A fresh run's conversion without the knobs, which its tone stage check is made on (solve): the roll-off at the
+  // knobs' base and the bracket's profile before the knobs re-anchored its curves (a print: its A before the knobs,
+  // knob_base_a). Set by the knobs where the tone stage runs and no record is replayed.
+  bool has_plain = false;
+  float plain_x_hi = 1.0f, plain_q995 = 0.0f;
+  bool has_plain_prof = false;
+  ParsedFilmProfile plain_prof;
+
+  // The highlight roll-off of every bundle conversion, measured on the half-size frame as the bracket search measures
+  // it: Auto's result and given values in decode, while that frame exists (render frees the mosaic; LibRaw's
+  // half-size decode is analysed and gone).
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  // The tone stage as convert applied it to the final image (Setup::tone_stage has the plan).
+  bool tone_applied = false;
+  ToneClip tone_clip;
+  ToneCurve tone_curve;            // the curve applied (the plan's, capped on this image; or the recorded one)
+  ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
+  double tone_share = 1.0;         // and the share of the highlight and range moves kept
+  double tone_shadow_share = 1.0;  // and of the shadow move
+  bool tone_fell_back = false;     // and whether no share held both ends (Options::tone_fallback chose the curve)
+  bool tone_moved_nothing = false; // and whether its kept shares moved nothing, so no curve was applied
+  // The search's shadow alternative (ParamSearchResult::shadow, as the search returned it), the alternative after its
+  // stages (null: none, or already chosen in solve), the choice, and the kept candidate's clip check.
+  ShadowAlternative shadow_search;
+  std::shared_ptr<ShadowCandidate> shadow_candidate;
+  ShadowChoice shadow_choice;
+  ToneCheck tone_check;
+
+  double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
+  double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
+  // The bracket analysis on the half-size frame outside Auto's time: the knobs and the roll-off.
+  double t_analysis_ms = 0.0;
+  double t_full_conversion_ms = 0.0, t_tiff_write_ms = 0.0;
+  // Where the full-size steps ran, "cpu" or "gpu": the debayer or the merge of a mosaic (the CPU's for any other
+  // decode), and the conversion to the output encoding.
+  const char* full_size_decode = "cpu";
+  const char* full_size_conversion = "cpu";
+
+  // The scan's exposure: EXIF (of exposure_file, the first input), else LibRaw's, else 1/8 s at ISO 100 (warned once).
+  std::string exposure_file;
+  bool has_exif_exp = false;
+  double exif_shutter_d = 0.0, exif_iso_d = 0.0;
+  bool warned_default_exposure = false;
+  void scan_exposure(const LibRaw& r, double& shutter_out, double& iso_out);
+
+  // The full-resolution image the conversion runs on: rgb3 on the CFA path, LibRaw's image otherwise.
+  RgbInput image();
+};
+
+// The conversion parameters: what solve decides, convert applies and write records.
+struct Conversion {
+  float exposure_comp = 1.0f, gain_g = 1.0f, gain_b = 1.0f;
+  unsigned pin_mask = 0;
+  float merged_matrix[9] = {0};
+  float knee = 0.95f;
+  ShoulderInfo shoulder;
+  ParsedFilmProfile film_prof;
+  std::vector<uint8_t> embedded_icc;     // the bracket's ICC profile
+  std::string bundle_target_name;
+  int bundle_target_idx = -1;
+  DinoSolveResult dino_res;              // the single-profile search
+  // With a bundle: E, g and b on the station's scale (what -E, --gain_g and --gain_b take), for cli_equivalent.
+  std::optional<std::array<float, 3>> station_params;
+  // The film base the sidecar records. A bundle conversion takes the base read from the scan (Scan::film_base), else
+  // the bundle's, through the station's merged matrix; the film base scale of the input matrix stays 1.
+  std::vector<int> profile_film_base_rgb = {1, 1, 1};
+  std::vector<int> sidecar_profile_film_base_rgb;
+  std::vector<int> sidecar_film_base_rgb = {1, 1, 1};
+  std::string film_base_source = "none";
+  OutputSpec out;
+  DensityOutput density;                 // with Setup::density
+};
+
+int prepare(const Options& o, Setup& s);
+int decode(const Options& o, Setup& s, Scan& scan);
+// After the last pass of the search (after decode, or where --probe_intent stops): logs the GPU's passes and frees its
+// frame copy, and fails when --check_renderer counts a pass outside the renderer or its comparison with the GPU is
+// outside the tolerance, before anything is written.
+int finish_search_passes(const Options& o, Setup& s);
+int begin_conversion(const Options& o, const Setup& s, Conversion& c);
+int render(const Options& o, const Setup& s, Scan& scan, Backend& backend);
+int solve(const Options& o, Setup& s, Scan& scan, Conversion& c);
+int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend& backend);
+int write(const Options& o, const Setup& s, Scan& scan, Conversion& c);
 
 #endif  // NEGICC_H

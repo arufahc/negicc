@@ -702,8 +702,8 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       out.present = true;
       out.target_curves = node.value("target_curves", std::string());
     }
-    // What a print of a density file takes from the chart, per exposure bracket (neg_process.cc): the mid grey as the
-    // light's density, and the slopes of the film's grey scale.
+    // What a print of a density file takes from the chart, per exposure bracket (print_emulation.cc): the mid grey as
+    // the light's density, and the slopes of the film's grey scale.
     if (dm.contains("brackets") && (!dm["brackets"].is_object() || !dm["brackets"].contains("targets") ||
                                     !dm["brackets"]["targets"].is_object())) {
       refuse("density_matrices.brackets", dm["brackets"], "is not an object with an object of targets");
@@ -849,10 +849,10 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     }
   }
 
-  // The film stock's spectra, for a print material given as a file (neg_process.cc). A block that is not whole is left
-  // out: such a print then has no matrix and says so. Whether a whole block's densities give a finite print matrix
-  // depends on the print material too, so that is checked where the matrix is computed (neg_process.cc). log_exposure
-  // only selects the samples that enter that matrix, so its order is not checked.
+  // The film stock's spectra, for a print material given as a file (print_emulation.cc). A block that is not whole is
+  // left out: such a print then has no matrix and says so. Whether a whole block's densities give a finite print matrix
+  // depends on the print material too, so that is checked where the matrix is computed (print_emulation.cc).
+  // log_exposure only selects the samples that enter that matrix, so its order is not checked.
   if (j.contains("film_model") && j["film_model"].is_object()) {
     const nlohmann::json& fm = j["film_model"];
     auto numbers = [](const nlohmann::json& a, std::vector<double>& out) {
