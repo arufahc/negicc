@@ -1405,6 +1405,10 @@ void cpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* 
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("cpu_pixel_shift_merge_sampled: rot_cw must be a multiple of 90");
     }
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
+        throw std::invalid_argument(
+            "cpu_pixel_shift_merge_sampled: white_level must be within a 16-bit sample's range");
+    }
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)
     for (long long i = 0; i < n; ++i) pixel_shift_pixel_cpu(a, pitch, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);

@@ -846,6 +846,8 @@ void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int 
 void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0, int cy0, int cx1, int cy1) {
     if (a.rot_cw % 90 != 0)
         throw std::invalid_argument("gpu_pixel_shift_merge_grid: rot_cw must be a multiple of 90");
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max()))
+        throw std::invalid_argument("gpu_pixel_shift_merge_grid: white_level must be within a 16-bit sample's range");
     const SampleGrid gd = sample_grid(step, cx0, cy0, cx1, cy1);
     if (gd.cols <= 0 || gd.rows <= 0) return;
     require_device();
