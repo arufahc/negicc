@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -738,6 +739,9 @@ void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
 void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("gpu_pixel_shift_merge: rot_cw must be a multiple of 90");
+    }
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
+        throw std::invalid_argument("gpu_pixel_shift_merge: white_level must be within a 16-bit sample's range");
     }
     if (a.dst_w <= 0 || a.dst_h <= 0) return;   // nothing to make, as the CPU's loops run no row
     require_device();
