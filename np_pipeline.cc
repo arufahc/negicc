@@ -2717,6 +2717,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           delete proc;
           return 1;
         }
+        if (!raw_levels_valid(*fp, o.files[mi])) {
+          delete proc;
+          return 1;
+        }
         const size_t fpitch = fp->imgdata.sizes.raw_pitch / 2;
         if (!is_sony_a7rm4(fp) || fp->imgdata.sizes.width != src_w || fp->imgdata.sizes.height != src_h ||
             fpitch != cfa_pitch || fp->imgdata.idata.filters != filters ||
