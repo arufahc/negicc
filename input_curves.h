@@ -224,11 +224,7 @@ struct CurveFitOptions {
   bool hold_slope = true;       // InputCurves::hold for the fitted curves (on: Alpha Lam, 2026-11-05)
   // The joint fit (fit_input_curves_joint): E solved for each candidate so the grid's median L* equals Auto's. Off:
   // E stays at Auto's (the measurement of the solver against the pattern search).
-#ifdef NEGICC_CURVE_FIT_E_FIXED
-  bool solve_e = false;
-#else
   bool solve_e = true;
-#endif
   // The tolerance, in L*, of each candidate's E solve (JointCurveModel::solve_e). The Jacobian's probes move a
   // parameter by 1e-3, which moves the grid's median L* by about 0.01: a tolerance of 1e-3 would leave the probe's E
   // either unchanged or moved by up to the tolerance, so the derivative through E would be noise. 2e-5 is a few float
@@ -270,10 +266,6 @@ struct NeutralStats {
   int m = 0;
   float a_bar = 0.0f, b_bar = 0.0f;
   float k_a = 0.0f, k_b = 0.0f;
-  float q_a = 0.0f, q_b = 0.0f;
-  float off() const { return std::hypot(a_bar, b_bar); }
-  float slope() const { return std::hypot(k_a, k_b); }
-  float quad() const { return std::hypot(q_a, q_b); }
 };
 
 // The joint fit's never-greener guard (fit_input_curves_joint): the grid's mean a* at Auto and at the fit's result,
@@ -328,8 +320,6 @@ class JointCurveModel {
       fb_[r] = (f.merged[3 * r] * f.film_base[0] + f.merged[3 * r + 1] * f.film_base[1] +
                 f.merged[3 * r + 2] * f.film_base[2]) / 65535.0f;
   }
-
-  int n() const { return f_.n; }
 
   // The curves of shape (its a and k) anchored at (e, g, b), as anchor_curves anchors them.
   InputCurves anchored(const InputCurves& shape, float e, float g, float b) {
@@ -443,11 +433,6 @@ class JointCurveModel {
   // set_scene_neutral found anchors (the head's p, with some evidence).
   bool has_anchors() const { return has_anchors_; }
 
-  NeutralStats neutral_stats(float e, float g, float b, const InputCurves& shape) {
-    const InputCurves c = anchored(shape, e, g, b);
-    return neutral_stats_anchored(e, g, b, c);
-  }
-
   NeutralStats neutral_stats_on(const PipelineConfig& cfg, float e, float g, float b) const {
     NeutralStats st;
     st.m = (int)neu_idx_.size();
@@ -545,55 +530,21 @@ class JointCurveModel {
  private:
   NeutralStats compute_neutral_moments(const std::vector<Lab>& labs, double sL, double sa, double sb,
                                        NeutralStats& st) const {
-    double vL = 0.0, sLa = 0.0, sLb = 0.0, sz3 = 0.0;
+    double vL = 0.0, sLa = 0.0, sLb = 0.0;
     for (int k = 0; k < st.m; ++k) {
       const double w = neu_w_[k];
       const double dL = labs[k].L - sL;
-      const double z = dL / 50.0;
       vL += w * dL * dL;
-      sz3 += w * z * z * z;
       sLa += w * dL * (labs[k].a - sa);
       sLb += w * dL * (labs[k].b - sb);
     }
     const double ka = 50.0 * sLa / (vL + 25.0);
     const double kb = 50.0 * sLb / (vL + 25.0);
-    const double vz = vL / 2500.0;
-    const double mu3 = sz3 / (vz + 1e-4);
-    double vq = 0.0, sqa = 0.0, sqb = 0.0;
-    for (int k = 0; k < st.m; ++k) {
-      const double w = neu_w_[k];
-      const double z = (labs[k].L - sL) / 50.0;
-      const double uq = 4.0 * (z * z - vz - mu3 * z);
-      const double ea = (labs[k].a - sa) - ka * z;
-      const double eb = (labs[k].b - sb) - kb * z;
-      vq += w * uq * uq;
-      sqa += w * uq * ea;
-      sqb += w * uq * eb;
-    }
     st.a_bar = (float)sa;
     st.b_bar = (float)sb;
     st.k_a = (float)ka;
     st.k_b = (float)kb;
-    st.q_a = (float)(sqa / (vq + 0.04));
-    st.q_b = (float)(sqb / (vq + 0.04));
     return st;
-  }
-
-  NeutralStats neutral_stats_anchored(float e, float g, float b, const InputCurves& c) const {
-    NeutralStats st;
-    st.m = (int)neu_idx_.size();
-    if (st.m <= 0) return st;
-    std::vector<Lab> labs(st.m);
-    double sL = 0.0, sa = 0.0, sb = 0.0;
-    for (int k = 0; k < st.m; ++k) {
-      const int i = neu_idx_[k];
-      const double w = neu_w_[k];
-      labs[k] = cell_lab(i, e, g, b, c);
-      sL += w * labs[k].L;
-      sa += w * labs[k].a;
-      sb += w * labs[k].b;
-    }
-    return compute_neutral_moments(labs, sL, sa, sb, st);
   }
 
   static float median(std::vector<float> v) {
@@ -655,7 +606,6 @@ struct JointFitGuard {
   std::vector<double> pw, auto_a, auto_L;  // p^2; Auto's a* (a cell a candidate renders non-finite counts at it) and L*
   double ref[2] = {0.0, 0.0};
   bool counted[2] = {false, false};
-  bool ready = false;  // set_cells() and ref done: the residuals carry the guard's entries from then on
 
   // lab_auto(i): cell i's Lab on Auto's render; neutral_p: the head's p per cell, or null.
   template <typename AutoLab>
@@ -992,7 +942,6 @@ inline JointCurveFit fit_input_curves_joint(const PipelineConfig& cfg, const Cur
     const InputCurves c = model.anchored(InputCurves{}, eA, g0, b0);
     guard.set_cells(n, [&](int i) { return model.cell_lab(i, eA, g0, b0, c); }, f.neutral_p);
     guard_means(p0, eA, guard.ref);
-    guard.ready = true;
   }
   for (int k = 0; k < 2; ++k) {
     out.guard.counted[k] = guard.counted[k];
@@ -1200,12 +1149,6 @@ inline float solve_e_for_median_L(PipelineConfig cfg, const CurveFrame& f, const
     else lo = mid;
   }
   return std::sqrt(lo * hi);
-}
-
-// The same around e0 over [e0 / 4, 4 e0] (the bounds before they were given).
-inline float remeter_e_median(PipelineConfig cfg, const CurveFrame& f, const InputCurves& shape, float e0, float g,
-                              float b, float target_L, int iters = 40) {
-  return solve_e_for_median_L(cfg, f, shape, e0, e0 * 0.25f, e0 * 4.0f, g, b, target_L, nullptr, iters);
 }
 
 }  // namespace negicc
