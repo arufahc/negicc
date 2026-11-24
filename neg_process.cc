@@ -4185,7 +4185,10 @@ int parse_options(int ac, char* av[], Options& o) {
   parser.add_argument("--brightness")
     .help("Brightness offset after the parameter search and the curve fit, in stops of the reference grey's "
           "luminance. It moves the result, whether searched or given (-E sets what it starts "
-          "from, not the final exposure), and the tone curve is applied on top unchanged; on a print (--print) it "
+          "from, not the final exposure). It is applied after Auto and the tone curve are fixed: the curve is the one "
+          "the conversion without the knobs keeps, applied on top unchanged, so raising brightness can clip highlights "
+          "the curve lifts (on 198 test frames, +0.5 put 16 over half a percent of the frame at white, the worst "
+          "14.5 %); on a print (--print) it "
           "moves the print's mid grey A while E is held (a density output takes it only with --print, for its CLFs). "
           "Reuses the Auto or DINOv3 result in <output>.json when this build wrote it from the same input files (size "
           "and CRC-32) and the same arguments apart from -o and the knobs; otherwise searches again.")
@@ -4193,12 +4196,14 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(0.0f);
   parser.add_argument("--tint")
     .help("Tint offset after the parameter search, in CIELAB a* units of the reference grey (negative: green, "
-          "positive: magenta). Reuses <output>.json when it matches.")
+          "positive: magenta). Applied after Auto and the tone curve are fixed, as --brightness. Reuses <output>.json "
+          "when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
   parser.add_argument("--warmth")
     .help("Warmth offset after the parameter search, in CIELAB b* units of the reference grey (negative: blue, "
-          "positive: yellow). Reuses <output>.json when it matches.")
+          "positive: yellow). Applied after Auto and the tone curve are fixed, as --brightness. Reuses <output>.json "
+          "when it matches.")
     .scan<'g', float>()
     .default_value(0.0f);
   // A bundle conversion reads the film base from the scan (film_base_detector.h: the rebate, else the thinnest film),
