@@ -353,6 +353,16 @@ sRGB 242 (`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 t
 
 The tone stage (4.4) changes lightness only. A print (5.4) takes neither the shoulder nor the tone stage.
 
+**Where the full-size steps run.** `neg_process` makes the full-resolution image (2.1) and converts it through a
+backend (`np_pipeline.h`: `Backend`). On a USE_CUDA=1 build with a CUDA device that runs its kernels, the grain-aware
+debayer or the pixel-shift merge runs on the device (`gpu_passes.cu`: `gpu_grain_aware_debayer`,
+`gpu_pixel_shift_merge`), and so does the conversion to `-P srgb` or `-P srgb-g10`, through the search's GPU render
+(4.2). The device's debayer and merge give the CPU's values exactly. Its conversion computes the same `convert_pixel`
+but rounds `powf`, `tanhf` and `cbrtf` differently in the last place, so a value of the exported picture can differ
+from the CPU's by one 16-bit code. A custom output profile, whose last step is Little CMS, and an image that is not
+three samples a pixel are converted on the CPU. `--dino_backend cpu` keeps both steps on the CPU, and so does
+`--check_renderer`. The sidecar's `used.full_size` records where each ran.
+
 ## 4.2 The Auto search
 
 The search chooses the bracket and `(E, g, b)`. It works on the half-size image of the frame's inner 90 % crop
@@ -483,7 +493,7 @@ result afterwards, in stops of the reference grey's luminance and in its `a*` an
 **Where the passes run.** Every preview and clip pass of the search, the print's search, the curve fit and the tone
 plan goes through one renderer (`multi_target_optimizer.h`: `PreviewRenderer`): on a USE_CUDA=1 build with a CUDA
 device that runs its kernels the GPU's (`GpuRenderer`, `gpu_passes.cu`), else the CPU's; `--dino_backend cpu` keeps
-the passes, and the network, on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
+the passes, the network and the full-size steps (4.1) on the CPU. The GPU runs the same per-pixel pipeline (`color_pipeline.h`) with fused
 multiply-add off on both sides, but the two round `powf`, `tanhf` and `cbrtf` differently in the last place, so a
 preview can differ by one code and a result in its last digits. The sidecar's `auto` block records `renderer`: `gpu`,
 or `cpu, compared with the gpu` under `--check_renderer` with a device (no key: the CPU's). A run reuses a sidecar
@@ -618,16 +628,21 @@ which holds each pixel's `a*` and `b*` to first order (`color_pipeline.h`: `appl
 | Clip check | inner crop 90 %; the 2 × 2 at the origin of every 8 × 8 block | The share at white (a channel at the 16-bit maximum) and at black (a channel at 0), each against its own share before the stage. |
 | Curve limits | black ±15, white 80 to 110, gamma 0.7 to 1.45, contrast 0.7 to 1.5 | The range of each number; a recorded curve (`--tone_stage curve:`) outside it is refused. |
 
-**The clip check.** Before the export is converted, each candidate curve is tried on a sample of the frame through
-the conversion kernel: the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner crop, the area the
-curve is planned on. The sample is converted once up to the tone curve (`tone_clip_sample`), and each candidate's
-table is applied to those values with the rest of the kernel (`tone_clip_shares`). A demosaiced image can clip on some phases of the 2 × 2 colour mosaic and not
-on the others, so a sample of one pixel per block could miss it; the 2 × 2 covers every phase. Each end is compared
-with its own share before the stage: falling black clipping does not pay for rising white clipping, nor the reverse.
-The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole shadow move unless the black
-end then fails, and only then is the shadow move scaled with the rest, so a curve that lifts the shadows keeps the
-lift. When no share holds, the last is kept. The sidecar records both shares before (the sample) and after (every
-pixel of the inner crop) as `tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
+**The clip check.** Before the export is converted, each candidate curve is tried on a sample of the frame through the
+conversion kernel: the 2 × 2 pixels at the origin of every 8 × 8 block that lie in the inner crop, the area the curve is
+planned on. The sample is converted once up to the tone curve (`tone_clip_sample`), and each candidate's table is
+applied to those values with the rest of the kernel (`tone_clip_shares`). A demosaiced image can clip on some phases of
+the 2 × 2 colour mosaic and not on the others, so a sample of one pixel per block could miss it; the 2 × 2 covers every
+phase. Each end is compared with its own share before the stage: falling black clipping does not pay for rising white
+clipping, nor the reverse. The shares are tried in order (1, 0.75, 0.5, 0.25, 0); at each, the curve keeps the whole
+shadow move unless the black end then fails, and only then is the shadow move scaled with the rest, so a curve that
+lifts the shadows keeps the lift. When no share holds both ends, `--tone_stage` says which end gives way: `auto` (and
+`on`) keep the last share with the shadow lift; `highlights_first` keeps the largest share whose white end holds, else
+lowers the shadow lift at the last share through the same shares until white holds, else keeps the least white clipping;
+`least_total` keeps the curve whose shares at the two ends together are least, among every curve the other two try (the
+larger share on a tie, then the larger lift). The sidecar names the rule as `tone_stage.fallback` (null where a share
+held). The sidecar records both shares before (the sample) and after (every pixel of the inner crop) as
+`tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
 
 **The search's shadow alternative.** When the search found one (4.2, step 8), it goes through the stages after the
 search as the result does (the curve fit on white light, the tone plan, the roll-off), and both go through the clip

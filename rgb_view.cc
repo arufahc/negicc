@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -754,6 +755,11 @@ void gpu_upload(void*, const void*, size_t) { no_cuda(); }
 void gpu_download(void*, const void*, size_t) { no_cuda(); }
 void gpu_render(const RenderArgs&) { no_cuda(); }
 void gpu_highlight_clip(const HighlightClipArgs&) { no_cuda(); }
+void gpu_preview_debayer(const PreviewDebayerArgs&) { no_cuda(); }
+void gpu_grain_aware_debayer(const GrainAwareDebayerArgs&) { no_cuda(); }
+void gpu_pixel_shift_merge(const PixelShiftMergeArgs&) { no_cuda(); }
+void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs&, int, int, int, int, int) { no_cuda(); }
+void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs&, int, int, int, int, int) { no_cuda(); }
 #endif
 
 void cpu_render(const RenderArgs& a) {
@@ -1149,6 +1155,142 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a) {
     }
 }
 
+// One output pixel (x2, y2) of the grain-aware debayer: its photosite after the inverse crop, rotation and flips, the
+// soft green and the ratio-interpolated red and blue from the 7 x 7 CFA neighbourhood (reflected at the sensor's
+// edges), rounded and clamped to 16 bits, then the flat field at that pixel. cpu_grain_aware_debayer and
+// cpu_grain_aware_debayer_sampled both compute their pixels with it.
+static inline void grain_aware_pixel_cpu(const GrainAwareDebayerArgs& a, float k, float eps, size_t pitch, int x2,
+                                         int y2, uint16_t px_out[3]) {
+    int x_rel = 0, y_rel = 0;
+    map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
+    const int c = a.rx + x_rel;
+    const int r = a.ry + y_rel;
+
+    const float G = reconstruct_green_soft_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch, a.white_level, eps);
+
+    const bool r_even = ((r & 1) == 0);
+    const bool c_even = ((c & 1) == 0);
+
+    float R = 0.0f;
+    float B = 0.0f;
+
+    const float c_center = get_px_refl_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
+    const bool near_clip = (c_center >= (a.white_level - 64.0f)) || (G >= (a.white_level - 64.0f));
+
+    if (near_clip) {
+        if (r_even && c_even) {
+            R = c_center;
+            const float b00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+            const float b01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+            const float b10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+            const float b11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+            B = 0.25f * (b00 + b01 + b10 + b11);
+        } else if (!r_even && !c_even) {
+            B = c_center;
+            const float r00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
+            const float r01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
+            const float r10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
+            const float r11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
+            R = 0.25f * (r00 + r01 + r10 + r11);
+        } else if (r_even && !c_even) {
+            R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                        get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+            B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                        get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+        } else {
+            R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
+                        get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
+            B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
+                        get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
+        }
+    } else {
+        if (r_even && c_even) {
+            R = c_center;
+        } else if (r_even && !c_even) {
+            const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float rl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+            const float rr = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+            R = (G + k) * (0.5f * (rl + rr)) - k;
+        } else if (!r_even && c_even) {
+            const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float ru = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+            const float rd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+            R = (G + k) * (0.5f * (ru + rd)) - k;
+        } else {
+            const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float r00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                              (g00 + k);
+            const float r01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                              (g01 + k);
+            const float r10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                              (g10 + k);
+            const float r11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                              (g11 + k);
+            R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
+        }
+
+        if (!r_even && !c_even) {
+            B = c_center;
+        } else if (!r_even && c_even) {
+            const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float bl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
+            const float br = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
+            B = (G + k) * (0.5f * (bl + br)) - k;
+        } else if (r_even && !c_even) {
+            const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float bu = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
+            const float bd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
+            B = (G + k) * (0.5f * (bu + bd)) - k;
+        } else {
+            const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
+                                                         a.white_level, eps);
+            const float b00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                              (g00 + k);
+            const float b01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                              (g01 + k);
+            const float b10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
+                              (g10 + k);
+            const float b11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
+                              (g11 + k);
+            B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
+        }
+    }
+
+    uint16_t px[3] = {(uint16_t)std::round(std::max(0.0f, std::min(65535.0f, R))),
+                      (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, G))),
+                      (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, B)))};
+    if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+    px_out[0] = px[0];
+    px_out[1] = px[1];
+    px_out[2] = px[2];
+}
+
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("cpu_grain_aware_debayer: rot_cw must be a multiple of 90");
@@ -1163,131 +1305,8 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     #pragma omp parallel for schedule(static)
     for (int y2 = 0; y2 < a.dst_h; ++y2) {
         for (int x2 = 0; x2 < a.dst_w; ++x2) {
-            int x_rel = 0, y_rel = 0;
-            map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
-
-            const int c = a.rx + x_rel;
-            const int r = a.ry + y_rel;
-
-            const float G = reconstruct_green_soft_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch, a.white_level, eps);
-
-            const bool r_even = ((r & 1) == 0);
-            const bool c_even = ((c & 1) == 0);
-
-            float R = 0.0f;
-            float B = 0.0f;
-
-            const float c_center = get_px_refl_cpu(a.cfa_bayer, r, c, a.src_h, a.src_w, pitch);
-            const bool near_clip = (c_center >= (a.white_level - 64.0f)) || (G >= (a.white_level - 64.0f));
-
-            if (near_clip) {
-                if (r_even && c_even) {
-                    R = c_center;
-                    const float b00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
-                    const float b01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
-                    const float b10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
-                    const float b11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
-                    B = 0.25f * (b00 + b01 + b10 + b11);
-                } else if (!r_even && !c_even) {
-                    B = c_center;
-                    const float r00 = get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch);
-                    const float r01 = get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch);
-                    const float r10 = get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch);
-                    const float r11 = get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch);
-                    R = 0.25f * (r00 + r01 + r10 + r11);
-                } else if (r_even && !c_even) {
-                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
-                                get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
-                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
-                                get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
-                } else {
-                    R = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) +
-                                get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch));
-                    B = 0.5f * (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) +
-                                get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch));
-                }
-            } else {
-                if (r_even && c_even) {
-                    R = c_center;
-                } else if (r_even && !c_even) {
-                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float rl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
-                    const float rr = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
-                    R = (G + k) * (0.5f * (rl + rr)) - k;
-                } else if (!r_even && c_even) {
-                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float ru = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
-                    const float rd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
-                    R = (G + k) * (0.5f * (ru + rd)) - k;
-                } else {
-                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float r00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g00 + k);
-                    const float r01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g01 + k);
-                    const float r10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g10 + k);
-                    const float r11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g11 + k);
-                    R = (G + k) * (0.25f * (r00 + r01 + r10 + r11)) - k;
-                }
-
-                if (!r_even && !c_even) {
-                    B = c_center;
-                } else if (!r_even && c_even) {
-                    const float g_l = reconstruct_green_soft_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g_r = reconstruct_green_soft_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float bl = (get_px_refl_cpu(a.cfa_bayer, r, c - 1, a.src_h, a.src_w, pitch) + k) / (g_l + k);
-                    const float br = (get_px_refl_cpu(a.cfa_bayer, r, c + 1, a.src_h, a.src_w, pitch) + k) / (g_r + k);
-                    B = (G + k) * (0.5f * (bl + br)) - k;
-                } else if (r_even && !c_even) {
-                    const float g_u = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g_d = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float bu = (get_px_refl_cpu(a.cfa_bayer, r - 1, c, a.src_h, a.src_w, pitch) + k) / (g_u + k);
-                    const float bd = (get_px_refl_cpu(a.cfa_bayer, r + 1, c, a.src_h, a.src_w, pitch) + k) / (g_d + k);
-                    B = (G + k) * (0.5f * (bu + bd)) - k;
-                } else {
-                    const float g00 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g01 = reconstruct_green_soft_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g10 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float g11 = reconstruct_green_soft_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch,
-                                                                 a.white_level, eps);
-                    const float b00 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c - 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g00 + k);
-                    const float b01 = (get_px_refl_cpu(a.cfa_bayer, r - 1, c + 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g01 + k);
-                    const float b10 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c - 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g10 + k);
-                    const float b11 = (get_px_refl_cpu(a.cfa_bayer, r + 1, c + 1, a.src_h, a.src_w, pitch) + k) /
-                                      (g11 + k);
-                    B = (G + k) * (0.25f * (b00 + b01 + b10 + b11)) - k;
-                }
-            }
-
-            uint16_t px[3] = {(uint16_t)std::round(std::max(0.0f, std::min(65535.0f, R))),
-                              (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, G))),
-                              (uint16_t)std::round(std::max(0.0f, std::min(65535.0f, B)))};
-            if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+            uint16_t px[3];
+            grain_aware_pixel_cpu(a, k, eps, pitch, x2, y2, px);
             const long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
             a.rgb_out[dst_idx + 0] = px[0];
             a.rgb_out[dst_idx + 1] = px[1];
@@ -1296,58 +1315,117 @@ void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a) {
     }
 }
 
+void cpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("cpu_grain_aware_debayer_sampled: rot_cw must be a multiple of 90");
+    }
+    if (!is_rggb_pattern_cpu(a.filters)) {
+        throw std::invalid_argument("cpu_grain_aware_debayer_sampled: currently only supports RGGB Bayer pattern");
+    }
+    const float k = 16.0f;
+    const float eps = (a.eps > 0.0f) ? a.eps : 4096.0f;
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
+    #pragma omp parallel for schedule(static)
+    for (long long i = 0; i < n; ++i)
+        grain_aware_pixel_cpu(a, k, eps, pitch, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);
+}
+
+// One output pixel (x2, y2) of the pixel-shift merge: the four frames' samples at its photosite and the three
+// beside it, clipped to the white level, then the flat field at that pixel. cpu_pixel_shift_merge and
+// cpu_pixel_shift_merge_sampled both compute their pixels with it.
+static inline void pixel_shift_pixel_cpu(const PixelShiftMergeArgs& a, size_t pitch, int x2, int y2,
+                                         uint16_t px_out[3]) {
+    int x_rel = 0, y_rel = 0;
+    map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
+
+    const int c = a.rx + x_rel;
+    const int r = a.ry + y_rel;
+
+    const uint16_t s0 = (uint16_t)get_px_refl_cpu(a.bayer_f0, r,     c,     a.src_h, a.src_w, pitch);
+    const uint16_t s1 = (uint16_t)get_px_refl_cpu(a.bayer_f1, r - 1, c,     a.src_h, a.src_w, pitch);
+    const uint16_t s2 = (uint16_t)get_px_refl_cpu(a.bayer_f2, r - 1, c + 1, a.src_h, a.src_w, pitch);
+    const uint16_t s3 = (uint16_t)get_px_refl_cpu(a.bayer_f3, r,     c + 1, a.src_h, a.src_w, pitch);
+
+    const uint16_t samples[4] = {s0, s1, s2, s3};
+    const int coords[4][2] = {{r, c}, {r - 1, c}, {r - 1, c + 1}, {r, c + 1}};
+
+    uint16_t R = 0, B = 0;
+    uint32_t G_sum = 0;
+    int g_count = 0;
+    bool g_clipped = false;
+    for (int i = 0; i < 4; ++i) {
+        const int col = bayer_color_at(coords[i][0], coords[i][1], a.filters);
+        if (col & 1) {
+            G_sum += samples[i];
+            g_count++;
+            if (samples[i] >= (uint16_t)a.white_level) g_clipped = true;
+        } else if (col == 0) {
+            R = samples[i];
+        } else {
+            B = samples[i];
+        }
+    }
+
+    uint16_t G = (g_count > 0) ? (uint16_t)(G_sum / g_count) : 0;
+    if (g_clipped || G >= (uint16_t)a.white_level) G = (uint16_t)a.white_level;
+    if (R >= (uint16_t)a.white_level) R = (uint16_t)a.white_level;
+    if (B >= (uint16_t)a.white_level) B = (uint16_t)a.white_level;
+
+    uint16_t px[3] = {R, G, B};
+    if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+    px_out[0] = px[0];
+    px_out[1] = px[1];
+    px_out[2] = px[2];
+}
+
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a) {
     if (a.rot_cw % 90 != 0) {
         throw std::invalid_argument("cpu_pixel_shift_merge: rot_cw must be a multiple of 90");
+    }
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
+        throw std::invalid_argument("cpu_pixel_shift_merge: white_level must be within a 16-bit sample's range");
     }
     const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
     #pragma omp parallel for schedule(static)
     for (int y2 = 0; y2 < a.dst_h; ++y2) {
         for (int x2 = 0; x2 < a.dst_w; ++x2) {
-            int x_rel = 0, y_rel = 0;
-            map_inverse_geometry_cpu(x2, y2, a.dst_w, a.dst_h, a.rw, a.rh, a.rot_cw, a.hflip, a.vflip, x_rel, y_rel);
-
-            const int c = a.rx + x_rel;
-            const int r = a.ry + y_rel;
-
-            const uint16_t s0 = (uint16_t)get_px_refl_cpu(a.bayer_f0, r,     c,     a.src_h, a.src_w, pitch);
-            const uint16_t s1 = (uint16_t)get_px_refl_cpu(a.bayer_f1, r - 1, c,     a.src_h, a.src_w, pitch);
-            const uint16_t s2 = (uint16_t)get_px_refl_cpu(a.bayer_f2, r - 1, c + 1, a.src_h, a.src_w, pitch);
-            const uint16_t s3 = (uint16_t)get_px_refl_cpu(a.bayer_f3, r,     c + 1, a.src_h, a.src_w, pitch);
-
-            const uint16_t samples[4] = {s0, s1, s2, s3};
-            const int coords[4][2] = {{r, c}, {r - 1, c}, {r - 1, c + 1}, {r, c + 1}};
-
-            uint16_t R = 0, B = 0;
-            uint32_t G_sum = 0;
-            int g_count = 0;
-            bool g_clipped = false;
-            for (int i = 0; i < 4; ++i) {
-                const int col = bayer_color_at(coords[i][0], coords[i][1], a.filters);
-                if (col & 1) {
-                    G_sum += samples[i];
-                    g_count++;
-                    if (samples[i] >= (uint16_t)a.white_level) g_clipped = true;
-                } else if (col == 0) {
-                    R = samples[i];
-                } else {
-                    B = samples[i];
-                }
-            }
-
-            uint16_t G = (g_count > 0) ? (uint16_t)(G_sum / g_count) : 0;
-            if (g_clipped || G >= (uint16_t)a.white_level) G = (uint16_t)a.white_level;
-            if (R >= (uint16_t)a.white_level) R = (uint16_t)a.white_level;
-            if (B >= (uint16_t)a.white_level) B = (uint16_t)a.white_level;
-
-            uint16_t px[3] = {R, G, B};
-            if (a.flat.gain) flat_divide(a.flat, a.flat_x0 + x_rel, a.flat_y0 + y_rel, px);
+            uint16_t px[3];
+            pixel_shift_pixel_cpu(a, pitch, x2, y2, px);
             const long long dst_idx = ((long long)y2 * a.dst_w + x2) * 3;
             a.rgb_out[dst_idx + 0] = px[0];
             a.rgb_out[dst_idx + 1] = px[1];
             a.rgb_out[dst_idx + 2] = px[2];
         }
     }
+}
+
+long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1) {
+    auto below = [step](int t) { return 2LL * (t / step) + (t % step < 2 ? t % step : 2); };  // sampled in [0, t)
+    const long long cols = below(cx1) - below(cx0), rows = below(cy1) - below(cy0);
+    return cols > 0 && rows > 0 ? cols * rows : 0;
+}
+
+void map_frame_to_sensor(int rx, int ry, int rw, int rh, int rot_cw, bool hflip, bool vflip, int dst_w, int dst_h,
+                         const int32_t* xy, long long n, int32_t* rc) {
+    for (long long i = 0; i < n; ++i) {
+        int x_rel = 0, y_rel = 0;
+        map_inverse_geometry_cpu(xy[2 * i], xy[2 * i + 1], dst_w, dst_h, rw, rh, rot_cw, hflip, vflip, x_rel, y_rel);
+        rc[2 * i] = ry + y_rel;
+        rc[2 * i + 1] = rx + x_rel;
+    }
+}
+
+void cpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n) {
+    if (a.rot_cw % 90 != 0) {
+        throw std::invalid_argument("cpu_pixel_shift_merge_sampled: rot_cw must be a multiple of 90");
+    }
+    if (!(a.white_level >= 0.0f && a.white_level <= std::numeric_limits<uint16_t>::max())) {
+        throw std::invalid_argument(
+            "cpu_pixel_shift_merge_sampled: white_level must be within a 16-bit sample's range");
+    }
+    const size_t pitch = a.cfa_pitch > 0 ? a.cfa_pitch : (size_t)a.src_w;
+    #pragma omp parallel for schedule(static)
+    for (long long i = 0; i < n; ++i) pixel_shift_pixel_cpu(a, pitch, xy[2 * i], xy[2 * i + 1], a.rgb_out + i * 3);
 }
 
 }  // namespace negicc

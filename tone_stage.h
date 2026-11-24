@@ -65,11 +65,27 @@ constexpr double kToneWhiteStarts[3] = {100.0, 110.0, 85.0};
 // than kToneClipAllowance more at black (a channel at 0), each end against its own share before the stage. The moves
 // are scaled down to the first of kToneClipShares at which both ends hold: the highlight and range moves always, the
 // shadow move only when the black end fails with the full shadow move (a lift of the shadows is never scaled away).
-// When no share holds, the last (no highlight or range move) is kept. The shares are measured on a sample of the
-// image the export converts, through the kernel: the 2 x 2 pixels at the origin of every kToneClipSampleStep x
+// When no share holds, ToneClipFallback says which end gives way. The shares are measured on a sample of the image
+// the export converts, through the kernel: the 2 x 2 pixels at the origin of every kToneClipSampleStep x
 // kToneClipSampleStep block, so the sample covers each phase of a 2 x 2 colour mosaic the image was demosaiced from.
 constexpr double kToneClipAllowance = 0.005;
 constexpr double kToneClipShares[5] = {1.0, 0.75, 0.5, 0.25, 0.0};
+// The curve kept when no share holds both ends (--tone_stage auto, highlights_first, least_total). Each share's
+// candidate is the curve the check tried last at it: the whole shadow move, or the scaled one where the black end
+// failed with it.
+enum ToneClipFallback {
+    // Shadows first (the default): the last share's candidate, no highlight or range move, the shadow lift kept where
+    // black holds.
+    kToneFallbackShadowsFirst,
+    // Highlights first: the largest share whose white end holds; else, at the last share, the shadow move scaled
+    // through kToneClipShares until the white end holds; else the candidate tried that clips least at white (the first
+    // tried on a tie).
+    kToneFallbackHighlightsFirst,
+    // Least total: the candidate whose shares at white and at black together are least, of the shares' candidates and
+    // the last share with the shadow move scaled through kToneClipShares (every candidate the other two rules try); on
+    // a tie the larger share, then the larger shadow move.
+    kToneFallbackLeastTotal,
+};
 constexpr int kToneClipSampleStep = 8;
 // The inner crop the clip check reads: the search's (ParamSearchOptions::crop_ratio), the area the plan's preview
 // shows.
@@ -137,15 +153,16 @@ void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc
 // The plan's curve for the image the export converts (its clip check's sample, tone_clip_sample, through pc): the
 // designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends hold against the
 // conversion's own shares (white_before, black_before: tone_clip_shares without a curve), else the moves scaled as
-// kToneClipAllowance says. share gets the share of the highlight and range moves kept, and shadow_share (when given)
-// that of the shadow move; white_after and black_after (when given) the sample's shares at white and at black with the
-// curve kept, as the check counted them.
+// kToneClipAllowance says, and fallback when no share holds both ends. share gets the share of the highlight and
+// range moves kept, shadow_share (when given) that of the shadow move, fell_back (when given) whether no share
+// held, so that fallback chose the curve, and white_after and black_after (when given) the sample's shares at white
+// and at black with the curve kept, as the check counted them.
 ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, double pred_L98, double pred_range,
                               const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
                               double white_before, double black_before, const ToneCurve& designed,
                               const ToneTargets& designed_targets, ToneTargets* targets, double* share,
-                              double* shadow_share = nullptr, double* white_after = nullptr,
-                              double* black_after = nullptr);
+                              double* shadow_share = nullptr, ToneClipFallback fallback = kToneFallbackShadowsFirst,
+                              bool* fell_back = nullptr, double* white_after = nullptr, double* black_after = nullptr);
 
 // The tone stage's plan as the conversion solves it after the curve fit (from the fit's ToneStagePlan: the heads'
 // predictions and the final render's preview): the preview's descriptors, the targets and the curve between them.

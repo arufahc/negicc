@@ -384,7 +384,8 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(false)
     .implicit_value(true);
   parser.add_argument("--tone_stage")
-    .help("auto (default), on, off, or a recorded curve: curve:black,white,gamma,contrast. auto: the tone stage "
+    .help("auto (default), on, off, highlights_first, least_total, or a recorded curve: "
+          "curve:black,white,gamma,contrast. auto: the tone stage "
           "runs on every bundle conversion with -P srgb that is not a print, on white-light and TriLED bundles alike, "
           "whether or not the curve fit runs and with or without given --target, -E and gains (with all four given "
           "the search runs for it), and nowhere else (another or no -P, a print, a single ICC profile), so it can be "
@@ -393,14 +394,21 @@ int parse_options(int ac, char* av[], Options& o) {
           "predict the frame's shadow level, highlight level and tonal range as a lab scan would have them, and one "
           "monotone L* curve, applied in the conversion itself, moves the image all the way to the predicted shadow "
           "level and half way to the highlight level and range, holding the mid-tones and each colour's a* and b*. "
+          "Where the moves would clip either end beyond 0.5 % of the inner crop more than before the stage, they are "
+          "scaled down; where no scaling keeps both ends, auto and on keep the shadow lift (the highlights clip), "
+          "highlights_first keeps the highlights (the shadow lift is scaled down until they hold), and least_total "
+          "keeps the curve that clips least at both ends together. highlights_first and least_total otherwise run as "
+          "auto. "
           "A recorded curve (a sidecar's cli_equivalent) is replayed with --target, -E, --gain_g and --gain_b, "
           "without searching or predicting; one outside the stage's limits (black -15 to 15, white 80 to 110, gamma "
           "0.7 to 1.45, contrast 0.7 to 1.5) is refused.")
     .default_value(std::string("auto"));
   parser.add_argument("--dino_backend")
-    .help("DINOv3 inference backend: auto (the default), cpu, or gpu (USE_CUDA=1 builds). cpu also keeps the "
-          "search's passes over the frame on the CPU, which a USE_CUDA=1 build otherwise runs on a CUDA device that "
-          "runs its kernels (see CUDA_ARCH in the README's build section).")
+    .help("DINOv3 inference backend: auto (the default), cpu, or gpu (USE_CUDA=1 builds). cpu keeps everything on "
+          "the CPU: the network, the search's passes over the frame, and the full-size debayer, pixel-shift merge "
+          "and conversion, which a USE_CUDA=1 build otherwise runs on a CUDA device that runs its kernels (see "
+          "CUDA_ARCH in the README's build section). On the device a value of the exported picture can differ from "
+          "the CPU's by one 16-bit code.")
     .default_value(std::string("auto"));
   parser.add_argument("--check_renderer")
     .help("Check aid (the renderer interface, multi_target_optimizer.h PreviewRenderer): run the bundle search, the "
@@ -735,6 +743,11 @@ int parse_options(int ac, char* av[], Options& o) {
       o.tone_stage = v == "on" ? Options::kToneStageOn : v == "off" ? Options::kToneStageOff : Options::kToneStageAuto;
       return true;
     }
+    if (v == "highlights_first" || v == "least_total") {
+      o.tone_stage = Options::kToneStageAuto;
+      o.tone_fallback = v == "highlights_first" ? kToneFallbackHighlightsFirst : kToneFallbackLeastTotal;
+      return true;
+    }
     const std::string pre = prefix;
     if (v.compare(0, pre.size(), pre) == 0) {
       const std::vector<std::string> items = split_csv(v.substr(pre.size()));
@@ -745,7 +758,8 @@ int parse_options(int ac, char* av[], Options& o) {
         return true;
       }
     }
-    log_error("%s takes auto, on, off, or recorded values: %s followed by %d comma-separated numbers, not '%s'\n",
+    log_error("%s takes auto, on, off, highlights_first, least_total, or recorded values: %s followed by %d "
+              "comma-separated numbers, not '%s'\n",
               name, prefix, count, v.c_str());
     return false;
   };

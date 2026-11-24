@@ -1737,12 +1737,22 @@ void GpuRenderer::bind_frame(const negicc::RgbView& frame) {
     m.copied = false;
   } else {
     const int w = frame.width, h = frame.height;
-    std::vector<uint16_t> host((size_t)w * h * 3);
+    const size_t bytes = (size_t)w * h * 3 * sizeof(uint16_t);
+    void* dev = m.frame_copy.get(bytes);
+    // A frame bound for one render over it (render_over_frame) that is already the copy's layout, 3 samples a pixel
+    // row after row with no flat field, is uploaded as it is. Any other frame is first read through its view into
+    // such a picture on the host.
+    const bool as_it_is = render_over_frame && !frame.g2_ptr && !frame.flat.gain && frame.g_ptr == frame.r_ptr + 1 &&
+                          frame.b_ptr == frame.r_ptr + 2 && frame.pitch == 3 && frame.stride == (ptrdiff_t)w * 3;
+    if (as_it_is) {
+      negicc::gpu_upload(dev, frame.r_ptr, bytes);
+    } else {
+      std::vector<uint16_t> host((size_t)w * h * 3);
 #pragma omp parallel for schedule(static)
-    for (int y = 0; y < h; ++y)
-      for (int x = 0; x < w; ++x) frame.sample(x, y, host.data() + ((size_t)y * w + x) * 3);
-    void* dev = m.frame_copy.get(host.size() * sizeof(uint16_t));
-    negicc::gpu_upload(dev, host.data(), host.size() * sizeof(uint16_t));
+      for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) frame.sample(x, y, host.data() + ((size_t)y * w + x) * 3);
+      negicc::gpu_upload(dev, host.data(), bytes);
+    }
     m.dev_frame = static_cast<const uint16_t*>(dev);
     m.copied = true;
   }
@@ -1760,9 +1770,13 @@ void GpuRenderer::render(const negicc::RenderArgs& a) {
   const size_t elem = a.out_type == 1 ? 1 : a.out_type == 0 ? 2 : 4;
   const size_t bytes = (size_t)a.width * a.height * 3 * elem;
   if (bytes == 0) return;
-  d.out = m.out.get(bytes);
+  // Over the renderer's own copy when asked (render_over_frame): the copy is 3 samples a pixel, row after row.
+  const bool over = render_over_frame && m.copied && a.out_type == 0 && view.r_ptr == m.dev_frame &&
+                    a.width == m.frame.width && a.height == m.frame.height;
+  d.out = over ? const_cast<uint16_t*>(m.dev_frame) : m.out.get(bytes);
   negicc::gpu_render(d);
   negicc::gpu_download(a.out, d.out, bytes);
+  if (over) release_frame();   // the copy now holds the render, not the frame
 }
 
 void GpuRenderer::release_frame() {

@@ -70,7 +70,8 @@ adjust the result from that file without running the model again.
 Each conversion prints a block headed `Used:`, which `out.tif.json` keeps as `used`. In the pipeline's order it names
 the profile set (built in or from a path), the camera the set records and the scan's camera (make and model), and for
 a narrow-band set the camera models its crosstalk matrix holds for and whether the scan's model is one; then the decode
-(camera RGB, or LibRaw's white-light decode to linear Rec.2020), the flat field, the crop in sensor pixels and where it
+(camera RGB, or LibRaw's white-light decode to linear Rec.2020), where the full-size steps ran (`full_size`: the
+decode and the conversion, each on the `cpu` or the `gpu`), the flat field, the crop in sensor pixels and where it
 came from, the crosstalk correction (its nine numbers and their source, or why there is none), the film base and its
 source, and the ICC profile the picture renders through: the bracket's, or the print's.
 
@@ -119,6 +120,11 @@ contain; the log says so and why, and `-r`, `-g` and `-b` give the rows of a mat
 that states no model (a TIFF) and a set from before the list are not compared, and take the set's matrix. Three
 separate frames need no correction. A white-light set has no matrix and lists no models, and no camera is compared for
 it.
+
+Rows given with `-r`, `-g` and `-b` are in the units of the profile set's own correction matrix. The set stores its
+film base as read through that matrix, and the automatic exposure compares the scan's film base with the stored one,
+so rows of another overall scale move the automatic exposure, by log2 of the scale in stops. Rows that leave the
+matrix not invertible are refused.
 
 Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
 turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than
@@ -343,16 +349,16 @@ scene conversion's mean L\* with `--brightness` (the offset in stops is in each 
 | `--gain_g`, `--gain_b` | Green and blue gains relative to red (default 1). The search (and the curve fit on white light) keeps them and finds the rest. With an ICC profile (`-p file.icc`), giving either turns the search off. |
 | `--brightness`, `--tint`, `--warmth` | Adjustments applied after the search and the curve fit, to found and given values alike. They reuse `<output>.json` from the same inputs. On a print they move its printing exposure and colour balance; a density output takes them only with `--print`, for its CLFs, and searches each print again for them. |
 | `--fit_curves auto\|off\|on\|<numbers>` | The curve fit. `auto` (default) runs it wherever it applies. `off` skips it. `off` and `on` are errors where it does not apply (it never applies to the RGB LED, an ICC profile or a print). Eight or ten numbers replay the curves recorded in a sidecar. |
-| `--tone_stage auto\|off\|on\|curve:<numbers>` | The tone stage. `auto` (default) runs it on every bundle conversion with `-P srgb` that is not a print, on both lights, with given values too. `off` skips it. `on` is an error where it does not apply. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast); numbers outside the stage's limits are refused. A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. A TriLED replay command from an older build that gives the values without any `--tone_stage` now runs the tone stage; add `--tone_stage off` to reproduce its file. |
+| `--tone_stage auto\|off\|on\|highlights_first\|least_total\|curve:<numbers>` | The tone stage. `auto` (default) runs it on every bundle conversion with `-P srgb` that is not a print, on both lights, with given values too. `off` skips it. `on` is an error where it does not apply. Where no scaling of its moves keeps both ends from clipping, `auto` and `on` keep the shadow lift and let the highlights clip; `highlights_first` keeps the highlights and lifts the shadows less; `least_total` keeps the curve that clips least at both ends together; both otherwise run as `auto`. `curve:` with four numbers replays the lightness curve recorded in a sidecar (black, white, gamma, contrast); numbers outside the stage's limits are refused. A sidecar's replay command carries `--tone_stage off` (with `--fit_curves off` on white light) when neither step ran. A TriLED replay command from an older build that gives the values without any `--tone_stage` now runs the tone stage; add `--tone_stage off` to reproduce its file. |
 | `--roi auto [h\|v]` or `--roi x y w h [rot [hflip [vflip]]]` | The frame: detected, or given in sensor pixels. |
 | `--film_format 35mm\|645\|6x6\|6x7\|6x9\|auto` | The format `--roi auto` looks for (default 35mm). With a given `--roi`, the format the film base is read around (default: every format). A sidecar's replay command carries the format the film base was read around when its detection used one (given, or `--roi auto`'s 35mm), as it carries the frame. |
 | `--rot` (`--rot_cw`), `--hflip`, `--vflip` | Orientation of the output. |
 | `-q`, `--quality` | Demosaic: −1 automatic, or a LibRaw quality (4 is DCB). |
-| `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's). |
+| `-r`, `-g`, `-b` | Rows of the crosstalk matrix (default: the profile set's), in the units of the set's own matrix. |
 | `-C`, `--no_crop` | Keep the RAW's full area. |
 | `--flat` | A flat-field `.npz` measured on the empty gate. |
 | `--dino <head>:<file>,...` | Use your own models: `intent` (an `.onnx` file or its directory), `neutral`, `tone`. A path with no head name is the intent model. |
-| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs (`cpu` also keeps the search's passes on the CPU, DESIGN.md 4.2), and how many search iterations. |
+| `--dino_backend auto\|cpu\|gpu`, `--dino_iters` | Where the vision model runs, and how many search iterations. `cpu` keeps everything on the CPU: the model, the search's passes (DESIGN.md 4.2) and the full-size debayer, merge and conversion, which a USE_CUDA=1 build otherwise runs on a CUDA device (DESIGN.md 4.1). On the device a value of the exported picture can differ from the CPU's by one 16-bit code. |
 | `--check_renderer`, `--probe_intent`, `--probe_params`, `--probe_stops` | Development aids: a check of the search's renderer interface (the search, the print's search, the curve fit and the tone plan through a renderer that runs and counts each pass on the CPU, and on a USE_CUDA=1 build with a device also on the GPU, comparing the two, DESIGN.md 4.2; the picture must equal a conversion whose passes run on the CPU, compared by hand), and a record of what the intent head predicts from chosen renders. `--help` describes them. |
 
 ## Hardware the profiles were made with

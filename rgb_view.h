@@ -56,7 +56,7 @@ struct RgbView {
     const uint16_t* r_ptr = nullptr;
     const uint16_t* g_ptr = nullptr;
     // The second green of a Bayer 2x2 cell: half-size views average it with g_ptr ((G1 + G2) >> 1), as
-    // cpu_preview_debayer and negicc-station's CUDA preview kernel do. Null for X-Trans and interleaved RGB.
+    // cpu_preview_debayer and gpu_preview_debayer do. Null for X-Trans and interleaved RGB.
     // film_image_from_cfa (the frame detector's input) still takes G1 only.
     const uint16_t* g2_ptr = nullptr;
     const uint16_t* b_ptr = nullptr;
@@ -403,7 +403,33 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 // Under white light the blue channel is too noisy for the ratios; those scans decode through LibRaw instead.
 // -----------------------------------------------------------------------------------------------------------------
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
+// Throws std::invalid_argument when white_level is outside a 16-bit sample's range (0 to 65535).
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+// The same pixels as cpu_grain_aware_debayer and cpu_pixel_shift_merge, for the n output positions xy (x2, y2 pairs in
+// a.dst_w x a.dst_h) only, written in that order to a.rgb_out (n x 3): the tone stage's clip check reads the
+// pixels it samples without demosaicing the frame.
+void cpu_grain_aware_debayer_sampled(const GrainAwareDebayerArgs& a, const int32_t* xy, long long n);
+void cpu_pixel_shift_merge_sampled(const PixelShiftMergeArgs& a, const int32_t* xy, long long n);
+// The sensor photosite (row, col) of each output position xy (x2, y2) of a frame decoded from region (rx, ry, rw, rh),
+// turned rot_cw and flipped to dst_w x dst_h: the mapping the debayer kernels use, written as pairs to rc.
+void map_frame_to_sensor(int rx, int ry, int rw, int rh, int rot_cw, bool hflip, bool vflip, int dst_w, int dst_h,
+                         const int32_t* xy, long long n, int32_t* rc);
+
+// The same three on a CUDA device (gpu_passes.cu, USE_CUDA=1 builds; they throw GpuError without one). Every pointer in
+// the arguments is device memory: the mosaics, the flat field's tables and rgb_out. The caller puts them there.
+// neg_process calls the debayer and the merge for its full-size image. It does not call gpu_preview_debayer, whose
+// half-size image it reads as a view (RgbView::from_cfa_half): that one is here for an application that shows the
+// half-size image from device memory, beside its CPU twin.
+void gpu_preview_debayer(const PreviewDebayerArgs& a);
+void gpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
+void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+// On the GPU, the pixels of cpu_grain_aware_debayer_sampled and cpu_pixel_shift_merge_sampled for the clip check's
+// sample laid out by its blocks (the 2 x 2 at the origin of every step x step
+// block inside the crop [cx0, cx1) x [cy0, cy1) of the a.dst_w x a.dst_h frame), in the order of that list of
+// positions, the positions computed on the device: a.rgb_out device-visible, sampled_grid_count(...) x 3.
+long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1);
+void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
+void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
 
 // -----------------------------------------------------------------------------------------------------------------
 // The program's thread count when none is given: the smaller of kDefaultThreadCap and the physical cores this process

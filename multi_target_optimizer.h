@@ -195,6 +195,12 @@ struct GpuRenderer : PreviewRenderer {
   // For a frame the GPU reads in place: the device address of frame.r_ptr (an interleaved RGB view without a flat
   // field, whose pitch and stride hold on the device), or null to have the frame copied.
   std::function<const uint16_t*(const negicc::RgbView& frame)> device_frame;
+  // For a caller that needs the bound frame no more after one render (the full-size conversion): a 16-bit render of
+  // the whole frame is written over the renderer's own copy of it, so the device holds the picture once, not twice.
+  // The kernel reads each pixel before it writes it. The frame is released by that render. Such a frame, when it is
+  // already 3 samples a pixel row after row with no flat field, is also uploaded as it is, with no copy of it made
+  // on the host first. Set before bind_frame. Not an option of the program: only the full-size conversion sets it.
+  bool render_over_frame = false;
   long binds = 0, renders = 0, clips = 0;
 
  private:
