@@ -5494,13 +5494,14 @@ bool write_json_sidecar(const Sidecar& sc) {
   } else if (sc.tone_moved_nothing) {
     cli.insert(cli.end(), {"--tone_stage", "off"});  // the plan applied no curve: the same pixels without the stage
   }
-  // A bundle conversion with neither recorded curves nor a recorded tone curve: the given values alone render these
-  // pixels, and --tone_stage off (with --fit_curves off on white light, the fit's light) keeps the stages that run
-  // after given values too from running on the replay.
-  if (sc.is_bundle && cli.size() >= 2 && std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end() &&
-      std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) {
-    if (sc.input_space == InputSpace::kRec2020Linear) cli.insert(cli.end(), {"--fit_curves", "off"});
-    cli.insert(cli.end(), {"--tone_stage", "off"});
+  // A bundle conversion: the given values render these pixels on the replay, so each stage that runs after given values
+  // and recorded nothing is turned off there, each on its own: --fit_curves off on white light (the fit's light) where
+  // no curves are recorded, and --tone_stage off where no tone curve is recorded (nor already turned off above).
+  if (sc.is_bundle && cli.size() >= 2) {
+    if (sc.input_space == InputSpace::kRec2020Linear &&
+        std::find(cli.begin(), cli.end(), "--fit_curves") == cli.end())
+      cli.insert(cli.end(), {"--fit_curves", "off"});
+    if (std::find(cli.begin(), cli.end(), "--tone_stage") == cli.end()) cli.insert(cli.end(), {"--tone_stage", "off"});
   }
   // A print is made by its own search (no given values with --print): its replay is the frame, the print and the knobs
   // if any, and re-running it re-runs the search (deterministic, with --dino, --dino_iters and --dino_backend when
@@ -9224,6 +9225,11 @@ static void candidate_tone_check(const Options& o, const Setup& s, Scan& scan, c
                                   plan.pred_mean[ToneHead::kR9010], pc, sample, t.white_before, t.black_before,
                                   s.tone_plan.curve, s.tone_plan.targets, &t.targets, &t.share, &t.shadow_share,
                                   o.tone_fallback, &t.fell_back, &wa, &ka);
+    // Shares that move nothing apply no curve (convert): the sample's shares after the stage are those before it.
+    if (tone_moves_nothing(t.share, t.shadow_share)) {
+      wa = t.white_before;
+      ka = t.black_before;
+    }
   } else {
     tone_clip_shares(pc, sample, &t.curve, &wa, &ka);
   }
@@ -9538,9 +9544,9 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
                100.0 * scan.tone_clip.black_before, 100.0 * scan.tone_clip.black_after, 1000.0 * (t_tone_1 - t_tone_0),
                1000.0 * (t_tone_2 - t_tone_1));
     else
-      log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); inner crop at white "
-               "%.4f%% -> %.4f%%, at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting with the "
-               "curve\n",
+      log_info("Tone stage: black %.3f white %.3f gamma %.4f contrast %.4f (highlight share %.3f); inner crop at "
+               "white %.4f%% -> %.4f%%, at black %.4f%% -> %.4f%%; %.0f ms checking the clipping, %.0f ms converting "
+               "with the curve\n",
                q.black, q.white, q.gamma, q.contrast, scan.tone_share, 100.0 * scan.tone_clip.white_before,
                100.0 * scan.tone_clip.white_after, 100.0 * scan.tone_clip.black_before,
                100.0 * scan.tone_clip.black_after, 1000.0 * (t_tone_1 - t_tone_0), 1000.0 * (t_tone_2 - t_tone_1));
