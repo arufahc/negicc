@@ -457,8 +457,11 @@ not the optimiser's reading of it, matches the field.
    one with the lowest black share is picked, the first in screening order on a tie. When that is not the result's
    bracket and the result's bracket, at its screened parameters, is not as low, the picked bracket runs the loop of
    step 4 (or keeps its tournament run) and has its roll-off measured: the alternative. Whether the conversion takes
-   it is decided after the full-size decode, by the tone stage's clip check (4.4). The step does not run with
-   `--target` or `-E`.
+   it is decided after the full-size decode, by the tone stage's clip check (4.4). The result's bracket is compared
+   whether or not it is within the allowance (the allowance chooses where to move to; the result's bracket is where
+   the picture is), and the result's own black share is recorded but takes no part in the choice. The step does not
+   run with `--target` or `-E`, with one bracket, or where no alternative could be kept: an output other than sRGB,
+   the tone stage off, a density output or a print.
 
 The sidecar records the winning step's field as `intent_field` (`μ` and `σ` per cell): its `a*` and `b*` as that step
 predicted them, its `L*` the lightness target of step 2.
@@ -650,8 +653,11 @@ check: each candidate's sample is converted once, its shares before the stage ar
 chosen on it, which counts the shares after the stage. The alternative replaces the result only if, at white and at
 black, before and after the stage, each of its shares is no higher than the result's and at least one is lower. The
 clip check of the candidate kept is the export's. The sidecar records the step and the choice as
-`auto.shadow_alternative`: each screened bracket's shares in the clip pass, the bracket picked (or why none), the
-alternative's parameters, both candidates' four shares on the sample, and which was kept.
+`auto.shadow_alternative`: each screened bracket's shares in the clip pass, the bracket picked (or why none, and
+whether the result's bracket was within the allowance), the alternative's parameters, both candidates' four shares on
+the sample (or why they were not compared), and which was kept. Each candidate carries its own knob solve
+(`--brightness`, `--tint`, `--warmth`) and the curves re-anchored at it. The Auto's inferences and times, and its log,
+include the alternative's work; the log names the alternative's blocks.
 
 **Limits.** The moves were chosen by comparing pictures, not derived.
 

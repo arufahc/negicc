@@ -1735,6 +1735,12 @@ static void capture_candidate(const Setup& s, const Scan& scan, ShadowCandidate&
   k.curves_base_idx = s.curves_base_idx;
   k.curves_base_prof = s.curves_base_prof;
   k.curves_base_prof.rebind_pointers();
+  k.has_knob_res = scan.has_knob_res;
+  std::copy(scan.knob_base, scan.knob_base + 3, k.knob_base);
+  k.knob_res = scan.knob_res;
+  k.has_knob_curves = scan.has_knob_curves;
+  k.knob_curves = scan.knob_curves;
+  k.knob_base_a = scan.knob_base_a;
   k.prof_idx = scan.auto_res.target_idx;
   k.prof = s.bundle.targets[k.prof_idx].film_prof;
   k.prof.rebind_pointers();
@@ -1757,6 +1763,12 @@ static void restore_candidate(Setup& s, Scan& scan, const ShadowCandidate& k) {
   s.curves_base_idx = k.curves_base_idx;
   s.curves_base_prof = k.curves_base_prof;
   s.curves_base_prof.rebind_pointers();
+  scan.has_knob_res = k.has_knob_res;
+  std::copy(k.knob_base, k.knob_base + 3, scan.knob_base);
+  scan.knob_res = k.knob_res;
+  scan.has_knob_curves = k.has_knob_curves;
+  scan.knob_curves = k.knob_curves;
+  scan.knob_base_a = k.knob_base_a;
   s.bundle.targets[k.prof_idx].film_prof = k.prof;
   s.bundle.targets[k.prof_idx].film_prof.rebind_pointers();
 }
@@ -2523,6 +2535,10 @@ int decode(const Options& o, Setup& s, Scan& scan) {
   // With a shadow alternative (ParamSearchResult::shadow), the alternative's own stages after the search (the curve
   // fit on white light, the tone plan) and its roll-off, from the same state as the result's, kept in
   // scan.shadow_candidate for solve; the state is then the result's again, whose roll-off the caller measures.
+  // Whether the search looks for a shadow alternative: only where one could be kept, an sRGB export with the tone
+  // stage on (the choice is its clip check's), no density output, no print, and more than one bracket.
+  const bool shadow_possible = s.tone_active && o.colorspace == "srgb" && !s.density && s.print_profs.empty() &&
+                               o.prints.empty() && bundle.targets.size() > 1;
   auto stages_and_shadow = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
                                const ParamSearchOptions& opts) -> bool {
     scan.shadow_search = scan.auto_res.shadow;
@@ -2556,7 +2572,12 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     s.curves_base_idx = -1;
     scan.has_curve_params = false;
     scan.has_rolloff = false;
+    scan.has_knob_res = false;
+    scan.has_knob_curves = false;
+    scan.knob_res = KnobSolveResult{};
     scan.auto_res = *alt;
+    log_info("The shadow alternative (%s): its stages after the search, the knobs and the roll-off:\n",
+             alt->target_name.c_str());
     const bool ok = stages_after_search(frame, scan_shutter_s, scan_iso, opts) &&
                     solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso);
     if (ok) {
@@ -2632,6 +2653,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
         set_search_pins(o, s, opts);
+        opts.shadow_alternative = shadow_possible;
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
@@ -2957,6 +2979,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
       set_search_pins(o, s, opts);
+      opts.shadow_alternative = shadow_possible;
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
@@ -3487,6 +3510,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   switch_candidate(s, scan, a, *bp);
   Conversion cb = c0;
   cb.film_prof.rebind_pointers();
+  log_info("The shadow alternative (%s), converted to compare:\n", bp->auto_res.target_name.c_str());
   const bool b_ok = solve_one(o, s, scan, cb) == 0;
   if (b_ok) candidate_tone_check(o, s, scan, cb, tb, ch.alternative);
   bool no_higher = b_ok, lower = false;
@@ -3503,6 +3527,10 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   } else {
     switch_candidate(s, scan, *bp, a);
     scan.tone_check = ta;
+    if (c.station_params) {   // the conversion is the result's again, not the alternative's solved above
+      log_info("Solved (the result, kept): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n",
+               (*c.station_params)[0], (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
+    }
   }
   ch.check_ms = (omp_get_wtime() - t0) * 1000.0;
   log_info("Shadow alternative %s: %s; at white %.4f%% -> %.4f%% and at black %.4f%% -> %.4f%% (the result), "
@@ -4115,12 +4143,14 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
     const ShadowChoice& ch = scan.shadow_choice;
     nlohmann::ordered_json j, rows = nlohmann::ordered_json::array();
     for (const ShadowBracketRow& r : sa.rows)
-      rows.push_back({{"target_idx", r.target_idx}, {"white_pct", (double)(r.white)}, {"black_pct", (double)(r.black)}});
+      rows.push_back({{"target_idx", r.target_idx}, {"white_pct", (double)(r.white)},
+                      {"black_pct", (double)(r.black)}});
     j["clip_pass"] = rows;
     j["result_white_pct"] = (double)(sa.result_white);
     j["result_black_pct"] = (double)(sa.result_black);
     j["bracket"] = sa.picked >= 0 ? nlohmann::ordered_json(sa.picked) : nlohmann::ordered_json(nullptr);
     j["none"] = sa.none ? nlohmann::ordered_json(sa.none) : nlohmann::ordered_json(nullptr);
+    j["chosen_within_allowance"] = sa.chosen_within_allowance;
     if (sa.result) {
       const ParamSearchResult& b = *sa.result;
       j["alternative"] = {{"target_idx", b.target_idx}, {"e", (double)(b.params.e)}, {"g", (double)(b.params.g)},
@@ -4140,7 +4170,8 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
       j["kept"] = ch.kept_alternative ? "alternative" : "result";
     }
     j["inferences"] = sa.inferences;
-    j["time_ms"] = {{"search_step", (double)(sa.ms)}, {"stages", (double)(ch.stages_ms)}, {"check", (double)(ch.check_ms)}};
+    j["time_ms"] = {{"search_step", (double)(sa.ms)}, {"stages", (double)(ch.stages_ms)},
+                    {"check", (double)(ch.check_ms)}};
     sc.shadow_json_str = j.dump();
   }
   if (s.has_cached_sidecar) {

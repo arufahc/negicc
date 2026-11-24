@@ -284,6 +284,13 @@ struct ShadowCandidate {
   std::string input_curves_source;
   int curves_base_idx = -1;
   ParsedFilmProfile curves_base_prof;
+  // The knobs' state (--brightness, --tint, --warmth): their solve on this candidate, and the curves re-anchored at it.
+  bool has_knob_res = false;
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
+  double knob_base_a = NAN;
   int prof_idx = -1;
   ParsedFilmProfile prof0, prof;
   ParsedFilmProfile result_prof0;  // in the alternative's: the result's bracket's profile before the stages

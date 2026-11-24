@@ -2573,8 +2573,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   // and has its roll-off measured as the result's was: the alternative, which the conversion takes in place of the
   // result only when the tone stage's clip check finds it no higher at either end, before and after the stage, and
   // lower at one (np_pipeline.cc). None when the chosen bracket is the lowest or tied lowest at black, and none with
-  // a pinned bracket or E (the step only moves the bracket and E).
-  if (!pin_target && !pin_e && !screening.empty()) {
+  // a pinned bracket or E (the step only moves the bracket and E), with one bracket, or where the caller says no
+  // alternative could be kept (ParamSearchOptions::shadow_alternative). The chosen bracket's own row is compared
+  // whether or not it is within the white allowance: the allowance selects a bracket to move to, and the chosen one is
+  // where the picture already is. The result's own shares (its final parameters) are measured in the same pass: its
+  // white share sets the allowance; its black share is recorded and takes no part in the choice.
+  if (opts.shadow_alternative && !pin_target && !pin_e && screening.size() > 1) {
     ShadowAlternative& sh = out.shadow;
     const Clock::time_point t_sh0 = Clock::now();
     const int inf0 = out.inferences;
@@ -2608,8 +2612,12 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     if (best >= 0) sh.picked = sh.rows[best].target_idx;
     if (best < 0) sh.none = "no bracket within the white allowance";
     else if (sh.picked == chosen.target_idx) sh.none = "the chosen bracket is the lowest";
-    else if (row_of_chosen >= 0 && sh.rows[row_of_chosen].black <= sh.rows[best].black)
-      sh.none = "the chosen bracket is tied lowest";
+    else if (row_of_chosen >= 0 && sh.rows[row_of_chosen].black < sh.rows[best].black)
+      sh.none = "the chosen bracket is lower at black";
+    else if (row_of_chosen >= 0 && sh.rows[row_of_chosen].black == sh.rows[best].black)
+      sh.none = "the chosen bracket is tied lowest at black";
+    sh.chosen_within_allowance =
+        row_of_chosen >= 0 && sh.rows[row_of_chosen].white <= sh.result_white + allow_pct;
     if (!sh.none) {
       const Screened& sc = screening[best];
       const int t = sh.picked;
@@ -2638,6 +2646,10 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
         auto alt = std::make_shared<ParamSearchResult>(out);
         alt->shadow = ShadowAlternative{};
         fill_result(*alt, fp_alt, p_alt);
+        // The alternative did not go through the clip fallback or the pullback.
+        alt->clip_fallback = ClipFallbackOutcome::kNotNeeded;
+        alt->clip_fallback_white_clip = 0.0f;
+        alt->highlight_pullback = false;
         sh.result = alt;
       } else {
         sh.none = "the alternative's fixed point failed";
@@ -2645,16 +2657,28 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
     sh.inferences = out.inferences - inf0;
     sh.ms = std::chrono::duration<double, std::milli>(Clock::now() - t_sh0).count();
-    if (sh.result) sh.result->inferences = out.inferences;  // the Auto's, both runs
     if (verbose) {
       std::cout << "Auto: shadow alternative: ";
-      if (sh.result) std::cout << name_of(sh.picked) << " (black " << fixed(sh.rows[best].black, 3) << "% at its screened parameters against "
-                               << fixed(sh.result_black, 3) << "% for the result), " << sh.inferences << " inferences\n";
-      else std::cout << "none (" << sh.none << ")\n";
+      if (sh.result) {
+        std::cout << name_of(sh.picked) << " (black " << fixed(sh.rows[best].black, 3)
+                  << "% at its screened parameters), " << sh.inferences << " inferences\n";
+      } else {
+        std::cout << "none (" << sh.none << ")\n";
+      }
     }
   }
   fr.write_timings();
   out.total_time = Clock::now() - t_start;
+  if (out.shadow.result) {
+    // The Auto's inferences and times, with the alternative's work, as the result's record has them.
+    ParamSearchResult& b = *out.shadow.result;
+    b.inferences = out.inferences;
+    b.render_time = out.render_time;
+    b.infer_time = out.infer_time;
+    b.search_time = out.search_time;
+    b.residual_time = out.residual_time;
+    b.total_time = out.total_time;
+  }
   return true;
 }
 

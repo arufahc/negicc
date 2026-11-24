@@ -131,7 +131,9 @@ const char* to_string(ClipFallbackOutcome outcome);
 //   input tables (cfg's in_trc) may change between any two calls, in place at the same address (the curve fit's
 //   re-meter passes) or freed and replaced (when the fit composes its curves into the bracket): a renderer reads them
 //   on every call, or compares their contents, and never keys a copy by their address.
-// - The search owns every output buffer: out is sized before each call and must be filled before it returns.
+// - The search owns every output buffer: out is sized before each call and must be filled before it returns. The clip
+//   pass's black_out, when set, must be filled too: the shadow alternative reads it, and a renderer that left it
+//   unfilled would never offer one.
 //
 // A renderer may refuse a frame it cannot read (a CFA view with its private flat-field mapping, say) by throwing from
 // bind_frame. A failed pass throws: the exception leaves the search, the fit, the tone plan or the roll-off measurement
@@ -263,6 +265,10 @@ struct ParamSearchOptions {
   // highlights rather than unexposed rebate, so only holder-dark cells are left out.
   bool fallback_crop = false;
   bool film_base_is_rebate = false;
+  // Whether to look for the shadow alternative (ParamSearchResult::shadow) after the highlight pullback. The caller
+  // sets it where an alternative could be kept: neg_process with an sRGB export, the tone stage on, no density output
+  // and no print (the choice is made by the tone stage's clip check). Not set: the step does not run.
+  bool shadow_alternative = false;
   // Pins (neg_process's --target, -E, --gain_g and --gain_b on a bundle): the search and the curve fit run
   // as without them, with the bracket restricted to pin_target (when >= 0) and E, g or b (pin_mask: PIN_E, PIN_G and
   // PIN_B of dinov3.h) held at pin_e, pin_g and pin_b (E in ParamSearchResult::params' units). A pinned
@@ -351,6 +357,7 @@ struct ShadowAlternative {
   int picked = -1;                     // the bracket the step chose (-1: none within the white allowance)
   const char* none = nullptr;          // why there is no alternative, or null
   bool reused_run = false;             // the alternative's fixed point is the tournament's run of that bracket
+  bool chosen_within_allowance = false;  // the chosen bracket's row is within the white allowance
   int inferences = 0;                  // the step's own DINOv3 inferences (its fixed point's)
   double ms = 0.0;                     // the step's time
   std::shared_ptr<ParamSearchResult> result;  // the alternative (null: none)
