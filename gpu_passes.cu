@@ -1,9 +1,10 @@
 // The bundle search's two passes over the frame on a CUDA device (USE_CUDA=1 builds): the preview render, with or
 // without its statistics, and the highlight clip pass. Each kernel is the shared per-pixel pipeline of
-// color_pipeline.h plus the epilogue of its CPU function in rgb_view.cc (cpu_render, cpu_highlight_clip), built with
-// --fmad=false so the device rounds the stages as the host compiler does (-ffp-contract=off). What still differs is
-// the last place of the transcendentals (powf, tanhf, cbrtf: libdevice against glibc), so a GPU pass is not bit for
-// bit the CPU's; neg_process --check_renderer measures the difference (multi_target_optimizer.h CompareRenderer).
+// the colour pipeline part of negicc_core.h plus the epilogue of its CPU function in rgb_view.cc (cpu_render,
+// cpu_highlight_clip), built with --fmad=false so the device rounds the stages as the host compiler does
+// (-ffp-contract=off). What still differs is the last place of the transcendentals (powf, tanhf, cbrtf: libdevice
+// against glibc), so a GPU pass is not bit for bit the CPU's; neg_process --check_renderer measures the difference
+// (negicc.h CompareRenderer).
 //
 // Reductions are deterministic: each block writes its partial sums to its own slot and the host adds the slots in a
 // fixed order; histograms use integer atomics, which are exact.
@@ -21,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "rgb_view.h"
+#include "negicc_core.h"
 
 namespace negicc {
 

@@ -100,7 +100,7 @@ def sq (x : α) : α := x * x
 /-- `x` held between `lo` and `hi` (C++ `std::clamp(x, lo, hi)`, for `lo ≤ hi`). -/
 def clamp (x lo hi : α) : α := min (max x lo) hi
 
-/-- `x` held between `0` and `1` (`clamp01` in `color_pipeline.h`). -/
+/-- `x` held between `0` and `1` (`clamp01` in the colour pipeline part of `negicc_core.h`). -/
 def clamp01 (x : α) : α := min 1.0 (max 0.0 x)
 
 /-- `x ≥ 0` rounded to the nearest natural number, halves upward: over the real numbers this is C

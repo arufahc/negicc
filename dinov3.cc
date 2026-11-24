@@ -14,10 +14,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-// The DINOv3 intent model and the Auto search (dinov3.h), in the pipeline's order: the preprocessing, DinoV3Engine
-// with the ONNX Runtime CPU runners, the TensorRT runners (or their stubs in a USE_CUDA=0 build), and the Auto solver.
+// The DINOv3 intent model and the Auto search (the DINOv3 part of negicc.h), in the pipeline's order: the
+// preprocessing, DinoV3Engine with the ONNX Runtime CPU runners, the TensorRT runners (or their stubs in a USE_CUDA=0
+// build), and the Auto solver.
 
-#include "dinov3.h"
+#include "negicc.h"
 
 #include <omp.h>
 #include <algorithm>
@@ -35,9 +36,6 @@
 #include <vector>
 
 #include <onnxruntime_cxx_api.h>
-
-#include "color_pipeline.h"
-#include "profile_bundle.h"
 
 // ====================================================================================================================
 // Preprocessing
@@ -253,7 +251,7 @@ void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int pat
             const double cg = negicc::srgb_decode(g_sum * inv_pixels / 255.0);
             const double cb = negicc::srgb_decode(b_sum * inv_pixels / 255.0);
 
-            // L* of the displayed sRGB against its own white, as color_pipeline.h linear_srgb_to_lab (independent of
+            // L* of the displayed sRGB against its own white, as negicc_core.h linear_srgb_to_lab (independent of
             // the PCS -> sRGB conversion): OpenCV's cvtColor Y row and CIE 15's exact break and slope (kLabEpsilon,
             // kLabKappa).
             const double Y = 0.212671 * cr + 0.715160 * cg + 0.072169 * cb;
@@ -1172,8 +1170,9 @@ void intent_loss(const SolverConfig& cfg, const float* merged, const uint16_t* g
     double sL = 0.0, sa = 0.0, sb = 0.0, clip = 0.0;
     for (int i = 0; i < n_px; ++i) {
       const uint16_t* px = grid_rgb16 + i * 3;
-      // Scored in linear light, as the station's pipeline (color_pipeline.h): the clip rule reads the pre-shoulder
-      // value and L*a*b* the displayed one (after the shoulder), the linear equivalents of the encoded ones.
+      // Scored in linear light, as the station's pipeline (the colour pipeline part of negicc_core.h): the clip rule
+      // reads the pre-shoulder value and L*a*b* the displayed one (after the shoulder), the linear equivalents of the
+      // encoded ones.
       const negicc::Rgb lin = negicc::convert_pixel_linear(pc, m, px);
       clip += negicc::linear_channel_white_clipped(lin.r) + negicc::linear_channel_white_clipped(lin.g) +
               negicc::linear_channel_white_clipped(lin.b);

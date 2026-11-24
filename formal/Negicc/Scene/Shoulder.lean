@@ -23,7 +23,7 @@ compresses the highlights smoothly instead. It acts per channel on the pre-shoul
 `x_hi` is the one parameter, set per frame. `C` follows from it (`shoulderCeiling`), and the knee
 is where the parabola leaves the identity with the same slope: `t_k` solves
 `shoulderKneeGap t_hi C t_k = 0`, found by bisection (`setShoulder`, `set_shoulder` in
-`color_pipeline.h`).
+the colour pipeline part of `negicc_core.h`).
 
 Auto sets `x_hi` so that the frame's own highlights, not the chart's white, decide where the
 roll-off starts: the 99.5 % point `q` of the largest channel of the pre-shoulder render is mapped
@@ -177,7 +177,7 @@ def maxHistQuantileFrom (rank : α) : List Nat → Nat → Nat → α
     else maxHistQuantileFrom rank rest (i + 1) (below + count)
 
 /-- The `q` point (`0 ≤ q ≤ 1`) of a largest-channel histogram, interpolated linearly inside its
-bin (`max_hist_quantile` in `rgb_view.h`). Zero for an empty histogram. -/
+bin (`max_hist_quantile` in `negicc_core.h`). Zero for an empty histogram. -/
 def maxHistQuantile (hist : Array Nat) (q : α) : α :=
   let total : Nat := hist.foldl (· + ·) 0
   if total = 0 then 0.0 else maxHistQuantileFrom (q * (total : α)) hist.toList 0 0

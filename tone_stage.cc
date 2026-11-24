@@ -13,16 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "tone_stage.h"
+#include "negicc.h"
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <vector>
 
-// ---- Stage 4, the tone stage (tone_stage.h) ----
+// ---- Stage 4, the tone stage (the tone stage part of negicc_core.h) ----
 //
-// One monotone L* curve applied in the conversion kernel (color_pipeline.h apply_tone), holding the mid-tones. It
+// One monotone L* curve applied in the conversion kernel (negicc_core.h apply_tone), holding the mid-tones. It
 // takes the tone heads' predictions of the shadow level, highlight level and tonal range and the preview they were
 // made on; the conversion solves the curve after the fit or the search (tone_plan), scales the highlight and range
 // moves down where the curve would clip the export (tone_plan_for_image, on a sample through the kernel) and
@@ -30,7 +30,7 @@
 //
 // The preview's L* (sRGB D65, in double precision, Y from the luminance row of linear sRGB D65 -> XYZ): the descriptors
 // the curve is solved from. Only the small preview is measured this way; no output pixel goes through Lab.
-// The sRGB curve is color_pipeline.h's srgb_decode, in double; tone_lab_f and tone_lab_finv are CIE 1976 L*a*b*'s f
+// The sRGB curve is negicc_core.h's srgb_decode, in double; tone_lab_f and tone_lab_finv are CIE 1976 L*a*b*'s f
 // and its inverse with the exact constants (CIE 15; ICC.1:2022 Annex A): break (6/29)^3 = 216/24389, slope 24389/27 /
 // 116.
 static inline double tone_lab_f(double t) {
@@ -76,7 +76,7 @@ ToneDescriptors tone_descriptors(const uint8_t* rgb, size_t n) {
     double decode[256];
     for (int v = 0; v < 256; ++v) decode[v] = negicc::srgb_decode(v / 255.0);
     for (size_t i = 0; i < n; ++i) {
-        // Y: the luminance row of color_pipeline.h linear_srgb_to_lab (OpenCV's cvtColor RGB -> Lab matrix).
+        // Y: the luminance row of negicc_core.h linear_srgb_to_lab (OpenCV's cvtColor RGB -> Lab matrix).
         const double Y = 0.212671 * decode[rgb[3 * i]] + 0.715160 * decode[rgb[3 * i + 1]] +
                          0.072169 * decode[rgb[3 * i + 2]];
         L[i] = 116.0 * tone_lab_f(Y) - 16.0;
@@ -252,11 +252,12 @@ ToneCurve tone_plan_shares(const ToneDescriptors& render, double pred_L2, double
     return tone_solve(render, t);
 }
 
-// The clip check's sample (tone_stage.h): every kToneClipSampleStep x kToneClipSampleStep block's 2 x 2 at its origin,
-// the blocks laid from the image's origin, of which the pixels inside the inner crop count. One pixel a block would
-// always fall on the same phase of a 2 x 2 colour mosaic, and a demosaiced image can clip on the other phases alone.
-// Those pixels are the crossings of the inner crop's rows and columns at offsets 0 and 1 within their block. Each is
-// converted once, up to the tone curve; the shares with and without a curve are counted on these values.
+// The clip check's sample (the tone stage part of negicc_core.h): every kToneClipSampleStep x kToneClipSampleStep
+// block's 2 x 2 at its origin, the blocks laid from the image's origin, of which the pixels inside the inner crop
+// count. One pixel a block would always fall on the same phase of a 2 x 2 colour mosaic, and a demosaiced image can
+// clip on the other phases alone. Those pixels are the crossings of the inner crop's rows and columns at offsets 0 and
+// 1 within their block. Each is converted once, up to the tone curve; the shares with and without a curve are counted
+// on these values.
 std::vector<negicc::Rgb> tone_clip_sample(const negicc::PipelineConfig& pc, const float* matrix, const uint16_t* img,
                                           int w, int h, int stride) {
     const negicc::InnerCrop ic = negicc::compute_inner_crop(w, h, kToneClipCrop);
@@ -297,7 +298,8 @@ void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc
     // sRGB encoding). It runs with the program's thread count.
 #pragma omp parallel for schedule(static) reduction(+ : wc, kc)
     for (long long i = 0; i < n; ++i) {
-        // convert_pixel (color_pipeline.h) after the display value: the tone curve, then the encoding.
+        // convert_pixel (the colour pipeline part of negicc_core.h) after the display value: the tone curve, then the
+        // encoding.
         negicc::Rgb v = sample[(size_t)i];
         if (tone) v = negicc::apply_tone(c.tone, v);
         v = negicc::encode_output(v, c.encoding);

@@ -20,7 +20,7 @@ A table needs at least two entries (`n ≥ 1`); the conversion treats a shorter 
 luminance `Y` goes to `Y'` on the neutral axis, and the pixel's difference from the neutral of its
 own luminance, `v - Y`, is added back scaled by `f'(Y) / f'(Y')`, where `f` is CIELAB's cube-root
 compression. To first order that keeps `a*` and `b*` where they were. No pixel is converted to
-CIELAB. `tone_table_Y` and `apply_tone` in `color_pipeline.h`.
+CIELAB. `tone_table_Y` and `apply_tone` in `negicc_core.h`.
 -/
 
 namespace Negicc

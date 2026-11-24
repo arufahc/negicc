@@ -11,7 +11,7 @@ public import Negicc.Base.Defs
 # The inner crop
 
 The statistics and previews of a frame leave out its border: they read the centred `crop_ratio`
-share of the frame (`compute_inner_crop` in `color_pipeline.h`), with `crop_ratio = 0.90`
+share of the frame (`compute_inner_crop` in `negicc_core.h`), with `crop_ratio = 0.90`
 (`ParamSearchOptions::crop_ratio`).
 -/
 

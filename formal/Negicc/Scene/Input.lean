@@ -15,17 +15,17 @@ the black level is subtracted and the mosaic is resolved to three channels (the 
 not part of this specification). It then goes through
 
 1. the **flat field** (`flatDivide`): each channel divided by the gain of the scanner's light and
-   lens at that place, `flat_divide` in `flat_field.h`;
+   lens at that place, `flat_divide` in `negicc_core.h`;
 2. the **load** (`loadU16`): the 16-bit code over 65535;
 3. the **input matrix** (`candidateMatrix` of `mergedMatrix`): the crosstalk correction, which
    unmixes the three LEDs, with each row scaled so that the film base lands on one level
    (`compute_station_merged_matrix` in `profile_bundle.cc`), and then by the exposure `E` and the
-   gains `g` and `b` (`candidate_matrix` in `color_pipeline.h`);
+   gains `g` and `b` (`candidate_matrix` in `negicc_core.h`);
 4. the **soft knee** (`kneeCompress`): the identity up to 0.95, then a roll-off toward 1, so that
    values past the profile's input range compress instead of clipping.
 
 The result, `correctedRgb`, is in `[0, 1]` and is proportional, below the knee, to the film's
-transmission in each LED band: `convert_pixel_corrected` in `color_pipeline.h`.
+transmission in each LED band: `convert_pixel_corrected` in `negicc_core.h`.
 -/
 
 namespace Negicc
@@ -93,7 +93,7 @@ def mergedMatrix (X : Mat3 α) (f : Vec3 α) (n ratio : α) : Mat3 α :=
 
 /-- The input matrix of one candidate `(E, g, b)`: the merged matrix with its rows scaled by `E`,
 `E g` and `E b`. `E` is the exposure, a gain on all three channels; `g` and `b` are the gains of
-green and blue relative to red. `candidate_matrix` in `color_pipeline.h`. -/
+green and blue relative to red. `candidate_matrix` in `negicc_core.h`. -/
 def candidateMatrix (merged : Mat3 α) (e g b : α) : Mat3 α :=
   Mat3.scaleRows ⟨e, e * g, e * b⟩ merged
 
@@ -101,7 +101,7 @@ def candidateMatrix (merged : Mat3 α) (e g b : α) : Mat3 α :=
 
 /-- The soft knee on one channel: `0` for a non-positive value, the identity up to `knee`, then
 `knee + (1 - knee) tanh((v - knee) / (1 - knee))`, held at `0.9999`. With `knee ≥ 1` it only
-clamps to `[0, 1]`. `knee_compress` in `color_pipeline.h`; the conversion uses `knee = 0.95`. -/
+clamps to `[0, 1]`. `knee_compress` in `negicc_core.h`; the conversion uses `knee = 0.95`. -/
 def kneeCompress (knee v : α) : α :=
   if v ≤ 0.0 then 0.0
   else if 1.0 ≤ knee then min 1.0 v

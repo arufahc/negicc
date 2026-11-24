@@ -13,10 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "profile_bundle.h"
-
-#include "dinov3.h"
-#include "np_log.h"
+#include "negicc.h"
 
 #include <lcms2_plugin.h>
 #include <netinet/in.h>
@@ -610,7 +607,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
     bundle.normalization_target = v.get<double>();
   }
 
-  // The density export's matrices and the light's record (profile_bundle.h); absent from older bundles.
+  // The density export's matrices and the light's record (ProfileBundle in negicc.h); absent from older bundles.
   if (j.contains("light_source") && j["light_source"].is_object()) bundle.light_source_json = j["light_source"].dump();
   if (j.contains("density_matrices") && !j["density_matrices"].is_object()) {
     refuse("density_matrices", j["density_matrices"], "is not an object");

@@ -1,4 +1,4 @@
-#include "flat_field.h"
+#include "negicc.h"
 
 #include <zlib.h>
 

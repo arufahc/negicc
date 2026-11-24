@@ -14,7 +14,7 @@ Each exposure bracket of a profile bundle has an ICC profile built from a shot o
 `AToB0` element takes the corrected RGB of the negative (proportional to transmission) to the
 colour of the scene, as XYZ under D50 (the ICC profile connection space). How a profile is
 built is not part of this specification: its tables are given data. What the conversion does with
-them is, and is defined here as `applyProfile` (`apply_profile` in `color_pipeline.h`):
+them is, and is defined here as `applyProfile` (`apply_profile` in `negicc_core.h`):
 
 1. each channel through its **input curve**, a sampled table over `[0, 1]`;
 2. a **matrix and offset**, clamped to `[0, 1]`: the identity, which the parser sets on every

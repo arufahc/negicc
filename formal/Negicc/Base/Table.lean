@@ -12,7 +12,7 @@ public import Negicc.Base.Scalar
 
 A table is an `Array α` of samples of a function at equally spaced points. `tableAt` reads it at
 a fractional index by linear interpolation; `tableEval` reads it as a curve over `[0, 1]`, the
-way the film profile's curves are stored (`apply_trc` in `color_pipeline.h`).
+way the film profile's curves are stored (`apply_trc` in `negicc_core.h`).
 
 `sum` and `mean` are the sum and the arithmetic mean of an array.
 -/
@@ -37,7 +37,7 @@ def tableAt (tab : Array α) (s : α) : α :=
   lerp (tab.getD k 0.0) (tab.getD (k + 1) 0.0) (s - (k : α))
 
 /-- The table read as a curve over `[0, 1]`: sample `i` of `n` is the value at `i / (n - 1)`
-(`apply_trc` in `color_pipeline.h`). An empty table is the identity, and a table of one sample is
+(`apply_trc` in `negicc_core.h`). An empty table is the identity, and a table of one sample is
 that sample. -/
 def tableEval (tab : Array α) (v : α) : α :=
   if tab.size = 0 then v

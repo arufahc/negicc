@@ -63,11 +63,12 @@ files, scripts, or source comments. Use relative paths instead.
 
 - Do not introduce arbitrary namespaces (e.g. `namespace dinov3`) in application and engine sources (`neg_process.cc`,
   `tone_stage.cc`, etc.), which reside in the global namespace. The shared pipeline files consumed by
-  `negicc-station` (`rgb_view.h`, `rgb_view.cc`, `gpu_passes.cu`, `color_pipeline.h`, `flat_field.h`, `flat_field.cc`,
-  `input_curves.h`, `film_base_detector.h`, `film_base_detector.cc`, and `white_light_balance.h`) use
-  `namespace negicc`, and so do the TIFF and JPEG readers in `np_input.h` and `np_input.cc` (`RgbImage`, `read_tiff`,
-  `read_jpeg`, `to_linear_rec2020`) and `dilate` in `film_frame_detector.h`; the rest of `np_input.*` and
-  `film_frame_detector.*` is in the global namespace.
+  `negicc-station` (the colour pipeline, flat field, image view, input curves and film base detector parts of
+  `negicc_core.h`, the white-light balance part of `negicc.h`, and `rgb_view.cc`, `gpu_passes.cu`, `flat_field.cc`
+  and `film_base_detector.cc`) use `namespace negicc`, and so do the TIFF and JPEG readers in the inputs part of
+  `negicc.h` and in `np_input.cc` (`RgbImage`, `read_tiff`, `read_jpeg`, `to_linear_rec2020`) and `dilate` in the
+  frame detector part of `negicc_core.h`; the rest of the inputs part and `np_input.cc`, and of the frame detector
+  part and `film_frame_detector.cc`, is in the global namespace.
 
 ---
 
@@ -88,7 +89,7 @@ Rules for any OpenMP parallel region added to this repository:
 - **Say it at the region.** A short comment gives what was measured, where, and what thread count the region uses.
 - **One thread count for the whole program; when none is given, the smaller of 16 and the physical cores the process
   may run on.** A program calls `negicc::apply_default_thread_count()` once before its first parallel region
-  (`neg_process` does). `OMP_NUM_THREADS` is honoured as it is. The 16 (`kDefaultThreadCap`, `rgb_view.h`) is the
+  (`neg_process` does). `OMP_NUM_THREADS` is honoured as it is. The 16 (`kDefaultThreadCap`, `negicc_core.h`) is the
   owner's number: a default must not take every core for a small gain. Measured on a 192-thread machine (96 cores),
   a conversion takes 12.1 s at 8 threads, 10.3 s at 16, 9.1 s at 32 and 7.7 s at 96, and uses 57, 62, 73 and 155 CPU
   seconds; OpenMP's own default, every hardware thread, is slower than 96. A Jetson Orin Nano has 6 cores, so its

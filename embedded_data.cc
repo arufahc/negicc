@@ -13,13 +13,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "embedded_data.h"
+#include "negicc.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
-
-#include "profile_bundle.h"
 
 // Defined by bin_out/embedded_data.S, which the Makefile writes; it passes the symbol names as EMBED_TABLE and
 // EMBED_COUNT.

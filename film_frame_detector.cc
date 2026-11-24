@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Film frame detector (see film_frame_detector.h for the interface).
+// Film frame detector (see the frame detector part of negicc_core.h for the interface).
 //
 // Sizes used below
 //   image   W x H        the input's pixel grid (FilmImage::width x height); never copied
@@ -69,7 +69,7 @@
 // Units: the work image holds sample / white (1.0 is a clipped photosite). Densities and colour ratios are log2
 // ("stops") unless named otherwise.
 
-#include "film_frame_detector.h"
+#include "negicc_core.h"
 
 #include <algorithm>
 #include <cmath>

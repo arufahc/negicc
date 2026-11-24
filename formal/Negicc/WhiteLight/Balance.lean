@@ -12,7 +12,7 @@ public import Negicc.Base.Defs
 
 Before LibRaw's camera matrix mixes the camera's channels, the white-light decode multiplies them
 by gains that put this scan's film base on the profile's (`film_base_balance_gains` in
-`white_light_balance.h`):
+the white-light balance part of `negicc.h`):
 
   `K_c = (C⁻¹ f_profile)_c / (C⁻¹ f)_c`, divided by the largest of the three,
 

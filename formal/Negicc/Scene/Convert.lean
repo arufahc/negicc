@@ -12,7 +12,7 @@ public import Negicc.Tone.Apply
 /-!
 # The conversion of one pixel
 
-The stages of `color_pipeline.h`, in order, for one 16-bit camera RGB pixel and one input matrix
+The stages of `negicc_core.h`, in order, for one 16-bit camera RGB pixel and one input matrix
 (`candidateMatrix` of the frame's merged matrix at the chosen `E`, `g`, `b`):
 
 | Value | Definition | C++ |

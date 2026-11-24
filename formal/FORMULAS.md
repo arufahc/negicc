@@ -77,7 +77,7 @@ image of the assembled image. The frame is cut from the full image after the ana
 itself is told where the frame lies (`--roi`, `--roi auto`'s detection, or the first RAW capture's
 inset crop, which it searches as it searches `--roi`).
 
-**White-light film-base balance** (`white_light_balance.h`: `film_base_balance_gains`; Lean
+**White-light film-base balance** (`negicc.h`: `film_base_balance_gains`; Lean
 `filmBaseBalanceGains`, `rec2020Rgb`, `Mat3.adjugate`, `Mat3.det`). With `C = rec2020_rgb · rgb_cam`:
 
 ```
@@ -91,7 +91,7 @@ that is not a finite positive number, which only floating point's overflow and u
 
 ## 2.2 Flat field
 
-(`flat_field.cc`: `axis_table`; `flat_field.h`: `flat_divide`; Lean `flatAxis`, `flatGain`,
+(`flat_field.cc`: `axis_table`; `negicc_core.h`: `flat_divide`; Lean `flatAxis`, `flatGain`,
 `flatDivide`.) Pixel `k` of an axis, `h = k` on the half-size decode and `h = (k + 0.5)/2 − 0.5` on
 the full-size one, block `B`, `N` blocks:
 
@@ -143,7 +143,7 @@ White light has `X = I`. It enters through `M_frame = diag(s) X`.
 
 ## 2.5 The input matrix and the soft knee
 
-(`color_pipeline.h`: `load_u16`, `candidate_matrix`, `knee_compress`, `convert_pixel_corrected`;
+(`negicc_core.h`: `load_u16`, `candidate_matrix`, `knee_compress`, `convert_pixel_corrected`;
 Lean `loadU16`, `candidateMatrix`, `kneeCompress`, `autoKnee`, `correctedRgb`.)
 
 ```
@@ -155,7 +155,7 @@ knee(x) = 0                                        x ≤ 0
 
 ## 3.3 The inner crop
 
-(`color_pipeline.h`: `compute_inner_crop`; `multi_target_optimizer.h`: `ParamSearchOptions::crop_ratio`;
+(`negicc_core.h`: `compute_inner_crop`; `negicc.h`: `ParamSearchOptions::crop_ratio`;
 Lean `innerCrop`, `searchCropRatio`.)
 
 ```
@@ -245,7 +245,7 @@ L* = 116 f(Y) − 16,   a* = 500 (f(X/0.950456) − f(Y)),   b* = 200 (f(Y) − 
 
 ## 4.3 Given input curves on a white-light profile
 
-(`input_curves.h`: `curve_stops`, `input_curve`, `compose_input_table`, `CombinedProfile::build`; Lean
+(`negicc_core.h`: `curve_stops`, `input_curve`, `compose_input_table`, `CombinedProfile::build`; Lean
 `curveStops`, `inputCurve`, `composeInputTable`, `combinedProfile`.) Curves the fit found or a run
 recorded, composed into the bracket's green and blue input tables:
 
@@ -261,7 +261,7 @@ table_i = in(clamp01(curve(i / (n − 1))))                  (green and blue; re
 (`tone_stage.cc`: `tone_curve_L`, `tone_table`, `tone_curve_ok`, `tone_descriptors`, `tone_targets`,
 `tone_solve`, `tone_plan`, `tone_plan_shares`, `tone_pick_clip_share`, `tone_clip_sample`, `tone_clip_shares`,
 `tone_plan_for_image`;
-`color_pipeline.h`: `tone_lab_fprime`, `tone_table_Y`, `apply_tone`. Lean `ToneCurve`, `toneCurveL`,
+`negicc_core.h`: `tone_lab_fprime`, `tone_table_Y`, `apply_tone`. Lean `ToneCurve`, `toneCurveL`,
 `toneTable`, `toneCurveOk`, `toneLstarOfU8`, `percentileSorted`, `toneDescriptors`, `toneTargets`,
 `toneTargetsShares`, `toneResiduals`, `toneCost`, `toneLM`, `toneSolve`, `tonePlan`, `tonePlanShares`,
 `tonePickClipShare`, `toneClipSample`, `tonePlanForImage`, `toneLabFprime`, `toneLuminance`, `toneTableY`, `applyTone`.)
@@ -359,7 +359,7 @@ code by reading only.
 
 - **The Auto search** (4.2) and the networks (3.5): specified separately, in #211.
 - **Where the passes run.** On a CUDA build with a device the search's previews and clip passes run
-  on the GPU (`gpu_passes.cu`), through the same per-pixel functions of `color_pipeline.h`; the
+  on the GPU (`gpu_passes.cu`), through the same per-pixel functions of the colour pipeline part of `negicc_core.h`; the
   specification is over the real numbers and covers both, but the vectors are computed on the CPU
   (the generator runs without a device), so the GPU's last-place rounding of `powf`, `tanhf` and
   `cbrtf` is not checked.
@@ -392,7 +392,7 @@ vectors and checks as they stood against `47a187d` are in this branch's history 
 - **A bracket's calibrated range on a frame** (DESIGN 3.3; `multi_target_optimizer.cc`: the scene's
   green points `compute_frame_stats`, `u16_percentile_linear`, `bracket_enclosure`, `pull_centre`,
   `frame_scale`'s `e_norm`; a bracket's green range and exposure as the loader derives them).
-- **The white-light curve fit and the re-anchoring after the knobs** (DESIGN 4.3; `input_curves.h`:
+- **The white-light curve fit and the re-anchoring after the knobs** (DESIGN 4.3; `negicc_core.h`:
   the anchors `input_curve_reference`, the shape test `curve_shape_ok`, the per-cell model, the `E`
   solve, the moments, the never-greener guard, the Levenberg-Marquardt solve, the re-meter;
   `multi_target_optimizer.cc`: the fit's target clamp, `fallback_picture_cells`, `curve_frame_of`,

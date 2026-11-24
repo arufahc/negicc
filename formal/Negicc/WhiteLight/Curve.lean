@@ -11,8 +11,8 @@ public import Negicc.Scene.Convert
 # Given input curves composed into the profile
 
 A white-light conversion may carry curves on the green and blue input of the bracket's profile
-(`input_curves.h`), found by the curve fit or recorded by an earlier run. Per channel, on the value `v`
-entering the profile's input curve (after the input matrix and the knee), with its pivot `ref`:
+(the input curves part of `negicc_core.h`), found by the curve fit or recorded by an earlier run. Per channel, on the
+value `v` entering the profile's input curve (after the input matrix and the knee), with its pivot `ref`:
 
   `u = log2(v / ref)` for `v < ref`, `f(u) = u (1 + a + k tanh(u - u_med))`, `v' = ref 2^f(u)`;
   `v ≥ ref`: `v` (`input_curve`, `curve_stops`).
