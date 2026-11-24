@@ -63,7 +63,8 @@ int main(int ac, char* av[]) {
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
   negicc::apply_default_thread_count();  // at most 16 threads, unless OMP_NUM_THREADS is set
-  // A failed GPU pass throws out of the search (negicc::GpuError); nothing else is meant to throw.
+  // A failed step on the GPU, a pass of the search or a full-size step, throws negicc::GpuError; nothing else is
+  // meant to throw. It ends the conversion before the picture is written.
   try {
     Setup s;
     if (prepare(o, s)) return 1;
@@ -72,13 +73,14 @@ int main(int ac, char* av[]) {
     if (finish_search_passes(o, s)) return 1;
     Conversion c;
     if (begin_conversion(o, s, c)) return 1;
-    CpuBackend backend;
+    const std::unique_ptr<Backend> backend_owner = make_backend(o);
+    Backend& backend = *backend_owner;
     if (render(o, s, scan, backend)) return 1;
     if (solve(o, s, scan, c)) return 1;
     if (convert(o, s, scan, c, backend)) return 1;
     return write(o, s, scan, c);
   } catch (const negicc::GpuError& e) {
-    log_error("%s (a GPU pass of the search failed: --dino_backend cpu keeps the passes on the CPU)\n", e.what());
+    log_error("%s (a step on the GPU failed: --dino_backend cpu keeps everything on the CPU)\n", e.what());
     return 1;
   } catch (const std::exception& e) {
     log_error("%s\n", e.what());

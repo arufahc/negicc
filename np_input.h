@@ -104,8 +104,9 @@ inline PixelShiftGroupCheck check_pixel_shift_group(const PixelShiftTags tags[4]
 
 // Opens a RAW or DNG file into proc, repairing leading spaces in UniqueCameraModel (e.g. SilverFast DNGs) if needed.
 int open_raw_file(LibRaw* proc, const std::string& fn);
-// Opens and unpacks a RAW or DNG file into proc (open_raw_file, then unpack()); LIBRAW_DATA_ERROR when its levels
-// fail raw_levels_valid.
+// Opens and unpacks a RAW or DNG file into proc (open_raw_file, then unpack()). A sensor whose photosites are not a
+// square grid (45-degree or non-square pixels) is refused with LIBRAW_FILE_UNSUPPORTED, and a file whose levels fail
+// raw_levels_valid with LIBRAW_DATA_ERROR.
 int open_and_unpack_raw_file(LibRaw* proc, const std::string& fn);
 // Whether the black and white levels of the unpacked proc are what its 16-bit samples can hold: the white level
 // (maximum) within 1 to 65535, each black (black, cblack[0..3], the cblack[6..] pattern and a DNG's black levels as

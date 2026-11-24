@@ -79,60 +79,174 @@ RgbInput Scan::image() {
   return img;
 }
 
-void CpuBackend::render(const MosaicInput& in, const Region& region, int dst_w, int dst_h, uint16_t* rgb_out) {
-  if (in.n_frames == 1) {
-    negicc::GrainAwareDebayerArgs ga{};
-    ga.cfa_bayer = in.frames[0];
-    ga.src_w = in.width;
-    ga.src_h = in.height;
-    ga.rx = region.x;
-    ga.ry = region.y;
-    ga.rw = region.w;
-    ga.rh = region.h;
-    ga.rot_cw = region.rot_cw;
-    ga.hflip = region.hflip;
-    ga.vflip = region.vflip;
-    ga.dst_w = dst_w;
-    ga.dst_h = dst_h;
-    ga.filters = in.filters;
-    ga.white_level = in.white_level;
-    ga.eps = 4096.0f;
-    ga.rgb_out = rgb_out;
-    ga.flat = in.flat;
-    ga.flat_x0 = region.x;
-    ga.flat_y0 = region.y;
-    ga.cfa_pitch = in.pitch;
-    negicc::cpu_grain_aware_debayer(ga);
-  } else {
-    negicc::PixelShiftMergeArgs pm{};
-    pm.bayer_f0 = in.frames[0];
-    pm.bayer_f1 = in.frames[1];
-    pm.bayer_f2 = in.frames[2];
-    pm.bayer_f3 = in.frames[3];
-    pm.src_w = in.width;
-    pm.src_h = in.height;
-    pm.rx = region.x;
-    pm.ry = region.y;
-    pm.rw = region.w;
-    pm.rh = region.h;
-    pm.rot_cw = region.rot_cw;
-    pm.hflip = region.hflip;
-    pm.vflip = region.vflip;
-    pm.dst_w = dst_w;
-    pm.dst_h = dst_h;
-    pm.filters = in.filters;
-    pm.white_level = in.white_level;
-    pm.rgb_out = rgb_out;
-    pm.flat = in.flat;
-    pm.flat_x0 = region.x;
-    pm.flat_y0 = region.y;
-    pm.cfa_pitch = in.pitch;
-    negicc::cpu_pixel_shift_merge(pm);
+// The debayer's and the merge's arguments for a region of a mosaic.
+static negicc::GrainAwareDebayerArgs debayer_args(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                                                  uint16_t* rgb_out) {
+  negicc::GrainAwareDebayerArgs ga{};
+  ga.cfa_bayer = in.frames[0];
+  ga.src_w = in.width;
+  ga.src_h = in.height;
+  ga.rx = region.x;
+  ga.ry = region.y;
+  ga.rw = region.w;
+  ga.rh = region.h;
+  ga.rot_cw = region.rot_cw;
+  ga.hflip = region.hflip;
+  ga.vflip = region.vflip;
+  ga.dst_w = dst_w;
+  ga.dst_h = dst_h;
+  ga.filters = in.filters;
+  ga.white_level = in.white_level;
+  ga.eps = 4096.0f;
+  ga.rgb_out = rgb_out;
+  ga.flat = in.flat;
+  ga.flat_x0 = region.x;
+  ga.flat_y0 = region.y;
+  ga.cfa_pitch = in.pitch;
+  return ga;
+}
+
+static negicc::PixelShiftMergeArgs merge_args(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                                              uint16_t* rgb_out) {
+  negicc::PixelShiftMergeArgs pm{};
+  pm.bayer_f0 = in.frames[0];
+  pm.bayer_f1 = in.frames[1];
+  pm.bayer_f2 = in.frames[2];
+  pm.bayer_f3 = in.frames[3];
+  pm.src_w = in.width;
+  pm.src_h = in.height;
+  pm.rx = region.x;
+  pm.ry = region.y;
+  pm.rw = region.w;
+  pm.rh = region.h;
+  pm.rot_cw = region.rot_cw;
+  pm.hflip = region.hflip;
+  pm.vflip = region.vflip;
+  pm.dst_w = dst_w;
+  pm.dst_h = dst_h;
+  pm.filters = in.filters;
+  pm.white_level = in.white_level;
+  pm.rgb_out = rgb_out;
+  pm.flat = in.flat;
+  pm.flat_x0 = region.x;
+  pm.flat_y0 = region.y;
+  pm.cfa_pitch = in.pitch;
+  return pm;
+}
+
+void CpuBackend::render(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                        std::vector<uint16_t>& rgb_out, const std::function<void(int)>&) {
+  rgb_out.resize((size_t)std::max(dst_w, 0) * std::max(dst_h, 0) * 3);
+  if (in.n_frames == 1) negicc::cpu_grain_aware_debayer(debayer_args(in, region, dst_w, dst_h, rgb_out.data()));
+  else negicc::cpu_pixel_shift_merge(merge_args(in, region, dst_w, dst_h, rgb_out.data()));
+  render_ran = "cpu";
+}
+
+namespace {
+// Device memory, freed at the end of its scope.
+struct DeviceMem {
+  void* p = nullptr;
+  DeviceMem() = default;
+  DeviceMem(const DeviceMem&) = delete;
+  DeviceMem& operator=(const DeviceMem&) = delete;
+  ~DeviceMem() { reset(); }
+  void reset() {
+    negicc::gpu_free(p);
+    p = nullptr;
   }
+  void* alloc(size_t bytes) {
+    reset();
+    p = negicc::gpu_malloc(bytes);
+    return p;
+  }
+  void* upload(const void* host, size_t bytes) {
+    negicc::gpu_upload(alloc(bytes), host, bytes);
+    return p;
+  }
+};
+}  // namespace
+
+void GpuBackend::render(const MosaicInput& in, const Region& region, int dst_w, int dst_h,
+                        std::vector<uint16_t>& rgb_out, const std::function<void(int)>& frame_done) {
+  // The CPU's when there is nothing to render or no device runs this build's kernels. The device is asked for here,
+  // where a step first needs it, so a run without such a step never starts it.
+  if (dst_w <= 0 || dst_h <= 0 || in.width <= 0 || in.height <= 0 || !negicc::gpu_device_available()) {
+    CpuBackend::render(in, region, dst_w, dst_h, rgb_out, frame_done);
+    return;
+  }
+  // A mosaic's rows are pitch elements apart, and its last row holds width of them.
+  const size_t mosaic_bytes = ((size_t)in.pitch * (size_t)(in.height - 1) + (size_t)in.width) * sizeof(uint16_t);
+  DeviceMem frames[4], flat_block, out;
+  MosaicInput dev = in;
+  // Each of the host's mosaics goes as soon as its copy is on the device: the two are held for one frame at a time.
+  for (int k = 0; k < in.n_frames; ++k) {
+    dev.frames[k] = static_cast<const uint16_t*>(frames[k].upload(in.frames[k], mosaic_bytes));
+    frame_done(k);
+  }
+  if (in.flat.gain) {
+    // The flat field's tables are one block; the copy's tables sit at the same offsets in it.
+    if (!in.flat_tables) throw negicc::GpuError("a flat field without its tables cannot be copied to the device");
+    const char* host = static_cast<const char*>(in.flat_tables->host_block());
+    const char* copy = static_cast<const char*>(flat_block.upload(host, in.flat_tables->host_bytes()));
+    auto moved = [&](const void* ptr) { return copy + (static_cast<const char*>(ptr) - host); };
+    dev.flat.gain = reinterpret_cast<const float*>(moved(in.flat.gain));
+    dev.flat.ax_i = reinterpret_cast<const int*>(moved(in.flat.ax_i));
+    dev.flat.ax_t = reinterpret_cast<const float*>(moved(in.flat.ax_t));
+    dev.flat.ay_i = reinterpret_cast<const int*>(moved(in.flat.ay_i));
+    dev.flat.ay_t = reinterpret_cast<const float*>(moved(in.flat.ay_t));
+  }
+  const size_t out_bytes = (size_t)dst_w * dst_h * 3 * sizeof(uint16_t);
+  uint16_t* dev_out = static_cast<uint16_t*>(out.alloc(out_bytes));
+  if (dev.n_frames == 1) negicc::gpu_grain_aware_debayer(debayer_args(dev, region, dst_w, dst_h, dev_out));
+  else negicc::gpu_pixel_shift_merge(merge_args(dev, region, dst_w, dst_h, dev_out));
+  // The kernel has finished (the two calls wait for it). The device's mosaics and flat field go before the host's
+  // picture is made, which is first written by the download: the picture is never held beside the mosaics.
+  for (DeviceMem& f : frames) f.reset();
+  flat_block.reset();
+  rgb_out.resize((size_t)dst_w * dst_h * 3);
+  negicc::gpu_download(rgb_out.data(), dev_out, out_bytes);
+  render_ran = "gpu";
+}
+
+void GpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
+                         const RgbInput& img) {
+  // The CPU's for an encoding or a layout the device's render does not make, and when no device runs this build's
+  // kernels (asked for last, so that a conversion the device would not run anyway does not start it).
+  if ((out.encoding != ENCODE_SRGB && out.encoding != ENCODE_SRGB_LINEAR) || img.channels != 3 ||
+      !negicc::gpu_device_available()) {
+    CpuBackend::convert(out, pc, merged_matrix, img);
+    return;
+  }
+  // The picture is copied to the device and read there, so the result may be copied back over it.
+  const negicc::RgbView frame = negicc::RgbView::from_interleaved_rgb(img.pixels, img.width, img.height);
+  GpuRenderer renderer;
+  renderer.render_over_frame = true;   // the device holds the picture once: the render replaces its copy
+  renderer.bind_frame(frame);
+  negicc::RenderArgs a{};
+  a.in_view = &frame;
+  a.width = img.width;
+  a.height = img.height;
+  a.matrix = merged_matrix;
+  a.cfg = pc;
+  a.out_type = 0;   // 16-bit codes
+  a.out = img.pixels;
+  renderer.render(a);
+  convert_ran = "gpu";
+}
+
+// Whether the steps that can run on a CUDA device may: the search's passes and the full-size steps, by one rule. Not
+// with --dino_backend cpu, which keeps everything on the CPU, and not under --check_renderer, which runs the search's
+// passes on the CPU to compare them with the device's: its picture is the CPU's throughout.
+static bool device_allowed(const Options& o) { return !o.check_renderer && o.dino_backend != "cpu"; }
+
+std::unique_ptr<Backend> make_backend(const Options& o) {
+  if (device_allowed(o)) return std::make_unique<GpuBackend>();
+  return std::make_unique<CpuBackend>();
 }
 
 void CpuBackend::convert(const OutputSpec& out, const negicc::PipelineConfig& pc, const float merged_matrix[9],
                          const RgbInput& img) {
+  convert_ran = "cpu";
   const int width = img.width, height = img.height, ch = img.channels;
   uint16_t* pixels = img.pixels;
   // The sRGB encodings and ENCODE_NONE (the corrected RGB, already in [0, 1]) write 16-bit codes in place.
@@ -406,9 +520,7 @@ static int recorded_curve_off_shape(const negicc::InputCurves& c, const ProfileD
 
 // Whether the search's passes run on the GPU: a USE_CUDA=1 build with a device that runs its kernels, unless
 // --dino_backend cpu or --check_renderer (the CPU's, counted, and compared with the GPU's where it can run them).
-static bool search_runs_on_gpu(const Options& o) {
-  return !o.check_renderer && o.dino_backend != "cpu" && negicc::gpu_device_available();
-}
+static bool search_runs_on_gpu(const Options& o) { return device_allowed(o) && negicc::gpu_device_available(); }
 
 // The checks and the reading of a previous run's sidecar j (try_load_cached_sidecar); false with why when it does not
 // serve this conversion.
@@ -770,6 +882,11 @@ static PassThroughRenderer& pass_through_renderer() {
   return r;
 }
 
+// Rows given with -r, -g and -b that leave the crosstalk correction, as it applies, not invertible.
+static const char kRowsNotInvertible[] =
+    "-r, -g and -b: the crosstalk correction matrix is not an invertible 3x3 of numbers within float range (its "
+    "float determinant a normal float)\n";
+
 // The renderer of the search's passes: --check_renderer's (counting, and comparing with the GPU's where a device runs
 // its kernels), the GPU's (search_runs_on_gpu), or null (the CPU's).
 static PreviewRenderer* search_renderer(const Options& o, const Setup& s) {
@@ -1040,6 +1157,18 @@ int prepare(const Options& o, Setup& s) {
                                 : (s.is_bundle && o.input_mode != InputMode::kThreeShot && bundle.has_crosstalk)
                                     ? "bundle"
                                     : "identity";
+  }
+  // The correction is the inverse of the light's mixing (DESIGN.md 2.4), so it is invertible: rows that leave it
+  // singular (all zero, or linearly dependent) would collapse the picture. Checked on the matrix as it applies. With
+  // an ICC profile that is the rows here; with a bundle it is known only once the scan's camera has decided which
+  // rows the bundle gives (decode).
+  if (!s.is_bundle && s.has_crosstalk && (row_given[0] || row_given[1] || row_given[2])) {
+    float x[9];
+    for (int i = 0; i < 9; ++i) x[i] = (*rows[i / 3])[i % 3];
+    if (!crosstalk_matrix_invertible(x)) {
+      log_error("%s", kRowsNotInvertible);
+      return 1;
+    }
   }
   // An RGB TIFF or JPEG is colour-managed RGB, converted to linear Rec.2020: not the camera RGB a crosstalk
   // correction (a camera_raw_rgb bundle) needs.
@@ -1627,6 +1756,17 @@ int decode(const Options& o, Setup& s, Scan& scan) {
                o.row_given[0] || o.row_given[1] || o.row_given[2] ? " (the rows given are applied)" : "");
     }
   }
+  // The matrix as it applies, now that the camera check has decided the rows the bundle gives: with rows given it is
+  // tested as a bundle's own matrix is when it loads, before anything reads through it.
+  if (s.is_bundle && s.has_crosstalk && (o.row_given[0] || o.row_given[1] || o.row_given[2]) &&
+      !crosstalk_matrix_invertible(bundle.crosstalk_matrix)) {
+    log_error("%s", kRowsNotInvertible);
+    return 1;
+  }
+  // Rows given on a camera_raw_rgb bundle without a matrix of its own are its correction from here on, as a bundle's
+  // matrix is: the film base capture, the film base found in the frame, what the base was read with and the search
+  // read through them, as the conversion does. (Set after the camera check, which turns off only a bundle's own.)
+  if (s.is_bundle && s.has_crosstalk) bundle.has_crosstalk = true;
 
   scan.exposure_file = o.files[0];
   scan.has_exif_exp = read_exif_exposure_d(o.files[0], scan.exif_shutter_d, scan.exif_iso_d);
@@ -2756,6 +2896,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.mosaic.filters = filters;
     scan.mosaic.white_level = cfa_white_level;
     scan.mosaic.flat = flat_full;
+    scan.mosaic.flat_tables = scan.flat_full_tables.get();
     scan.cfa_region = {cfa_rx, cfa_ry, cfa_rw, cfa_rh, scan.rot_cw, scan.hflip, scan.vflip};
   } else {
     if (o.input_mode == InputMode::kRgbFile || o.input_mode == InputMode::kThreeShot) {
@@ -2862,20 +3003,28 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
   const bool swap_dims = (norm_rot == 90 || norm_rot == 270);
   const int dst_w = swap_dims ? r.h : r.w;
   const int dst_h = swap_dims ? r.w : r.h;
-  scan.rgb3.resize((size_t)dst_w * dst_h * 3);
   log_info(scan.mosaic.n_frames == 1 ? "Debayer quality: grain-aware\n" : "Merging 4 images...\n");
-  backend.render(scan.mosaic, r, dst_w, dst_h, scan.rgb3.data());
-
-  // The mosaics are not needed any more: LibRaw's raw buffer is freed (proc keeps its metadata), and a pixel shift's
-  // other frames go.
-  if (proc->imgdata.rawdata.raw_alloc && !proc->imgdata.image) {
-    proc->imgdata.image = (ushort (*)[4])proc->imgdata.rawdata.raw_alloc;
-    proc->imgdata.rawdata.raw_alloc = nullptr;
-    proc->imgdata.rawdata.raw_image = nullptr;
-    proc->free_image();
-  }
-  proc->recycle_datastream();
-  for (auto& p : scan.ps_extra) p.reset();
+  // A mosaic is freed once it is not needed any more: after the render, or as soon as the backend has its own copy of
+  // it. Frame 0 is LibRaw's raw buffer (proc keeps its metadata); a pixel shift's other three are their own.
+  bool freed[4] = {false, false, false, false};
+  const auto free_frame = [&](int k) {
+    if (freed[k]) return;
+    freed[k] = true;
+    if (k > 0) {
+      scan.ps_extra[k - 1].reset();
+      return;
+    }
+    if (proc->imgdata.rawdata.raw_alloc && !proc->imgdata.image) {
+      proc->imgdata.image = (ushort (*)[4])proc->imgdata.rawdata.raw_alloc;
+      proc->imgdata.rawdata.raw_alloc = nullptr;
+      proc->imgdata.rawdata.raw_image = nullptr;
+      proc->free_image();
+    }
+    proc->recycle_datastream();
+  };
+  backend.render(scan.mosaic, r, dst_w, dst_h, scan.rgb3, free_frame);   // sizes scan.rgb3
+  scan.full_size_decode = backend.render_ran;
+  for (int k = 0; k < 4; ++k) free_frame(k);
   scan.mosaic = MosaicInput();
 
   proc->imgdata.sizes.iwidth = dst_w;
@@ -3337,6 +3486,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
   } else {
     backend.convert(out, export_pc, c.merged_matrix, scan.image());
   }
+  scan.full_size_conversion = backend.convert_ran;
   if (out.encoding == ENCODE_CUSTOM) {
     cmsCloseProfile(out.xyz);
     cmsCloseProfile(out.custom);
@@ -3426,6 +3576,10 @@ static nlohmann::ordered_json conversion_used(const Options& o, const Setup& s, 
   }
   u["decode"] = {{"space", decode}, {"input", scan.input_source}};
   log_info("  Decode: %s; input %s\n", decode_text.c_str(), scan.input_source.c_str());
+  // Where the full-size steps ran: on the device where make_backend allows it and one runs this build's kernels.
+  u["full_size"] = {{"decode", scan.full_size_decode}, {"conversion", scan.full_size_conversion}};
+  log_info("  Full-size steps: decode on the %s, conversion on the %s\n", scan.full_size_decode,
+           scan.full_size_conversion);
 
   if (o.flat.empty()) {
     u["flat_field"] = nullptr;
