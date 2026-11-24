@@ -70,7 +70,7 @@ A RAW is opened with LibRaw and its black level is subtracted per channel (`np_i
 
 - **The half-size image** is what the searches and the film base read. Under the RGB LED it is read straight from the
   CFA mosaic, one pixel per 2×2 Bayer quad: `(R, (G1 + G2) / 2, B)`, with no demosaic. It is a view into the mosaic,
-  not a copy (`negicc_core.h`: `RgbView::from_cfa_half`, `cpu_preview_debayer`).
+  not a copy (`negicc_core.h`: `RgbView::from_cfa_half`).
 - **The full-resolution image** is what the output is converted from. Under the RGB LED a single Sony RGGB RAW is
   demosaiced by a grain-aware debayer (`negicc_core.h`: `cpu_grain_aware_debayer`): green from the two Hamilton-Adams
   estimates blended by `1 / (4096 + gradient²)`, red and blue as ratios `(R + 16) / (G + 16)`, bilinear where a

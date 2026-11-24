@@ -123,7 +123,7 @@ struct PipelineConfig {
     float shoulder_t_k = 0.0f;  // log2(x_k)
     float shoulder_t_hi = 0.0f; // log2(x_hi)
     float shoulder_s_k = 1.0f;  // encoded sRGB value at the knee
-    float shoulder_c = 1.0f;    // encoded sRGB ceiling C reached at x_hi (shoulder_ceiling(x_hi), set_shoulder())
+    float shoulder_c = 1.0f;    // encoded sRGB ceiling C reached at x_hi (set_shoulder(), from kShoulderCeiling)
     float shoulder_y_c = 1.0f;  // linear value of the ceiling
     // The tone stage (sRGB export only; null everywhere else: the search, the statistics and the shoulder measurement
     // never set it).
@@ -619,8 +619,9 @@ inline float shoulder_x_hi_anchored(float q, float n = kShoulderExponent) {
 // Finds the picture area of the frame to crop (the "primary" frame), the other frames visible on the strip
 // (neighbours and partial frames, the "secondaries"), the visible film strip (picture plus rebate, the "film base"
 // rectangle), the 35mm sprocket holes, the film's tilt, the strip direction and the frame orientation, and a flat
-// patch of unexposed film base for --film_base_rgb auto. 35mm, 645, 6x6, 6x7 and 6x9 frames, given by the caller or
-// tried in turn (FILM_FORMAT_AUTO). Film on bare light without a holder, in a strip holder or in a frame holder.
+// patch of unexposed film base for the base read from the scan. 35mm, 645, 6x6, 6x7 and 6x9 frames, given by the
+// caller or tried in turn (FILM_FORMAT_AUTO). Film on bare light without a holder, in a strip holder or in a frame
+// holder.
 //
 // Input: the image is read in place through FilmImage, three channel lattices that may point into one CFA mosaic
 // (one sample per photosite) or into an RGB image (interleaved or planar). Nothing of the input is copied; the
@@ -934,9 +935,8 @@ FlatFieldPtr load_flat_field_file(const std::string& path);
 // Shared zero-copy CFA downsized view (RgbView), its CPU passes, and the same passes on a CUDA device.
 //
 // Five-step pipeline architecture:
-//   Step 1 (Load & decode): InputFormat enum (CFA Bayer/X-Trans, 4xCFA Sony pixel shift, and TODOs for
-//     RGB/3xCFA/3xMono), per-channel black subtraction in-place on the CFA mosaic (keeping all 4 CFA mosaics in memory
-//     for 4x pixel shift).
+//   Step 1 (Load & decode): per-channel black subtraction in-place on the CFA mosaic (one Bayer or X-Trans mosaic, or
+//     the four mosaics of a Sony pixel shift, all kept in memory).
 //   Step 2 (Downsizing): Zero-copy half-size RgbView over the CFA mosaic (r_ptr, g_ptr, g2_ptr, b_ptr, pitch, stride).
 //   Step 3 (Crop, rotate, flip & inline ROI search): detect_film_frame operates inline on the Step 2 view;
 //     crop_and_orient adjusts pointers, pitch, stride, and sensor flat-field coordinates with zero memory copy.
@@ -946,17 +946,6 @@ FlatFieldPtr load_flat_field_file(const std::string& path);
 //     (or 4x pixel-shift merge), crop/rotate/flip, and flat_divide.
 
 namespace negicc {
-
-// Inputs of the zero-copy CFA path: one CFA mosaic (2x2 Bayer or 6x6 X-Trans), or the four mosaics of a Sony
-// pixel shift. The TODO_ values are input kinds that still take LibRaw's decode: an RGB image, three CFA captures
-// (one per light) and three monochrome captures.
-enum class InputFormat : int {
-    CFA_BAYER_OR_XTRANS = 1,
-    SONY_PIXEL_SHIFT_4 = 2,
-    TODO_RGB = 3,
-    TODO_3X_CFA = 4,
-    TODO_3X_MONO = 5,
-};
 
 // The colour (0 R, 1 G, 2 B, 3 a second green where the pattern marks one) of photosite (r, c) of a Bayer mosaic
 // described by LibRaw's idata.filters: two bits per cell, as LibRaw's (and dcraw's) FC(row, col).
@@ -1010,8 +999,7 @@ struct RgbView {
     }
 
     // Construct a zero-copy view over an interleaved 16-bit 3-channel RGB or 4-channel (LibRaw image[][4]) buffer.
-    // TODO RGB - Subsampled: cover InputFormat::TODO_RGB, TODO_3X_CFA, TODO_3X_MONO by subsampling with
-    // pitch = 2 * channels and stride = 2 * row_elems.
+    // TODO: no half-size form: a subsampling view (pitch = 2 * channels, stride = 2 * row_elems) is not written.
     static RgbView from_interleaved_rgb(const uint16_t* rgb, int w, int h, int channels = 3,
                                         ptrdiff_t row_elems = 0, FlatSampleArgs flat = {},
                                         std::shared_ptr<const FlatTables> flat_pin = nullptr);
@@ -1095,7 +1083,7 @@ inline std::vector<std::vector<std::pair<int, T>>> resample_taps(int n, int m, T
     return taps;
 }
 
-// Summary produced by compute_raw_stats (shared by FrameView::raw_stats and multi_target_optimizer).
+// Summary produced by compute_raw_stats (called by the companion application).
 struct RawStatsSummary {
     int dino_w = 0, dino_h = 0;
     int grid_w = 0, grid_h = 0;
@@ -2720,8 +2708,8 @@ struct TonePlanCurve {
 //     part bluer than the orange film: film transmits no more blue than its base, so a flat stretch of film that
 //     forms a plateau is not taken for light.
 //
-// The white-light arithmetic follows negicc-station's auto_crop.py (downsample, classify) and the film_base_detect.py
-// this replaced, as numpy 2 and OpenCV compute them, float32 where they are float32.
+// The white-light arithmetic follows negicc-station's auto_crop.py (downsample, classify) and its film base reading,
+// as numpy 2 and OpenCV compute them, float32 where they are float32.
 // The base is in the conversion's film base space: the decode through the crosstalk matrix (none for a white-light
 // decode, already linear Rec.2020). The scan is its own base capture (the same exposure).
 

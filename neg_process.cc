@@ -41,7 +41,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -674,11 +673,6 @@ int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::strin
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and
 // the sidecar writer share it.
-// The tone stage's types (the tone stage part of negicc_core.h), which the sidecar refers to.
-struct ToneCurve;
-struct ToneTargets;
-struct ToneClip;
-struct TonePlanCurve;
 
 struct FileFingerprint {
   bool ok = false;
@@ -4218,7 +4212,7 @@ int parse_options(int ac, char* av[], Options& o) {
     .default_value(0.0f);
   // A bundle conversion reads the film base from the scan (negicc_core.h: the rebate, else the thinnest film),
   // as negicc-station's Auto does, or from a capture of unexposed film (--film_base, below; the film base declarations
-  // above); --film_base_rgb, which took it as numbers or from the rebate, is gone.
+  // above).
   parser.add_argument("--film_stock")
     .help("Film stock of the built-in profile bundle and intent adapter: ektar100, portra160 or portra400. Without it "
           "(-p with an ICC profile or a bundle whose name names no stock with an adapter), the parameter search falls "
@@ -9140,8 +9134,8 @@ static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c, bool
       base_g = s.cached_sidecar.base_g;
       base_b = s.cached_sidecar.base_b;
     } else {
-      // TODO: Run `solve_dinov3_intent` on `oriented_half_view` (zero-copy half-size CFA view) instead of the
-      // full-resolution `cfa_export_rgb` buffer once single-target solver baselines are updated.
+      // TODO: Run `solve_dinov3_intent` on a half-size view of the frame instead of the full-resolution `scan.rgb3`
+      // buffer once single-target solver baselines are updated.
       const bool solve_ok = scan.cfa
           ? solve_dinov3_intent(s.engine, cfg, c.merged_matrix,
                                 negicc::RgbView::from_interleaved_rgb(

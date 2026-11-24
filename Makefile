@@ -6,9 +6,9 @@
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to
 #                             link ONNX Runtime statically)
 #   make onnxruntime_prebuilt  # ONNX Runtime's shared library from its PyPI wheel, which neg_process links by default
-#   make lib                # bin_out/libnegicc_dinov3.a and bin_out/libraw.a, linked by negicc-station
+#   make lib                # bin_out/libnegicc_dinov3.a and the third-party libraries, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
-#   make deps               # bin_out/liblcms2.a and bin_out/libz.a, from the 3rd_party/lcms2 and zlib submodules
+#   make deps               # bin_out/liblcms2.a, libz.a, libjpeg.a and libtiff.a, from their 3rd_party submodules
 
 PYTHON ?= python3
 CMAKE ?= cmake
