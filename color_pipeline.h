@@ -425,9 +425,6 @@ NEGICC_HD Lab srgb_to_lab(Rgb c) {
 // An encoded channel is white-clipped at 16-bit code 65400 and above, black-clipped at code 200 and below. The linear
 // forms are the same thresholds decoded through the sRGB curve: srgb_decode(65399.5 / 65535) and
 // srgb_decode(200.5 / 65535).
-NEGICC_HD bool channel_white_clipped(float v) { return v * 65535.0f >= 65399.5f; }
-NEGICC_HD bool channel_black_clipped(float v) { return v * 65535.0f < 200.5f; }
-
 NEGICC_HD bool linear_channel_white_clipped(float l) { return l >= 0.9953029f; }
 NEGICC_HD bool linear_channel_black_clipped(float l) { return l < 0.00023679829f; }
 

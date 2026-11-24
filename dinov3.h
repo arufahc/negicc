@@ -135,15 +135,6 @@ public:
     // Multi-head forward pass with selectable destination buffers.
     virtual void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
                      const DinoV3RunnerOutputs& outputs) = 0;
-
-    // Legacy overload for callers only requiring intent field (mu, sigma).
-    void run(const float* pixel_values, int height, int width, const float* pool_weights, int patches,
-             float* mu, float* sigma) {
-        DinoV3RunnerOutputs outs;
-        outs.mu = mu;
-        outs.sigma = sigma;
-        run(pixel_values, height, width, pool_weights, patches, outs);
-    }
 };
 
 // Per-stock adapter: tokens [1, N, 768] -> mu, sigma [1, N, 3].
