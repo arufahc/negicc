@@ -32,7 +32,8 @@
 
 #include <nlohmann/json.hpp>
 
-static void read_curve_set_local(_cmsStageToneCurvesData* data,
+// False when a channel has no curve or a value of one is not finite.
+static bool read_curve_set_local(_cmsStageToneCurvesData* data,
                                  std::vector<float> (&out)[3],
                                  int (&out_sizes)[3],
                                  const float* (&out_ptrs)[3]) {
@@ -41,7 +42,7 @@ static void read_curve_set_local(_cmsStageToneCurvesData* data,
       out[c].clear();
       out_sizes[c] = 0;
       out_ptrs[c] = nullptr;
-      continue;
+      return false;
     }
     cmsToneCurve* tc = data->TheCurves[c];
     const int entries = cmsGetToneCurveEstimatedTableEntries(tc);
@@ -56,11 +57,13 @@ static void read_curve_set_local(_cmsStageToneCurvesData* data,
       for (int i = 0; i < 4096; ++i) {
         float in_v = (float)i / 4095.0f;
         out[c][i] = cmsEvalToneCurveFloat(tc, in_v);
+        if (!std::isfinite(out[c][i])) return false;
       }
     }
     out_sizes[c] = (int)out[c].size();
     out_ptrs[c] = out[c].data();
   }
+  return true;
 }
 
 bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
@@ -111,10 +114,12 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
     if (type == cmsSigCurveSetElemType) {
       auto* cd = (_cmsStageToneCurvesData*)cmsStageData(st);
       if (at == 0) {
-        read_curve_set_local(cd, prof.in_trc, prof.data.in_trc_size, prof.data.in_trc);
+        if (!read_curve_set_local(cd, prof.in_trc, prof.data.in_trc_size, prof.data.in_trc))
+          return refuse("an input curve is missing or not finite");
         at = 1;
       } else if (at == 2) {
-        read_curve_set_local(cd, prof.out_trc, prof.data.out_trc_size, prof.data.out_trc);
+        if (!read_curve_set_local(cd, prof.out_trc, prof.data.out_trc_size, prof.data.out_trc))
+          return refuse("an output curve is missing or not finite");
         at = 3;
       } else if (at == 1) {
         return refuse("a second set of curves before any cLUT (input curves without a cLUT, or a lutAtoBType's M or B "
@@ -133,11 +138,15 @@ bool parse_film_profile_pipeline(cmsHPROFILE hprof, ParsedFilmProfile& prof) {
     } else if (type == cmsSigCLutElemType) {
       if (at != 1) return refuse(at == 0 ? "a cLUT without input curves before it" : "a second cLUT");
       auto* cl = (_cmsStageCLutData*)cmsStageData(st);
+      if (!cl || !cl->Params) return refuse("a cLUT without its grid");
       for (int i = 0; i < 3; ++i) prof.data.clut_dim[i] = cl->Params->nSamples[i];
       const size_t n = (size_t)prof.data.clut_dim[0] * prof.data.clut_dim[1] * prof.data.clut_dim[2] * 3;
       prof.clut.resize(n);
       if (cl->HasFloatValues) {
-        for (size_t i = 0; i < n; ++i) prof.clut[i] = cl->Tab.TFloat[i];
+        for (size_t i = 0; i < n; ++i) {
+          prof.clut[i] = cl->Tab.TFloat[i];
+          if (!std::isfinite(prof.clut[i])) return refuse("a cLUT value is not finite");
+        }
       } else {
         for (size_t i = 0; i < n; ++i) prof.clut[i] = cl->Tab.T[i] / 65535.0f;
       }
@@ -357,7 +366,18 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
       if (fseek(fp, pos, SEEK_SET) != 0) break;
       uint8_t m[2];
       uint16_t seg_len = 0;
-      if (fread(m, 1, 2, fp) != 2 || m[0] != 0xFF || !rd16(false, seg_len) || seg_len < 2) break;
+      if (fread(m, 1, 2, fp) != 2 || m[0] != 0xFF) break;
+      // A fill byte (FF before a marker) and a marker without a length (TEM 01, RST0 to RST7) are stepped over
+      // (ITU-T T.81 B.1.1.2, B.1.1.3).
+      if (m[1] == 0xFF) {
+        pos += 1;
+        continue;
+      }
+      if (m[1] == 0x01 || (m[1] >= 0xD0 && m[1] <= 0xD7)) {
+        pos += 2;
+        continue;
+      }
+      if (!rd16(false, seg_len) || seg_len < 2) break;
       if (m[1] == 0xE1 && seg_len >= 8) {
         char exif_hdr[6];
         if (fread(exif_hdr, 1, 6, fp) == 6 && std::memcmp(exif_hdr, "Exif\0\0", 6) == 0) {
@@ -424,26 +444,26 @@ bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double
   }
   bool got_shutter = false;
   for (const auto& e : entries) {
-    if (e.tag == 0x829A) {
+    // Each value is taken only when it is one: an ExposureTime RATIONAL (type 5) above 0, an ISO above 0. A value of
+    // type size x count up to 4 bytes is held in the entry itself (TIFF 6.0, section 2), else at its offset.
+    if (e.tag == 0x829A && e.fmt == 5 && e.cnt >= 1) {
       uint32_t num = 0, den = 0;
-      if (fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0 && rd32(le, num) && rd32(le, den) && den > 0) {
+      if (fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0 && rd32(le, num) && rd32(le, den) && num > 0 && den > 0) {
         shutter_s = (double)num / (double)den;
         got_shutter = true;
       }
-    } else if (e.tag == 0x8827 && e.fmt == 3) {
-      if (e.cnt == 1) {
-        iso = (double)(le ? (e.val & 0xFFFFu) : ((e.val >> 16) & 0xFFFFu));
-      } else if (e.cnt > 1 && fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0) {
-        uint16_t v16 = 0;
-        if (rd16(le, v16)) iso = (double)v16;
+    } else if (e.tag == 0x8827 && e.fmt == 3 && e.cnt >= 1) {
+      uint16_t v16 = 0;
+      if (e.cnt <= 2) {
+        v16 = (uint16_t)(le ? (e.val & 0xFFFFu) : ((e.val >> 16) & 0xFFFFu));
+      } else if (fseek(fp, tiff_base + (long)e.val, SEEK_SET) != 0 || !rd16(le, v16)) {
+        v16 = 0;
       }
-    } else if (e.tag == 0x8827 && e.fmt == 4) {
-      if (e.cnt == 1) {
-        iso = (double)e.val;
-      } else if (e.cnt > 1 && fseek(fp, tiff_base + (long)e.val, SEEK_SET) == 0) {
-        uint32_t v32 = 0;
-        if (rd32(le, v32)) iso = (double)v32;
-      }
+      if (v16 > 0) iso = (double)v16;
+    } else if (e.tag == 0x8827 && e.fmt == 4 && e.cnt >= 1) {
+      uint32_t v32 = e.val;
+      if (e.cnt > 1 && (fseek(fp, tiff_base + (long)e.val, SEEK_SET) != 0 || !rd32(le, v32))) v32 = 0;
+      if (v32 > 0) iso = (double)v32;
     }
   }
   fclose(fp);
@@ -745,6 +765,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       ok = gb.step > 0.0;
     }
     for (int c = 0; ok && c < 3; ++c) {
+      ok = g["apd"][c].is_array();   // a column of numbers (an object's values would be taken in its keys' order)
       for (const auto& v : g["apd"][c]) {
         ok = ok && v.is_number() && std::isfinite(v.get<double>()) &&
              (gb.apd[c].empty() || v.get<double>() > gb.apd[c].back());
@@ -752,6 +773,9 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       }
       ok = ok && gb.apd[c].size() >= 2 && gb.apd[c].size() == gb.apd[0].size();
     }
+    // Every node's light density, start + step * i, a finite number (a start and a step each within double's range can
+    // still overflow at the last node).
+    ok = ok && std::isfinite(gb.start + gb.step * (double)(gb.apd[0].size() - 1));
     gb.present = ok;
     if (!ok) {
       gb = GreyBalanceCurves{};
@@ -1020,8 +1044,11 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
         // A patch without a green is not counted. Kept as a float (the grey wedge below reads these same entries).
         if (!it.value().contains("g")) continue;
         const nlohmann::json& gv = it.value()["g"];
-        if (!gv.is_number() || !(std::fabs(gv.get<double>()) <= (double)std::numeric_limits<float>::max())) {
-          refuse(pat + ".g", gv, "is not a number within float range");
+        // A patch's green is a light level the sensor read: above 0 once kept as a float (a level of 0 or below gives
+        // the bracket's enclosure an infinite or NaN width).
+        if (!gv.is_number() || !(gv.get<double>() <= (double)std::numeric_limits<float>::max()) ||
+            !((float)gv.get<double>() > 0.0f)) {
+          refuse(pat + ".g", gv, "is not a number above 0 within float range");
         }
         tgt.patches_g.push_back((float)gv.get<double>());
       }
@@ -1282,6 +1309,8 @@ void adjust_correction_matrix(const std::vector<float>& r_coef,
                               const std::vector<int>& profile_film_base_rgb,
                               const std::vector<int>& film_base_rgb,
                               float* merged_matrix) {
+  if (r_coef.size() < 3 || g_coef.size() < 3 || b_coef.size() < 3 || !merged_matrix)
+    throw std::invalid_argument("adjust_correction_matrix: each row needs three coefficients, and a matrix to write");
   // First convert the linear RGB into corrected RGB values that are proportional
   // to transmittance.
   float cc_average_r = dot_product(r_coef, film_base_rgb);

@@ -693,6 +693,7 @@ struct Sidecar {
   char** argv = nullptr;
   const LibRaw* proc = nullptr;          // the camera, ISO and shutter (nullptr: none recorded)
   std::vector<std::string> files;
+  std::vector<std::string> bundle_files;  // the ICC files beside a bundle given as a file (bundle_side_files)
   // Each file's fingerprint when this run already took it (the sidecar loader); null or short: taken here.
   const std::vector<FileFingerprint>* file_fingerprints = nullptr;
   int orig_w = 0, orig_h = 0;
@@ -2974,6 +2975,19 @@ size_t a2b0_lut16(const std::vector<uint8_t>& icc) {
   return 0;
 }
 
+// Whether the lut16 A2B0 table at off (a2b0_lut16) has a paper white: the X, Y and Z of its node of largest Y (the
+// first, as to_paper_white takes it) all above 0, which to_paper_white divides by. The table must lie in the file.
+bool lut16_has_paper_white(const std::vector<uint8_t>& icc, size_t off) {
+  auto u16 = [&icc](size_t o) { return (unsigned)icc[o] << 8 | icc[o + 1]; };
+  const size_t grid = icc[off + 10], n = u16(off + 48);
+  const size_t clut = off + 52 + 3 * n * 2, nodes = grid * grid * grid;
+  if (icc[off + 9] != 3 || nodes == 0 || clut + nodes * 6 > icc.size()) return false;
+  size_t best = 0;
+  for (size_t k = 1; k < nodes; ++k)
+    if (u16(clut + 6 * k + 2) > u16(clut + 6 * best + 2)) best = k;
+  return u16(clut + 6 * best) > 0 && u16(clut + 6 * best + 2) > 0 && u16(clut + 6 * best + 4) > 0;
+}
+
 constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (the profile bundle part of negicc.h), in double
 
 }  // namespace
@@ -3483,7 +3497,10 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
         const long code = (long)icc[at] << 8 | icc[at + 1];
         worst = std::max(worst, std::labs(code - std::lround(std::min(std::max(mine[c][i], 0.0), 1.0) * 65535.0)));
       }
-    if (worst <= 1) {
+    if (worst <= 1 && !lut16_has_paper_white(icc, off)) {
+      log_warn("The bundle's print ICC for %s has no paper white (its brightest node has an X, Y or Z of 0): its table "
+               "is computed here\n", print.c_str());
+    } else if (worst <= 1) {
       // Described as the table computed here is: the material, with no bracket (each bracket's curves and then the
       // print's A replace the file's).
       if (!set_icc_description(icc, description)) {
@@ -4513,6 +4530,7 @@ int parse_options(int ac, char* av[], Options& o) {
     log_error("Rotation must be a multiple of 90 degrees (got %d)\n", o.rot_cw);
     return 1;
   }
+  o.rot_cw = ((o.rot_cw % 360) + 360) % 360;   // 0, 90, 180 or 270: -90 is 270, 360 is 0
 
   // The film format of the frame detector: --roi auto's search (35mm unless given, as negicc-station and the recorded
   // parity cases), and, when given, the film base's frame detection with a given frame. auto asks for every format.
@@ -5279,6 +5297,65 @@ bool file_fingerprint(const std::string& path, uintmax_t& size, uint32_t& crc) {
   return !f.bad();
 }
 
+static bool paths_match(const std::string& recorded, const std::string& path);
+
+// The files the options name, as the sidecar records them (inputs.option_files): every argument (and every comma-separated
+// piece of one, and either side of its first colon: --film_base's file:x,y,w,h, --dino's head:path) that names a
+// regular file other than the inputs and the output, in the order given, with its size and CRC-32. A later run reuses
+// the sidecar only when its own option files are these, unchanged: a bundle, flat field, output profile, print or head
+// edited in place gives another size or CRC-32.
+// bundle_files: the files a bundle given as a file reads besides itself (its brackets' and prints' ICC profiles,
+// bundle_side_files), which no argument names.
+static ordered_json option_files_json(int argc, char** argv, const std::vector<std::string>& inputs,
+                                      const std::string& output, const std::vector<std::string>& bundle_files) {
+  ordered_json out = ordered_json::array();
+  std::vector<std::string> seen;
+  auto consider = [&](const std::string& p) {
+    if (p.empty() || !is_regular_file(p) || paths_match(output, p)) return;
+    for (const std::string& f : inputs)
+      if (paths_match(f, p)) return;
+    for (const std::string& q : seen)
+      if (q == p) return;
+    seen.push_back(p);
+    uintmax_t size = 0;
+    uint32_t crc = 0;
+    const bool ok = file_fingerprint(p, size, crc);
+    out.push_back({{"arg", utf8_replaced(p)}, {"size", ok ? ordered_json(size) : ordered_json(nullptr)},
+                   {"crc32", ok ? ordered_json(crc) : ordered_json(nullptr)}});
+  };
+  for (int i = 1; i < argc; ++i) {
+    const std::string a = argv[i];
+    consider(a);
+    size_t from = 0;
+    while (from <= a.size()) {
+      const size_t to = std::min(a.find(',', from), a.size());
+      const std::string piece = a.substr(from, to - from);
+      if (piece != a) consider(piece);
+      const size_t colon = piece.find(':');
+      if (colon != std::string::npos) {
+        consider(piece.substr(0, colon));
+        consider(piece.substr(colon + 1));
+      }
+      from = to + 1;
+    }
+  }
+  for (const std::string& f : bundle_files) consider(f);
+  return out;
+}
+
+// The ICC files beside a bundle given as a file (a split bundle's brackets and prints), as paths; none for a built-in
+// bundle or one that holds its profiles inline.
+static std::vector<std::string> bundle_side_files(const ProfileBundle& b) {
+  std::vector<std::string> out;
+  if (!is_regular_file(b.path)) return out;
+  const std::filesystem::path dir = std::filesystem::path(b.path).parent_path();
+  for (const BundleTarget& t : b.targets)
+    if (!t.icc_file.empty()) out.push_back((dir / t.icc_file).string());
+  for (const BundlePrint& p : b.prints)
+    if (p.icc_in_file && !p.icc_file.empty()) out.push_back((dir / p.icc_file).string());
+  return out;
+}
+
 bool write_json_sidecar(const Sidecar& sc) {
   ordered_json j;
   j["schema"] = "negicc.neg_process.sidecar/1";
@@ -5309,6 +5386,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   }
   j["inputs"] = {{"raw_files", sc.files},
                  {"raw_file_stats", stats},
+                 {"option_files", option_files_json(sc.argc, sc.argv, sc.files, sc.output_path, sc.bundle_files)},
                  {"camera", camera},
                  {"iso", sc.proc ? num(sc.proc->imgdata.other.iso_speed) : ordered_json(0)},
                  {"shutter", sc.proc ? num(sc.proc->imgdata.other.shutter) : ordered_json(0)}};
@@ -6145,6 +6223,15 @@ static std::vector<std::string> result_args(const std::vector<std::string>& argv
       for (int k = (int)g.size() - 1; k < opt->arity && i + 1 < argv.size(); ++k) g.push_back(argv[++i]);
     }
     if (opt && opt->skip) continue;
+    // A turn is one of 0, 90, 180 and 270 however it was written (-90 is 270, 360 is 0), as parse_options keeps it:
+    // --rot_cw's value and --roi's fifth number.
+    auto turn = [](std::string& v) {
+      char* e = nullptr;
+      const long t = std::strtol(v.c_str(), &e, 10);
+      if (!v.empty() && e && *e == '\0' && t % 90 == 0) v = std::to_string(((t % 360) + 360) % 360);
+    };
+    if (g[0] == "--rot_cw" && g.size() == 2) turn(g[1]);
+    if (g[0] == "--roi" && g.size() >= 6 && g[1] != "auto") turn(g[5]);
     groups.push_back(g);
   }
   std::stable_sort(groups.begin(), groups.end(),
@@ -6288,6 +6375,24 @@ static bool load_cached_sidecar(const nlohmann::ordered_json& j, const Options& 
     if (!fp.ok || st["size"].get<uintmax_t>() != fp.size || st["crc32"].get<uint32_t>() != fp.crc) {
       return why = o.files[i] + " is not the file it converted", false;
     }
+  }
+
+  // The files the options name (a bundle, a flat field, an output profile, a print, a head): the same files, unchanged.
+  // A sidecar written before they were recorded is not reused: what it converted with cannot be told.
+  {
+    const auto& was = j["inputs"].value("option_files", nlohmann::ordered_json());
+    if (!was.is_array()) return why = "it does not record the files its options name", false;
+    const nlohmann::ordered_json now =
+        option_files_json(o.argc, o.argv, o.files, o.output, s.is_bundle ? bundle_side_files(s.bundle) : std::vector<std::string>{});
+    bool same = was.size() == now.size();
+    for (size_t i = 0; same && i < now.size(); ++i) {
+      same = was[i].is_object() && was[i].value("arg", nlohmann::ordered_json()).is_string() &&
+             paths_match(was[i]["arg"].get<std::string>(), now[i]["arg"].get<std::string>()) &&
+             was[i].value("size", nlohmann::ordered_json()) == now[i]["size"] && !now[i]["size"].is_null() &&
+             was[i].value("crc32", nlohmann::ordered_json()) == now[i]["crc32"];
+      if (!same) return why = now[i]["arg"].get<std::string>() + " is not the file it converted with", false;
+    }
+    if (!same) return why = "its options name other files", false;
   }
 
   // A film base capture is part of what was converted: the same file, not only the same name.
@@ -6575,6 +6680,7 @@ static bool try_load_cached_sidecar(const Options& o, Setup& s) {
 // channel above 1, which the print, keeping no shoulder, cuts. The bundle's print ICC itself stays absolute. paper_xyz gets the
 // base.
 static void to_paper_white(ParsedFilmProfile& p, double* paper_xyz = nullptr) {
+  if (p.clut.size() < 3) return;           // no table to scale
   const double* d50 = negicc::kPcsWhite;   // the white the outputs write at full scale
   size_t best = 0;
   for (size_t i = 1; i < p.clut.size(); i += 3)
@@ -9911,6 +10017,7 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   sc.print_name = s.print_name;
   sc.print_file = s.print_file;
   sc.print_file_sha256 = s.print_file_sha256;
+  if (s.is_bundle) sc.bundle_files = bundle_side_files(s.bundle);
   sc.print_from_bundle = s.print_from_bundle;
   std::string print_bracket_name;   // a picture print's bracket as recorded: nearest its final A
   if (!s.print_profs.empty()) {

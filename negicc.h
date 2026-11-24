@@ -599,7 +599,8 @@ float shutter_to_seconds(const std::string& shutter);
 double shutter_to_seconds_d(const std::string& shutter);
 
 // Reads (ExposureTime in seconds, ISO) in double precision from a TIFF-based RAW's EXIF IFD (matching
-// auto_exposure.read_exif_exposure). Returns true when ExposureTime was read.
+// auto_exposure.read_exif_exposure). Returns true when ExposureTime was read: a RATIONAL above 0. An ISO is taken when
+// above 0; shutter_s and iso keep what they held for a value the file does not give.
 bool read_exif_exposure_d(const std::string& filepath, double& shutter_s, double& iso);
 
 // Whether a crosstalk correction matrix, as the floats that are applied, is usable: every element finite, and the
@@ -683,7 +684,8 @@ struct ShoulderInfo {
 
 // The input matrix: the crosstalk rows r_coef, g_coef and b_coef, each scaled by its channel's film base ratio
 // (profile_film_base_rgb / film_base_rgb) and by global_exposure_comp, gain_g and gain_b as negicc-station applies
-// them, into merged_matrix (3x3, row-major). Prints the rows.
+// them, into merged_matrix (3x3, row-major). Prints the rows. Throws std::invalid_argument when a row has fewer than
+// three coefficients or merged_matrix is null.
 void adjust_correction_matrix(const std::vector<float>& r_coef, const std::vector<float>& g_coef,
                               const std::vector<float>& b_coef, float global_exposure_comp, float gain_g,
                               float gain_b, const std::vector<int>& profile_film_base_rgb,
