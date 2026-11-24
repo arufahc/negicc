@@ -1111,6 +1111,10 @@ struct ShadowCandidate {
   bool has_knob_curves = false;
   negicc::InputCurves knob_curves;
   double knob_base_a = NAN;
+  bool has_plain = false;  // and the conversion without them (Scan::has_plain)
+  float plain_x_hi = 1.0f, plain_q995 = 0.0f;
+  bool has_plain_prof = false;
+  ParsedFilmProfile plain_prof;
   int prof_idx = -1;
   ParsedFilmProfile prof0, prof;
   ParsedFilmProfile result_prof0;  // in the alternative's: the result's bracket's profile before the stages
@@ -1124,6 +1128,9 @@ struct ToneCheck {
   ToneTargets targets;
   double share = 1.0, shadow_share = 1.0;
   bool fell_back = false;  // no share held both ends (Options::tone_fallback chose the curve)
+  // Made on the conversion without the knobs: convert takes its curve and counts the shares before the stage on the
+  // knobbed image it converts, as a replay does.
+  bool without_knobs = false;
 };
 
 // The choice between the search's result and its shadow alternative (solve). The shares are of the tone stage's clip
@@ -1216,6 +1223,13 @@ struct Scan {
   bool has_knob_res = false;             // --brightness, --tint or --warmth solved
   float knob_base[3] = {1.0f, 1.0f, 1.0f};
   KnobSolveResult knob_res;
+  // A fresh run's conversion without the knobs, which its tone stage check is made on (solve): the roll-off at the
+  // knobs' base and the bracket's profile before the knobs re-anchored its curves (a print: its A before the knobs,
+  // knob_base_a). Set by the knobs where the tone stage runs and no record is replayed.
+  bool has_plain = false;
+  float plain_x_hi = 1.0f, plain_q995 = 0.0f;
+  bool has_plain_prof = false;
+  ParsedFilmProfile plain_prof;
 
   // The highlight roll-off of every bundle conversion, measured on the half-size frame as the bracket search measures
   // it: Auto's result and given values in decode, while that frame exists (render frees the mosaic; LibRaw's
@@ -7439,6 +7453,12 @@ static void capture_candidate(const Setup& s, const Scan& scan, ShadowCandidate&
   k.has_knob_curves = scan.has_knob_curves;
   k.knob_curves = scan.knob_curves;
   k.knob_base_a = scan.knob_base_a;
+  k.has_plain = scan.has_plain;
+  k.plain_x_hi = scan.plain_x_hi;
+  k.plain_q995 = scan.plain_q995;
+  k.has_plain_prof = scan.has_plain_prof;
+  k.plain_prof = scan.plain_prof;
+  k.plain_prof.rebind_pointers();
   k.prof_idx = scan.auto_res.target_idx;
   k.prof = s.bundle.targets[k.prof_idx].film_prof;
   k.prof.rebind_pointers();
@@ -7467,6 +7487,12 @@ static void restore_candidate(Setup& s, Scan& scan, const ShadowCandidate& k) {
   scan.has_knob_curves = k.has_knob_curves;
   scan.knob_curves = k.knob_curves;
   scan.knob_base_a = k.knob_base_a;
+  scan.has_plain = k.has_plain;
+  scan.plain_x_hi = k.plain_x_hi;
+  scan.plain_q995 = k.plain_q995;
+  scan.has_plain_prof = k.has_plain_prof;
+  scan.plain_prof = k.plain_prof;
+  scan.plain_prof.rebind_pointers();
   s.bundle.targets[k.prof_idx].film_prof = k.prof;
   s.bundle.targets[k.prof_idx].film_prof.rebind_pointers();
 }
@@ -7680,12 +7706,32 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       scan.knob_res.limited = pk.limited;
       for (int i = 0; i < 3; ++i) scan.knob_res.grey_lab[i] = pk.grey_lab[i];
       scan.has_knob_res = true;
+      scan.has_plain = s.tone_active && !s.has_cached_sidecar;  // the print without them: knob_base_a, base g, b
       log_info("Knobs on the print: A %.4f -> %.4f, g %.4f -> %.4f, b %.4f -> %.4f (E %.4f held); the grey L* %.3f "
                "a* %.3f b* %.3f%s\n", scan.knob_base_a, pk.a, base_g, pk.g, base_b, pk.b, base_e, pk.grey_lab[0],
                pk.grey_lab[1], pk.grey_lab[2], pk.limited ? " (limited)" : "");
       return true;
     }
     if (knobs_here && target_idx >= 0 && target_idx < (int)bundle.targets.size()) {
+      // Where the tone stage runs and no record is replayed, the conversion without the knobs (Scan::has_plain),
+      // which its clip check is made on: the roll-off as a run without them measures it, and the bracket's profile
+      // before the knobs re-anchor its curves in place.
+      if (s.tone_active && !s.has_cached_sidecar && s.print_id.empty()) {
+        if (scan.has_curve_params && s.curve_fit.rolloff_measured) {
+          scan.plain_x_hi = s.curve_fit.x_hi;
+          scan.plain_q995 = s.curve_fit.x_hi_q995;
+        } else {
+          scan.plain_x_hi = measure_rolloff_x_hi(bundle, target_idx, frame, scan_shutter_s, scan_iso, base_e, base_g,
+                                                 base_b, ParamSearchOptions{}.crop_ratio, &scan.plain_q995,
+                                                 scan.film_base_rgb(), search_renderer(o, s));
+        }
+        scan.has_plain_prof = target_idx == s.curves_base_idx && s.input_curves.active();
+        if (scan.has_plain_prof) {
+          scan.plain_prof = bundle.targets[target_idx].film_prof;
+          scan.plain_prof.rebind_pointers();
+        }
+        scan.has_plain = true;
+      }
       scan.knob_base[0] = base_e;
       scan.knob_base[1] = base_g;
       scan.knob_base[2] = base_b;
@@ -8273,6 +8319,8 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     scan.has_knob_res = false;
     scan.has_knob_curves = false;
     scan.knob_res = KnobSolveResult{};
+    scan.has_plain = false;
+    scan.has_plain_prof = false;
     scan.auto_res = *alt;
     log_info("The shadow alternative (%s): its stages after the search, the knobs and the roll-off:\n",
              alt->target_name.c_str());
@@ -8867,7 +8915,7 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
   return 0;
 }
 
-static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c) {
+static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c, bool quiet = false) {
   ProfileBundle& bundle = s.bundle;
   LibRaw* proc = scan.proc.get();
   // With a bundle, E, g and b are the station's (the search's, and what -E, --gain_g and --gain_b take): the
@@ -8927,7 +8975,7 @@ static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c) {
     const float fg = scan.has_knob_res ? scan.knob_res.g : p.g;
     const float fb = scan.has_knob_res ? scan.knob_res.b : p.b;
     apply_station(fe, fg, fb);
-    if (!(s.has_cached_sidecar && s.cached_sidecar.is_auto)) {
+    if (!quiet && !(s.has_cached_sidecar && s.cached_sidecar.is_auto)) {
       log_info("Auto: %s E %.4f g %.4f b %.4f (resid %.4f, %s), %d inferences\n", res.target_name.c_str(),
              res.params.e, res.params.g, res.params.b, res.residual, to_string(res.status),
              res.inferences);
@@ -8938,21 +8986,25 @@ static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c) {
              ms(res.render_time), ms(res.infer_time), ms(res.residual_time), ms(res.search_time),
              ms(res.total_time));
     }
-    if (scan.has_curve_params && s.curve_fit.fallback) {
-      log_info("Curve fit fell back (%s): no curves; E %.4f g %.4f b %.4f on the bracket's profile\n",
-               s.curve_fit.fallback, p.e, p.g, p.b);
-    } else if (scan.has_curve_params) {
-      log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
-    }
-    log_knobs();
-    if (!s.print_id.empty()) {
-      // A print is made by its own search, which takes no -E, gains or --target: its A, g and b.
-      // The bracket nearest the print's final A (after the knobs, their moved A), as the sidecar records it.
-      log_info("Print: A %.6g g %.9g b %.9g (E held; nearest %s)%s\n\n", s.print_a, fg, fb,
-               bundle.targets[nearest_bracket(s.print_cont.a_mid, s.print_a)].name.c_str(),
-               scan.has_knob_res ? ", moved by the knobs" : "");
+    if (quiet) {
+      // The conversion without the knobs (Scan::has_plain), for the tone stage's check (solve logs it).
     } else {
-      log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
+      if (scan.has_curve_params && s.curve_fit.fallback) {
+        log_info("Curve fit fell back (%s): no curves; E %.4f g %.4f b %.4f on the bracket's profile\n",
+                 s.curve_fit.fallback, p.e, p.g, p.b);
+      } else if (scan.has_curve_params) {
+        log_info("Fitted curves: E %.4f g %.4f b %.4f on the combined profile\n", p.e, p.g, p.b);
+      }
+      log_knobs();
+      if (!s.print_id.empty()) {
+        // A print is made by its own search, which takes no -E, gains or --target: its A, g and b.
+        // The bracket nearest the print's final A (after the knobs, their moved A), as the sidecar records it.
+        log_info("Print: A %.6g g %.9g b %.9g (E held; nearest %s)%s\n\n", s.print_a, fg, fb,
+                 bundle.targets[nearest_bracket(s.print_cont.a_mid, s.print_a)].name.c_str(),
+                 scan.has_knob_res ? ", moved by the knobs" : "");
+      } else {
+        log_info("Solved: -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n\n", fe, fg, fb, c.bundle_target_idx);
+      }
     }
   } else if (s.use_dino) {
     // The single-bracket solver, on an ICC profile (a bundle's search is the bundle search).
@@ -9144,7 +9196,7 @@ static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c) {
       c.shoulder.has_knee = true;
       c.shoulder.knee = pc.shoulder_x_k;
     }
-    log_info("Roll-off: q995 %.3f, x_hi %.3f (sRGB output only)\n", q995, c.shoulder.x_hi);
+    if (!quiet) log_info("Roll-off: q995 %.3f, x_hi %.3f (sRGB output only)\n", q995, c.shoulder.x_hi);
   }
   return 0;
 }
@@ -9181,6 +9233,51 @@ static void candidate_tone_check(const Options& o, const Setup& s, Scan& scan, c
   shares[3] = ka;
 }
 
+// One candidate's tone stage clip check where its conversion c has the knobs and this run planned the stage
+// (Scan::has_plain): made on the same candidate without the knobs (from c0, the conversion before solve_one), so that
+// the curve, and the choice between the result and its shadow alternative, are those of the run without them, and the
+// knobs act under the curve as on a replay of that run's record. Otherwise the check is c's own.
+static bool knob_free_tone_check(const Options& o, Setup& s, Scan& scan, const Conversion& c0, const Conversion& c,
+                                 ToneCheck& t, double shares[4]) {
+  if (!scan.has_knob_res || !scan.has_plain) {
+    candidate_tone_check(o, s, scan, c, t, shares);
+    return true;
+  }
+  ParsedFilmProfile& prof = s.bundle.targets[c.bundle_target_idx].film_prof;
+  ParsedFilmProfile knob_prof;
+  if (scan.has_plain_prof) {
+    knob_prof = prof;
+    prof = scan.plain_prof;
+    prof.rebind_pointers();
+  }
+  const float x_hi = scan.rolloff_x_hi, q995 = scan.rolloff_q995;
+  const double print_a = s.print_a;
+  scan.rolloff_x_hi = scan.plain_x_hi;
+  scan.rolloff_q995 = scan.plain_q995;
+  if (!s.print_id.empty()) s.print_a = scan.knob_base_a;
+  scan.has_knob_res = false;
+  Conversion cp = c0;
+  cp.film_prof.rebind_pointers();
+  const bool ok = solve_one(o, s, scan, cp, true) == 0;
+  if (ok) {
+    candidate_tone_check(o, s, scan, cp, t, shares);
+    t.without_knobs = true;
+    log_info("Tone stage check without the knobs (-E %.9g --gain_g %.9g --gain_b %.9g --target %d): the knobs act "
+             "under its curve\n", cp.station_params ? (*cp.station_params)[0] : 0.0f,
+             cp.station_params ? (*cp.station_params)[1] : 0.0f, cp.station_params ? (*cp.station_params)[2] : 0.0f,
+             cp.bundle_target_idx);
+  }
+  scan.has_knob_res = true;
+  s.print_a = print_a;
+  scan.rolloff_x_hi = x_hi;
+  scan.rolloff_q995 = q995;
+  if (scan.has_plain_prof) {
+    prof = knob_prof;
+    prof.rebind_pointers();
+  }
+  return ok;
+}
+
 // solve, and with a shadow alternative (Scan::shadow_candidate) the choice between it and the search's result: the
 // alternative is taken only when its shares at white and at black on the tone stage's clip check sample, before and
 // after the stage, are each no higher than the result's and at least one is lower. Each candidate's sample is
@@ -9189,18 +9286,25 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   scan.tone_check = ToneCheck{};
   const std::shared_ptr<ShadowCandidate> bp = scan.shadow_candidate;
   scan.shadow_candidate.reset();
-  if (!bp) return solve_one(o, s, scan, c);
+  // With the knobs on a run that planned the tone stage, its check is made without them (knob_free_tone_check).
+  const bool tone_here = s.has_tone && o.colorspace == "srgb" && !s.density;
+  if (!bp && !(tone_here && scan.has_knob_res && scan.has_plain)) return solve_one(o, s, scan, c);
   ShadowChoice& ch = scan.shadow_choice;
   const Conversion c0 = c;
   int r = solve_one(o, s, scan, c);
   if (r) return r;
-  if (!(s.has_tone && o.colorspace == "srgb" && !s.density && s.print_id.empty())) {
+  if (!bp) {
+    double shares[4];
+    if (!knob_free_tone_check(o, s, scan, c0, c, scan.tone_check, shares)) return 1;
+    return 0;
+  }
+  if (!(tone_here && s.print_id.empty())) {
     ch.not_checked = "no tone stage on this conversion";
     return 0;
   }
   const double t0 = omp_get_wtime();
   ToneCheck ta, tb;
-  candidate_tone_check(o, s, scan, c, ta, ch.result);
+  if (!knob_free_tone_check(o, s, scan, c0, c, ta, ch.result)) return 1;
   ShadowCandidate a;
   capture_candidate(s, scan, a);
   a.prof0 = bp->result_prof0;
@@ -9209,8 +9313,7 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   Conversion cb = c0;
   cb.film_prof.rebind_pointers();
   log_info("The shadow alternative (%s), converted to compare:\n", bp->auto_res.target_name.c_str());
-  const bool b_ok = solve_one(o, s, scan, cb) == 0;
-  if (b_ok) candidate_tone_check(o, s, scan, cb, tb, ch.alternative);
+  const bool b_ok = solve_one(o, s, scan, cb) == 0 && knob_free_tone_check(o, s, scan, c0, cb, tb, ch.alternative);
   bool no_higher = b_ok, lower = false;
   for (int i = 0; b_ok && i < 4; ++i) {
     no_higher = no_higher && ch.alternative[i] <= ch.result[i];
@@ -9343,9 +9446,11 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
       make_pipeline_config(c.film_prof.data, c.knee, c.shoulder.x_hi, out.encoding);
   // The tone stage (tone_stage.h): this run's plan, or the recorded curve on a replay, applied in the
   // conversion kernel (color_pipeline.h apply_tone) between the display value and the sRGB encoding. Under the knobs
-  // the recorded curve is applied after them, as recorded: a fixed monotone map on top of the knobbed render (zero
-  // knobs reproduce the export; a brighter knob gives a brighter result), not re-solved against the knobbed render,
-  // which would pull the shadow level back to the prediction and undo the knob.
+  // the curve is the one without them, applied after them: on a replay the recorded curve, as recorded; on a fresh
+  // run the plan checked on the conversion without the knobs (solve, knob_free_tone_check), so it equals the knobs on
+  // the record of a run without them. A fixed monotone map on top of the knobbed render (zero knobs reproduce the
+  // export; a brighter knob gives a brighter result), not re-solved against the knobbed render, which would pull the
+  // shadow level back to the prediction and undo the knob.
   scan.tone_applied = false;
   const bool tone_here = s.has_tone && out.encoding == ENCODE_SRGB;
   LibRaw* tp = scan.proc.get();
@@ -9362,7 +9467,7 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     scan.tone_shadow_share = 1.0;
     scan.tone_fell_back = false;
     const double t_tone_0 = omp_get_wtime();
-    if (scan.tone_check.valid) {
+    if (scan.tone_check.valid && !scan.tone_check.without_knobs) {
       // solve made this check already, on the same sample, choosing between the result and its shadow alternative.
       scan.tone_clip.white_before = scan.tone_check.white_before;
       scan.tone_clip.black_before = scan.tone_check.black_before;
@@ -9376,7 +9481,16 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     } else {
       const std::vector<negicc::Rgb> sample = tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride);
       tone_clip_shares(export_pc, sample, nullptr, &scan.tone_clip.white_before, &scan.tone_clip.black_before);
-      if (tone_plan_here) {
+      if (scan.tone_check.valid) {
+        // solve made the check without the knobs (knob_free_tone_check): its curve, under which the knobs act.
+        scan.tone_curve = scan.tone_check.curve;
+        if (tone_plan_here) {
+          scan.tone_targets = scan.tone_check.targets;
+          scan.tone_share = scan.tone_check.share;
+          scan.tone_shadow_share = scan.tone_check.shadow_share;
+          scan.tone_fell_back = scan.tone_check.fell_back;
+        }
+      } else if (tone_plan_here) {
         // This run's plan: its moves scaled where they would clip this image at either end (tone_plan_for_image).
         scan.tone_curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2],
                                               plan.pred_mean[ToneHead::kL98], plan.pred_mean[ToneHead::kR9010],

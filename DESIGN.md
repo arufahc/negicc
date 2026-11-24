@@ -647,6 +647,13 @@ larger share on a tie, then the larger lift). The sidecar names the rule as `ton
 held). The sidecar records both shares before (the sample) and after (every pixel of the inner crop) as
 `tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
 
+**Under the knobs.** `--brightness`, `--tint` and `--warmth` act under the tone curve: the curve is the one the run
+without them keeps, applied after them. A replay of a record applies its curve as recorded; a fresh run with the knobs
+makes the clip check, and the choice of the search's shadow alternative, on each candidate converted without them
+(its roll-off measured at the knobs' base, its bracket's profile before the knobs re-anchor the curves), then converts
+with the knobs under that curve, so it gives the picture of the knobs on the record of a run without them. The shares
+before the stage that the sidecar records are those of the knobbed picture.
+
 **The search's shadow alternative.** When the search found one (4.2, step 8), it goes through the stages after the
 search as the result does (the curve fit on white light, the tone plan, the roll-off), and both go through the clip
 check: each candidate's sample is converted once, its shares before the stage are counted, and its plan's curve is
