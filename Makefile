@@ -440,18 +440,19 @@ bin_out/embedded_data.o: embedded_data.cc embedded_data.h profile_bundle.h Makef
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -DEMBED_TABLE=$(EMBED_TABLE) -DEMBED_COUNT=$(EMBED_COUNT) \
 	    -c embedded_data.cc -o $@
 
-# neg_process's own sources (np_*.cc): not in the library negicc-station links. Compiled as
-# neg_process.cc is, so moving code between them leaves its arithmetic as it was.
+# neg_process's own sources: neg_process.cc, the program, and np_input.cc, its inputs (which negicc-station
+# compiles too). Not in the library negicc-station links. Compiled alike, so moving code between them
+# leaves its arithmetic as it was.
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) \
               $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
-NP_SRCS = np_options.cc np_pipeline.cc np_output.cc np_input.cc np_film_base.cc np_print.cc
+NP_SRCS = np_input.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = $(wildcard np_*.h) rgb_view.h color_pipeline.h flat_field.h \
           dinov3.h film_frame_detector.h film_base_detector.h profile_bundle.h \
           multi_target_optimizer.h input_curves.h white_light_balance.h embedded_data.h tone_stage.h \
           3rd_party/tiff_head.h
 
-bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
+bin_out/neg_process.o: neg_process.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(NP_CXXFLAGS) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -c $< -o $@
 
@@ -460,19 +461,15 @@ bin_out/np_input.o: np_input.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	$(CXX) $(NP_CXXFLAGS) $(TIFF_INC) $(JPEG_INC) -c $< -o $@
 
-bin_out/np_%.o: np_%.cc $(NP_HDRS) $(BUILD_STAMP)
-	mkdir -p bin_out
-	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
-
 NEG_PROCESS_OBJS = bin_out/embedded_data.o bin_out/embedded_data_files.o $(NP_OBJS)
 
 neg_process: bin_out/neg_process
 
-bin_out/neg_process: neg_process.cc $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) \
+bin_out/neg_process: bin_out/neg_process.o $(NEG_PROCESS_OBJS) bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) \
                      $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) $(ORT_DEPS) $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
 	@echo "ONNX Runtime: $(if $(filter 1,$(ORT_STATIC)),static from $(ORT_SRC_DIR),$(ORT_LIB_DIR))"
-	$(CXX) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -o $@ neg_process.cc $(NEG_PROCESS_OBJS) \
+	$(CXX) -o $@ bin_out/neg_process.o $(NEG_PROCESS_OBJS) \
 	    bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party \
 	    $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) \
 	    $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)

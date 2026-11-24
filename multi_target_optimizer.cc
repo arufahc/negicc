@@ -2557,7 +2557,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
 // ---- Stage 3, the profile tables: the fitted G/B input curves --------------------------------------------------
 //
 // The curves live in the bracket's input tables, composed at an E, g and b (apply_input_curves): the fit's, a
-// replay's, or the knobs', which compose them again from the bracket's own tables (np_pipeline.cc). Every render after
+// replay's, or the knobs', which compose them again from the bracket's own tables (neg_process.cc). Every render after
 // that, on the CPU or the GPU, reads one ordinary profile.
 
 void apply_input_curves(ParsedFilmProfile& prof, const negicc::InputCurves& curves) {
@@ -3100,7 +3100,7 @@ class WhiteLightFit {
         fr_(bundle, engine, opts.verbose, opts.max_steps, scratch_) {}
 
   bool run() {
-    // White light only (see the --fit_curves gate in np_pipeline.cc): a TriLED bundle's curves are the measured ones.
+    // White light only (see the --fit_curves gate in neg_process.cc): a TriLED bundle's curves are the measured ones.
     if (bundle_.has_crosstalk) {
       std::cerr << "ERROR! Fitted input curves are for white-light bundles: a TriLED bundle converts through its "
                    "measured curves" << std::endl;

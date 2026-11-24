@@ -109,7 +109,7 @@ constexpr float kShoulderAnchorCode = 242.0f;
 
 // ICC PCS encoding scale applied after the output TRCs: 1 + 32767/32768, the PCS XYZ value of code FFFFh, the largest
 // u1Fixed15Number (ICC.1:2022 4.8 Table 6 and 6.3.4.2 Table 11), so a curve's [0, 1] output becomes PCS XYZ. A lut16's
-// table holds PCS XYZ as its code over this (np_print.cc). Exact in single precision.
+// table holds PCS XYZ as its code over this (neg_process.cc). Exact in single precision.
 constexpr float kPcsScale = 1.0f + 32767.0f / 32768.0f;
 
 NEGICC_HD float clamp01(float v) {
@@ -246,8 +246,8 @@ constexpr double kPcsWhite[3] = {63190.0 / 65536.0, 1.0, 54061.0 / 65536.0};
 // kPcsWhite maps to (1, 1, 1): a colour-managed reader gets the PCS back within quantisation from srgb-g10, and from
 // srgb within that and the difference between the profile's 4096-entry TRC table and the analytic sRGB curve the codes
 // are encoded with. It replaces Bradford D50 -> D65 followed by the textbook XYZ -> sRGB matrix, which differ from it
-// in the fourth decimal. The print CLF keeps the standard sRGB (np_print.cc print_clf_nodes), as it carries no profile.
-// Unclamped; inline so device code can use it.
+// in the fourth decimal. The print CLF keeps the standard sRGB (neg_process.cc print_clf_nodes), as it carries no
+// profile. Unclamped; inline so device code can use it.
 NEGICC_HD Rgb pcs_to_linear_srgb_unclamped(Rgb v) {
     return { v.r * 3.13427485f + v.g * -1.61727573f + v.b * -0.490724277f,
              v.r * -0.978795611f + v.g * 1.91616171f + v.b * 0.0334533327f,
