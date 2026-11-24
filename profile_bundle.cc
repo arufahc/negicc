@@ -238,6 +238,26 @@ const char* to_string(InputSpace space) {
   return space == InputSpace::kRec2020Linear ? "rec2020_linear" : "camera_raw_rgb";
 }
 
+bool crosstalk_matrix_invertible(const float m[9]) {
+  double x[9];
+  for (int k = 0; k < 9; ++k) {
+    if (!std::isfinite(m[k])) return false;
+    x[k] = m[k];
+  }
+  const double det = x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
+                     x[2] * (x[3] * x[7] - x[4] * x[6]);
+  // The determinant of dependent rows is not computed as 0 but as rounding residue (two equal rows of general values
+  // give about 1e-17), so it is compared with the rounding error this computation can carry: a product of two floats
+  // is exact in double, each term then takes two rounded operations and the sum two more, at most four units of
+  // roundoff (2 x DBL_EPSILON) of the terms' magnitudes. A determinant within that of 0 is 0 as far as the arithmetic
+  // can tell.
+  const double magnitude = std::fabs(x[0]) * (std::fabs(x[4] * x[8]) + std::fabs(x[5] * x[7])) +
+                           std::fabs(x[1]) * (std::fabs(x[3] * x[8]) + std::fabs(x[5] * x[6])) +
+                           std::fabs(x[2]) * (std::fabs(x[3] * x[7]) + std::fabs(x[4] * x[6]));
+  if (std::fabs(det) <= 2.0 * std::numeric_limits<double>::epsilon() * magnitude) return false;
+  return std::fabs(det) >= (double)std::numeric_limits<float>::min();
+}
+
 static bool parse_3x3_matrix(const nlohmann::json& node, float out_m[9], double out_d[9] = nullptr) {
   if (!node.is_array() || node.size() != 3) return false;
   for (int r = 0; r < 3; ++r) {
@@ -882,10 +902,7 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
       for (int k = 0; ok && k < 9; ++k) {
         ok = std::fabs(bundle.crosstalk_matrix_d[k]) <= (double)std::numeric_limits<float>::max();
       }
-      double x[9];
-      for (int k = 0; k < 9; ++k) x[k] = bundle.crosstalk_matrix[k];
-      ok = ok && std::fabs(x[0] * (x[4] * x[8] - x[5] * x[7]) - x[1] * (x[3] * x[8] - x[5] * x[6]) +
-                           x[2] * (x[3] * x[7] - x[4] * x[6])) >= (double)std::numeric_limits<float>::min();
+      ok = ok && crosstalk_matrix_invertible(bundle.crosstalk_matrix);
       if (!ok) {
         throw std::runtime_error("profile bundle " + raw_path + ": the crosstalk correction matrix is not an "
                                  "invertible 3x3 of numbers within float range (its float determinant a normal "
