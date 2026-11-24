@@ -829,7 +829,9 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
   }
 
   // The film stock's spectra, for a print material given as a file (np_print.h). A block that is not whole is left
-  // out: such a print then has no matrix and says so.
+  // out: such a print then has no matrix and says so. Whether a whole block's densities give a finite print matrix
+  // depends on the print material too, so that is checked where the matrix is computed (np_print.cc). log_exposure
+  // only selects the samples that enter that matrix, so its order is not checked.
   if (j.contains("film_model") && j["film_model"].is_object()) {
     const nlohmann::json& fm = j["film_model"];
     auto numbers = [](const nlohmann::json& a, std::vector<double>& out) {
