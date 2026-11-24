@@ -27,6 +27,9 @@ LibRaw, Little-CMS 2, zlib, libtiff and libjpeg-turbo are built from the submodu
 linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the first time (needs `curl` and `python3`;
 [3rd_party/onnxruntime_prebuilt/README.md](3rd_party/onnxruntime_prebuilt/README.md)), unless an ONNX Runtime in the
 same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
+`neg_process` makes no network connection: it turns ONNX Runtime's telemetry off (`ORT_DISABLE_TELEMETRY=1`, unless
+you set that variable) before the library's environment is created, so the library neither writes under `~/.cache`
+nor contacts its telemetry server.
 
 A USE_CUDA=1 build also runs the search's passes on the GPU. `CUDA_ARCH` is the GPU's compute capability without the
 dot: 87 (the default) for a Jetson Orin, 86 for an RTX 30 card, 89 for an RTX 40, e.g. `make USE_CUDA=1 CUDA_ARCH=86

@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -669,6 +670,15 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
 
 namespace {
 
+// ONNX Runtime's environment, with the library's telemetry off. ONNX Runtime 1.30 runs telemetry by default: when
+// its environment is created it writes a device id and a database under ~/.cache/Microsoft/DeveloperTools/ and opens
+// a TLS connection to a telemetry host. It reads ORT_DISABLE_TELEMETRY then, so the variable is set here, before any
+// environment exists; a value the caller set is kept.
+Ort::Env make_ort_env(const char* log_id) {
+    setenv("ORT_DISABLE_TELEMETRY", "1", 0);
+    return Ort::Env(ORT_LOGGING_LEVEL_WARNING, log_id);
+}
+
 class OrtCpuRunner : public DinoV3Runner {
 public:
     OrtCpuRunner(const std::string& model_path, int num_threads) {
@@ -762,7 +772,7 @@ public:
     }
 
 private:
-    Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "negicc_dinov3"};
+    Ort::Env env_ = make_ort_env("negicc_dinov3");
     Ort::SessionOptions opts_;
     std::unique_ptr<Ort::Session> session_;
     bool has_pool_weights_ = false;
@@ -799,7 +809,7 @@ public:
     }
 
 private:
-    Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "negicc_adapter"};
+    Ort::Env env_ = make_ort_env("negicc_adapter");
     Ort::SessionOptions opts_;
     std::unique_ptr<Ort::Session> session_;
     size_t bytes_ = 0;
