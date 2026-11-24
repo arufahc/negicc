@@ -325,6 +325,31 @@ struct FixedPointResult {
   int grid_w = 0, grid_h = 0;
 };
 
+struct ParamSearchResult;
+
+// One screened bracket in the shadow alternative's clip pass: its shares of the inner crop (percent) with a channel
+// white-clipped and with a channel black-clipped, at its screened parameters.
+struct ShadowBracketRow {
+  int target_idx = -1;
+  float white = 0.0f, black = 0.0f;
+};
+
+// The search's shadow alternative (search_conversion_params, after the highlight pullback; DESIGN.md 4.2): the
+// screened bracket with the least black clipping among those that clip white no more than the result plus
+// kToneClipAllowance, with its fixed point. The conversion takes it in place of the result only when the tone
+// stage's clip check of both finds it no higher at white and at black, before and after the stage, and lower at one.
+struct ShadowAlternative {
+  bool ran = false;                    // the step ran (not with a pinned bracket or E)
+  std::vector<ShadowBracketRow> rows;  // the screened brackets, in screening order
+  float result_white = 0.0f, result_black = 0.0f;  // the result in its bracket's pass (percent)
+  int picked = -1;                     // the bracket the step chose (-1: none within the white allowance)
+  const char* none = nullptr;          // why there is no alternative, or null
+  bool reused_run = false;             // the alternative's fixed point is the tournament's run of that bracket
+  int inferences = 0;                  // the step's own DINOv3 inferences (its fixed point's)
+  double ms = 0.0;                     // the step's time
+  std::shared_ptr<ParamSearchResult> result;  // the alternative (null: none)
+};
+
 struct ParamSearchResult {
   int target_idx = -1;      // the chosen bracket, an index into ProfileBundle::targets
   std::string target_name;  // its name in the bundle ("Target 3")
@@ -387,6 +412,10 @@ struct ParamSearchResult {
   negicc::RgbView frame_stats_view;
   float frame_stats_crop_ratio = 0.0f;
   int frame_stats_max_size = 0, frame_stats_patch = 0;
+
+  // The shadow alternative this result's search found (ShadowAlternative): the conversion takes it in place of this
+  // result only when the tone stage's clip check says so (np_pipeline.cc).
+  ShadowAlternative shadow;
 };
 
 // The highlight roll-off's x_hi (color_pipeline.h shoulder_x_hi_anchored) of frame, a whole frame at any size and

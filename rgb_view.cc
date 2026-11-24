@@ -956,11 +956,12 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
     const long long npx = (long long)crop.w * crop.h;
     if (npx <= 0) {
         std::memset(a.out, 0, (size_t)a.n * 5 * sizeof(float));
+        if (a.black_out) std::memset(a.black_out, 0, (size_t)a.n * sizeof(float));
         return;
     }
 
     struct CandAccum {
-        uint64_t exc_r = 0, exc_g = 0, exc_b = 0, wc = 0;
+        uint64_t exc_r = 0, exc_g = 0, exc_b = 0, wc = 0, bk = 0;
         uint32_t hist_L[kLabBins] = {};
     };
     std::vector<CandAccum> totals(a.n);
@@ -972,6 +973,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
 
     std::vector<uint64_t> total_max_hist;
     if (a.max_hist) total_max_hist.assign((size_t)a.n * kMaxHistBins, 0);
+    const bool count_black = a.black_out != nullptr;
 
     #pragma omp parallel
     {
@@ -995,6 +997,11 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
                             linear_channel_white_clipped(lin.b)) {
                             acc.wc++;
                         }
+                        if (count_black && (linear_channel_black_clipped(lin.r) ||
+                                            linear_channel_black_clipped(lin.g) ||
+                                            linear_channel_black_clipped(lin.b))) {
+                            acc.bk++;
+                        }
                         const float L = linear_srgb_to_L(to_display(a.cfg, lin));
                         acc.hist_L[lab_bin(L)]++;
                         if (a.max_hist) {
@@ -1015,6 +1022,11 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
                             linear_channel_white_clipped(lin.b)) {
                             acc.wc++;
                         }
+                        if (count_black && (linear_channel_black_clipped(lin.r) ||
+                                            linear_channel_black_clipped(lin.g) ||
+                                            linear_channel_black_clipped(lin.b))) {
+                            acc.bk++;
+                        }
                         const float L = linear_srgb_to_L(to_display(a.cfg, lin));
                         acc.hist_L[lab_bin(L)]++;
                         if (a.max_hist) {
@@ -1031,6 +1043,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
             totals[c].exc_g += local[c].exc_g;
             totals[c].exc_b += local[c].exc_b;
             totals[c].wc    += local[c].wc;
+            totals[c].bk    += local[c].bk;
             for (int k = 0; k < kLabBins; ++k) totals[c].hist_L[k] += local[c].hist_L[k];
         }
         for (size_t k = 0; k < local_max_hist.size(); ++k) total_max_hist[k] += local_max_hist[k];
@@ -1045,6 +1058,7 @@ void cpu_highlight_clip(const HighlightClipArgs& a) {
         o[2] = (float)((double)totals[c].exc_b / tot * 100.0);
         o[3] = (float)((double)totals[c].wc    / tot * 100.0);
         o[4] = (float)percentile_from_hist_L(totals[c].hist_L, tot, 0.50);
+        if (count_black) a.black_out[c] = (float)((double)totals[c].bk / tot * 100.0);
     }
 }
 

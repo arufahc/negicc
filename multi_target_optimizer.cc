@@ -34,6 +34,7 @@
 #include "dinov3.h"
 #include "profile_bundle.h"
 #include "nlohmann/json.hpp"
+#include "tone_stage.h"  // kToneClipAllowance (the shadow alternative)
 
 const char* to_string(FixedPointStatus status) {
   switch (status) {
@@ -644,6 +645,7 @@ struct ClipStats {
   float exc[3];      // at or above the bracket's ceiling, per channel
   float white_clip;  // with any channel white-clipped
   float median_L;    // the median L*
+  float black_any;   // with any channel black-clipped (linear_channel_black_clipped)
 };
 
 // The highlight clipping of img's crop rendered with each conversion matrix (9 floats per candidate in matrices).
@@ -653,7 +655,7 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
                                               float shoulder = 1.0f, uint64_t* max_hist = nullptr,
                                               PreviewRenderer* renderer = nullptr) {
   const size_t n = matrices.size() / 9;
-  std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0});
+  std::vector<ClipStats> res(n, ClipStats{{0, 0, 0}, 0, 0, 0});
   const InnerCrop crop = (crop_in.w > 0 && crop_in.h > 0) ? crop_in : InnerCrop{0, 0, img.width, img.height};
   const uint64_t npx = uint64_t(crop.w) * crop.h;
   if (npx == 0 || n == 0) return res;
@@ -677,6 +679,8 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
     ha.ceil_lin[c] = negicc::srgb_decode(std::max(0.0f, (thr_u8 - 0.5f) / 255.0f));
   }
   ha.out = hc_out.data();
+  std::vector<float> black_out(n, 0.0f);
+  ha.black_out = black_out.data();
   if (renderer) {
     renderer->highlight_clip(ha);
   } else {
@@ -688,6 +692,7 @@ std::vector<ClipStats> measure_highlight_clip(const negicc::RgbView& img, const 
     res[c].exc[2] = hc_out[c * 5 + 2];
     res[c].white_clip = hc_out[c * 5 + 3];
     res[c].median_L = hc_out[c * 5 + 4];
+    res[c].black_any = black_out[c];
   }
   return res;
 }
@@ -1875,9 +1880,16 @@ void CompareRenderer::highlight_clip(const negicc::HighlightClipArgs& a) {
   negicc::HighlightClipArgs g = a;
   g.out = out.data();
   g.max_hist = a.max_hist ? hist.data() : nullptr;
+  std::vector<float> black_g(a.black_out ? (size_t)a.n : 0);  // the GPU's own, compared as a clip share
+  g.black_out = a.black_out ? black_g.data() : nullptr;
   gpu.highlight_clip(g);
   Pass p;
-  p.values = (long long)a.n * 5 + (long long)hist.size();
+  p.values = (long long)a.n * 5 + (long long)hist.size() + (long long)black_g.size();
+  for (size_t c = 0; c < black_g.size(); ++c) {
+    const double diff = compared(p, a.black_out[c], black_g[c]);
+    p.max_abs = std::max(p.max_abs, diff);
+    p.max_share = std::max(p.max_share, diff);
+  }
   for (int c = 0; c < a.n; ++c)
     for (int k = 0; k < 5; ++k) {
       const double diff = compared(p, a.out[c * 5 + k], out[c * 5 + k]);
@@ -2513,26 +2525,118 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     }
   }
 
-  out.target_idx = chosen.target_idx;
-  out.target_name = name_of(chosen.target_idx);
-  out.params = {white_light ? params.e : params.e / e_norm, params.g, params.b, params.shoulder};
-  out.residual = chosen.residual;
-  out.shoulder_q995 = chosen.shoulder_q995;
-  out.shoulder_knee = chosen.shoulder_knee;
-  out.shoulder_guard = chosen.shoulder_guard;
-  out.status = chosen.status;
-  out.intent_mu = chosen.mu;
-  out.intent_sigma = chosen.sigma;
-  out.intent_neutral_p = chosen.neutral_p;
-  out.intent_tone_features = chosen.tone_features;
-  out.intent_grid_w = chosen.grid_w;
-  out.intent_grid_h = chosen.grid_h;
-  out.intent_params = chosen.params;
-  {
+  // The result from a chosen run and its final parameters (also the shadow alternative's).
+  auto fill_result = [&](ParamSearchResult& r, const FixedPointResult& ch, const ConversionParams& p) {
+    r.target_idx = ch.target_idx;
+    r.target_name = name_of(ch.target_idx);
+    r.params = {white_light ? p.e : p.e / e_norm, p.g, p.b, p.shoulder};
+    r.residual = ch.residual;
+    r.shoulder_q995 = ch.shoulder_q995;
+    r.shoulder_knee = ch.shoulder_knee;
+    r.shoulder_guard = ch.shoulder_guard;
+    r.status = ch.status;
+    r.intent_mu = ch.mu;
+    r.intent_sigma = ch.sigma;
+    r.intent_neutral_p = ch.neutral_p;
+    r.intent_tone_features = ch.tone_features;
+    r.intent_grid_w = ch.grid_w;
+    r.intent_grid_h = ch.grid_h;
+    r.intent_params = ch.params;
+    r.e_range_lo = r.e_range_hi = 0.0f;
     Enclosure enc{};
-    if (bounds_of(chosen.target_idx, enc) && enc.feasible) {
-      out.e_range_lo = white_light ? enc.e_min : enc.e_min / e_norm;
-      out.e_range_hi = white_light ? enc.e_max : enc.e_max / e_norm;
+    if (bounds_of(ch.target_idx, enc) && enc.feasible) {
+      r.e_range_lo = white_light ? enc.e_min : enc.e_min / e_norm;
+      r.e_range_hi = white_light ? enc.e_max : enc.e_max / e_norm;
+    }
+  };
+  fill_result(out, chosen, params);
+
+  // The shadow alternative (ShadowAlternative, DESIGN.md 4.2). After the highlight pullback, one clip pass per
+  // screened bracket at its screened parameters reads its share of the inner crop with a channel white-clipped and
+  // with a channel black-clipped (the chosen bracket's pass also reads the result itself). Among the brackets whose
+  // white share is within kToneClipAllowance of the result's, the one with the lowest black share (the first in
+  // screening order on a tie) runs its fixed point on the clip fallback's path (the tournament's run when it had one)
+  // and has its roll-off measured as the result's was: the alternative, which the conversion takes in place of the
+  // result only when the tone stage's clip check finds it no higher at either end, before and after the stage, and
+  // lower at one (np_pipeline.cc). None when the chosen bracket is the lowest or tied lowest at black, and none with
+  // a pinned bracket or E (the step only moves the bracket and E).
+  if (!pin_target && !pin_e && !screening.empty()) {
+    ShadowAlternative& sh = out.shadow;
+    const Clock::time_point t_sh0 = Clock::now();
+    const int inf0 = out.inferences;
+    sh.ran = true;
+    bool r_found = false;
+    for (size_t k = 0; k < screening.size(); ++k) {
+      const int t = screening[k].result.target_idx;
+      std::vector<ConversionParams> cands = {screening[k].result.params};
+      const bool is_chosen = t == chosen.target_idx;
+      if (is_chosen) cands.push_back(params);
+      const std::vector<ClipStats> cs = fr.highlight_clip(t, cands, kCeil);
+      sh.rows.push_back({t, cs[0].white_clip, cs[0].black_any});
+      if (is_chosen) {
+        sh.result_white = cs[1].white_clip;
+        sh.result_black = cs[1].black_any;
+        r_found = true;
+      }
+    }
+    if (!r_found) {  // not expected: every bracket the search can choose was screened
+      const ClipStats cm = fr.highlight_clip(chosen.target_idx, {params}, kCeil)[0];
+      sh.result_white = cm.white_clip;
+      sh.result_black = cm.black_any;
+    }
+    const float allow_pct = (float)(kToneClipAllowance * 100.0);  // the clip pass counts in percent
+    int best = -1, row_of_chosen = -1;
+    for (size_t k = 0; k < sh.rows.size(); ++k) {
+      const ShadowBracketRow& r = sh.rows[k];
+      if (r.target_idx == chosen.target_idx) row_of_chosen = (int)k;
+      if (r.white <= sh.result_white + allow_pct && (best < 0 || r.black < sh.rows[best].black)) best = (int)k;
+    }
+    if (best >= 0) sh.picked = sh.rows[best].target_idx;
+    if (best < 0) sh.none = "no bracket within the white allowance";
+    else if (sh.picked == chosen.target_idx) sh.none = "the chosen bracket is the lowest";
+    else if (row_of_chosen >= 0 && sh.rows[row_of_chosen].black <= sh.rows[best].black)
+      sh.none = "the chosen bracket is tied lowest";
+    if (!sh.none) {
+      const Screened& sc = screening[best];
+      const int t = sh.picked;
+      const FixedPointResult* run = nullptr;
+      for (const auto& a : adaptive)
+        if (a.target_idx == t) run = &a;
+      FixedPointResult fp_alt;
+      bool ok = true;
+      if (run) {
+        fp_alt = *run;
+        sh.reused_run = true;
+      } else {
+        float eb[3];
+        trust_bounds(sc, eb);
+        if (verbose) std::cout << "Auto: fixed point on " << name_of(t) << " (the shadow alternative)\n";
+        ok = fr.fixed_point(t, sc.result.params, eb, fp_alt);
+      }
+      if (ok) {
+        ConversionParams p_alt = fp_alt.params;
+        float q995 = 0.0f;
+        p_alt.shoulder = fr.measure_shoulder(t, p_alt, &q995);
+        fp_alt.shoulder_q995 = q995;
+        negicc::PipelineConfig pc{};
+        negicc::set_shoulder(pc, p_alt.shoulder);
+        fp_alt.shoulder_knee = pc.shoulder_x_k;
+        auto alt = std::make_shared<ParamSearchResult>(out);
+        alt->shadow = ShadowAlternative{};
+        fill_result(*alt, fp_alt, p_alt);
+        sh.result = alt;
+      } else {
+        sh.none = "the alternative's fixed point failed";
+      }
+    }
+    sh.inferences = out.inferences - inf0;
+    sh.ms = std::chrono::duration<double, std::milli>(Clock::now() - t_sh0).count();
+    if (sh.result) sh.result->inferences = out.inferences;  // the Auto's, both runs
+    if (verbose) {
+      std::cout << "Auto: shadow alternative: ";
+      if (sh.result) std::cout << name_of(sh.picked) << " (black " << fixed(sh.rows[best].black, 3) << "% at its screened parameters against "
+                               << fixed(sh.result_black, 3) << "% for the result), " << sh.inferences << " inferences\n";
+      else std::cout << "none (" << sh.none << ")\n";
     }
   }
   fr.write_timings();

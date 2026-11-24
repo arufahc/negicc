@@ -60,7 +60,7 @@ constexpr int kThreads = 256;
 constexpr int kStatFields = 13;  // white, black, mid_a, mid_b, mid_n, hi_a, hi_b, hi_n, sh_a, sh_b, sh_n, all_a, all_b
 constexpr int kRgbHistBins = 3 * 256;
 constexpr int kRenderHistBins = kRgbHistBins + kLabBins;
-constexpr int kHighlightBins = kLabBins + 4;  // hist_L + exceedance R, G, B + white clip
+constexpr int kHighlightBins = kLabBins + 5;  // hist_L + exceedance R, G, B + white clip + any channel black
 
 // The input of a pass: interleaved 16-bit RGB at base + y * stride + x * pitch (uint16_t elements). A contiguous
 // image has pitch 3 and stride 3 * width; a crop of a bound frame keeps the frame's pitch and stride.
@@ -185,7 +185,7 @@ __global__ void highlight_clip_kernel(InPix in, InnerCrop crop, const float* __r
     __syncthreads();
     const int c = blockIdx.y;
     const float* m = mats + c * 9;
-    unsigned int loc_er = 0, loc_eg = 0, loc_eb = 0, loc_wc = 0;
+    unsigned int loc_er = 0, loc_eg = 0, loc_eb = 0, loc_wc = 0, loc_bk = 0;
     const long long crop_npx = (long long)crop.w * crop.h;
     const long long step = (long long)gridDim.x * blockDim.x;
     for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x; idx < crop_npx; idx += step) {
@@ -198,6 +198,9 @@ __global__ void highlight_clip_kernel(InPix in, InnerCrop crop, const float* __r
         if (linear_channel_white_clipped(lin.r) || linear_channel_white_clipped(lin.g) ||
             linear_channel_white_clipped(lin.b))
             loc_wc++;
+        if (linear_channel_black_clipped(lin.r) || linear_channel_black_clipped(lin.g) ||
+            linear_channel_black_clipped(lin.b))
+            loc_bk++;
         const float L = linear_srgb_to_L(to_display(cfg, lin));
         atomicAdd(&sh_bins[lab_bin(L)], 1u);
         if (max_hist_out) atomicAdd(&sh_max[max_hist_bin(fmaxf(lin.r, fmaxf(lin.g, lin.b)))], 1u);
@@ -206,6 +209,7 @@ __global__ void highlight_clip_kernel(InPix in, InnerCrop crop, const float* __r
     if (loc_eg) atomicAdd(&sh_bins[kLabBins + 1], loc_eg);
     if (loc_eb) atomicAdd(&sh_bins[kLabBins + 2], loc_eb);
     if (loc_wc) atomicAdd(&sh_bins[kLabBins + 3], loc_wc);
+    if (loc_bk) atomicAdd(&sh_bins[kLabBins + 4], loc_bk);
     __syncthreads();
     unsigned int* dst = bins_out + (size_t)c * kHighlightBins;
     for (int k = threadIdx.x; k < kHighlightBins; k += blockDim.x)
@@ -358,6 +362,7 @@ void gpu_highlight_clip(const HighlightClipArgs& a) {
     const long long npx = (long long)crop.w * crop.h;
     if (npx <= 0) {
         std::memset(a.out, 0, (size_t)a.n * 5 * sizeof(float));
+        if (a.black_out) std::memset(a.black_out, 0, (size_t)a.n * sizeof(float));
         return;
     }
     float* d_mats = static_cast<float*>(g_matrices.get((size_t)a.n * 9 * sizeof(float)));
@@ -390,6 +395,7 @@ void gpu_highlight_clip(const HighlightClipArgs& a) {
         float* o = a.out + (size_t)c * 5;
         for (int k = 0; k < 4; ++k) o[k] = (float)((double)b[kLabBins + k] / tot * 100.0);
         o[4] = (float)median_from_hist_L(b, tot);
+        if (a.black_out) a.black_out[c] = (float)((double)b[kLabBins + 4] / tot * 100.0);
     }
 }
 
