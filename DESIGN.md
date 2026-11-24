@@ -130,7 +130,7 @@ same flat.
 
 The film base is the orange mask of unexposed film. Dividing by it makes each channel a transmittance relative to
 bare film, so a profile and a scan agree whatever the mask's colour or the scan's exposure. The base `f` is taken,
-in this order (`neg_process.cc`, `film_detector.cc`: `detect_film_base`):
+in this order (`pipeline.cc`, `film_detector.cc`: `detect_film_base`):
 
 1. **A capture of unexposed film** (`--film_base <file>[:x,y,w,h]`, TriLED only): decoded as the half-size view,
    flat-fielded, read over the given region or over a region found by tiles (the brightest group of smooth tiles of
@@ -354,7 +354,7 @@ sRGB 242 (`shoulder_x_hi_anchored`), at most 2.5; for `x_hi` between 1 and 1.1 t
 The tone stage (4.4) changes lightness only. A print (5.4) takes neither the shoulder nor the tone stage.
 
 **Where the full-size steps run.** `neg_process` makes the full-resolution image (2.1) and converts it through a
-backend (`neg_process.cc`: `Backend`). On a USE_CUDA=1 build with a CUDA device that runs its kernels, the grain-aware
+backend (`pipeline.cc`: `Backend`). On a USE_CUDA=1 build with a CUDA device that runs its kernels, the grain-aware
 debayer or the pixel-shift merge runs on the device (`gpu_passes.cu`: `gpu_grain_aware_debayer`,
 `gpu_pixel_shift_merge`), and so does the conversion to `-P srgb` or `-P srgb-g10`, through the search's GPU render
 (4.2). The device's debayer and merge give the CPU's values exactly. Its conversion computes the same `convert_pixel`
@@ -699,12 +699,12 @@ The print's exposure is one number, `A`, the APD of the film's grey that prints 
 5 are combined into one ICC profile per print material (5.4), and the print's own search (5.6) finds `A` and the
 gains for each frame on that profile. The density file and its CLF (5.9) carry the same chain for other tools.
 
-The code is `neg_process.cc`. A profile set holds nothing of a print material, and a print material holds nothing of a
-film.
+The code is `print_emulation.cc`. A profile set holds nothing of a print material, and a print material holds nothing of
+a film.
 
 ## 5.2 Density
 
-A pixel's density above the film base in the light's channels, and in a measure (`neg_process.cc`:
+A pixel's density above the film base in the light's channels, and in a measure (`print_emulation.cc`:
 `density_encode_in_place`):
 
 ```
@@ -764,8 +764,8 @@ XYZ    = Σ_λ τ(λ) light(λ) observer(λ) / Σ_λ light(λ) ȳ(λ)
 
 The chain is written as an ICC profile shaped as the chart profiles are (ICC v2, RGB → PCS XYZ D50, A2B0 `lut16`:
 three 4096-entry input curves, a 45³ table, identity output curves), so the conversion runs it as it runs them
-(`neg_process.cc`: `bracket_print_profiles`, `print_table`, `bracket_print_curves`). For the profile's input `x` (2.5,
-after the knee) in channel `c`:
+(`print_emulation.cc`: `bracket_print_profiles`, `print_table`, `bracket_print_curves`). For the profile's input `x`
+(2.5, after the knee) in channel `c`:
 
 ```
 dL_c    = −log10(unknee(x_c) g_c / n0)                light density; (g_r, g_g, g_b) = (1, g, b), applied after the knee
@@ -867,7 +867,7 @@ and leave them as the search measured them. A density output's `search`, one per
 The table's lightest node is the paper's base under its viewing light, against a perfect white (`Y` = 1). The print
 is shown relative to its paper, as the ICC defines media-relative colorimetry: each of X, Y and Z of every node is
 scaled by the PCS white's over the paper base's, so the base becomes the display's white in the preview the search
-sees and in the output (`neg_process.cc`: `to_paper_white`). The PCS white is D50 as an ICC profile stores it,
+sees and in the output (`pipeline.cc`: `to_paper_white`). The PCS white is D50 as an ICC profile stores it,
 (63190, 65536, 54061) / 65536 (`kPcsWhite`), which the sRGB profile's colorants sum to, so the base is written at 65535
 in all three channels. The paper's tint is then not shown, as an eye adapted to the
 paper does not see it. A saturated light colour can still have an sRGB channel above 1, which is cut
@@ -1037,7 +1037,7 @@ there; RP 180 blue and APD red respond partly outside that range (`response_outs
 | The film's dye spectra, base and neutral scale | `L`, `F`, `Q` | `bundle.json` `film_model` (spektrafilm's film profile) |
 | Status M, RP 180 and APD response curves | `F` | not shipped |
 | The print material's sensitivity, curves, dyes and base | `Q`, the print | the spektrafilm print profile |
-| The CIE 1931 2° observer, D50, D55 | the print | `neg_process.cc` |
+| The CIE 1931 2° observer, D50, D55 | the print | `print_emulation.cc` |
 
 The camera has no spectral data here; the crosstalk correction stands in for its response curves.
 

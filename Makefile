@@ -432,18 +432,31 @@ bin_out/embedded_data.o: embedded_data.cc negicc.h negicc_core.h Makefile $(BUIL
 	$(CXX) $(DINOV3_CXXFLAGS) -I3rd_party -DEMBED_TABLE=$(EMBED_TABLE) -DEMBED_COUNT=$(EMBED_COUNT) \
 	    -c embedded_data.cc -o $@
 
-# neg_process's own sources: neg_process.cc, the program, and np_input.cc, its inputs (which negicc-station
-# compiles too). Not in the library negicc-station links. Compiled alike, so moving code between them
-# leaves its arithmetic as it was.
+# neg_process's own sources: neg_process.cc (the command line and main), print_emulation.cc, np_output.cc and
+# pipeline.cc, and np_input.cc, its inputs and the film base capture (which negicc-station compiles too). Not in the
+# library negicc-station links. Compiled alike, so moving code between them leaves its arithmetic as it was.
 NP_CXXFLAGS = -O3 -std=c++17 -fopenmp -ffp-contract=off -Wall -Wextra -I. -I3rd_party $(LIBRAW_INC) $(LCMS2_INC) \
               $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC)
-NP_SRCS = np_input.cc
+NP_SRCS = np_input.cc print_emulation.cc np_output.cc pipeline.cc
 NP_OBJS = $(patsubst %.cc,bin_out/%.o,$(NP_SRCS))
 NP_HDRS = negicc.h negicc_core.h 3rd_party/tiff_head.h 3rd_party/picosha2/picosha2.h
 
 bin_out/neg_process.o: neg_process.cc $(NP_HDRS) $(BUILD_STAMP)
 	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
+
+bin_out/print_emulation.o: print_emulation.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
+
+# The version the TIFF, the sidecar and --version name.
+bin_out/np_output.o: np_output.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
 	$(CXX) $(NP_CXXFLAGS) -DNEGICC_GIT_VERSION="\"$(GIT_VERSION)\"" -c $< -o $@
+
+bin_out/pipeline.o: pipeline.cc $(NP_HDRS) $(BUILD_STAMP)
+	mkdir -p bin_out
+	$(CXX) $(NP_CXXFLAGS) -c $< -o $@
 
 # np_input.cc reads TIFF and JPEG files with libtiff and libjpeg-turbo.
 bin_out/np_input.o: np_input.cc $(NP_HDRS) $(BUILD_STAMP)
