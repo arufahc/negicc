@@ -786,7 +786,6 @@ class SearchFrame {
     intent_cells(cfg, input_matrix_, stats_.grid.data(), n, {cp.e, cp.g, cp.b}, lab.data());
     return lab;
   }
-  const float* frame_matrix() const { return frame_matrix_; }
   const float* input_matrix() const { return input_matrix_; }
   float e_norm() const { return e_norm_; }
 
@@ -1558,14 +1557,6 @@ bool knob_grey_lab(const ProfileData& grey_prof, const ProfileData& prof, const 
 float knob_grey_miss_stops(float brightness_stops, float grey_L) {
   auto Y = [](double L) { return L > 8.0 ? std::pow((L + 16.0) / 116.0, 3.0) : L / negicc::kLabKappa; };
   return (float)std::log2(Y(grey_L) / Y(lstar_after_stops(50.0f, brightness_stops)));
-}
-
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
-                              float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
-                              ParamSearchResult& out) {
-  return search_conversion_params(
-      bundle, engine, negicc::RgbView::from_interleaved_rgb(frame.rgb.data(), frame.width, frame.height),
-      (double)scan_shutter_s, (double)scan_iso, opts, out);
 }
 
 namespace {

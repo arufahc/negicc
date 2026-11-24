@@ -472,7 +472,7 @@ struct BundleTarget {
 enum class InputSpace {
   // Sensor RGB (narrowband TriLED light): black subtracted, no white balance, then the bundle's crosstalk matrix.
   kCameraRawRgb,
-  // Linear Rec.2020 (white D65 light): LibRaw's white-light decode (neg_process.cc decode_white_light), with no
+  // Linear Rec.2020 (white D65 light): LibRaw's white-light decode (np_input.cc decode_white_light), with no
   // crosstalk matrix.
   kRec2020Linear,
 };
@@ -1299,13 +1299,6 @@ bool solve_dinov3_intent(DinoV3Engine& eng, const SolverConfig& cfg, const float
 // Parameter search: the conversion parameter search, its renderers, the curve fit and the tone stage's plan
 // ====================================================================================================================
 
-// Interleaved 16-bit camera RGB: width x height pixels, row-major, rgb holding width * height * 3 values.
-struct RgbImage {
-  int width = 0;
-  int height = 0;
-  std::vector<uint16_t> rgb;
-};
-
 // The conversion parameter search, ported from negicc-station's (PerTargetConverter.convert with its defaults). It
 // does not convert anything: on the half-size analysis decode of one frame it picks the calibration bracket of a
 // profile bundle and the exposure E and gains g, b that neg_process then converts the full image with.
@@ -1838,10 +1831,6 @@ bool search_print_continuous(const ProfileBundle& bundle, const std::vector<Prin
 // The bracket that names a print at mid grey a: the one whose own A_mid is nearest a (the first of equals, in the
 // bundle's order). The search names its result's this way, and a print the knobs moved is named by its moved A.
 int nearest_bracket(const std::vector<double>& a_mid, double a);
-
-bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine, const RgbImage& frame,
-                              float scan_shutter_s, float scan_iso, const ParamSearchOptions& opts,
-                              ParamSearchResult& out);
 
 // ---- Fitted G/B input curves (the input curves part of negicc_core.h) -------------------------------------------
 
