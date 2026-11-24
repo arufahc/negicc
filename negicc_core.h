@@ -2651,6 +2651,12 @@ std::vector<negicc::Rgb> tone_clip_sample(const negicc::PipelineConfig& pc, cons
 void tone_clip_shares(const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample, const ToneCurve* q,
                       double* white, double* black);
 
+// Whether a plan's kept shares move nothing: the highlight and range moves and the shadow move all at share 0. The
+// targets are then the render's own descriptors, and the stage applies no curve: the conversion is the one without
+// the stage, exactly (the solver's curve for those targets is within about 1e-4 of the identity, not equal to it, and
+// a table, even of the identity, goes through Lab f and its inverse in float).
+inline bool tone_moves_nothing(double share, double shadow_share) { return share == 0.0 && shadow_share == 0.0; }
+
 // The plan's curve for the image the export converts (its clip check's sample, tone_clip_sample, through pc): the
 // designed moves (designed, solved for designed_targets by tone_plan at share 1) when both ends hold against the
 // conversion's own shares (white_before, black_before: tone_clip_shares without a curve), else the moves scaled as
