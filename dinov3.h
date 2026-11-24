@@ -524,8 +524,8 @@ struct IntentLoss {
   float clip = 0.0f;  // in percent [0, 100]
 };
 
-// The input curves of a profile with the gains g and b in them, after the knee (the print, np_print.h PrintContinuum):
-// three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
+// The input curves of a profile with the gains g and b in them, after the knee (the print, neg_process.cc
+// PrintContinuum): three tables of trc_size entries each, as ParsedFilmProfile::in_trc holds them.
 using GainCurves = std::function<void(float g, float b, std::vector<float> trc[3])>;
 
 struct SolverConfig {
