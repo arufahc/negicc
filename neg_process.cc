@@ -756,6 +756,7 @@ struct Sidecar {
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
   const int* auto_frame_half = nullptr;
   std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar
+  std::string shadow_json_str;           // the search's shadow alternative and the choice (auto.shadow_alternative)
   std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
   std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
   std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar
@@ -1084,6 +1085,58 @@ struct LibRawDeleter {
 };
 using LibRawPtr = std::unique_ptr<LibRaw, LibRawDeleter>;
 
+// The search's shadow alternative (ParamSearchResult::shadow) through the stages after the search: one candidate's
+// state from them (the curve fit, the tone plan and the roll-off), with its bracket's profile before (prof0) and after
+// (prof) the fit composed curves into it.
+struct ShadowCandidate {
+  ParamSearchResult auto_res;
+  bool has_curve_params = false;
+  ConversionParams curve_params;
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  WhiteLightFitResult curve_fit;
+  ToneStagePlan tone_stage;
+  bool tone_stage_ran = false;
+  TonePlanCurve tone_plan;
+  bool has_tone = false;
+  ToneCurve tone_curve;
+  negicc::InputCurves input_curves;
+  std::string input_curves_source;
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
+  // The knobs' state (--brightness, --tint, --warmth): their solve on this candidate, and the curves re-anchored at it.
+  bool has_knob_res = false;
+  float knob_base[3] = {1.0f, 1.0f, 1.0f};
+  KnobSolveResult knob_res;
+  bool has_knob_curves = false;
+  negicc::InputCurves knob_curves;
+  double knob_base_a = NAN;
+  int prof_idx = -1;
+  ParsedFilmProfile prof0, prof;
+  ParsedFilmProfile result_prof0;  // in the alternative's: the result's bracket's profile before the stages
+};
+
+// The tone stage's clip check of the kept candidate, made in solve; convert takes it instead of checking again.
+struct ToneCheck {
+  bool valid = false;
+  double white_before = 0, black_before = 0;
+  ToneCurve curve;
+  ToneTargets targets;
+  double share = 1.0, shadow_share = 1.0;
+  bool fell_back = false;  // no share held both ends (Options::tone_fallback chose the curve)
+};
+
+// The choice between the search's result and its shadow alternative (solve). The shares are of the tone stage's clip
+// check sample: white before, black before, white after and black after the stage.
+struct ShadowChoice {
+  bool checked = false;            // both went through the clip check
+  bool kept_alternative = false;   // the alternative was taken
+  double result[4] = {0, 0, 0, 0}, alternative[4] = {0, 0, 0, 0};
+  double stages_ms = 0.0;          // the alternative's stages after the search
+  double check_ms = 0.0;           // the alternative's solve and both candidates' clip checks
+  const char* not_checked = nullptr;  // why an alternative was not checked
+};
+
 // The scan through the pipeline.
 struct Scan {
   LibRawPtr proc;                        // the RAW (its metadata, and its image on the LibRaw path)
@@ -1177,6 +1230,12 @@ struct Scan {
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   double tone_shadow_share = 1.0;  // and of the shadow move
   bool tone_fell_back = false;     // and whether no share held both ends (Options::tone_fallback chose the curve)
+  // The search's shadow alternative (ParamSearchResult::shadow, as the search returned it), the alternative after its
+  // stages (null: none, or already chosen in solve), the choice, and the kept candidate's clip check.
+  ShadowAlternative shadow_search;
+  std::shared_ptr<ShadowCandidate> shadow_candidate;
+  ShadowChoice shadow_choice;
+  ToneCheck tone_check;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
@@ -4960,6 +5019,7 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["inferences"] = a.inferences;
   j["time_ms"] = num(sc.t_auto_ms, "%.1f");
   if (sc.search_renderer != "cpu") j["renderer"] = sc.search_renderer;
+  if (!sc.shadow_json_str.empty()) j["shadow_alternative"] = ordered_json::parse(sc.shadow_json_str);
   return j;
 }
 
@@ -7351,6 +7411,73 @@ static void load_sidecar_film_base(const Options& o, Setup& s, Scan& scan) {
   }
 }
 
+// ---- The search's shadow alternative: its own stages after the search, and the choice in solve -------------------
+
+// The state the stages after the search leave for one candidate (ShadowCandidate), and putting it back.
+static void capture_candidate(const Setup& s, const Scan& scan, ShadowCandidate& k) {
+  k.auto_res = scan.auto_res;
+  k.auto_res.shadow = ShadowAlternative{};
+  k.has_curve_params = scan.has_curve_params;
+  k.curve_params = scan.curve_params;
+  k.has_rolloff = scan.has_rolloff;
+  k.rolloff_x_hi = scan.rolloff_x_hi;
+  k.rolloff_q995 = scan.rolloff_q995;
+  k.curve_fit = s.curve_fit;
+  k.tone_stage = s.tone_stage;
+  k.tone_stage_ran = s.tone_stage_ran;
+  k.tone_plan = s.tone_plan;
+  k.has_tone = s.has_tone;
+  k.tone_curve = s.tone_curve;
+  k.input_curves = s.input_curves;
+  k.input_curves_source = s.input_curves_source;
+  k.curves_base_idx = s.curves_base_idx;
+  k.curves_base_prof = s.curves_base_prof;
+  k.curves_base_prof.rebind_pointers();
+  k.has_knob_res = scan.has_knob_res;
+  std::copy(scan.knob_base, scan.knob_base + 3, k.knob_base);
+  k.knob_res = scan.knob_res;
+  k.has_knob_curves = scan.has_knob_curves;
+  k.knob_curves = scan.knob_curves;
+  k.knob_base_a = scan.knob_base_a;
+  k.prof_idx = scan.auto_res.target_idx;
+  k.prof = s.bundle.targets[k.prof_idx].film_prof;
+  k.prof.rebind_pointers();
+}
+static void restore_candidate(Setup& s, Scan& scan, const ShadowCandidate& k) {
+  scan.auto_res = k.auto_res;
+  scan.has_curve_params = k.has_curve_params;
+  scan.curve_params = k.curve_params;
+  scan.has_rolloff = k.has_rolloff;
+  scan.rolloff_x_hi = k.rolloff_x_hi;
+  scan.rolloff_q995 = k.rolloff_q995;
+  s.curve_fit = k.curve_fit;
+  s.tone_stage = k.tone_stage;
+  s.tone_stage_ran = k.tone_stage_ran;
+  s.tone_plan = k.tone_plan;
+  s.has_tone = k.has_tone;
+  s.tone_curve = k.tone_curve;
+  s.input_curves = k.input_curves;
+  s.input_curves_source = k.input_curves_source;
+  s.curves_base_idx = k.curves_base_idx;
+  s.curves_base_prof = k.curves_base_prof;
+  s.curves_base_prof.rebind_pointers();
+  scan.has_knob_res = k.has_knob_res;
+  std::copy(k.knob_base, k.knob_base + 3, scan.knob_base);
+  scan.knob_res = k.knob_res;
+  scan.has_knob_curves = k.has_knob_curves;
+  scan.knob_curves = k.knob_curves;
+  scan.knob_base_a = k.knob_base_a;
+  s.bundle.targets[k.prof_idx].film_prof = k.prof;
+  s.bundle.targets[k.prof_idx].film_prof.rebind_pointers();
+}
+// Switches the pipeline's state from candidate from to candidate to: from's bracket back to its profile before the
+// stages (the curve fit composes its curves into the bracket's tables), then to's state.
+static void switch_candidate(Setup& s, Scan& scan, const ShadowCandidate& from, const ShadowCandidate& to) {
+  s.bundle.targets[from.prof_idx].film_prof = from.prof0;
+  s.bundle.targets[from.prof_idx].film_prof.rebind_pointers();
+  restore_candidate(s, scan, to);
+}
+
 int decode(const Options& o, Setup& s, Scan& scan) {
   ProfileBundle& bundle = s.bundle;
   std::copy(o.roi, o.roi + 4, scan.roi);
@@ -8103,6 +8230,70 @@ int decode(const Options& o, Setup& s, Scan& scan) {
     }
     return true;
   };
+  // With a shadow alternative (ParamSearchResult::shadow), the alternative's own stages after the search (the curve
+  // fit on white light, the tone plan) and its roll-off, from the same state as the result's, kept in
+  // scan.shadow_candidate for solve; the state is then the result's again, whose roll-off the caller measures.
+  // Whether the search looks for a shadow alternative: only where one could be kept, an sRGB export with the tone
+  // stage on (the choice is its clip check's), no density output, no print, and more than one bracket.
+  const bool shadow_possible = s.tone_active && o.colorspace == "srgb" && !s.density && s.print_profs.empty() &&
+                               o.prints.empty() && bundle.targets.size() > 1;
+  auto stages_and_shadow = [&](const negicc::RgbView& frame, double scan_shutter_s, double scan_iso,
+                               const ParamSearchOptions& opts) -> bool {
+    scan.shadow_search = scan.auto_res.shadow;
+    scan.shadow_candidate.reset();
+    scan.shadow_choice = ShadowChoice{};
+    const std::shared_ptr<ParamSearchResult> alt = scan.shadow_search.result;
+    scan.auto_res.shadow = ShadowAlternative{};
+    if (!alt) return stages_after_search(frame, scan_shutter_s, scan_iso, opts);
+    const double t0 = omp_get_wtime();
+    auto prof_of = [&](int idx) {
+      ParsedFilmProfile p = bundle.targets[idx].film_prof;
+      p.rebind_pointers();
+      return p;
+    };
+    const int ia = scan.auto_res.target_idx, ib = alt->target_idx;
+    ShadowCandidate a, b;
+    a.prof0 = prof_of(ia);
+    b.prof0 = prof_of(ib);
+    if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
+    capture_candidate(s, scan, a);
+    bundle.targets[ia].film_prof = a.prof0;
+    bundle.targets[ia].film_prof.rebind_pointers();
+    s.curve_fit = WhiteLightFitResult{};
+    s.tone_stage = ToneStagePlan{};
+    s.tone_stage_ran = false;
+    s.tone_plan = TonePlanCurve{};
+    s.has_tone = false;
+    s.tone_curve = ToneCurve{};
+    s.input_curves = negicc::InputCurves{};
+    s.input_curves_source.clear();
+    s.curves_base_idx = -1;
+    scan.has_curve_params = false;
+    scan.has_rolloff = false;
+    scan.has_knob_res = false;
+    scan.has_knob_curves = false;
+    scan.knob_res = KnobSolveResult{};
+    scan.auto_res = *alt;
+    log_info("The shadow alternative (%s): its stages after the search, the knobs and the roll-off:\n",
+             alt->target_name.c_str());
+    const bool ok = stages_after_search(frame, scan_shutter_s, scan_iso, opts) &&
+                    solve_knobs_and_rolloff(frame, scan_shutter_s, scan_iso);
+    if (ok) {
+      capture_candidate(s, scan, b);
+      b.result_prof0 = a.prof0;
+      b.result_prof0.rebind_pointers();
+    } else {
+      log_warn("the shadow alternative's stages after the search failed; the search's result stands\n");
+    }
+    bundle.targets[ib].film_prof = b.prof0;  // the alternative's bracket as it was, then the result's state
+    bundle.targets[ib].film_prof.rebind_pointers();
+    restore_candidate(s, scan, a);
+    scan.has_rolloff = false;  // the result's, measured by the caller
+    if (ok) scan.shadow_candidate = std::make_shared<ShadowCandidate>(std::move(b));
+    else scan.shadow_choice.not_checked = "its stages after the search failed";
+    scan.shadow_choice.stages_ms = (omp_get_wtime() - t0) * 1000.0;
+    return true;
+  };
   HalfSizeAnalysis analyse;
   if (s.is_bundle) {
     analyse = [&](const LibRaw& raw) -> bool {
@@ -8160,6 +8351,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         opts.film_base_rgb_d = scan.film_base_rgb();
         opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
         set_search_pins(o, s, opts);
+        opts.shadow_alternative = shadow_possible;
         opts.probe_path = o.probe_intent;
         opts.probe_params = o.probe_params;
         opts.probe_stops = o.probe_stops;
@@ -8174,7 +8366,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
           std::_Exit(r);  // without static teardown: the inference engine's threads are still alive here
         }
         scan.has_auto_res = true;
-        if (!stages_after_search(frame, scan_shutter_s, scan_iso, opts)) return false;
+        if (!stages_and_shadow(frame, scan_shutter_s, scan_iso, opts)) return false;
         scan.t_auto_ms = (omp_get_wtime() - t_auto_0) * 1000.0;
       }
       // The bracket analysis (timings_ms.analysis, not raw_decode): the knobs and the roll-off.
@@ -8485,6 +8677,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
       opts.film_base_rgb_d = scan.film_base_rgb();
       opts.film_base_from_scan = opts.film_base_rgb_d != nullptr;
       set_search_pins(o, s, opts);
+      opts.shadow_alternative = shadow_possible;
       opts.probe_path = o.probe_intent;
       opts.probe_params = o.probe_params;
       opts.probe_stops = o.probe_stops;
@@ -8500,7 +8693,7 @@ int decode(const Options& o, Setup& s, Scan& scan) {
         std::_Exit(r);  // without static teardown: the inference engine's threads are still alive here
       }
       scan.has_auto_res = true;
-      if (!stages_after_search(search_half_view, scan_shutter_s, scan_iso, opts)) {
+      if (!stages_and_shadow(search_half_view, scan_shutter_s, scan_iso, opts)) {
         delete proc;
         return 1;
       }
@@ -8674,7 +8867,7 @@ int render(const Options& o, const Setup& s, Scan& scan, Backend& backend) {
   return 0;
 }
 
-int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
+static int solve_one(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   ProfileBundle& bundle = s.bundle;
   LibRaw* proc = scan.proc.get();
   // With a bundle, E, g and b are the station's (the search's, and what -E, --gain_g and --gain_b take): the
@@ -8956,6 +9149,96 @@ int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
   return 0;
 }
 
+// One candidate's tone stage clip check, as convert makes it (the sRGB encoding): its sample of the image the export
+// converts (tone_clip_sample, once), its shares at white and at black before the stage, the plan's curve
+// (tone_plan_for_image) and the shares it counted with that curve. shares: white before, black before, white after,
+// black after.
+static void candidate_tone_check(const Options& o, const Setup& s, Scan& scan, const Conversion& cc, ToneCheck& t,
+                                 double shares[4]) {
+  LibRaw* tp = scan.proc.get();
+  const uint16_t* rgb = !scan.rgb3.empty() ? scan.rgb3.data() : &tp->imgdata.image[0][0];
+  const int stride = !scan.rgb3.empty() ? 3 : 4;
+  const int iw = tp->imgdata.sizes.iwidth, ih = tp->imgdata.sizes.iheight;
+  const negicc::PipelineConfig pc = make_pipeline_config(cc.film_prof.data, cc.knee, cc.shoulder.x_hi, ENCODE_SRGB);
+  const std::vector<negicc::Rgb> sample = tone_clip_sample(pc, cc.merged_matrix, rgb, iw, ih, stride);
+  t = ToneCheck{};
+  t.valid = true;
+  tone_clip_shares(pc, sample, nullptr, &t.white_before, &t.black_before);
+  t.curve = s.tone_curve;
+  double wa = 0.0, ka = 0.0;
+  const ToneStagePlan& plan = s.tone_stage;
+  if (plan.planned && !plan.preview.empty()) {
+    t.curve = tone_plan_for_image(s.tone_plan.render, plan.pred_mean[ToneHead::kL2], plan.pred_mean[ToneHead::kL98],
+                                  plan.pred_mean[ToneHead::kR9010], pc, sample, t.white_before, t.black_before,
+                                  s.tone_plan.curve, s.tone_plan.targets, &t.targets, &t.share, &t.shadow_share,
+                                  o.tone_fallback, &t.fell_back, &wa, &ka);
+  } else {
+    tone_clip_shares(pc, sample, &t.curve, &wa, &ka);
+  }
+  shares[0] = t.white_before;
+  shares[1] = t.black_before;
+  shares[2] = wa;
+  shares[3] = ka;
+}
+
+// solve, and with a shadow alternative (Scan::shadow_candidate) the choice between it and the search's result: the
+// alternative is taken only when its shares at white and at black on the tone stage's clip check sample, before and
+// after the stage, are each no higher than the result's and at least one is lower. Each candidate's sample is
+// converted once; the kept one's check goes to convert (Scan::tone_check), which does not make it again.
+int solve(const Options& o, Setup& s, Scan& scan, Conversion& c) {
+  scan.tone_check = ToneCheck{};
+  const std::shared_ptr<ShadowCandidate> bp = scan.shadow_candidate;
+  scan.shadow_candidate.reset();
+  if (!bp) return solve_one(o, s, scan, c);
+  ShadowChoice& ch = scan.shadow_choice;
+  const Conversion c0 = c;
+  int r = solve_one(o, s, scan, c);
+  if (r) return r;
+  if (!(s.has_tone && o.colorspace == "srgb" && !s.density && s.print_id.empty())) {
+    ch.not_checked = "no tone stage on this conversion";
+    return 0;
+  }
+  const double t0 = omp_get_wtime();
+  ToneCheck ta, tb;
+  candidate_tone_check(o, s, scan, c, ta, ch.result);
+  ShadowCandidate a;
+  capture_candidate(s, scan, a);
+  a.prof0 = bp->result_prof0;
+  a.prof0.rebind_pointers();
+  switch_candidate(s, scan, a, *bp);
+  Conversion cb = c0;
+  cb.film_prof.rebind_pointers();
+  log_info("The shadow alternative (%s), converted to compare:\n", bp->auto_res.target_name.c_str());
+  const bool b_ok = solve_one(o, s, scan, cb) == 0;
+  if (b_ok) candidate_tone_check(o, s, scan, cb, tb, ch.alternative);
+  bool no_higher = b_ok, lower = false;
+  for (int i = 0; b_ok && i < 4; ++i) {
+    no_higher = no_higher && ch.alternative[i] <= ch.result[i];
+    lower = lower || ch.alternative[i] < ch.result[i];
+  }
+  ch.checked = b_ok;
+  ch.kept_alternative = no_higher && lower;
+  if (ch.kept_alternative) {
+    c = cb;
+    c.film_prof.rebind_pointers();
+    scan.tone_check = tb;
+  } else {
+    switch_candidate(s, scan, *bp, a);
+    scan.tone_check = ta;
+    if (c.station_params) {   // the conversion is the result's again, not the alternative's solved above
+      log_info("Solved (the result, kept): -E %.9g --gain_g %.9g --gain_b %.9g --target %d\n",
+               (*c.station_params)[0], (*c.station_params)[1], (*c.station_params)[2], c.bundle_target_idx);
+    }
+  }
+  ch.check_ms = (omp_get_wtime() - t0) * 1000.0;
+  log_info("Shadow alternative %s: %s; at white %.4f%% -> %.4f%% and at black %.4f%% -> %.4f%% (the result), "
+           "%.4f%% -> %.4f%% and %.4f%% -> %.4f%% (the alternative) on the clip check's sample; %.0f ms\n",
+           bp->auto_res.target_name.c_str(), ch.kept_alternative ? "taken" : "not taken", 100.0 * ch.result[0],
+           100.0 * ch.result[2], 100.0 * ch.result[1], 100.0 * ch.result[3], 100.0 * ch.alternative[0],
+           100.0 * ch.alternative[2], 100.0 * ch.alternative[1], 100.0 * ch.alternative[3], ch.check_ms);
+  return 0;
+}
+
 int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend& backend) {
   OutputSpec& out = c.out;
   if (s.density) {
@@ -9079,7 +9362,18 @@ int convert(const Options& o, const Setup& s, Scan& scan, Conversion& c, Backend
     scan.tone_shadow_share = 1.0;
     scan.tone_fell_back = false;
     const double t_tone_0 = omp_get_wtime();
-    {
+    if (scan.tone_check.valid) {
+      // solve made this check already, on the same sample, choosing between the result and its shadow alternative.
+      scan.tone_clip.white_before = scan.tone_check.white_before;
+      scan.tone_clip.black_before = scan.tone_check.black_before;
+      scan.tone_curve = scan.tone_check.curve;
+      if (tone_plan_here) {
+        scan.tone_targets = scan.tone_check.targets;
+        scan.tone_share = scan.tone_check.share;
+        scan.tone_shadow_share = scan.tone_check.shadow_share;
+        scan.tone_fell_back = scan.tone_check.fell_back;
+      }
+    } else {
       const std::vector<negicc::Rgb> sample = tone_clip_sample(export_pc, c.merged_matrix, rgb, iw, ih, stride);
       tone_clip_shares(export_pc, sample, nullptr, &scan.tone_clip.white_before, &scan.tone_clip.black_before);
       if (tone_plan_here) {
@@ -9539,6 +9833,45 @@ int write(const Options& o, const Setup& s, Scan& scan, Conversion& c) {
   if (o.dino_backend != "auto") sc.dino_backend_arg = o.dino_backend;
   sc.dino_iters = o.dino_iters;
   sc.auto_res = scan.has_auto_res && !s.has_cached_sidecar ? &scan.auto_res : nullptr;
+  if (sc.auto_res && scan.shadow_search.ran) {
+    // The search's shadow alternative (ParamSearchResult::shadow) and the choice (solve): each screened bracket's
+    // shares in the clip pass, the bracket it chose and why there was none, and the two candidates' shares on the tone
+    // stage's clip check sample.
+    const ShadowAlternative& sa = scan.shadow_search;
+    const ShadowChoice& ch = scan.shadow_choice;
+    nlohmann::ordered_json j, rows = nlohmann::ordered_json::array();
+    for (const ShadowBracketRow& r : sa.rows)
+      rows.push_back({{"target_idx", r.target_idx}, {"white_pct", (double)(r.white)},
+                      {"black_pct", (double)(r.black)}});
+    j["clip_pass"] = rows;
+    j["result_white_pct"] = (double)(sa.result_white);
+    j["result_black_pct"] = (double)(sa.result_black);
+    j["bracket"] = sa.picked >= 0 ? nlohmann::ordered_json(sa.picked) : nlohmann::ordered_json(nullptr);
+    j["none"] = sa.none ? nlohmann::ordered_json(sa.none) : nlohmann::ordered_json(nullptr);
+    j["chosen_within_allowance"] = sa.chosen_within_allowance;
+    if (sa.result) {
+      const ParamSearchResult& b = *sa.result;
+      j["alternative"] = {{"target_idx", b.target_idx}, {"e", (double)(b.params.e)}, {"g", (double)(b.params.g)},
+                          {"b", (double)(b.params.b)}, {"residual", (double)(b.residual)},
+                          {"reused_tournament_run", sa.reused_run}};
+      auto shares = [](const double* v) {
+        return nlohmann::ordered_json{{"white_before", (double)(v[0])}, {"black_before", (double)(v[1])},
+                                      {"white_after", (double)(v[2])}, {"black_after", (double)(v[3])}};
+      };
+      j["checked"] = ch.checked;
+      if (ch.checked) {
+        j["result_sample"] = shares(ch.result);
+        j["alternative_sample"] = shares(ch.alternative);
+      } else {
+        j["not_checked"] = ch.not_checked ? nlohmann::ordered_json(ch.not_checked) : nlohmann::ordered_json(nullptr);
+      }
+      j["kept"] = ch.kept_alternative ? "alternative" : "result";
+    }
+    j["inferences"] = sa.inferences;
+    j["time_ms"] = {{"search_step", (double)(sa.ms)}, {"stages", (double)(ch.stages_ms)},
+                    {"check", (double)(ch.check_ms)}};
+    sc.shadow_json_str = j.dump();
+  }
   if (s.has_cached_sidecar) {
     // The previous run's search records, its intent field and its curves' record carry over unchanged.
     if (s.cached_sidecar.is_auto) {

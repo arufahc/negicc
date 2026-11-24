@@ -332,7 +332,8 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                               const negicc::PipelineConfig& pc, const std::vector<negicc::Rgb>& sample,
                               double white_before, double black_before, const ToneCurve& designed,
                               const ToneTargets& designed_targets, ToneTargets* targets, double* share,
-                              double* shadow_share, ToneClipFallback fallback, bool* fell_back) {
+                              double* shadow_share, ToneClipFallback fallback, bool* fell_back, double* white_after,
+                              double* black_after) {
     constexpr int n = (int)(sizeof(kToneClipShares) / sizeof(kToneClipShares[0]));
     ToneCurve curves[n];
     ToneTargets tts[n];
@@ -360,6 +361,11 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
         }
     }
     if (fell_back) *fell_back = k < 0;
+    // The kept curve's shares on the sample, as counted below (or above, for a share's candidate).
+    auto kept_shares = [&](double aw, double ab) {
+        if (white_after) *white_after = aw;
+        if (black_after) *black_after = ab;
+    };
     if (k < 0 && fallback == kToneFallbackLeastTotal) {
         // The least clipping at both ends together, over every candidate either end's rule tries: the shares'
         // candidates, and the last share with the shadow move scaled through the shares. On a tie, the larger share,
@@ -371,6 +377,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
         ToneCurve kept_curve = curves[k];
         ToneTargets kept_targets = tts[k];
         double kept_share = kToneClipShares[k], kept_shadow = ss[k];
+        double kept_aw = aws[k], kept_ab = abs_[k];
         const double hs = kToneClipShares[n - 1];
         for (int j = 1; j < n; ++j) {
             const double s2 = kToneClipShares[j];
@@ -385,8 +392,11 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
                 kept_targets = t;
                 kept_share = hs;
                 kept_shadow = s2;
+                kept_aw = aw;
+                kept_ab = ab;
             }
         }
+        kept_shares(kept_aw, kept_ab);
         if (shadow_share) *shadow_share = kept_shadow;
         *share = kept_share;
         *targets = kept_targets;
@@ -404,22 +414,25 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
             ToneCurve kept_curve = curves[best];
             ToneTargets kept_targets = tts[best];
             double kept_share = kToneClipShares[best], kept_shadow = ss[best];
+            double kept_ab = abs_[best];
             const double hs = kToneClipShares[n - 1];
             for (int j = 1; j < n; ++j) {
                 const double s2 = kToneClipShares[j];
                 ToneTargets t;
                 const ToneCurve q = tone_plan_shares(render, pred_L2, pred_L98, pred_range, hs, s2, &t);
-                double aw = 0.0;
-                tone_clip_shares(pc, sample, &q, &aw, nullptr);
+                double aw = 0.0, ab = 0.0;
+                tone_clip_shares(pc, sample, &q, &aw, &ab);  // the black share only for the kept curve's record
                 if (aw - white_before <= kToneClipAllowance || aw < best_aw) {
                     best_aw = aw;
                     kept_curve = q;
                     kept_targets = t;
                     kept_share = hs;
                     kept_shadow = s2;
+                    kept_ab = ab;
                     if (aw - white_before <= kToneClipAllowance) break;
                 }
             }
+            kept_shares(best_aw, kept_ab);
             if (shadow_share) *shadow_share = kept_shadow;
             *share = kept_share;
             *targets = kept_targets;
@@ -428,6 +441,7 @@ ToneCurve tone_plan_for_image(const ToneDescriptors& render, double pred_L2, dou
     } else if (k < 0) {
         k = n - 1;  // shadows first: the last share, no highlight or range move
     }
+    kept_shares(aws[k], abs_[k]);
     if (shadow_share) *shadow_share = ss[k];
     *share = kToneClipShares[k];
     *targets = tts[k];

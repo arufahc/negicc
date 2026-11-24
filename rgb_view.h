@@ -278,6 +278,9 @@ struct HighlightClipArgs {
     // source of the shoulder's x_hi). Filled when non-null. The clip and exceedance counts read the pre-shoulder
     // value; the L* median (out[4]) is post-shoulder.
     uint64_t* max_hist = nullptr;
+    // Optional: n floats, the percent of the crop with any channel black-clipped (linear_channel_black_clipped), for
+    // the search's shadow alternative. Filled when non-null; out is the same either way.
+    float* black_out = nullptr;
 };
 
 struct LabStatsRow {

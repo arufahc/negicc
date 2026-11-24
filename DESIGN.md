@@ -449,6 +449,19 @@ not the optimiser's reading of it, matches the field.
    and it moves to a denser bracket or raises `E` by more than 2 %. Dark and backlit frames are left alone, and the
    pullback does not run after the clip fallback took the next bracket, with `-E`, or on a one-bracket set.
 7. **Final shoulder.** `x_hi` is measured once more at the final parameters.
+8. **Shadow alternative.** The picture's preview can crush shadows that no statistic of the cells shows: a colour
+   with one saturated channel going below black, or a dark area's chroma noise. The step reads it from the render. One
+   clip pass per screened bracket, at its screened parameters, counts the share of the inner crop with a channel
+   white-clipped and with a channel black-clipped (the result's own bracket's pass also counts the result). Among the
+   brackets whose white share is within the clip allowance of the tone stage (0.5 % of the crop) of the result's, the
+   one with the lowest black share is picked, the first in screening order on a tie. When that is not the result's
+   bracket and the result's bracket, at its screened parameters, is not as low, the picked bracket runs the loop of
+   step 4 (or keeps its tournament run) and has its roll-off measured: the alternative. Whether the conversion takes
+   it is decided after the full-size decode, by the tone stage's clip check (4.4). The result's bracket is compared
+   whether or not it is within the allowance (the allowance chooses where to move to; the result's bracket is where
+   the picture is), and the result's own black share is recorded but takes no part in the choice. The step does not
+   run with `--target` or `-E`, with one bracket, or where no alternative could be kept: an output other than sRGB,
+   the tone stage off, a density output or a print.
 
 The sidecar records the winning step's field as `intent_field` (`μ` and `σ` per cell): its `a*` and `b*` as that step
 predicted them, its `L*` the lightness target of step 2.
@@ -471,6 +484,7 @@ The search's parameters, in the order the steps use them:
 | Convergence | 0.02 in `E + g + b`; 1.5 % (TriLED); past minimum (white); 8 steps | When a loop stops. |
 | Clip fallback | over 0.03 %; halve; −4.5 to +0.5 `L*`; residual within 10 % | Moves a clipping frame to the next denser bracket. |
 | Highlight pullback | `L*` 58 with 2.2 %, `L*` 48 with 7.5 % (11 % above 235); 0.15 stop | Darkens a bright frame whose highlights crowd white. |
+| Shadow alternative | white within the tone stage's clip allowance (0.5 %); the lowest black share | A bracket that crushes less shadow, read from its render. |
 | Highlight roll-off | 99.5 % point to sRGB 242; `x_hi` ≤ 2.5; exponent 2; ceiling 0.988 | Compresses highlights above the chart's white. |
 
 **Given values.** On a bundle, under either light, `--target`, `-E`, `--gain_g` and `--gain_b` are held and the rest
@@ -632,6 +646,18 @@ lowers the shadow lift at the last share through the same shares until white hol
 larger share on a tie, then the larger lift). The sidecar names the rule as `tone_stage.fallback` (null where a share
 held). The sidecar records both shares before (the sample) and after (every pixel of the inner crop) as
 `tone_stage.clip`, and the shares kept as `moves.highlight_share` and `moves.shadow_share`.
+
+**The search's shadow alternative.** When the search found one (4.2, step 8), it goes through the stages after the
+search as the result does (the curve fit on white light, the tone plan, the roll-off), and both go through the clip
+check: each candidate's sample is converted once, its shares before the stage are counted, and its plan's curve is
+chosen on it, which counts the shares after the stage. The alternative replaces the result only if, at white and at
+black, before and after the stage, each of its shares is no higher than the result's and at least one is lower. The
+clip check of the candidate kept is the export's. The sidecar records the step and the choice as
+`auto.shadow_alternative`: each screened bracket's shares in the clip pass, the bracket picked (or why none, and
+whether the result's bracket was within the allowance), the alternative's parameters, both candidates' four shares on
+the sample (or why they were not compared), and which was kept. Each candidate carries its own knob solve
+(`--brightness`, `--tint`, `--warmth`) and the curves re-anchored at it. The Auto's inferences and times, and its log,
+include the alternative's work; the log names the alternative's blocks.
 
 **Limits.** The moves were chosen by comparing pictures, not derived.
 
