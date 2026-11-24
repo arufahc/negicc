@@ -428,14 +428,41 @@ static json tone_vectors(const ProfileBundle& bundle, int target_idx) {
     tone_clip_shares(pc, sample, &q, &wa, &ka);
     j["clip"]["curves"].push_back({{"curve", tone_curve_json(q)}, {"white", wa}, {"black", ka}});
   }
-  {
+  {  // The plan for that image (the default rule): it lifts the shadows and pushes the highlights.
     ToneTargets dt, t;
     const double pr[3] = {d.L2 + 3.0, d.L98 + 12.0, d.range() + 20.0};
     const ToneCurve designed = tone_plan(d, pr[0], pr[1], pr[2], 1.0, &dt);
-    double share = 0.0;
-    const ToneCurve q = tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, sample, wb, kb, designed, dt, &t, &share);
-    j["clip"]["plan"] = {{"pred", {pr[0], pr[1], pr[2]}}, {"share", share}, {"targets", {t.L2, t.L50, t.L98, t.range}},
-                         {"curve", tone_curve_json(q)}};
+    double share = 0.0, shadow_share = 0.0;
+    const ToneCurve q =
+        tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, sample, wb, kb, designed, dt, &t, &share, &shadow_share);
+    j["clip"]["plan"] = {{"pred", {pr[0], pr[1], pr[2]}}, {"share", share}, {"shadow_share", shadow_share},
+                         {"targets", {t.L2, t.L50, t.L98, t.range}}, {"curve", tone_curve_json(q)}};
+  }
+  // A darker image through the same conversion (the same pattern at 1 to 1.6 times the input), and a plan that pushes
+  // the shadows and the highlights down: the designed curve puts more of the image at 0 than the allowance, so the
+  // black end steps the shares down (and re-plans the shadow move at the shares where it fails with it whole).
+  {
+    std::vector<uint16_t> dark(W * H * 3);
+    for (int y = 0; y < H; ++y)
+      for (int x = 0; x < W; ++x) {
+        uint16_t* p = &dark[(y * W + x) * 3];
+        const double t = 1.0 + 0.6 * (double)(x + W * y) / (W * H);
+        p[0] = (uint16_t)std::lround(9342.5 * t * (1.0 + 0.2 * std::sin(x * 0.7)));
+        p[1] = (uint16_t)std::lround(5433.0 * t);
+        p[2] = (uint16_t)std::lround(7411.5 * t * (1.0 + 0.2 * std::cos(y * 0.9)));
+      }
+    const std::vector<negicc::Rgb> ds = tone_clip_sample(pc, m, dark.data(), W, H, 3);
+    double dwb = 0.0, dkb = 0.0;
+    tone_clip_shares(pc, ds, nullptr, &dwb, &dkb);
+    ToneTargets dt, t;
+    const double pr[3] = {d.L2 - 9.9, d.L98 - 20.0, d.range() - 30.0};
+    const ToneCurve designed = tone_plan(d, pr[0], pr[1], pr[2], 1.0, &dt);
+    double share = 0.0, shadow_share = 0.0;
+    const ToneCurve q =
+        tone_plan_for_image(d, pr[0], pr[1], pr[2], pc, ds, dwb, dkb, designed, dt, &t, &share, &shadow_share);
+    j["clip"]["dark"] = {{"img", dark}, {"none", {dwb, dkb}},
+                         {"plan", {{"pred", {pr[0], pr[1], pr[2]}}, {"share", share}, {"shadow_share", shadow_share},
+                                   {"targets", {t.L2, t.L50, t.L98, t.range}}, {"curve", tone_curve_json(q)}}}};
   }
   return j;
 }
