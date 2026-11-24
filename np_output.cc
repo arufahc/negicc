@@ -244,6 +244,7 @@ static ordered_json auto_json(const ParamSearchResult& a, const int* frame_half,
   j["inferences"] = a.inferences;
   j["time_ms"] = num(sc.t_auto_ms, "%.1f");
   if (sc.search_renderer != "cpu") j["renderer"] = sc.search_renderer;
+  if (!sc.shadow_json_str.empty()) j["shadow_alternative"] = ordered_json::parse(sc.shadow_json_str);
   return j;
 }
 

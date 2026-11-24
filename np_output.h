@@ -108,6 +108,7 @@ struct Sidecar {
   const ParamSearchResult* auto_res = nullptr;  // the bundle search, when it ran
   const int* auto_frame_half = nullptr;
   std::string cached_auto_json_str;      // preserved "auto" JSON when reusing a sidecar
+  std::string shadow_json_str;           // the search's shadow alternative and the choice (auto.shadow_alternative)
   std::string cached_dino_json_str;      // preserved "dino" JSON when reusing a sidecar
   std::string cached_intent_field_json_str;  // preserved "intent_field" JSON when reusing a sidecar
   std::string cached_input_curves_json_str;  // preserved "input_curves" JSON when reusing a sidecar

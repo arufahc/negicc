@@ -231,6 +231,50 @@ struct LibRawDeleter {
 };
 using LibRawPtr = std::unique_ptr<LibRaw, LibRawDeleter>;
 
+// The search's shadow alternative (ParamSearchResult::shadow) through the stages after the search: one candidate's
+// state from them (the curve fit, the tone plan and the roll-off), with its bracket's profile before (prof0) and after
+// (prof) the fit composed curves into it.
+struct ShadowCandidate {
+  ParamSearchResult auto_res;
+  bool has_curve_params = false;
+  ConversionParams curve_params;
+  bool has_rolloff = false;
+  float rolloff_x_hi = 1.0f, rolloff_q995 = 0.0f;
+  WhiteLightFitResult curve_fit;
+  ToneStagePlan tone_stage;
+  bool tone_stage_ran = false;
+  TonePlanCurve tone_plan;
+  bool has_tone = false;
+  ToneCurve tone_curve;
+  negicc::InputCurves input_curves;
+  std::string input_curves_source;
+  int curves_base_idx = -1;
+  ParsedFilmProfile curves_base_prof;
+  int prof_idx = -1;
+  ParsedFilmProfile prof0, prof;
+  ParsedFilmProfile result_prof0;  // in the alternative's: the result's bracket's profile before the stages
+};
+
+// The tone stage's clip check of the kept candidate, made in solve; convert takes it instead of checking again.
+struct ToneCheck {
+  bool valid = false;
+  double white_before = 0, black_before = 0;
+  ToneCurve curve;
+  ToneTargets targets;
+  double share = 1.0, shadow_share = 1.0;
+};
+
+// The choice between the search's result and its shadow alternative (solve). The shares are of the tone stage's clip
+// check sample: white before, black before, white after and black after the stage.
+struct ShadowChoice {
+  bool checked = false;            // both went through the clip check
+  bool kept_alternative = false;   // the alternative was taken
+  double result[4] = {0, 0, 0, 0}, alternative[4] = {0, 0, 0, 0};
+  double stages_ms = 0.0;          // the alternative's stages after the search
+  double check_ms = 0.0;           // the alternative's solve and both candidates' clip checks
+  const char* not_checked = nullptr;  // why an alternative was not checked
+};
+
 // The scan through the pipeline.
 struct Scan {
   LibRawPtr proc;                        // the RAW (its metadata, and its image on the LibRaw path)
@@ -323,6 +367,12 @@ struct Scan {
   ToneTargets tone_targets;        // with this run's plan: the targets it was solved for
   double tone_share = 1.0;         // and the share of the highlight and range moves kept
   double tone_shadow_share = 1.0;  // and of the shadow move
+  // The search's shadow alternative (ParamSearchResult::shadow, as the search returned it), the alternative after its
+  // stages (null: none, or already chosen in solve), the choice, and the kept candidate's clip check.
+  ShadowAlternative shadow_search;
+  std::shared_ptr<ShadowCandidate> shadow_candidate;
+  ShadowChoice shadow_choice;
+  ToneCheck tone_check;
 
   double t_raw_0 = 0.0;                  // timings (ms) the sidecar records
   double t_raw_decode_ms = 0.0, t_frame_det_ms = 0.0, t_auto_ms = 0.0;
