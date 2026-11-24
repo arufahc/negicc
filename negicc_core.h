@@ -663,7 +663,8 @@ struct FilmImage {
 };
 
 // An interleaved RGB image of |channels| (3 or 4, R G B first) uint16_t per pixel, |row_stride| uint16_t elements
-// per row (0: width * channels); e.g. LibRaw's image[][4] after dcraw_process or a pixel-shift merge.
+// per row (0: width * channels); e.g. LibRaw's image[][4] after dcraw_process or a pixel-shift merge. Null pixels or
+// fewer than 3 channels give an empty image (no data), which the detector refuses.
 FilmImage film_image_from_interleaved(const uint16_t* pixels, int width, int height, int channels,
                                       ptrdiff_t row_stride = 0, float white = 65535.0f);
 
@@ -692,10 +693,11 @@ struct FrameDetectionParams {
   FilmFormat format = FILM_FORMAT_AUTO;  // set by the user for the best accuracy; AUTO tries every format
   FilmPolarity polarity = FILM_NEGATIVE;
   char axis_hint = 0;            // 'h' (or 'H') the strip runs along x, 'v' (or 'V') along y, 0 detect
-  float max_rotation_deg = 5.0f; // tilt search range
+  float max_rotation_deg = 5.0f; // tilt search range, 0 to 90 degrees (the reported tilt stays within it)
   int work_size = 1024;          // long side of the work image, pixels (at least 256)
   bool refine = true;            // sub-pixel refinement of the primary frame's edges on the full-resolution image
   float crop_inset = 0.005f;     // FrameDetection::crop: inset per side, as a fraction of the crop's width or height
+                                 // (at least 0, below 0.5)
   int crop_align = 1;            // FrameDetection::crop: x, y, x + w and y + h multiples of this (the CFA period)
 };
 
@@ -751,13 +753,16 @@ struct FrameDetection {
   std::string reason;                 // comma-separated diagnostics ("" when nothing to report)
 };
 
-// Detects the film frame in |image|. False when the image is too small or holds no frame.
+// Detects the film frame in |image|. False when the image is too small or holds no frame, or when the image or params
+// break their stated ranges (a white level that is not positive and finite, a black level that is not finite, a
+// channel's x0 or y0 outside [0, step), max_rotation_deg or crop_inset outside its range).
 bool detect_film_frame(const FilmImage& image, const FrameDetectionParams& params, FrameDetection& out);
 
 // Median per channel (sample units, black subtracted) of the samples whose photosite centre lies inside |patch|
 // (image pixels), and the standard deviation of their green log10 density. False when it holds fewer than 32
-// samples of a channel. Used for the base patch on the image the caller converts (e.g. the decoded crop in its own
-// colour space; shift the patch's centre by the crop's origin, and halve it for a half-size decode).
+// samples of a channel, or when the image has no samples or the patch is not finite with a positive size. Used for the
+// base patch on the image the caller converts (e.g. the decoded crop in its own colour space; shift the patch's
+// centre by the crop's origin, and halve it for a half-size decode).
 bool film_sample_patch(const FilmImage& image, const FilmRect& patch, float rgb[3], float* std_d);
 
 namespace negicc {
@@ -863,13 +868,14 @@ public:
     // Divides an interleaved u16 RGB decode in place (computed in float, rounded once, clamped to 65535).
     // half: the decode is half-size (else full-size, sampled at half-size coordinates (x + 0.5) / 2 - 0.5).
     // Before dividing, counts pixels with any channel >= clip_level; returns that count.
-    // Throws std::invalid_argument if the decode size does not match the size the grid was measured on.
+    // Throws std::invalid_argument if the decode size does not match the size the grid was measured on, or rgb is null.
     size_t apply(uint16_t* rgb, int width, int height, bool half, uint16_t clip_level) const;
 
     // Divides a full-size CFA mosaic in place, before any demosaic (the white-light decode): photosite (x, y) is
     // divided by the gain of its own colour, pattern[(y % 6) * 6 + x % 6] (0 = R, 1 = G, 2 = B; a 2x2 Bayer or a
     // 6x6 X-Trans pattern), sampled at half-size coordinates as apply() samples a full-size decode. pitch: u16 per
-    // row of cfa. Throws std::invalid_argument if width / 2 x height / 2 is not the size the grid was measured on.
+    // row of cfa. Throws std::invalid_argument if width / 2 x height / 2 is not the size the grid was measured on,
+    // if cfa or pattern is null, or if pitch is below width (rows would overlap).
     void apply_cfa(uint16_t* cfa, size_t pitch, int width, int height, const uint8_t pattern[36]) const;
 
     // The gain grid and the lookup tables of a width x height decode (half: half-size, else full-size), in host or
@@ -913,7 +919,7 @@ private:
 
 using FlatFieldPtr = std::shared_ptr<const FlatField>;
 
-// Pixels of an interleaved u16 RGB image with any channel >= clip_level.
+// Pixels of an interleaved u16 RGB image with any channel >= clip_level (0 for a null image).
 size_t count_clipped(const uint16_t* rgb, size_t pixels, uint16_t clip_level);
 
 // Loads a flat-field .npz file saved by scan_flat_field.py (containing gain.npy float32 [gh, gw, 3] and info.npy JSON).
@@ -1314,9 +1320,12 @@ void cpu_preview_debayer(const PreviewDebayerArgs& a);
 //
 // Under white light the blue channel is too noisy for the ratios; those scans decode through LibRaw instead.
 // -----------------------------------------------------------------------------------------------------------------
+// Throws std::invalid_argument when white_level or eps is not finite.
 void cpu_grain_aware_debayer(const GrainAwareDebayerArgs& a);
 // Throws std::invalid_argument when white_level is outside a 16-bit sample's range (0 to 65535).
 void cpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
+// Every debayer and merge here and below throws std::invalid_argument when it would write a pixel (a positive dst_w and
+// dst_h, or n > 0) from a mosaic without a positive src_w and src_h, or with a mosaic, the positions or rgb_out null.
 // The same pixels as cpu_grain_aware_debayer and cpu_pixel_shift_merge, for the n output positions xy (x2, y2 pairs in
 // a.dst_w x a.dst_h) only, written in that order to a.rgb_out (n x 3): the tone stage's clip check reads the
 // pixels it samples without demosaicing the frame.
@@ -1338,7 +1347,8 @@ void gpu_pixel_shift_merge(const PixelShiftMergeArgs& a);
 // On the GPU, the pixels of cpu_grain_aware_debayer_sampled and cpu_pixel_shift_merge_sampled for the clip check's
 // sample laid out by its blocks (the 2 x 2 at the origin of every step x step
 // block inside the crop [cx0, cx1) x [cy0, cy1) of the a.dst_w x a.dst_h frame), in the order of that list of
-// positions, the positions computed on the device: a.rgb_out device-visible, sampled_grid_count(...) x 3.
+// positions, the positions computed on the device: a.rgb_out device-visible, sampled_grid_count(...) x 3 (0 for a step
+// not above 0; the crop's part below 0 holds no positions).
 long long sampled_grid_count(int step, int cx0, int cy0, int cx1, int cy1);
 void gpu_grain_aware_debayer_grid(const GrainAwareDebayerArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
 void gpu_pixel_shift_merge_grid(const PixelShiftMergeArgs& a, int step, int cx0, int cy0, int cx1, int cy1);
@@ -2754,7 +2764,7 @@ struct FilmBaseDetection {
 // The thinnest film on the half-size decode |half| of a TriLED scan or capture (step 2. above), in its units. |white|
 // is the clipping level of its samples before the flat field (black subtracted, in their units). |at_clip| (when
 // given): whether that film, read on the same pixels before the flat field, is at the sensor's clip in a channel
-// (FilmBaseDetection::thinnest_clipped).
+// (FilmBaseDetection::thinnest_clipped). 0, 0, 0 (and not at the clip) when half is not valid().
 void thinnest_film_base(const RgbView& half, float white, float out[3], bool* at_clip = nullptr);
 
 // The film base of the scan whose half-size decode (flat field applied) is |half|. |det| is the frame detector's
@@ -2763,7 +2773,7 @@ void thinnest_film_base(const RgbView& half, float white, float out[3], bool* at
 // detection succeeded with confidence at least kBaseMinFrameConf. |crosstalk| the 3x3 row-major crosstalk matrix (null
 // for none: a white-light decode). |white| is the clipping level of half's samples before its flat field (black
 // subtracted, in their units; unused on a white-light decode). False (out.found false) when neither step gives a
-// positive base; out still carries the detector's record.
+// positive, finite base; out still carries the detector's record. False with nothing read when half is not valid().
 bool detect_film_base(const RgbView& half, const FrameDetection* det, int sensor_w, int sensor_h,
                       const double* crosstalk, float white, FilmBaseDetection& out);
 

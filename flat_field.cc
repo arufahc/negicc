@@ -86,6 +86,7 @@ FlatField::FlatField(std::vector<float> gain, int grid_h, int grid_w, int block,
 }
 
 size_t count_clipped(const uint16_t* rgb, size_t pixels, uint16_t clip_level) {
+    if (!rgb) return 0;  // no image, no clipped pixels
     size_t n = 0;
     #pragma omp parallel for reduction(+ : n) schedule(static)
     for (long long p = 0; p < (long long)pixels; ++p) {
@@ -137,6 +138,7 @@ std::shared_ptr<const FlatTables> FlatField::tables(int width, int height, bool 
 }
 
 size_t FlatField::apply(uint16_t* rgb, int width, int height, bool half, uint16_t clip_level) const {
+    if (!rgb && width > 0 && height > 0) throw std::invalid_argument("flat field: no image to apply it to");
     const FlatSampleArgs f = tables(width, height, half)->host();
     size_t clipped = 0;
     #pragma omp parallel for reduction(+ : clipped) schedule(static)
@@ -155,7 +157,12 @@ void FlatField::apply_cfa(uint16_t* cfa, size_t pitch, int width, int height, co
         throw std::invalid_argument("flat field was measured on a " + std::to_string(m_half_w) + "x" +
                                     std::to_string(m_half_h) + " half-size decode; this mosaic is " +
                                     std::to_string(width) + "x" + std::to_string(height));
-    for (int k = 0; k < 36; ++k)
+    if (width > 0 && height > 0 && (!cfa || !pattern))
+        throw std::invalid_argument("flat field: no mosaic or no CFA pattern to apply it to");
+    // Rows must not overlap: they are divided in parallel, one row per thread.
+    if (pitch < (size_t)std::max(width, 0))
+        throw std::invalid_argument("flat field: the mosaic's pitch is shorter than its width");
+    for (int k = 0; k < 36 && pattern; ++k)
         if (pattern[k] > 2) throw std::invalid_argument("flat field: CFA colour index must be 0, 1 or 2");
     const Axis ax = axis_table(width, false, m_block, m_gw);
     const Axis ay = axis_table(height, false, m_block, m_gh);

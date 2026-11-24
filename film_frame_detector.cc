@@ -78,6 +78,10 @@
 namespace {
 
 constexpr float kPi = 3.14159265358979f;   // pi in single precision
+// The largest tilt search range (FrameDetectionParams::max_rotation_deg): a line's direction repeats every 180
+// degrees, so +-90 covers every tilt. Larger ranges are refused (the search's 0.2 degree steps stop advancing in single
+// precision long before a range is infinite).
+constexpr float kMaxRotationDeg = 90.0f;
 
 // Stops below the film base still counted as base (classify), and the spread a line of film base may have.
 constexpr float kBaseMargin = 0.30f;
@@ -382,6 +386,8 @@ float estimate_rotation(const WorkImage& wi, float max_deg, float* confidence) {
   const double s0 = score(best - 0.02f), s1 = score(best + 0.02f);
   const double den = s0 - 2 * bs + s1;
   if (den < 0) best += (float)(0.02 * 0.5 * (s0 - s1) / den);
+  // The fine steps and the parabola can reach past the coarse range: the tilt stays within +-max_deg.
+  best = std::min(std::max(best, -max_deg), max_deg);
   const double med = percentile(coarse, 0.5);
   *confidence = (float)(med > 0 ? std::min(1.0, (bs / med - 1.0) / 2.0) : 0.0);
   return best;
@@ -2758,6 +2764,7 @@ int FilmImage::samples_y() const {
 FilmImage film_image_from_interleaved(const uint16_t* pixels, int width, int height, int channels,
                                       ptrdiff_t row_stride, float white) {
   FilmImage im;
+  if (!pixels || channels < 3) return im;  // no R, G and B to read: an empty image, which the detector refuses
   im.width = width;
   im.height = height;
   im.step = 1;
@@ -2850,6 +2857,13 @@ void FilmRect::corners(float xy[8]) const {
 
 bool film_sample_patch(const FilmImage& im, const FilmRect& patch, float rgb[3], float* std_d) {
   const int nx = im.samples_x(), ny = im.samples_y();
+  if (!rgb || im.step <= 0 || nx <= 0 || ny <= 0) return false;
+  for (const FilmChannel& c : im.ch)
+    if (!c.data) return false;
+  if (!(std::isfinite(patch.cx) && std::isfinite(patch.cy) && std::isfinite(patch.angle_deg) && patch.w > 0.0f &&
+        patch.h > 0.0f && std::isfinite(patch.w) && std::isfinite(patch.h))) {
+    return false;
+  }
   float xy[8];
   patch.corners(xy);
   float bx0 = xy[0], by0 = xy[1], bx1 = xy[0], by1 = xy[1];
@@ -2864,10 +2878,13 @@ bool film_sample_patch(const FilmImage& im, const FilmRect& patch, float rgb[3],
   for (int ch = 0; ch < 3; ++ch) {
     const FilmChannel& fc = im.ch[ch];
     // Lattice samples whose photosite centre (x0 + i * step + 0.5) lies in the patch's bounding box ...
-    const int i0 = std::max(0, (int)std::ceil((bx0 - 0.5f - fc.x0) / im.step));
-    const int i1 = std::min(nx - 1, (int)std::floor((bx1 - 0.5f - fc.x0) / im.step));
-    const int j0 = std::max(0, (int)std::ceil((by0 - 0.5f - fc.y0) / im.step));
-    const int j1 = std::min(ny - 1, (int)std::floor((by1 - 0.5f - fc.y0) / im.step));
+    // (Each bound is held in [-1, n] before it becomes an int, a NaN at -1, which leaves the range as it was: a box far
+    // outside the lattice is empty either way.)
+    auto lattice = [](float v, int n) { return !(v > -1.0f) ? -1.0f : std::min(v, (float)n); };
+    const int i0 = std::max(0, (int)std::ceil(lattice((bx0 - 0.5f - fc.x0) / im.step, nx)));
+    const int i1 = std::min(nx - 1, (int)std::floor(lattice((bx1 - 0.5f - fc.x0) / im.step, nx)));
+    const int j0 = std::max(0, (int)std::ceil(lattice((by0 - 0.5f - fc.y0) / im.step, ny)));
+    const int j1 = std::min(ny - 1, (int)std::floor(lattice((by1 - 0.5f - fc.y0) / im.step, ny)));
     for (int j = j0; j <= j1; ++j) {
       for (int i = i0; i <= i1; ++i) {
         // ... and inside the turned patch.
@@ -2897,9 +2914,13 @@ bool detect_film_frame(const FilmImage& im, const FrameDetectionParams& params, 
   // Below ~256 px the work image is too coarse for the class statistics (the film base level comes out wrong).
   FrameDetectionParams P = params;
   P.work_size = std::max(256, P.work_size);
-  if (im.samples_x() < 16 || im.samples_y() < 16 || im.white <= 0.0f) return false;
+  if (im.samples_x() < 16 || im.samples_y() < 16 || !(im.white > 0.0f) || !std::isfinite(im.white)) return false;
   for (const FilmChannel& c : im.ch)
-    if (!c.data) return false;
+    if (!c.data || !std::isfinite(c.black) || c.x0 < 0 || c.x0 >= im.step || c.y0 < 0 || c.y0 >= im.step) return false;
+  // The tilt range within [0, kMaxRotationDeg]; the crop inset a fraction in [0, 0.5) of the crop per side, as the
+  // crop's half sizes are scaled by 1 - 2 inset, which must stay positive.
+  if (!(P.max_rotation_deg >= 0.0f && P.max_rotation_deg <= kMaxRotationDeg)) return false;
+  if (!(P.crop_inset >= 0.0f && P.crop_inset < 0.5f)) return false;
 
   // 1. Work image: ww x wh, long side <= work_size.
   WorkImage wi;
