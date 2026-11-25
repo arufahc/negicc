@@ -27,6 +27,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -506,7 +507,8 @@ NEGICC_HD InnerCrop compute_inner_crop(int W, int H, float crop_ratio) {
 
 // The DINOv3 input size of a w x h image: its longer side scaled to max_size, both sides rounded to whole
 // patch_size patches (grid_w x grid_h of them). The defaults are the backbone's image_size and patch_size
-// (models/dinov3-small/backbone.json).
+// (models/dinov3-small/backbone.json). A side is at most as many patches as an int holds in pixels (INT_MAX /
+// patch_size): only a max_size within patch_size / 2 of INT_MAX reaches that; DinoV3Engine refuses such sizes.
 struct AspectPreservedShape {
     int target_w = 16, target_h = 16;
     int grid_w = 1, grid_h = 1;
@@ -523,6 +525,8 @@ inline AspectPreservedShape compute_aspect_preserved_shape(int w, int h, int max
     int gh = (int)std::nearbyint((double)mh * scale / (double)p);
     if (gw < 1) gw = 1;
     if (gh < 1) gh = 1;
+    if (gw > INT_MAX / p) gw = INT_MAX / p;
+    if (gh > INT_MAX / p) gh = INT_MAX / p;
     return {gw * p, gh * p, gw, gh};
 }
 

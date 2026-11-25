@@ -23,6 +23,7 @@
 #include <omp.h>
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,29 @@
 // ====================================================================================================================
 
 namespace {
+
+// The preprocessing's sizes are ints, and so are some products of them (a row in bytes, a grid's sides in pixels, the
+// cells times 3): a call whose sizes are below 1, or whose products do not fit an int, throws std::invalid_argument.
+void require_sizes(bool ok, const char* fn, const char* rule) {
+    if (!ok) throw std::invalid_argument(std::string(fn) + ": " + rule);
+}
+
+bool fits_int(long long v) { return v <= INT_MAX; }
+
+// An 8-bit RGB resize's sizes: rows of src_stride bytes that hold src_w pixels, and dst rows that fit an int in bytes.
+void require_resize_sizes(int src_w, int src_h, int src_stride, int dst_w, int dst_h, const char* fn) {
+    require_sizes(src_w >= 1 && src_h >= 1 && dst_w >= 1 && dst_h >= 1 && src_stride >= (long long)src_w * 3 &&
+                      fits_int((long long)dst_w * 3),
+                  fn, "every size must be at least 1, src_stride at least src_w * 3, and dst_w * 3 within an int");
+}
+
+// A gw x gh grid of patch x patch cells: its sides in pixels, and its cells times 3, within an int.
+void require_grid_sizes(int gw, int gh, int patch, const char* fn) {
+    require_sizes(gw >= 1 && gh >= 1 && patch >= 1 && fits_int((long long)gw * patch) &&
+                      fits_int((long long)gh * patch) && fits_int((long long)gw * gh * 3),
+                  fn, "the grid and the patch must be at least 1, and the grid's sides in pixels and its cells times "
+                      "3 within an int");
+}
 
 // ---- Antialiased Bilinear Resampling with Support Widening ----------------------------------------------------
 // 2-pass separable filter bit-exact with Pillow's Image.Resampling.BILINEAR: coefficients in double,
@@ -139,6 +163,7 @@ void compute_aspect_preserved_shape(int w, int h, int max_size, int patch_size,
 
 void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
                                      uint8_t* dst, int dst_w, int dst_h) {
+    require_resize_sizes(src_w, src_h, src_stride, dst_w, dst_h, "antialiased_bilinear_resize_rgb");
     const bool need_h = dst_w != src_w, need_v = dst_h != src_h;
     if (!need_h && !need_v) {
         for (int y = 0; y < src_h; ++y)
@@ -200,6 +225,7 @@ void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, i
 
 void cv_linear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
                           uint8_t* dst, int dst_w, int dst_h) {
+    require_resize_sizes(src_w, src_h, src_stride, dst_w, dst_h, "cv_linear_resize_rgb");
     std::vector<int> xofs, yofs;
     std::vector<short> alpha, beta;
     cv_linear_coeffs(src_w, dst_w, xofs, alpha);
@@ -230,10 +256,11 @@ void cv_linear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stri
 }
 
 void compute_tone_weights(const uint8_t* img_u8, int grid_w, int grid_h, int patch_size, float* out_weights) {
+    require_grid_sizes(grid_w, grid_h, patch_size, "compute_tone_weights");
     // Tone bins of intent_model.py: TONE_SHADOW_L 30, TONE_HIGHLIGHT_L 80, TONE_RAMP 10
     constexpr double kShadowL = 30.0, kHighlightL = 80.0, kRamp = 10.0;
     const int target_w = grid_w * patch_size;
-    const double inv_pixels = 1.0 / (double)(patch_size * patch_size);
+    const double inv_pixels = 1.0 / ((double)patch_size * patch_size);
 
     #pragma omp parallel for schedule(static)
     for (int gy = 0; gy < grid_h; ++gy) {
@@ -301,6 +328,20 @@ std::string join_path(const std::string& dir, const std::string& name) {
 
 bool ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// The network sizes an engine takes: a patch of at least 1 pixel and a max_size of at least one patch. A preview's grid
+// has at most max_size / patch_size + 1 patches a side (compute_aspect_preserved_shape rounds max_size / patch_size to
+// the nearest whole number), and the search counts that preview's values (pixels times 3) in an int
+// (multi_target_optimizer.cc compute_frame_stats), so they must fit one for a square preview that many patches a side.
+// The other ints taken of these sizes are smaller: a row in bytes, the grid's sides in pixels, the cells times 3.
+void require_network_sizes(int max_size, int patch_size) {
+    const long long side = patch_size >= 1 ? ((long long)max_size / patch_size + 1) * patch_size : 0;
+    // side is below 2^32; once it is within an int its square is a long long.
+    require_sizes(patch_size >= 1 && max_size >= patch_size && fits_int(side) && side * side <= INT_MAX / 3,
+                  "DinoV3Engine",
+                  "patch_size must be at least 1, max_size at least patch_size, and the largest preview "
+                  "((max_size / patch_size + 1) * patch_size pixels a side) times 3 within an int");
 }
 
 }  // namespace
@@ -437,9 +478,14 @@ size_t DinoV3Engine::memory_bytes() const {
 
 void DinoV3Engine::load(const std::string& model_spec, const std::string& backend, int num_threads,
                         int max_size, int patch_size) {
+    require_network_sizes(max_size, patch_size);
+    // A new model: nothing of the earlier one stays (its adapter and the neutral head that read its tokens).
     runner_.reset();
     adapter_.reset();
+    neutral_head_.reset();
+    adapter_file_.clear();
     adapter_name_.clear();
+    adapter_path_.clear();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
@@ -494,9 +540,14 @@ void DinoV3Engine::load(const std::string& model_spec, const std::string& backen
 
 void DinoV3Engine::load_memory(const void* engine_data, size_t engine_size, const void* onnx_data, size_t onnx_size,
                                const std::string& backend, int num_threads, int max_size, int patch_size) {
+    require_network_sizes(max_size, patch_size);
+    // A new model: nothing of the earlier one stays (its adapter and the neutral head that read its tokens).
     runner_.reset();
     adapter_.reset();
+    neutral_head_.reset();
+    adapter_file_.clear();
     adapter_name_.clear();
+    adapter_path_.clear();
     max_size_ = max_size;
     patch_size_ = patch_size;
     if (backend != "auto" && backend != "cpu" && backend != "gpu") {
@@ -534,8 +585,9 @@ DinoV3InferenceResult DinoV3Engine::infer(const uint8_t* srgb_data, int width, i
     if (!is_loaded()) {
         throw std::runtime_error("DinoV3Engine::infer called before model loaded.");
     }
-    if (width <= 0 || height <= 0 || !srgb_data) {
-        throw std::invalid_argument("DinoV3Engine::infer: invalid image dimensions or null data pointer");
+    if (width <= 0 || height <= 0 || stride < (long long)width * 3 || !srgb_data) {
+        throw std::invalid_argument("DinoV3Engine::infer: invalid image dimensions, a stride short of a row "
+                                    "(width * 3 bytes) or null data pointer");
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -1050,8 +1102,28 @@ public:
         context_->setTensorAddress("tokens", const_cast<void*>(device_tokens));
         context_->setTensorAddress("mu", mu_.reserve(field_bytes));
         context_->setTensorAddress("sigma", sigma_.reserve(field_bytes));
-        for (size_t i = 0; i < extra_outputs_.size(); ++i)
-            context_->setTensorAddress(extra_outputs_[i].c_str(), extra_[i].reserve(field_bytes));
+        // An extra output (log_var) is bound but not read: its buffer holds what the engine gives for these tokens,
+        // its shape times its element's size, whatever that is.
+        for (size_t i = 0; i < extra_outputs_.size(); ++i) {
+            const char* name = extra_outputs_[i].c_str();
+            const nvinfer1::Dims d = context_->getTensorShape(name);
+            size_t bytes = 0;
+            switch (engine_->getTensorDataType(name)) {
+                case nvinfer1::DataType::kFLOAT: case nvinfer1::DataType::kINT32: bytes = 4; break;
+                case nvinfer1::DataType::kHALF: bytes = 2; break;
+                case nvinfer1::DataType::kINT8: case nvinfer1::DataType::kBOOL: bytes = 1; break;
+                default:
+                    throw std::runtime_error("TensorRT adapter engine output " + extra_outputs_[i] +
+                                             " has an element type this runner does not size");
+            }
+            for (int k = 0; k < d.nbDims; ++k) {
+                if (d.d[k] < 0)
+                    throw std::runtime_error("TensorRT adapter engine output " + extra_outputs_[i] +
+                                             " has no shape for these tokens");
+                bytes *= (size_t)d.d[k];
+            }
+            context_->setTensorAddress(name, extra_[i].reserve(bytes));
+        }
         if (!context_->enqueueV3(stream_)) throw std::runtime_error("TensorRT adapter enqueueV3 failed");
         check_cuda(cudaMemcpyAsync(mu, mu_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H mu");
         check_cuda(cudaMemcpyAsync(sigma, sigma_.ptr, field_bytes, cudaMemcpyDeviceToHost, stream_), "D2H sigma");
@@ -1506,6 +1578,8 @@ float optimize_target_for_intent(const SolverConfig& cfg, const float* merged, c
 }
 
 void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch, float* lab_out) {
+  require_sizes(w >= 1 && h >= 1, "trained_cells_lab", "the preview must be at least 1 x 1");
+  require_grid_sizes(gw, gh, patch, "trained_cells_lab");
   const int W = gw * patch, H = gh * patch;
   float lut[256];
   for (int v = 0; v < 256; ++v) lut[v] = negicc::srgb_decode(v / 255.0f);
@@ -1602,6 +1676,7 @@ void trained_cells_lab(const uint8_t* preview_u8, int w, int h, int gw, int gh, 
 
 float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw, int gh, int patch,
                                 const float* mu, const float* sigma) {
+  require_grid_sizes(gw, gh, patch, "self_consistency_residual");
   const int n = gw * gh;
   std::vector<float> lab((size_t)n * 3);
   trained_cells_lab(preview_u8, w, h, gw, gh, patch, lab.data());
@@ -1609,6 +1684,8 @@ float self_consistency_residual(const uint8_t* preview_u8, int w, int h, int gw,
 }
 
 float residual_from_cells(const float* lab, int n, const float* mu, const float* sigma) {
+  require_sizes(n >= 1 && fits_int((long long)n * 3), "residual_from_cells",
+                "n must be at least 1, and n * 3 within an int");
   double sum_res = 0.0;
   for (int i = 0; i < n; ++i) {
     const float dL = (lab[i * 3 + 0] - mu[i * 3 + 0]) / sigma[i * 3 + 0];
