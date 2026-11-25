@@ -26,10 +26,13 @@ jobs:
       - name: Build neg_process
         # ONNX Runtime is the shared library of Microsoft's PyPI wheel, fetched and checked by
         # 3rd_party/onnxruntime_prebuilt/fetch.sh (make runs it); the static build needs the onnxruntime source.
+        # STATIC=1 with ORT_STATIC=0 links the compiler's runtime libraries in (libstdc++, libgcc, libgomp; a base
+        # Ubuntu has no libgomp) and keeps ONNX Runtime's shared library.
         run: |
-          make neg_process USE_CUDA=0 GIT_VERSION="${GITHUB_SHA::7}" -j"$(nproc)"
+          make neg_process USE_CUDA=0 STATIC=1 ORT_STATIC=0 GIT_VERSION="${GITHUB_SHA::7}" -j"$(nproc)"
           strip bin_out/neg_process
           readelf -d bin_out/neg_process | grep -q 'NEEDED.*libonnxruntime.so.1'
+          if readelf -d bin_out/neg_process | grep -E 'NEEDED.*(libgomp|libstdc\+\+|libgcc_s)'; then exit 1; fi
           ./bin_out/neg_process --version
           ./bin_out/neg_process --list_profiles
 
@@ -61,6 +64,15 @@ jobs:
           tar -C dist -czf dist/neg_process-linux-x86_64.tar.gz neg_process-linux-x86_64
           (cd dist && sha256sum neg_process-linux-x86_64.tar.gz > neg_process-linux-x86_64.tar.gz.sha256)
 
+      - name: Run the archive on a clean Ubuntu
+        # Unpacked and run as a user would, in a container with nothing installed and no network, so that a library
+        # the archive lacks fails here. LD_BIND_NOW resolves every symbol at start, so a missing one fails too.
+        run: |
+          docker run --rm --network=none --user 65534:65534 -v "$PWD/dist:/dist:ro" ubuntu:24.04 sh -ec '
+            cd /tmp && tar -xzf /dist/neg_process-linux-x86_64.tar.gz && cd neg_process-linux-x86_64
+            LD_BIND_NOW=1 ./neg_process --version
+            LD_BIND_NOW=1 ./neg_process --list_profiles > /dev/null'
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -77,7 +89,7 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF_NAME}"
             TITLE="neg_process ${TAG}"
-            NOTES="Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
+            NOTES="Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, DINOv3 models and the compiler's runtime libraries (libstdc++, libgcc, libgomp) statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             # A versioned release that already exists was made by hand, with its own archive and notes (a build
             # with ONNX Runtime linked in, make STATIC=1): they are left as they are.
             if gh release view "${TAG}" >/dev/null 2>&1; then
@@ -89,7 +101,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
             TAG="latest"
             TITLE="neg_process (${GITHUB_SHA::7})"
-            NOTES="Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
+            NOTES="Linux x86_64 build of \`neg_process\` from \`master\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, DINOv3 models and the compiler's runtime libraries (libstdc++, libgcc, libgomp) statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
             git tag -f "${TAG}" "${GITHUB_SHA}"
             git push -f origin "refs/tags/${TAG}"
             if gh release view "${TAG}" >/dev/null 2>&1; then
