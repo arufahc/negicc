@@ -1259,6 +1259,24 @@ struct Screened {
   Enclosure enclosure;
 };
 
+// A quantity of the frame's scale (a given film base channel as a float, a row's scale, the exposure ratio, e_norm and
+// what the result scales by it): finite and above 0, else the film base or the scan's shutter and ISO lie outside what
+// a float carries through the conversion, and the run stops instead of returning inf, NaN or 0.
+float frame_scaled(float v, const char* what) {
+  if (!(std::isfinite(v) && v > 0.0f))
+    throw std::invalid_argument(std::string(what) + " is not a finite number above 0 as a float: the film base or the "
+                                "scan's shutter and ISO are outside what the conversion can scale");
+  return v;
+}
+
+// The input matrix in reference units (M_frame / e_norm): finite in every entry.
+void frame_matrix_finite(const float m[9]) {
+  for (int i = 0; i < 9; ++i)
+    if (!std::isfinite(m[i]))
+      throw std::invalid_argument("the input matrix is not finite: the film base or the scan's shutter and ISO are "
+                                  "outside what the conversion can scale");
+}
+
 }  // namespace
 
 // ---- Public API ----------------------------------------------------------------------------------------------
@@ -1278,8 +1296,12 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
     for (int i = 0; i < 3; ++i) s.fb[i] = (float)opts.film_base_rgb_d[i];
     fb = s.fb;
   }
+  const bool given_fb = fb != nullptr;
   if (!fb) fb = bundle.film_base_avg;
   if (fb != s.fb) std::copy(fb, fb + 3, s.fb);
+  // A given base reaches the matrix as a float (narrowed from double here): it must stay a finite number above 0.
+  if (given_fb)
+    for (int i = 0; i < 3; ++i) frame_scaled(s.fb[i], "the film base");
   const float fb_t = bundle.film_base_shutter.empty() ? 0.125f : shutter_to_seconds(bundle.film_base_shutter);
   const float fb_exposure = fb_t * (bundle.film_base_iso / 100.0f);
   // A measured base comes from this capture: no exposure ratio.
@@ -1289,12 +1311,16 @@ static FrameScale frame_scale(const ProfileBundle& bundle, float scan_shutter_s,
   const float scan_exposure = scan_shutter_s * (scan_iso / 100.0f);
   if (!has_custom_fb && !(scan_exposure > 0.0f && std::isfinite(scan_exposure)))
     throw std::invalid_argument("the scan's shutter and ISO must be positive finite numbers");
-  s.ratio_frame = has_custom_fb ? 1.0f : fb_exposure / scan_exposure;
+  s.ratio_frame = frame_scaled(has_custom_fb ? 1.0f : fb_exposure / scan_exposure, "the exposure ratio of the scan");
+  // Each row's scale, normalization_target / fb * ratio, for a base that is used (merged_matrix).
+  for (int r = 0; r < 3; ++r)
+    if (s.fb[r] > 0) frame_scaled((bundle.normalization_target / s.fb[r]) * s.ratio_frame, "a row's scale");
   const float ratio_ref = fb_exposure / (REFERENCE_SHUTTER_S * (REFERENCE_ISO / 100.0f));
   float ref_matrix[9];
   merged_matrix(bundle, s.fb, s.ratio_frame, s.frame_matrix);
   merged_matrix(bundle, bundle.film_base_avg, ratio_ref, ref_matrix);
-  s.e_norm = (ref_matrix[4] != 0.0f) ? s.frame_matrix[4] / ref_matrix[4] : 1.0f;
+  s.e_norm = frame_scaled((ref_matrix[4] != 0.0f) ? s.frame_matrix[4] / ref_matrix[4] : 1.0f, "e_norm");
+  frame_scaled(1.0f / s.e_norm, "1 / e_norm");
   return s;
 }
 
@@ -1320,7 +1346,8 @@ float measure_rolloff_x_hi(const ProfileBundle& bundle, const negicc::ProfileDat
   // As SearchFrame::measure_shoulder: M_frame at E (Auto's units), written as (M_frame / e_norm) * (E * e_norm).
   float input_matrix[9], m[9];
   for (int i = 0; i < 9; ++i) input_matrix[i] = scale.frame_matrix[i] / scale.e_norm;
-  negicc::candidate_matrix(input_matrix, e * scale.e_norm, g, b, m);
+  frame_matrix_finite(input_matrix);
+  negicc::candidate_matrix(input_matrix, frame_scaled(e * scale.e_norm, "E in the reference's units"), g, b, m);
   static const float kCeil[3] = {255.0f, 255.0f, 255.0f};
   std::vector<uint64_t> hist(negicc::kMaxHistBins, 0);
   if (renderer) renderer->bind_frame(frame);
@@ -2038,9 +2065,11 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
   for (int i = 0; i < 9; ++i) out.input_matrix[i] = scale.frame_matrix[i] / e_norm;
+  frame_matrix_finite(out.input_matrix);
   for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) /
-                       e_norm;
+    out.row_scale[r] = frame_scaled(
+        (scale.fb[r] > 0 ? (bundle.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm,
+        "a row's scale");
   }
 
   // Step 1: the enclosure of each bracket (on white-light bundles, g_lo and g_hi are scaled by e_norm into reference
@@ -2549,7 +2578,7 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
   auto fill_result = [&](ParamSearchResult& r, const FixedPointResult& ch, const ConversionParams& p) {
     r.target_idx = ch.target_idx;
     r.target_name = name_of(ch.target_idx);
-    r.params = {white_light ? p.e : p.e / e_norm, p.g, p.b, p.shoulder};
+    r.params = {frame_scaled(white_light ? p.e : p.e / e_norm, "the result's E"), p.g, p.b, p.shoulder};
     r.residual = ch.residual;
     r.shoulder_q995 = ch.shoulder_q995;
     r.shoulder_knee = ch.shoulder_knee;
@@ -2565,8 +2594,8 @@ bool search_conversion_params(const ProfileBundle& bundle, DinoV3Engine& engine,
     r.e_range_lo = r.e_range_hi = 0.0f;
     Enclosure enc{};
     if (bounds_of(ch.target_idx, enc) && enc.feasible) {
-      r.e_range_lo = white_light ? enc.e_min : enc.e_min / e_norm;
-      r.e_range_hi = white_light ? enc.e_max : enc.e_max / e_norm;
+      r.e_range_lo = frame_scaled(white_light ? enc.e_min : enc.e_min / e_norm, "the result's E range");
+      r.e_range_hi = frame_scaled(white_light ? enc.e_max : enc.e_max / e_norm, "the result's E range");
     }
   };
   fill_result(out, chosen, params);
@@ -3406,7 +3435,7 @@ bool plan_auto_tone_stage(ProfileBundle& bundle, DinoV3Engine& engine, const neg
                    : 1.0f;
   // The preview renders in the search's units: a TriLED search runs on M_frame / e_norm with E in the reference's
   // units, while res.params.e is in this frame's (white light searches in the frame's units).
-  if (bundle.has_crosstalk) p.e *= fr.e_norm();
+  if (bundle.has_crosstalk) p.e = frame_scaled(p.e * fr.e_norm(), "E in the reference's units");
   std::vector<float> features = res.intent_tone_features;
   plan_tone_on_render(fr, pd, p, &tone_head, encoding, features, out);
   return true;
@@ -3505,8 +3534,11 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
   const float e_norm = fr.e_norm();
   out.e_norm = e_norm;
   for (int i = 0; i < 9; ++i) out.input_matrix[i] = scale.frame_matrix[i] / e_norm;
+  frame_matrix_finite(out.input_matrix);
   for (int r = 0; r < 3; ++r) {
-    out.row_scale[r] = (scale.fb[r] > 0 ? (pb.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm;
+    out.row_scale[r] = frame_scaled(
+        (scale.fb[r] > 0 ? (pb.normalization_target / scale.fb[r]) * scale.ratio_frame : 1.0f) / e_norm,
+        "a row's scale");
   }
   // E = 1 relative to the frame's own film base: the base reads n0, as the brackets were measured. The search runs on
   // M_frame / e_norm, which in green is the reference scan's matrix whatever the frame's base, so E = 1 there would put
@@ -3790,7 +3822,8 @@ static bool search_print_material(PrintFrame& pf, const ProfileBundle& bundle, c
   }
   out.target_idx = nearest;
   out.target_name = bundle.targets[nearest].name;
-  out.params = {white_light ? E : E / e_norm, best.g, best.b, best.shoulder};   // as search_conversion_params
+  out.params = {frame_scaled(white_light ? E : E / e_norm, "the result's E"), best.g, best.b,
+                best.shoulder};   // as search_conversion_params
   out.residual = best_err;
   out.status = cr.converged ? FixedPointStatus::kConverged : FixedPointStatus::kMaxIters;
   out.intent_mu = best_mu;
