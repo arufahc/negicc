@@ -200,8 +200,8 @@ before and after.
 
 ![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
 
-*The three scans of [Scans from other cameras](#scans-from-other-cameras). Left to right: scene colour matching, the
-print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it
+*Three forum scans, credited under [Scans from other cameras](#scans-from-other-cameras). Left to right: scene
+colour matching, the print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it
 (`--film_stock portra400 --light_source d65 --roi auto -P srgb`, with `--print kodak_portra_endura` and
 `--print kodak_2383`). Rendered with negicc `2130afd`.*
 
@@ -367,24 +367,24 @@ with negicc `d174ca9`.
 ### Print emulation directly to a picture
 
 `--print` with `-P srgb` writes the print as a 16-bit sRGB TIFF through the material's print ICC, at the printing
-exposure and colour balance its own search finds. `--rot 180` turns this scan upright.
+exposure and colour balance its own search finds.
 
 ```sh
-bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --print kodak_portra_endura --rot 180 \
-    -P srgb -o print.tif scan.RAW
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --print kodak_portra_endura -P srgb \
+    -o print.tif scan.RAW
 ```
 
-![Mauritius mountain with river mouth, the scan and its print on Portra Endura](samples/web_5e74adc30c_portra_endura.jpg)
+![Hands holding a marble, the scan and its print on Portra Endura](samples/web_72a0a8b2e5_portra_endura.jpg)
 
-*Canon EOS 5DS R.* [Mauritius Mountain with River Mouth](https://discuss.pixls.us/t/50730/1), posted by gsinha,
-2025-06-16. The print on Kodak Portra Endura paper. Rendered with negicc `d174ca9`.
+*Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
+DanielE, 2026-07-11. The print on Kodak Portra Endura paper. Rendered with negicc `7aff141`.
 
 ### Print emulation through a density file and a CLF
 
 The first command writes the negative's density above the film base as a 16-bit ADX16 TIFF (`-P apd`; with
 `-P rp180 -o scan.dpx` it is a 10-bit Cineon DPX) and, for `--print kodak_2383`, a CLF beside it that renders that file
 as the print. The second applies the CLF with OpenImageIO's `oiiotool`; any program that reads CLF through OpenColorIO
-can.
+can. The scan is the one above, through the other route and on another material.
 
 ```sh
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P apd --print kodak_2383 -o scan.tif scan.RAW
@@ -403,8 +403,9 @@ through the CLF, all of the difference in the thinnest film, at or near its base
 differently ([Print emulation](#print-emulation)).
 
 The RAW files, the pictures above and their prints under [Print emulation](#print-emulation) belong to the
-photographers who posted them. No copyright is claimed on them here. If one of them is yours and you want it removed,
-open an issue.
+photographers who posted them. The top row of the white-light print figure there is
+[Mauritius Mountain with River Mouth](https://discuss.pixls.us/t/50730/1), posted by gsinha, 2025-06-16, taken with a
+Canon EOS 5DS R. No copyright is claimed on them here. If one of them is yours and you want it removed, open an issue.
 
 ## Options
 
