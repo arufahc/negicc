@@ -354,7 +354,8 @@ with negicc `d174ca9`.
 exposure and colour balance its own search finds. `--rot 180` turns this scan upright.
 
 ```sh
-bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --print kodak_portra_endura --rot 180 -P srgb -o print.tif scan.RAW
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --print kodak_portra_endura --rot 180 \
+    -P srgb -o print.tif scan.RAW
 ```
 
 ![Mauritius mountain with river mouth, the scan and its print on Portra Endura](samples/web_5e74adc30c_portra_endura.jpg)
