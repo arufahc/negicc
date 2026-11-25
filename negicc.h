@@ -644,6 +644,10 @@ void load_profile_bundle(const std::string& resolved_path, ProfileBundle& bundle
 void load_profile_bundle_from_memory(const char* data, size_t size, const std::string& name,
                                      const BundleFileReader& read_file, ProfileBundle& bundle);
 
+// The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix. The loader refuses a
+// bracket for which it is not finite; the grey balance curve and the print read it (print_emulation.cc).
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
+
 // --------------------------------------------------------------------------------------------------------------------
 // Profiles
 // neg_process's profiles: resolving a profile path, and loading an ICC film profile, or a profile bundle JSON.
@@ -2337,8 +2341,6 @@ constexpr double kPaperAlphaStart = -1.5, kPaperAlphaStep = 0.005;
 constexpr int kPaperAlphaPoints = 661;
 using PrintCurves = std::array<std::vector<double>, 3>;
 
-// The bracket's mid grey as green APD: its grey_light_density through the bundle's APD matrix.
-double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket);
 // curve_grey and curve_slopes at a mid grey A (green APD) in place of a bracket's.
 void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]);
 void curve_slopes_at(const ProfileBundle& bundle, double a, double slopes[3]);

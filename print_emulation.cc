@@ -1406,11 +1406,6 @@ constexpr double kPrintKnee = kKnee;  // the conversion's soft knee (the profile
 
 }  // namespace
 
-double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket) {
-  const double* m = bundle.density_matrix[kDensityApd].m;
-  return m[3] * bracket.grey_light[0] + m[4] * bracket.grey_light[1] + m[5] * bracket.grey_light[2];
-}
-
 void curve_grey_at(const ProfileBundle& bundle, double a, double light[3]) {
   const GreyBalanceCurves& g = bundle.grey_balance;
   const std::vector<double> x = grey_grid(g);

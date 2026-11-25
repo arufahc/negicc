@@ -286,6 +286,11 @@ const char* density_measure_key(DensityMeasure m) {
   return m == kDensityStatusM ? "status_m" : m == kDensityRp180 ? "rp180_printing_density" : "academy_printing_density";
 }
 
+double bracket_mid_apd(const ProfileBundle& bundle, const DensityBracket& bracket) {
+  const double* m = bundle.density_matrix[kDensityApd].m;
+  return m[3] * bracket.grey_light[0] + m[4] * bracket.grey_light[1] + m[5] * bracket.grey_light[2];
+}
+
 double shutter_to_seconds_d(const std::string& shutter) {
   std::string s = shutter;
   const size_t b = s.find_first_not_of(" \t\r\n");
@@ -743,12 +748,9 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           if (!three(e["grey_light_density"], bracket.grey_light)) {
             refuse(at + ".grey_light_density", e["grey_light_density"], "is not three numbers");
           }
-          // The bracket's mid grey as APD, which the grey balance curve and the print read: this sum, in this order, is
-          // print_emulation.cc bracket_mid_apd's. Finite numbers whose products or sum pass the range of a double give
-          // none.
-          const double* apd = bundle.density_matrix[kDensityApd].m;
-          if (!std::isfinite(apd[3] * bracket.grey_light[0] + apd[4] * bracket.grey_light[1] +
-                             apd[5] * bracket.grey_light[2])) {
+          // The bracket's mid grey as APD (bracket_mid_apd, through the APD matrix read above), which the grey balance
+          // curve and the print read: finite numbers whose products or sum pass the range of a double give none.
+          if (!std::isfinite(bracket_mid_apd(bundle, bracket))) {
             refuse(at + ".grey_light_density", e["grey_light_density"],
                    "gives a mid grey APD through density_matrices.academy_printing_density that is not finite");
           }
