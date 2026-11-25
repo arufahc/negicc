@@ -36,6 +36,9 @@
 #include <system_error>
 #include <vector>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <lcms2.h>
 #include <tiffio.h>
 #include <jpeglib.h>  // after <cstdio>: it needs FILE and size_t
@@ -52,16 +55,6 @@ void normalize_rotation(int& rot_cw, bool& hflip, bool& vflip) {
     vflip = !vflip;
     rot_cw = 0;
   }
-}
-
-// Where pixel (x, y) of a rw x rh region lands, (dx, dy), when the region is rotated clockwise by rot_cw (0, 90 or
-// 270, see normalize_rotation) and then flipped. The result is dst_w x dst_h: rw x rh, or rh x rw when rotated.
-static inline void oriented_pos(int x, int y, int rw, int rh, int dst_w, int dst_h, int rot_cw, bool hflip,
-                                bool vflip, int& dx, int& dy) {
-  const int x1 = (rot_cw == 0) ? x : ((rot_cw == 90) ? (rh - 1 - y) : y);
-  const int y1 = (rot_cw == 0) ? y : ((rot_cw == 90) ? x : (rw - 1 - x));
-  dx = hflip ? (dst_w - 1 - x1) : x1;
-  dy = vflip ? (dst_h - 1 - y1) : y1;
 }
 
 bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
@@ -84,40 +77,79 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
     return true;
   }
 
-  ushort (*new_image)[4] = (ushort (*)[4]) malloc((size_t)dst_w * dst_h * sizeof(*new_image));
-  if (!new_image) {
-    log_error("Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
-    return false;
+  // Done in the image's own buffer, so the decode never holds a second full-size image. Each step moves pixels
+  // within the buffer; the last gives back the part past the region.
+  ushort (*img)[4] = proc->imgdata.image;
+  const size_t n = (size_t)rw * rh;
+
+  // 1. The region to the start of the buffer, row by row in order: a row moves toward lower addresses and lands
+  //    below the next rows' pixels (row y ends at y * rw + rw <= (ry + y + 1) * cur_w + rx), so no row overwrites
+  //    one not yet moved.
+  if (rx != 0 || ry != 0 || rw != cur_w) {
+    if (rw == cur_w) {
+      memmove(img, img + (size_t)ry * cur_w, n * sizeof(*img));
+    } else {
+      for (int y = 0; y < rh; ++y) memmove(img + (size_t)y * rw, img + (size_t)(ry + y) * cur_w + rx, rw * sizeof(*img));
+    }
   }
 
-  const ushort (*src_image)[4] = proc->imgdata.image;
-
-  if (rot_cw == 0 && !hflip && !vflip) {
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < rh; ++y) {
-      memcpy(&new_image[(size_t)y * dst_w],
-             &src_image[(size_t)(ry + y) * cur_w + rx],
-             (size_t)rw * sizeof(*new_image));
-    }
-  } else {
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < rh; ++y) {
-      for (int x = 0; x < rw; ++x) {
-        int dx = 0, dy = 0;
-        oriented_pos(x, y, rw, rh, dst_w, dst_h, rot_cw, hflip, vflip, dx, dy);
-
-        const ushort* s = src_image[(size_t)(ry + y) * cur_w + (rx + x)];
-        ushort* d = new_image[(size_t)dy * dst_w + dx];
-        d[0] = s[0];
-        d[1] = s[1];
-        d[2] = s[2];
-        d[3] = s[3];
+  // 2. A rotation is a transposition (rw x rh to rh x rw) and a flip: 90 degrees clockwise flips the columns of the
+  //    transposed image, 270 its rows. A square region swaps pixels across its diagonal. Otherwise each pixel goes to
+  //    the place of the one it displaces, cycle after cycle, with one bit per pixel marking those already in place.
+  if (swap_dims) {
+    if (rw == rh) {
+      #pragma omp parallel for schedule(dynamic, 64)
+      for (int y = 0; y < rh; ++y) {
+        for (int x = y + 1; x < rw; ++x) std::swap(img[(size_t)y * rw + x], img[(size_t)x * rw + y]);
+      }
+    } else {
+      std::vector<uint64_t> placed;
+      try {
+        placed.assign((n + 63) / 64, 0);
+      } catch (const std::bad_alloc&) {
+        log_error("Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
+        return false;
+      }
+      // The pixel at k = y * rw + x of the region belongs at x * rh + y of the transposed image.
+      auto dest = [rw, rh](size_t k) { return (k % (size_t)rw) * rh + k / (size_t)rw; };
+      for (size_t start = 1; start + 1 < n; ++start) {
+        if (placed[start >> 6] >> (start & 63) & 1) continue;
+        ushort carried[4];
+        memcpy(carried, img[start], sizeof(carried));
+        size_t k = start;
+        do {
+          const size_t to = dest(k);
+          ushort displaced[4];
+          memcpy(displaced, img[to], sizeof(displaced));
+          memcpy(img[to], carried, sizeof(carried));
+          memcpy(carried, displaced, sizeof(carried));
+          placed[to >> 6] |= (uint64_t)1 << (to & 63);
+          k = to;
+        } while (k != start);
       }
     }
+    if (rot_cw == 90) hflip = !hflip;
+    else vflip = !vflip;
   }
 
-  proc->free_image();
-  proc->imgdata.image = new_image;
+  // 3. The flips, in place: rows swapped end for end, pixels within each row.
+  if (vflip) {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < dst_h / 2; ++y) {
+      std::swap_ranges(img + (size_t)y * dst_w, img + (size_t)y * dst_w + dst_w, img + (size_t)(dst_h - 1 - y) * dst_w);
+    }
+  }
+  if (hflip) {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < dst_h; ++y) std::reverse(img + (size_t)y * dst_w, img + (size_t)y * dst_w + dst_w);
+  }
+
+  // 4. The pages past the region given back to the system. The buffer itself stays where it is: LibRaw keeps track
+  //    of the image's pointer and frees it, so it is not reallocated. Nothing reads past the region again.
+  const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+  const uintptr_t tail = ((uintptr_t)(img + n) + page - 1) / page * page;
+  const uintptr_t end = (uintptr_t)(img + (size_t)cur_w * cur_h) / page * page;
+  if (end > tail) madvise((void*)tail, end - tail, MADV_DONTNEED);
   proc->imgdata.sizes.iwidth = dst_w;
   proc->imgdata.sizes.iheight = dst_h;
   return true;
