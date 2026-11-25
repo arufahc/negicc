@@ -743,6 +743,15 @@ static void parse_profile_bundle(const nlohmann::json& j, const std::string& raw
           if (!three(e["grey_light_density"], bracket.grey_light)) {
             refuse(at + ".grey_light_density", e["grey_light_density"], "is not three numbers");
           }
+          // The bracket's mid grey as APD, which the grey balance curve and the print read: this sum, in this order, is
+          // print_emulation.cc bracket_mid_apd's. Finite numbers whose products or sum pass the range of a double give
+          // none.
+          const double* apd = bundle.density_matrix[kDensityApd].m;
+          if (!std::isfinite(apd[3] * bracket.grey_light[0] + apd[4] * bracket.grey_light[1] +
+                             apd[5] * bracket.grey_light[2])) {
+            refuse(at + ".grey_light_density", e["grey_light_density"],
+                   "gives a mid grey APD through density_matrices.academy_printing_density that is not finite");
+          }
           bundle.density_brackets.push_back(bracket);
         }
       }

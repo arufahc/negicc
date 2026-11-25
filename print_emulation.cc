@@ -476,8 +476,10 @@ bool read_vector(const nlohmann::json& j, std::vector<double>& out) {
   return true;
 }
 
-// numpy.interp: linear between the points, the end values outside them.
+// numpy.interp: linear between the points, the end values outside them. A NaN x lies on neither side of the points:
+// it is given back, for the caller's check of finite values, and not looked up past the table's end.
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
+  if (std::isnan(x)) return x;
   if (x <= xs.front()) return ys.front();
   if (x >= xs.back()) return ys.back();
   const size_t hi = std::upper_bound(xs.begin(), xs.end(), x) - xs.begin();
@@ -1337,9 +1339,11 @@ DensityPrints density_prints(const DensityRecord& rec, const std::string& output
 
 namespace {
 
-// The value of a table on start + step i at x, linear, the end values outside it (numpy.interp on a uniform grid).
+// The value of a table on start + step i at x, linear, the end values outside it (numpy.interp on a uniform grid). A
+// NaN, which no index holds, is given back as interp gives it.
 double on_grid(const std::vector<double>& ys, double start, double step, double x) {
   const double t = (x - start) / step;
+  if (std::isnan(t)) return t;
   if (t <= 0.0) return ys.front();
   if (t >= (double)(ys.size() - 1)) return ys.back();
   const size_t i = (size_t)t;
@@ -1832,6 +1836,14 @@ bool bracket_print_profiles(const ProfileBundle& bundle, const std::string& prin
   if (!p) {
     const std::string& why = material.no_print_matrix[kDensityApd];
     return err = why.empty() ? "no print matrix for the bundle's film" : why, false;
+  }
+  // Paper_c reads the print's curve at aim_c - eta_c alpha, eta_c the sum of row c of the print matrix (paper_curve):
+  // finite entries whose sum passes the range of a double give none (inf times the alpha of 0).
+  for (int c = 0; c < 3; ++c) {
+    if (!std::isfinite(p[c * 3] + p[c * 3 + 1] + p[c * 3 + 2])) {
+      return err = "row " + std::to_string(c) + " of the print matrix on " + material.name + " for " +
+                   density_measure_key(kDensityApd) + " sums to a number that is not finite", false;
+    }
   }
   // Paper_c divides by its top, the print's density at the film's brightest: one not above 0 gives no curve.
   const PrintCurves paper = paper_curve(material, p);
