@@ -32,9 +32,13 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <numeric>
 #include <string>
 #include <system_error>
 #include <vector>
+
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <lcms2.h>
 #include <tiffio.h>
@@ -52,16 +56,6 @@ void normalize_rotation(int& rot_cw, bool& hflip, bool& vflip) {
     vflip = !vflip;
     rot_cw = 0;
   }
-}
-
-// Where pixel (x, y) of a rw x rh region lands, (dx, dy), when the region is rotated clockwise by rot_cw (0, 90 or
-// 270, see normalize_rotation) and then flipped. The result is dst_w x dst_h: rw x rh, or rh x rw when rotated.
-static inline void oriented_pos(int x, int y, int rw, int rh, int dst_w, int dst_h, int rot_cw, bool hflip,
-                                bool vflip, int& dx, int& dy) {
-  const int x1 = (rot_cw == 0) ? x : ((rot_cw == 90) ? (rh - 1 - y) : y);
-  const int y1 = (rot_cw == 0) ? y : ((rot_cw == 90) ? x : (rw - 1 - x));
-  dx = hflip ? (dst_w - 1 - x1) : x1;
-  dy = vflip ? (dst_h - 1 - y1) : y1;
 }
 
 bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
@@ -84,40 +78,101 @@ bool extract_roi_and_transform(LibRaw* proc, int rx, int ry, int rw, int rh,
     return true;
   }
 
-  ushort (*new_image)[4] = (ushort (*)[4]) malloc((size_t)dst_w * dst_h * sizeof(*new_image));
-  if (!new_image) {
-    log_error("Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
-    return false;
+  // Done in the image's own buffer, so the decode never holds a second full-size image. Each step moves pixels
+  // within the buffer; the pages past the region are given back to the system (the buffer itself stays where it is:
+  // LibRaw keeps track of the image's pointer and frees it, so it is not reallocated; nothing reads past the region
+  // again).
+  ushort (*img)[4] = proc->imgdata.image;
+  const size_t n = (size_t)rw * rh;
+  auto give_back_tail = [&]() {
+    const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    const uintptr_t tail = ((uintptr_t)(img + n) + page - 1) / page * page;
+    const uintptr_t end = (uintptr_t)(img + (size_t)cur_w * cur_h) / page * page;
+    if (end > tail) madvise((void*)tail, end - tail, MADV_DONTNEED);
+  };
+
+  // 1. The region to the start of the buffer, row by row in order: a row moves toward lower addresses and lands
+  //    below the next rows' pixels (row y ends at y * rw + rw <= (ry + y + 1) * cur_w + rx), so no row overwrites
+  //    one not yet moved.
+  if (rx != 0 || ry != 0 || rw != cur_w) {
+    if (rw == cur_w) {
+      memmove(img, img + (size_t)ry * cur_w, n * sizeof(*img));
+    } else {
+      for (int y = 0; y < rh; ++y) memmove(img + (size_t)y * rw, img + (size_t)(ry + y) * cur_w + rx, rw * sizeof(*img));
+    }
   }
 
-  const ushort (*src_image)[4] = proc->imgdata.image;
-
-  if (rot_cw == 0 && !hflip && !vflip) {
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < rh; ++y) {
-      memcpy(&new_image[(size_t)y * dst_w],
-             &src_image[(size_t)(ry + y) * cur_w + rx],
-             (size_t)rw * sizeof(*new_image));
+  // 2. A quarter turn of a region that is not square: an in-place transposition (rh x rw to rw x rh) by row and column
+  //    permutations (Catanzaro, Keller and Garland, "A decomposition for in-place matrix transposition", PPoPP 2014),
+  //    each pass parallel, with a buffer per thread of one row, or of a column block one cache line wide; then the
+  //    flip below. For a region of m rows of n pixels, c = gcd(m, n), a = m / c, b = n / c:
+  //      a. if c > 1, column j rotates up by j / b: new[i][j] = old[(i + j / b) mod m][j];
+  //      b. row i is scattered: new[i][((i + j / b) mod m + j m) mod n] = old[i][j];
+  //      c. column j is gathered: new[i][j] = old[(j + i n - i / a) mod m][j];
+  //    and the buffer then holds the n x m transposed image, row after row.
+  if (swap_dims && rw != rh) {
+    const int64_t m = rh, nn = rw;
+    const int64_t c = std::gcd(m, nn), a = m / c, b = nn / c;
+    long line = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+    const int64_t block = std::max<int64_t>(1, (line > 0 ? line : (long)sizeof(*img)) / (long)sizeof(*img));
+    const int threads = omp_get_max_threads();
+    const int64_t per = std::max(m * block, nn);
+    std::vector<uint64_t> scratch;
+    try {
+      scratch.resize((size_t)threads * per);
+    } catch (const std::bad_alloc&) {
+      log_error("Failed to allocate memory for transformed ROI (%dx%d)\n", dst_w, dst_h);
+      return false;
     }
-  } else {
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < rh; ++y) {
-      for (int x = 0; x < rw; ++x) {
-        int dx = 0, dy = 0;
-        oriented_pos(x, y, rw, rh, dst_w, dst_h, rot_cw, hflip, vflip, dx, dy);
-
-        const ushort* s = src_image[(size_t)(ry + y) * cur_w + (rx + x)];
-        ushort* d = new_image[(size_t)dy * dst_w + dx];
-        d[0] = s[0];
-        d[1] = s[1];
-        d[2] = s[2];
-        d[3] = s[3];
+    static_assert(sizeof(*img) == sizeof(uint64_t), "a pixel is four 16-bit samples");
+    auto at = [img, nn](int64_t i, int64_t j) { return img[i * nn + j]; };
+    // new[i][j] = old[src(i, j)][j] for every column, a block of columns at a time through the thread's buffer.
+    auto columns = [&](auto src) {
+      #pragma omp parallel for schedule(dynamic)
+      for (int64_t j0 = 0; j0 < nn; j0 += block) {
+        uint64_t* t = scratch.data() + (size_t)omp_get_thread_num() * per;
+        const int64_t w = std::min(block, nn - j0);
+        for (int64_t i = 0; i < m; ++i) memcpy(t + i * w, at(i, j0), w * sizeof(uint64_t));
+        for (int64_t i = 0; i < m; ++i)
+          for (int64_t k = 0; k < w; ++k) memcpy(at(i, j0 + k), t + src(i, j0 + k) * w + k, sizeof(uint64_t));
       }
+    };
+    if (c > 1) columns([m, b](int64_t i, int64_t j) { return (i + j / b) % m; });
+    #pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < m; ++i) {
+      uint64_t* t = scratch.data() + (size_t)omp_get_thread_num() * per;
+      memcpy(t, at(i, 0), nn * sizeof(uint64_t));
+      for (int64_t j = 0; j < nn; ++j) memcpy(at(i, ((i + j / b) % m + j * m) % nn), t + j, sizeof(uint64_t));
     }
+    columns([m, nn, a](int64_t i, int64_t j) { return ((j + i * nn - i / a) % m + m) % m; });
+    if (rot_cw == 90) hflip = !hflip;
+    else vflip = !vflip;
   }
 
-  proc->free_image();
-  proc->imgdata.image = new_image;
+  //    A square region swaps pixels across its diagonal. Either way the transposition is followed by a flip: 90
+  //    degrees clockwise flips the columns of the transposed image, 270 its rows.
+  if (swap_dims && rw == rh) {
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int y = 0; y < rh; ++y) {
+      for (int x = y + 1; x < rw; ++x) std::swap(img[(size_t)y * rw + x], img[(size_t)x * rw + y]);
+    }
+    if (rot_cw == 90) hflip = !hflip;
+    else vflip = !vflip;
+  }
+
+  // 3. The flips, in place: rows swapped end for end, pixels within each row.
+  if (vflip) {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < dst_h / 2; ++y) {
+      std::swap_ranges(img + (size_t)y * dst_w, img + (size_t)y * dst_w + dst_w, img + (size_t)(dst_h - 1 - y) * dst_w);
+    }
+  }
+  if (hflip) {
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < dst_h; ++y) std::reverse(img + (size_t)y * dst_w, img + (size_t)y * dst_w + dst_w);
+  }
+
+  give_back_tail();
   proc->imgdata.sizes.iwidth = dst_w;
   proc->imgdata.sizes.iheight = dst_h;
   return true;
