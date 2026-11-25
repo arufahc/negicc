@@ -29,7 +29,9 @@ linked as a shared library, which `make` fetches from Microsoft's PyPI wheel the
 same layout is found in `3rd_party/onnxruntime` or beside the checkout; the build prints which it links.
 `make STATIC=1 neg_process` instead builds ONNX Runtime from the `3rd_party/onnxruntime` submodule and links it into the
 binary, with the compiler's runtime libraries (libstdc++, libgcc, libgomp): the binary then needs only the C library
-(glibc 2.38 or later when built on Ubuntu 24.04).
+(glibc 2.38 or later when built on Ubuntu 24.04). The release archive is built with `STATIC=1 ORT_STATIC=0`: the
+runtime libraries linked in, ONNX Runtime's shared library beside the binary (it needs the system's libstdc++ and
+libgcc_s, which a base Ubuntu 24.04 has).
 `neg_process` makes no network connection: it turns ONNX Runtime's telemetry off (`ORT_DISABLE_TELEMETRY=1`, unless
 you set that variable) before the library's environment is created, so the library neither writes under `~/.cache`
 nor contacts its telemetry server.

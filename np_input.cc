@@ -14,7 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // neg_process's inputs: image geometry, RAW decoding with LibRaw, TIFF and JPEG files, and the inputs besides one
-// RAW (the inputs part of negicc.h).
+// RAW (the inputs part of negicc.h); then the film base read from a capture of unexposed film (the film base part of
+// negicc.h).
 
 #include "negicc.h"
 

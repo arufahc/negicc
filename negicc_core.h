@@ -16,8 +16,8 @@
 // negicc's library, the parts that need only the standard library, in this order (each needs only those before
 // it): the per-pixel colour pipeline, the frame detector, the flat field, the image view and its passes, the
 // white-light input curves, the tone stage, the film base detector, the index of the embedded data and
-// neg_process's messages. gpu_passes.cu and the two detectors' sources include this header alone; every other
-// source includes negicc.h.
+// neg_process's messages. gpu_passes.cu and film_detector.cc (the frame and film base detectors) include this header
+// alone; every other source includes negicc.h.
 
 #ifndef NEGICC_CORE_H
 #define NEGICC_CORE_H
@@ -65,8 +65,8 @@
 //   -> encode (sRGB curve or linear), clamp
 //      convert_pixel: the output code value in [0, 1]
 //
-// A backend that adds a stage writes it here as a NEGICC_HD function and calls it from these convert_pixel_*
-// functions; per-pixel kernels (CPU loops in rgb_view.cc, CUDA kernels in negicc-station) only call them.
+// A backend that adds a stage writes it here as a NEGICC_HD function and calls it from these convert_pixel_* functions;
+// per-pixel kernels (CPU loops: rgb_view.cc; CUDA kernels: gpu_passes.cu and the companion application) only call them.
 
 #if defined(__CUDACC__)
 #define NEGICC_HD __host__ __device__ __forceinline__
