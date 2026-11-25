@@ -21,17 +21,21 @@
 #include "negicc.h"
 
 #include <omp.h>
+#include <pthread.h>
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -731,11 +735,139 @@ Ort::Env make_ort_env(const char* log_id) {
     return Ort::Env(ORT_LOGGING_LEVEL_WARNING, log_id);
 }
 
+// ONNX Runtime's worker threads, reserved before a session is created. ONNX Runtime 1.30 does not survive a worker that
+// fails to start: its pool throws with the workers already started still waiting for work, and then waits forever to
+// join them (a process whose address space ran out while its pools started hung so, sleeping). A null handle from the
+// custom thread function ends the same way. So a session's workers are started here first, parked, one fewer than its
+// intra-op threads (the thread that runs the session works too: ONNX Runtime asks for exactly that many); if one cannot
+// start, those started are stopped and the session is not created: std::runtime_error, which the caller can handle,
+// with the process as it was. The sessions' custom thread function hands ONNX Runtime a parked thread.
+struct ParkedWorker {
+    pthread_t thread{};
+    std::mutex m;
+    std::condition_variable cv;
+    OrtThreadWorkerFn fn = nullptr;
+    void* param = nullptr;
+    bool stop = false;
+};
+
+void* run_parked_worker(void* p) {
+    ParkedWorker* w = static_cast<ParkedWorker*>(p);
+    std::unique_lock<std::mutex> lock(w->m);
+    w->cv.wait(lock, [w] { return w->fn != nullptr || w->stop; });
+    if (!w->fn) return nullptr;  // stopped unused
+    const OrtThreadWorkerFn fn = w->fn;
+    void* const param = w->param;
+    lock.unlock();
+    fn(param);
+    return nullptr;
+}
+
+class WorkerReserve {
+public:
+    // Starts n parked workers; if one cannot start, stops those started and throws std::runtime_error.
+    void reserve(int n) {
+        for (int k = 0; k < n; ++k) {
+            ParkedWorker* w = new (std::nothrow) ParkedWorker;
+            const int err = w ? pthread_create(&w->thread, nullptr, run_parked_worker, w) : ENOMEM;
+            if (err != 0) {
+                delete w;
+                release();
+                throw std::runtime_error("cannot start the " + std::to_string(n) + " worker threads of ONNX Runtime (" +
+                                         std::to_string(k) + " started): " + std::strerror(err));
+            }
+            std::lock_guard<std::mutex> lock(m_);
+            parked_.push_back(w);
+        }
+    }
+
+    // Stops the parked workers ONNX Runtime did not take.
+    void release() {
+        std::vector<ParkedWorker*> unused;
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            unused.swap(parked_);
+        }
+        for (ParkedWorker* w : unused) {
+            {
+                std::lock_guard<std::mutex> lock(w->m);
+                w->stop = true;
+            }
+            w->cv.notify_one();
+            pthread_join(w->thread, nullptr);
+            delete w;
+        }
+    }
+
+    ~WorkerReserve() { release(); }
+
+    // The sessions' custom thread function: a parked worker, given the pool's work loop. Past the reserve (ONNX
+    // Runtime asking for more workers than its intra-op threads less one, which 1.30 does not), a thread is started
+    // here; if that one cannot start, ONNX Runtime would wait forever on the workers it already has, the hang this
+    // reserve exists to avoid, so the program ends at once with the reason (std::_Exit: nothing that would join those
+    // workers may run). It is the one way this library can end its caller's process, and only if ONNX Runtime's count
+    // of workers changes.
+    static OrtCustomThreadHandle create(void* options, OrtThreadWorkerFn fn, void* param) {
+        WorkerReserve* r = static_cast<WorkerReserve*>(options);
+        ParkedWorker* w = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(r->m_);
+            if (!r->parked_.empty()) {
+                w = r->parked_.back();
+                r->parked_.pop_back();
+            }
+        }
+        if (w) {
+            {
+                std::lock_guard<std::mutex> lock(w->m);
+                w->fn = fn;
+                w->param = param;
+            }
+            w->cv.notify_one();
+            return reinterpret_cast<OrtCustomThreadHandle>(w);
+        }
+        w = new (std::nothrow) ParkedWorker;
+        int err = ENOMEM;
+        if (w) {
+            w->fn = fn;
+            w->param = param;
+            err = pthread_create(&w->thread, nullptr, run_parked_worker, w);
+            if (err == 0) return reinterpret_cast<OrtCustomThreadHandle>(w);
+            delete w;
+        }
+        std::fprintf(stderr, "ERROR! cannot start a thread for ONNX Runtime beyond the reserved ones: %s\n",
+                     std::strerror(err));
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(1);
+    }
+
+    static void join(OrtCustomThreadHandle h) {
+        ParkedWorker* w = reinterpret_cast<ParkedWorker*>(const_cast<OrtCustomHandleType*>(h));
+        pthread_join(w->thread, nullptr);
+        delete w;
+    }
+
+    // Sets the session options to take their workers from this reserve, and reserves them.
+    void attach(Ort::SessionOptions& opts, int intra_op_threads) {
+        opts.SetCustomCreateThreadFn(&WorkerReserve::create);
+        opts.SetCustomThreadCreationOptions(this);
+        opts.SetCustomJoinThreadFn(&WorkerReserve::join);
+        reserve(intra_op_threads - 1);
+    }
+
+private:
+    std::mutex m_;
+    std::vector<ParkedWorker*> parked_;
+};
+
+
 class OrtCpuRunner : public DinoV3Runner {
 public:
     OrtCpuRunner(const std::string& model_path, int num_threads) {
         set_options(num_threads);
         session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), opts_);
+        workers_.release();
         read_io();
     }
 
@@ -743,15 +875,18 @@ public:
     OrtCpuRunner(const void* onnx_data, size_t onnx_size, int num_threads) {
         set_options(num_threads);
         session_ = std::make_unique<Ort::Session>(env_, onnx_data, onnx_size, opts_);
+        workers_.release();
         read_io();
     }
 
     void set_options(int num_threads) {
         if (num_threads <= 0) num_threads = omp_get_max_threads();  // the program's thread count
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
-        opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
+        const int intra = std::min(std::max(1, num_threads), hw);
+        opts_.SetIntraOpNumThreads(intra);
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        workers_.attach(opts_, intra);
     }
 
     void read_io() {
@@ -826,6 +961,7 @@ public:
 private:
     Ort::Env env_ = make_ort_env("negicc_dinov3");
     Ort::SessionOptions opts_;
+    WorkerReserve workers_;  // before session_: the session's workers are joined before the reserve goes
     std::unique_ptr<Ort::Session> session_;
     bool has_pool_weights_ = false;
     bool has_tokens_ = false;
@@ -838,10 +974,13 @@ public:
     OrtAdapterRunner(const void* onnx_data, size_t onnx_size, int num_threads) : bytes_(onnx_size) {
         if (num_threads <= 0) num_threads = omp_get_max_threads();  // the program's thread count
         const int hw = std::max(1, (int)std::thread::hardware_concurrency());
-        opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
+        const int intra = std::min(std::max(1, num_threads), hw);
+        opts_.SetIntraOpNumThreads(intra);
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        workers_.attach(opts_, intra);
         session_ = std::make_unique<Ort::Session>(env_, onnx_data, onnx_size, opts_);
+        workers_.release();
     }
 
     size_t memory_bytes() const override { return bytes_; }
@@ -863,6 +1002,7 @@ public:
 private:
     Ort::Env env_ = make_ort_env("negicc_adapter");
     Ort::SessionOptions opts_;
+    WorkerReserve workers_;  // before session_: the session's workers are joined before the reserve goes
     std::unique_ptr<Ort::Session> session_;
     size_t bytes_ = 0;
 };

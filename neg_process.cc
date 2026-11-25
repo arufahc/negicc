@@ -21,6 +21,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/resource.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -997,6 +1001,15 @@ int parse_options(int ac, char* av[], Options& o) {
 // reads the RAW's CFA mosaic in place before anything is decoded, and only the frame is decoded, e.g.
 //     neg_process --film_stock portra400 --light_source tri --target 0 --roi auto --film_format 6x7 -o out.tif scan.ARW
 int main(int ac, char* av[]) {
+#ifdef __GLIBC__
+  // glibc gives each thread that allocates an arena of its own, and each arena reserves 64 MB of address space ahead
+  // of use (HEAP_MAX_SIZE on a 64-bit system). Under a limited address space (ulimit -v) those reservations run out
+  // before the memory does: at the default thread count a 2 GB limit was reached before the input was read. With a
+  // limit, the threads share the one main arena, which reserves nothing ahead, so memory that runs out is refused
+  // where it is allocated (an input too large for it is refused with its size).
+  struct rlimit as_limit;
+  if (getrlimit(RLIMIT_AS, &as_limit) == 0 && as_limit.rlim_cur != RLIM_INFINITY) mallopt(M_ARENA_MAX, 1);
+#endif
   Options o;
   if (const int r = parse_options(ac, av, o)) return r < 0 ? 0 : r;
   negicc::apply_default_thread_count();  // at most 16 threads, unless OMP_NUM_THREADS is set
