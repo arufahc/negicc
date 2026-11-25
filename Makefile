@@ -5,7 +5,9 @@
 #                             them)
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to
 #                             link ONNX Runtime and the compiler's runtime libraries statically: the binary then needs
-#                             only the C library; ORT_STATIC=1 links ONNX Runtime alone statically)
+#                             only the C library; ORT_STATIC=1 links ONNX Runtime alone statically; STATIC=1
+#                             ORT_STATIC=0, the release build, links the runtime libraries alone and keeps ONNX
+#                             Runtime's shared library)
 #   make onnxruntime_prebuilt  # ONNX Runtime's shared library from its PyPI wheel, which neg_process links by default
 #   make lib                # bin_out/libnegicc_dinov3.a and the third-party libraries, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
@@ -212,9 +214,12 @@ endif
 
 # STATIC=1 also links the compiler's runtime libraries in (libstdc++, libgcc and OpenMP's libgomp), so that the binary
 # needs no library beyond the C library (libc, libm). The objects are still compiled with -fopenmp; the link takes
-# libgomp.a in place of -fopenmp's libgomp.so.
+# libgomp.a in place of -fopenmp's libgomp.so. With ORT_STATIC=0 (the release workflow's build) ONNX Runtime stays the
+# shared library beside the binary: --exclude-libs keeps the runtimes' symbols out of the binary's dynamic symbol
+# table, so that the library binds only to the system's libstdc++ and libgcc_s and never to the copies linked in here.
 ifeq ($(STATIC),1)
-    NP_LINK_OPENMP = $(shell $(CXX) -print-file-name=libgomp.a) -pthread -static-libstdc++ -static-libgcc
+    NP_LINK_OPENMP = $(shell $(CXX) -print-file-name=libgomp.a) -pthread -static-libstdc++ -static-libgcc \
+                     -Wl,--exclude-libs,ALL
 else
     NP_LINK_OPENMP = -fopenmp
 endif
