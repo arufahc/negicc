@@ -78,20 +78,6 @@ decode and the conversion, each on the `cpu` or the `gpu`), the flat field, the 
 came from, the crosstalk correction (its nine numbers and their source, or why there is none), the film base and its
 source, and the ICC profile the picture renders through: the bracket's, or the print's.
 
-### The film base from a capture
-
-`--film_base base.ARW` reads the film base from a capture that shows unexposed film: a whole frame of it, or a
-picture with a strip of rebate beside it. The base is used for a picture or for density. The capture is decoded as
-the scan is and scaled to the scan's exposure. The brightest smooth stretch of film anywhere on it is found, leaving
-out dust, scratches, clipped areas, and anything that is not the colour of film base, such as bare light beside the
-film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
-needs an RGB-LED profile set and a Sony RAW. Give the same `--flat` as for the scan.
-
-A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
-`<output>.json`, so the capture is not needed again. `--film_base scan` reads the base from the scan itself
-instead. Without a capture, and with no earlier capture recorded for the output, the base is read from the scan
-as before.
-
 ## Method
 
 A colour negative has three dye layers on an orange base, and the layers do not respond to light in step with each
@@ -103,52 +89,6 @@ differently at every exposure.
 negicc handles this in two parts. The film's behaviour is measured once per stock and stored in profiles. What a
 given picture should look like is decided per frame by a vision model.
 
-### The light
-
-`neg_process` reads camera RAWs, linear DNGs, TIFFs and JPEGs. A TIFF or JPEG with an embedded ICC profile is
-converted through it; without one an 8-bit file is taken as sRGB and a 16-bit TIFF as linear Rec.2020. With
-`--light_source tri` a 16-bit TIFF without a profile is taken as the scanning camera's linear RGB.
-
-With white light (`--light_source d65`), such as a white LED, any camera works. The lamp's colour is taken out using
-the film base found in the scan itself, so your lamp does not have to match the one the profiles were made with.
-
-With a narrow-band RGB LED (`--light_source tri`) each colour of light falls on one dye, which separates the layers
-better. One RAW is enough. Pixel-shift sets and three separate R, G and B frames also work.
-
-The camera's channels overlap, so a narrow-band profile set carries a crosstalk matrix measured on the camera the
-profiles were made with. Its `bundle.json` lists the camera models the matrix holds for (`camera_models`; the shipped
-sets list `ILCE-7RM4` and `ILCE-7RM4A`, the A7R IV and IVA), and `neg_process` compares the RAW's model with that list
-exactly. The only case that turns the correction off is a RAW that states a camera model the set's list does not
-contain; the log says so and why, and `-r`, `-g` and `-b` give the rows of a matrix measured on that camera. An input
-that states no model (a TIFF) and a set from before the list are not compared, and take the set's matrix. Three
-separate frames need no correction. A white-light set has no matrix and lists no models, and no camera is compared for
-it.
-
-Rows given with `-r`, `-g` and `-b` are in the units of the profile set's own correction matrix. The set stores its
-film base as read through that matrix, and the automatic exposure compares the scan's film base with the stored one,
-so rows of another overall scale move the automatic exposure, by log2 of the scale in stops. Rows that leave the
-matrix not invertible are refused.
-
-Single-shot RGB-LED scans from Sony sensors go through negicc's own demosaic, which was written to stop film grain
-turning into maze patterns. Measured against a pixel-shift capture of the same frame it is about 1.2 dB better than
-bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by LibRaw. `-q` chooses LibRaw's method,
-and on a Sony single shot `-q 0` or higher replaces negicc's demosaic with it; pixel-shift sets are always merged.
-
-![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
-
-Single-shot RGB-LED scans on a Sony RGGB sensor, against a 4-shot pixel-shift capture of the same frame.
-
-| Algorithm | Raw MAE ↓ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | R−G zipper ↓ |
-| :--- | :---: | :---: | :---: | :---: |
-| 4-shot pixel shift (ground truth) | 0.00 | ∞ | 0.00 / 0.00 | 142.4 |
-| **Grain-aware colour-ratio** (RGB-LED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
-| LibRaw DCB (`-q 4`) | 79.60 | 39.85 | 1.76 / 7.21 | 71.7 |
-| LibRaw VNG (`-q 1`) | 80.19 | 39.96 | 1.75 / 7.12 | 58.6 |
-| PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 40.03 | 1.73 / 6.97 | 55.3 (grain maze) |
-| Bilinear (`-q 0`) | 89.15 | 39.16 | 1.90 / 7.87 | 115.0 |
-
-Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positive.
-
 ### The profiles
 
 Each profile set (`profiles/<Stock>-A7R4-<Light>/`) carries two sets of ICC profiles built from the same film
@@ -159,6 +99,8 @@ measurements:
 - **Print material emulation** (`print_<material>.icc`, used with `--print <material>`): eight print profiles that
   model the negative printed onto darkroom papers and motion-picture print films
   ([spektrafilm](https://github.com/andreavolpato/spektrafilm)).
+
+### Scene colour matching
 
 For the scene profiles, an IT8 chart was photographed onto each stock at seven exposures, from three stops under to
 three stops over, and each frame was scanned under both lights.
@@ -180,108 +122,7 @@ to (ArgyllCMS `profcheck`), and 2 to 4 on patches held out of the fit; each prof
 example [Portra 400](profiles/Portra400-A7R4-TriLED/README.md). The print emulation profiles use the same shape (input
 TRC curves followed by a 45³ colour table) and are described under [Print emulation](#print-emulation) below.
 
-### Choosing exposure and colour
-
-The profiles describe the film. They do not know how bright a particular picture should be or what its colour
-balance is. For that, negicc runs Meta's DINOv3 vision model over a preview and reads three small heads trained on
-lab scans:
-
-| Head | What it predicts | What it is used for |
-|---|---|---|
-| Intent | the colour each part of the picture should have | choosing the profile, exposure and colour balance |
-| Neutral ([models/neutral_head](models/neutral_head/README.md)) | which parts are neutral surfaces | removing casts that differ between shadows and highlights |
-| Tone ([models/tone_head](models/tone_head/README.md)) | how dark the shadows, how bright the highlights and how wide the range should be | contrast |
-
-![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
-
-*As committed in `e7fa5a1` (2026-10-31), with an earlier intent adapter than the one shipped now.*
-
-A conversion goes through these steps:
-
-1. Find the frame and the film base, and work out which exposure profiles can hold the scene.
-2. Search. Render the candidates, compare each with what the intent head predicts, adjust exposure and the green and
-   blue gains, and repeat until it settles. This step runs for both lights.
-3. Fit the curves (white light only). Gains cannot remove a cast that is warm in the shadows and cool in the
-   highlights. The slopes of the green and blue curves are adjusted until the surfaces the neutral head picked out
-   are grey. The same fit sets the overall magenta-green balance from the intent head. A result greener than the
-   search's is not accepted, apart from a small tolerance and the deep shadows.
-4. Set the contrast (both lights). One lightness curve moves the picture toward the tone head's prediction.
-
-With the RGB LED the curves are the measured ones, so step 3 does not run there: the profiles were made under that
-light, and there is no lamp or camera difference for a fit to correct.
-
-#### The search
-
-On the frame below the first render is cyan-green and the search brings it to a daylight balance. This step removes
-the uniform colour cast that comes from the LED lights being set to different powers.
-
-![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
-
-*As committed in `9f9c790` (2026-10-31), with an earlier intent adapter than the one shipped now.*
-
-#### Curve fitting (white light only)
-
-Under a white light the crosstalk matrix and the light's spectrum are unknown, and a broadband light brings in a
-lot of noise between the response curves of the film's dye layers. This step is needed to neutralise the colours
-and to remove the crossover colour cast, the one that differs between shadows and highlights.
-
-The neutral head marks the cells that should be grey: here the road, the building fronts and the dark uniforms,
-not the trees. Weighted by it, the
-search's render runs green-yellow in the shadows and magenta-blue in the highlights; the curve fit takes most of that
-trend out.
-
-![Neutral head and the curve fit](samples/neutral_field.png)
-
-#### The tone stage
-
-The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
-lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
-was. Where that would push more of the picture to black or to white than the render already has, the moves are
-scaled back until neither end clips more.
-
-![Tone head and the lightness curve](samples/tone_prediction.png)
-
-[DESIGN.md](DESIGN.md) has the formulas, every number these steps depend on, and the limits of each step.
-
-## Scans from other cameras
-
-Scans from any camera under white light (`--light_source d65`) can be converted for scene colour matching or for print
-emulation:
-
-```sh
-# Scene colour matching
-bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
-
-# Print emulation directly to a picture (print material ICC)
-bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
-
-# Print emulation through an ADX16 (or Cineon DPX) density file and a CLF
-bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
-```
-
-Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
-were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
-
-![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
-
-*Canon EOS 5DS R.* [Mauritius Mountain with River Mouth](https://discuss.pixls.us/t/50730/1), posted by gsinha,
-2025-06-16.
-
-![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
-
-*Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
-DanielE, 2026-07-11.
-
-![Fête du Travail](samples/web_d216d498d5.jpg)
-
-*Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
-
-The right-hand pictures were rendered with negicc `02876a0`. The RAW files and the pictures belong to the
-photographers who posted them. No copyright is claimed on them here.
-If one of them is yours and you want it removed, open an issue.
-
-## Print emulation
+### Print emulation
 
 Print emulation models shining a printer lamp through the negative onto darkroom paper or motion-picture print film.
 Eight materials from [spektrafilm](https://github.com/andreavolpato/spektrafilm) are built in — six papers (such as
@@ -321,7 +162,8 @@ adapt the viewing light's white ([DESIGN.md](DESIGN.md) 5.9).
 
 ![Print TRC Curves and 3D cLUT Gamut](samples/print_trc_and_clut.png)
 
-On a print, the tone stage (`--tone_stage`) is disabled so the picture keeps the print material's own tone curve.
+On a print neither the curve fit nor the tone stage (both below) runs, so the picture keeps the print material's own
+tone curve.
 Under the narrow-band RGB LED (`--light_source tri`), the print ICC reproduces the spectral print model it is sampled
 from to 0.06 to 0.14 ΔE₀₀ on average: that is its table's sampling error, and the model itself has not been compared
 with a real print. Under white light (`--light_source d65`), where the lamp and camera spectra are not measured, a
@@ -333,6 +175,195 @@ materials](samples/print_materials_triled.jpg)
 *Top left: scene colour matching (without `--print`). Then the six papers and the two print films, each matched to the
 scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
 `1d154d7`.*
+
+From white-light scans, the print follows the same path: each of the three forum scans shown under
+[Scans from other cameras](#scans-from-other-cameras) below, as a print on two materials.
+
+![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
+
+*The three scans of [Scans from other cameras](#scans-from-other-cameras). Left to right: scene colour matching, the
+print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it
+(`--film_stock portra400 --light_source d65 --roi auto -P srgb`, with `--print kodak_portra_endura` and
+`--print kodak_2383`). Rendered with negicc `2130afd`.*
+
+### Choosing exposure and colour
+
+The profiles describe the film. They do not know how bright a particular picture should be or what its colour
+balance is. For that, negicc runs Meta's DINOv3 vision model over a preview and reads three small heads trained on
+lab scans:
+
+| Head | What it predicts | What it is used for |
+|---|---|---|
+| Intent | the colour each part of the picture should have | choosing the profile, exposure and colour balance |
+| Neutral ([models/neutral_head](models/neutral_head/README.md)) | which parts are neutral surfaces | removing casts that differ between shadows and highlights |
+| Tone ([models/tone_head](models/tone_head/README.md)) | how dark the shadows, how bright the highlights and how wide the range should be | contrast |
+
+![DINOv3 Intent Field and Convergence](samples/dinov3_intent.png)
+
+*As committed in `e7fa5a1` (2026-10-31), with an earlier intent adapter than the one shipped now.*
+
+A conversion goes through these steps:
+
+1. Find the frame and the film base, and work out which exposure profiles can hold the scene.
+2. Search. Render the candidates, compare each with what the intent head predicts, adjust exposure and the green and
+   blue gains, and repeat until it settles. This step runs for both lights.
+3. Fit the curves (white light only, never on a print). Gains cannot remove a cast that is warm in the shadows and
+   cool in the highlights. The slopes of the green and blue curves are adjusted until the surfaces the neutral head
+   picked out are grey. The same fit sets the overall magenta-green balance from the intent head. A result greener
+   than the search's is not accepted, apart from a small tolerance and the deep shadows.
+4. Set the contrast (both lights, with `-P srgb`, never on a print). One lightness curve moves the picture toward the
+   tone head's prediction.
+
+With the RGB LED the curves are the measured ones, so step 3 does not run there: the profiles were made under that
+light, and there is no lamp or camera difference for a fit to correct.
+
+#### The search
+
+On the frame below the first render is cyan-green and the search brings it to a daylight balance. This step removes
+the uniform colour cast that comes from the LED lights being set to different powers.
+
+![DINOv3 Patch Residual Error Minimization](samples/dinov3_residuals.png)
+
+*As committed in `9f9c790` (2026-10-31), with an earlier intent adapter than the one shipped now.*
+
+#### Curve fitting (white light only)
+
+Under a white light the crosstalk matrix and the light's spectrum are unknown, and a broadband light brings in a
+lot of noise between the response curves of the film's dye layers. This step is needed to neutralise the colours
+and to remove the crossover colour cast, the one that differs between shadows and highlights. A print never runs it.
+
+The neutral head marks the cells that should be grey: here the road, the building fronts and the dark uniforms,
+not the trees. Weighted by it, the search's render runs green-yellow in the shadows and magenta-blue in the
+highlights; the curve fit takes most of that trend out.
+
+![Neutral head and the curve fit](samples/neutral_field.png)
+
+#### The tone stage
+
+The tone head predicts how dark the shadows and how bright the highlights of a lab scan of the frame would be. The
+lightness curve moves the shadows all the way and the highlights half way to it, and leaves the mid-tone where it
+was. Where that would put more than half a percent more of the picture at black or at white than the render already
+has, the highlight and contrast moves are scaled back, and the shadow move with them only if the black end still
+clips, until both ends hold; where no scaling holds, `--tone_stage` says which end gives way. When both moves end at
+zero, no curve is applied and the picture is the conversion without the stage.
+
+![Tone head and the lightness curve](samples/tone_prediction.png)
+
+[DESIGN.md](DESIGN.md) has the formulas, every number these steps depend on, and the limits of each step.
+
+### The film base
+
+The film base is the orange mask of unexposed film. The scan is divided by it, so that each channel reads the
+film's transmittance relative to bare film and a profile and a scan agree whatever the mask's colour or the scan's
+exposure. Without a capture it is read from the scan: from the rebate beside the frame, or else from the thinnest
+film in the picture; failing both, the profile set's own base is used.
+
+`--film_base base.ARW` reads the film base from a capture that shows unexposed film: a whole frame of it, or a
+picture with a strip of rebate beside it. The base is used for a picture or for density. The capture is decoded as
+the scan is and scaled to the scan's exposure. The brightest smooth stretch of film anywhere on it is found, leaving
+out dust, scratches, clipped areas, and anything that is not the colour of film base, such as bare light beside the
+film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It needs an RGB-LED profile set and a Sony
+RAW. Give the same `--flat` as for the scan.
+
+A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
+`<output>.json`, so the capture is not needed again. `--film_base scan` reads the base from the scan itself
+instead. Without a capture, and with no earlier capture recorded for the output, the base is read from the scan.
+
+### The flat field
+
+`--flat` takes a flat field measured on the empty gate: an `.npz` holding a coarse grid of gains per channel in
+sensor coordinates, 1 at the sensor's centre. Every decode of the scan is divided by the gain at each pixel's sensor
+position, before any crop or rotation, which takes out the falloff of the light and the lens. The picture, the
+searches and the film base all read the divided scan, and a film base capture is divided by the same flat. It
+applies to a camera RAW, a single shot or a pixel-shift set.
+
+### The demosaic
+
+Single-shot RGB-LED scans from Sony sensors with an RGGB colour filter array (CFA) go through negicc's own demosaic,
+which was written to stop film grain turning into maze patterns. Measured against a pixel-shift capture of the same
+frame it is about 1.2 dB better than bilinear and 0.5 dB better than LibRaw's DCB. Everything else is demosaiced by
+LibRaw. `-q` chooses LibRaw's method, and on a Sony single shot `-q 0` or higher replaces negicc's demosaic with it;
+pixel-shift sets are always merged. Where negicc's demosaic runs, the searches and the film base read a half-size
+image taken straight from the CFA, one pixel per 2×2 block, with no demosaic.
+
+![Demosaicing Algorithm Comparison](samples/demosaic_comparison.png)
+
+Single-shot RGB-LED scans on a Sony RGGB sensor, against a 4-shot pixel-shift capture of the same frame.
+
+| Algorithm | Raw MAE ↓ | Positive PSNR (dB) ↑ | Positive ΔE₀₀ mean / p95 ↓ | R−G zipper ↓ |
+| :--- | :---: | :---: | :---: | :---: |
+| 4-shot pixel shift (ground truth) | 0.00 | ∞ | 0.00 / 0.00 | 142.4 |
+| **Grain-aware colour-ratio** (RGB-LED default) | **80.81** | **40.38** | **1.69 / 6.86** | 56.5 |
+| LibRaw DCB (`-q 4`) | 79.60 | 39.85 | 1.76 / 7.21 | 71.7 |
+| LibRaw VNG (`-q 1`) | 80.19 | 39.96 | 1.75 / 7.12 | 58.6 |
+| PPG / AHD (`-q 2` / `-q 3`) | 80.61 | 40.03 | 1.73 / 6.97 | 55.3 (grain maze) |
+| Bilinear (`-q 0`) | 89.15 | 39.16 | 1.90 / 7.87 | 115.0 |
+
+Raw MAE is in 14-bit LSB; PSNR and ΔE₀₀ are measured on the inverted positive.
+
+### The light
+
+`neg_process` reads camera RAWs, linear DNGs, TIFFs and JPEGs. A TIFF or JPEG with an embedded ICC profile is
+converted through it; without one an 8-bit file is taken as sRGB and a 16-bit TIFF as linear Rec.2020. With
+`--light_source tri` a 16-bit TIFF without a profile is taken as the scanning camera's linear RGB.
+
+With white light (`--light_source d65`), such as a white LED, any camera works. The lamp's colour is taken out using
+the film base found in the scan itself, so your lamp does not have to match the one the profiles were made with.
+
+With a narrow-band RGB LED (`--light_source tri`) each colour of light falls on one dye, which separates the layers
+better. One RAW is enough. Pixel-shift sets and three separate R, G and B frames also work.
+
+The camera's channels overlap, so a narrow-band profile set carries a crosstalk matrix measured on the camera the
+profiles were made with. Its `bundle.json` lists the camera models the matrix holds for (`camera_models`; the shipped
+sets list `ILCE-7RM4` and `ILCE-7RM4A`, the A7R IV and IVA), and `neg_process` compares the RAW's model with that list
+exactly. The only case that turns the correction off is a RAW that states a camera model the set's list does not
+contain; the log says so and why, and `-r`, `-g` and `-b` give the rows of a matrix measured on that camera. An input
+that states no model (a TIFF) and a set without the list are not compared, and take the set's matrix. Three
+separate frames need no correction. A white-light set has no matrix and lists no models, and no camera is compared for
+it.
+
+Rows given with `-r`, `-g` and `-b` are in the units of the profile set's own correction matrix. The set stores its
+film base as read through that matrix, and the automatic exposure compares the scan's film base with the stored one,
+so rows of another overall scale move the automatic exposure, by log2 of the scale in stops. Rows that leave the
+matrix not invertible are refused.
+
+## Scans from other cameras
+
+Scans from any camera under white light (`--light_source d65`) can be converted for scene colour matching or for print
+emulation:
+
+```sh
+# Scene colour matching
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
+
+# Print emulation directly to a picture (print material ICC)
+bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
+
+# Print emulation through an ADX16 (or Cineon DPX) density file and a CLF
+bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
+```
+
+Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
+were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
+`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
+
+![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
+
+*Canon EOS 5DS R.* [Mauritius Mountain with River Mouth](https://discuss.pixls.us/t/50730/1), posted by gsinha,
+2025-06-16.
+
+![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
+
+*Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
+DanielE, 2026-07-11.
+
+![Fête du Travail](samples/web_d216d498d5.jpg)
+
+*Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
+
+The right-hand pictures were rendered with negicc `2130afd`. The RAW files, the pictures above and their prints under
+[Print emulation](#print-emulation) belong to the photographers who posted them. No copyright is claimed on them here.
+If one of them is yours and you want it removed, open an issue.
 
 ## Options
 
