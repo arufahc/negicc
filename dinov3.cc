@@ -21,7 +21,9 @@
 #include "negicc.h"
 
 #include <omp.h>
+#include <pthread.h>
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -679,6 +681,44 @@ Ort::Env make_ort_env(const char* log_id) {
     return Ort::Env(ORT_LOGGING_LEVEL_WARNING, log_id);
 }
 
+// ONNX Runtime's worker threads, started here (the sessions' custom thread functions) so that a thread that cannot be
+// started ends the program with its reason. ONNX Runtime 1.30 does not survive a worker that fails to start: its pool
+// throws with the workers already started still waiting for work, and then waits forever to join them. A process
+// whose address space ran out while its pools started hung so, sleeping, instead of ending.
+struct OrtWorker {
+    OrtThreadWorkerFn fn;
+    void* param;
+    pthread_t thread;
+};
+
+void* run_ort_worker(void* p) {
+    const OrtWorker* w = static_cast<const OrtWorker*>(p);
+    w->fn(w->param);
+    return nullptr;
+}
+
+OrtCustomThreadHandle start_ort_worker(void*, OrtThreadWorkerFn fn, void* param) {
+    int err = ENOMEM;
+    if (OrtWorker* w = static_cast<OrtWorker*>(std::malloc(sizeof(OrtWorker)))) {
+        w->fn = fn;
+        w->param = param;
+        err = pthread_create(&w->thread, nullptr, run_ort_worker, w);
+        if (err == 0) return reinterpret_cast<OrtCustomThreadHandle>(w);
+        std::free(w);
+    }
+    // Ended at once: the workers already started cannot be stopped, so nothing that would wait for them may run.
+    std::fprintf(stderr, "ERROR! cannot start a thread for ONNX Runtime: %s\n", std::strerror(err));
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(1);
+}
+
+void join_ort_worker(OrtCustomThreadHandle h) {
+    OrtWorker* w = reinterpret_cast<OrtWorker*>(const_cast<OrtCustomHandleType*>(h));
+    pthread_join(w->thread, nullptr);
+    std::free(w);
+}
+
 class OrtCpuRunner : public DinoV3Runner {
 public:
     OrtCpuRunner(const std::string& model_path, int num_threads) {
@@ -700,6 +740,8 @@ public:
         opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        opts_.SetCustomCreateThreadFn(start_ort_worker);
+        opts_.SetCustomJoinThreadFn(join_ort_worker);
     }
 
     void read_io() {
@@ -789,6 +831,8 @@ public:
         opts_.SetIntraOpNumThreads(std::min(std::max(1, num_threads), hw));
         opts_.AddConfigEntry("session.intra_op.allow_spinning", "0");
         opts_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        opts_.SetCustomCreateThreadFn(start_ort_worker);
+        opts_.SetCustomJoinThreadFn(join_ort_worker);
         session_ = std::make_unique<Ort::Session>(env_, onnx_data, onnx_size, opts_);
     }
 
