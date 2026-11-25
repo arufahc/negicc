@@ -333,40 +333,62 @@ matrix not invertible are refused.
 ## Scans from other cameras
 
 Scans from any camera under white light (`--light_source d65`) can be converted for scene colour matching or for print
-emulation:
+emulation. Each example below is a scan that someone posted on the [pixls.us](https://discuss.pixls.us) forum, taken
+with a camera and lamp the profiles were not made with, and the command that made the picture. Left: the scan as the
+camera saw it. Right: the result. Everything the command does not set is automatic.
+
+### Scene colour matching
 
 ```sh
-# Scene colour matching
 bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P srgb -o scene.tif scan.RAW
-
-# Print emulation directly to a picture (print material ICC)
-bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura --roi auto -P srgb -o print.tif scan.RAW
-
-# Print emulation through an ADX16 (or Cineon DPX) density file and a CLF
-bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura --roi auto -o density.tif scan.RAW
 ```
 
-Three scans people posted on the [pixls.us](https://discuss.pixls.us) forum, taken with cameras and lamps the profiles
-were not made with. Left: the scan as the camera saw it. Right: `neg_process` with
-`--film_stock portra400 --light_source d65 --roi auto -P srgb`, everything else automatic.
+![Fête du Travail, the scan and its scene conversion](samples/web_d216d498d5.jpg)
 
-![Mauritius mountain with river mouth](samples/web_5e74adc30c.jpg)
+*Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13. Rendered
+with negicc `d174ca9`.
+
+### Print emulation directly to a picture
+
+`--print` with `-P srgb` writes the print as a 16-bit sRGB TIFF through the material's print ICC, at the printing
+exposure and colour balance its own search finds. `--rot 180` turns this scan upright.
+
+```sh
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto --print kodak_portra_endura --rot 180 \
+    -P srgb -o print.tif scan.RAW
+```
+
+![Mauritius mountain with river mouth, the scan and its print on Portra Endura](samples/web_5e74adc30c_portra_endura.jpg)
 
 *Canon EOS 5DS R.* [Mauritius Mountain with River Mouth](https://discuss.pixls.us/t/50730/1), posted by gsinha,
-2025-06-16.
+2025-06-16. The print on Kodak Portra Endura paper. Rendered with negicc `d174ca9`.
 
-![Hands holding a marble](samples/web_72a0a8b2e5.jpg)
+### Print emulation through a density file and a CLF
+
+The first command writes the negative's density above the film base as a 16-bit ADX16 TIFF (`-P apd`; with
+`-P rp180 -o scan.dpx` it is a 10-bit Cineon DPX) and, for `--print kodak_2383`, a CLF beside it that renders that file
+as the print. The second applies the CLF with OpenImageIO's `oiiotool`; any program that reads CLF through OpenColorIO
+can.
+
+```sh
+bin_out/neg_process --film_stock portra400 --light_source d65 --roi auto -P apd --print kodak_2383 -o scan.tif scan.RAW
+oiiotool scan.tif --ociofiletransform scan.tif.kodak_2383.clf -o print.tif
+```
+
+![Hands holding a marble, the scan and its print on Vision 2383](samples/web_72a0a8b2e5_2383_clf.jpg)
 
 *Nikon D810.* [Negative inversion challenge! Skin tones and greens](https://discuss.pixls.us/t/59155/1), posted by
-DanielE, 2026-07-11.
+DanielE, 2026-07-11. The print on Kodak Vision 2383 print film. Rendered with negicc `d174ca9`.
 
-![Fête du Travail](samples/web_d216d498d5.jpg)
+The CLF carries the printing exposure and balance of the print's own search, so this is the print that
+`--print kodak_2383 -P srgb` writes from the same scan: the two differ by 0.23 ΔE₀₀ on average (0.54 at the 95th
+percentile). They differ most at black: 1.2 % of the picture has a channel at black through the print ICC and 0.8 %
+through the CLF, all of the difference in the thinnest film, at or near its base, which the two paths handle
+differently ([Print emulation](#print-emulation)).
 
-*Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
-
-The right-hand pictures were rendered with negicc `2130afd`. The RAW files, the pictures above and their prints under
-[Print emulation](#print-emulation) belong to the photographers who posted them. No copyright is claimed on them here.
-If one of them is yours and you want it removed, open an issue.
+The RAW files, the pictures above and their prints under [Print emulation](#print-emulation) belong to the
+photographers who posted them. No copyright is claimed on them here. If one of them is yours and you want it removed,
+open an issue.
 
 ## Options
 
