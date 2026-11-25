@@ -182,8 +182,9 @@ From white-light scans, the print follows the same path: each of the three forum
 ![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
 
 *The three scans of [Scans from other cameras](#scans-from-other-cameras). Left to right: scene colour matching, the
-print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it (`--film_stock portra400 --light_source d65 --roi auto -P
-srgb`, with `--print kodak_portra_endura` and `--print kodak_2383`). Rendered with negicc `2130afd`.*
+print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it
+(`--film_stock portra400 --light_source d65 --roi auto -P srgb`, with `--print kodak_portra_endura` and
+`--print kodak_2383`). Rendered with negicc `2130afd`.*
 
 ### Choosing exposure and colour
 
@@ -232,9 +233,8 @@ lot of noise between the response curves of the film's dye layers. This step is 
 and to remove the crossover colour cast, the one that differs between shadows and highlights. A print never runs it.
 
 The neutral head marks the cells that should be grey: here the road, the building fronts and the dark uniforms,
-not the trees. Weighted by it, the
-search's render runs green-yellow in the shadows and magenta-blue in the highlights; the curve fit takes most of that
-trend out.
+not the trees. Weighted by it, the search's render runs green-yellow in the shadows and magenta-blue in the
+highlights; the curve fit takes most of that trend out.
 
 ![Neutral head and the curve fit](samples/neutral_field.png)
 
@@ -262,8 +262,8 @@ film in the picture; failing both, the profile set's own base is used.
 picture with a strip of rebate beside it. The base is used for a picture or for density. The capture is decoded as
 the scan is and scaled to the scan's exposure. The brightest smooth stretch of film anywhere on it is found, leaving
 out dust, scratches, clipped areas, and anything that is not the colour of film base, such as bare light beside the
-film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It
-needs an RGB-LED profile set and a Sony RAW. Give the same `--flat` as for the scan.
+film. `--film_base base.ARW:x,y,w,h` gives the region in sensor pixels. It needs an RGB-LED profile set and a Sony
+RAW. Give the same `--flat` as for the scan.
 
 A later run to the same output, with the same inputs and the same `--flat`, takes that base back from
 `<output>.json`, so the capture is not needed again. `--film_base scan` reads the base from the scan itself
