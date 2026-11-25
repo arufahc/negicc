@@ -13,8 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// neg_process's output: the 16-bit TIFF with its ICC profile, and the JSON sidecar beside it. Their declarations
-// are the output part of negicc.h.
+// neg_process's output: the picture's 16-bit TIFF with its ICC profile, the JSON sidecar beside the output, and the
+// density file (a 16-bit TIFF or a 10-bit DPX) with its print CLFs. Their declarations are the output part of negicc.h.
 
 #include <netinet/in.h>
 #include <stdio.h>
@@ -42,7 +42,8 @@
 
 // ====================================================================================================================
 // Output: code
-// The 16-bit TIFF with its ICC profile, and the JSON sidecar beside it.
+// The picture's 16-bit TIFF with its ICC profile, the JSON sidecar beside the output, and the density file (TIFF or
+// DPX) with its print CLFs.
 // ====================================================================================================================
 
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,

@@ -13,9 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// neg_process's print: the density output's encoding and files, the print materials (built in and spektrafilm
-// files), a frame's print, its print CLF and the print ICC profiles. Their declarations are the print part of
-// negicc.h.
+// neg_process's print: the density output's encoding and metadata, the print materials (built in and spektrafilm
+// files), a frame's print, its print CLF's text and the print ICC profiles' bytes. Their declarations are the print
+// part of negicc.h. The density file and the CLFs are written by np_output.cc (the output part of negicc.h).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,8 +40,8 @@
 
 // ====================================================================================================================
 // Print: code
-// The density output's encoding and files, the print materials (built in and spektrafilm files), a frame's print, its
-// print CLF and the print ICC profiles: what the print part of negicc.h declares.
+// The density output's encoding and metadata, the print materials (built in and spektrafilm files), a frame's print,
+// its print CLF's text and the print ICC profiles' bytes: what the print part of negicc.h declares.
 // ====================================================================================================================
 
 // ---- BEGIN CIE TABLES (written by the companion profiling tools, not in this repository) ----

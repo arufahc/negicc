@@ -13,9 +13,31 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// negicc's library: negicc_core.h, then the parts that need a third-party header (LittleCMS's lcms2.h, LibRaw's
-// libraw/libraw.h), in this order (each needs only those before it): the white-light balance, neg_process's
-// inputs, the profile bundle, the DINOv3 intent model with the Auto search, and the conversion parameter search.
+// Two things, one after the other:
+//
+//   1. negicc's library: negicc_core.h, then the parts that need a third-party header (LittleCMS's lcms2.h, LibRaw's
+//      libraw/libraw.h), in this order (each needs only those before it): the white-light balance, neg_process's
+//      inputs, the profile bundle, the DINOv3 intent model with the Auto search, and the conversion parameter search.
+//      The library's sources (libnegicc_dinov3.a) and the companion application's own sources use only this part.
+//   2. neg_process's own declarations, from the banner "neg_process's own declarations" to the end: what its program
+//      sources (neg_process.cc, np_input.cc, print_emulation.cc, np_output.cc and pipeline.cc) share, in this order:
+//      the print, the film base, the options, the output and the pipeline.
+//
+// Contents, each part under a banner with its name:
+//
+//   White-light balance      the film-base balance of the white-light decode
+//   Inputs                   geometry, RAW decoding, TIFF and JPEG files, the inputs besides one RAW
+//   Profile bundle           the film profile as the host holds it, the bundles and their brackets, the profiles, the
+//                            input matrix and the shoulder
+//   DINOv3                   the intent model and the Auto search that runs on it
+//   Parameter search         the conversion parameter search, its renderers, the curve fit and the tone stage's plan
+//   ---- neg_process's own declarations ----
+//   Print                    the density output's encoding and record, the print materials, a frame's print and its
+//                            CLF, and the print ICC
+//   Film base                the film base read from a capture of unexposed film
+//   Options                  the command line
+//   Output                   the picture's TIFF, the density file (TIFF or DPX) and its print CLFs, and the sidecar
+//   Pipeline                 the stages main runs in turn and the state they hand on
 
 #ifndef NEGICC_H
 #define NEGICC_H
@@ -2016,6 +2038,15 @@ bool run_white_light_fit(ProfileBundle& bundle, DinoV3Engine& engine, const negi
                          double scan_shutter_s, double scan_iso, const ParamSearchOptions& opts,
                          const ParamSearchResult& res, const negicc::CurveFitOptions& fit_opts,
                          int encoding, const ToneHead* tone_head, WhiteLightFitResult& out);
+
+// ####################################################################################################################
+// neg_process's own declarations
+// ####################################################################################################################
+//
+// The library's interface ends above. From here to the end are the declarations neg_process's program sources share
+// (neg_process.cc, np_input.cc, print_emulation.cc, np_output.cc and pipeline.cc): the print, the film base, the
+// options, the output and the pipeline. The library's sources and the companion application's own sources use none
+// of them. They are in the global namespace, so their names reach every source that includes this header.
 
 // ====================================================================================================================
 // Print: declarations
