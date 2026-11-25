@@ -179,8 +179,24 @@ materials](samples/print_materials_triled.jpg)
 scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
 `1d154d7`.*
 
-From white-light scans, the print follows the same path: each of the three forum scans shown under
-[Scans from other cameras](#scans-from-other-cameras) below, as a print on two materials.
+From a white-light scan (`--light_source d65`), the two ways are:
+
+```sh
+# 1. The print ICC, directly to a picture.
+bin_out/neg_process --film_stock portra400 --light_source d65 --print kodak_portra_endura -P srgb \
+    --roi auto -o print.tif scan.RAW
+
+# 2. The density file, then its CLF.
+bin_out/neg_process --film_stock portra400 --light_source d65 -P apd --print kodak_portra_endura \
+    --roi auto -o scan.tif scan.RAW
+oiiotool scan.tif --ociofiletransform scan.tif.kodak_portra_endura.clf -o print.jpg
+```
+
+Unlike the narrow-band commands above, these take no `--film_base`: a capture of unexposed film is read only with a
+narrow-band profile set, so on white light the base is read from the scan itself, from the rebate beside the frame or
+else from the thinnest film ([The film base](#the-film-base)). That base also takes the lamp's colour out, so any
+camera works ([The light](#the-light)). [Scans from other cameras](#scans-from-other-cameras) shows single scans
+before and after.
 
 ![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
 
