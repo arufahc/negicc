@@ -176,6 +176,15 @@ materials](samples/print_materials_triled.jpg)
 scene conversion's mean L\* with `--brightness` (the offset in stops is in each cell's title). Rendered with negicc
 `1d154d7`.*
 
+From white-light scans, the print follows the same path: each of the three forum scans shown under
+[Scans from other cameras](#scans-from-other-cameras) below, as a print on two materials.
+
+![Three white-light scans as negicc's picture and as prints on Portra Endura and Vision 2383](samples/print_white_light.jpg)
+
+*The three scans of [Scans from other cameras](#scans-from-other-cameras). Left to right: scene colour matching, the
+print on Portra Endura paper, the print on Vision 2383 print film, each as its search left it (`--film_stock portra400 --light_source d65 --roi auto -P
+srgb`, with `--print kodak_portra_endura` and `--print kodak_2383`). Rendered with negicc `2130afd`.*
+
 ### Choosing exposure and colour
 
 The profiles describe the film. They do not know how bright a particular picture should be or what its colour
@@ -352,8 +361,8 @@ DanielE, 2026-07-11.
 
 *Canon EOS R.* [Fête du Travail](https://discuss.pixls.us/t/45538/1), posted by jonathanBieler, 2024-09-13.
 
-The right-hand pictures were rendered with negicc `02876a0`. The RAW files and the pictures belong to the
-photographers who posted them. No copyright is claimed on them here.
+The right-hand pictures were rendered with negicc `2130afd`. The RAW files, the pictures above and their prints under
+[Print emulation](#print-emulation) belong to the photographers who posted them. No copyright is claimed on them here.
 If one of them is yours and you want it removed, open an issue.
 
 ## Options
