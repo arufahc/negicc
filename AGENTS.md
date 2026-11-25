@@ -101,3 +101,7 @@ Rules for any OpenMP parallel region added to this repository:
   the program's count, so nothing in the program runs with a number of its own. Do not give a runtime a fixed count.
 - **Batch runs set `OMP_NUM_THREADS` for every process,** so that processes times threads stays within the machine's
   cores.
+- **Measured so far:** the quarter turn of a region that is not square (`extract_roi_and_transform`, `np_input.cc`),
+  on a 9000 x 6000 region of a 60 MP RAW: 1.27 s on 1 thread, 0.41 s on 4, 0.22 s on 8, 0.13 s on 16 and 0.11 s on
+  24, so it takes the program's thread count with no cap; identical output at 1, 4 and 16 threads, and no race in a
+  ThreadSanitizer build at those counts.
