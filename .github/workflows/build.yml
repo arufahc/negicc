@@ -78,8 +78,10 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
             TITLE="neg_process ${TAG}"
             NOTES="Linux x86_64 build of \`neg_process\` (${GITHUB_SHA::7}) with LibRaw, Little-CMS 2, libtiff, libjpeg-turbo, zlib, profile bundles, and DINOv3 models statically linked in, and ONNX Runtime 1.30.0 beside it as libonnxruntime.so.1."
+            # A versioned release that already exists was made by hand, with its own archive and notes (a build
+            # with ONNX Runtime linked in, make STATIC=1): they are left as they are.
             if gh release view "${TAG}" >/dev/null 2>&1; then
-              gh release upload "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 --clobber
+              echo "Release ${TAG} exists: its assets and notes are left as they are."
             else
               gh release create "${TAG}" dist/neg_process-linux-x86_64.tar.gz dist/neg_process-linux-x86_64.tar.gz.sha256 \
                 --title "${TITLE}" --notes "${NOTES}"

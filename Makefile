@@ -4,7 +4,8 @@
 #   make dinov3_engine      # its TensorRT engine and the adapters', for USE_CUDA=1 builds (on the machine that runs
 #                             them)
 #   make neg_process        # bin_out/neg_process, with the backbone built in when it was exported (add STATIC=1 to
-#                             link ONNX Runtime statically)
+#                             link ONNX Runtime and the compiler's runtime libraries statically: the binary then needs
+#                             only the C library; ORT_STATIC=1 links ONNX Runtime alone statically)
 #   make onnxruntime_prebuilt  # ONNX Runtime's shared library from its PyPI wheel, which neg_process links by default
 #   make lib                # bin_out/libnegicc_dinov3.a and the third-party libraries, linked by negicc-station
 #   make libraw             # bin_out/libraw.a, LibRaw built from the 3rd_party/libraw submodule
@@ -209,6 +210,15 @@ else
     $(error STATIC / ORT_STATIC must be 0 or 1, got '$(ORT_STATIC)')
 endif
 
+# STATIC=1 also links the compiler's runtime libraries in (libstdc++, libgcc and OpenMP's libgomp), so that the binary
+# needs no library beyond the C library (libc, libm). The objects are still compiled with -fopenmp; the link takes
+# libgomp.a in place of -fopenmp's libgomp.so.
+ifeq ($(STATIC),1)
+    NP_LINK_OPENMP = $(shell $(CXX) -print-file-name=libgomp.a) -pthread -static-libstdc++ -static-libgcc
+else
+    NP_LINK_OPENMP = -fopenmp
+endif
+
 # Only the prebuilt library is fetched; the static one has its own recipe below.
 ifneq ($(ORT_FETCHED),)
 $(ORT_FETCHED):
@@ -276,8 +286,9 @@ else
     $(error USE_CUDA must be 0 or 1, got '$(USE_CUDA)')
 endif
 
-# A change of USE_CUDA, ORT_STATIC or (on a CUDA build) CUDA_ARCH rebuilds everything.
-BUILD_STAMP = bin_out/.use_cuda_$(USE_CUDA)$(if $(filter 1,$(USE_CUDA)),_arch_$(CUDA_ARCH))_static_$(ORT_STATIC)
+# A change of USE_CUDA, ORT_STATIC, STATIC or (on a CUDA build) CUDA_ARCH rebuilds everything.
+BUILD_STAMP = bin_out/.use_cuda_$(USE_CUDA)$(if $(filter 1,$(USE_CUDA)),_arch_$(CUDA_ARCH))_static_$(ORT_STATIC)$(if \
+              $(filter 1,$(STATIC)),_runtime)
 
 $(BUILD_STAMP):
 	mkdir -p bin_out
@@ -474,7 +485,7 @@ bin_out/neg_process: bin_out/neg_process.o $(NEG_PROCESS_OBJS) bin_out/libnegicc
 	$(CXX) -o $@ bin_out/neg_process.o $(NEG_PROCESS_OBJS) \
 	    bin_out/libnegicc_dinov3.a $(LIBRAW_LIB) $(TIFF_LIB) $(JPEG_LIB) $(LCMS2_LIB) $(ZLIB_LIB) -I. -I3rd_party \
 	    $(LIBRAW_INC) $(LCMS2_INC) $(ZLIB_INC) $(JSON_INC) $(ARGPARSE_INC) $(ORT_INC) $(DINOV3_EXTRA_INC) \
-	    $(LIBRAW_LDLIBS) -O3 -std=c++17 -fopenmp -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
+	    $(LIBRAW_LDLIBS) -O3 -std=c++17 $(NP_LINK_OPENMP) -ffp-contract=off $(ORT_LDFLAGS) $(DINOV3_EXTRA_LIBS)
 	@# The bundles built in are read back with the parser that converts with them: a bad export fails the build.
 	@$@ --list_profiles > /dev/null || { rm -f $@; exit 1; }
 
