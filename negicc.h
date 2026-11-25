@@ -711,6 +711,9 @@ void adjust_correction_matrix(const std::vector<float>& r_coef, const std::vecto
 
 // Antialiased 2-pass separable bilinear resize on 8-bit RGB with kernel support widening;
 // bit-exact with Pillow's Image.Resampling.BILINEAR (fixed point, 8-bit intermediate).
+// The preprocessing functions here and trained_cells_lab, self_consistency_residual and residual_from_cells throw
+// std::invalid_argument for a size below 1, a src_stride short of a row (src_w * 3 bytes), or sizes whose products
+// (a row in bytes, a grid's sides in pixels, the cells times 3) do not fit an int.
 void antialiased_bilinear_resize_rgb(const uint8_t* src, int src_w, int src_h, int src_stride,
                                      uint8_t* dst, int dst_w, int dst_h);
 
@@ -1088,7 +1091,10 @@ public:
     // a CUDA device and the model has a TensorRT engine, as intent_model.resolve_intent_backend).
     // num_threads: ONNX Runtime's threads for the backbone on the CPU; 0 takes the program's thread count (see
     // make_ort_runner).
-    // Throws std::runtime_error (std::invalid_argument for a bad backend) when the model cannot be loaded.
+    // max_size, patch_size: patch_size at least 1, max_size at least patch_size, and the largest preview's values
+    // ((max_size / patch_size + 1) * patch_size pixels a side, times 3) within an int: max_size at most 26751 for a
+    // patch_size of 16. A load drops what an earlier one set: the adapter and the neutral head.
+    // Throws std::runtime_error (std::invalid_argument for a bad backend or sizes) when the model cannot be loaded.
     void load(const std::string& model_spec, const std::string& backend = "auto", int num_threads = 0,
               int max_size = 512, int patch_size = 16);
 
@@ -1145,8 +1151,9 @@ public:
     int max_size() const { return max_size_; }
     int patch_size() const { return patch_size_; }
 
-    // Run inference on 8-bit sRGB preview image. Not thread-safe (a TensorRT execution context runs one inference at
-    // a time): callers that share one engine between threads serialize their calls, as negicc-station's binding does.
+    // Run inference on 8-bit sRGB preview image, its rows stride bytes apart (at least width * 3). Not thread-safe (a
+    // TensorRT execution context runs one inference at a time): callers that share one engine between threads
+    // serialize their calls, as negicc-station's binding does.
     DinoV3InferenceResult infer(const uint8_t* srgb_data, int width, int height, int stride);
 
 private:
