@@ -2166,23 +2166,6 @@ std::string density_metadata_json(const DensityRecord& rec, int indent = -1);
 // level. False, and zeros, when the record has no balance.
 bool density_balance_offset(const DensityRecord& rec, double offset[3], double* mean = nullptr);
 
-struct DensityFileInfo {
-  std::string make, model;            // the camera
-  std::string software;               // "neg_process <version>"
-  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
-};
-
-// Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
-// description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
-// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
-// user-defined data. 0 on success.
-int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                       const std::string& description, const DensityFileInfo& info);
-int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
-                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
-                      const DensityFileInfo& info);
-
-
 // ---- The print of a density file ------------------------------------------------------------------------------------
 //
 // Beside a density file goes, for each print material --print names, a CLF that prints it: density -> the print
@@ -2335,9 +2318,6 @@ struct DensityPrints {
 // measure and channel factors).
 DensityPrints density_prints(const DensityRecord& rec, const std::string& output,
                              const std::vector<std::string>& print_ids);
-// Writes the CLFs. 0 on success; a CLF that cannot be written removes those written before it and returns 1.
-int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
-void remove_print_clfs(const DensityPrints& prints);
 
 // ---- The print ICC: a frame printed as the picture conversion renders it --------------------------------------------
 //
@@ -2642,12 +2622,34 @@ struct Options {
 // Output: declarations
 // ====================================================================================================================
 
-// neg_process's output: the 16-bit TIFF with its ICC profile, and the JSON sidecar beside it.
+// neg_process's output: the picture's 16-bit TIFF with its ICC profile, the density file (a 16-bit TIFF or a 10-bit
+// DPX) with its print CLFs, and the JSON sidecar beside the output. Their code is np_output.cc.
 
 // Writes proc's image (or rgb3, 3 samples a pixel, in its place) as a 16-bit TIFF to output with the ICC profile
 // attach_profile names ("srgb", "srgb-g10" or a file) or, when that is empty, embedded_icc. 0 on success.
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
                const std::vector<uint8_t>& embedded_icc = {}, const uint16_t* rgb3 = nullptr);
+
+struct DensityFileInfo {
+  std::string make, model;            // the camera
+  std::string software;               // "neg_process <version>"
+  long long timestamp = 0;            // the capture's time (seconds since the epoch); 0 or less: no date written
+};
+
+// Writes density codes (width x height, `channels` samples a pixel, the first three R, G, B) to a 16-bit RGB TIFF with
+// description (the metadata JSON) in its ImageDescription tag, or to a 10-bit RGB DPX (three samples in each 32-bit
+// word, big-endian; the transfer and colorimetric codes and the element's description name the measure) with it in the
+// user-defined data. 0 on success.
+int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                       const std::string& description, const DensityFileInfo& info);
+int write_density_dpx(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
+                      const std::string& description, const DensityEncoding& enc, DensityMeasure measure,
+                      const DensityFileInfo& info);
+
+// Writes the print CLFs of a density file (density_prints, the print part). 0 on success; a CLF that cannot be
+// written removes those written before it and returns 1.
+int write_print_clfs(const DensityRecord& rec, const DensityPrints& prints);
+void remove_print_clfs(const DensityPrints& prints);
 
 // What the sidecar records.
 // An input's size and CRC-32 (file_fingerprint), kept so a run hashes each input once: the sidecar loader's check and

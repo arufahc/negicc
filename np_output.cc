@@ -1030,7 +1030,7 @@ bool write_json_sidecar(const Sidecar& sc) {
   return true;
 }
 
-// ---- The density file (TIFF or DPX) and the print's CLFs (declared in the print part of negicc.h) -------------------
+// ---- The density file (TIFF or DPX) and the print's CLFs ------------------------------------------------------------
 
 namespace {
 
