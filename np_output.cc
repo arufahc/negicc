@@ -46,6 +46,9 @@
 // DPX) with its print CLFs.
 // ====================================================================================================================
 
+// Why two TIFF writers: this one writes LibRaw's TIFF header (tiff_head.h), with the camera's EXIF and GPS fields and
+// the ICC profile, in the host's byte order; write_density_tiff (below) builds its own directory, since the density
+// file's metadata JSON does not fit the header's 512-byte description field.
 int write_tiff(LibRaw* proc, const std::string& attach_profile, const std::string& output,
                const std::vector<uint8_t>& embedded_icc, const uint16_t* rgb3) {
   unsigned* output_profile = NULL;
@@ -1095,6 +1098,9 @@ void put_str(uint8_t* p, size_t field, const std::string& s) {
 
 }  // namespace
 
+// Not write_tiff's header (LibRaw's, tiff_head.h): the metadata JSON in ImageDescription is longer than the 512 bytes
+// that header holds for it, and this file has no ICC profile, EXIF or GPS fields. Its directory is built here,
+// little-endian on every host.
 int write_density_tiff(const std::string& path, const uint16_t* pixels, int width, int height, int channels,
                        const std::string& description, const DensityFileInfo& info) {
   const uint64_t strip_bytes = (uint64_t)width * (uint64_t)height * 6;
